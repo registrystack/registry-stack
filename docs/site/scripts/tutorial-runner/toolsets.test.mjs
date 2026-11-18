@@ -23,7 +23,7 @@ const CASES = {
     names: ['cd tutorial-work/breg', 'cat .breg/dev/state.json', 'ls ./breg', 'cat breg.yaml', 'cd breg-demo', 'ls breg/'],
   },
   casework: {
-    runs: ['caseworkctl dev start .', 'casework --version', 'rstack casework api /v1/review-tasks', 'caseworkctl check . | tail -1'],
+    runs: ['rstack casework init . --template standalone-decision', 'casework --version', 'caseworkctl check . | tail -1'],
     names: ['cd tutorial-work/casework', 'cat .casework/dev/state.json', 'cat casework.yaml', 'ls casework/'],
   },
   coordinator: {

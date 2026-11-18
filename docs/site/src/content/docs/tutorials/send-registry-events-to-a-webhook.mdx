@@ -1,6 +1,6 @@
 ---
 title: Send registry events to a webhook
-description: Declare a contact event, create a contact, and read the signed delivery the local receiver received.
+description: Declare a contact event, print the signed request it produces, and see how the durable example receiver accepts it.
 status: current
 owner: registry-docs
 source_repos:
@@ -19,13 +19,13 @@ tutorial_test:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 In about fifteen minutes your registry will tell another system each time a contact is created:
-the event declared, a contact added, and the signed delivery read back from a local receiver.
+the event declared, the signed request it produces printed, and the receiver that accepts it explained.
 
 <QuickstartMeta
-  outcome="A signed contact-created delivery received by the local receiver."
+  outcome="A declared contact-created event, its signed sample request, and the receiver that accepts it."
   time="About 15 minutes"
   level="Local evaluation only"
-  prerequisites={['The project from Extend a registry with a module', 'Running Docker', 'An editor']}
+  prerequisites={['The project from Extend a registry with a module', 'An editor']}
 />
 
 ## Declare the event
@@ -57,8 +57,8 @@ None: a registry sends nothing until a Record type declares it. Open `registry.y
 ```
 
 The hook fires once a new contact is committed. Its projection lets only `name` leave the
-registry. `contact-events` is a destination name, not an address: an operator binds it to a URL,
-and the local registry binds it to a receiver of its own.
+registry. `contact-events` is a destination name, not an address: an operator binds it to a URL
+in the runtime file.
 
 Check the project and ask again:
 
@@ -76,66 +76,56 @@ Event deliveries:
     projected fields  name
 ```
 
-## Create a contact
+## Print the signed request
 
-Start the registry with the hook in place:
+A registry sends the event after the write that caused it commits. A development run started with
+`rstack dev` binds no event destinations, so it refuses a project that declares one. You build the
+receiver against a sample instead. This command prints the request one event produces. It needs no
+running registry and no database:
 
 ```sh
-rstack breg dev start
+rstack breg hook sample . --event contact-created-v1
 ```
 
 ```text test-excerpt
-webhook receiver  http://127.0.0.1:<port>/events
-events file       <project-dir>/.breg/dev/events.jsonl
+Built the sample delivery. The canonical request follows.
+  event  contact-created-v1
 ```
 
-The receiver verifies each delivery's signature before it keeps it, in `.breg/dev/events.jsonl`.
-That file holds projected values, so use test records only. Add the test contact again:
+The output is a complete `POST` request: the headers `Idempotency-Key`, `X-Registry-Signature` and
+the `ce-` CloudEvents headers, then a body whose `values` hold a synthetic `name`. The signature
+is a placeholder. A real delivery signs the exact bytes with a key you share with the receiver.
 
-```sh
-rstack breg examples run contact
+## Receive it
+
+`products/breg/examples/webhook-receiver/` in the source repository holds a receiver that accepts
+deliveries durably. It verifies the signature, checks that the registry, instance, Record type
+and event match what you configured, and writes the event to its own SQLite inbox before it
+answers `204`. It answers `503` when it cannot store the event, so the registry retries. Install
+the `registry-stack-client` package, create an owner-only key file, and start it with the values
+of your event:
+
+```sh test-skip="needs the registry-stack-client package and a signing key of your own"
+python3 products/breg/examples/webhook-receiver/receiver.py \
+  --registry-id local-directory --instance-id local --record-type contact \
+  --event-id contact-created-v1 --field name --key /path/to/key \
+  --inbox /path/to/private-state/inbox.sqlite3 --port 8090
 ```
 
-The registry commits the contact first, then delivers the event from its own queue.
+The receiver listens on `127.0.0.1` at `/events`. Bind the `contact-events` destination to it in
+the runtime file of a registry you serve with `breg serve`, as
+[Bind webhook receivers](../../operate/breg-webhooks/) describes. That page also shows how to
+provision the shared key and list the deliveries still waiting or failed.
 
-## Read the delivery
+The receiver proves only that an attempt arrived. A real receiving service stores each event
+before acting on it. A retry resends an event with the same `idempotencyKey`. An operator replay
+resends it with the same `eventId` and a new key. Check both before acting.
 
-```sh test-retry="10"
-rstack breg --format json dev events
-```
-
-```json test-excerpt
-{
-  "deliveryId": "events.contact.contact-created-v1.webhook",
-  "destinationId": "contact-events",
-  "eventType": "contact-created-v1",
-  "attempt": 1,
-  "status": "received"
-}
-```
-
-`"status": "received"` means the receiver verified the signature and kept the first attempt. The
-report leaves out the projected `name`; add `--include-payload` to see it.
-
-If `deliveries` is empty, the first delivery has not arrived yet or the registry is still
-retrying; run the command again after a few seconds. On a deployed registry,
-`rstack breg hook list` shows the deliveries still waiting or failed, as
-[Bind webhook receivers](../../operate/breg-webhooks/) describes.
-
-The local receiver proves only that an attempt arrived. A real receiving service stores each
-event before acting on it. A retry resends an event with the same `idempotencyKey`; an operator
-replay resends it with the same `eventId` and a new key. Check both before acting.
-
-When you are finished, `rstack breg dev stop --remove` stops the registry and deletes its test data.
-
-{/* Evidence: crates/registry-bregctl/src/dev/events.rs, Receiver, verify and report;
-    crates/registry-bregctl/src/dev/mod.rs, CHANGED_INPUTS and reclaimed;
-    crates/registry-bregctl/src/hook_lifecycle.rs, list_with;
-    crates/registry-platform-hooks/src/delivery/service.rs, DeliveryStatusKind and
-    idempotency_key_is_stable_across_retries_and_changes_on_replay_generation;
+{/* Evidence: crates/registry-bregctl/src/hook_lifecycle.rs, sample;
     crates/registry-bregctl/src/explain_report.rs, events;
-    products/breg/examples/minimal/registry.yaml;
-    products/breg/examples/minimal/examples/scenarios.json. */}
+    crates/registry-rstack-dev/src/products.rs, destinations.hooks;
+    products/breg/examples/webhook-receiver/README.md;
+    products/breg/examples/minimal/registry.yaml. */}
 
 ## Next
 

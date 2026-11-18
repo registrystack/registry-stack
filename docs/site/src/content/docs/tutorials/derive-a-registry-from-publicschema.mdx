@@ -212,25 +212,87 @@ you continue.
 {/* Evidence: crates/registry-breg/src/compiler.rs, stored_field_fillability_findings();
     crates/registry-bregctl/src/check.rs. */}
 
+## Describe the test callers
+
+The derivation wrote an `operator` and a `reader` access profile. `rstack dev` runs the project from
+a development plan that names the synthetic people who call it. Each person's test token carries
+the scope and purpose their access profile requires. Create `household-registry/dev.yaml`:
+
+```yaml title="household-registry/dev.yaml" test-file
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+issuer: https://identity.household.example.test
+products:
+  - {product: breg, project: ., audience: "urn:example:household-registry"}
+people:
+  operator:
+    subject: household-registry-operator
+    client: household-operator
+    grants:
+      breg:
+        profile: operator
+        scopes: ["registry:household-registry:operate"]
+        claims:
+          registry_actor_kind: human
+          registry_purpose: registry-operations
+  reader:
+    subject: household-registry-reader
+    client: household-reader
+    grants:
+      breg:
+        profile: reader
+        scopes: ["registry:household-registry:read"]
+        claims:
+          registry_actor_kind: human
+          registry_purpose: registry-reporting
+scenarioFile: dev/scenarios.yaml
+```
+
+The plan names a scenario file, requests that `rstack dev` sends once the registry runs. This one
+lists the people as `reader`:
+
+```sh
+mkdir household-registry/dev
+```
+
+```yaml title="household-registry/dev/scenarios.yaml" test-file
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: reader-lists-people
+    steps:
+      - id: list-people
+        product: breg
+        as: reader
+        method: GET
+        path: "/v1/records/persons?accessProfile=reader"
+        expect: {status: 200}
+```
+
 ## Start the registry
 
 ```sh
-rstack breg dev start household-registry
+rstack dev start household-registry --ttl 4h | tee household-registry/dev-run.txt
 ```
 
-```text test-excerpt
-bregctl dev succeeded.
-  status          ready
+```text test-expect
+Run <run-id> ready
+  breg http://127.0.0.1:<port>
+  Scenario reader-lists-people passed
+  Logs <logs-directory>
+  rstack dev token <run-id> --as operator
+  rstack dev token <run-id> --as reader
 ```
 
-The first start downloads PostgreSQL and the local token issuer, so allow a few minutes. Before it
-reports `ready`, `dev` replays the scenarios in `tests/journeys.yaml` against a throwaway database,
-then starts your registry on an empty one. The report also prints the registry's address, `breg
-url`, and one client for each access profile, `operator` and `reader`. If `dev start` stops
-because a port is taken, [Create your first registry](../first-breg/) shows how to pick
-other ports.
+The first start downloads PostgreSQL's image, so allow a few minutes. Before it reports `ready`,
+`rstack dev` replays the scenarios in `tests/journeys.yaml` against a throwaway database, then
+starts your registry on an empty one, at the `breg` address. Each run gets a free port of its own,
+so your address differs. The run ends after four hours, or when you stop it.
+[Run a project with rstack dev](../../configure/run-a-project-with-rstack-dev/) describes the rest
+of the report, token expiry and recovery.
 
-{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, start(). */}
+{/* Evidence: products/platform/PROJECT-DEV.md; products/breg/examples/minimal/dev.yaml;
+    crates/registry-rstack-dev/src/lib.rs. */}
 
 ## Create a person
 
@@ -250,14 +312,17 @@ Save the person you will create. The API takes field names in camel case, `perso
 }
 ```
 
-Create it as the local `operator` client. The API command finds the running project and obtains a
-fresh credential. Every write carries an idempotency key, so a retry of the same request never
-creates a second person:
+Create it as `operator`. `rstack dev token` writes a short-lived header file for a test caller, and
+`rstack breg api` sends one request with it. Every write carries an idempotency key, so a retry of
+the same request never creates a second person. Tokens last five minutes, so run the first three
+lines again when a request is refused with status 401:
 
 ```sh
+RUN="$(awk '$1 == "Run" {print $2}' household-registry/dev-run.txt)"
+BREG_URL="$(awk '$1 == "breg" {print $2}' household-registry/dev-run.txt)"
+OPERATOR_HEADERS="$(rstack dev token "$RUN" --as operator | awk '$2 == "headers" {print $3}')"
 rstack breg api /v1/records/persons \
-  --project household-registry \
-  --client operator \
+  --url "$BREG_URL" --header @"$OPERATOR_HEADERS" \
   --idempotency-key first-person \
   --input person.json
 ```
@@ -284,8 +349,7 @@ The response carries the [Record](../../reference/glossary/#registry-record) the
 holds: your fields under `domainData`, an identifier the registry assigned, and revision `1`. Fields you
 did not send are `null`, because the derivation makes no PublicSchema property required.
 
-{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, local_api_connection();
-    crates/registry-cli-api/src/api.rs, run_api();
+{/* Evidence: crates/registry-cli-api/src/api.rs, run_api();
     crates/registry-breg/src/api/mod.rs, router();
     crates/registry-breg/src/logical_names.rs, default_api_name(). */}
 
@@ -294,9 +358,9 @@ did not send are `null`, because the derivation makes no PublicSchema property r
 List people under the `reader` access profile:
 
 ```sh
+READER_HEADERS="$(rstack dev token "$RUN" --as reader | awk '$2 == "headers" {print $3}')"
 rstack breg api '/v1/records/persons?accessProfile=reader' \
-  --project household-registry \
-  --client reader
+  --url "$BREG_URL" --header @"$READER_HEADERS"
 ```
 
 ```json test-excerpt
@@ -354,13 +418,14 @@ warning[breg.access.profile-higher-classification] recordTypes[id=group-membersh
   next: Remove the field from readableFields, or confirm that the profile scopes and purposes admit only callers cleared for this classification.
 ```
 
-Check the generated candidate, then compare its compiled result with the package the local runtime
-configuration binds:
+Check the generated candidate, then compare its compiled result with the package the run's runtime
+configuration binds. The run keeps that file, `breg-runtime.yaml`, in the directory that holds its
+`logs` directory:
 
 ```sh
 rstack breg check household-registry-2
-rstack breg diff household-registry-2 \
-  --runtime-config "$(pwd)/household-registry/.breg/dev/runtime.yaml"
+RUN_DIR="$(dirname "$(awk '$1 == "Logs" {print $2}' household-registry/dev-run.txt)")"
+rstack breg diff household-registry-2 --runtime-config "$RUN_DIR/breg-runtime.yaml"
 ```
 
 ```text test-excerpt
@@ -458,12 +523,11 @@ candidate and repeat `check` and both explanations before comparing packages.
 ## Compare the reconciled candidate again
 
 Repeat the package comparison. `rstack breg diff` compares the compiled candidate with a package, not
-with another source directory. Use the absolute local runtime path so the report verifies the
+with another source directory. Use the run's runtime file so the report verifies the
 runtime configuration and its exact package digest binding:
 
 ```sh
-rstack breg diff household-registry-2 \
-  --runtime-config "$(pwd)/household-registry/.breg/dev/runtime.yaml"
+rstack breg diff household-registry-2 --runtime-config "$RUN_DIR/breg-runtime.yaml"
 ```
 
 ```text test-excerpt
@@ -494,7 +558,7 @@ When the package diff matches your intent, continue with [Change an active
 registry](../../operate/breg-changes/). That procedure explains which classifications need a
 reviewed migration, how to test and package the successor with the active package as its baseline,
 and how the migration credential holder reviews and activates it. If the diff contains an
-unexpected removal, disclosure change, or unsupported change, keep the running project unchanged,
+unexpected removal, disclosure change, or unsupported change, keep the project unchanged,
 correct the candidate, then run `check`, the explanations, and `diff` again.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, DiffArgs and diff();
@@ -504,19 +568,18 @@ correct the candidate, then run `check`, the explanations, and `diff` again.
 
 ## Stop the registry
 
-`--remove` deletes the registry's database with the person you created. Leave it off to keep the
-records for a later `dev start`:
+Stopping a run deletes its database with the person you created. A development run keeps nothing for
+a later start. Records you want to keep belong in a registry served with `breg serve`:
 
 ```sh
-rstack breg dev stop household-registry --remove
+rstack dev stop "$RUN"
 ```
 
-```text test-excerpt
-bregctl dev succeeded.
-  status          stopped
+```text test-expect
+Run <run-id> stopped
 ```
 
-{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, stop() and reclaim(). */}
+{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack-dev/src/lib.rs. */}
 
 ## Next
 

@@ -26,18 +26,19 @@ const MAXIMUM_SCAN_PAGES = 500;
 function authorizationFrom(variable) {
   const path = __ENV[variable];
   if (!path) {
-    throw new Error(`${variable} must name one caseworkctl dev Authorization header file`);
+    throw new Error(`${variable} must name one rstack dev Authorization header file`);
   }
-  // The bearer line comes first; the client's Casework profile follows.
+  // The bearer line comes first; the Casework and review profiles follow.
   const lines = open(path, 'r').trim().split('\n');
   const header = lines[0];
   if (
     !header.startsWith('Authorization: Bearer ')
     || header.split('.').length !== 3
-    || lines.length > 2
-    || (lines.length === 2 && !lines[1].startsWith('Registry-Casework-Profile: '))
+    || lines.length > 3
+    || (lines.length > 1 && !lines[1].startsWith('Registry-Casework-Profile: '))
+    || (lines.length > 2 && !lines[2].startsWith('Registry-Review-Profile: '))
   ) {
-    throw new Error(`${variable} must contain one caseworkctl dev Authorization header`);
+    throw new Error(`${variable} must contain one rstack dev Authorization header`);
   }
   return header.slice('Authorization: '.length);
 }

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-11-18"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -16,8 +16,8 @@ tutorial_test:
 
 A ReviewTask waits in a queue until someone eligible picks it up. Which people that is lives in
 the [directory](../../reference/glossary/#directory), not in the policy. You continue in
-`tutorial-work/casework`, with the development session you restarted in
-[Author a Casework policy](../casework/) still running.
+`tutorial-work/casework`, with the `rstack dev` run you restarted in
+[Author a Casework policy](../casework/) still going.
 
 ## What the directory holds
 
@@ -34,44 +34,38 @@ Only an [access profile](../../reference/glossary/#access-profile) with the `adm
     crates/registry-casework/src/store.rs, directory(); crates/registry-casework/src/assignment.rs,
     bootstrap_directory() and update_directory_team(). */}
 
-## Seed it for the development session
+## Seed it for the development run
 
-The session seeded its directory from `dev-clients.yaml`, as its `administrator` client, on its
-first start:
+A new directory is empty. The run's scenario, `tests/scenarios.yaml`, seated the team with the same
+bootstrap call a deployment uses, as the plan's `administrator` person:
 
-```yaml title="dev-clients.yaml" test-excerpt="tutorial-work/casework/dev-clients.yaml"
-directory:
-  - team: decisions-team
-    queue: decisions
-    staff: [staff]
-    supervisors: [supervisor]
+```yaml title="tests/scenarios.yaml" test-excerpt="tutorial-work/casework/tests/scenarios.yaml"
+body:
+  teamId: decisions-team
+  staff: [{issuer: https://identity.standalone.example.test, subject: staff}]
+  supervisors: []
+  queueId: decisions
 ```
 
-Each entry names one team and the one declared queue it serves, with at most eight teams. Its
-`staff` must be clients bound to a staff profile and its `supervisors` clients bound to a supervisor
-profile. `caseworkctl check` refuses a file that leaves a declared queue with no team
-(`casework.dev-clients.unserved-queue`) or that has no administrator client to seed it.
-
-A deployment names people by issuer and subject. Show the subject the session's staff client signs in as:
-
-```sh test-cwd="tutorial-work/casework"
-caseworkctl dev identity staff
-```
-
-```json test-excerpt
-{"clientId": "staff", "subject": "17e79057-d468-701e-845e-a94875c37bd4"}
-```
-
-{/* Evidence: crates/registry-caseworkctl/src/dev/config.rs, DirectoryTeam, bind(),
-    casework.dev-clients.unserved-queue and missing-administrator;
-    crates/registry-caseworkctl/src/dev/mod.rs, DevAction::Identity. */}
+The body names one team and the one declared queue it serves. Its staff and supervisors are an
+issuer and a subject each, here the issuer and subject `staff` signs in with in `dev.yaml`.
 
 ## Read the directory
 
-Read it as the administrator to confirm every queue has a team:
+Find the run you left going. The start report you saved in `run.json` names it:
 
-```sh
-rstack casework api /v1/directory --client administrator | jq .
+```sh test-cwd="tutorial-work/casework"
+run_id="$(jq -r .run_id run.json)"
+casework_url="$(jq -r .products.casework run.json)"
+headers_for() {
+  rstack dev token "$run_id" --as "$1" | awk '$1 == "casework" && $2 == "headers" {print $3}'
+}
+```
+
+Read the directory as the administrator to confirm every queue has a team:
+
+```sh test-cwd="tutorial-work/casework"
+curl -sS --fail-with-body --header @"$(headers_for administrator)" "$casework_url/v1/directory" | jq .
 ```
 
 ```json test-excerpt
@@ -86,8 +80,7 @@ rstack casework api /v1/directory --client administrator | jq .
 
 ## Bootstrap a deployment's directory
 
-A deployment has no `dev-clients.yaml`. Its first administrator creates the first team with one
-call, naming directory revision `0` and an idempotency key so a retry cannot create it twice:
+A deployment's first administrator creates the first team with one call, naming directory revision `0` and an idempotency key so a retry cannot create it twice:
 
 ```json title="directory-bootstrap.json"
 {
@@ -102,14 +95,12 @@ call, naming directory revision `0` and an idempotency key so a retry cannot cre
 }
 ```
 
-```sh test-skip="the development session already seeded its directory, so revision 0 is refused"
-rstack casework api /v1/directory/bootstrap \
-  --url "$casework_url" \
-  --header @administrator.header \
-  --header 'Registry-Casework-Profile: administrator' \
-  --if-match '"0"' \
-  --idempotency-key directory-bootstrap-1 \
-  --input directory-bootstrap.json
+```sh test-skip="the run's scenario already seeded its directory, so revision 0 is refused"
+curl -sS --fail-with-body --header @"$(headers_for administrator)" \
+  --header 'Content-Type: application/json' \
+  --header 'If-Match: "0"' \
+  --header 'Idempotency-Key: directory-bootstrap-1' \
+  --data @directory-bootstrap.json "$casework_url/v1/directory/bootstrap"
 ```
 
 Casework refuses a queue the active package does not declare. Later changes go through

@@ -177,6 +177,7 @@ impl Issuer {
                         .principal
                 }
                 Product::Casework => &input.casework_principals[&grant.profile],
+                Product::Evidence => anyhow::bail!("Evidence has no browser application"),
             };
             ensure!(
                 !matches!(principal.as_str(), "name" | "registry_scopes")
@@ -212,6 +213,14 @@ impl Issuer {
             if principal != "sub" {
                 claims.insert(principal.clone(), json!(person.subject));
             }
+        }
+        if product == Product::Evidence {
+            claims.insert("evidence_tags".to_owned(), json!([grant.profile]));
+            // Evidence requires every token to name its kind of caller. A test
+            // person is a service caller unless the grant's claims say otherwise.
+            claims
+                .entry("registry_actor_kind".to_owned())
+                .or_insert_with(|| json!("service"));
         }
         if let Some(alias) = browser_alias {
             claims.insert("registry_principal".to_owned(), json!(person.subject));

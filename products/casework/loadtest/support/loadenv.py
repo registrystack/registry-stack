@@ -1,10 +1,9 @@
-#!/usr/bin/env python3
-"""Bounded helpers for the Registry Casework load-test development session.
+"""Bounded helpers for the Registry Casework load-test development run.
 
-The stock ``caseworkctl dev`` lifecycle owns PostgreSQL, the local token
-issuer, credentials, the directory seed, and the Casework process. This module
-prepares only the authored load-test project and validates the non-secret
-references that the load harness consumes.
+``rstack dev`` owns PostgreSQL, the local token signing key, credentials, the
+directory seed, and the Casework process. This module prepares only the
+authored load-test project and validates the non-secret references that the
+load harness consumes.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ import json
 import os
 import re
 import shutil
-import socket
 import stat
 import subprocess
 import sys
@@ -23,50 +21,38 @@ from typing import Any
 from urllib.parse import urlparse
 
 
-MARKER = "registry-stack-casework-loadtest-v1"
-PRODUCER_CLIENT = "loadtest-producer"
-STAFF_CLIENT = "loadtest-staff"
-HEADER_CLIENTS = (PRODUCER_CLIENT, STAFF_CLIENT)
-DATABASE_NAME = "casework_dev"
+MARKER = "registry-stack-casework-loadtest-v2"
+# The people the standalone-decision example's dev.yaml declares: the load
+# harness drives every Staff request through one principal and every producer
+# request through another.
+PRODUCER_PERSON = "requester"
+STAFF_PERSON = "staff"
+HEADER_PEOPLE = (PRODUCER_PERSON, STAFF_PERSON)
+RUN_ID = re.compile(r"[0-9a-f]{32}")
 # The runtime pool is fixed in crates/registry-casework/src/store.rs; the
-# development lifecycle cannot change it, so the evidence records the constant.
+# development run cannot change it, so the evidence records the constant.
 RUNTIME_POOL_MAX = 32
 BUILD_PROFILES = ("debug", "release")
-REQUESTER_BINDING = re.compile(
-    r"(?m)^(  requester:\n    profile: requester\n)"
-    r"    issuer: [^\n]+\n    subject: [^\n]+\n"
-)
-SUBJECT_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
-# Synthetic local callers. One client binds each access profile the example
-# declares, which is what caseworkctl dev requires, so the load harness drives
-# every Staff request through one principal and every producer request through
-# another. Nothing here is a credential.
-DEV_CLIENTS = """apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
-kind: CaseworkDevClients
-clients:
-  - id: loadtest-admin
-    accessProfile: administrator
-    scopes: [casework:admin]
-    claims:
-      registry_actor_kind: human
-  - id: loadtest-supervisor
-    accessProfile: supervisor
-    scopes: [casework:supervisor]
-    claims:
-      registry_actor_kind: human
-  - id: loadtest-staff
-    accessProfile: staff
-    scopes: [casework:staff]
-    claims:
-      registry_actor_kind: human
-  - id: loadtest-producer
-    accessProfile: requester
-    scopes: [casework:request]
-directory:
-  - team: loadtest-decisions
-    queue: decisions
-    staff: [loadtest-staff]
-    supervisors: [loadtest-supervisor]
+# The scenario only staffs the decisions queue. The example's own scenario
+# also decides a request, which the load-test seed counts must not include.
+SCENARIOS = """# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: staff-the-queue
+    steps:
+      - id: staff-the-queue
+        product: casework
+        as: administrator
+        method: POST
+        path: /v1/directory/bootstrap
+        headers: {If-Match: '"0"', Idempotency-Key: staff-the-queue}
+        body:
+          teamId: decisions-team
+          staff: [{issuer: https://identity.standalone.example.test, subject: staff}]
+          supervisors: []
+          queueId: decisions
+        expect: {status: 200}
 """
 
 
@@ -108,120 +94,69 @@ def _require_root(root: Path) -> Path:
     return resolved
 
 
-def reserve_ports() -> tuple[int, int, int]:
-    listeners: list[socket.socket] = []
-    try:
-        for _ in range(3):
-            listener = socket.socket()
-            listener.bind(("127.0.0.1", 0))
-            listeners.append(listener)
-        return tuple(listener.getsockname()[1] for listener in listeners)  # type: ignore[return-value]
-    finally:
-        for listener in listeners:
-            listener.close()
-
-
-def producer_subject(caseworkctl: Path) -> str:
-    """The stable local subject caseworkctl dev issues to the producer client."""
-    result = subprocess.run(
-        [str(caseworkctl), "--format", "json", "dev", "identity", PRODUCER_CLIENT],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    report = json.loads(result.stdout)
-    if not isinstance(report, dict):
-        raise LoadtestError("caseworkctl dev identity did not report one JSON object")
-    subject = report.get("subject")
-    if report.get("clientId") != PRODUCER_CLIENT or not isinstance(subject, str):
-        raise LoadtestError("caseworkctl dev identity did not report the producer subject")
-    if not SUBJECT_PATTERN.fullmatch(subject):
-        raise LoadtestError("caseworkctl dev identity reported an unbounded subject")
-    return subject
-
-
-def local_project(example: Path, project: Path, issuer_port: int, subject: str) -> None:
+def local_project(example: Path, project: Path) -> None:
     if example.is_symlink() or not example.is_dir():
         raise LoadtestError("standalone-decision example must be an ordinary directory")
     if any(path.is_symlink() for path in example.rglob("*")):
         raise LoadtestError("standalone-decision example must not contain symbolic links")
     if project.exists() or project.is_symlink():
         raise LoadtestError("load-test project output must not already exist")
-    if not 1 <= issuer_port <= 65535:
-        raise LoadtestError("issuer port must be a TCP port")
-    if not SUBJECT_PATTERN.fullmatch(subject):
-        raise LoadtestError("producer subject must be one bounded identifier")
-    shutil.copytree(example, project, symlinks=False)
-    policy = project / "casework.yaml"
-    source = policy.read_text(encoding="utf-8")
-    source, count = REQUESTER_BINDING.subn(
-        lambda match: (
-            f"{match[1]}    issuer: http://127.0.0.1:{issuer_port}\n"
-            f"    subject: {subject}\n"
-        ),
-        source,
-    )
-    if count != 1:
-        raise LoadtestError(
-            "standalone-decision example must have exactly one requester producer binding; "
-            "update load-test preparation to match its profile, issuer, and subject fields"
-        )
-    policy.write_text(source, encoding="utf-8")
-    (project / "dev-clients.yaml").write_text(DEV_CLIENTS, encoding="utf-8")
+    shutil.copytree(example, project, symlinks=False, ignore=shutil.ignore_patterns("tests", "dev-clients.yaml"))
+    (project / "tests").mkdir()
+    (project / "tests/scenarios.yaml").write_text(SCENARIOS, encoding="utf-8")
+
+
+def _run_id(value: object) -> str:
+    if not isinstance(value, str) or not RUN_ID.fullmatch(value):
+        raise LoadtestError("rstack dev reported a malformed run identifier")
+    return value
+
+
+def _loopback_origin(value: object, label: str) -> str:
+    origin = urlparse(str(value))
+    if (
+        origin.scheme != "http"
+        or origin.hostname != "127.0.0.1"
+        or origin.port is None
+        or origin.path not in ("", "/")
+        or origin.query
+        or origin.fragment
+    ):
+        raise LoadtestError(f"{label} must be a loopback Casework origin")
+    return f"http://127.0.0.1:{origin.port}"
 
 
 def write_environment(
     root: Path,
-    dev_report: Path,
-    caseworkctl: Path,
+    start_report: Path,
+    rstack: Path,
     build_profile: str,
     runtime_library_path: str,
 ) -> None:
     root = _require_root(root)
-    report = _read_json_object(dev_report)
-    project = (root / "project").resolve()
-    if (
-        Path(str(report.get("project", ""))).resolve() != project
-        or report.get("ok") is not True
-        or report.get("status") != "complete"
-        or report.get("outcome") != "ready"
-    ):
-        raise LoadtestError("caseworkctl dev did not report the expected ready project")
-    expected_state = project / ".casework/dev/state.json"
-    if Path(str(report.get("stateFile", ""))).resolve() != expected_state.resolve():
-        raise LoadtestError("caseworkctl dev reported state outside the load-test project")
-    state = _read_json_object(_owner_only_regular(expected_state, "development state"))
-    container = state.get("containerId")
-    if (
-        not isinstance(container, str)
-        or len(container) != 64
-        or not all(c in "0123456789abcdefABCDEF" for c in container)
-    ):
-        raise LoadtestError("development state has no bounded database container identity")
-    origin = urlparse(str(report.get("caseworkUrl", "")))
-    if origin.scheme != "http" or origin.hostname != "127.0.0.1" or origin.port is None or origin.path not in ("", "/"):
-        raise LoadtestError("caseworkctl dev reported a non-loopback Casework origin")
-    reported_clients = {
-        client.get("id") for client in report.get("clients", []) if isinstance(client, dict)
-    }
-    if not set(HEADER_CLIENTS) <= reported_clients:
-        raise LoadtestError("caseworkctl dev did not register the load-test clients")
-    executable = caseworkctl.resolve()
+    report = _read_json_object(start_report)
+    run_id = _run_id(report.get("run_id"))
+    products = report.get("products")
+    if not isinstance(products, dict) or "casework" not in products:
+        raise LoadtestError("rstack dev did not report a Casework origin")
+    casework_url = _loopback_origin(products["casework"], "rstack dev reported origin")
+    executable = rstack.resolve()
     if not executable.is_file():
-        raise LoadtestError("caseworkctl path must be a regular file")
+        raise LoadtestError("rstack path must be a regular file")
     if build_profile not in BUILD_PROFILES:
         raise LoadtestError("build profile must be debug or release")
     if ":" in runtime_library_path or (runtime_library_path and not Path(runtime_library_path).is_dir()):
         raise LoadtestError("runtime library path must be one existing directory")
     environment = {
-        "casework_url": f"http://127.0.0.1:{origin.port}",
-        "caseworkctl": str(executable),
+        "casework_url": casework_url,
+        "rstack": str(executable),
         "build_profile": build_profile,
         "runtime_library_path": runtime_library_path,
-        "project": str(project),
+        "run_id": run_id,
+        "state_dir": str(root / "state"),
         "pool_max": RUNTIME_POOL_MAX,
-        "database": {"container": container, "database": DATABASE_NAME},
+        # rstack dev names the managed database after the run.
+        "database": {"database": f"rstack_{run_id}_casework"},
     }
     _write_new(root / "env.json", json.dumps(environment, indent=2, sort_keys=True) + "\n")
 
@@ -233,111 +168,101 @@ def describe(root: Path, repository: Path) -> tuple[str, str, str, str]:
     build_profile = environment.get("build_profile")
     if build_profile not in BUILD_PROFILES:
         raise LoadtestError("environment records an unknown build profile")
-    caseworkctl = Path(str(environment.get("caseworkctl", "")))
-    if caseworkctl != repository.resolve() / "target" / build_profile / "caseworkctl" or not caseworkctl.is_file():
+    rstack = Path(str(environment.get("rstack", "")))
+    if rstack != repository.resolve() / "target" / build_profile / "rstack" or not rstack.is_file():
         raise LoadtestError(
-            "the caseworkctl recorded by this environment is unavailable; preserve state and restore the matching build"
+            "the rstack recorded by this environment is unavailable; preserve state and restore the matching build"
         )
-    project = Path(str(environment.get("project", "")))
-    if project != root / "project":
+    if Path(str(environment.get("state_dir", ""))) != root / "state":
         raise LoadtestError("load-test environment references paths outside its owned checkout state")
-    origin = urlparse(str(environment.get("casework_url", "")))
-    if (
-        origin.scheme != "http"
-        or origin.hostname != "127.0.0.1"
-        or origin.port is None
-        or origin.path
-        or origin.query
-        or origin.fragment
-    ):
-        raise LoadtestError("environment records a non-loopback Casework origin")
+    run_id = _run_id(environment.get("run_id"))
+    casework_url = _loopback_origin(environment.get("casework_url", ""), "environment origin")
+    if casework_url != environment["casework_url"]:
+        raise LoadtestError("environment records a non-canonical Casework origin")
     library_path = str(environment.get("runtime_library_path", ""))
     if ":" in library_path or any(character.isspace() for character in library_path):
         raise LoadtestError("runtime library path must be one directory without separators")
-    for value in (str(caseworkctl), str(project)):
-        if any(character.isspace() for character in value):
-            raise LoadtestError("load-test paths must not contain whitespace")
-    return str(environment["casework_url"]), str(caseworkctl), str(project), library_path
+    if any(character.isspace() for character in str(rstack)):
+        raise LoadtestError("load-test paths must not contain whitespace")
+    return casework_url, str(rstack), run_id, library_path
 
 
-def fresh_header(caseworkctl: Path, project: Path, client: str) -> Path:
-    if client not in HEADER_CLIENTS:
-        raise LoadtestError("the load-test client is not registered")
+def fresh_header(rstack: Path, run_id: str, state_dir: Path, person: str) -> Path:
+    if person not in HEADER_PEOPLE:
+        raise LoadtestError("the load-test person is not registered")
+    _run_id(run_id)
     result = subprocess.run(
-        [str(caseworkctl), "--format", "json", "dev", "token", client, str(project)],
+        [str(rstack), "--format", "json", "dev", "token", run_id, "--as", person],
         check=True,
         capture_output=True,
         text=True,
         timeout=45,
+        env={**os.environ, "RSTACK_DEV_STATE_DIR": str(state_dir)},
     )
     report = json.loads(result.stdout)
-    expected = project.resolve() / f".casework/dev/secrets/{client}.header"
-    reported = Path(str(report.get("headerFile", ""))).resolve()
-    if reported != expected:
-        raise LoadtestError("caseworkctl dev token reported a header outside the owned session")
+    credentials = report.get("credentials") if isinstance(report, dict) else None
+    if not isinstance(credentials, list) or len(credentials) != 1 or not isinstance(credentials[0], dict):
+        raise LoadtestError("rstack dev token did not report one credential")
+    reported = Path(str(credentials[0].get("header_file", ""))).resolve()
+    if reported.parent != (state_dir / run_id).resolve():
+        raise LoadtestError("rstack dev token reported a header outside the owned run")
     _owner_only_regular(reported, "authorization header")
     value = reported.read_text(encoding="ascii")
     lines = value.split("\n")
-    # The file carries the bearer line and then the client's Casework profile.
+    # The file carries the bearer line, the Casework profile, and then the
+    # review profile.
     if (
         not value.endswith("\n")
-        or len(lines) != 3
+        or len(lines) != 4
         or not lines[0].startswith("Authorization: Bearer ")
         or lines[0].count(".") != 2
         or not lines[1].startswith("Registry-Casework-Profile: ")
+        or not lines[2].startswith("Registry-Review-Profile: ")
     ):
-        raise LoadtestError("caseworkctl dev token returned a malformed authorization header")
+        raise LoadtestError("rstack dev token returned a malformed authorization header")
     return reported
 
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
-    commands.add_parser("ports")
-    subject = commands.add_parser("producer-subject")
-    subject.add_argument("--caseworkctl", type=Path, required=True)
     local = commands.add_parser("local-project")
     local.add_argument("--example", type=Path, required=True)
     local.add_argument("--project", type=Path, required=True)
-    local.add_argument("--issuer-port", type=int, required=True)
-    local.add_argument("--producer-subject", required=True)
     environment = commands.add_parser("environment")
     environment.add_argument("--root", type=Path, required=True)
-    environment.add_argument("--dev-report", type=Path, required=True)
-    environment.add_argument("--caseworkctl", type=Path, required=True)
+    environment.add_argument("--start-report", type=Path, required=True)
+    environment.add_argument("--rstack", type=Path, required=True)
     environment.add_argument("--build-profile", choices=BUILD_PROFILES, required=True)
     environment.add_argument("--runtime-library-path", default="")
     describe_command = commands.add_parser("describe")
     describe_command.add_argument("--root", type=Path, required=True)
     describe_command.add_argument("--repository", type=Path, required=True)
     header = commands.add_parser("header")
-    header.add_argument("--caseworkctl", type=Path, required=True)
-    header.add_argument("--project", type=Path, required=True)
-    header.add_argument("--client", choices=HEADER_CLIENTS, required=True)
+    header.add_argument("--rstack", type=Path, required=True)
+    header.add_argument("--run-id", required=True)
+    header.add_argument("--state-dir", type=Path, required=True)
+    header.add_argument("--person", choices=HEADER_PEOPLE, required=True)
     return result
 
 
 def main() -> int:
     arguments = parser().parse_args()
     try:
-        if arguments.command == "ports":
-            print(" ".join(str(port) for port in reserve_ports()))
-        elif arguments.command == "producer-subject":
-            print(producer_subject(arguments.caseworkctl))
-        elif arguments.command == "local-project":
-            local_project(arguments.example, arguments.project, arguments.issuer_port, arguments.producer_subject)
+        if arguments.command == "local-project":
+            local_project(arguments.example, arguments.project)
         elif arguments.command == "environment":
             write_environment(
                 arguments.root,
-                arguments.dev_report,
-                arguments.caseworkctl,
+                arguments.start_report,
+                arguments.rstack,
                 arguments.build_profile,
                 arguments.runtime_library_path,
             )
         elif arguments.command == "describe":
             print(" ".join(describe(arguments.root, arguments.repository)))
         elif arguments.command == "header":
-            print(fresh_header(arguments.caseworkctl, arguments.project, arguments.client))
+            print(fresh_header(arguments.rstack, arguments.run_id, arguments.state_dir, arguments.person))
     except (
         LoadtestError,
         OSError,

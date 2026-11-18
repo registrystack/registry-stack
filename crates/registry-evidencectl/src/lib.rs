@@ -146,6 +146,8 @@ enum Command {
     Tooling(tooling::ToolingCommand),
     #[command(name = "__dev-supervisor", hide = true)]
     DevSupervisor(dev::SupervisorArgs),
+    #[command(name = "rstack-dev", hide = true)]
+    RstackDev(registry_rstack_dev::Args),
 }
 
 #[derive(Debug, Args)]
@@ -501,6 +503,12 @@ fn run_entry() -> ExitCode {
             return ExitCode::from(report::USAGE_EXIT);
         }
     };
+    let cli = match cli.command {
+        Command::RstackDev(args) => {
+            return registry_rstack_dev::run(args, &mut std::io::stdout(), &mut std::io::stderr());
+        }
+        command => Cli { command, ..cli },
+    };
     let command_path = command_path(&matches);
     let format_explicit = report_format_requested(&arguments);
     if let Command::Runtime(args) = &cli.command {
@@ -741,6 +749,7 @@ fn run_entry() -> ExitCode {
         Command::Tooling(command) => tooling::run(command, format),
         Command::DevSupervisor(args) => dev::run_supervisor(args),
         Command::Runtime(_) => unreachable!("runtime bypasses report dispatch"),
+        Command::RstackDev(_) => unreachable!("rstack-dev bypasses report dispatch"),
     };
     match result {
         Ok(code) => code,
@@ -1712,10 +1721,15 @@ mod tests {
         "runtime",
     ];
 
+    /// The hidden subcommand hosting `rstack dev`. Its arguments belong to
+    /// `registry-rstack-dev`, which owns that contract, so the rules below
+    /// about this CLI's own surface skip it.
+    const HOSTED_RUNNER: &str = "rstack-dev";
+
     fn leaf_paths(command: &clap::Command, prefix: &mut Vec<String>, leaves: &mut Vec<String>) {
         let subcommands: Vec<_> = command
             .get_subcommands()
-            .filter(|sub| sub.get_name() != "help")
+            .filter(|sub| sub.get_name() != "help" && sub.get_name() != HOSTED_RUNNER)
             .collect();
         if subcommands.is_empty() {
             leaves.push(prefix.join(" "));
@@ -1738,7 +1752,10 @@ mod tests {
             {
                 found.push(prefix.join(" "));
             }
-            for sub in command.get_subcommands() {
+            for sub in command
+                .get_subcommands()
+                .filter(|sub| sub.get_name() != HOSTED_RUNNER)
+            {
                 prefix.push(sub.get_name().to_owned());
                 defining(sub, prefix, found);
                 prefix.pop();
@@ -2244,7 +2261,10 @@ mod tests {
             .get_arguments()
             .map(|argument| (path.to_owned(), argument.clone()))
             .collect();
-        for subcommand in command.get_subcommands() {
+        for subcommand in command
+            .get_subcommands()
+            .filter(|subcommand| subcommand.get_name() != HOSTED_RUNNER)
+        {
             let child = format!("{path} {}", subcommand.get_name());
             arguments.extend(tree_arguments(subcommand, &child));
         }

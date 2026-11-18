@@ -29,9 +29,7 @@ caseworkctl check ./casework
 caseworkctl explain ./casework
 caseworkctl test ./casework
 caseworkctl types ./casework --output ./casework-types
-caseworkctl dev start ./casework
-caseworkctl dev token requester ./casework
-caseworkctl dev token staff ./casework
+rstack dev start ./casework
 ```
 
 `check` compiles the policy and local schema closure offline. `explain` reports
@@ -39,14 +37,12 @@ the policy binding, context custody, stages, outcomes, routing, clocks,
 staffing, refusals, and recovery. `test` exercises only local synthetic
 fixtures; its `offline-synthetic` boundary does not prove a deployed service.
 `types` writes TypeScript and Python types for policy bindings and review
-contracts. `dev` owns a retained local Casework database and issuer; `dev token`
-writes owner-only headers for a registered teaching client. Use
-`caseworkctl dev events ./casework` for a bounded local runtime journal and
-`caseworkctl dev stop ./casework` when finished. A stop preserves the database.
-The dev database pulls `docker.io/library/postgres:17.11` at pinned digest
-`sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`.
-Retained owned containers using the previous exact ECR Public reference at
-that digest remain valid.
+contracts. `rstack dev` runs the project with its own PostgreSQL server and a local
+issuer, from a plan file. The
+[standalone decision example](examples/standalone-decision/dev.yaml) has the plan and a scenario
+for this starter. `rstack dev token RUN --as staff` writes an owner-only header file for a person the
+plan names, and `rstack dev stop RUN` removes the run with its database. See
+[Run a project for development](../platform/PROJECT-DEV.md) for the database image and recovery.
 
 Policy, stage, routing-rule, queue, team, and outcome labels are presentation
 text for people. They are single-line values: tabs, line feeds, carriage
@@ -357,10 +353,7 @@ after it (defence in depth). New notes still require current source
 disclosure.
 There is no generic Proposal read or source synchronization in this integration.
 
-For local development, configure `dev-clients.yaml` `integrations` explicitly
-and start the BReg dev session separately. Running `caseworkctl dev start`
-with `--issuer-project ./breg-project` borrows a ready BReg issuer only after the
-Casework clients and their precise grants have been registered there. See
+For local development, list BReg and Casework in one `rstack dev` plan. See
 [the pairing guide](https://docs.registrystack.org/configure/casework/#pair-a-current-source-provider) for provider and secret-file configuration.
 The BReg producer owns Proposal submission, cancellation, and result
 consumption. Applying the Proposal uses a separate BReg principal and BReg's

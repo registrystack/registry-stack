@@ -98,6 +98,10 @@ fn the_single_product_examples_satisfy_the_plan_schema() {
             "products/casework/examples/standalone-decision",
             "tests/scenarios.yaml",
         ),
+        (
+            "products/evidence/examples/standalone",
+            "tests/scenarios.yaml",
+        ),
     ] {
         assert!(
             plan.is_valid(&example(&format!("{directory}/dev.yaml"))),

@@ -23,28 +23,33 @@ if [[ ! -f "$run_dir/env.json" ]]; then
 	exit 2
 fi
 
-read -r container database < <(
+read -r run_id database < <(
 	python3 - "$run_dir/env.json" <<'PY'
 import json
+import re
 import sys
 from pathlib import Path
 
 environment = json.load(open(sys.argv[1], encoding="utf-8"))
 root = Path(sys.argv[1]).resolve().parent
-if (root / ".launcher-owned").read_text().strip() != "registry-stack-casework-loadtest-v1":
+if (root / ".launcher-owned").read_text().strip() != "registry-stack-casework-loadtest-v2":
     raise SystemExit(2)
-project = (root / "project").resolve()
-if Path(environment["project"]).resolve() != project:
+run_id = environment["run_id"]
+if not re.fullmatch(r"[0-9a-f]{32}", run_id):
     raise SystemExit(2)
-state = json.load(open(project / ".casework/dev/state.json", encoding="utf-8"))
-container = environment["database"]["container"]
-if container != state.get("containerId") or len(container) != 64 or any(c not in "0123456789abcdefABCDEF" for c in container):
+database = environment["database"]["database"]
+if database != f"rstack_{run_id}_casework":
     raise SystemExit(2)
-if environment["database"]["database"] != "casework_dev":
-    raise SystemExit(2)
-print(container, "casework_dev")
+print(run_id, database)
 PY
 )
+
+# rstack dev labels the managed PostgreSQL container with its run.
+container=$(docker ps --quiet --no-trunc --filter "label=org.registrystack.rstack.dev-run=$run_id")
+if [[ -z "$container" || "$container" == *$'\n'* ]]; then
+	printf '%s\n' "expected one running database container for rstack dev run $run_id" >&2
+	exit 2
+fi
 
 psql_exec() {
 	docker exec -i "$container" psql -v ON_ERROR_STOP=1 -q -U postgres -d "$database" "$@"

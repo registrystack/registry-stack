@@ -115,14 +115,16 @@ export async function serveBinaries(binDir, entries, libraryDir) {
 // of their variables names an exact candidate or released binary, served by
 // name from binDir; and its local development sessions, stopped in the order
 // given when the journey ends, each with the arguments stopArgs gives for its
-// project directory.
+// project directory. With devRuns, the journey's `rstack dev` runs keep their
+// state in a directory of the journey's own, and each is stopped when it ends.
 function productToolset({
   label,
   binaries,
   cargoArgs,
   profileVariable,
   targetName,
-  sessions,
+  sessions = [],
+  devRuns = false,
   managedComponents,
   stopArgs = (project) => ['dev', 'stop', project, '--remove'],
   buildEnv = () => ({}),
@@ -179,7 +181,10 @@ function productToolset({
         );
         await prepareManagedRstack({ repoRoot, workRoot, binDir, rstackBin: exact.rstack, components, libraryDir });
       }
-      return {};
+      if (!devRuns) return {};
+      const stateDir = join(workRoot, 'rstack-dev');
+      await mkdir(stateDir, { mode: 0o700 });
+      return { RSTACK_DEV_STATE_DIR: stateDir };
     },
 
     // Stop every local development session the journey started and reclaim
@@ -200,6 +205,27 @@ function productToolset({
         throw error;
       }
       let stoppedAll = true;
+      if (devRuns) {
+        const stateDir = join(dirname(readerDir), 'rstack-dev');
+        let runs = [];
+        try {
+          runs = (await readdir(stateDir, { withFileTypes: true })).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'));
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+        }
+        for (const { name: run } of runs) {
+          const stop = spawnSync(join(binDir, 'rstack'), ['dev', 'stop', run], {
+            encoding: 'utf8',
+            env: { ...process.env, RSTACK_DEV_STATE_DIR: stateDir },
+          });
+          if (stop.status === 0) {
+            console.log(`stopped the rstack dev run ${run}`);
+          } else {
+            console.error(`could not stop the rstack dev run ${run}:\n${stop.stdout}${stop.stderr}`);
+            stoppedAll = false;
+          }
+        }
+      }
       for (const [tool, state] of sessions) {
         for (const entry of entries.filter((path) => path.endsWith(state)).sort()) {
           if (inherited.get(entry) === (await stat(join(readerDir, entry))).mtimeMs) continue;
@@ -420,6 +446,7 @@ const bregProduct = productToolset({
   profileVariable: 'BREG_TUTORIAL_CARGO_PROFILE',
   targetName: 'breg-tutorial-source',
   sessions: [['bregctl', '.breg/dev/state.json']],
+  devRuns: true,
   managedComponents: { breg: { entrypoint: 'bregctl', binaries: ['bregctl', 'breg'] } },
   // A reader installs the client packages at the version `breg --version`
   // reports, and the journey's packages are assembled at the workspace
@@ -435,10 +462,10 @@ const breg = {
   clients: CLIENT_INSTALLS,
 
   async prepare(context) {
-    await bregProduct.prepare(context);
+    const productEnv = await bregProduct.prepare(context);
     const { env, close } = await clientEnvironment(context.steps ?? [], context.repoRoot, context.workRoot);
     closeClients = close;
-    return env;
+    return { ...productEnv, ...env };
   },
 
   async teardown(context) {
@@ -450,9 +477,9 @@ const breg = {
 };
 
 // Registry Casework: casework and caseworkctl, with breg and bregctl because
-// a Casework journey may review work a local registry holds. `caseworkctl dev`
-// resolves `casework` and `bregctl` from PATH. Casework sessions stop first,
-// so they no longer reconcile against a registry that is stopping.
+// a Casework journey may review work a local registry holds. Its local runs
+// are `rstack dev` runs, which resolve the product binaries from the managed
+// install and keep their state in the journey's own directory.
 const casework = productToolset({
   label: 'casework, caseworkctl, breg, and bregctl',
   commands: /(^|[^\w./=-])(caseworkctl|casework)([^\w./-]|$)|(^|\s)rstack\s+casework(?:\s|$)/mu,
@@ -470,10 +497,7 @@ const casework = productToolset({
     breg: { entrypoint: 'bregctl', binaries: ['bregctl', 'breg'] },
     casework: { entrypoint: 'caseworkctl', binaries: ['caseworkctl', 'casework'] },
   },
-  sessions: [
-    ['caseworkctl', '.casework/dev/state.json'],
-    ['bregctl', '.breg/dev/state.json'],
-  ],
+  devRuns: true,
 });
 
 // Registry Coordinator's reviewed-notice journey composes the three product

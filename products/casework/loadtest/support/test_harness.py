@@ -36,7 +36,12 @@ seed = importlib.util.module_from_spec(SEED_SPEC)
 SEED_SPEC.loader.exec_module(seed)
 
 EXAMPLE = REPOSITORY / "products/casework/examples/standalone-decision"
-HEADER = "Authorization: Bearer header.payload.signature\nRegistry-Casework-Profile: staff\n"
+HEADER = (
+    "Authorization: Bearer header.payload.signature\n"
+    "Registry-Casework-Profile: staff\n"
+    "Registry-Review-Profile: staff\n"
+)
+RUN_ID = "0123456789abcdef0123456789abcdef"
 
 
 class LifecycleStub:
@@ -278,74 +283,33 @@ class RegistryCaseworkHarnessTests(unittest.TestCase):
         results = [entry for entry in stub.requests if entry["path"] == "/v1/review-requests/request-new/result"]
         self.assertEqual(len(results), 2)
 
-    def test_local_project_rewrites_the_producer_binding_and_preserves_existing_output(self) -> None:
+    def test_local_project_copies_the_example_and_seeds_only_the_directory(self) -> None:
         source_policy = (EXAMPLE / "casework.yaml").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory) / "project"
-            loadenv.local_project(EXAMPLE, project, 45678, "agent-0123abcd")
-            policy = (project / "casework.yaml").read_text(encoding="utf-8")
-            self.assertIn("    issuer: http://127.0.0.1:45678\n", policy)
-            self.assertIn("    subject: agent-0123abcd\n", policy)
-            original_issuer = next(line for line in source_policy.splitlines(keepends=True) if line.startswith("    issuer: "))
-            original_subject = next(line for line in source_policy.splitlines(keepends=True) if line.startswith("    subject: "))
-            self.assertEqual(policy.count("    issuer: http://127.0.0.1:45678\n"), 1)
-            self.assertEqual(policy.count("    subject: agent-0123abcd\n"), 1)
+            loadenv.local_project(EXAMPLE, project)
+            self.assertEqual((project / "casework.yaml").read_text(encoding="utf-8"), source_policy)
             self.assertEqual(
-                policy.replace("    issuer: http://127.0.0.1:45678\n", original_issuer)
-                .replace("    subject: agent-0123abcd\n", original_subject),
-                source_policy,
+                (project / "dev.yaml").read_text(encoding="utf-8"), (EXAMPLE / "dev.yaml").read_text(encoding="utf-8")
             )
-            clients = (project / "dev-clients.yaml").read_text(encoding="utf-8")
-            self.assertIn("kind: CaseworkDevClients\n", clients)
-            self.assertIn("id: loadtest-producer", clients)
-            self.assertIn("id: loadtest-staff", clients)
-            self.assertIn("queue: decisions", clients)
+            self.assertFalse((project / "dev-clients.yaml").exists())
+            scenarios = (project / "tests/scenarios.yaml").read_text(encoding="utf-8")
+            self.assertIn("path: /v1/directory/bootstrap", scenarios)
+            self.assertIn("queueId: decisions", scenarios)
+            self.assertNotIn("request-a-decision", scenarios)
             sentinel = project / "sentinel"
             sentinel.write_text("keep", encoding="utf-8")
             with self.assertRaises(loadenv.LoadtestError):
-                loadenv.local_project(EXAMPLE, project, 45678, "agent-0123abcd")
+                loadenv.local_project(EXAMPLE, project)
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
-            with self.assertRaises(loadenv.LoadtestError):
-                loadenv.local_project(EXAMPLE, Path(directory) / "other", 45678, "subject with spaces")
         self.assertEqual((EXAMPLE / "casework.yaml").read_text(encoding="utf-8"), source_policy)
 
-    def test_local_project_changes_only_the_named_requester_binding(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            example = root / "example"
-            shutil.copytree(EXAMPLE, example)
-            policy_path = example / "casework.yaml"
-            original = policy_path.read_text(encoding="utf-8")
-            other_producer = original.split("trustedProducers:\n", 1)[1].replace(
-                "  requester:\n    profile:", "  other-requester:\n    profile:", 1
-            )
-            policy_path.write_text(original + other_producer, encoding="utf-8")
-            for index, (port, subject) in enumerate(((45678, "agent-0123abcd"), (45679, "agent-9876abcd"))):
-                with self.subTest(port=port, subject=subject):
-                    project = root / f"project-{index}"
-                    loadenv.local_project(example, project, port, subject)
-                    policy = (project / "casework.yaml").read_text(encoding="utf-8")
-                    self.assertEqual(policy.count(f"    issuer: http://127.0.0.1:{port}\n"), 1)
-                    self.assertEqual(policy.count(f"    subject: {subject}\n"), 1)
-                    self.assertTrue(policy.endswith(other_producer))
-                    self.assertEqual(policy.split("trustedProducers:\n", 1)[0], original.split("trustedProducers:\n", 1)[0])
-            self.assertEqual(policy_path.read_text(encoding="utf-8"), original + other_producer)
-
-    def test_local_project_refuses_requester_binding_drift(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            original = (EXAMPLE / "casework.yaml").read_text(encoding="utf-8")
-            producer = original.split("trustedProducers:\n", 1)[1]
-            for name, policy in (
-                ("missing", original.replace("  requester:\n    profile:", "  other-requester:\n    profile:")),
-                ("duplicate", original + producer),
-            ):
-                with self.subTest(name=name):
-                    example = root / name
-                    example.mkdir()
-                    (example / "casework.yaml").write_text(policy, encoding="utf-8")
-                    with self.assertRaisesRegex(loadenv.LoadtestError, "update load-test preparation"):
-                        loadenv.local_project(example, root / f"project-{name}", 45678, "agent-0123abcd")
+    def test_example_plan_names_the_people_the_harness_acts_as(self) -> None:
+        plan = (EXAMPLE / "dev.yaml").read_text(encoding="utf-8")
+        for person in (loadenv.PRODUCER_PERSON, loadenv.STAFF_PERSON):
+            self.assertIn(f"\n  {person}:\n", plan)
+        self.assertIn(f"    subject: {loadenv.STAFF_PERSON}\n", plan)
+        self.assertIn(f"subject: {loadenv.STAFF_PERSON}}}", loadenv.SCENARIOS)
 
     def test_local_project_refuses_symbolic_links(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -357,114 +321,122 @@ class RegistryCaseworkHarnessTests(unittest.TestCase):
             for source, output in ((linked_example, root / "project"), (EXAMPLE, linked_output)):
                 with self.subTest(source=source.name, output=output.name):
                     with self.assertRaises(loadenv.LoadtestError):
-                        loadenv.local_project(source, output, 45678, "agent-0123abcd")
+                        loadenv.local_project(source, output)
             copied_example = root / "example"
             shutil.copytree(EXAMPLE, copied_example)
             (copied_example / "linked-policy.yaml").symlink_to(EXAMPLE / "casework.yaml")
             with self.assertRaises(loadenv.LoadtestError):
-                loadenv.local_project(copied_example, root / "project", 45678, "agent-0123abcd")
+                loadenv.local_project(copied_example, root / "project")
             self.assertFalse((root / "project").exists())
             self.assertTrue(linked_output.is_symlink())
 
-    def test_dev_header_must_be_the_owned_private_session_file(self) -> None:
+    def _fake_rstack(self, directory: Path, header: Path) -> Path:
+        fake = directory / "rstack"
+        fake.write_text(
+            "#!/bin/sh\n"
+            '[ "$RSTACK_DEV_STATE_DIR" = "$EXPECTED_STATE" ] || exit 3\n'
+            f'[ "$*" = "--format json dev token {RUN_ID} --as $EXPECTED_PERSON" ] || exit 4\n'
+            f"printf '%s\\n' '{{\"credentials\":[{{\"header_file\":\"{header}\"}}]}}'\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o700)
+        return fake
+
+    def test_dev_header_must_be_the_owned_private_run_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            project = Path(directory) / "project"
-            header = project / ".casework/dev/secrets/loadtest-staff.header"
+            root = Path(directory).resolve()
+            state = root / "state"
+            header = state / RUN_ID / "headers-casework-staff-1"
             header.parent.mkdir(parents=True)
             header.write_text(HEADER, encoding="ascii")
             header.chmod(0o600)
-            fake = Path(directory) / "caseworkctl"
-            fake.write_text(f"#!/bin/sh\nprintf '%s\\n' '{{\"headerFile\":\"{header}\"}}'\n", encoding="utf-8")
-            fake.chmod(0o700)
-            self.assertEqual(loadenv.fresh_header(fake, project, "loadtest-staff"), header.resolve())
+            fake = self._fake_rstack(root, header)
+            os.environ["EXPECTED_STATE"] = str(state)
+            self.addCleanup(os.environ.pop, "EXPECTED_STATE", None)
+            self.addCleanup(os.environ.pop, "EXPECTED_PERSON", None)
+            os.environ["EXPECTED_PERSON"] = "staff"
+            self.assertEqual(loadenv.fresh_header(fake, RUN_ID, state, "staff"), header)
             with self.assertRaises(loadenv.LoadtestError):
-                loadenv.fresh_header(fake, project, "loadtest-producer")
-            with self.assertRaises(loadenv.LoadtestError):
-                loadenv.fresh_header(fake, project, "loadtest-admin")
+                loadenv.fresh_header(fake, RUN_ID, state, "administrator")
             header.write_text("Authorization: Bearer opaque\n", encoding="ascii")
             with self.assertRaises(loadenv.LoadtestError):
-                loadenv.fresh_header(fake, project, "loadtest-staff")
+                loadenv.fresh_header(fake, RUN_ID, state, "staff")
             header.write_text(HEADER, encoding="ascii")
             header.chmod(0o644)
             with self.assertRaises(loadenv.LoadtestError):
-                loadenv.fresh_header(fake, project, "loadtest-staff")
+                loadenv.fresh_header(fake, RUN_ID, state, "staff")
+            header.chmod(0o600)
+            outside = root / "elsewhere"
+            outside.write_text(HEADER, encoding="ascii")
+            outside.chmod(0o600)
+            os.environ["EXPECTED_PERSON"] = "requester"
+            fake = self._fake_rstack(root, outside)
+            with self.assertRaises(loadenv.LoadtestError):
+                loadenv.fresh_header(fake, RUN_ID, state, "requester")
 
-    def test_environment_records_only_the_owned_ready_session(self) -> None:
+    def test_environment_records_only_the_owned_ready_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve() / ".run"
-            project = root / "project"
-            state = project / ".casework/dev/state.json"
-            state.parent.mkdir(parents=True)
+            root.mkdir()
             (root / ".launcher-owned").write_text(loadenv.MARKER + "\n", encoding="ascii")
-            state.write_text(json.dumps({"containerId": "a" * 64}), encoding="utf-8")
-            state.chmod(0o600)
-            caseworkctl = Path(directory) / "caseworkctl"
-            caseworkctl.write_text("", encoding="utf-8")
-            report = {
-                "ok": True,
-                "status": "complete",
-                "outcome": "ready",
-                "project": str(project),
-                "stateFile": str(state),
-                "caseworkUrl": "http://127.0.0.1:4321",
-                "clients": [{"id": "loadtest-staff"}, {"id": "loadtest-producer"}],
-            }
-            report_path = root / "dev-report.json"
+            rstack = Path(directory) / "rstack"
+            rstack.write_text("", encoding="utf-8")
+            report = {"run_id": RUN_ID, "products": {"casework": "http://127.0.0.1:4321"}}
+            report_path = root / "start-report.json"
             for stale in (
-                {
-                    **{key: value for key, value in report.items() if key != "outcome"},
-                    "status": "ready",
-                },
-                {key: value for key, value in report.items() if key != "outcome"},
-                {**report, "outcome": "starting"},
-                {**report, "ok": False},
+                {**report, "run_id": "not-a-run"},
+                {**report, "products": {}},
+                {**report, "products": {"casework": "http://192.0.2.1:4321"}},
+                {**report, "products": {"casework": "https://127.0.0.1:4321"}},
             ):
                 report_path.write_text(json.dumps(stale), encoding="utf-8")
                 with self.assertRaises(loadenv.LoadtestError):
-                    loadenv.write_environment(root, report_path, caseworkctl, "release", "")
-            report_path.write_text(json.dumps({**report, "caseworkUrl": "http://192.0.2.1:4321"}), encoding="utf-8")
-            with self.assertRaises(loadenv.LoadtestError):
-                loadenv.write_environment(root, report_path, caseworkctl, "release", "")
+                    loadenv.write_environment(root, report_path, rstack, "release", "")
             report_path.write_text(json.dumps(report), encoding="utf-8")
-            loadenv.write_environment(root, report_path, caseworkctl, "release", "")
+            loadenv.write_environment(root, report_path, rstack, "release", "")
             environment = json.loads((root / "env.json").read_text(encoding="utf-8"))
             self.assertEqual(environment["casework_url"], "http://127.0.0.1:4321")
             self.assertEqual(environment["pool_max"], 32)
-            self.assertEqual(environment["database"], {"container": "a" * 64, "database": "casework_dev"})
+            self.assertEqual(environment["run_id"], RUN_ID)
+            self.assertEqual(environment["database"], {"database": f"rstack_{RUN_ID}_casework"})
+            self.assertEqual(environment["state_dir"], str(root / "state"))
             self.assertEqual(sorted(environment), sorted(
-                ["build_profile", "casework_url", "caseworkctl", "database", "pool_max", "project",
-                 "runtime_library_path"]
+                ["build_profile", "casework_url", "database", "pool_max", "rstack", "run_id",
+                 "runtime_library_path", "state_dir"]
             ))
             with self.assertRaises(FileExistsError):
-                loadenv.write_environment(root, report_path, caseworkctl, "release", "")
+                loadenv.write_environment(root, report_path, rstack, "release", "")
 
     def test_describe_accepts_only_the_recorded_build_of_this_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory).resolve()
             root = repository / "products/casework/loadtest/.run"
-            (root / "project").mkdir(parents=True)
+            (root / "state").mkdir(parents=True)
             (root / ".launcher-owned").write_text(loadenv.MARKER + "\n", encoding="ascii")
-            caseworkctl = repository / "target/release/caseworkctl"
-            caseworkctl.parent.mkdir(parents=True)
-            caseworkctl.write_text("", encoding="utf-8")
+            rstack = repository / "target/release/rstack"
+            rstack.parent.mkdir(parents=True)
+            rstack.write_text("", encoding="utf-8")
             library = repository / "fips"
             library.mkdir()
             environment = {
                 "casework_url": "http://127.0.0.1:1234",
-                "caseworkctl": str(caseworkctl),
+                "rstack": str(rstack),
                 "build_profile": "release",
-                "project": str(root / "project"),
+                "run_id": RUN_ID,
+                "state_dir": str(root / "state"),
                 "runtime_library_path": str(library),
             }
             (root / "env.json").write_text(json.dumps(environment), encoding="utf-8")
             self.assertEqual(
                 loadenv.describe(root, repository),
-                ("http://127.0.0.1:1234", str(caseworkctl), str(root / "project"), str(library)),
+                ("http://127.0.0.1:1234", str(rstack), RUN_ID, str(library)),
             )
             for field, value in (
                 ("build_profile", "debug"),
                 ("casework_url", "http://127.0.0.1:1234/v1"),
                 ("runtime_library_path", f"{library}:/tmp"),
+                ("run_id", "../escape"),
+                ("state_dir", str(repository / "elsewhere")),
             ):
                 (root / "env.json").write_text(json.dumps({**environment, field: value}), encoding="utf-8")
                 with self.assertRaises(loadenv.LoadtestError):
@@ -481,7 +453,7 @@ class RegistryCaseworkHarnessTests(unittest.TestCase):
             run_dir.mkdir()
             (run_dir / "env.json").write_text("{}", encoding="utf-8")
             described = subprocess.CompletedProcess(
-                [], 0, stdout="http://127.0.0.1:4321 /opt/caseworkctl /opt/project\n", stderr=""
+                [], 0, stdout=f"http://127.0.0.1:4321 /opt/rstack {RUN_ID}\n", stderr=""
             )
             arguments = ["seed.py", "--count", "200", "--run-dir", str(run_dir)]
             stderr = io.StringIO()
@@ -688,10 +660,12 @@ done
         self.assertIn("trap cleanup_failed_start EXIT", up)
         self.assertIn("registry_cargo_build", up)
         self.assertIn("--runtime-library-path", up)
-        self.assertIn("caseworkctl\" --format json dev start", up)
-        self.assertIn("dev stop --remove", up)
-        self.assertIn("dev stop --remove", down)
-        self.assertIn("registry-stack-casework-loadtest-v1", down)
+        self.assertIn("rstack\" --format json dev start", up)
+        self.assertIn("RSTACK_DEV_STATE_DIR", up)
+        self.assertIn("dev stop", up)
+        self.assertIn("dev stop", down)
+        self.assertNotIn("caseworkctl dev", up + down + run + dbstats)
+        self.assertIn("registry-stack-casework-loadtest-v2", down)
         self.assertIn("DYLD_FALLBACK_LIBRARY_PATH", run + down)
         for name in ("reviewHistoryLockWaiters", "lockWaiters", "blockedBackends"):
             self.assertIn(f"'{name}'", dbstats)

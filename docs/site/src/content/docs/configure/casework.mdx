@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-18"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -22,14 +22,14 @@ import reference from '../../../data/generated/casework-configuration.json';
 If you are writing the policy a Registry Casework deployment will run, you edit a project
 directory and check it offline, with no database and no network. You continue in
 `tutorial-work/casework`, the project from
-[Decide your first ReviewRequest](../../tutorials/first-casework/), with its development session
-still running.
+[Decide your first ReviewRequest](../../tutorials/first-casework/), with its `rstack dev` run
+still going.
 
 ## Read the project files
 
-`casework.yaml` is the policy. `dev-clients.yaml` names the local callers and teams for
-`caseworkctl dev`, `fixtures/` holds the cases `test` proves, and `runtime.example.yaml` is a
-starting runtime configuration for a deployment. `.casework/schemas/` holds the JSON Schemas your
+`casework.yaml` is the policy. `dev.yaml` and `tests/scenarios.yaml`, which you wrote in the
+tutorial, describe the local run for `rstack dev`. `fixtures/` holds the cases `test` proves, and
+`runtime.example.yaml` is a starting runtime configuration for a deployment. `.casework/schemas/` holds the JSON Schemas your
 editor reads through each file's first-line comment. Check the project as it stands:
 
 ```sh test-cwd="tutorial-work/casework"
@@ -38,15 +38,14 @@ caseworkctl check .
 
 ```json test-excerpt
 {
-  "filesChecked": 3,
+  "filesChecked": 2,
   "policyBindings": [
     {"digest": "sha256:<digest>", "id": "decision", "version": "1"}
   ]
 }
 ```
 
-Check reads `casework.yaml`, `dev-clients.yaml`, the development session's state file while one
-exists, and any `holiday-sets/`, and prints one binding for each
+Check reads the project's configuration files and any `holiday-sets/`, and prints one binding for each
 [ReviewPolicy](../../reference/glossary/#review-policy). When a file is wrong, it prints a refusal
 with a code such as `casework.review-policy.unknown-queue`, the file, line, and JSON pointer, and
 the next step to take.
@@ -200,7 +199,7 @@ caseworkctl test .
 
 ```json test-excerpt
 {
-  "filesChecked": 4,
+  "filesChecked": 3,
   "policyBindings": [
     {"digest": "sha256:<digest>", "id": "decision", "version": "1"}
   ]
@@ -259,29 +258,31 @@ time. [Deploy Registry Casework](../../operate/casework/) activates the package.
     crates/registry-casework/src/http.rs, create_holiday_revision;
     crates/registry-casework/src/review.rs, "source-facts-missing" clock state. */}
 
-## Restart the session on the edited project
+## Restart the run on the edited project
 
-The running session serves the package it built when it started, and it refuses to restart on
-edited files while it holds records, so discard it and start a fresh one. This deletes the
-ReviewRequest you decided earlier and the session's credentials:
+A run serves the package it built when it started, so stop it and start a fresh one on the edited
+files. This deletes the ReviewRequest you decided earlier and the run's credentials. The scenario
+seats the staff team again. Find the run first. The start report you saved in `run.json` names it:
 
 ```sh
-caseworkctl dev stop --remove
-caseworkctl dev start
+run_id="$(jq -r .run_id run.json)"
+casework_url="$(jq -r .products.casework run.json)"
+headers_for() {
+  rstack dev token "$run_id" --as "$1" | awk '$1 == "casework" && $2 == "headers" {print $3}'
+}
 ```
 
-```json test-excerpt
-{"status": "complete", "outcome": "stopped", "directory": {"revision": 0, "teams": 0}}
+```sh
+rstack dev stop "$run_id"
+rstack --format json dev start . --ttl 2h > run.json
+run_id="$(jq -r .run_id run.json)"
+casework_url="$(jq -r .products.casework run.json)"
 ```
 
-```json test-excerpt
-{"status": "complete", "outcome": "ready", "directory": {"revision": 1, "teams": 1}}
-```
+The new run has a new ID, a new port and new tokens, so ask for tokens again with `headers_for`
+before your next call. Leave it running.
 
-The session keeps its ports. Its tokens are new, so run `caseworkctl dev token` again before your
-next call. Leave it running.
-
-{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, start, stop, InputsChanged. */}
+{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack/tests/dev_run.rs, casework_alone_runs_end_to_end. */}
 
 ## Enable a delegated staff reader
 

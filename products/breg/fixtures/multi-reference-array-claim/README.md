@@ -10,14 +10,13 @@ also sends a signed token with a scalar claim through the production
 authenticator and proves that the malformed credential fails closed before the
 Action runs.
 
-Run the fixture through the local development lifecycle:
+Check the fixture, then run it with `rstack dev`:
 
 ```bash
 bregctl check .
-bregctl dev start .
+rstack dev start . --ttl 1h
 ```
 
-`bregctl dev start` runs `tests/journeys.yaml` before serving the package. Stop
-the session with `bregctl dev stop . --remove`.
-The claim variants bind to their exact refusal steps through
-[`testBindings`](https://docs.registrystack.org/reference/bregctl-dev/#explicit-teaching-clients).
+`rstack dev start` runs `tests/journeys.yaml` before serving the package. Stop the run with
+`rstack dev stop RUN`, which removes its data. The claim variants bind to their exact refusal steps
+through the people the fixture's `dev.yaml` names for each journey step.

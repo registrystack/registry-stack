@@ -34,6 +34,14 @@ use super::{
     private_directory, stopping, write_private, BregAuthority, RunInput, POLL,
 };
 
+#[path = "evidence.rs"]
+mod evidence;
+
+/// Makes the run's Evidence package and packaging output writable again so the run directory can be removed.
+pub(super) fn unlock_package(root: &Path) -> Result<()> {
+    evidence::unlock_package(root)
+}
+
 /// The run's development field-encryption data key, inside the owner-only run
 /// directory and removed with it.
 pub(super) const FIELD_KEY: &str = "field-key";
@@ -87,6 +95,9 @@ impl RuntimeKind {
         }
     }
 }
+
+/// The refusal for a product that needs the run's database when the run has none.
+const NEEDS_DATABASE: &str = "the product needs a database but the run has none";
 
 /// How long a started product has to answer `/ready`.
 const READINESS_WAIT: Duration = Duration::from_secs(30);
@@ -299,6 +310,13 @@ pub(super) struct ProductRunner<'a> {
     http: reqwest::Client,
     children: Vec<(RuntimeKind, guard::Child)>,
     bindings: Option<RuntimeBindings>,
+    /// The run issuer, kept so Evidence's key set can serve its public keys.
+    issuer: Option<Arc<Issuer>>,
+    /// The run issuer's reserved listener, held for the key set server of an
+    /// Evidence run until Evidence activates.
+    issuer_listener: Option<TcpListener>,
+    /// The loopback key set server Evidence's target names, stopped with the run.
+    jwks: Option<evidence::JwksServer>,
 }
 
 impl<'a> ProductRunner<'a> {
@@ -322,7 +340,15 @@ impl<'a> ProductRunner<'a> {
                 .build()?,
             children: Vec::new(),
             bindings: None,
+            issuer: None,
+            issuer_listener: None,
+            jwks: None,
         })
+    }
+
+    /// Hands over the run issuer's listener to serve Evidence's key set.
+    pub(super) fn hold_issuer_listener(&mut self, listener: TcpListener) {
+        self.issuer_listener = Some(listener);
     }
 
     pub(super) fn check(&self) -> Result<()> {
@@ -334,20 +360,29 @@ impl<'a> ProductRunner<'a> {
                 // packaging; the published source is left intact.
                 continue;
             }
-            self.tool(
-                entry.product,
-                "check",
-                &[self.input.project.join(&entry.project).as_os_str()],
-            )?;
+            let project = self.input.project.join(&entry.project);
+            if entry.product == Product::Evidence {
+                // Evidence checks a project against a target. The project's
+                // `local-target.yaml` names its development connections.
+                let target = project.join("local-target.yaml");
+                self.tool(
+                    entry.product,
+                    "check",
+                    &[project.as_os_str(), "--target".as_ref(), target.as_os_str()],
+                )?;
+                continue;
+            }
+            self.tool(entry.product, "check", &[project.as_os_str()])?;
         }
         Ok(())
     }
 
     pub(super) fn start(
         &mut self,
-        database: &mut Database,
+        mut database: Option<&mut Database>,
         issuer: Arc<Issuer>,
     ) -> Result<BTreeMap<Product, String>> {
+        self.issuer = Some(issuer.clone());
         // Keep the reservations for later products until each is ready to bind.
         let ports: Vec<_> = self
             .input
@@ -384,14 +419,22 @@ impl<'a> ProductRunner<'a> {
             let bind = url.strip_prefix("http://").expect("local URL");
             let config = match product {
                 Product::Breg => {
-                    let (config, package) =
-                        self.activate_breg(database, &issuer, &project, bind)?;
+                    let (config, package) = self.activate_breg(
+                        database.as_deref_mut().context(NEEDS_DATABASE)?,
+                        &issuer,
+                        &project,
+                        bind,
+                    )?;
                     breg_package = Some(package);
                     config
                 }
-                Product::Casework => {
-                    self.activate_casework(database, &project, bind, breg_package.as_deref())?
-                }
+                Product::Casework => self.activate_casework(
+                    database.as_deref_mut().context(NEEDS_DATABASE)?,
+                    &project,
+                    bind,
+                    breg_package.as_deref(),
+                )?,
+                Product::Evidence => self.activate_evidence(&project, bind)?,
             };
             let binaries = &self.input.binaries[&product];
             let mut command = guard::Command::new(
@@ -400,6 +443,9 @@ impl<'a> ProductRunner<'a> {
                 &binaries.runtime,
             )
             .map_err(operational)?;
+            if product == Product::Evidence {
+                command.arg("serve");
+            }
             command.arg("--runtime-config").arg(config);
             if product == Product::Casework {
                 command.arg("serve");
@@ -880,6 +926,9 @@ impl<'a> ProductRunner<'a> {
                 config
             }
             Product::Casework => casework_config(plan, name, self.root, package, &identity, bind),
+            Product::Evidence => {
+                unreachable!("Evidence writes its runtime configuration by packaging")
+            }
         };
         if let Some(bindings) = &self.bindings {
             bindings.configure(product, &mut config);
@@ -1010,6 +1059,7 @@ impl<'a> ProductRunner<'a> {
             incomplete.join(", ")
         );
         drop(self.bindings.take());
+        drop(self.jwks.take());
         Ok(())
     }
 
@@ -1406,6 +1456,7 @@ fn inspection_failed(
     let (tool, variable) = match product {
         Product::Breg => ("bregctl", "RSTACK_BREGCTL_BIN"),
         Product::Casework => ("caseworkctl", "RSTACK_CASEWORKCTL_BIN"),
+        Product::Evidence => ("evidencectl", "RSTACK_EVIDENCECTL_BIN"),
     };
     InspectionUnavailable::new(
         field,
@@ -1466,6 +1517,7 @@ fn product_root(
     let manifest_name = match product {
         Product::Breg => "registry.yaml",
         Product::Casework => "casework.yaml",
+        Product::Evidence => "evidence.yaml",
     };
     let manifest = project.join(manifest_name).canonicalize().map_err(|_| {
         plan::SemanticRefusal::new(

@@ -18,13 +18,12 @@ project with live and indexed external Person and shareholding views.
 Its synthetic source and journey are acceptance fixtures for a disposable
 deployment.
 
-The `minimal/` and `facility/` shipped starters include their own local clients
-and authored journeys.
-The facility starter's `bregctl examples` scenarios cover registration,
+The `minimal/` and `facility/` shipped starters include their own development
+plans, local callers and authored journeys.
+The facility starter's scenarios cover registration,
 no-review draft editing, ownership refusal, submission, manual application,
-cancellation, and an independently reviewed correction. Their retained attempts
-preserve exact commands through interruption and restart. See the portable
-[facility instructions](facility/README.md) for the commands.
+cancellation, and an independently reviewed correction. See the portable
+[facility instructions](facility/README.md).
 
 From the repository root:
 
@@ -91,4 +90,4 @@ Python project types used by `facility/console/`; the console tests use metadata
 and generated clients rather than lifecycle URL construction.
 
 For a locally deployed service, the maintained [development runbook](https://docs.registrystack.org/reference/bregctl-dev/)
-owns PostgreSQL, authentication, package activation and the `bregctl dev` lifecycle.
+owns PostgreSQL, authentication and package activation. `rstack dev` runs a project locally.

@@ -2,27 +2,26 @@
 
 A local environment for measuring Registry Casework's unified review surfaces
 with the `standalone-decision` example. The launcher delegates the whole
-service lifecycle to `caseworkctl dev`: its owned PostgreSQL container, the
-stock local token issuer, credentials, the directory seed, retained state, and
-the supervised Casework process. Load evidence and synthetic seed data live
-under `loadtest/.run` and are never committed.
+service lifecycle to `rstack dev` (see
+[Run a project with rstack dev](../../platform/PROJECT-DEV.md)): its managed
+PostgreSQL container, the throwaway local token signing key, credentials, the
+directory seed, run state, and the supervised Casework process. Load evidence
+and synthetic seed data live under `loadtest/.run` and are never committed.
 
-The example is copied into `.run/project` with two changes. Its producer
-binding names the local issuer on the port this environment reserved and the
-subject `caseworkctl dev identity loadtest-producer` reports, because the
-checked-in example names a fixed port and a placeholder subject. The copy also
-gets a `dev-clients.yaml` with four synthetic clients and a directory seed that
-puts `loadtest-staff` on the `decisions` queue. The current harness uses one
-Staff principal and one producer principal; additional local clients may bind
-the same access profile when a workload needs distinct people with the same
-role.
+The example is copied into `.run/project` with one change. Its `tests/`
+scenario is replaced by one that only staffs the `decisions` queue, because the
+example's own scenario also decides a request and the seed counts must start at
+zero. The example's `dev.yaml` is used as it is: the `staff` person and the
+`requester` person are the one Staff principal and the one producer principal
+the harness acts as. Add people to `dev.yaml` when a workload needs distinct
+people with the same role.
 
 ## Prerequisites
 
 - `cargo`, `docker`, `python3`
 - `k6` (`brew install k6`)
 
-`up.sh` builds `casework` and `caseworkctl` with the release profile, because
+`up.sh` builds `casework`, `caseworkctl`, and `rstack` with the release profile, because
 latency and capacity from an unoptimized build are not representative.
 `up.sh --debug` builds the development profile instead, for iterating on the
 harness itself; every run manifest records which profile was measured. On
@@ -56,8 +55,8 @@ accounts for, so a later `seed.py` refuses to run; run `down.sh` and start a
 fresh environment.
 
 `up.sh` refuses any existing `.run` path and does not clear it. `down.sh` first
-validates the launcher's ownership marker, then calls `caseworkctl dev stop
---remove` for that exact project. It retains the load evidence and synthetic
+validates the launcher's ownership marker, then calls `rstack dev stop` for
+that exact run, with the run state kept under `.run/state`. It retains the load evidence and synthetic
 seed files. Move the stopped `.run` directory aside before starting another
 environment.
 
@@ -95,10 +94,10 @@ flow pool. Workload selection uses a deterministic per-VU PRNG
 (`RANDOM_SEED=20260902` by default).
 
 The harness does not benchmark the token issuer. Before every k6 process,
-`run.sh` calls `caseworkctl dev token` for `loadtest-staff` and
-`loadtest-producer`, validates each reported owner-only header file, and gives
-k6 only those paths. Each k6 invocation must fit within four minutes so the
-five-minute development tokens remain usable.
+`run.sh` calls `rstack dev token` for the `staff` and `requester` people,
+validates each reported owner-only header file, and gives k6 only those paths.
+Each k6 invocation must fit within four minutes so the five-minute development
+tokens remain usable.
 
 ## Tuning
 
@@ -161,8 +160,8 @@ does not claim per-statement timings.
 The harness never saves bearer tokens, cursors, raw principals,
 request/response bodies, SQL text, or bound SQL values. Task and request
 identifiers exist only in the owner-only seed pools under `.run/seed`. The
-only authorization files are the owner-only headers managed by `caseworkctl
-dev` inside the project's ignored private state.
+only authorization files are the owner-only headers managed by `rstack dev`
+inside the run's private state under `.run/state`.
 
 ## Database diagnostics
 
@@ -178,13 +177,13 @@ products/casework/loadtest/dbstats.sh analyze
 `reviewHistoryLockWaiters` counts lock waits on statements that touch
 `casework_review_history`. Review mutations append their accountability rows
 to `casework_review_history` inside the mutating transaction. Audit entries go
-to the runtime's audit destination, which `caseworkctl dev` places in the
-project's private state, so no database table carries them.
+to the runtime's audit destination, which `rstack dev` places in the run's
+private state, so no database table carries them.
 
 ## Reading results
 
 - The runtime's PostgreSQL pool is fixed at 32 connections with a 5 second checkout wait, and
-  neither `caseworkctl dev` nor runtime configuration changes it. The manifest
+  neither `rstack dev` nor runtime configuration changes it. The manifest
   records the constant.
 - The inbox list is the expected hot spot: one page loads a bounded set of
   candidate tasks and checks each on its own pool checkout. Expect `list_tasks`

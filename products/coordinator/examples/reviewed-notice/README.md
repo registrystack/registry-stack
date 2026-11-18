@@ -44,7 +44,7 @@ cargo build --locked -p registry-coordinator --example reviewed-notice-input
 ~~~
 
 Give it an owner-only token file for a BReg profile that may read the
-application. A bregctl dev token header file is accepted directly:
+application. A header file from `rstack dev token`, or the one the session helper writes, is accepted directly:
 
 ~~~sh
 target/debug/examples/reviewed-notice-input \

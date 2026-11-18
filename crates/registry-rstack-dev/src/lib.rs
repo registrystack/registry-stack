@@ -4,7 +4,7 @@
 //! so each product CLI that `rstack dev` supports links this crate behind the
 //! hidden [`COMMAND`] subcommand and the launcher execs that host. `check`
 //! and `start` run in the CLI of the plan's first product in the order breg,
-//! casework, because the plan needs that CLI anyway. `status`, `token`, and
+//! casework, evidence, because the plan needs that CLI anyway. `status`, `token`, and
 //! `stop` run in the first host available: a run keeps its state in its run
 //! directory, so any host of the same release serves a run another host
 //! started. This crate links no product crate; it drives each product through
@@ -171,6 +171,16 @@ struct RunInput {
 }
 
 impl RunInput {
+    /// Whether any product in the plan keeps its data in PostgreSQL. Evidence
+    /// holds no database, so a plan of Evidence alone needs neither a server
+    /// nor Docker.
+    fn needs_database(&self) -> bool {
+        self.plan
+            .products
+            .iter()
+            .any(|entry| entry.product != Product::Evidence)
+    }
+
     fn requires_postgis(&self) -> bool {
         self.breg_authority
             .as_ref()
@@ -360,6 +370,7 @@ fn provisioned_labels(root: &Path) -> Result<Vec<(&'static str, bool)>> {
                 labels.push(("breg", spatial));
             }
             Product::Casework => labels.push(("casework", false)),
+            Product::Evidence => {}
         }
     }
     Ok(labels)
@@ -858,7 +869,11 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
     plan::validate_application_authority(&plan, &inspection)?;
     plan.order_products_for_start();
     let named = |variable| env::var_os(variable).is_some_and(|value| !value.is_empty());
-    let managed_database = !named(DATABASE_URL);
+    let needs_database = plan
+        .products
+        .iter()
+        .any(|entry| entry.product != Product::Evidence);
+    let managed_database = needs_database && !named(DATABASE_URL);
     if managed_database {
         ensure!(
             !named(CA_FILE),
@@ -1033,8 +1048,8 @@ fn reserve_run_issuer(plan: &mut plan::Plan) -> Result<Option<TcpListener>> {
         return Ok(None);
     }
     ensure!(
-        plan.application.is_some() || plan.paired_run_binding(),
-        "run issuer requires an application or exact paired binding"
+        plan.application.is_some() || plan.paired_run_binding() || plan.runs_evidence(),
+        "run issuer requires an application, an exact paired binding, or Evidence"
     );
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .context("reserve run issuer loopback listener")
@@ -1075,6 +1090,11 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     if issuer_listener.is_some() {
         write_private(&root.join("input.json"), &capture_input(&input)?)?;
     }
+    if input.plan.runs_evidence() {
+        if let Some(listener) = issuer_listener.take() {
+            products.hold_issuer_listener(listener);
+        }
+    }
     let mut database = None;
     let mut docker = None;
     let mut expiry = None;
@@ -1082,42 +1102,50 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     let image = Image::for_plan(input.requires_postgis());
     let prepared = catch_startup(|| {
         products.check()?;
-        let (admin, ca) = if input.managed_database {
-            // The run's own server hands the by-address path its URL and the
-            // CA the run drew, as an operator's server would.
-            let server =
-                docker
-                    .insert(Docker::connect()?)
-                    .start_server(root, &input.run_id, image)?;
-            write_private(&root.join("postgres-ca"), &server.ca_pem)?;
-            (server.admin_url, Some(server.ca_pem))
-        } else {
-            let ca = env::var_os(CA_FILE)
-                .map(|path| {
-                    let bytes = plan::read(Path::new(&path), 1024 * 1024)
-                        .context("cannot read the PostgreSQL CA file")
-                        .map_err(operational)?;
-                    write_private(&root.join("postgres-ca"), &bytes)?;
-                    Ok::<_, anyhow::Error>(bytes)
-                })
-                .transpose()?;
-            let admin = Zeroizing::new(
-                env::var(DATABASE_URL)
-                    .map_err(|_| anyhow::anyhow!("missing PostgreSQL administrator URL"))?,
-            );
-            (admin, ca)
-        };
         let issuer = Arc::new(Issuer::create(root)?);
-        let connected =
-            Database::connect(&admin, ca.as_deref(), &input.run_id).map_err(with_ca_hint)?;
-        // The cluster identity must be recorded before anything can create a database or role.
-        write_private(
-            &root.join(POSTGRES_IDENTITY),
-            &serde_json::to_vec(connected.recovery_identity())?,
-        )
-        .context("cannot record the PostgreSQL cluster for recovery")
-        .map_err(operational)?;
-        let urls = products.start(database.insert(connected), issuer.clone())?;
+        let connected = if input.needs_database() {
+            let (admin, ca) = if input.managed_database {
+                // The run's own server hands the by-address path its URL and the
+                // CA the run drew, as an operator's server would.
+                let server =
+                    docker
+                        .insert(Docker::connect()?)
+                        .start_server(root, &input.run_id, image)?;
+                write_private(&root.join("postgres-ca"), &server.ca_pem)?;
+                (server.admin_url, Some(server.ca_pem))
+            } else {
+                let ca = env::var_os(CA_FILE)
+                    .map(|path| {
+                        let bytes = plan::read(Path::new(&path), 1024 * 1024)
+                            .context("cannot read the PostgreSQL CA file")
+                            .map_err(operational)?;
+                        write_private(&root.join("postgres-ca"), &bytes)?;
+                        Ok::<_, anyhow::Error>(bytes)
+                    })
+                    .transpose()?;
+                let admin = Zeroizing::new(
+                    env::var(DATABASE_URL)
+                        .map_err(|_| anyhow::anyhow!("missing PostgreSQL administrator URL"))?,
+                );
+                (admin, ca)
+            };
+            let connected =
+                Database::connect(&admin, ca.as_deref(), &input.run_id).map_err(with_ca_hint)?;
+            // The cluster identity must be recorded before anything can create a database or role.
+            write_private(
+                &root.join(POSTGRES_IDENTITY),
+                &serde_json::to_vec(connected.recovery_identity())?,
+            )
+            .context("cannot record the PostgreSQL cluster for recovery")
+            .map_err(operational)?;
+            Some(connected)
+        } else {
+            None
+        };
+        let urls = products.start(
+            connected.map(|connected| &mut *database.insert(connected)),
+            issuer.clone(),
+        )?;
         let journey_reports = input
             .scenarios
             .iter()
@@ -1151,7 +1179,9 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             "products": urls, "people": input.plan.people.keys().collect::<Vec<_>>(),
             "expires_at": expires_at, "logs": root.join("logs"),
         });
-        report["database"] = if input.managed_database {
+        report["database"] = if !input.needs_database() {
+            json!({"mode": "none"})
+        } else if input.managed_database {
             json!({"mode": "managed", "image": image.reference})
         } else {
             json!({"mode": "address"})
@@ -1339,6 +1369,7 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
         ));
         let headers = match product {
             Product::Breg => format!("Authorization: Bearer {}\n", &*token),
+            Product::Evidence => format!("Authorization: Bearer {}\n", &*token),
             Product::Casework => format!("Authorization: Bearer {}\nRegistry-Casework-Profile: {}\nRegistry-Review-Profile: {}\n",
                 &*token, grant.profile, grant.profile),
         };
@@ -1554,6 +1585,7 @@ fn product_tool(product: Product) -> Result<PathBuf> {
         match product {
             Product::Breg => "RSTACK_BREGCTL_BIN",
             Product::Casework => "RSTACK_CASEWORKCTL_BIN",
+            Product::Evidence => "RSTACK_EVIDENCECTL_BIN",
         },
     )
 }
@@ -1567,6 +1599,10 @@ fn binaries(product: Product) -> Result<Binaries> {
         Product::Casework => Binaries {
             tool: product_tool(product)?,
             runtime: binary(product, "RSTACK_CASEWORK_BIN")?,
+        },
+        Product::Evidence => Binaries {
+            tool: product_tool(product)?,
+            runtime: binary(product, "RSTACK_EVIDENCE_BIN")?,
         },
     })
 }
@@ -1734,6 +1770,7 @@ fn removing_dir(root: &Path) -> Result<PathBuf> {
 /// leaves key material behind.
 fn remove_run_dir(root: &Path) -> Result<()> {
     let doomed = removing_dir(root)?;
+    products::unlock_package(root).context("cannot unlock the run's Evidence package")?;
     match fs::remove_file(root.join(products::FIELD_KEY)) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
             return Err(error).context("cannot remove the run's field-encryption key");

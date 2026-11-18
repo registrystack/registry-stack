@@ -295,6 +295,11 @@ function unlock(root) {
   if (result.status !== 0) console.error(`could not make ${root} writable:\n${result.stderr}`);
 }
 
+// `rstack dev start` tells an operator when other runs are still live. A page
+// cannot show that notice, because it depends on what else is running.
+const RUN_NOTICE = /^rstack dev: (run \S+ is|\d+ runs are) still live.*\n?/gmu;
+const withoutRunNotices = (text) => text.replace(RUN_NOTICE, '');
+
 // Check every test-expect and test-excerpt block, in page order, against the
 // output or file copy the journey left for it. Returns the number that fail.
 async function checkBlocks(steps, outDir) {
@@ -302,7 +307,7 @@ async function checkBlocks(steps, outDir) {
   for (const [index, step] of steps.entries()) {
     if (step.kind !== 'expect' && step.kind !== 'excerpt') continue;
     const sourceIndex = step.path ? index : step.runIndex;
-    const source = await readFile(join(outDir, outName(sourceIndex)), 'utf8');
+    const source = withoutRunNotices(await readFile(join(outDir, outName(sourceIndex)), 'utf8'));
     const fenceOutput = step.path ? undefined : `the output of the sh fence at line ${steps[step.runIndex].line}`;
     let problem;
     if (step.kind === 'expect') {

@@ -63,10 +63,11 @@ Changing the blocklist is a boundary decision: record it in this file.
   published references are `reference/breg-configuration.mdx` and
   `reference/breg-api.mdx`. Focused guides sit beside them as `configure/breg-*.mdx`,
   `operate/breg-*.mdx`, and `reference/breg-*.mdx`.
-- Local loops: `reference/bregctl-dev.mdx` for the native `bregctl dev`
-  lifecycle, `products/breg/quickstart/` for the scripted first hour, and
-  `products/breg/examples/` for the canonical projects and resumable
-  scenarios `bregctl examples` lists and runs.
+- Local loops: `rstack dev` runs a project from its `dev.yaml` plan and
+  scenario file (`configure/run-a-project-with-rstack-dev.mdx`),
+  `products/breg/quickstart/` for the scripted first hour, and
+  `products/breg/examples/` for the canonical projects and their scenario
+  files. `reference/bregctl-dev.mdx` documents the older `bregctl dev` lifecycle.
 - Canonical projects: `products/breg/examples/`, `products/breg/acceptance/`,
   and `products/breg/fixtures/`. `products/breg/examples/README.md` indexes the
   examples; acceptance and fixture projects carry a README where one exists.

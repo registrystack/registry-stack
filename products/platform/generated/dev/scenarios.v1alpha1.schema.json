@@ -283,7 +283,8 @@
       "description": "A product the development run can start.",
       "enum": [
         "breg",
-        "casework"
+        "casework",
+        "evidence"
       ],
       "type": "string"
     },

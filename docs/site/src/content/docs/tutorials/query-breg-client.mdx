@@ -34,21 +34,18 @@ application uses, or run both against the same registry.
 
 ## Get a token for your programs
 
-In the project directory, request a token for the `editor` test caller and put it, with the
-registry's address, where your programs will read them:
+In the project directory, find the run's address and request a token for the `editor` test caller.
+Put both, where your programs will read them:
 
 ```sh test-cwd="tutorial-work/project"
-rstack breg dev token editor
-export REGISTRY_URL=http://127.0.0.1:8090
-export REGISTRY_TOKEN="$(sed 's/^Authorization: Bearer //' .breg/dev/secrets/editor.header)"
+RUN="$(awk '$1 == "Run" {print $2}' dev-run.txt)"
+export REGISTRY_URL="$(awk '$1 == "breg" {print $2}' dev-run.txt)"
+EDITOR_HEADERS="$(rstack dev token "$RUN" --as editor | awk '$2 == "headers" {print $3}')"
+export REGISTRY_TOKEN="$(sed 's/^Authorization: Bearer //' "$EDITOR_HEADERS")"
 ```
 
-```text test-expect
-bregctl dev token succeeded.
-```
-
-Use the address `rstack breg dev start` reported if it differs. The token lasts five minutes: when a
-program fails with status 401, run these three commands again in the project directory.
+`dev-run.txt` is the report that `rstack dev start` printed in the last tutorial. The token lasts five
+minutes: when a program fails with status 401, run these commands again in the project directory.
 
 ## Install the client
 
@@ -463,7 +460,7 @@ Registered contact registered@example.test
 
 {/* Evidence: crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi;
     crates/registry-breg-client-node/client.d.ts; crates/registry-breg-client/src/actions.rs;
-    crates/registry-breg-client/src/proposal.rs; products/breg/examples/minimal/registry.yaml. */}
+    crates/registry-breg-client/src/proposal.rs; products/breg/examples/minimal/registry.yaml; products/platform/PROJECT-DEV.md. */}
 
 ## Next
 
