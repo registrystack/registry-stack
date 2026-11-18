@@ -41,7 +41,7 @@ pub const SMTP_IMPLICIT_TLS_PORT: u16 = 465;
 /// runtime's listener: a build carrying the `postgres-test` or `smtp-test`
 /// feature, or a unit test build. Any other build accepts it only from a
 /// runtime whose own listener is `development-loopback`, the local
-/// development posture `messagingctl dev` runs, and refuses it behind a
+/// development posture `rstack dev` runs, and refuses it behind a
 /// production listener at startup and in `messagingctl check`.
 const DEVELOPMENT_LOOPBACK_PERMITTED: bool =
     cfg!(any(test, feature = "postgres-test", feature = "smtp-test"));

@@ -1067,7 +1067,7 @@ fn init(directory: &Path) -> Outcome {
                 "directory": directory,
                 "created": created,
                 "next": [
-                    "Run messagingctl check --project DIRECTORY, then messagingctl dev DIRECTORY to run it locally against PostgreSQL and Mailpit containers.",
+                    "Run messagingctl check --project DIRECTORY, then rstack dev start DIRECTORY to run it locally against PostgreSQL and Mailpit containers.",
                     "Run messagingctl package DIRECTORY --output PACKAGE, point runtime.yaml at PACKAGE, run messagingctl plan, then messagingctl apply, then messaging serve.",
                 ],
             }),
@@ -2876,7 +2876,7 @@ audit:
     }
 
     #[test]
-    fn init_points_at_the_local_dev_session() {
+    fn init_points_at_the_local_dev_run() {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("starter");
         let (exit, report) = json_run(&[OsStr::new("init"), directory.as_os_str()]);
@@ -2889,7 +2889,7 @@ audit:
             .collect();
         assert!(
             next.iter()
-                .any(|step| step.contains("messagingctl dev DIRECTORY")),
+                .any(|step| step.contains("rstack dev start DIRECTORY")),
             "{next:?}"
         );
 
@@ -2900,7 +2900,7 @@ audit:
             stdout
                 .lines()
                 .any(|line| line.starts_with("next: ")
-                    && line.contains("messagingctl dev DIRECTORY")),
+                    && line.contains("rstack dev start DIRECTORY")),
             "{stdout}"
         );
     }

@@ -143,19 +143,19 @@ test('the gate executes the local journey and names the hosted fences it omits',
   );
 });
 
-// The session is what every later step talks to, and the page ends by
-// stopping it. A replay that skipped either end would leave the middle
-// untested or hold two containers after the gate exits.
-test('the registered journey starts the session and stops it last', async () => {
+// The run is what every later step talks to, and the page ends by stopping
+// it. A replay that skipped either end would leave the middle untested or
+// hold two containers after the gate exits.
+test('the registered journey starts the run and stops it last', async () => {
   const steps = await specSteps();
   assert.equal(steps[0], 'run:Create a package');
-  assert.ok(steps.includes('session:Start the session'), steps.join(', '));
-  assert.equal(steps.at(-1), 'stop-session');
+  assert.ok(steps.includes('run:Start the run'), steps.join(', '));
+  assert.equal(steps.at(-1), 'run:Stop the run');
 });
 
-test('the registered journey opens the second terminal and sends both messages the page teaches', async () => {
+test('the registered journey sends both messages the page teaches', async () => {
   const steps = await specSteps();
-  for (const step of ['run:Open a second terminal', 'run:Send an SMS', 'run:Send an email']) {
+  for (const step of ['run:Send an SMS', 'run:Send an email']) {
     assert.ok(steps.includes(step), `${step} must stay in the journey`);
   }
 });
@@ -168,7 +168,8 @@ test('the journey retains the outcomes the page teaches', async () => {
     '"status": "delivered"',
     '"status": "submitted"',
     'Subject: Votre rendez-vous du 01/10/2026',
-    'containers are removed',
+    'send-a-reminder-sms: passed',
+    'stopped',
   ]) {
     assert.ok(branch.includes(expected), `${expected} must stay asserted`);
   }
@@ -269,103 +270,85 @@ test('the toolset refuses a relative binary path', async () => {
 // Cleanup
 // ---------------------------------------------------------------------------
 
-// Run the outer cleanup's session stop over a reader directory holding one
-// session record, with a stand-in docker that lists one owned container and
-// records what it was asked to do, and a stand-in session process that exits
-// on SIGINT.
-async function runStopDevSessions({ dockerRm = 'exit 0', withSession = true } = {}) {
+// Run the outer cleanup's run stop over a state directory holding one run
+// directory, a hidden bookkeeping directory the runner keeps beside the runs,
+// and a stand-in rstack that records what it was asked to do.
+async function runStopDevRuns({ stopStatus = 0, withRun = true } = {}) {
   const source = await readFile(gate, 'utf8');
   const root = await mkdtemp(join(tmpdir(), 'messaging-stop-test-'));
-  const readerDir = join(root, 'reader');
-  const binDir = join(root, 'bin');
+  const stateDir = join(root, 'rstack-dev');
+  const shimDir = join(root, 'bin');
   const calls = join(root, 'calls.log');
-  const pidFile = join(root, 'session.pid');
-  await mkdir(binDir);
+  await mkdir(shimDir);
+  await mkdir(join(stateDir, '.recovery'), { recursive: true });
+  if (withRun) {
+    await mkdir(join(stateDir, 'run-one'));
+  }
   await writeFile(
-    join(binDir, 'docker'),
+    join(shimDir, 'rstack'),
     [
       '#!/usr/bin/env bash',
-      `printf 'docker %s\\n' "$*" >>'${calls}'`,
-      'if [[ "$1" == ps ]]; then printf "c0ffee\\n"; exit 0; fi',
-      dockerRm,
+      `printf 'rstack %s state=%s\\n' "$*" "$RSTACK_DEV_STATE_DIR" >>'${calls}'`,
+      `exit ${stopStatus}`,
       '',
     ].join('\n'),
     { mode: 0o755 },
   );
-  if (withSession) {
-    const record = join(readerDir, 'first-messaging/tutorial-work/notices/.messaging/dev/session.json');
-    await mkdir(dirname(record), { recursive: true });
-    await writeFile(record, '{"owner":"owner-1","state":"ready","containers":["c0ffee"]}\n');
-  }
   const harness = join(root, 'stop.sh');
   await writeFile(
     harness,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
-      `READER_DIR='${readerDir}'`,
-      `SESSION_PID_FILE='${pidFile}'`,
-      "OWNER_LABEL='org.registrystack.messagingctl.dev-owner'",
-      `PATH='${binDir}':"$PATH"`,
-      await liftFunction(source, 'stop_dev_sessions'),
-      // A background process of a non-interactive shell starts with SIGINT
-      // ignored; the session, like this stand-in, installs its own handler.
-      `python3 -c 'import signal, sys, time; signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); open(sys.argv[1], "w").write("up"); time.sleep(60)' '${root}/up' &`,
-      'session=$!',
-      `printf '%s\\n' "$session" >'${pidFile}'`,
-      `until [[ -f '${root}/up' ]]; do sleep 0.05; done`,
-      'if stop_dev_sessions; then status=0; else status=$?; fi',
-      'if kill -0 "$session" 2>/dev/null; then printf "session still running\\n"; fi',
-      'printf "stop_dev_sessions: %d\\n" "$status"',
+      `DEV_STATE_DIR='${stateDir}'`,
+      `SHIM_DIR='${shimDir}'`,
+      await liftFunction(source, 'stop_dev_runs'),
+      'if stop_dev_runs; then status=0; else status=$?; fi',
+      'printf "stop_dev_runs: %d\\n" "$status"',
       '',
     ].join('\n'),
   );
   try {
     const result = await runShell(`bash ${harness}`);
     const recorded = existsSync(calls) ? await readFile(calls, 'utf8') : '';
-    return { ...result, calls: recorded.split('\n').filter(Boolean) };
+    return { ...result, stateDir, calls: recorded.split('\n').filter(Boolean) };
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 }
 
-// A journey that fails halfway leaves `messagingctl dev` running with two
-// containers behind it. The cleanup interrupts the session, which removes its
-// own containers, then sweeps by the owner label for whatever a crashed
-// session left.
-test('the cleanup interrupts the session and sweeps its owned containers', async () => {
-  const { code, output, calls } = await runStopDevSessions();
+// A journey that fails halfway leaves its run going with a PostgreSQL and a
+// Mailpit container behind it. The cleanup stops each run the journey
+// started, which removes them, and nothing else.
+test('the cleanup stops each run the journey started', async () => {
+  const { code, output, calls, stateDir } = await runStopDevRuns();
   assert.equal(code, 0, output);
-  assert.doesNotMatch(output, /session still running/u);
-  assert.match(output, /stop_dev_sessions: 0/u);
-  assert.deepEqual(calls, [
-    'docker ps --all --quiet --filter label=org.registrystack.messagingctl.dev-owner=owner-1',
-    'docker rm --force --volumes c0ffee',
-  ]);
+  assert.match(output, /stop_dev_runs: 0/u);
+  assert.deepEqual(calls, [`rstack dev stop run-one state=${stateDir}`]);
 });
 
-test('the cleanup reaches no container runtime when no session was recorded', async () => {
-  const { code, output, calls } = await runStopDevSessions({ withSession: false });
+test('the cleanup reaches no runner when no run was started', async () => {
+  const { code, output, calls } = await runStopDevRuns({ withRun: false });
   assert.equal(code, 0, output);
-  assert.match(output, /stop_dev_sessions: 0/u);
+  assert.match(output, /stop_dev_runs: 0/u);
   assert.deepEqual(calls, []);
 });
 
-// A container that will not go is reported rather than hidden, and reported to
-// the caller, which is what keeps the session record from being deleted.
-test('the cleanup reports a container it could not remove', async () => {
-  const { code, output } = await runStopDevSessions({ dockerRm: 'exit 1' });
+// A run that will not stop is reported rather than hidden, and reported to
+// the caller, which is what keeps the run's state from being deleted.
+test('the cleanup reports a run it could not stop', async () => {
+  const { code, output } = await runStopDevRuns({ stopStatus: 1 });
   assert.equal(code, 0, output);
-  assert.match(output, /could not remove container c0ffee/u);
-  assert.match(output, /stop_dev_sessions: 1/u);
+  assert.match(output, /could not stop the rstack dev run run-one/u);
+  assert.match(output, /stop_dev_runs: 1/u);
 });
 
-async function runCleanup({ sessionsStopped }) {
+async function runCleanup({ runsStopped }) {
   const source = await readFile(gate, 'utf8');
   const root = await mkdtemp(join(tmpdir(), 'messaging-cleanup-test-'));
   const workRoot = join(root, 'work');
   await mkdir(join(workRoot, 'reader'), { recursive: true });
-  await writeFile(join(workRoot, 'reader', 'session.json'), '{}\n');
+  await writeFile(join(workRoot, 'reader', 'marker'), '{}\n');
   const harness = join(root, 'cleanup.sh');
   await writeFile(
     harness,
@@ -373,9 +356,9 @@ async function runCleanup({ sessionsStopped }) {
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       `WORK_ROOT='${workRoot}'`,
-      "OWNER_LABEL='org.registrystack.messagingctl.dev-owner'",
+      `DEV_STATE_DIR='${workRoot}/rstack-dev'`,
       await liftFunction(source, 'cleanup'),
-      `stop_dev_sessions() { return ${sessionsStopped ? 0 : 1}; }`,
+      `stop_dev_runs() { return ${runsStopped ? 0 : 1}; }`,
       'cleanup',
       '',
     ].join('\n'),
@@ -388,15 +371,15 @@ async function runCleanup({ sessionsStopped }) {
   }
 }
 
-test('the cleanup removes the work root once every session is stopped', async () => {
-  const { code, output, survived } = await runCleanup({ sessionsStopped: true });
+test('the cleanup removes the work root once every run is stopped', async () => {
+  const { code, output, survived } = await runCleanup({ runsStopped: true });
   assert.equal(code, 0, output);
   assert.equal(survived, false, output);
   assert.match(output, /tutorial gate: PASS/u);
 });
 
-test('the cleanup keeps the work root when a container was left behind', async () => {
-  const { code, output, workRoot, survived } = await runCleanup({ sessionsStopped: false });
+test('the cleanup keeps the work root when a run could not be stopped', async () => {
+  const { code, output, workRoot, survived } = await runCleanup({ runsStopped: false });
   assert.equal(code, 0, output);
   assert.equal(survived, true, output);
   assert.ok(output.includes(workRoot), output);
@@ -408,9 +391,8 @@ test('the cleanup keeps the work root when a container was left behind', async (
 
 // A page with the registered journey's headings whose fences print the
 // outcomes the spec asserts, replayed against a stand-in binary. This proves
-// the session and stop steps without Docker: the session starts in the
-// background, the journey waits for its ready line, and the stop step's
-// SIGINT is what makes the stand-in print its stop report.
+// the replay mechanics without Docker: the fences run in one shell, in order,
+// and the transcript is checked afterwards.
 const STAND_IN_PAGE = [
   '---',
   'title: stub',
@@ -423,16 +405,10 @@ const STAND_IN_PAGE = [
   `mkdir -p tutorial-work/notices && printf 'kind: starter\\nid: one\\n' >tutorial-work/starter.yaml`,
   '```',
   '',
-  '## Start the session',
+  '## Start the run',
   '',
   '```sh',
-  'rstack messaging dev tutorial-work/notices',
-  '```',
-  '',
-  '## Open a second terminal',
-  '',
-  '```sh',
-  'cd tutorial-work/notices',
+  `printf 'send-a-reminder-sms: passed\\n'`,
   '```',
   '',
   '## Send an SMS',
@@ -447,23 +423,16 @@ const STAND_IN_PAGE = [
   `printf '"status": "submitted"\\nSubject: Votre rendez-vous du 01/10/2026\\n'`,
   '```',
   '',
+  '## Stop the run',
+  '',
+  '```sh',
+  `printf 'Run r stopped\\n'`,
+  '```',
+  '',
 ].join('\n');
 
-function standInMessagingctl({ ready = true, stopReport = true } = {}) {
-  return [
-    '#!/usr/bin/env python3',
-    'import signal, sys, time',
-    'if sys.argv[1:2] == ["dev"] and len(sys.argv) == 3:',
-    ready
-      ? '    stop = []\n    signal.signal(signal.SIGINT, lambda *_: stop.append(1))\n    print("ready", flush=True)\n    while not stop:\n        time.sleep(0.05)'
-      : '    print("the session could not start", flush=True)\n    sys.exit(3)',
-    stopReport
-      ? `    print("stopped; the session's containers are removed", flush=True)`
-      : '    print("stopped", flush=True)',
-    '    sys.exit(0)',
-    'print("messagingctl", *sys.argv[1:])',
-    '',
-  ].join('\n');
+function standInMessagingctl() {
+  return ['#!/usr/bin/env python3', 'import sys', 'print("messagingctl", *sys.argv[1:])', ''].join('\n');
 }
 
 // The Author and Deploy stand-ins continue in the tutorial's reader
@@ -522,7 +491,10 @@ async function replayStandIn(options = {}) {
     for (const section of ['start', 'tutorials', 'configure', 'operate']) {
       await mkdir(join(root, 'docs', section), { recursive: true });
     }
-    await writeFile(join(root, 'docs/tutorials/first-messaging.mdx'), STAND_IN_PAGE);
+    await writeFile(
+      join(root, 'docs/tutorials/first-messaging.mdx'),
+      options.stopReport === false ? STAND_IN_PAGE.replace('Run r stopped', 'Run r gone') : STAND_IN_PAGE,
+    );
     await writeFile(join(root, 'docs/configure/messaging.mdx'), standInAuthorPage(options.author));
     await writeFile(
       join(root, 'docs/configure/api-connections.mdx'),
@@ -532,7 +504,7 @@ async function replayStandIn(options = {}) {
     const bin = join(root, 'messagingctl');
     const runtime = join(root, 'messaging');
     const rstack = join(root, 'rstack');
-    await writeFile(bin, standInMessagingctl(options), { mode: 0o755 });
+    await writeFile(bin, standInMessagingctl(), { mode: 0o755 });
     await writeFile(runtime, '#!/usr/bin/env bash\nprintf "messaging runtime\\n"\n', { mode: 0o755 });
     await writeFile(
       rstack,
@@ -545,7 +517,6 @@ async function replayStandIn(options = {}) {
         MESSAGINGCTL_BIN: bin,
         MESSAGING_BIN: runtime,
         RSTACK_BIN: rstack,
-        MESSAGING_TUTORIAL_READY_SECONDS: '20',
         REGISTRY_CARGO_RUNTIME_LIBRARY_PATH: '',
       },
       [],
@@ -555,13 +526,10 @@ async function replayStandIn(options = {}) {
   }
 }
 
-test('the replay leaves the session running, then stops it with SIGINT', async () => {
+test('the replay runs every fence in order and passes', async () => {
   const { code, output } = await replayStandIn();
   assert.equal(code, 0, output);
-  assert.match(output, /fence \d+ \(session, left running\)/u);
-  assert.match(output, /^ready$/mu);
-  assert.match(output, /stop the session \(Ctrl-C\)/u);
-  assert.match(output, /containers are removed/u);
+  assert.match(output, /Run r stopped/u);
   assert.match(output, /Registry Messaging tutorial gate: PASS/u);
 });
 
@@ -595,27 +563,12 @@ test('an excerpt outside the reader directory fails the replay', async () => {
   assert.match(output, /which is not inside the reader directory/u);
 });
 
-test('a session that stops before it is ready fails the replay', async () => {
-  const { code, output } = await replayStandIn({ ready: false });
-  assert.notEqual(code, 0, output);
-  assert.match(output, /the session stopped before it reported ready/u);
-  assert.match(output, /the session could not start/u);
-});
-
-// A session that no longer says it removed its containers is exactly the
-// regression a successful exit hides.
-test('a session that stops without removing its containers fails the replay', async () => {
+// A run that no longer reports it stopped is exactly the regression a
+// successful exit hides.
+test('a journey whose transcript lacks an asserted outcome fails the replay', async () => {
   const { code, output } = await replayStandIn({ stopReport: false });
   assert.notEqual(code, 0, output);
-  assert.match(output, /never showed "containers are removed"/u);
-});
-
-test('the gate sets none of the development port overrides', async () => {
-  const source = await readFile(gate, 'utf8');
-  for (const name of ['MESSAGINGCTL_DEV_PORT', 'MESSAGINGCTL_DEV_METRICS_PORT']) {
-    assert.doesNotMatch(source, new RegExp(`^[^#\\n]*${name}=`, 'mu'), `${name} must stay unset`);
-    assert.doesNotMatch(source, new RegExp(`export ${name}`, 'u'), `${name} must stay unset`);
-  }
+  assert.match(output, /never showed "stopped"/u);
 });
 
 // ---------------------------------------------------------------------------
@@ -732,38 +685,6 @@ test('a renamed heading fails the gate by name', async () => {
   }
 });
 
-// The session line runs in the background. A second command under the session
-// heading would run ahead of it in the foreground or not at all, so the gate
-// refuses the shape rather than guessing.
-test('a session heading holding a second fence fails the gate', async () => {
-  const root = await docsFixtureRoot((page) =>
-    page.replace('\n## Open a second terminal\n', '\n```sh\ndocker ps\n```\n\n## Open a second terminal\n'),
-  );
-  try {
-    const { code, output } = await runGate({ MESSAGING_TUTORIAL_DOCS_ROOT: root });
-    assert.notEqual(code, 0, output);
-    assert.match(output, /holds more than one sh fence/u);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('a session fence holding a second command line fails the gate', async () => {
-  const root = await docsFixtureRoot((page) =>
-    page.replace(
-      '```sh\nrstack messaging dev tutorial-work/notices\n```',
-      '```sh\nrstack messaging dev tutorial-work/notices\nrstack messaging api /health --client case-system\n```',
-    ),
-  );
-  try {
-    const { code, output } = await runGate({ MESSAGING_TUTORIAL_DOCS_ROOT: root });
-    assert.notEqual(code, 0, output);
-    assert.match(output, /holds 2 command lines/u);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test('a registered page without a replay spec fails by name', async () => {
   const source = await readFile(gate, 'utf8');
   const root = await mkdtemp(join(tmpdir(), 'messaging-spec-test-'));
@@ -795,6 +716,14 @@ test('the gate pins neither fence counts nor page strings', async () => {
   const source = await readFile(gate, 'utf8');
   assert.doesNotMatch(source, /SPEC_FENCES/u);
   assert.doesNotMatch(source, /SPEC_LITERALS/u);
+});
+
+// Messaging runs under `rstack dev`, whose runs keep their state in a
+// directory of the gate's own and are stopped by the cleanup.
+test('the gate drives rstack dev and not a messagingctl session', async () => {
+  const source = await readFile(gate, 'utf8');
+  assert.doesNotMatch(source, /messagingctl dev/u);
+  assert.match(source, /RSTACK_DEV_STATE_DIR/u);
 });
 
 test('the gate refuses an unknown argument', async () => {
