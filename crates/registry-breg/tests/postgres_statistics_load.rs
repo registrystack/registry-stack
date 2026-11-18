@@ -25,7 +25,8 @@ use registry_breg::{
         RegistryStateTestIdentity,
     },
     statistics::{
-        apply_disclosure, canonical_document, CellValue, DisclosureMethod, StatisticsDocument,
+        apply_protected_disclosure, canonical_document, CellDisclosureInput, CellValue,
+        DisclosureMethod, StatisticsDocument,
     },
 };
 use registry_platform_audit::AuditProfile;
@@ -184,12 +185,16 @@ async fn million_unit_three_dimension_statistics_measurement() {
     assert_eq!(live.cells.len(), 75);
     let mut disclosed = live.clone();
     let start = Instant::now();
-    apply_disclosure(
+    let inputs = vec![CellDisclosureInput::default(); disclosed.cells.len()];
+    apply_protected_disclosure(
         &mut disclosed.cells,
+        &inputs,
         DisclosureMethod::MinimumCountAndRounding {
             minimum_count: 5,
             rounding_base: 5,
         },
+        &[],
+        &std::collections::BTreeSet::new(),
     )
     .unwrap();
     let disclosure_elapsed = start.elapsed();

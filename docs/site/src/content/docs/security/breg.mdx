@@ -753,7 +753,7 @@ Each lists the condition, the consequence, the mitigation, and the related matri
   every other operation.
   So an agent token can publish or read exact values through it.
   The publisher's dry run (`versions:dry-run`) belongs to the publisher alone and stores nothing.
-  It reserves no version and writes one audit entry.
+  It reserves no version, and writes an audit attempt and one terminal entry.
 - Mitigation: declare `actorKind: human` or `actorKind: service` on every profile that holds
   `publish` or `read-exact`, and on the `exactReads` profile.
 - Related: `BREG-SEC-168`.
@@ -821,28 +821,40 @@ Each lists the condition, the consequence, the mitigation, and the related matri
   dataset and one version.
   A suppressed sum also suppresses the same measure in every total that contains it.
   These paths stay open:
-  - Two datasets over the same population at different granularities, such as monthly and yearly,
-    can be differenced against each other.
-    So can two datasets whose dimensions overlap but are not nested.
-    The totals rule works inside one dataset, and the nested-dimensions check catches only nested
-    dimensions.
+  - The compiler refuses two protected releases of a sum of the same field over the same unit
+    (`breg.statistical-dataset.sum-field-released-twice`).
+    It does so whatever their dimensions, populations, and granularities, because any two share a
+    total that the totals rule cannot see across datasets.
+    An `exact-public-values` release of the same field still publishes what the protected release
+    withholds.
+    That release needs the field classified `public` (`BREG-RES-24`).
+  - A count withheld by the contributor minimum does not blank its totals.
+    A reader can estimate it from the rounded total and its rounded siblings.
+    The contributor minimum protects a count only as far as rounding does (`BREG-RES-07`).
   - Revised versions of the same period can be differenced against each other.
     Changing `dominancePercent` between versions does not start a new series.
   - The p% rule does not protect against a reader who already knows several contributors' values.
   - A decimal sum is exact, so it sits beside a rounded count of the same cell.
     A reader learns the exact amount, though not the exact number of contributors.
-  - A cell whose contributors all have zero publishes a sum of zero.
-    That tells every reader that each contributor's value is zero, as an exact zero count already does.
+  - A cell of at least `minimumCount` contributors publishes a sum of zero with status `exact` in two
+    cases.
+    One is when no contributor has a value for the field.
+    The other is when the field is `decimal` and every value is zero.
+    Either tells every reader that no contributor in the cell has a positive value.
+    A smaller cell is suppressed, whether or not its Records have a value.
 - Mitigation: release a sum only after a statistician has reviewed the rules and their
   implementation.
   Until then, the compiler refuses a `publish` or `read-releases` grant on such a dataset.
-  Declare one dataset per population and granularity, and keep the revisions of a period few.
+  Release every sum of a field in one dataset, and keep the revisions of a period few.
   Use the publisher's dry run to see which cells and totals will be blank before you publish.
   Serve values that must stay exact, or that can be negative, through `read-exact`.
 - Related: `BREG-RES-07`.
 
 {/* Evidence: crates/registry-breg/tests/compiler_statistics.rs,
-    every_release_grant_on_a_dataset_with_a_sum_is_held_even_without_a_publisher. */}
+    every_release_grant_on_a_dataset_with_a_sum_is_held_even_without_a_publisher,
+    a_summed_field_released_by_two_datasets_over_one_unit_is_refused_at_the_second;
+    crates/registry-breg/tests/statistics.rs,
+    a_small_cell_whose_records_leave_the_summed_field_unset_is_suppressed_with_its_totals. */}
 
 ## Report a vulnerability
 

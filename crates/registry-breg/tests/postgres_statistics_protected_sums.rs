@@ -45,7 +45,8 @@ const DATABASE_ID: &str = "protected-sums-database";
 const DATASET: &str = "records-by-category";
 
 /// One parcel: district, category, owner (an index into the owner list, or
-/// `None` for a parcel with no owner), area (decimal) and units (int64).
+/// `None` for a parcel with no owner), area (decimal) and units (int64), each
+/// empty for a parcel that leaves the field unset.
 type Parcel = (
     &'static str,
     &'static str,
@@ -389,6 +390,138 @@ async fn an_unended_period_is_refused_by_the_dry_run_as_by_publish() {
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_small_cell_whose_parcels_leave_the_summed_fields_unset_is_withheld() {
+    // d2/c has no parcels in the main fixture, so its sums are an exact zero.
+    // Two owners' parcels with no area and no units make it a cell of two
+    // contributors, none of them with a value: a zero would tell a reader
+    // that this small group left both fields unset.
+    let mut rows = parcels();
+    rows.push(("d2", "c", Some(0), "", ""));
+    rows.push(("d2", "c", Some(1), "", ""));
+    let (database, task, app) = fixture(protected(compiled(), field_contributor()), &rows).await;
+    let dry = dry_run(&app, "publisher", "2025-03").await;
+    assert_eq!(dry.status(), StatusCode::OK);
+    let body = body_json(dry).await;
+    for (measure, reason) in [
+        ("parcels", "minimum-count"),
+        ("area-sum", "minimum-contributors"),
+        ("units-sum", "minimum-contributors"),
+    ] {
+        let cell = cell_of(&body["document"], "d2", "c", measure);
+        assert_eq!(
+            json!([cell["value"], cell["status"]]),
+            json!([null, "suppressed"]),
+            "{measure}"
+        );
+        assert_eq!(
+            reason_of(&body, "d2", "c", measure),
+            Some(reason),
+            "{measure}"
+        );
+    }
+    task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parcels_with_no_owner_in_two_cells_are_one_contributor_at_their_total() {
+    // Owner 0 and an unowned parcel in d1/a, an unowned parcel in d2/a. The
+    // total _T/a has three parcels and two contributors, not three: the
+    // unowned parcels of both cells are one contributor together.
+    let rows: Vec<Parcel> = vec![
+        ("d1", "a", Some(0), "10.00", "10"),
+        ("d1", "a", None, "10.00", "10"),
+        ("d2", "a", None, "10.00", "10"),
+    ];
+    let (database, task, app) = fixture(protected(compiled(), field_contributor()), &rows).await;
+    let dry = dry_run(&app, "publisher", "2025-03").await;
+    assert_eq!(dry.status(), StatusCode::OK);
+    let body = body_json(dry).await;
+    for measure in ["parcels", "area-sum", "units-sum"] {
+        let total = cell_of(&body["document"], "_T", "a", measure);
+        assert_eq!(total["status"], "suppressed", "{measure}");
+        assert_eq!(
+            reason_of(&body, "_T", "a", measure),
+            Some("minimum-contributors"),
+            "{measure}"
+        );
+    }
+    task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dataset_without_dimensions_releases_its_grand_total_through_the_dry_run_and_publish() {
+    let mut without_dimensions = source();
+    without_dimensions["statisticalDatasets"][0]["dimensions"] = json!([]);
+    let (database, task, app) = fixture(
+        protected(compiled_from(&without_dimensions), field_contributor()),
+        &parcels(),
+    )
+    .await;
+    let dry = dry_run(&app, "publisher", "2025-03").await;
+    assert_eq!(dry.status(), StatusCode::OK);
+    let body = body_json(dry).await;
+    assert_eq!(body["suppressions"], json!([]));
+    let mut document = body["document"].clone();
+    // 21 parcels of seven contributors (six owners and the unowned parcels).
+    // The largest two contributions are 140.00 and 50.00 of an area of
+    // 310.00, and 50 and 40 of 213 units: neither sum is dominated.
+    let cells: BTreeMap<String, Value> = document["cells"]
+        .as_array()
+        .expect("cells are an array")
+        .iter()
+        .map(|cell| {
+            assert_eq!(cell["dimensions"], json!({}));
+            (
+                cell["measure"].as_str().unwrap().to_owned(),
+                json!([cell["value"], cell["status"]]),
+            )
+        })
+        .collect();
+    assert_eq!(
+        cells,
+        BTreeMap::from([
+            ("parcels".to_owned(), json!([20, "rounded"])),
+            ("area-sum".to_owned(), json!(["310.00", "exact"])),
+            ("units-sum".to_owned(), json!(["215", "rounded"])),
+        ])
+    );
+    let published = publish(&app, "grand-total").await;
+    assert_eq!(published.status(), StatusCode::CREATED);
+    let read = read_version(&app, "reader", 1).await;
+    assert_eq!(read.status(), StatusCode::OK);
+    let mut stored = body_json(read).await;
+    for value in [&mut stored, &mut document] {
+        value["release"]
+            .as_object_mut()
+            .expect("release member")
+            .remove("computedAt");
+    }
+    assert_eq!(stored, document);
+    task.abort();
+    database.cleanup().await;
+}
+
+/// The reason the dry run gives for one cell, if it withheld it.
+fn reason_of<'a>(
+    body: &'a Value,
+    district: &str,
+    category: &str,
+    measure: &str,
+) -> Option<&'a str> {
+    let target = cell_of(&body["document"], district, category, measure);
+    body["suppressions"]
+        .as_array()
+        .expect("suppressions are an array")
+        .iter()
+        .find(|entry| {
+            &body["document"]["cells"][entry["cell"].as_u64().unwrap() as usize] == target
+        })
+        .map(|entry| entry["reason"].as_str().expect("a reason"))
+}
+
 fn assert_no_protected_input(bytes: &[u8]) {
     let text = String::from_utf8_lossy(bytes).to_lowercase();
     for word in [
@@ -485,7 +618,11 @@ fn source() -> Value {
 }
 
 fn compiled() -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(&serde_json::to_vec(&source()).unwrap()).expect("parses");
+    compiled_from(&source())
+}
+
+fn compiled_from(source: &Value) -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(&serde_json::to_vec(source).unwrap()).expect("parses");
     compile_project(&project, &[], CompileProfile::Authoring).expect("compiles")
 }
 
@@ -638,8 +775,8 @@ async fn insert_parcels(
         "INSERT INTO registry_data.{table}
              (record_id, record_revision, record_lifecycle, active_package_revision,
               {subject}, {active}, {district}, {category}, {event_date}, {area}, {units}, {owner})
-         VALUES ($1::text::uuid, 1, 'active', $8, $1, true, $2, $3, $4, $5::text::numeric,
-                 $6::text::bigint, $7::text::uuid)",
+         VALUES ($1::text::uuid, 1, 'active', $8, $1, true, $2, $3, $4,
+                 NULLIF($5::text, '')::numeric, NULLIF($6::text, '')::bigint, $7::text::uuid)",
         subject = column("subject"),
         active = column("active"),
         district = column("district"),
@@ -722,7 +859,7 @@ async fn release_row_count(database: &TestDatabase) -> i64 {
 fn claims(profile: &str) -> VerifiedRequestClaims {
     VerifiedRequestClaims::authenticated(
         "principal",
-        &format!("protected-sums-{profile}"),
+        format!("protected-sums-{profile}"),
         Default::default(),
         None,
         Default::default(),

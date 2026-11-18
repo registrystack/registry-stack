@@ -863,40 +863,7 @@ pub fn build_exact_cells(
     Ok(cells)
 }
 
-pub fn apply_disclosure(
-    cells: &mut [Cell],
-    method: DisclosureMethod,
-) -> Result<(), StatisticsError> {
-    let DisclosureMethod::MinimumCountAndRounding {
-        minimum_count,
-        rounding_base,
-    } = method
-    else {
-        return Ok(());
-    };
-    if minimum_count < 2 || rounding_base < 2 {
-        return Err(StatisticsError::InvalidDisclosureParameters);
-    }
-    for cell in cells {
-        let Some(CellValue::Count(value)) = cell.value else {
-            return Err(StatisticsError::InvalidDocument(
-                "disclosure control requires exact count cells",
-            ));
-        };
-        if value == 0 {
-            cell.status = CellStatus::Exact;
-        } else if value < minimum_count {
-            cell.value = None;
-            cell.status = CellStatus::Suppressed;
-        } else {
-            cell.value = Some(CellValue::Count(round_halves_up(value, rounding_base)?));
-            cell.status = CellStatus::Rounded;
-        }
-    }
-    Ok(())
-}
-
-/// What 8b's SQL computes for one cell of a protected release. Never
+/// What the release query computes for one cell of a protected release. Never
 /// serialized: no document carries it.
 ///
 /// Records with no value for the contributor field form one contributor
@@ -908,6 +875,9 @@ pub struct CellDisclosureInput {
     /// records with a value for the summed field); `None` when the dataset
     /// declares no contributor.
     pub contributors: Option<u64>,
+    /// The distinct contributors among all of the cell's records, whatever the
+    /// summed field holds; `None` when the dataset declares no contributor.
+    pub cell_contributors: Option<u64>,
     /// For a sum cell, whether the p% rule holds, from
     /// `dominance_predicate_sql`. False for every other measure.
     pub dominant: bool,
@@ -982,11 +952,15 @@ pub fn apply_protected_disclosure(
     let mut primary_sums = Vec::new();
     for (index, (cell, input)) in cells.iter().zip(inputs).enumerate() {
         let is_sum = sums.contains(cell.measure.as_str());
-        let below_contributors = input
-            .contributors
-            .is_some_and(|contributors| contributors > 0 && contributors < minimum_count);
+        let below = |contributors: Option<u64>| {
+            contributors
+                .is_some_and(|contributors| contributors > 0 && contributors < minimum_count)
+        };
+        let below_contributors = below(input.contributors);
         reasons[index] = if is_sum {
-            if below_contributors {
+            // A small cell is withheld even when none of its records has a
+            // value for the summed field: a zero would say they left it unset.
+            if below_contributors || below(input.cell_contributors) {
                 Some(SuppressionReason::MinimumContributors)
             } else if input.dominant {
                 Some(SuppressionReason::Dominance)

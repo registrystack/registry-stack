@@ -1036,14 +1036,16 @@ pub struct StatisticalValidityFieldsSource {
 )]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum StatisticalDisclosureSource {
-    /// Count, distinct-count and sum cells below `minimumCount` are suppressed
-    /// and counts are rounded to a multiple of `roundingBase`. A release
-    /// carries counts and distinct counts; a sum is held until its disclosure
-    /// rules are reviewed, and a mean, ratio or percentile is read live or
-    /// released exactly. A dataset that declares a sum and grants `publish`
-    /// also names who a value belongs to (`contributor`) and the share one
-    /// contributor may hold before a cell is withheld (`dominancePercent`);
-    /// every other dataset omits both.
+    /// Count and distinct-count cells below `minimumCount` are suppressed and
+    /// counts are rounded to a multiple of `roundingBase`. A sum cell is
+    /// suppressed when fewer than `minimumCount` contributors stand behind it
+    /// or when the p% rule finds it dominated; an `int64` sum is rounded like
+    /// a count and a decimal sum is exact. A release carries counts and
+    /// distinct counts; a sum is held until its disclosure rules are reviewed,
+    /// and a mean, ratio or percentile is read live or released exactly. A
+    /// dataset that declares a sum and grants `publish` also names who a value
+    /// belongs to (`contributor`) and the p of the p% rule
+    /// (`dominancePercent`); every other dataset omits both.
     MinimumCountAndRounding {
         #[serde(deserialize_with = "bounded_u64::<_, 2, MAX_EXACT_JSON_INTEGER>")]
         #[cfg_attr(

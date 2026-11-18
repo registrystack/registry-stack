@@ -151,8 +151,8 @@ summed `decimal` field must declare a `minimum` of zero or more
 (`breg.statistical-dataset.sum-release-negative-values`). Day periods are refused
 (`breg.statistical-dataset.sum-release-day-granularity`), a dataset that releases a sum declares at most 4
 dimensions (`breg.statistical-dataset.non-additive-dimensions`), and two datasets that release a sum of the
-same field over the same unit and population, one's dimensions all among the other's, are refused
-(`breg.statistical-dataset.sum-release-nested`). The contributor joins the definition digest, so changing it
+same field over the same unit are refused, whatever their dimensions, populations, and granularities
+(`breg.statistical-dataset.sum-field-released-twice`). The contributor joins the definition digest, so changing it
 starts a new release series; `dominancePercent` does not. See [Release sums](../../configure/breg-statistics/#release-sums).
 
 `measure` is a reserved column name, so no dimension may use it. At most one access profile holds `publish`

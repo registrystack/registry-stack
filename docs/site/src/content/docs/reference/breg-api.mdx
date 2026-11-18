@@ -917,11 +917,13 @@ under the dataset's `exactReads` profile, not the caller's; each read is audited
 dataset with releases. It takes the body of a publication, `{"status":"provisional"}` or `{"status":"final"}`,
 and no `Idempotency-Key`. It runs the publication's computation and checks and answers `200` with
 `{"document", "suppressions"}`: `document` is the release document a publication made at that moment would
-store, including its next version number (a dry run takes no lock, so a publication made in between takes
-that number), and `suppressions` lists each suppressed cell as its index in
+store, including its next version number (a dry run takes no publication lock, so a publication made in
+between takes that number), and `suppressions` lists each suppressed cell as its index in
 `document.cells` and a `reason`, one of `minimum-count`, `minimum-contributors`, `dominance`, or
-`contains-suppressed-sum`. The list of reasons can grow. A dry run stores nothing, reserves no version, and
-writes one audit entry. It is refused as a publication is, with `422` `statistical_dataset.release_refused`
+`contains-suppressed-sum`. The list of reasons can grow. `suppressions` adds about 50 bytes per suppressed cell
+to a document of at most 8 MiB, so a client reading the dry run of a dataset near that bound needs a response
+limit above its 8 MiB default. A dry run stores nothing and reserves no version; it writes an audit attempt and
+one terminal entry. It is refused as a publication is, with `422` `statistical_dataset.release_refused`
 and a `refusalCode` such as `negative-value`.
 
 Document reads from the live, exact, series, latest-version, and exact-version routes send

@@ -28,12 +28,13 @@ use crate::model::{
 };
 use crate::mutation::BoundValue;
 use crate::statistics::{
-    apply_protected_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
-    dominance_predicate_sql, maximum_measure_characters, period_for_code, period_range, Cell,
-    CellDisclosureInput, CellSuppression, CellValue, Contributor, DatasetDocument, DimensionDomain,
-    DisclosureDocument, DisclosureMethod, ExactDocument, GroupedCell, LiveDocument, Measure,
-    Period, PeriodDocument, PeriodGranularity, PeriodKind, PeriodVersionHeader, ReleaseDocument,
-    ReleaseStatus, ReleaseVersionHeader, StatisticsDocument, StatisticsError, WithdrawalDocument,
+    apply_protected_disclosure, build_exact_cells, canonical_document,
+    canonical_document_and_digest, current_period, dominance_predicate_sql,
+    maximum_measure_characters, period_for_code, period_range, Cell, CellDisclosureInput,
+    CellSuppression, CellValue, Contributor, DatasetDocument, DimensionDomain, DisclosureDocument,
+    DisclosureMethod, ExactDocument, GroupedCell, LiveDocument, Measure, Period, PeriodDocument,
+    PeriodGranularity, PeriodKind, PeriodVersionHeader, ReleaseDocument, ReleaseStatus,
+    ReleaseVersionHeader, StatisticsDocument, StatisticsError, WithdrawalDocument,
     WithdrawalReason, MAX_CELLS_PER_RESPONSE,
 };
 
@@ -554,8 +555,9 @@ impl PostgresStatisticsService {
     /// Everything a publication stores, found in `transaction`: the next
     /// version, the snapshot as it stands now, and the disclosure-controlled
     /// release document. Publication and the dry run both build the document
-    /// here, so they cannot diverge. Takes no lock; `persist_release` holds the
-    /// release key's, the dry run holds none and reports the version a
+    /// here, so they cannot diverge. Takes no lock itself: the transaction holds
+    /// the shared registry lock, `persist_release` adds the release key's, and
+    /// the dry run takes no release lock, so it reports the version a
     /// publication would take if no other lands first.
     async fn prepare_release(
         &self,
@@ -715,6 +717,9 @@ impl PostgresStatisticsService {
             suppressions,
             ..
         } = prepared?;
+        // The dry run answers with the document a publication would store, so
+        // it passes the checks publish applies before storing one.
+        canonical_document(&document).map_err(map_statistics_error)?;
         Ok(StatisticsDryRunOutcome {
             result_count: document.cells.len(),
             document,
@@ -2414,15 +2419,18 @@ fn cell_inputs(
                 (Some(row), Some(position)) => match row.sums.get(&position) {
                     Some((contributors, dominant)) => CellDisclosureInput {
                         contributors: Some(*contributors),
+                        cell_contributors: Some(row.contributors),
                         dominant: *dominant,
                     },
                     None => CellDisclosureInput {
                         contributors: Some(row.contributors),
+                        cell_contributors: Some(row.contributors),
                         dominant: false,
                     },
                 },
                 _ => CellDisclosureInput {
                     contributors: Some(0),
+                    cell_contributors: Some(0),
                     dominant: false,
                 },
             }

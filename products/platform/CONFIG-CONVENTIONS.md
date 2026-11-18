@@ -421,7 +421,7 @@ by an uppercase letter, and keys ending `Limit`).
 
 **CFG-NAME-4 (MUST). A quantity's unit is the last word of its key** and is
 spelled out: `Milliseconds`, `Seconds`, `Minutes`, `Hours`, `Days`,
-`WorkingDays`, `Bytes`, `Degrees`. A count has no unit word. A unit not listed
+`WorkingDays`, `Bytes`, `Degrees`, `Percent`. A count has no unit word. A unit not listed
 here is added to the list in the same change that first uses it. See CFG-QTY.
 
 **CFG-NAME-5 (MUST). A concept shared by several products has one name.**

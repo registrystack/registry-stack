@@ -1688,6 +1688,19 @@ fn generated_artifacts_cover_the_effective_model_metadata_and_seven_routes() {
     assert_eq!(publish["parameters"][0]["required"], false);
     assert_eq!(publish["parameters"][0]["schema"]["default"], "publisher");
     assert_eq!(publish["x-registry-defaultAccessProfile"], "publisher");
+    // A dry run reads no stored version, so a withdrawn one never answers it.
+    let dry_run_statuses = openapi["paths"]
+        ["/v1/statistics/records-by-category/releases/{period}/versions:dry-run"]["post"]
+        ["responses"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        dry_run_statuses,
+        BTreeSet::from(["200", "400", "401", "404", "409", "415", "422", "500", "503", "504"])
+    );
     assert_eq!(
         openapi["paths"]
             ["/v1/statistics/records-by-category/releases/{period}/versions/{version}/withdrawal"]
@@ -3969,18 +3982,21 @@ fn two_sum_releases(mutate: impl FnOnce(&mut Value)) -> Value {
     value
 }
 
-fn nested_refusals(value: &Value) -> Vec<Diagnostic> {
+fn released_twice_refusals(value: &Value) -> Vec<Diagnostic> {
     compile(value)
         .expect_err("sums are held")
         .diagnostics()
         .iter()
-        .filter(|diagnostic| diagnostic.code == code("sum-release-nested"))
+        .filter(|diagnostic| diagnostic.code == code("sum-field-released-twice"))
         .cloned()
         .collect()
 }
 
+/// Any two releases of a sum of one field over one unit share a total, at
+/// least the grand total, so whatever their dimensions, populations and
+/// granularities the second is refused.
 #[test]
-fn two_sum_releases_over_nested_dimensions_are_refused_at_the_second_dataset() {
+fn a_summed_field_released_by_two_datasets_over_one_unit_is_refused_at_the_second() {
     let flag = |value: &mut Value| {
         value["recordTypes"][0]["fields"]
             .as_array_mut()
@@ -3998,7 +4014,7 @@ fn two_sum_releases_over_nested_dimensions_are_refused_at_the_second_dataset() {
         }
     };
     // equal dimensions
-    let equal = nested_refusals(&two_sum_releases(|_| {}));
+    let equal = released_twice_refusals(&two_sum_releases(|_| {}));
     assert_eq!(equal.len(), 1);
     assert!(equal[0]
         .path
@@ -4007,20 +4023,26 @@ fn two_sum_releases_over_nested_dimensions_are_refused_at_the_second_dataset() {
     // one's dimensions among the other's
     let mut subset = two_sum_releases(|second| second["dimensions"] = json!(["category", "flag"]));
     flag(&mut subset);
-    assert_eq!(nested_refusals(&subset).len(), 1);
+    assert_eq!(released_twice_refusals(&subset).len(), 1);
     // the reverse
     let mut reverse = two_sum_releases(|_| {});
     flag(&mut reverse);
     reverse["statisticalDatasets"][0]["dimensions"] = json!(["category", "flag"]);
-    assert_eq!(nested_refusals(&reverse).len(), 1);
-    // disjoint dimensions
+    assert_eq!(released_twice_refusals(&reverse).len(), 1);
+    // disjoint dimensions still share the grand total
     let mut disjoint = two_sum_releases(|second| second["dimensions"] = json!(["flag"]));
     flag(&mut disjoint);
-    assert!(nested_refusals(&disjoint).is_empty());
+    assert_eq!(released_twice_refusals(&disjoint).len(), 1);
     // a different population
     let different_population =
         two_sum_releases(|second| second["population"] = json!("active eq false"));
-    assert!(nested_refusals(&different_population).is_empty());
+    assert_eq!(released_twice_refusals(&different_population).len(), 1);
+    // a different granularity
+    let different_granularity = two_sum_releases(|second| {
+        second["period"] =
+            json!({"type":"flow","field":"event-date","granularity":"year","firstPeriod":"2025"});
+    });
+    assert_eq!(released_twice_refusals(&different_granularity).len(), 1);
     // a different summed field
     let different_field = two_sum_releases(|second| {
         second["measures"] = json!([{"id":"total-amount","type":"sum","field":"amount"}]);
@@ -4029,11 +4051,11 @@ fn two_sum_releases_over_nested_dimensions_are_refused_at_the_second_dataset() {
     let mut only_amount = different_field;
     only_amount["statisticalDatasets"][0]["measures"] =
         json!([{"id":"total-units","type":"sum","field":"quantity"}]);
-    assert!(nested_refusals(&only_amount).is_empty());
+    assert!(released_twice_refusals(&only_amount).is_empty());
 }
 
 #[test]
-fn two_sum_releases_over_different_units_are_not_nested() {
+fn a_summed_field_released_over_two_units_is_not_refused() {
     let mut value = two_sum_releases(|second| second["unit"] = json!("record-two"));
     let mut second_type = value["recordTypes"][0].clone();
     second_type["id"] = json!("record-two");
@@ -4050,7 +4072,7 @@ fn two_sum_releases_over_different_units_are_not_nested() {
             .unwrap()
             .push(records);
     }
-    assert!(nested_refusals(&value).is_empty());
+    assert!(released_twice_refusals(&value).is_empty());
 }
 
 #[test]

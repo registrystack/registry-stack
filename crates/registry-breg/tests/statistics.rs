@@ -5,15 +5,24 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::NaiveDate;
 use registry_breg::contract::FieldTypeSource;
 use registry_breg::statistics::{
-    apply_disclosure, apply_protected_disclosure, build_exact_cells, canonical_document_and_digest,
-    current_period, document_csv, dominance_predicate_sql, maximum_decimal_characters,
-    maximum_measure_characters, period_for_code, period_range, Cell, CellDisclosureInput,
-    CellStatus, CellSuppression, CellValue, Contributor, DatasetDocument, DimensionDomain,
-    DisclosureDocument, DisclosureMethod, ExactDocument, GroupedCell, LiveDocument, Measure,
-    PeriodDocument, PeriodGranularity, PeriodKind, ReleaseDocument, ReleaseStatus,
-    StatisticsDocument, StatisticsError, SumDisclosure, SuppressionReason, TOTAL_CODE,
-    UNKNOWN_CODE,
+    apply_protected_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
+    document_csv, dominance_predicate_sql, maximum_decimal_characters, maximum_measure_characters,
+    period_for_code, period_range, Cell, CellDisclosureInput, CellStatus, CellSuppression,
+    CellValue, Contributor, DatasetDocument, DimensionDomain, DisclosureDocument, DisclosureMethod,
+    ExactDocument, GroupedCell, LiveDocument, Measure, PeriodDocument, PeriodGranularity,
+    PeriodKind, ReleaseDocument, ReleaseStatus, StatisticsDocument, StatisticsError, SumDisclosure,
+    SuppressionReason, TOTAL_CODE, UNKNOWN_CODE,
 };
+
+/// Applies `method` to cells of counts and distinct counts only, as a release
+/// without sums does.
+fn apply_count_disclosure(
+    cells: &mut [Cell],
+    method: DisclosureMethod,
+) -> Result<(), StatisticsError> {
+    let inputs = vec![CellDisclosureInput::default(); cells.len()];
+    apply_protected_disclosure(cells, &inputs, method, &[], &BTreeSet::new()).map(|_| ())
+}
 
 fn date(year: i32, month: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, day).expect("test date is valid")
@@ -393,7 +402,7 @@ fn a_total_row_with_an_unknown_code_beside_it_is_still_refused() {
 #[test]
 fn disclosure_threshold_rounding_and_halves_up_are_exact() {
     let mut cells = cells_with_values(&[0, 1, 4, 5, 7, 8]);
-    apply_disclosure(
+    apply_count_disclosure(
         &mut cells,
         DisclosureMethod::MinimumCountAndRounding {
             minimum_count: 5,
@@ -417,7 +426,7 @@ fn disclosure_threshold_rounding_and_halves_up_are_exact() {
     );
 
     let mut exact_half = cells_with_values(&[6]);
-    apply_disclosure(
+    apply_count_disclosure(
         &mut exact_half,
         DisclosureMethod::MinimumCountAndRounding {
             minimum_count: 2,
@@ -431,7 +440,7 @@ fn disclosure_threshold_rounding_and_halves_up_are_exact() {
     );
 
     let mut rounded_to_zero = cells_with_values(&[2]);
-    apply_disclosure(
+    apply_count_disclosure(
         &mut rounded_to_zero,
         DisclosureMethod::MinimumCountAndRounding {
             minimum_count: 2,
@@ -450,7 +459,7 @@ fn disclosure_property_values_are_null_zero_or_a_rounding_multiple() {
     for minimum_count in 2..=12 {
         for rounding_base in 2..=12 {
             let mut cells = cells_with_values(&(0..=200).collect::<Vec<_>>());
-            apply_disclosure(
+            apply_count_disclosure(
                 &mut cells,
                 DisclosureMethod::MinimumCountAndRounding {
                     minimum_count,
@@ -474,7 +483,7 @@ fn rounded_zero_exists_only_below_half_of_the_rounding_base() {
     for minimum_count in 2..=12 {
         for rounding_base in 2..=12 {
             let mut cells = cells_with_values(&(0..=200).collect::<Vec<_>>());
-            apply_disclosure(
+            apply_count_disclosure(
                 &mut cells,
                 DisclosureMethod::MinimumCountAndRounding {
                     minimum_count,
@@ -648,7 +657,7 @@ fn candidates_consistent_with_published_total(
         if current.len() == cell_count {
             let total = current.iter().sum();
             let mut total_cell = cells_with_values(&[total]);
-            apply_disclosure(&mut total_cell, parameters).unwrap();
+            apply_count_disclosure(&mut total_cell, parameters).unwrap();
             if total_cell[0].value == count(published_total) {
                 found.push(current.clone());
             }
@@ -1356,7 +1365,7 @@ fn disclosure_control_refuses_a_cell_that_is_not_a_count() {
         ];
         assert!(
             matches!(
-                apply_disclosure(&mut cells, parameters),
+                apply_count_disclosure(&mut cells, parameters),
                 Err(StatisticsError::InvalidDocument(_))
             ),
             "{cell:?}"
@@ -1457,7 +1466,7 @@ fn exact_public_values_leave_every_cell_as_computed() {
         measure_cell("average", decimal("3.25"), CellStatus::Exact),
     ];
     let computed = cells.clone();
-    apply_disclosure(&mut cells, DisclosureMethod::ExactPublicValues).unwrap();
+    apply_count_disclosure(&mut cells, DisclosureMethod::ExactPublicValues).unwrap();
     assert_eq!(cells, computed);
 }
 
@@ -1741,7 +1750,7 @@ fn disclosure_suppresses_and_rounds_a_distinct_count_on_its_own_value() {
     // Eight records but two distinct owners: the count rounds, the distinct
     // count is suppressed.
     let mut cells = vec![cell("count", 8), cell("owners", 2), cell("owners", 7)];
-    apply_disclosure(
+    apply_count_disclosure(
         &mut cells,
         DisclosureMethod::MinimumCountAndRounding {
             minimum_count: 5,
@@ -2043,6 +2052,7 @@ fn cell_at(period: &str, codes: &[(&str, &str)], measure: &str, value: Option<Ce
 fn input(contributors: Option<u64>, dominant: bool) -> CellDisclosureInput {
     CellDisclosureInput {
         contributors,
+        cell_contributors: contributors,
         dominant,
     }
 }
@@ -2200,6 +2210,42 @@ fn a_cell_with_its_own_reason_keeps_it_when_it_also_contains_a_suppressed_sum() 
             (0, SuppressionReason::MinimumContributors),
             (1, SuppressionReason::Dominance)
         ]
+    );
+}
+
+#[test]
+fn a_small_cell_whose_records_leave_the_summed_field_unset_is_suppressed_with_its_totals() {
+    let mut cells = vec![
+        // one contributor, no value for the summed field: a zero would say so
+        cell_at("2025", &[("region", "a")], "total", decimal("0")),
+        cell_at("2025", &[("region", "_T")], "total", decimal("900")),
+        // enough contributors and none with a value: the exact zero stays
+        cell_at("2025", &[("region", "b")], "total", decimal("0")),
+    ];
+    let inputs = [
+        CellDisclosureInput {
+            contributors: Some(0),
+            cell_contributors: Some(1),
+            dominant: false,
+        },
+        input(Some(9), false),
+        CellDisclosureInput {
+            contributors: Some(0),
+            cell_contributors: Some(9),
+            dominant: false,
+        },
+    ];
+    let found = protect(&mut cells, &inputs).unwrap();
+    assert_eq!(
+        reasons(&found),
+        vec![
+            (0, SuppressionReason::MinimumContributors),
+            (1, SuppressionReason::ContainsSuppressedSum)
+        ]
+    );
+    assert_eq!(
+        (cells[2].value.clone(), cells[2].status),
+        (decimal("0"), CellStatus::Exact)
     );
 }
 

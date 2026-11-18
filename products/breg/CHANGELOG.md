@@ -64,7 +64,7 @@
   number, plus `suppressions`: for each suppressed cell, its index in
   `document.cells` and the reason (`minimum-count`, `minimum-contributors`,
   `dominance`, or `contains-suppressed-sum`; the list may grow). It stores
-  nothing, reserves no version, and writes one audit entry. The clients gain
+  nothing, reserves no version, and writes an audit attempt and one terminal entry. The clients gain
   `statistics_release_dry_run` (Rust and Python) and `statisticsReleaseDryRun`
   (Node.js), and the Rust client and `bregctl statistics publish` recognize the
   `negative-value` refusal code. This change is additive.
@@ -81,8 +81,9 @@
   a sum over a `decimal` field is exact. A publication refuses with refusal
   code `negative-value` when a summed value is negative, and the compiler
   refuses a decimal field without a `minimum` of zero or more, day periods,
-  more than 4 dimensions, and two datasets whose sums over one field, unit,
-  and population have nested dimensions. The compiler also refuses a
+  more than 4 dimensions, and a second dataset that releases a sum of the
+  same field over the same unit
+  (`breg.statistical-dataset.sum-field-released-twice`). The compiler also refuses a
   `publish` or `read-releases` grant on such a dataset
   (`breg.statistical-dataset.sum-release-held`) until a statistician has
   reviewed the rules and their implementation; until then, sums are served

@@ -175,7 +175,7 @@ DURATION_TEXT_WORDS = frozenset(
 # An ISO 8601 duration value (`PT48H`, `P2D`) shows a text member holds a
 # duration whatever its key says.
 ISO_8601_DURATION = re.compile(r"^-?P(?=.)(\d+Y)?(\d+M)?(\d+W)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+(\.\d+)?S)?)?$")
-UNITS = ("Milliseconds", "Seconds", "Minutes", "Hours", "Days", "WorkingDays", "Bytes", "Degrees")
+UNITS = ("Milliseconds", "Seconds", "Minutes", "Hours", "Days", "WorkingDays", "Bytes", "Degrees", "Percent")
 TIME_UNITS = ("Milliseconds", "Seconds", "Minutes", "Hours", "Days")
 NONCANONICAL_UNITS = {
     "Ms": "Milliseconds", "Millis": "Milliseconds", "Msec": "Milliseconds",
