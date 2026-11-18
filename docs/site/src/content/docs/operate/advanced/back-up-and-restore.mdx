@@ -34,19 +34,14 @@ up these alongside every database backup, on the same schedule:
   pg_dump --format=custom --file=/srv/backup/registry-before-build-2.dump registry
   ```
 
-  When the package declares an indexed external projection, exclude the data of its seven
-  projection and refresh tables. The backup then holds no source values, bindings, refresh work,
-  selectors, or receipts. Keep the tables themselves: use `--exclude-table-data`, never `--exclude-table`.
+  When the package declares an indexed external projection, exclude the data of its six
+  projection and refresh tables with one pattern. The backup then holds no source values,
+  bindings, refresh work, or selectors. Keep the tables themselves: use `--exclude-table-data`,
+  never `--exclude-table`. Quote the pattern so the shell does not expand it.
 
   ```sh
   pg_dump --format=custom \
-    --exclude-table-data=registry_internal.registry_external_projection_scopes \
-    --exclude-table-data=registry_internal.registry_external_projection_refreshes \
-    --exclude-table-data=registry_internal.registry_external_projection_snapshots \
-    --exclude-table-data=registry_internal.registry_external_projection_values \
-    --exclude-table-data=registry_internal.registry_external_refresh_plans \
-    --exclude-table-data=registry_internal.registry_external_refresh_work \
-    --exclude-table-data=registry_internal.registry_external_refresh_receipts \
+    --exclude-table-data='registry_internal.registry_external_*' \
     --file=/srv/backup/registry-before-build-2.dump registry
   ```
 
@@ -55,6 +50,13 @@ up these alongside every database backup, on the same schedule:
   rebuilds the cache under the current binding and source grant; nothing is restored from the backup. See
   [Back up logically](../../../configure/breg-external-projections/#back-up-logically)
   in the external projections guide.
+
+  The exclusion applies to `pg_dump` only. The projection tables are ordinary logged tables, so
+  physical base backups, volume snapshots, WAL archives, and streaming replicas carry cached
+  source values. Keep those copies no longer than the source grant permits storage. Before a
+  physically restored copy or a promoted replica serves under changed source authority, run
+  `bregctl external-projection purge` for each affected projection. See
+  [Physical backups, WAL, and replicas](https://github.com/registrystack/registry-stack/blob/main/products/breg/external-projection-storage.md#physical-backups-wal-and-replicas).
 
 - The package directory, the runtime file, and the secret files it
   references. A restore needs the package the backup was taken under.
@@ -66,9 +68,9 @@ up these alongside every database backup, on the same schedule:
 - The attachment bucket, when `attachmentStorage` binds an S3-compatible backend. The database
   holds references; the bucket holds the bytes, so back it up at the same point.
 
-{/* Evidence: crates/registry-breg/src/postgres/external_projection.rs, INSTALL_SQL;
-    crates/registry-breg/src/postgres/external_refresh_queue.rs, registry_external_refresh_plans,
-    registry_external_refresh_work and registry_external_refresh_receipts. */}
+{/* Evidence: crates/registry-breg/src/postgres/external_projection.rs, INSTALL_SQL (four store tables);
+    crates/registry-breg/src/postgres/external_refresh_queue.rs, registry_external_refresh_plans and
+    registry_external_refresh_work (two queue tables, all logged). */}
 
 ### Registry Casework state
 

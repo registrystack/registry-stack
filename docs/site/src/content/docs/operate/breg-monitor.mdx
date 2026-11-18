@@ -196,7 +196,8 @@ rise in `client-error`, and put the registry behind an upstream rate limit: it h
 | `review` | Submits Proposals for review and reads results. |
 | `attachment-verification` | Sends uploaded files to an external verifier, when enabled. |
 | `subject-access-log-retention` | Drops expired subject access log entries, once a minute. |
-| `external-projection-retention` | Deletes expired, replaced, and withdrawn external projection snapshots and refresh receipts every five seconds, when the active package declares an indexed external projection. |
+| `external-projection-retention` | Deletes expired external projection snapshots and refresh receipts, everything under a purged or replaced epoch, and stale refresh queue rows every five seconds, when the active package declares an indexed external projection. |
+| `external-refresh` | Runs each configured [refresh plan](../../configure/breg-external-views/#refresh-plans-and-the-in-process-worker) in process, as the plan's worker identity, when the active package declares an indexed external projection. |
 
 `breg_worker_last_success_age_seconds` counts from the last iteration that did not fail, work or no
 work. The first three loop at least once a second, so an age of minutes means a worker fails every
@@ -230,28 +231,75 @@ An external projection retention pass deletes at most eight batches of a thousan
 None of its signals carries a source key, a value, or a secret:
 
 - A pass that deletes rows logs one `info` line per projection and reason, with `snapshots` and
-  `receipts` counts. The reason is `expired`, `replaced` for a rotated epoch, or `withdrawn`.
+  `receipts` counts. The reason is `expired`, `replaced` for an epoch that a changed contract,
+  operation, allowed field list, or cache lifetime replaced, or `withdrawn` for a scope that
+  `bregctl external-projection purge` made inactive.
+- A pass that deletes refresh queue rows logs `external refresh retention removed queue state` at
+  `info`, with `work` and `plans` counts. It deletes queued work that expired or belongs to an
+  inactive plan, an older plan generation, or a purged or replaced epoch, and an inactive plan 24
+  hours after its last change once no work is left.
 - A pass that fails logs `external projection retention tick failed` at `error`, with a `reason` of
   `registry-not-ready`, `lock-timeout`, `query-cancelled`, `database`, or `deadline`. It names no
   projection, because one pass covers them all.
 - A pass that reaches its batch bound logs a `warn` line; the rest of the backlog waits for the next
   pass.
 
+The refresh worker's signals name a plan, never a source key or value:
+
+- Each step logs `external refresh step completed` at `info`, with its `outcome` and the
+  `processed`, `published`, `reused`, `retried`, `settled`, and `sweep_acquisition_failures` counts.
+- At start, a plan the runtime file names but cannot resolve logs `external refresh plan is
+  unavailable` at `warn`, with the `path` and `code` of the refusal. That plan does not run; the
+  other plans do. A plan whose projection has no usable source binding logs `external refresh plan
+  has no active source binding` instead.
+- A sweep that finds the plan's queue full logs `external refresh queue is full; failed sweep keys
+  wait for the next sweep` at `warn`, with the `refused` count.
+- A saved sweep position that no longer opens, as after a cursor key rotation, logs `external
+  refresh continuation reset` at `warn`, and the plan's next sweep starts over.
+- A Record write whose refresh capture failed logs `external refresh capture failed; the next sweep
+  covers the Record` at `warn`, with the category `external_refresh.capture_failed`. The write
+  itself commits.
+
 `bregctl doctor` adds an `external-projection.status` information advisory for each projection a
 server would serve. It gives the time the source grant expires, as `grantValidUntilUnixSeconds`, and
 for an indexed projection when the newest snapshot it holds was observed, as
 `newestPublicationUnixSeconds`. A live projection holds no snapshots, and an indexed projection that
 was never refreshed has no newest snapshot. Renew the grant before it expires. An old or missing
-newest snapshot means the refresh sweep is not running. A projection without a usable binding is
+newest snapshot means no refresh plan is publishing for it. A projection without a usable binding is
 reported as an `external-projection.unavailable` warning instead; see
 [Troubleshooting](#troubleshooting).
+
+`doctor` also adds an `external-refresh.status` information advisory for each refresh plan. It
+reports `registered`, `due`, `leased`, `pending`, and `ready`, and when known
+`oldestReadyAgeSeconds`, `lastAttemptAtUnixSeconds`, and `lastCompletedAtUnixSeconds`, with the
+last outcome in the message. A `ready` count that keeps growing, or a last completion that falls
+behind the plan's interval, means the worker cannot keep up or keeps failing. Two warnings judge
+each plan against its source grant and cache lifetime:
+
+- `external-refresh.grant-expired`: the plan's source grant has expired, with
+  `grantRemainingSeconds`. Renew the grant.
+- `external-refresh.ttl-headroom`: the plan's `intervalSeconds` reaches the shorter of the
+  effective cache lifetime and the remaining grant, so cached values can expire before the next
+  sweep. The advisory reports `intervalSeconds`, `effectiveCacheTtlSeconds`, and
+  `grantRemainingSeconds`. Shorten the interval or renew the grant.
+
+`doctor` refuses a runtime file whose refresh plan does not resolve against the active package,
+with one of the `breg.external-refresh.*` codes in [Troubleshooting](#troubleshooting).
 
 {/* Evidence: crates/registry-breg/src/postgres/external_runtime.rs, run_retention(), retention_tick(),
     purge_tick(), projection_status();
     crates/registry-breg/src/postgres/external_projection.rs, enabled();
+    crates/registry-breg/src/postgres/external_refresh_queue.rs, purge_expired() and
+    purge_external_refresh_state;
+    crates/registry-breg/src/postgres/external_runtime/managed.rs, configure_managed_refresh() and
+    the step, queue-full, and continuation logs;
+    crates/registry-breg/src/mutation.rs, external_refresh.capture_failed;
     crates/registry-breg/src/postgres/mod.rs, RetentionFailureReason;
     crates/registry-breg/src/startup.rs, external_projection_retention and background_task_stop_code();
-    crates/registry-bregctl/src/lib.rs, write_doctor_success() and external_projection_status_report(). */}
+    crates/registry-breg/src/runtime_config.rs, external_refresh_diagnostics();
+    crates/registry-bregctl/src/doctor.rs, plan_diagnostics;
+    crates/registry-bregctl/src/lib.rs, write_doctor_success(), external_projection_status_report(),
+    and external_refresh_status_report(). */}
 
 {/* Evidence: crates/registry-breg/src/metrics.rs, ProgressWorker, PendingQueue, read_queues();
     crates/registry-breg/src/startup.rs, OperationalEvent, RecordTimerIterationCause,
@@ -389,19 +437,29 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `migration.rehearsal.*` | PostgreSQL refused the rehearsal, so `apply` would too. | Correct the SQL or the project. |
 | `source.unavailable` | A read could not complete: the database is unreachable or has no free connection, an audit record could not be written, or history no longer covers the snapshot. | Check the database and the audit destination; for a snapshot read, take a fresh reference. |
 | `external-projection.unavailable` | From `doctor`, a warning: an external projection the package declares or the runtime file binds has no usable binding, and the message names why. Its views answer `source.unavailable`; other views serve. | Add or correct its entry under `externalSources` in the runtime file, then restart. |
-| `external-projection.status` | From `doctor`, information: when a projection's source grant expires and when its newest snapshot was observed. | Renew the grant before it expires; if the newest snapshot is old or missing, run the refresh sweep. |
+| `external-projection.status` | From `doctor`, information: when a projection's source grant expires and when its newest snapshot was observed. | Renew the grant before it expires; if the newest snapshot is old or missing, check its plan's `external-refresh.status` advisory and the refresh worker's logs. |
+| `external-refresh.status` | From `doctor`, information: a refresh plan's queue counts and its last attempt, completion, and outcome. | If `ready` keeps growing or the last completion falls behind the interval, read the refresh worker's logs for the plan. |
+| `external-refresh.grant-expired` | From `doctor`, a warning: a refresh plan's source grant has expired. | Renew the grant and update `grantValidUntil` under `externalSources`, then restart. Renewing the cutoff keeps the stored epoch and its cache. |
+| `external-refresh.ttl-headroom` | From `doctor`, a warning: a refresh plan's interval reaches the shorter of its effective cache lifetime and its remaining grant. | Shorten `intervalSeconds`, lengthen the authored cache lifetime, or renew the grant. |
+| `breg.external-refresh.*` | From `check --runtime-config` or `doctor`, an entry under `externalRefresh.plans` does not resolve against the active package: its view, link, root, worker profile, worker client, principal or row claims, notifier, projection, or source binding is missing or does not match; the code and path name which. At start, the registry logs the same plan as unavailable and runs the others. | Correct the plan entry at the path named, or the profile or binding it points at. |
+| `breg.runtime.external-refresh-id-collision` | Two `externalRefresh.plans` ids differ only by `-` and `_`. | Rename one of them. |
+| `external-source-facts.arguments` | `bregctl generate external-source-facts` was given a relative `--runtime-config` path or an argument other than `--runtime-config` and `--output`. | Pass the runtime file by absolute path, with only those two arguments. |
+| `external-source-facts.binding` | A binding under `externalSources` could not produce its facts; the message names the refusal reason. | Review the runtime binding, the source grant, and the pinned Adapter pack. |
+| `external-source-facts.output` | The facts file could not be written. | Provide a new output file in a writable directory. |
+| `external_source.secrets`, `external_source.load`, `external_store.install`, `external_refresh.register`, `external_store.status`, `external_refresh.status` | The registry could not set up its external views at start or during a check, so it does not serve. The category names the stage: resolving the runtime file's secret references, loading the `externalSources` bindings, binding the projection store, registering the refresh plans, or reading their status for the check. | For the first two, correct `externalSources` or the secrets it names. For the others, check the database and its migration and runtime roles. Then restart. |
+| `external_refresh.worker.panicked`, `external_refresh.worker.returned` | The refresh worker stopped, so the process drains requests and exits with status 1. | Read the lines before it, fix the cause, and restart. The same code on every restart names the worker to investigate. |
+| `external_projection.retention.panicked`, `external_projection.retention.returned` | The retention worker stopped, so the process drains requests and exits with status 1. | As above. |
 | `external-projection.in-progress` | From `bregctl external-projection`, another session holds the migration lock. Nothing changed. | Wait, then rerun. |
 | `external-projection.runtime-config.path-invalid` | `bregctl external-projection` was given a relative runtime file path. A runtime file it cannot read or accept reports the same reader codes `bregctl status` does. | Pass the runtime file by absolute path. |
 | `external-projection.package.refused` | From `bregctl external-projection`, the active package was refused: `package.expectedDigest` pins another package (both digests are named), or the package at `package.root` failed verification (the message names why). | Deploy the pinned package or update the pin; for a failed verification, restore the reviewed package directory. |
 | `external-projection.database-configuration.refused` | `bregctl external-projection` could not build its database connections: `database.runtimeUrlRef` or `database.migrationUrlRef` did not resolve to a PostgreSQL URL that names its configured role under `database.roles`. Nothing changed. | Correct the reference or its secret, then rerun. |
-| `external-projection.database.unavailable` | `bregctl external-projection` could not reach the database, or a statement or the commit did not complete. A withdrawal or rotation whose commit was not acknowledged may have taken effect. | Check the database, then run `bregctl external-projection inspect` before rerunning a change. |
+| `external-projection.database.unavailable` | `bregctl external-projection` could not reach the database, or a statement or the commit did not complete. A purge whose commit was not acknowledged may have taken effect. | Check the database, then run `bregctl external-projection inspect` before rerunning a change. |
 | `external-projection.migration-authority.refused` | The migration connection does not hold the migration authority: it connects as another role than `database.roles.migration`, holds database-level administrative authority, or does not own the registry schemas. Nothing changed. | Point `database.migrationUrlRef` at the migration role, then rerun. |
 | `external-projection.not-ready` | The database is not ready for the active package, or its activation changed after the command opened it. Nothing changed. | Run `bregctl doctor` to name the cause, fix it, then rerun. |
 | `external-projection.audit.unavailable` | The audit destination could not be opened or refused an entry. When it refused the outcome entry, the change committed. | Repair the audit path and directory permissions, then run `bregctl external-projection inspect` before retrying. |
 | `external-projection.runtime.unavailable` | `bregctl external-projection` could not start its async runtime. Nothing changed. | Rerun the command. |
 | `external-projection.unknown` | The projection named to `bregctl external-projection` is not an indexed external projection of the active package. | Name one the package declares. |
-| `external-projection.binding.unavailable` | `bregctl external-projection rotate` found no usable binding for the projection under `externalSources`; the message names the failed check. | Correct the binding, or remove it from the runtime file to stop acquisition. |
-| `external-projection.not-bound` | `bregctl external-projection withdraw` found no bound scope for the projection. Nothing changed. | Nothing to withdraw. |
+| `external-projection.not-bound` | `bregctl external-projection purge` found no bound scope for the projection. Nothing changed. | Nothing to purge. |
 | `idempotency.expired` | The write committed; its receipt expired. | Read the record instead. |
 | `history.erase.acknowledgement.required` | `--acknowledge-irreversible` is missing. | Confirm, then add the flag. |
 | `history.rebaseline.live-rows.unverified` | A live row disagrees with its journal head. | Compare suspect records' revisions. |
@@ -439,7 +497,12 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
     live_old_server_drains_apply_and_exact_successor_restart_becomes_ready;
     crates/registry-bregctl/src/lib.rs, external_projection_failure();
     crates/registry-breg/src/external_projection_maintenance.rs, ExternalProjectionMaintenanceError,
-    configured_scope();
+    inspect() and purge();
+    crates/registry-breg/src/external_refresh_config.rs, the breg.external-refresh codes;
+    crates/registry-breg/src/runtime_config.rs, ExternalRefreshIdCollision;
+    crates/registry-breg/src/startup.rs, ExternalViewsStage and external_views_refused();
+    crates/registry-bregctl/src/lib.rs, external-source-facts.arguments, external-source-facts.binding,
+    external-source-facts.output, external-refresh.grant-expired, external-refresh.ttl-headroom;
     crates/registry-breg/src/problem.rs. */}
 
 ## Next

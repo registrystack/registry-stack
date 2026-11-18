@@ -84,20 +84,29 @@
   in another registry beside its own Record, without copying the other
   registry's data into the Record. Declare `externalRecordTypes`,
   `externalProjections` (`mode: live` or `indexed`) and `externalViews` in the
-  project, bind each source under `externalSources` and `externalRefresh` in the
-  runtime file, and grant `externalViews` and `refreshExternalProjections` in an
-  access profile. Readers use
-  `GET /v1/external-views/{view}/{link}/records` and `.../records/{root}`; a
-  refresh profile uses `/refresh` and `/refresh-labels`, and a refresh plan
-  uses `/v1/external-refresh-plans/{plan}/step` and `/hints`. A view that
+  project, and grant `externalViews` and `refreshExternalProjections` in an
+  access profile. In the runtime file, bind each source under
+  `externalSources`, whose `allowedFields` is the operator's approval of the
+  outside fields BReg may copy, and give each indexed link a refresh plan
+  under `externalRefresh`. Readers use
+  `GET /v1/external-views/{view}/{link}/records` and `.../records/{root}`.
+  BReg runs refresh plans in process as each plan's configured worker
+  identity. A source notifier posts to
+  `/v1/external-refresh-plans/{plan}/source-changes`, and a staff
+  application's service client can ask for one root to be refreshed with
+  `POST /v1/external-views/{view}/{link}/records/{root}/refresh`. A view that
   cannot be answered completely returns the problem
   `registry-breg/external_view/incomplete`. `bregctl external-projection
-  inspect|withdraw|rotate|refresh` operates the cached values, and `bregctl
-  generate external-source-facts` writes the source facts. An indexed
-  projection keeps its cache in seven derived tables in `registry_internal`
-  (see [External projections](https://docs.registrystack.org/configure/breg-external-projections/)) and
-  needs separate migration and runtime database roles. Exclude those tables'
-  data from backups; see the back-up and restore page. The
+  inspect|purge` operates the cached values, and `bregctl generate
+  external-source-facts` writes the source facts. An indexed projection keeps
+  its cache in four store tables and two refresh queue tables in
+  `registry_internal` (see
+  [External projections](https://docs.registrystack.org/configure/breg-external-projections/))
+  and needs separate migration and runtime database roles. Exclude their data
+  from logical backups with
+  `--exclude-table-data='registry_internal.registry_external_*'`. Physical
+  backups, WAL archives and replicas carry the cached values; see the back-up
+  and restore page. The
   [synthetic licensing example](examples/external-views/README.md) shows live
   and indexed views.
 - A Rhai Action plan can call `today()`, `add_days(date, days)` and
