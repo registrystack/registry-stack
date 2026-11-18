@@ -133,7 +133,7 @@ impl Issuer {
             .plan
             .people
             .get(alias)
-            .context("test person is not in the run's plan")?;
+            .ok_or_else(|| super::unknown_person(alias, &input.plan.people))?;
         self.sign_access(
             input,
             person,

@@ -4,7 +4,9 @@ use crate::identity::{self, DrivenTool, Failure, GenerateOptions, Input, Product
 use crate::install::{self, BootstrapOptions};
 use crate::store::{GenerationStore, InvocationLease};
 use crate::ReleaseManifest;
-use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{
+    value_parser, Arg, ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum,
+};
 use serde_json::{json, Value};
 use std::ffi::OsString;
 use std::fs;
@@ -168,6 +170,7 @@ enum Command {
 #[derive(Subcommand)]
 enum DevCommand {
     /// Validate a development plan without starting services.
+    #[command(after_help = "Example:\n  rstack dev check ./my-registry-project")]
     Check {
         /// Project directory containing dev.yaml.
         #[arg(value_name = "PROJECT")]
@@ -175,11 +178,9 @@ enum DevCommand {
         /// Refuse an unaccepted warning.
         #[arg(long)]
         deny_warnings: bool,
-        /// Emit the check report as JSON.
-        #[arg(long)]
-        json: bool,
     },
     /// Start a development environment for a registry project.
+    #[command(after_help = "Example:\n  rstack dev start ./my-registry-project --ttl 1h")]
     Start {
         /// Project directory containing dev.yaml.
         #[arg(value_name = "PROJECT")]
@@ -194,20 +195,18 @@ enum DevCommand {
         /// Lifetime after readiness, from 1s to 24h. Defaults to 30m.
         #[arg(long, value_name = "DURATION")]
         ttl: Option<String>,
-        /// Emit the runner's JSON report.
-        #[arg(long)]
-        json: bool,
     },
     /// Report the state of a development environment.
+    #[command(after_help = "Example:\n  rstack dev status 0123456789abcdef0123456789abcdef")]
     Status {
         /// Run ID returned by rstack dev start.
         #[arg(value_name = "RUN_ID")]
         run_id: String,
-        /// Emit the runner's JSON report.
-        #[arg(long)]
-        json: bool,
     },
     /// Issue a development token for one named synthetic person.
+    #[command(
+        after_help = "Example:\n  rstack dev token 0123456789abcdef0123456789abcdef --as operator"
+    )]
     Token {
         /// Run ID returned by rstack dev start.
         #[arg(value_name = "RUN_ID")]
@@ -215,11 +214,9 @@ enum DevCommand {
         /// Synthetic person configured by the project.
         #[arg(long = "as", value_name = "NAME")]
         person: String,
-        /// Emit the runner's JSON report.
-        #[arg(long)]
-        json: bool,
     },
     /// Stop a development environment.
+    #[command(after_help = "Example:\n  rstack dev stop 0123456789abcdef0123456789abcdef")]
     Stop {
         /// Run ID returned by rstack dev start.
         #[arg(value_name = "RUN_ID")]
@@ -232,9 +229,6 @@ enum DevCommand {
         /// RSTACK_DEV_DATABASE_URL; a run that started its own server needs none.
         #[arg(long, value_name = "URL", requires = "recover")]
         database_url: Option<String>,
-        /// Emit the runner's JSON report.
-        #[arg(long)]
-        json: bool,
     },
 }
 
@@ -361,15 +355,37 @@ enum ComponentCommand {
     List,
 }
 
+/// The installer's global path flags mean nothing to a development run, so
+/// `dev` and its subcommands carry hidden copies that keep them out of their
+/// help while still accepting them.
 pub fn command() -> clap::Command {
-    Cli::command()
+    Cli::command().mut_subcommand("dev", |dev| {
+        [
+            ("install_root", "install-root"),
+            ("bin_dir", "bin-dir"),
+            ("asset_dir", "asset-dir"),
+        ]
+        .into_iter()
+        .fold(dev, |dev, (id, flag)| {
+            dev.arg(
+                Arg::new(id)
+                    .long(flag)
+                    .global(true)
+                    .hide(true)
+                    .value_parser(value_parser!(PathBuf)),
+            )
+        })
+    })
+}
+
+fn parse(arguments: Vec<OsString>) -> Result<Cli, clap::Error> {
+    Cli::from_arg_matches(&command().try_get_matches_from(arguments)?)
 }
 
 pub fn run() -> i32 {
     let arguments: Vec<OsString> = std::env::args_os().collect();
     let (duplicate_format, json_requested, format_supplied, requested_format) =
         report_arguments(&arguments);
-    let json_requested = json_requested || dev_json_requested(&arguments);
     if duplicate_format {
         return emit_failure(2, "--format may be supplied only once", json_requested);
     }
@@ -392,7 +408,7 @@ pub fn run() -> i32 {
     } else {
         arguments
     };
-    let cli = match Cli::try_parse_from(arguments) {
+    let cli = match parse(arguments) {
         Ok(cli) => cli,
         Err(error) => {
             let code = error.exit_code();
@@ -437,16 +453,6 @@ fn report_arguments(arguments: &[OsString]) -> (bool, bool, bool, Option<Request
         }
     }
     (occurrences > 1, json, occurrences > 0, requested)
-}
-
-/// Whether a `dev` subcommand carries its own `--json` before any `--`.
-fn dev_json_requested(arguments: &[OsString]) -> bool {
-    command_tokens(arguments).first() == Some(&"dev")
-        && arguments
-            .iter()
-            .skip(1)
-            .take_while(|argument| *argument != "--")
-            .any(|argument| argument == "--json")
 }
 
 fn requested_report_format(value: &OsString) -> RequestedReportFormat {
@@ -652,8 +658,12 @@ fn execute(cli: Cli, format_supplied: bool, evidence_junit: bool) -> Result<(), 
         Some(Command::Help {
             product: Some(product),
         }) => {
-            known_product(product)?;
-            product_help(product, format, &[])?;
+            if product == "dev" {
+                dev_help(format)?;
+            } else {
+                known_product(product)?;
+                product_help(product, format, &[])?;
+            }
         }
         Some(Command::Components {
             command: ComponentCommand::List,
@@ -1472,24 +1482,52 @@ fn no_dev_host(managed: bool) -> CliFailure {
     ))
 }
 
+/// `rstack help dev`: the development commands' help, offline.
+fn dev_help(format: ReportFormat) -> Result<(), CliFailure> {
+    let mut root = command();
+    root.build();
+    let dev = root.find_subcommand_mut("dev").expect("the dev command");
+    match format {
+        ReportFormat::Human => reportln!("{}", dev.render_long_help()),
+        ReportFormat::Json => {
+            let subcommands: Vec<_> = dev
+                .get_subcommands()
+                .map(|sub| {
+                    json!({
+                        "name": sub.get_name(),
+                        "invocation": format!("rstack dev {}", sub.get_name()),
+                        "about": sub.get_about().map(ToString::to_string),
+                    })
+                })
+                .collect();
+            reportln!(
+                "{}",
+                json!({"schema_version":"registry.rstack.help.v1","command":{
+                    "name":"dev","invocation":"rstack dev",
+                    "about":dev.get_about().map(ToString::to_string),
+                    "subcommands":subcommands}})
+            );
+        }
+    }
+    Ok(())
+}
+
 fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<(), CliFailure> {
     let option = |name: &str, value: &std::ffi::OsStr| {
         let mut option = OsString::from(format!("--{name}="));
         option.push(value);
         option
     };
-    let (name, mut options, json, target, database_url, needs) = match action {
+    let (name, mut options, target, database_url, needs) = match action {
         DevCommand::Check {
             project,
             deny_warnings,
-            json,
         } => (
             "check",
             deny_warnings
                 .then(|| OsString::from("--deny-warnings"))
                 .into_iter()
                 .collect::<Vec<_>>(),
-            *json,
             project.as_os_str(),
             None,
             DevNeeds::check(project),
@@ -1499,7 +1537,6 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
             application_root,
             database_url,
             ttl,
-            json,
         } => (
             "start",
             application_root
@@ -1507,27 +1544,20 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
                 .map(|root| option("application-root", root.as_os_str()))
                 .chain(ttl.iter().map(|ttl| option("ttl", ttl.as_ref())))
                 .collect(),
-            *json,
             project.as_os_str(),
             database_url.as_deref(),
             DevNeeds::start(project),
         ),
-        DevCommand::Status { run_id, json } => (
+        DevCommand::Status { run_id } => (
             "status",
             Vec::new(),
-            *json,
             run_id.as_ref(),
             None,
             DevNeeds::any_host(),
         ),
-        DevCommand::Token {
-            run_id,
-            person,
-            json,
-        } => (
+        DevCommand::Token { run_id, person } => (
             "token",
             vec![option("as", person.as_ref())],
-            *json,
             run_id.as_ref(),
             None,
             DevNeeds::any_host(),
@@ -1536,20 +1566,18 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
             run_id,
             recover,
             database_url,
-            json,
         } => (
             "stop",
             recover
                 .then(|| OsString::from("--recover"))
                 .into_iter()
                 .collect(),
-            *json,
             run_id.as_ref(),
             database_url.as_deref(),
             DevNeeds::any_host(),
         ),
     };
-    if json || matches!(format, ReportFormat::Json) {
+    if matches!(format, ReportFormat::Json) {
         options.push(OsString::from("--json"));
     }
 

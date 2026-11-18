@@ -375,7 +375,7 @@ fn source_start_passes_one_argument_list_and_binary_set() {
         .command()
         .args(["dev", "start"])
         .arg(&tools.project)
-        .args(["--ttl", "45m", "--database-url", database_url, "--json"])
+        .args(["--ttl", "45m", "--database-url", database_url])
         .env("EXPECTED_DATABASE_URL", database_url)
         .output()
         .unwrap();
@@ -387,7 +387,7 @@ fn source_start_passes_one_argument_list_and_binary_set() {
         hosted(&output),
         (
             "bregctl".to_owned(),
-            runner_arguments("start", &["--ttl=45m", "--json"], &tools.project)
+            runner_arguments("start", &["--ttl=45m"], &tools.project)
         )
     );
     assert!(stdout.contains("database:matched\n"));
@@ -439,16 +439,17 @@ fn dev_actions_encode_the_public_contract_and_launcher_json_format() {
                 "check",
                 tools.project.to_str().unwrap(),
                 "--deny-warnings",
-                "--json",
             ],
-            runner_arguments("check", &["--deny-warnings", "--json"], &tools.project),
+            runner_arguments("check", &["--deny-warnings"], &tools.project),
         ),
         (
             vec!["--format", "json", "dev", "status", "run-1"],
             runner_arguments("status", &["--json"], &run("run-1")),
         ),
         (
-            vec!["dev", "token", "run-2", "--as", "reviewer", "--json"],
+            vec![
+                "--format", "json", "dev", "token", "run-2", "--as", "reviewer",
+            ],
             runner_arguments("token", &["--as=reviewer", "--json"], &run("run-2")),
         ),
         (
@@ -456,11 +457,11 @@ fn dev_actions_encode_the_public_contract_and_launcher_json_format() {
             runner_arguments("stop", &[], &run("run-3")),
         ),
         (
-            vec!["dev", "stop", "run-4", "--json"],
+            vec!["--format", "json", "dev", "stop", "run-4"],
             runner_arguments("stop", &["--json"], &run("run-4")),
         ),
         (
-            vec!["dev", "stop", "run-5", "--recover", "--json"],
+            vec!["--format", "json", "dev", "stop", "run-5", "--recover"],
             runner_arguments("stop", &["--recover", "--json"], &run("run-5")),
         ),
         (
@@ -519,7 +520,6 @@ fn database_url_is_refused_for_stop_without_recover() {
             "run-7",
             "--database-url",
             "postgresql://example.invalid/x",
-            "--json",
         ])
         .env("RSTACK_BREGCTL_BIN", &tools.bregctl)
         .output()
@@ -558,15 +558,27 @@ fn root_and_dev_help_need_no_installation_or_binary_overrides() {
         ),
         (
             &["dev", "check", "--help"][..],
-            &["PROJECT", "--deny-warnings", "--json"][..],
+            &[
+                "PROJECT",
+                "--deny-warnings",
+                "rstack dev check ./my-registry-project",
+            ][..],
         ),
         (
             &["dev", "start", "--help"][..],
-            &["--database-url", "--ttl", "--json"][..],
+            &[
+                "--database-url",
+                "--ttl",
+                "rstack dev start ./my-registry-project",
+            ][..],
         ),
         (
             &["dev", "stop", "--help"][..],
-            &["--recover", "--database-url", "--json"][..],
+            &[
+                "--recover",
+                "--database-url",
+                "rstack dev stop 0123456789abcdef0123456789abcdef",
+            ][..],
         ),
     ] {
         let output = tools.empty_command().args(arguments).output().unwrap();
@@ -613,11 +625,11 @@ fn assert_matches_error_schema(report: &Value) {
 }
 
 #[test]
-fn dev_subcommand_json_makes_launcher_failures_json() {
+fn format_json_makes_dev_failures_json() {
     let tools = SourceTools::new();
     let output = tools
         .empty_command()
-        .args(["dev", "start", "/missing", "--json"])
+        .args(["--format", "json", "dev", "start", "/missing"])
         .output()
         .unwrap();
 
@@ -631,7 +643,7 @@ fn dev_subcommand_json_makes_launcher_failures_json() {
 
     let usage = tools
         .empty_command()
-        .args(["dev", "token", "run-1", "--json"])
+        .args(["--format", "json", "dev", "token", "run-1"])
         .output()
         .unwrap();
     assert_eq!(usage.status.code(), Some(2), "{usage:?}");
@@ -650,6 +662,56 @@ fn dev_subcommand_json_makes_launcher_failures_json() {
     assert!(String::from_utf8(human.stderr)
         .unwrap()
         .starts_with("rstack: "));
+}
+
+#[test]
+fn dev_json_flag_is_refused() {
+    let tools = SourceTools::new();
+    for arguments in [
+        &["dev", "check", "/p", "--json"][..],
+        &["dev", "start", "/p", "--json"][..],
+        &["dev", "status", "run-1", "--json"][..],
+        &["dev", "token", "run-1", "--as", "x", "--json"][..],
+        &["dev", "stop", "run-1", "--json"][..],
+    ] {
+        let output = tools.empty_command().args(arguments).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("--json"), "{arguments:?}: {stderr}");
+    }
+}
+
+#[test]
+fn help_dev_is_accepted() {
+    let tools = SourceTools::new();
+    let output = tools
+        .empty_command()
+        .args(["help", "dev"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for text in ["check", "start", "status", "token", "stop"] {
+        assert!(stdout.contains(text), "{stdout}");
+    }
+    assert!(!stdout.contains("--install-root"), "{stdout}");
+}
+
+#[test]
+fn dev_help_hides_the_installer_path_flags() {
+    let tools = SourceTools::new();
+    for arguments in [
+        &["dev", "--help"][..],
+        &["dev", "start", "--help"][..],
+        &["dev", "stop", "--help"][..],
+    ] {
+        let output = tools.empty_command().args(arguments).output().unwrap();
+        assert!(output.status.success(), "{arguments:?}: {output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        for flag in ["--install-root", "--bin-dir", "--asset-dir"] {
+            assert!(!stdout.contains(flag), "{arguments:?}: {stdout}");
+        }
+    }
 }
 
 #[test]
