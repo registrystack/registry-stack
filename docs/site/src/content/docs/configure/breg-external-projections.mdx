@@ -37,7 +37,7 @@ A changed contract, operation, allowed field list, or effective cache lifetime s
 A purged scope whose binding is still configured also starts a fresh epoch.
 Rows under every older epoch are left for the retention worker, and a purged or replaced epoch never becomes readable again.
 
-`allowedFields` in the deployment binding is the runtime operator's own approval of which outside fields BReg may copy.
+`allowedFields` in the deployment binding is the runtime operator's own approval of which outside fields Base Registry Engine (BReg) may copy.
 It is separate from the fields the package author lists on the projection.
 A package that adds a projection field leaves that projection unavailable until the operator adds the field to `allowedFields`.
 The refusal names the field and the path `/externalSources/{id}/allowedFields`.
@@ -48,7 +48,7 @@ Changing the projection's own declaration resets its scope during package activa
 
 The migration installs the queue and the compiler-owned lookup indexes.
 Activating a package that removes the last indexed projection drops the refresh queue first, then the store, so the retired declaration leaves no cached source data behind in the live database.
-To stop acquisition without changing the package, remove the projection's source binding and refresh plans from every Base Registry Engine (BReg) instance and restart.
+To stop acquisition without changing the package, remove the projection's source binding and refresh plans from every BReg instance and restart.
 
 A projection that cannot bind leaves only its own views unavailable.
 Its binding can fail its own checks, its source grant can have expired, or the database can refuse its scope.
