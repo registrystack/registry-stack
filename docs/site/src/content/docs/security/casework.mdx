@@ -118,9 +118,9 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
       a_runtime_role_that_gained_ledger_authority_is_refused_at_startup_until_apply_records_it,
       a_refused_audit_request_leaves_the_database_untouched,
       retired_schema_refusal_preserves_data_before_any_ledger_write. */}
-- Local tooling: `caseworkctl api PATH --client CLIENT` binds the selected client's bearer and
-  profile into the request and adds no authority; Casework still authenticates and authorizes
-  every route.
+- Local tooling: `caseworkctl api PATH --url URL --header @FILE` sends the bearer and profile
+  headers that `rstack dev token RUN --as PERSON` wrote to the header file and adds no authority;
+  Casework still authenticates and authorizes every route.
   Remote connections follow the same boundary: selecting a connection creates no product
   authority, and the receiving product still authenticates and authorizes every protected request
   ([Call an API with rstack](../../configure/api-connections/)).

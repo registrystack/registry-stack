@@ -555,8 +555,7 @@ fn run_entry() -> ExitCode {
                 );
                 return ExitCode::from(report::USAGE_EXIT);
             }
-            return match registry_cli_api::run_api("evidence", *args, request::local_api_connection)
-            {
+            return match registry_cli_api::run_api("evidence", *args) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("error: {error}");

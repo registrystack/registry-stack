@@ -110,7 +110,7 @@ enum Command {
         #[arg(long)]
         backup_reference: Vec<String>,
     },
-    /// Call the Casework HTTP API with a saved connection or retained local client.
+    /// Call the Casework HTTP API with a saved connection or an explicit URL.
     Api(Box<registry_cli_api::ApiArgs>),
     /// Manage saved Casework API connections.
     Connection {
@@ -711,9 +711,6 @@ fn api(args: registry_cli_api::ApiArgs, format_supplied: bool, stderr: &mut dyn 
     match registry_cli_api::run_api_with_profile_headers(
         "casework",
         args,
-        |_, _| {
-            Err("Casework keeps no retained local caller session. Run rstack dev token RUN --as PERSON to write a header file, then pass --url URL and --header @FILE".to_owned())
-        },
         &["Registry-Casework-Profile", "Registry-Review-Profile"],
     ) {
         Ok(()) => ExitCode::SUCCESS,
@@ -1274,10 +1271,15 @@ mod tests {
             "/ready",
             "--project",
             "project",
-            "--client",
-            "staff",
+            "--url",
+            "https://casework.example.test",
+            "--header",
+            "@header.txt",
         ])
         .is_ok());
+        assert!(
+            Cli::try_parse_from(["caseworkctl", "api", "/ready", "--client", "staff",]).is_err()
+        );
         assert!(Cli::try_parse_from([
             "caseworkctl",
             "connection",

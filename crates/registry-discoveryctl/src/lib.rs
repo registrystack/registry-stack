@@ -203,12 +203,7 @@ where
         }
     };
     match arguments.command {
-        Command::Api(args) => api_command(
-            registry_cli_api::run_api("discovery", *args, |_, _| {
-                Err("Discovery uses a public endpoint; run rstack discovery connection add NAME --anonymous and select it with --connection NAME".to_owned())
-            }),
-            stderr,
-        ),
+        Command::Api(args) => api_command(registry_cli_api::run_api("discovery", *args), stderr),
         Command::Connection { command, format } => {
             if let registry_cli_api::ConnectionCommand::Check(args) = &command {
                 return match registry_cli_api::run_connection_check(

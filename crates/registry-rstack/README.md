@@ -73,13 +73,13 @@ and executable path, including whether a different `rstack` shadows it on
 Product API commands use the same connection and HTTP conventions:
 
 ```sh
-rstack breg api /v1/records/contacts --client editor
+rstack breg api /v1/records/contacts --url "$BREG_URL" --header @"$EDITOR_HEADERS"
 rstack breg connection add pilot
 rstack breg api /v1/records/contacts --connection pilot
 ```
 
-Local client selection reuses the ready project's endpoint and acquires a
-fresh credential. The guided connection setup saves a remote endpoint and
+A one-off request names the service with `--url` and a header file such as the
+one `rstack dev token RUN --as PERSON` writes. The guided connection setup saves a remote endpoint and
 credential references once. `connection use NAME` selects a default for the
 current product project, including calls from its subdirectories; explicit
 connection names also work outside a project.
@@ -91,7 +91,7 @@ refused HTTP response retains its body and exits 1. Usage exits 2 and
 operational failures exit 3. Requests are sent once. Product authorization,
 mutation revisions, idempotency keys, and Evidence verification retain their
 own API meanings. See [API connections](../../docs/site/src/content/docs/configure/api-connections.mdx)
-for local and remote setup.
+for one-off and saved-connection setup.
 
 ## Identity configuration
 

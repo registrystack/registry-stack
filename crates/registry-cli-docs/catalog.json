@@ -2077,15 +2077,6 @@
               "environment": null
             },
             {
-              "display": "--client <CLIENT>",
-              "description": "Named local development client resolved by the product adapter",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
               "display": "--connection <CONNECTION>",
               "description": "Named saved remote connection",
               "always_required": false,
@@ -2229,22 +2220,6 @@
               "kind": "requires-all",
               "when": "--ca-file <CA_FILE>",
               "arguments": [
-                "--url <URL>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--client <CLIENT>",
-                "--connection <CONNECTION>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--client <CLIENT>",
                 "--url <URL>"
               ]
             },
@@ -10002,7 +9977,7 @@
         {
           "name": "api",
           "invocation": "caseworkctl api",
-          "about": "Call the Casework HTTP API with a saved connection or retained local client",
+          "about": "Call the Casework HTTP API with a saved connection or an explicit URL",
           "long_about": null,
           "usage": "caseworkctl api [OPTIONS] <PATH>",
           "arguments": [
@@ -10020,15 +9995,6 @@
             {
               "display": "--project <PROJECT>",
               "description": "Project directory, or a descendant from which the exact product root is found",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--client <CLIENT>",
-              "description": "Named local development client resolved by the product adapter",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -10179,22 +10145,6 @@
               "kind": "requires-all",
               "when": "--ca-file <CA_FILE>",
               "arguments": [
-                "--url <URL>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--client <CLIENT>",
-                "--connection <CONNECTION>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--client <CLIENT>",
                 "--url <URL>"
               ]
             },
@@ -10826,15 +10776,6 @@
               "environment": null
             },
             {
-              "display": "--client <CLIENT>",
-              "description": "Named local development client resolved by the product adapter",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
               "display": "--connection <CONNECTION>",
               "description": "Named saved remote connection",
               "always_required": false,
@@ -10987,22 +10928,6 @@
               "kind": "requires-all",
               "when": "--ca-file <CA_FILE>",
               "arguments": [
-                "--url <URL>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--client <CLIENT>",
-                "--connection <CONNECTION>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--client <CLIENT>",
                 "--url <URL>"
               ]
             },
@@ -15250,15 +15175,6 @@
               "environment": null
             },
             {
-              "display": "--client <CLIENT>",
-              "description": "Named local development client resolved by the product adapter",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
               "display": "--connection <CONNECTION>",
               "description": "Named saved remote connection",
               "always_required": false,
@@ -15403,22 +15319,6 @@
               "kind": "requires-all",
               "when": "--ca-file <CA_FILE>",
               "arguments": [
-                "--url <URL>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--client <CLIENT>",
-                "--connection <CONNECTION>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--client <CLIENT>",
                 "--url <URL>"
               ]
             },
@@ -21526,7 +21426,7 @@
         {
           "name": "api",
           "invocation": "messagingctl api",
-          "about": "Call the Messaging HTTP API with a saved connection or retained local client",
+          "about": "Call the Messaging HTTP API with a saved connection or an explicit URL",
           "long_about": null,
           "usage": "messagingctl api [OPTIONS] <PATH>",
           "arguments": [
@@ -21544,15 +21444,6 @@
             {
               "display": "--project <PROJECT>",
               "description": "Project directory, or a descendant from which the exact product root is found",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--client <CLIENT>",
-              "description": "Named local development client resolved by the product adapter",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -21703,22 +21594,6 @@
               "kind": "requires-all",
               "when": "--ca-file <CA_FILE>",
               "arguments": [
-                "--url <URL>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--client <CLIENT>",
-                "--connection <CONNECTION>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--client <CLIENT>",
                 "--url <URL>"
               ]
             },
@@ -24584,15 +24459,6 @@
               "environment": null
             },
             {
-              "display": "--client <CLIENT>",
-              "description": "Named local development client resolved by the product adapter",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
               "display": "--connection <CONNECTION>",
               "description": "Named saved remote connection",
               "always_required": false,
@@ -24736,22 +24602,6 @@
               "kind": "requires-all",
               "when": "--ca-file <CA_FILE>",
               "arguments": [
-                "--url <URL>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--client <CLIENT>",
-                "--connection <CONNECTION>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--client <CLIENT>",
                 "--url <URL>"
               ]
             },

@@ -32,6 +32,16 @@ fn raw_api_rejects_the_global_report_format() {
 }
 
 #[test]
+fn raw_api_refuses_the_removed_client_flag() {
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["api", "/health", "--client", "reader"])
+        .output()
+        .expect("run evidencectl");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
 fn raw_api_response_bypasses_the_ctl_report_envelope() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind stand-in API");
     let address = listener.local_addr().unwrap();

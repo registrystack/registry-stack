@@ -52,7 +52,6 @@ fn api_args(path: &str, output: PathBuf) -> ApiArgs {
     ApiArgs {
         path: path.to_owned(),
         project: None,
-        client: None,
         connection: None,
         url: None,
         token_file: None,
@@ -90,7 +89,7 @@ fn post_preserves_the_deployment_prefix_query_and_explicit_headers() {
     args.header = vec![format!("X-Opaque: @{}", header.display())];
     args.idempotency_key = Some("operation-1".to_owned());
     args.if_match = Some("\"revision-3\"".to_owned());
-    run_api("breg", args, |_, _| unreachable!("--url bypasses resolver")).unwrap();
+    run_api("breg", args).unwrap();
 
     let request = String::from_utf8(request.recv().unwrap()).unwrap();
     assert!(request
@@ -115,7 +114,7 @@ fn automatic_credentials_cannot_be_replaced_by_a_repeated_header() {
     args.url = Some("http://127.0.0.1:9".to_owned());
     args.token_file = Some(token);
     args.header = vec!["Authorization: Bearer attacker-controlled".to_owned()];
-    let error = run_api("breg", args, |_, _| unreachable!("--url bypasses resolver")).unwrap_err();
+    let error = run_api("breg", args).unwrap_err();
     assert_eq!(error.exit_code(), 2);
     assert!(!error.to_string().contains("canary-token"));
 }
@@ -151,7 +150,7 @@ fn anonymous_requests_accept_one_explicit_authorization_header_from_each_support
         let mut args = api_args("v1/status", temporary.path().join("out"));
         args.url = Some(base_url);
         args.header = vec![argument];
-        run_api("breg", args, |_, _| unreachable!("--url bypasses resolver")).unwrap();
+        run_api("breg", args).unwrap();
 
         let request = String::from_utf8(request.recv().unwrap()).unwrap();
         let authorization = request
@@ -165,26 +164,6 @@ fn anonymous_requests_accept_one_explicit_authorization_header_from_each_support
 }
 
 #[test]
-fn local_connection_headers_cannot_be_replaced_by_cli_headers() {
-    let temporary = TempDir::new().unwrap();
-    let project = temporary.path().join("casework-project");
-    fs::create_dir_all(&project).unwrap();
-    fs::write(project.join("casework.yaml"), "marker").unwrap();
-    let mut args = api_args("v1/status", temporary.path().join("out"));
-    args.project = Some(project);
-    args.client = Some("staff-client".to_owned());
-    args.header = vec!["Registry-Casework-Profile: attacker-profile".to_owned()];
-
-    let error = run_api("casework", args, |_, _| {
-        LocalConnection::anonymous("http://127.0.0.1:9".to_owned())
-            .and_then(|connection| connection.with_header("Registry-Casework-Profile", "staff"))
-            .map_err(|error| error.to_string())
-    })
-    .expect_err("a CLI header must not override a local connection header");
-    assert_eq!(error.exit_code(), 2);
-}
-
-#[test]
 fn redirect_answers_are_returned_without_following_them() {
     let response = b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/leak\r\nContent-Length: 8\r\nConnection: close\r\n\r\nredirect";
     let (base_url, request) = server(response);
@@ -192,7 +171,7 @@ fn redirect_answers_are_returned_without_following_them() {
     let output = temporary.path().join("out");
     let mut args = api_args("v1/status", output.clone());
     args.url = Some(base_url);
-    let error = run_api("breg", args, |_, _| unreachable!("--url bypasses resolver")).unwrap_err();
+    let error = run_api("breg", args).unwrap_err();
     assert_eq!(error.exit_code(), 1);
     request.recv().unwrap();
     assert_eq!(fs::read(output).unwrap(), b"redirect");
@@ -205,7 +184,7 @@ fn response_bodies_are_bounded() {
     let temporary = TempDir::new().unwrap();
     let mut args = api_args("v1/status", temporary.path().join("out"));
     args.url = Some(base_url);
-    let error = run_api("breg", args, |_, _| unreachable!("--url bypasses resolver")).unwrap_err();
+    let error = run_api("breg", args).unwrap_err();
     request.recv().unwrap();
     assert_eq!(error.exit_code(), 3);
     assert!(matches!(error, ApiError::ResponseTooLarge));
@@ -259,16 +238,14 @@ fn paths_and_host_headers_cannot_escape_the_selected_endpoint() {
     ] {
         let mut args = api_args(path, temporary.path().join("out"));
         args.url = Some("https://registry.example.test/deployment/prefix".to_owned());
-        let error = run_api("breg", args, |_, _| unreachable!("explicit URL"))
-            .expect_err("an escaping path must be refused");
+        let error = run_api("breg", args).expect_err("an escaping path must be refused");
         assert_eq!(error.exit_code(), 2, "{path}: {error}");
     }
 
     let mut args = api_args("v1/status", temporary.path().join("out"));
     args.url = Some("https://registry.example.test/deployment/prefix".to_owned());
     args.header = vec!["Host: other.example.test".to_owned()];
-    let error = run_api("breg", args, |_, _| unreachable!("explicit URL"))
-        .expect_err("Host override must be refused");
+    let error = run_api("breg", args).expect_err("Host override must be refused");
     assert_eq!(error.exit_code(), 2);
 }
 
@@ -282,7 +259,7 @@ fn a_complete_header_file_supplies_multiple_header_lines() {
     let mut args = api_args("v1/status", temporary.path().join("out"));
     args.url = Some(base_url);
     args.header = vec![format!("@{}", headers.display())];
-    run_api("breg", args, |_, _| unreachable!("explicit URL")).unwrap();
+    run_api("breg", args).unwrap();
     let request = String::from_utf8(request.recv().unwrap())
         .unwrap()
         .to_ascii_lowercase();
@@ -299,8 +276,7 @@ fn an_invalid_explicit_ca_bundle_is_refused_before_connecting() {
     args.url = Some("https://registry.example.test/api".to_owned());
     args.ca_file = Some(ca);
 
-    let error = run_api("breg", args, |_, _| unreachable!("explicit URL"))
-        .expect_err("invalid trust material must be refused locally");
+    let error = run_api("breg", args).expect_err("invalid trust material must be refused locally");
     assert_eq!(error.exit_code(), 1);
     assert!(!error.to_string().contains("not a PEM certificate"));
 }

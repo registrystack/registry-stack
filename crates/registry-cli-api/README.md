@@ -6,7 +6,7 @@ strict saved-connection parsing, secret references, renewable
 `private_key_jwt` credentials, private CA trust, and project-scoped connection
 selection.
 
-Product adapters retain product semantics. They resolve named local clients,
+Product adapters retain product semantics. They
 declare any access-profile header names, and decide where these commands appear
 in their CLI. This crate does not interpret API resources, grants, revisions,
 or product-specific request bodies.
@@ -24,9 +24,7 @@ as its maintained example.
 
 ## Security boundary
 
-Connection selection does not create product authority. `--client` delegates
-to the product adapter, which owns any retained local endpoint, credential,
-profile headers, and readiness checks. `--connection` materializes one saved
+Connection selection does not create product authority. `--connection` materializes one saved
 connection for that product. `--url` is an advanced one-off destination with
 no automatic credential unless `--token-file` is supplied. A saved
 connection's automatic authentication mode is one of anonymous, a referenced

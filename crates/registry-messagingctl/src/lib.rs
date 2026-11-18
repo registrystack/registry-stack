@@ -140,7 +140,7 @@ enum Command {
     /// axllent/mailpit:v1.31.2 at those digests. Each publishes on 127.0.0.1
     /// only, and the session removes both when it stops.
     Dev(dev::DevArgs),
-    /// Call the Messaging HTTP API with a saved connection or retained local client.
+    /// Call the Messaging HTTP API with a saved connection or an explicit URL.
     Api(Box<registry_cli_api::ApiArgs>),
     /// Manage saved Messaging API connections.
     Connection {
@@ -801,7 +801,7 @@ fn api(
         );
         return ExitCode::from(USAGE_EXIT);
     }
-    match registry_cli_api::run_api("messaging", args, dev::api_connection) {
+    match registry_cli_api::run_api("messaging", args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             let _ = writeln!(stderr, "error: {error}");
@@ -2237,7 +2237,7 @@ fn render_dev(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     }
     writeln!(
         stdout,
-        "next: rstack messaging api PATH --client CLIENT; Ctrl-C stops the session"
+        "next: rstack messaging dev token --client CLIENT, then rstack messaging api PATH --url URL --header @FILE; Ctrl-C stops the session"
     )
 }
 

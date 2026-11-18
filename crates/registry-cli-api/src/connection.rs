@@ -447,7 +447,7 @@ pub(crate) fn resolve_saved(
                 .map(|selected| selected.connection.as_str())
                 .ok_or_else(|| {
                     ApiError::Configuration(
-                        "no remote connection is selected for this project; name --connection, --client, or --url"
+                        "no remote connection is selected for this project; name --connection or --url"
                             .to_owned(),
                     )
                 })?

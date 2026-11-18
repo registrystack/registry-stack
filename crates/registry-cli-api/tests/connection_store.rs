@@ -33,7 +33,6 @@ fn api_args(path: &str, output: PathBuf) -> ApiArgs {
     ApiArgs {
         path: path.to_owned(),
         project: None,
-        client: None,
         connection: None,
         url: None,
         token_file: None,
@@ -380,7 +379,7 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
     .unwrap();
     let mut unusable = api_args("v1/status", temporary.path().join("unusable.out"));
     unusable.connection = Some("staging".to_owned());
-    let error = run_api("breg", unusable, |_, _| unreachable!("saved connection"))
+    let error = run_api("breg", unusable)
         .expect_err("runtime credential errors must give value-free recovery guidance");
     assert_eq!(error.exit_code(), 1);
     assert!(error.to_string().contains("0400 or 0600"));
@@ -400,10 +399,7 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
 
     let mut first = api_args("v1/status", temporary.path().join("first.out"));
     first.connection = Some("production".to_owned());
-    run_api("breg", first, |_, _| {
-        unreachable!("saved remote connection")
-    })
-    .unwrap();
+    run_api("breg", first).unwrap();
     let first_request = String::from_utf8(requests.recv().unwrap())
         .unwrap()
         .to_ascii_lowercase();
@@ -424,10 +420,7 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
     write_secret(&production_token, "replacement-token\n");
     let mut second = api_args("v1/status", temporary.path().join("second.out"));
     second.project = Some(nested);
-    run_api("breg", second, |_, _| {
-        unreachable!("selected remote connection")
-    })
-    .unwrap();
+    run_api("breg", second).unwrap();
     let second_request = String::from_utf8(requests.recv().unwrap())
         .unwrap()
         .to_ascii_lowercase();
@@ -440,15 +433,12 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
     run_connection("casework", ConnectionCommand::Add(Box::new(casework))).unwrap();
     let mut profiled = api_args("v1/status", temporary.path().join("profiled.out"));
     profiled.connection = Some("production".to_owned());
-    let missing_headers = run_api("casework", profiled.clone(), |_, _| {
-        unreachable!("saved remote connection")
-    })
-    .expect_err("a saved profile requires adapter-owned header names");
+    let missing_headers = run_api("casework", profiled.clone())
+        .expect_err("a saved profile requires adapter-owned header names");
     assert_eq!(missing_headers.exit_code(), 1);
     run_api_with_profile_headers(
         "casework",
-        profiled,
-        |_, _| unreachable!("saved remote connection"),
+        profiled.clone(),
         &["Registry-Casework-Profile", "Registry-Review-Profile"],
     )
     .unwrap();
@@ -458,6 +448,16 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
     assert!(casework_request.contains("authorization: bearer replacement-token\r\n"));
     assert!(casework_request.contains("registry-casework-profile: staff\r\n"));
     assert!(casework_request.contains("registry-review-profile: staff\r\n"));
+
+    let mut overriding = profiled;
+    overriding.header = vec!["Registry-Casework-Profile: attacker-profile".to_owned()];
+    let error = run_api_with_profile_headers(
+        "casework",
+        overriding,
+        &["Registry-Casework-Profile", "Registry-Review-Profile"],
+    )
+    .expect_err("a CLI header must not override a saved connection profile header");
+    assert_eq!(error.exit_code(), 2);
 
     let saved = fs::read_to_string(
         temporary
@@ -518,10 +518,8 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
     assert!(saved.contains("trustedRootCertificatesFile:"));
     let mut private_ca_call = api_args("v1/status", temporary.path().join("ca.out"));
     private_ca_call.connection = Some("private-ca".to_owned());
-    let error = run_api("breg", private_ca_call, |_, _| {
-        unreachable!("saved connection")
-    })
-    .expect_err("invalid saved trust material must be refused locally");
+    let error = run_api("breg", private_ca_call)
+        .expect_err("invalid saved trust material must be refused locally");
     assert_eq!(error.exit_code(), 1);
 
     let token_body = r#"{"access_token":"renewed-token","token_type":"Bearer","expires_in":300}"#;
@@ -546,8 +544,7 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
 
     let mut call = api_args("v1/status", temporary.path().join("failure.out"));
     call.connection = Some("renewable".to_owned());
-    let error = run_api("breg", call, |_, _| unreachable!("saved remote connection"))
-        .expect_err("the API status remains a visible refusal");
+    let error = run_api("breg", call).expect_err("the API status remains a visible refusal");
     assert_eq!(error.exit_code(), 3);
     let token_request = String::from_utf8(token_requests.recv().unwrap()).unwrap();
     assert!(token_request.starts_with("POST /prefix/token HTTP/1.1\r\n"));
