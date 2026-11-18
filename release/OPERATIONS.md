@@ -422,10 +422,11 @@ rehearsal, and the BReg, Casework and Messaging dev tools pull canonical
 upstream `ghcr.io/axllent/mailpit` mirror. Each reference retains the exact
 upstream manifest digest; the registry endpoint changes, not the selected image
 bytes.
-The `dev start` help of `bregctl` and `caseworkctl` and the `dev` help of
-`messagingctl` name the exact image references they pull. A `bregctl`
-session whose schema requires PostGIS still pulls `postgis/postgis` from
-Docker Hub.
+`rstack dev` pulls the exact image references pinned in
+`crates/registry-rstack-dev/src/docker.rs`. The `dev start` help of `bregctl`
+and the `dev` help of `messagingctl` name the exact image references they
+pull. A `bregctl` session or an `rstack dev` run whose schema requires PostGIS
+still pulls `postgis/postgis` from Docker Hub.
 
 [Debian's Docker Official Image](https://hub.docker.com/_/debian),
 [PostgreSQL's Docker Official Image](https://hub.docker.com/_/postgres), and
