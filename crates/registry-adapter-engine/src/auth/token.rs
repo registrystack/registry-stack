@@ -371,10 +371,10 @@ enum ClientAuthentication {
         secret_ref: SecretReference,
         placement: CredentialPlacement,
     },
-    /// The signed assertion; the audience is resolved at compile time,
-    /// defaulting to the token endpoint exactly as the operator wrote
-    /// it, because RFC 7523 section 3 compares it by Simple String
-    /// Comparison against the endpoint the server published.
+    /// The signed assertion; the audience is the authorization server's
+    /// issuer identifier exactly as the operator wrote it, because RFC
+    /// 10070 section 4 compares it by Simple String Comparison against
+    /// the issuer the server publishes.
     PrivateKeyJwt {
         key_ref: SecretReference,
         audience: String,
@@ -501,9 +501,9 @@ impl TokenEndpointPlan {
         }
     }
 
-    /// Plan the signed-assertion kind; the assertion audience arrives
-    /// resolved, because the default is the token endpoint exactly as
-    /// the operator wrote it.
+    /// Plan the signed-assertion kind; the assertion audience is the
+    /// authorization server's issuer identifier exactly as the operator
+    /// wrote it.
     #[must_use]
     pub(crate) fn private_key_jwt(
         endpoint: ExternalId,

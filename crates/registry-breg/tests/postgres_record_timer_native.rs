@@ -1595,8 +1595,11 @@ async fn database_session_loss_recovery(harness: &mut NativeTimerHarness) -> Res
     harness.expect_non_info_code_range(owner, "hook.worker.iteration_failed", 0, 2)?;
     harness.expect_non_info_code_range(owner, "review.worker.iteration_failed", 0, 2)?;
     // A hook claim that draws a dead session fails at whichever database step
-    // it reached, so any claim step may report the loss.
+    // it reached, so any claim step may report the loss. The identity preflight
+    // runs before any hook row is read or written, so a dead session there is
+    // refused as identity_refused and changes nothing.
     for code in [
+        "hook.claim.identity_refused",
         "hook.claim.recovery_failed",
         "hook.claim.select_failed",
         "hook.claim.update_failed",

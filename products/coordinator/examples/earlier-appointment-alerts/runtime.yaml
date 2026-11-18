@@ -16,6 +16,7 @@ connections:
     profile: alert-workflow
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
+      clientAssertionAudience: https://issuer.example.org
       clientId: earlier-alert-coordinator
       signingKeyRef: secret:file/earlier-alert-coordinator-jwk
       resource: urn:example:alert-source
@@ -25,6 +26,7 @@ connections:
     baseUrl: https://scheduling.example.org
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
+      clientAssertionAudience: https://issuer.example.org
       clientId: earlier-alert-catalogue
       signingKeyRef: secret:file/earlier-alert-catalogue-jwk
       resource: urn:example:scheduling
@@ -34,6 +36,7 @@ connections:
     baseUrl: https://scheduling.example.org
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
+      clientAssertionAudience: https://issuer.example.org
       clientId: earlier-alert-manager
       signingKeyRef: secret:file/earlier-alert-manager-jwk
       resource: urn:example:scheduling
@@ -46,6 +49,7 @@ connections:
         bootstrapResource: urn:example:casework
     observationAuthorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
+      clientAssertionAudience: https://issuer.example.org
       clientId: earlier-alert-manager
       signingKeyRef: secret:file/earlier-alert-manager-jwk
       resource: urn:example:scheduling
@@ -55,6 +59,7 @@ connections:
     baseUrl: https://messaging.example.org
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
+      clientAssertionAudience: https://issuer.example.org
       clientId: earlier-alert-notices
       signingKeyRef: secret:file/earlier-alert-notices-jwk
       resource: urn:example:messaging

@@ -149,11 +149,11 @@
     },
     "OauthMember": {
       "additionalProperties": false,
-      "description": "Fixed OAuth request parameters for the token acquisition.\n\n`clientAssertionAudience` is who checks the client's authentication JWT;\n`resource` is the RFC 8707 resource indicator the token's audience must\nname. Neither is `expected.audience`, the Evidence assertion's audience.",
+      "description": "Fixed OAuth request parameters for the token acquisition.\n\n`clientAssertionAudience` is the authorization server's issuer identifier,\nthe sole audience RFC 10070 section 4 allows on the client's\nauthentication JWT; `resource` is the RFC 8707 resource indicator the\ntoken's audience must name. Neither is `expected.audience`, the Evidence\nassertion's audience.",
       "properties": {
         "clientAssertionAudience": {
           "$ref": "#/$defs/UriIdentity",
-          "description": "The audience of the client's authentication JWT."
+          "description": "The authorization server's issuer identifier, exactly as it publishes\nit: the audience of the client's authentication JWT."
         },
         "resource": {
           "$ref": "#/$defs/ResourceIndicator",
@@ -170,6 +170,9 @@
           "uniqueItems": true
         }
       },
+      "required": [
+        "clientAssertionAudience"
+      ],
       "type": "object"
     },
     "PrivateKeyMember": {
@@ -358,7 +361,7 @@
     },
     "oauth": {
       "$ref": "#/$defs/OauthMember",
-      "description": "Fixed OAuth request parameters for the token acquisition, for issuers\nwhose client-assertion audience, resource indicator, or requested\nscopes are not derivable from discovery. Omitted members keep the\ndiscovery-driven behavior."
+      "description": "Fixed OAuth request parameters for the token acquisition: the client\nassertion audience, always, and the resource indicator and requested\nscopes for issuers that need them. Omitted optional members keep the\ndiscovery-driven behavior."
     },
     "privateKey": {
       "$ref": "#/$defs/PrivateKeyMember",
@@ -378,7 +381,8 @@
     "kind",
     "baseUrl",
     "clientId",
-    "privateKey"
+    "privateKey",
+    "oauth"
   ],
   "title": "Evidence client profile",
   "type": "object"

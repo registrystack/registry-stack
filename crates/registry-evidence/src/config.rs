@@ -2504,12 +2504,23 @@ impl Default for SourceAcquisitionConfig {
     }
 }
 
+/// Upper bound on the configured acquisition deadline, equal to the authored
+/// target's ceiling.
+const MAX_ACQUISITION_DEADLINE_MILLISECONDS: u64 = 300_000;
+
 impl SourceAcquisitionConfig {
     fn is_default(&self) -> bool {
         *self == Self::default()
     }
 
     pub fn limits(self) -> Result<registry_adapter_engine::evidence::EvidenceLimits, ConfigError> {
+        if self.deadline_milliseconds > MAX_ACQUISITION_DEADLINE_MILLISECONDS {
+            // The number below is `MAX_ACQUISITION_DEADLINE_MILLISECONDS`; a
+            // test pins it to the authoring ceiling too.
+            return Err(ConfigError::Invalid(
+                "sourceAcquisition.acquisitionDeadlineMilliseconds is above the maximum of 300000",
+            ));
+        }
         let maximum_response_bytes = usize::try_from(self.maximum_response_bytes)
             .map_err(|_| ConfigError::Invalid("source acquisition response bound is too large"))?;
         registry_adapter_engine::evidence::EvidenceLimits::try_new(
@@ -6533,9 +6544,18 @@ mod tests {
         serde_json::json!({
             "type":"oauth2-private-key-jwt",
             "tokenEndpoint":"https://issuer.invalid/token",
+            "clientAssertionAudience":"https://issuer.invalid",
             "clientIdRef":"secret:env/CLIENT_ID",
             "clientAssertionKeyRef":"secret:env/CLIENT_ASSERTION_KEY",
             "maximumCacheSeconds":60
+        })
+    }
+
+    fn current_private_key_policy() -> serde_json::Value {
+        serde_json::json!({
+            "type":"oauth2-private-key-jwt",
+            "tokenEndpoint":"https://issuer.invalid/token",
+            "clientAssertionAudience":"https://issuer.invalid"
         })
     }
 
@@ -6563,6 +6583,37 @@ mod tests {
         ] {
             assert!(invalid.limits().is_err());
         }
+    }
+
+    #[test]
+    fn source_acquisition_deadline_stops_at_the_authoring_ceiling() {
+        assert_eq!(
+            MAX_ACQUISITION_DEADLINE_MILLISECONDS,
+            registry_evidence_authoring::target::MAX_ACQUISITION_DEADLINE_MILLISECONDS
+        );
+        let defaults = SourceAcquisitionConfig::default();
+        let at_ceiling = SourceAcquisitionConfig {
+            deadline_milliseconds:
+                registry_evidence_authoring::target::MAX_ACQUISITION_DEADLINE_MILLISECONDS,
+            ..defaults
+        };
+        at_ceiling.limits().expect("the ceiling itself loads");
+
+        let above = SourceAcquisitionConfig {
+            deadline_milliseconds:
+                registry_evidence_authoring::target::MAX_ACQUISITION_DEADLINE_MILLISECONDS + 1,
+            ..defaults
+        };
+        let error = above
+            .limits()
+            .expect_err("a deadline above the ceiling is refused at load");
+        assert!(
+            error.to_string().contains(
+                &registry_evidence_authoring::target::MAX_ACQUISITION_DEADLINE_MILLISECONDS
+                    .to_string()
+            ),
+            "the refusal names the maximum: {error}"
+        );
     }
 
     #[test]
@@ -9237,10 +9288,7 @@ mod tests {
             .filter(|value| {
                 let mut credential = current_private_key_credential();
                 credential["tokenEndpoint"] = serde_json::json!(value);
-                let mut policy = serde_json::json!({
-                    "type":"oauth2-private-key-jwt",
-                    "tokenEndpoint":"https://issuer.invalid/token"
-                });
+                let mut policy = current_private_key_policy();
                 policy["tokenEndpoint"] = serde_json::json!(value);
                 current_adapter_contract_accepts(
                     "https://source.invalid",
@@ -9514,6 +9562,10 @@ mod tests {
                 if let Some(key_ref) = key_ref {
                     authentication["clientAssertionKeyRef"] = serde_json::json!(key_ref);
                 }
+                if written == ASSERTION {
+                    authentication["clientAssertionAudience"] =
+                        serde_json::json!("https://source.invalid");
+                }
                 let accepted = written == accepting;
                 let label = format!("{written:?}/{secret_ref:?}/{placement:?}/{key_ref:?}");
 
@@ -9589,12 +9641,12 @@ mod tests {
         }
     }
 
-    /// RFC 7523 section 3 asks only that the audience identify the
-    /// authorization server and leaves the exact string to out-of-band
-    /// agreement, so this is an opaque identifier rather than a URL. It is
-    /// bounded like the sibling `audience` and validated by the same rule.
+    /// RFC 10070 section 4 makes the audience the authorization server's
+    /// issuer identifier, compared by Simple String Comparison, so the value
+    /// is carried exactly as written and has no default. It is bounded like
+    /// the sibling `audience` and validated by the same rule.
     #[test]
-    fn the_client_assertion_audience_is_a_bounded_optional_string() {
+    fn the_client_assertion_audience_is_a_bounded_required_string() {
         for (audience, accepted) in [
             (Some("https://issuer.invalid/"), true),
             // An issuer identifier that shares no origin with the token
@@ -9609,20 +9661,25 @@ mod tests {
             // credential error names nothing the operator can act on.
             (Some("   "), false),
             (Some("a".repeat(513).as_str()), false),
-            (None, true),
+            (None, false),
         ] {
             let mut authentication = current_private_key_credential();
-            if let Some(audience) = audience {
-                authentication["clientAssertionAudience"] = serde_json::json!(audience);
+            let mut policy = current_private_key_policy();
+            match audience {
+                Some(audience) => {
+                    authentication["clientAssertionAudience"] = serde_json::json!(audience);
+                    policy["clientAssertionAudience"] = serde_json::json!(audience);
+                }
+                None => {
+                    for document in [&mut authentication, &mut policy] {
+                        document
+                            .as_object_mut()
+                            .expect("the fixture is an object")
+                            .remove("clientAssertionAudience");
+                    }
+                }
             }
             let label = audience.map(str::len);
-            let mut policy = serde_json::json!({
-                "type":"oauth2-private-key-jwt",
-                "tokenEndpoint":"https://issuer.invalid/token"
-            });
-            if let Some(audience) = audience {
-                policy["clientAssertionAudience"] = serde_json::json!(audience);
-            }
             assert_eq!(
                 current_adapter_contract_accepts(
                     "https://source.invalid",
@@ -10949,6 +11006,7 @@ outboundTls:
         credential:
           type: oauth2-private-key-jwt
           tokenEndpoint: https://identity.invalid/token
+          clientAssertionAudience: https://identity.invalid
           clientIdRef: secret:env/SOURCE_CLIENT_ID
           clientAssertionKeyRef: secret:env/SOURCE_CLIENT_KEY
           maximumCacheSeconds: 60

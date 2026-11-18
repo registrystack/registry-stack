@@ -405,6 +405,7 @@ connections:
     commandPath: bills
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
+      clientAssertionAudience: https://issuer.example.org
       clientId: coordinator-payments
       signingKeyRef: secret:file/payments-jwk
       resource: https://payments.example.org
@@ -475,6 +476,7 @@ connections:
     producer: coordinator
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
+      clientAssertionAudience: https://issuer.example.org
       clientId: coordinator-review-producer
       signingKeyRef: secret:file/review-jwk
       resource: urn:example:casework
@@ -667,8 +669,8 @@ Startup verifies package closure, checksum pin, executable ABI, active package,
 database identity, schema, effective runtime role and configured state/audit
 secrets before serving. Startup checks retained live definitions under the
 admission lock before opening
-the normal listener. Endpoint, registered identity, scopes and task authority
-must retain each live run's original binding. New admissions repeat that check
+the normal listener. Endpoint, client assertion audience, registered identity,
+scopes and task authority must retain each live run's original binding. New admissions repeat that check
 inside their insertion transaction; worker polls keep their per-job fences
 without rescanning history every poll.
 

@@ -148,6 +148,13 @@ override. `humanIdentity` defaults to claim
 Principal selection belongs exclusively to each authored
 `accessProfiles.PROFILE_ID.principalClaim` in `casework.yaml`. The removed runtime field
 `authentication.oidc.principalClaim` is refused with that replacement.
+Casework trusts one issuer, so every access profile a person uses (staff, supervisor,
+administrator, an initiator profile and any other requester profile) must name the same
+`principalClaim`; `casework.yaml` is refused with `casework.access-profile.mixed-principal-claims`
+otherwise. Profiles a trusted producer uses are services and share one claim among themselves,
+which may differ from the people's. A service requester profile must be named by a trusted
+producer's `profile` to be compared apart from people; no Casework route serves a service through
+any other requester profile.
 
 `revokedKeyIds` is an optional list of at most 128 distinct nonempty key identifiers.
 Casework refuses a token whose protected `kid` appears in the list even while the key
@@ -189,8 +196,9 @@ operation. An optional `sourceProfiles` list is the complete set accepted from
 
 For a current-source BReg provider, `delegatedDisplayExchange` is an optional
 provider binding dedicated to these reads. It names the token endpoint,
-separate client and assertion-key secret references, optional assertion
-audience, exact downstream resource, non-empty scopes, and credential
+separate client and assertion-key secret references, the required assertion
+audience (`clientAssertionAudience`, the authorization server's issuer
+identifier), exact downstream resource, non-empty scopes, and credential
 generation. Casework passes only verified subject-token metadata and the
 invocation credential to this provider boundary. The provider performs a
 fresh per-call exchange and sends only the exchanged bearer to BReg; it never
@@ -238,18 +246,19 @@ The database holds no audit state.
 `casework.yaml:contextProviders`. Unknown keys are refused; an omitted provider
 leaves only its current-source operations unavailable, while submitted-context
 reviews continue to work. Each binding provides the BReg base URL,
-`tokenEndpoint`, `clientIdRef`, `clientAssertionKeyRef`, and
-`statusProfile`. The status profile must equal the authored
+`tokenEndpoint`, `clientIdRef`, `clientAssertionKeyRef`,
+`clientAssertionAudience`, and `statusProfile`. The status profile must equal the authored
 `serviceProfiles.service-status` for that provider. Optional
 `taskGrantProfile` must equal the provider's separately authored
 `serviceProfiles.task-grant-context` profile. Its absence disables current
 source task-grant context; the runtime never falls back to `statusProfile` or
 to the human display profile. This selection does not require the source access
 profile to be a singleton permission. The configured service client must be
-authorized for each selected profile at BReg. Optional
-`clientAssertionAudience`, `resource`, and `scopes` configure the OAuth
-client-assertion and token request for the service reader; use the exact values
-registered by the issuer and BReg deployment. The status credential reads only
+authorized for each selected profile at BReg. `clientAssertionAudience` is
+the authorization server's issuer identifier, exactly as its metadata publishes
+it: the client assertion's sole audience, with no default. Optional `resource`
+and `scopes` configure the token request for the service reader; use the exact
+values registered by the issuer and BReg deployment. The status credential reads only
 the operations and fields its source profiles grant. It does not supply fields
 shown to a human reviewer.
 

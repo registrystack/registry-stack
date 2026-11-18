@@ -32,6 +32,10 @@ const MAX_CLAIM_NAME_BYTES: usize = 128;
 const MAX_SCOPE_VALUES: usize = 128;
 const MAX_SCOPE_VALUE_BYTES: usize = 512;
 const REFUSAL_WARNING_INTERVAL: Duration = Duration::from_secs(60);
+/// Reads check no live task-grant status, so a revoked grant keeps reading
+/// until its token expires. This bound on the issued lifetime, not the time
+/// left, keeps that window short whatever the ordinary token ceiling allows.
+const MAX_TASK_GRANT_TOKEN_LIFETIME_SECONDS: i64 = 900;
 
 const REGISTERED_CLAIMS: &[&str] = &[
     "iss",
@@ -173,6 +177,9 @@ pub struct RegistryAuthenticator {
     trusted_actors: BTreeMap<String, String>,
     recipients: CompiledRecipients,
     consent_decisions: BTreeMap<String, BTreeSet<String>>,
+    /// The clock leeway the verifier applies to `exp` and `nbf`, reused as
+    /// the allowance for a task-grant token's `iat` ahead of this clock.
+    leeway: Duration,
 }
 
 impl RegistryAuthenticator {
@@ -197,6 +204,7 @@ impl RegistryAuthenticator {
         let audience = verifier_config.audiences[0].clone();
         let scope_claim = verifier_config.scope_claim.clone();
         let issuer = verifier_config.issuer.clone();
+        let leeway = verifier_config.leeway;
         let consent_decisions = crate::consent::feed_decisions(registry.entities());
         Ok(Self {
             verifier: TokenVerifier::new(verifier_config, key_source),
@@ -212,6 +220,7 @@ impl RegistryAuthenticator {
             trusted_actors: claims.trusted_actors,
             recipients: registry.recipients().clone(),
             consent_decisions,
+            leeway,
         })
     }
 
@@ -336,6 +345,14 @@ impl RegistryAuthenticator {
             grant
                 .verify_context(&verified, &self.audience)
                 .map_err(|_| AuthenticationError::InvalidClaims)?;
+            if !task_grant_token_lifetime_is_short(
+                verified.claims.iat,
+                verified.claims.exp,
+                now,
+                self.leeway,
+            ) {
+                return Err(AuthenticationError::InvalidClaims);
+            }
         }
         let grant_subjects = if grant.is_some() {
             bounded_identity(claims.get("identity"))?
@@ -386,6 +403,27 @@ impl RegistryAuthenticator {
         .and_then(|claims| claims.with_consent_claims(recipients, &self.consent_decisions))
         .map_err(|_| AuthenticationError::InvalidClaims)
     }
+}
+
+/// A task-grant token must carry `iat` and `exp`, be issued for between 1 and
+/// [`MAX_TASK_GRANT_TOKEN_LIFETIME_SECONDS`], and carry an `iat` no later than
+/// `now` plus the verifier's clock leeway, so its issued lifetime also bounds
+/// the time it is honoured from this clock.
+fn task_grant_token_lifetime_is_short(
+    issued_at: Option<i64>,
+    expires_at: Option<i64>,
+    now: u64,
+    leeway: Duration,
+) -> bool {
+    let latest_issued_at = now
+        .checked_add(leeway.as_secs())
+        .and_then(|latest| i64::try_from(latest).ok());
+    issued_at
+        .zip(expires_at)
+        .zip(latest_issued_at)
+        .filter(|((issued_at, _), latest_issued_at)| issued_at <= latest_issued_at)
+        .and_then(|((issued_at, expires_at), _)| expires_at.checked_sub(issued_at))
+        .is_some_and(|lifetime| (1..=MAX_TASK_GRANT_TOKEN_LIFETIME_SECONDS).contains(&lifetime))
 }
 
 fn admit_refusal_warning(last_warning: &Mutex<Option<Instant>>, now: Instant) -> bool {
@@ -977,5 +1015,71 @@ mod tests {
             &last_warning,
             now + REFUSAL_WARNING_INTERVAL
         ));
+    }
+
+    #[test]
+    fn task_grant_tokens_must_be_issued_for_at_most_fifteen_minutes() {
+        let issued = 1_800_000_000;
+        let now = 1_800_000_000;
+        let leeway = Duration::from_secs(60);
+        assert!(task_grant_token_lifetime_is_short(
+            Some(issued),
+            Some(issued + 900),
+            now,
+            leeway
+        ));
+        assert!(task_grant_token_lifetime_is_short(
+            Some(issued),
+            Some(issued + 1),
+            now,
+            leeway
+        ));
+        for (issued_at, expires_at) in [
+            (Some(issued), Some(issued + 901)),
+            (Some(issued - 604_200), Some(issued + 600)),
+            (None, Some(issued + 600)),
+            (Some(issued), None),
+            (Some(issued), Some(issued)),
+            (Some(issued + 1), Some(issued)),
+            (Some(i64::MIN), Some(i64::MAX)),
+        ] {
+            assert!(
+                !task_grant_token_lifetime_is_short(issued_at, expires_at, now, leeway),
+                "iat {issued_at:?} and exp {expires_at:?} are refused"
+            );
+        }
+    }
+
+    #[test]
+    fn task_grant_tokens_must_not_be_issued_later_than_now_plus_leeway() {
+        let now: u64 = 1_800_000_000;
+        let leeway = Duration::from_secs(60);
+        let at = |offset: i64| i64::try_from(now).expect("test clock fits i64") + offset;
+        for issued_at in [at(86_400), at(61)] {
+            assert!(
+                !task_grant_token_lifetime_is_short(
+                    Some(issued_at),
+                    Some(issued_at + 900),
+                    now,
+                    leeway
+                ),
+                "iat {issued_at} later than now plus leeway is refused"
+            );
+        }
+        for issued_at in [at(59), at(60)] {
+            assert!(
+                task_grant_token_lifetime_is_short(
+                    Some(issued_at),
+                    Some(issued_at + 900),
+                    now,
+                    leeway
+                ),
+                "iat {issued_at} within the leeway is accepted"
+            );
+        }
+        assert!(
+            !task_grant_token_lifetime_is_short(Some(at(0)), Some(at(900)), u64::MAX, leeway),
+            "a clock that cannot bound iat refuses the token"
+        );
     }
 }

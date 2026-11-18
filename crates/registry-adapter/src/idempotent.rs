@@ -100,7 +100,7 @@ const ASYNC_BINDING_DIGEST_DOMAIN: &[u8] = b"registry-adapter:async-binding:v1\0
 
 const LOGICAL_DEPLOYMENT_IDENTITY_MIGRATION: i64 = 200;
 const RESPONSE_REQUEST_ID_MIGRATION: i64 = 300;
-const MIGRATIONS: [(i64, &str); 8] = [
+const MIGRATIONS: [(i64, &str); 9] = [
     (
         100,
         include_str!("idempotent/migrations/0100_idempotency_store.sql"),
@@ -132,6 +132,10 @@ const MIGRATIONS: [(i64, &str); 8] = [
     (
         800,
         include_str!("idempotent/migrations/0800_resume_source_pin.sql"),
+    ),
+    (
+        900,
+        include_str!("idempotent/migrations/0900_async_source_pin.sql"),
     ),
 ];
 const SUPPORTED_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
@@ -220,6 +224,9 @@ pub struct AsyncEffectAttempt<'a> {
     pub recovery_id: Option<&'a str>,
     /// Finite deadline of the initial route execution.
     pub effect_deadline: SystemTime,
+    /// Digest of the source origins the write, status and uncertainty routes
+    /// reach. Every recovery lease requires the same digest.
+    pub source_digest: [u8; 32],
 }
 
 /// Artifact and deadline authority for one closed linear multi-effect write.
@@ -420,6 +427,10 @@ pub enum RecoveryLease {
     Busy,
     /// The row is expired, terminal, mismatched, or lacks safe correlation.
     Stale,
+    /// The row is live, but its pinned source origin is absent or differs
+    /// from the configured one. It is never polled and stays held until it
+    /// expires.
+    Quarantined,
 }
 
 /// Whether a terminal response represents success or a caller-visible
@@ -1680,7 +1691,8 @@ impl PostgresIdempotencyStore {
                      async_deployment_digest = $6, async_binding_digest = $7, \
                      async_binding_id = $8, async_profile_operation = $9, \
                      async_concrete_operation = $10, async_record_type = $11, \
-                     async_recovery_id = $12, async_expires_at = $13 \
+                     async_recovery_id = $12, async_expires_at = $13, \
+                     async_source_digest = $15 \
                  WHERE scope_digest = $1 AND request_digest = $2 AND state = 'claimed' \
                    AND claimed_at = $14",
                 &[
@@ -1698,6 +1710,7 @@ impl PostgresIdempotencyStore {
                     &attempt.recovery_id,
                     &async_expires_at,
                     &execution.claimed_at,
+                    &attempt.source_digest.as_slice(),
                 ],
             )
             .await?;
@@ -1967,10 +1980,13 @@ impl PostgresIdempotencyStore {
         }
     }
 
-    /// Acquire the accepted row's short source-poll lease.
+    /// Acquire the accepted row's short source-poll lease. `source_digest` is
+    /// the configured source origin; only a row pinned to the same origin is
+    /// leased.
     pub async fn acquire_status_recovery(
         &self,
         status: &PendingStatusLookup,
+        source_digest: [u8; 32],
         now: SystemTime,
         requested_deadline: SystemTime,
     ) -> Result<RecoveryLease, IdempotencyError> {
@@ -1984,6 +2000,7 @@ impl PostgresIdempotencyStore {
                  WHERE scope_digest = $1 AND request_digest = $2 \
                    AND async_binding_digest = $3 AND artifact_digest = $6 \
                    AND state = 'accepted' AND async_expires_at > $7 \
+                   AND async_source_digest = $8 \
                    AND (async_poll_lease_id IS NULL OR async_poll_lease_until <= $7) \
                  RETURNING scope_digest, request_digest, state, artifact_digest, \
                            async_binding_digest, async_binding_id, async_profile_operation, \
@@ -1997,6 +2014,7 @@ impl PostgresIdempotencyStore {
                     &lease_until,
                     &status.artifact_digest.as_slice(),
                     &now,
+                    &source_digest.as_slice(),
                 ],
             )
             .await?;
@@ -2005,6 +2023,27 @@ impl PostgresIdempotencyStore {
                 row, lease_id,
             )?))),
             None => {
+                let quarantined = client
+                    .query_opt(
+                        "SELECT 1 FROM adapter_idempotency_entries \
+                         WHERE scope_digest = $1 AND request_digest = $2 \
+                           AND async_binding_digest = $3 AND artifact_digest = $4 \
+                           AND state = 'accepted' AND async_expires_at > $5 \
+                           AND async_source_digest IS DISTINCT FROM $6",
+                        &[
+                            &status.scope_digest.as_slice(),
+                            &status.request_digest.as_slice(),
+                            &status.binding_digest.as_slice(),
+                            &status.artifact_digest.as_slice(),
+                            &now,
+                            &source_digest.as_slice(),
+                        ],
+                    )
+                    .await?
+                    .is_some();
+                if quarantined {
+                    return Ok(RecoveryLease::Quarantined);
+                }
                 let busy = client
                     .query_opt(
                         "SELECT 1 FROM adapter_idempotency_entries \
@@ -2030,10 +2069,13 @@ impl PostgresIdempotencyStore {
 
     /// Acquire uncertainty recovery only for the exact same key/request and
     /// an optional correlation committed before the non-safe send.
+    /// `source_digest` is the configured source origin; only a row pinned to
+    /// the same origin is leased.
     pub async fn acquire_uncertain_recovery(
         &self,
         request: ClaimRequest<'_>,
         artifact_digest: [u8; 32],
+        source_digest: [u8; 32],
         now: SystemTime,
         requested_deadline: SystemTime,
     ) -> Result<RecoveryLease, IdempotencyError> {
@@ -2050,6 +2092,7 @@ impl PostgresIdempotencyStore {
                  WHERE scope_digest = $1 AND request_digest = $2 \
                    AND artifact_digest = $3 AND state = 'effect_started' \
                    AND async_recovery_id IS NOT NULL AND async_expires_at > $6 \
+                   AND async_source_digest = $7 \
                    AND (async_poll_lease_id IS NULL OR async_poll_lease_until <= $6) \
                  RETURNING scope_digest, request_digest, state, artifact_digest, \
                            async_binding_digest, async_binding_id, async_profile_operation, \
@@ -2062,6 +2105,7 @@ impl PostgresIdempotencyStore {
                     &lease_id.as_slice(),
                     &lease_until,
                     &now,
+                    &source_digest.as_slice(),
                 ],
             )
             .await?;
@@ -2070,6 +2114,26 @@ impl PostgresIdempotencyStore {
                 row, lease_id,
             )?))),
             None => {
+                let quarantined = client
+                    .query_opt(
+                        "SELECT 1 FROM adapter_idempotency_entries \
+                         WHERE scope_digest = $1 AND request_digest = $2 \
+                           AND artifact_digest = $3 AND state = 'effect_started' \
+                           AND async_recovery_id IS NOT NULL AND async_expires_at > $4 \
+                           AND async_source_digest IS DISTINCT FROM $5",
+                        &[
+                            &scope_digest.as_slice(),
+                            &request.request_digest.as_slice(),
+                            &artifact_digest.as_slice(),
+                            &now,
+                            &source_digest.as_slice(),
+                        ],
+                    )
+                    .await?
+                    .is_some();
+                if quarantined {
+                    return Ok(RecoveryLease::Quarantined);
+                }
                 let busy = client
                     .query_opt(
                         "SELECT 1 FROM adapter_idempotency_entries \
@@ -2383,7 +2447,7 @@ impl PostgresIdempotencyStore {
                      async_record_type = NULL, async_source_id = NULL, \
                      async_recovery_id = NULL, async_accepted_at = NULL, \
                      async_expires_at = NULL, async_poll_lease_id = NULL, \
-                     async_poll_lease_until = NULL \
+                     async_poll_lease_until = NULL, async_source_digest = NULL \
                  FROM expired WHERE entries.scope_digest = expired.scope_digest \
                  RETURNING entries.scope_digest",
                 &[&now, &remaining],
@@ -2872,7 +2936,7 @@ async fn erase_one_if_expired(
                  async_record_type = NULL, async_source_id = NULL, \
                  async_recovery_id = NULL, async_accepted_at = NULL, \
                  async_expires_at = NULL, async_poll_lease_id = NULL, \
-                 async_poll_lease_until = NULL \
+                 async_poll_lease_until = NULL, async_source_digest = NULL \
              WHERE scope_digest = $1 AND ( \
                  (async_binding_digest IS NOT NULL AND async_expires_at <= $2) \
                  OR (state IN ('completed', 'failed') AND expires_at <= $2))",

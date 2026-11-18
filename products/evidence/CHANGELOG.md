@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+- BREAKING: `acquisitionDeadlineMilliseconds` has a maximum of 300000 (300
+  seconds) in the authored target
+  (`sourceAcquisition.acquisitionDeadlineMilliseconds`) and in the runtime
+  configuration file. A longer deadline fails to load with a range error that
+  names the field and the maximum; nothing is clamped. Migration: write a value
+  of at most 300000.
+- BREAKING: Evidence refuses to release an acquisition result after the caller's
+  task grant has expired, even when the acquisition deadline has not passed. The
+  caller receives `403 evidence.denied` and the audit records a failure with
+  safe error category `grant-expired`. Migration: issue grants that outlast the
+  source round trip and signing.
+- BREAKING: `offers.allowedClients: unrestricted` and
+  `offers.requiredScopes: unrestricted` are refused with
+  `evidence.oid4vci.offer-gate-unrestricted` unless `validationMode` is
+  `supervised-local-development`. This supersedes the 0.46.0 migration advice to
+  write `requiredScopes: unrestricted` where the member was absent: that
+  configuration no longer loads outside local development. Migration: list the
+  clients that may request an offer and the scopes they must hold.
+- BREAKING: every private_key_jwt client identity states its client assertion
+  audience, with no default: `clientAssertionAudience` on an
+  `oauth2-private-key-jwt` source credential in the runtime configuration and
+  the bundle, and on an `oauth2-private-key-jwt` connection in the authored
+  target, `oauth.clientAssertionAudience` in an Evidence client profile,
+  `audience` in the Node and Python client's `privateKeyJwt` and exchange
+  `client` objects, and `tokenClient.clientAssertionAudience` in the wallet
+  delivery (`evidence-oid4vci`) configuration. The client assertion carries it
+  as its only audience and has the header `typ: client-authentication+jwt`
+  (RFC 10070 section 4). A configuration, target, bundle or profile without it fails to
+  load, and a Node or Python client without it is refused when it is
+  constructed. `evidencectl client profile create` requires
+  `--client-assertion-audience`, and `evidencectl source add` refuses a source
+  handoff without `clientAssertionAudience`. Migration: set the audience member
+  to the authorization server's issuer identifier, exactly as its metadata
+  publishes it.
+
 ## 0.46.0 - 2026-11-08
 
 - Experimental public certificate check. An assertion definition may declare

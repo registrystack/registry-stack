@@ -139,11 +139,12 @@ export interface PrivateKeyJwtConfig {
   clientId: string
   clientKey: Readonly<Record<string, unknown>>
   /**
-   * The audience of the client assertion (who checks the client's
-   * authentication). Defaults to the token endpoint URL. This is not the
-   * `resource` of the token request.
+   * The audience of the client assertion: the authorization server's issuer
+   * identifier, exactly as its metadata publishes it (RFC 10070 section 4).
+   * Required; there is no default. This is not the `resource` of the token
+   * request.
    */
-  audience?: string
+  audience: string
   /**
    * The RFC 8707 resource indicator the token is requested for: the resource
    * server's registered identifier, not a URL to fetch.
@@ -197,10 +198,11 @@ export interface EvidenceExchangeClientConfig {
   /** The client's private key, as a JWK. */
   clientKey: Readonly<Record<string, unknown>>
   /**
-   * The audience of the client assertion, when the authorization server
-   * expects something other than its own token endpoint.
+   * The audience of the client assertion: the authorization server's issuer
+   * identifier, exactly as its metadata publishes it (RFC 10070 section 4).
+   * Required; there is no default.
    */
-  audience?: string
+  audience: string
   /**
    * The RFC 8707 resource indicator the token is requested for: the resource
    * server's registered identifier, not a URL to fetch.

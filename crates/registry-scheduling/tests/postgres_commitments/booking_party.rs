@@ -360,6 +360,47 @@ async fn a_current_appointment_read_grant_reads_a_self_booked_appointment_only_w
     assert_eq!(refusal["code"], "profile.not-authorized");
 }
 
+/// A caller admitted to the detail route only through its task grant reads
+/// what the grant covers, even when it owns the appointment. Ownership opens
+/// the owner read for a caller holding the reads scope; it does not widen a
+/// grant that names another location.
+#[tokio::test]
+async fn a_grant_admitted_owner_reads_only_what_its_grant_covers() {
+    let fx = fixture().await;
+    let (appointment_id, _) = booked(&fx, 300, 440, "grant-admitted-owner").await;
+    let route = format!("/v1/appointments/{appointment_id}");
+
+    let elsewhere = detail_token(
+        "principal-agent",
+        &detail_grant(&["appointment.read"], "south-counter"),
+    );
+    let (status, refusal) = fx.get(&route, &elsewhere).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refusal}");
+    assert_eq!(refusal["code"], "operation.not-authorized");
+
+    let (status, unknown) = fx
+        .get(&format!("/v1/appointments/{}", Uuid::new_v4()), &elsewhere)
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{unknown}");
+    let without_trace = |problem: &Value| {
+        let mut problem = problem.clone();
+        problem
+            .as_object_mut()
+            .expect("a problem object")
+            .remove("traceId");
+        problem
+    };
+    assert_eq!(
+        without_trace(&unknown),
+        without_trace(&refusal),
+        "an unknown id is refused exactly as a known one outside the grant"
+    );
+
+    let (status, read) = fx.get(&route, &fx.agent).await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["appointmentId"], appointment_id.as_str());
+}
+
 #[tokio::test]
 async fn assisted_manager_authority_is_bound_into_idempotency_and_retention() {
     let manager = "case-18-scheduling-manager";

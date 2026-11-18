@@ -142,6 +142,7 @@ for (const cancelLeader of [false, true]) {
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
     const client = new BaseRegistryClient({ baseUrl, authorization: { privateKeyJwt: {
       tokenEndpoint: `${baseUrl}/token`, clientId: 'synthetic-client', clientKey: key,
+      audience: baseUrl,
       resource: 'urn:test:resource', scopes: ['records:get'], attemptTimeoutMilliseconds: 3_000,
     } } });
     const controller = new AbortController();

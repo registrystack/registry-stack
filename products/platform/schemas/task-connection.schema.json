@@ -154,7 +154,7 @@
           "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:(?:[A-Za-z0-9._~:/?\\[\\]@!$&'()*+,;=-]|%[0-9A-Fa-f]{2})*$"
         }
       ],
-      "description": "The audience of each client's private_key_jwt assertion: an absolute\nURI without a fragment or user information."
+      "description": "The audience of each client's private_key_jwt assertion: the\nauthorization server's issuer identifier, exactly as its metadata\npublishes it (RFC 10070 section 4). An absolute URI without a\nfragment or user information."
     },
     "clients": {
       "additionalProperties": false,

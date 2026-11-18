@@ -924,7 +924,7 @@ fn target_secret_references_use_one_shared_syntax_at_every_retained_position() {
             vec!["clientIdRef", "clientSecretRef"],
         ),
         (
-            serde_json::json!({"type":"oauth2-private-key-jwt","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:env/CLIENT_ID","clientAssertionKeyRef":"secret:file/client-key","maximumCacheSeconds":300}),
+            serde_json::json!({"type":"oauth2-private-key-jwt","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:env/CLIENT_ID","clientAssertionKeyRef":"secret:file/client-key","clientAssertionAudience":"https://issuer.invalid","maximumCacheSeconds":300}),
             vec!["clientIdRef", "clientAssertionKeyRef"],
         ),
     ];

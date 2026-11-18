@@ -220,6 +220,7 @@ test('omitted private-key JWT durations use provider defaults and null is refuse
     authorization: {
       privateKeyJwt: {
         tokenEndpoint: 'https://issuer.invalid/oauth/token',
+        audience: 'https://issuer.invalid',
         clientId: 'breg-node-binding-test-client',
         clientKey,
         attemptTimeoutMilliseconds: 5_000,
@@ -227,6 +228,16 @@ test('omitted private-key JWT durations use provider defaults and null is refuse
     },
   };
   assert.ok(new BaseRegistryClient(config));
+  // RFC 10070 section 4: the client assertion names the authorization
+  // server's issuer identifier as its audience, so the configuration states it.
+  const { audience, ...withoutAudience } = config.authorization.privateKeyJwt;
+  assert.equal(audience, 'https://issuer.invalid');
+  for (const privateKeyJwt of [withoutAudience, { ...withoutAudience, audience: null }]) {
+    assert.throws(() => new BaseRegistryClient({ ...config, authorization: { privateKeyJwt } }),
+      (error) => error instanceof BaseRegistryClientError
+        && error.kind === 'configuration'
+        && error.message.includes('audience'));
+  }
   assert.throws(() => new BaseRegistryClient({
     ...config,
     authorization: {

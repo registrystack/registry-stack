@@ -79,7 +79,7 @@ model {
   breg.task_grants .call issuer 'Obtains a Casework status token' {
     #optional #taskAuthority
     technology 'OAuth client credentials / private_key_jwt'
-    description 'A separately configured BReg service client obtains only the Casework resource and casework:grants:status scope. Token endpoint, assertion audience, client key and destination are operator bindings.'
+    description 'A separately configured BReg service client obtains only the Casework resource and casework:grants:status scope. Token endpoint, assertion audience (the issuer identifier, the sole audience under RFC 10070 section 4), client key and destination are operator bindings.'
     link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/task_grant/config.rs 'Status-client credential binding'
   }
   breg.task_grants .call casework.api 'Checks current task status before new writes' {

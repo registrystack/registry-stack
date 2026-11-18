@@ -14,10 +14,9 @@ use tokio_postgres::types::ToSql;
 use uuid::Uuid;
 
 use crate::api::{
-    valid_text_search_term, AuthorizedRequestContext, HeldReadResponse, ReadFilterExpr,
-    ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField,
-    ReadServiceError, RecordReadRefusal, RowBoundaryOperator as ApiRowBoundaryOperator,
-    ServiceFuture, SnapshotReadRequest, SnapshotReadService,
+    valid_text_search_term, HeldReadResponse, ReadFilterExpr, ReadFilterOperator,
+    ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField, ReadServiceError,
+    RecordReadRefusal, ServiceFuture, SnapshotReadRequest, SnapshotReadService,
 };
 use crate::audit::{
     begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
@@ -49,11 +48,12 @@ use crate::stored_bytes;
 
 use super::cancellation::QueryCancellationGuard;
 use super::read::{
-    load_retained_plaintext_fields, open_history_row_members, temporal_instant_expression,
+    load_retained_plaintext_fields, open_history_row_members, strict_claim_context,
+    temporal_instant_expression,
 };
 use super::{
     begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
-    ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
+    ExpectedRegistryIdentity, RegistryLockKey, RuntimePool,
 };
 
 const MAX_SQL_LIMIT: usize = 1000;
@@ -1533,44 +1533,6 @@ impl SnapshotReadResult {
             effective_binding: materialized.effective_binding,
         })
     }
-}
-
-fn strict_claim_context(
-    registry: &CompiledRegistry,
-    context: &AuthorizedRequestContext,
-    entity_id: &str,
-) -> Result<ClaimContext, ReadServiceError> {
-    let row_boundaries = context
-        .row_boundaries()
-        .iter()
-        .map(|boundary| match boundary.operator() {
-            ApiRowBoundaryOperator::Equals => {
-                let values = boundary.values();
-                if values.len() != 1 {
-                    return Err(ReadServiceError::Unavailable);
-                }
-                Ok(RowBoundaryContext::Equals {
-                    field: boundary.field().to_owned(),
-                    value: values.first().ok_or(ReadServiceError::Unavailable)?.clone(),
-                })
-            }
-            ApiRowBoundaryOperator::In => Ok(RowBoundaryContext::In {
-                field: boundary.field().to_owned(),
-                values: boundary.values().clone(),
-            }),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    ClaimContext::for_compiled(
-        registry,
-        entity_id,
-        context.principal().map(str::to_owned),
-        context.selected_profile(),
-        context.purpose().map(str::to_owned),
-        row_boundaries,
-    )
-    .map(|claims| claims.with_audit_context(context.audit_context().cloned()))
-    .and_then(|claims| claims.with_recipients(context.recipients().clone()))
-    .map_err(|_| ReadServiceError::Unavailable)
 }
 
 fn required_history_fields(

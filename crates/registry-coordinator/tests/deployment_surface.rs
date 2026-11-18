@@ -278,20 +278,23 @@ async fn a_policy_admits_only_the_subjects_it_lists() {
 }
 
 /// A client assertion signed by hand, so the test can drive the token
-/// endpoint's client credentials and token exchange grants directly.
+/// endpoint's client credentials and token exchange grants directly. It names
+/// the issuer identifier as its audience and carries the explicit type, as
+/// RFC 10070 section 4 requires.
 fn client_assertion(
     key: &registry_platform_crypto::PrivateJwk,
     client: &str,
-    endpoint: &str,
+    issuer: &str,
     jti: &str,
 ) -> String {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     let now = Utc::now().timestamp();
     let header = serde_json::json!({
-        "alg": key.algorithm().unwrap().jwa_name(), "kid": key.kid, "typ": "JWT"
+        "alg": key.algorithm().unwrap().jwa_name(), "kid": key.kid,
+        "typ": "client-authentication+jwt"
     });
     let claims = serde_json::json!({
-        "iss": client, "sub": client, "aud": endpoint, "iat": now, "exp": now + 60, "jti": jti
+        "iss": client, "sub": client, "aud": issuer, "iat": now, "exp": now + 60, "jti": jti
     });
     let input = format!(
         "{}.{}",
@@ -346,6 +349,7 @@ async fn a_token_carrying_act_is_refused_and_an_exchange_without_one_is_not() {
         .start()
         .await;
     let endpoint = issuer.token_endpoint();
+    let assertion_audience = issuer.issuer();
     let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         issuer.jwks_uri(),
         JwksFetcherConfig::defaults(),
@@ -370,7 +374,7 @@ async fn a_token_carrying_act_is_refused_and_an_exchange_without_one_is_not() {
     };
     let auth = Authenticator::new(verifier, keys, [("producer".into(), policy)].into(), true);
 
-    let own = client_assertion(&key, "producer", &endpoint, "own");
+    let own = client_assertion(&key, "producer", &assertion_audience, "own");
     let service = granted_access_token(
         &endpoint,
         &[
@@ -388,7 +392,7 @@ async fn a_token_carrying_act_is_refused_and_an_exchange_without_one_is_not() {
     assert_eq!(caller.actor.subject, SERVICE);
 
     let exchange = |subject_token: String, jti: &'static str, actor: Option<String>| {
-        let assertion = client_assertion(&key, "producer", &endpoint, jti);
+        let assertion = client_assertion(&key, "producer", &assertion_audience, jti);
         let endpoint = endpoint.clone();
         async move {
             let mut form = vec![

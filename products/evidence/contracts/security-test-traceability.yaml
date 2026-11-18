@@ -424,6 +424,8 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: signing_failure_returns_a_problem_and_never_an_unsigned_body}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_signing_failure_no_fallback_format}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: singular_release_does_not_begin_after_its_acquisition_deadline}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: singular_release_does_not_begin_after_the_task_grant_expired}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: batch_release_does_not_begin_after_the_task_grant_expired}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: admitted_release_append_completes_and_returns_bytes_after_deadline}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_release_obeys_the_earliest_item_acquisition_deadline}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_unavailable_item_contributes_to_the_earliest_deadline}

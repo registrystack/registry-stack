@@ -3062,7 +3062,7 @@ mod tests {
         // too, or the runtime refuses the connection at serve.
         let bundle = production_source_bundle(
             "http://registry.example.invalid",
-            json!({"type": "oauth2-private-key-jwt", "tokenEndpoint": "http://identity.example.invalid/token"}),
+            json!({"type": "oauth2-private-key-jwt", "tokenEndpoint": "http://identity.example.invalid/token", "clientAssertionAudience": "http://identity.example.invalid"}),
         );
         let artifacts = direct_http_pack(json!({"type": "static-authorization"}));
 

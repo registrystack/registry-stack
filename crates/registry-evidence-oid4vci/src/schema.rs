@@ -152,7 +152,8 @@ mod tests {
             "tokenClient": {
                 "tokenEndpoint": "https://mint.example.org/token",
                 "clientId": "evidence-oid4vci",
-                "privateKeyRef": "secret:file/delivery-client.jwk.json"
+                "privateKeyRef": "secret:file/delivery-client.jwk.json",
+                "clientAssertionAudience": "https://mint.example.org"
             },
             "offers": {
                 "issuer": "https://mint.example.org",

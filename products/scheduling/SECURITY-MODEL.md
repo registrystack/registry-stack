@@ -99,7 +99,9 @@ commitment in place. `/readyz` follows the audit writer.
 
 - **Condition.** The caller holds a current online `appointment.read` task
   grant for the appointment's service and location, and the appointment is
-  self-booked (not source-managed).
+  self-booked (not source-managed). A caller that holds the reads scope also
+  reads what it owns; a caller admitted only through its grant is held to the
+  grant even for an appointment it owns.
 - **Consequence.** The caller can read any appointment it names by id at that
   service and location. The grant does not bind an appointment id. For
   source-managed appointments the exact retained manager and source issuer are

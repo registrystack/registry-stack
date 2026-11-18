@@ -78,8 +78,10 @@ For a deployment, the institution must supply these prerequisites:
   with the caller's subject.
 
 The runtime template uses loopback endpoints and secret references only, and
-sets `clientAssertionAudience`, the audience of the client's signed assertion;
-without it, the token endpoint URL is used. Copy it outside the package and
+sets the required `clientAssertionAudience`: the authorization server's issuer
+identifier, exactly as its metadata publishes it, which the client's signed
+assertion carries as its only audience (RFC 10070 section 4). Copy it outside
+the package and
 adapt its endpoints, PostgreSQL identity and roles, client, task authority and
 package pin. Follow [the deployment runbook](../../DEPLOYMENT.md) for
 installation and apply.

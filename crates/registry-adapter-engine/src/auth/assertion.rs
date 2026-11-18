@@ -120,7 +120,8 @@ mod tests {
     /// caller owns the clock, so the tests date them the same way.
     const NOW: i64 = 1_785_000_000;
     const CLIENT_ID: &str = "urn:example:client:adapter";
-    const TOKEN_ENDPOINT: &str = "https://tokens.example.invalid/token";
+    /// The authorization server's issuer identifier, the assertion audience.
+    const ISSUER: &str = "https://tokens.example.invalid";
     /// The platform's default, what the token plan passes the signer.
     const LIFETIME_SECONDS: i64 = 60;
 
@@ -175,22 +176,23 @@ mod tests {
 
     /// What the signer produces is a client assertion the authorization
     /// server can verify: the header names the key and the algorithm the
-    /// document states, the claims are the RFC 7523 section 2.2 set, and
-    /// the signature verifies under the key's own public half, for every
-    /// key kind this seam accepts.
+    /// document states, the type is the RFC 10070 section 4 explicit
+    /// client authentication type, the claims are the RFC 7523 section
+    /// 2.2 set, and the signature verifies under the key's own public
+    /// half, for every key kind this seam accepts.
     #[test]
     fn an_assertion_from_this_signer_verifies_under_its_key() {
         for document in [ED25519_JWK, P256_JWK] {
             let key = PrivateJwk::parse(document).expect("the pinned test key parses");
             let assertion =
-                sign(document, TOKEN_ENDPOINT, LIFETIME_SECONDS).expect("the assertion is signed");
+                sign(document, ISSUER, LIFETIME_SECONDS).expect("the assertion is signed");
 
             let (header, claims, signature) = parts(&assertion);
             assert_eq!(
                 header["alg"],
                 key.alg.as_deref().expect("the key states an algorithm")
             );
-            assert_eq!(header["typ"], "JWT");
+            assert_eq!(header["typ"], "client-authentication+jwt");
             assert_eq!(
                 header["kid"],
                 key.kid.as_deref().expect("the key names itself")
@@ -218,15 +220,16 @@ mod tests {
     }
 
     /// The audience is signed byte for byte as configured, never parsed
-    /// back or normalized here: RFC 7523 section 3 has the authorization
-    /// server compare it by Simple String Comparison, so the value the
-    /// token endpoint receives is the value the operator wrote.
+    /// back or normalized here: RFC 10070 section 4 has the authorization
+    /// server compare it with its issuer identifier by Simple String
+    /// Comparison, so the value the token endpoint receives is the value
+    /// the operator wrote.
     #[test]
     fn the_audience_is_signed_exactly_as_configured() {
         for audience in [
-            TOKEN_ENDPOINT,
-            "HTTPS://tokens.example.invalid/token",
-            "https://other.example.invalid/v2/oauth/token",
+            ISSUER,
+            "HTTPS://tokens.example.invalid",
+            "https://other.example.invalid/tenants/one",
         ] {
             let assertion =
                 sign(ED25519_JWK, audience, LIFETIME_SECONDS).expect("the assertion is signed");
@@ -243,7 +246,7 @@ mod tests {
     #[test]
     fn key_material_appears_in_no_rendering_the_seam_produces() {
         let assertion =
-            sign(ED25519_JWK, TOKEN_ENDPOINT, LIFETIME_SECONDS).expect("the assertion is signed");
+            sign(ED25519_JWK, ISSUER, LIFETIME_SECONDS).expect("the assertion is signed");
         assert!(
             !assertion.contains(ED25519_PRIVATE_MEMBER),
             "the assertion carries the private member"
@@ -258,8 +261,8 @@ mod tests {
         let unusable = format!(
             r#"{{"kty":"OKP","crv":"Ed25519","d":"{KEY_CANARY}","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc"}}"#
         );
-        let error = sign(&unusable, TOKEN_ENDPOINT, LIFETIME_SECONDS)
-            .expect_err("an unusable document refuses");
+        let error =
+            sign(&unusable, ISSUER, LIFETIME_SECONDS).expect_err("an unusable document refuses");
         assert_eq!(error, AuthError::Credential);
         for rendered in [
             error.to_string(),
@@ -282,7 +285,7 @@ mod tests {
             "\"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4\"",
             1,
         );
-        let error = sign(&unpaired, TOKEN_ENDPOINT, LIFETIME_SECONDS)
+        let error = sign(&unpaired, ISSUER, LIFETIME_SECONDS)
             .expect_err("a key that proves nothing refuses");
         assert_eq!(error, AuthError::Credential);
         assert!(
@@ -299,13 +302,13 @@ mod tests {
     /// `1..=300` seconds refuses rather than signs.
     #[test]
     fn the_lifetime_the_caller_states_bounds_the_assertion() {
-        let assertion = sign(ED25519_JWK, TOKEN_ENDPOINT, 120).expect("the assertion is signed");
+        let assertion = sign(ED25519_JWK, ISSUER, 120).expect("the assertion is signed");
         let (_, claims, _) = parts(&assertion);
         assert_eq!(claims["exp"], NOW + 120);
 
         for lifetime_seconds in [0, 301, i64::MIN, i64::MAX] {
             assert_eq!(
-                sign(ED25519_JWK, TOKEN_ENDPOINT, lifetime_seconds),
+                sign(ED25519_JWK, ISSUER, lifetime_seconds),
                 Err(AuthError::Credential),
                 "lifetime {lifetime_seconds}"
             );

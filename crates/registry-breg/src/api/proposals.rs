@@ -359,13 +359,7 @@ pub(crate) fn authorize(
     match (task_source, claims.grant()) {
         (None, None) => {}
         (Some(source), Some(grant)) => {
-            if source.source_issuer != grant.source_issuer()
-                || Some(grant.client()) != claims.requester_client()
-                || Some(grant.principal()) != claims.principal()
-                || Some(grant.purpose()) != claims.purpose()
-            {
-                return None;
-            }
+            let binding = bind_task_grant(&source.source_issuer, claims).ok()?;
             let bounds = grant.bounds().breg_permissions()?;
             let operation_name = crate::mutation::proposal_operation_name(operation);
             let scope = match operation {
@@ -395,14 +389,6 @@ pub(crate) fn authorize(
                     Some(scope)
                 }
             };
-            let binding = crate::task_grant::TaskGrantBinding::from_verified(
-                grant,
-                claims.grant_subjects().clone(),
-            )
-            .ok()?;
-            if !binding.is_current() {
-                return None;
-            }
             authority.common = authority
                 .common
                 .with_proposal_task_grant(binding.clone(), operation)

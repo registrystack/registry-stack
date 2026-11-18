@@ -122,7 +122,7 @@ impl Fixture {
         let (registry_config, mut exchange) =
             outbound_sections(&registry.base_url, &token_endpoint);
         exchange.assertion_audience =
-            Some(registry_platform_yaml::ExternalId::new(server.issuer()).unwrap());
+            registry_platform_yaml::ExternalId::new(server.issuer()).unwrap();
         let directory = tempfile::tempdir().expect("temporary directory");
         let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(vec![9; 32]))
             .expect("audit profile");

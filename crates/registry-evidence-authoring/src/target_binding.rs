@@ -373,13 +373,18 @@ pub struct TargetConnection {
     pub allowed_private_cidrs: Vec<String>,
 }
 
+/// The longest source acquisition deadline a target may configure. An
+/// acquisition under a task grant is also bounded by the grant's own expiry;
+/// this ceiling bounds every other acquisition and the in-flight window.
+pub const MAX_ACQUISITION_DEADLINE_MILLISECONDS: u64 = 300_000;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TargetSourceAcquisition {
     pub maximum_data_operations: BoundedU64<1, { u64::MAX }>,
     #[serde(rename = "acquisitionDeadlineMilliseconds")]
-    pub deadline_milliseconds: BoundedU64<1, { u64::MAX }>,
+    pub deadline_milliseconds: BoundedU64<1, MAX_ACQUISITION_DEADLINE_MILLISECONDS>,
     pub maximum_response_bytes: BoundedU64<1, { u64::MAX }>,
 }
 
@@ -461,8 +466,9 @@ pub enum TargetConnectionAuthentication {
         token_endpoint: String,
         client_id_ref: SecretReference,
         client_assertion_key_ref: SecretReference,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        client_assertion_audience: Option<String>,
+        /// The authorization server's issuer identifier, the client
+        /// assertion's sole audience (RFC 10070 section 4). It has no default.
+        client_assertion_audience: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scope: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -942,6 +948,21 @@ mod tests {
         assert!(runtime["endpoints"][0].get("authentication").is_none());
     }
 
+    /// The client assertion audience is the authorization server's issuer
+    /// identifier (RFC 10070 section 4) and has no default, so a private-key
+    /// JWT connection that does not state it is refused where it is read.
+    #[test]
+    fn a_private_key_jwt_connection_requires_the_client_assertion_audience() {
+        let error = serde_json::from_str::<TargetConnection>(
+            r#"{"endpoints":{"records":{"origin":"https://source.invalid/api","authentication":{"type":"oauth2-private-key-jwt","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:file/client-id","clientAssertionKeyRef":"secret:file/client-key","maximumCacheSeconds":60}}}}"#,
+        )
+        .expect_err("a private-key JWT connection without an assertion audience was accepted");
+        assert!(
+            error.to_string().contains("clientAssertionAudience"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn sqlite_only_connection_projects_no_network_authority() {
         let connection: TargetConnection =
@@ -990,6 +1011,27 @@ mod tests {
             }))
             .is_err(),
             "the ambiguous generic deadline spelling is not an authored alias"
+        );
+    }
+
+    #[test]
+    fn source_acquisition_deadline_has_an_upper_bound() {
+        let limits = |deadline: u64| {
+            serde_json::from_value::<TargetSourceAcquisition>(serde_json::json!({
+                "maximumDataOperations": 9,
+                "acquisitionDeadlineMilliseconds": deadline,
+                "maximumResponseBytes": 2_097_152
+            }))
+        };
+        limits(MAX_ACQUISITION_DEADLINE_MILLISECONDS)
+            .expect("the ceiling itself is a valid deadline");
+        let error = limits(MAX_ACQUISITION_DEADLINE_MILLISECONDS + 1)
+            .expect_err("a deadline above the ceiling is refused at load");
+        assert!(
+            error
+                .to_string()
+                .contains(&MAX_ACQUISITION_DEADLINE_MILLISECONDS.to_string()),
+            "the refusal names the maximum: {error}"
         );
     }
 

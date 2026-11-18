@@ -19,6 +19,7 @@ connections:
     profile: registrant-reader
     authorization:
       tokenEndpoint: http://127.0.0.1:8090/token
+      clientAssertionAudience: http://127.0.0.1:8090
       clientId: registrant-reader
       signingKeyRef: secret:file/client-key
       resource: urn:example:registrants

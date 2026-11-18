@@ -69,8 +69,10 @@ pub(crate) struct TaskConnection {
     /// private_key_jwt: `https`, or `http` to 127.0.0.1, localhost, or
     /// [::1]; no query or fragment.
     pub(crate) token_endpoint: Url,
-    /// The audience of each client's private_key_jwt assertion: an absolute
-    /// URI without a fragment or user information.
+    /// The audience of each client's private_key_jwt assertion: the
+    /// authorization server's issuer identifier, exactly as its metadata
+    /// publishes it (RFC 10070 section 4). An absolute URI without a
+    /// fragment or user information.
     pub(crate) client_assertion_audience: ExternalId,
     /// The resource of the bootstrap token that asks Casework for a grant
     /// assertion: an absolute URI without a fragment or user information.
@@ -294,7 +296,7 @@ mod tests {
 kind: PlatformTaskConnection
 caseworkUrl: http://127.0.0.1:8090
 tokenEndpoint: http://127.0.0.1:8091/oauth2/token
-clientAssertionAudience: http://127.0.0.1:8091/oauth2/token
+clientAssertionAudience: http://127.0.0.1:8091
 bootstrapResource: urn:registry:casework
 secretProviders:
   file:

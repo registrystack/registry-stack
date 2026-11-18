@@ -194,6 +194,18 @@ reconstructible in this closed subset. Later reads from the digest-bound,
 resupplied caller record are not supported, though they would not inherently
 depend on stored payloads.
 
+## Change a source under asynchronous writes
+
+An asynchronous write is polled only at the source origin it was sent to
+(`CONCEPT.md` section 9). Rotating a source credential needs no care. Change
+the `baseUrl` of an endpoint that an asynchronous write, status or uncertainty
+route reaches only after that operation's writes have settled: an unfinished
+write is otherwise held and never polled. Its status link answers the stored
+202, a same-key retry answers 409 without `Retry-After`, and the facade logs a
+value-free warning for each held poll. Restore the original `baseUrl` to let
+held writes finish, or let them expire. Let async writes settle before
+upgrading; rows written by an earlier version are quarantined and expire.
+
 ## Operate an SFTP job source
 
 The default-off `job-sftp` host is read-only. Give it a dedicated source
@@ -294,6 +306,28 @@ an unchanged held item is skipped by ordinary passes and rescans. Resolve a
 BReg outcome in BReg, or a Coordinator Run and linked review in their owning
 products.
 
+`adapter.job.revised-item` holds an item the destination may already have
+admitted under its key: a source edit after a hand-off that was accepted or
+whose answer was lost, or a `rescan` of an item refused on the retry of a lost
+answer. A Coordinator job that names a receiver for revisions sends such an
+item there as a `revised` event instead of holding it. Once that revised event
+may have been admitted (its answer was lost and its retry refused), a `rescan`
+sends it only to the same receiver with the same body; a changed receiver or
+body stops the pass as `adapter.job.coordinator-receiver-changed` or
+`adapter.job.coordinator-body-changed` before any request. Removing that receiver
+holds every such item, including one whose revised event was sent and whose
+answer was lost; restoring the receiver does not resend a held item, so check
+Coordinator for that Run before you resolve the hold.
+
+This hold is conservative. A refusal of the retry cannot show that the first
+attempt had no effect, so an item whose first attempt never reached the
+destination is held the same way: for example, a BReg request that timed out
+before it arrived, then a retry refused for invalid data. On a direct BReg
+job, or a Coordinator job without a receiver for revisions, correcting that
+item's source record does not deliver it, and no Adapter command releases
+the hold. Confirm under the destination's own authority that the first
+attempt left no effect, then make the registration there, outside the job.
+
 A refusal the destination answered is stored as
 `adapter.job.breg.<word>` or `adapter.job.coordinator.<word>`, where `<word>`
 is the destination's own refusal word. The prefix says which product to ask;
@@ -324,7 +358,10 @@ running pass or loop, then run
 `adapter-job rebind-identity <job.yaml> --pack <pack> --runtime <runtime>`
 once. It records the job's current identity and keeps the stored items and
 cursor, so the next pass reads source rows as new and may deliver them
-again. The host never infers identity from stored keys, rewrites rows, or
+again. The rebind refuses only while a pass holds the job lease; it does not
+check for held items or items marked as possibly admitted (`admittedBefore`
+in `inspect`), so settle those under the destination's own authority before
+you rebind. The host never infers identity from stored keys, rewrites rows, or
 resets the cursor automatically. To keep the old identity instead, restore the
 previous job definition. `pass --dry-run` shows the same stop before reading a
 page. The [Kobo job operations guide](examples/kobotoolbox-job/OPERATIONS.md)

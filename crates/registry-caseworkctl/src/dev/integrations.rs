@@ -431,8 +431,7 @@ impl Integrations {
                             != client.scopes.iter().collect::<BTreeSet<_>>()
                     })
                     || binding.token_endpoint != state.token_endpoint()
-                    || binding.client_assertion_audience.as_deref()
-                        != Some(state.issuer_origin().as_str())
+                    || binding.client_assertion_audience != state.issuer_origin()
                 {
                     return Err(super::DevFailure::integration("provider credentials must select one generated service client with its exact resource, scopes and issuer").into());
                 }

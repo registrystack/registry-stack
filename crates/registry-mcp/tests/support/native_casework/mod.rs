@@ -661,7 +661,7 @@ fn write_gateway_runtime(
             "rateLimits":{"perPrincipal":{"requestsPerMinute":1000,"burst":1000},"perClient":{"requestsPerMinute":1000,"burst":1000}},
             "bindings":[{"name":"native-casework","tools":[LIST_TOOL,CONTEXT_TOOL],"provider":{
             "type":"casework","authority":"delegated-staff-read","baseUrl":casework_origin.as_str(),"readerPolicy":casework::READER_POLICY,"sourceProfile":casework::SOURCE_PROFILE,"pageSize":20,
-                "authorization":{"exchange":{"tokenEndpoint":issuer.token_endpoint(),"clientId":GATEWAY_CLIENT,"privateKeyRef":"secret:file/gateway-client-key"},"audience":CASEWORK_AUDIENCE,"scopes":["casework:staff","casework:staff:delegated-read"]}
+                "authorization":{"exchange":{"tokenEndpoint":issuer.token_endpoint(),"clientId":GATEWAY_CLIENT,"privateKeyRef":"secret:file/gateway-client-key","assertionAudience":issuer.issuer()},"audience":CASEWORK_AUDIENCE,"scopes":["casework:staff","casework:staff:delegated-read"]}
             }}]
         }),
     );

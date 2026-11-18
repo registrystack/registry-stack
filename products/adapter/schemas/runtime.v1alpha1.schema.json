@@ -479,7 +479,7 @@
               "type": "string"
             },
             "clientAssertionAudience": {
-              "description": "Audience claim of the signed assertion, defaulting to the\ntoken endpoint.",
+              "description": "Audience claim of the signed assertion: the authorization\nserver's issuer identifier, its sole value under RFC 10070\nsection 4. Required, because no endpoint the binding names is\nthat identifier.",
               "type": "string"
             },
             "clientAssertionKeyRef": {
@@ -512,6 +512,7 @@
             }
           },
           "required": [
+            "clientAssertionAudience",
             "clientAssertionKeyRef",
             "clientIdRef",
             "maximumCacheSeconds",

@@ -301,6 +301,11 @@ narrow bootstrap on refresh, then exchanges the returned assertion. PEM trust
 roots in this new option are strings. Existing `private_key_jwt` authorization
 and explicit exchange APIs remain available.
 
+`private_key_jwt`, the exchange `client` and the remote `bootstrap` each
+require `audience`: the authorization server's issuer identifier, exactly as its
+metadata publishes it. The client assertion names it as its only audience (RFC
+10070 section 4), and a configuration without it is refused at construction.
+
 `registry_client.breg.PrivateKeyJwt(config)` wraps the shared Rust OAuth
 provider. Its configuration uses the existing snake-case `private_key_jwt`
 fields. Call `provider.exchange(subject_token)` with a short-lived signed task

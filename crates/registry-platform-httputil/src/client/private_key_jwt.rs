@@ -398,15 +398,13 @@ impl PrivateKeyJwtConfig {
     pub fn check_identity(
         token_endpoint: &Url,
         client_id: &str,
-        audience: Option<&str>,
+        audience: &str,
     ) -> Result<(), TokenError> {
         let refuse = |reason: &'static str| TokenError::Configuration { reason };
         if client_id.trim().is_empty() {
             return Err(refuse("the client identifier must not be empty"));
         }
-        // Only a stated audience can be empty. A caller that stated none gets the
-        // token endpoint, which is a parsed URL and therefore never is.
-        if audience.is_some_and(|audience| audience.trim().is_empty()) {
+        if audience.trim().is_empty() {
             return Err(refuse("the assertion audience must not be empty"));
         }
         if !token_endpoint.username().is_empty()
@@ -455,11 +453,14 @@ impl PrivateKeyJwtConfig {
         }
     }
 
-    /// State the assertion audience the authorization server expects.
+    /// State the assertion audience: the authorization server's issuer
+    /// identifier, exactly as its RFC 8414 metadata publishes it.
     ///
-    /// The default is the token endpoint URL, which is what RFC 7523 section 3
-    /// recommends. Set this only when the server published a different value: an
-    /// assertion whose audience the server does not recognize is refused as an
+    /// RFC 10070 section 4 makes the issuer identifier the sole audience of a
+    /// client assertion and has the server refuse any other value, its token
+    /// endpoint included. There is no default, and a provider whose
+    /// configuration states none is refused when it is built. An assertion
+    /// whose audience the server does not recognize is refused as an
     /// authentication failure, with no indication of which claim was wrong.
     ///
     /// Must not be empty; an empty value is refused when the provider is built
@@ -606,7 +607,6 @@ pub struct PrivateKeyJwt {
     token_endpoint: Url,
     client_id: String,
     audience: String,
-    audience_is_token_endpoint: bool,
     resource: Option<String>,
     /// The configured scopes in their canonical space-delimited encoding,
     /// parsed once when the provider is built.
@@ -638,21 +638,20 @@ impl PrivateKeyJwt {
         (self.resource.as_deref(), &self.requested_scopes)
     }
 
-    /// `assertion_audience` is the audience the caller pinned, or `None` when
-    /// it pinned none. Both sides default an unpinned audience to the token
-    /// endpoint, so `None` is compared against this provider's own default
-    /// rather than against a second spelling of the same URL.
+    /// `assertion_audience` is the issuer identifier the caller states as the
+    /// assertion audience, compared exactly as RFC 10070 section 4 has the
+    /// server compare it.
     pub(super) fn matches_discovered_binding(
         &self,
         client_id: &str,
         token_endpoint: &Url,
-        assertion_audience: Option<&str>,
+        assertion_audience: &str,
         resource: &str,
         scopes: &[String],
     ) -> bool {
         self.client_id == client_id
             && self.token_endpoint == *token_endpoint
-            && self.audience == assertion_audience.unwrap_or_else(|| token_endpoint.as_str())
+            && self.audience == assertion_audience
             && self.resource.as_deref() == Some(resource)
             // RFC 6749 section 3.3 scopes are a set carried as a
             // space-delimited list, and both sides refuse a repeated value
@@ -812,11 +811,13 @@ impl PrivateKeyJwt {
     ) -> Result<Self, TokenError> {
         let refuse = |reason: &'static str| TokenError::Configuration { reason };
 
-        PrivateKeyJwtConfig::check_identity(
-            &config.token_endpoint,
-            &config.client_id,
-            config.audience.as_deref(),
-        )?;
+        // RFC 10070 section 4 leaves exactly one audience a server accepts, the
+        // issuer identifier, and the provider cannot derive it from the token
+        // endpoint, so it is stated or the provider is not built.
+        let audience = config.audience.clone().ok_or_else(|| {
+            refuse("the assertion audience must be stated as the authorization server's issuer identifier")
+        })?;
+        PrivateKeyJwtConfig::check_identity(&config.token_endpoint, &config.client_id, &audience)?;
         // The assertion header names the algorithm so the server can verify
         // without guessing, which means it must state what this key actually
         // signs with rather than one fixed name. Restricting the client to a
@@ -912,13 +913,9 @@ impl PrivateKeyJwt {
         })
         .map_err(refuse)?;
 
-        let audience_is_token_endpoint = config.audience.is_none();
         Ok(Self {
             http,
-            audience: config
-                .audience
-                .unwrap_or_else(|| config.token_endpoint.as_str().to_owned()),
-            audience_is_token_endpoint,
+            audience,
             resource: config.resource,
             scope,
             requested_scopes,
@@ -1226,14 +1223,7 @@ impl fmt::Debug for PrivateKeyJwt {
             )
             .field("client_id", &self.client_id)
             .field("uses_dns_pinned_fetch", &self.fetch_url_policy.is_some())
-            .field(
-                "audience",
-                &if self.audience_is_token_endpoint {
-                    base_url_without_userinfo(&self.token_endpoint)
-                } else {
-                    std::borrow::Cow::Borrowed(self.audience.as_str())
-                },
-            )
+            .field("audience", &self.audience)
             .field("resource", &self.resource)
             .field("scopes", &self.requested_scopes.as_slice())
             .field(
@@ -1572,8 +1562,16 @@ mod tests {
             .expect("the token endpoint parses")
     }
 
+    /// The issuer identifier of the authorization server serving
+    /// `token_endpoint`, which every server in this module publishes as the
+    /// origin its token endpoint sits under.
+    fn issuer(token_endpoint: &Url) -> String {
+        token_endpoint.origin().ascii_serialization()
+    }
+
     fn config(token_endpoint: Url, client_key: PrivateJwk) -> PrivateKeyJwtConfig {
-        PrivateKeyJwtConfig::new(token_endpoint, CLIENT_ID, client_key)
+        let audience = issuer(&token_endpoint);
+        PrivateKeyJwtConfig::new(token_endpoint, CLIENT_ID, client_key).with_audience(audience)
     }
 
     /// A provider on a test clock, against a token endpoint that answers with one
@@ -1726,8 +1724,10 @@ mod tests {
         &assertion[..boundary]
     }
 
-    /// RFC 7523 section 2.2 fixes the claim set the token endpoint reads. The
-    /// header names the key so the server can select it without guessing.
+    /// RFC 7523 section 2.2 fixes the claim set the token endpoint reads, and
+    /// RFC 10070 section 4 fixes its audience as the issuer identifier and its
+    /// type as a client authentication JWT. The header names the key so the
+    /// server can select it without guessing.
     #[test]
     fn an_assertion_carries_the_claims_the_token_endpoint_requires() {
         let key = client_key(Some(KEY_ID));
@@ -1747,10 +1747,13 @@ mod tests {
             .expect("the assertion is signed");
         let (header, claims, signature) = parts(&assertion);
 
-        assert_eq!(header, json!({"alg": "EdDSA", "typ": "JWT", "kid": KEY_ID}));
+        assert_eq!(
+            header,
+            json!({"alg": "EdDSA", "typ": "client-authentication+jwt", "kid": KEY_ID})
+        );
         assert_eq!(claims["iss"], json!(CLIENT_ID));
         assert_eq!(claims["sub"], json!(CLIENT_ID));
-        assert_eq!(claims["aud"], json!(token_endpoint.as_str()));
+        assert_eq!(claims["aud"], json!(issuer(&token_endpoint)));
         assert_eq!(claims["iat"], json!(NOW));
         assert_eq!(
             claims["exp"],
@@ -1819,7 +1822,7 @@ mod tests {
 
             assert_eq!(
                 header,
-                json!({"alg": expected_alg, "typ": "JWT", "kid": key_id})
+                json!({"alg": expected_alg, "typ": "client-authentication+jwt", "kid": key_id})
             );
             verify(signing_input(&assertion).as_bytes(), &signature, &public).unwrap_or_else(
                 |error| {
@@ -1849,10 +1852,11 @@ mod tests {
         assert_eq!(first_claims["iat"], second_claims["iat"]);
     }
 
-    /// A deployment whose token endpoint expects an audience of its own name says
-    /// so, and the default is the endpoint URL.
+    /// The assertion carries the stated audience exactly as written, with no
+    /// normalization, because RFC 10070 section 4 has the server compare it with
+    /// its issuer identifier by Simple String Comparison.
     #[test]
-    fn the_assertion_audience_can_be_overridden() {
+    fn the_assertion_audience_is_the_stated_value_as_written() {
         let clock = Arc::new(TestClock::new(NOW));
         let provider = PrivateKeyJwt::with_clock(
             config(
@@ -2121,9 +2125,7 @@ mod tests {
     /// The assertion audience and the resource indicator answer different
     /// questions — who checks the client's authentication versus which
     /// resource server the credential is for — so a provider configured with
-    /// both must not let one stand in for the other, and an issuer that
-    /// expects the issuer identifier as the assertion audience keeps that
-    /// default behavior with a resource configured.
+    /// both must not let one stand in for the other.
     #[tokio::test]
     async fn the_assertion_audience_is_never_the_resource_indicator() {
         let server = token_endpoint_serving(issued(Some(TOKEN_LIFETIME_SECONDS))).await;
@@ -2155,23 +2157,6 @@ mod tests {
                 .expect("the resource is present")
                 .1,
             "urn:registry:evidence"
-        );
-
-        // With no audience override, the assertion keeps its token-endpoint
-        // default even while a resource is configured.
-        let default_audience = PrivateKeyJwt::with_clock(
-            config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
-                .with_resource("urn:registry:evidence"),
-            clock,
-        )
-        .expect("the provider is usable as configured");
-        let assertion = default_audience
-            .sign_assertion(NOW)
-            .expect("the assertion is signed");
-        let (_, claims, _) = parts(&assertion);
-        assert_eq!(
-            claims["aud"],
-            json!(format!("{}{TOKEN_PATH}", server.uri()))
         );
     }
 
@@ -2840,45 +2825,43 @@ mod tests {
             "http://localhost:1/token",
         ] {
             let endpoint = Url::parse(endpoint).unwrap();
-            PrivateKeyJwtConfig::check_identity(&endpoint, "client", None).unwrap();
-            PrivateKeyJwtConfig::check_identity(&endpoint, "client", Some("urn:identity:test"))
-                .unwrap();
+            PrivateKeyJwtConfig::check_identity(&endpoint, "client", "urn:identity:test").unwrap();
         }
         for (endpoint, client, audience, reason) in [
             (
                 "https://identity.test/token",
                 "",
-                None,
+                "https://identity.test",
                 "the client identifier must not be empty",
             ),
             (
                 "https://identity.test/token",
                 "  ",
-                None,
+                "https://identity.test",
                 "the client identifier must not be empty",
             ),
             (
                 "https://identity.test/token",
                 "client",
-                Some("  "),
+                "  ",
                 "the assertion audience must not be empty",
             ),
             (
                 "https://user@identity.test/token",
                 "client",
-                None,
+                "https://identity.test",
                 "the token endpoint must carry no credentials or fragment",
             ),
             (
                 "https://identity.test/token#fragment",
                 "client",
-                None,
+                "https://identity.test",
                 "the token endpoint must carry no credentials or fragment",
             ),
             (
                 "http://identity.test/token",
                 "client",
-                None,
+                "https://identity.test",
                 "the token endpoint must use HTTPS, or HTTP with a loopback host",
             ),
         ] {
@@ -2886,6 +2869,26 @@ mod tests {
                 matches!(PrivateKeyJwtConfig::check_identity(&Url::parse(endpoint).unwrap(),client,audience),Err(TokenError::Configuration {reason:actual}) if actual==reason)
             );
         }
+    }
+
+    /// RFC 10070 section 4 makes the authorization server's issuer identifier the
+    /// sole audience of a client assertion, so the provider has no audience of
+    /// its own to fall back on, and a configuration that states none is refused
+    /// when the provider is built.
+    #[test]
+    fn a_configuration_that_states_no_assertion_audience_is_refused() {
+        let error = PrivateKeyJwt::new(PrivateKeyJwtConfig::new(
+            endpoint("https://tokens.example.org"),
+            CLIENT_ID,
+            client_key(Some(KEY_ID)),
+        ))
+        .expect_err("a configuration without an assertion audience is refused");
+        assert_eq!(
+            error,
+            TokenError::Configuration {
+                reason: "the assertion audience must be stated as the authorization server's issuer identifier"
+            }
+        );
     }
 
     #[test]
@@ -2897,7 +2900,8 @@ mod tests {
                     endpoint("https://tokens.example.org"),
                     "   ",
                     client_key(Some(KEY_ID)),
-                ),
+                )
+                .with_audience("https://tokens.example.org"),
             ),
             (
                 "the token endpoint must use HTTPS, or HTTP with a loopback host",

@@ -247,7 +247,7 @@ fn delegation() -> Delegation {
         token_endpoint: Url::parse("https://issuer.example.test/token").expect("URL"),
         client_id: "gateway-client".to_owned(),
         private_key: key,
-        assertion_audience: None,
+        assertion_audience: "https://issuer.example.test".to_owned(),
         gateway_resource: "https://gateway.example.test/mcp".to_owned(),
         downstream_resource: "urn:example:downstream".to_owned(),
         downstream_scopes: vec!["bounded:read".to_owned()],

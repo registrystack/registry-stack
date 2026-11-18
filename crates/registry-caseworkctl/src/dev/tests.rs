@@ -440,12 +440,14 @@ integrations:
       tokenEndpoint: http://127.0.0.1:8093/oauth2/token
       clientIdRef: secret:file/reader-id
       clientAssertionKeyRef: secret:file/reader-key
+      clientAssertionAudience: http://127.0.0.1:8093
     source_main:
       baseUrl: http://127.0.0.1:8081
       statusProfile: review-status
       tokenEndpoint: http://127.0.0.1:8093/oauth2/token
       clientIdRef: secret:file/other-id
       clientAssertionKeyRef: secret:file/other-key
+      clientAssertionAudience: http://127.0.0.1:8093
   secretFiles:
     signing-key: /tmp/signing-key
     signing_key: /tmp/other-key
@@ -542,6 +544,7 @@ integrations:
       tokenEndpoint: http://127.0.0.1:8093/oauth2/token
       clientIdRef: secret:file/reader-id
       clientAssertionKeyRef: secret:file/reader-key
+      clientAssertionAudience: http://127.0.0.1:8093
   secretFiles:
     shared_id: /tmp/signing-key
 "#
@@ -596,7 +599,7 @@ fn integrations_read_identifiers_and_urls_through_shared_types() {
         structured[0].1,
         "/integrations/serviceClients/0/claims/tenant"
     );
-    let timeout = refused(integrations("  contextProviders:\n    source:\n      baseUrl: http://127.0.0.1:8080\n      statusProfile: review-status\n      tokenEndpoint: http://127.0.0.1:8093/oauth2/token\n      clientIdRef: secret:file/reader-id\n      clientAssertionKeyRef: secret:file/reader-key\n      requestTimeoutMilliseconds: 5000\n").as_bytes());
+    let timeout = refused(integrations("  contextProviders:\n    source:\n      baseUrl: http://127.0.0.1:8080\n      statusProfile: review-status\n      tokenEndpoint: http://127.0.0.1:8093/oauth2/token\n      clientIdRef: secret:file/reader-id\n      clientAssertionKeyRef: secret:file/reader-key\n      clientAssertionAudience: http://127.0.0.1:8093\n      requestTimeoutMilliseconds: 5000\n").as_bytes());
     assert_eq!(
         timeout,
         expected(&[(
@@ -3960,7 +3963,7 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_provi
         .context_providers
         .get_mut("deployment")
         .unwrap()
-        .client_assertion_audience = Some("https://other.example".into());
+        .client_assertion_audience = "https://other.example".into();
     assert!(wrong.validate_session(&state, &policy).is_err());
     let mut wrong = integrations.clone();
     wrong.service_clients[1].scopes.push("records:get".into());
@@ -4016,24 +4019,24 @@ fn a_current_bregctl_dev_state_names_the_borrowed_issuer_owner() {
     .unwrap();
     assert_eq!(borrowed_issuer(&state).unwrap(), Some(owner_root.clone()));
 
-    let administrator = "  administrator:\n    principalClaim: sub\n";
-    assert!(STANDALONE_YAML.contains(administrator));
+    // One claim for every person: with a custom claim everywhere, no profile is
+    // rewritten to the issuer owner's subject and each keeps its authored identity.
+    assert!(STANDALONE_YAML.contains("    principalClaim: sub\n"));
     fs::write(
         project.join("casework.yaml"),
-        STANDALONE_YAML.replacen(
-            administrator,
-            "  administrator:\n    principalClaim: custom_principal\n",
-            1,
+        STANDALONE_YAML.replace(
+            "    principalClaim: sub\n",
+            "    principalClaim: custom_principal\n",
         ),
     )
     .unwrap();
-    let policy = crate::project::load_and_check_policy(&project).unwrap();
+    let custom_policy = crate::project::load_and_check_policy(&project).unwrap();
     state.clients = vec![
         ReportedClient {
             id: "staff".to_owned(),
             profile: "staff".to_owned(),
             role: CaseworkActsAs::Staff,
-            principal: config::principal("staff"),
+            principal: "custom-staff".to_owned(),
         },
         ReportedClient {
             id: "administrator".to_owned(),
@@ -4047,21 +4050,32 @@ fn a_current_bregctl_dev_state_names_the_borrowed_issuer_owner() {
         &serde_json::to_vec(&json!({"clients":[{"id":"staff"},{"id":"administrator"}]})).unwrap(),
     )
     .unwrap();
+    assert!(
+        config::borrowed_subjects(&state, &custom_policy)
+            .unwrap()
+            .is_empty(),
+        "custom principal claims retain their authored identity"
+    );
+    verify_borrowed_subjects(&state, &project).unwrap();
+
+    fs::write(project.join("casework.yaml"), STANDALONE_YAML).unwrap();
+    let policy = crate::project::load_and_check_policy(&project).unwrap();
+    state.clients = vec![ReportedClient {
+        id: "staff".to_owned(),
+        profile: "staff".to_owned(),
+        role: CaseworkActsAs::Staff,
+        principal: config::principal("staff"),
+    }];
     let subjects = config::borrowed_subjects(&state, &policy).unwrap();
     let expected =
         registry_thunderid_tooling::local::agent_id(owner["instanceId"].as_str().unwrap(), "staff");
     assert_eq!(subjects["staff"], expected);
-    assert!(
-        !subjects.contains_key("administrator"),
-        "custom principal claims retain their authored identity"
-    );
     assert!(
         verify_borrowed_subjects(&state, &project).is_err(),
         "the standalone issuer's subject is not accepted under the borrowed issuer"
     );
     state.clients[0].principal = expected;
     verify_borrowed_subjects(&state, &project).unwrap();
-    assert_eq!(state.clients[1].principal, "custom-administrator");
     let mut foreign_owner = state.clone();
     foreign_owner.issuer_owner = Some(uuid::Uuid::new_v4().to_string());
     assert!(config::borrowed_subjects(&foreign_owner, &policy).is_err());
@@ -5045,7 +5059,7 @@ fn provider_connections_are_optional_and_use_declared_deployment_references() {
     let mut integrations: integrations::Integrations =
         serde_json::from_value(json!({"resource":"urn:casework:dev"})).unwrap();
     integrations.validate(&clients, &policy).unwrap();
-    let binding = json!({"baseUrl":"http://127.0.0.1:8800","statusProfile":"review-status","tokenEndpoint":"http://127.0.0.1:8801/oauth2/token","clientIdRef":"secret:file/provider-id","clientAssertionKeyRef":"secret:file/provider-key"});
+    let binding = json!({"baseUrl":"http://127.0.0.1:8800","statusProfile":"review-status","tokenEndpoint":"http://127.0.0.1:8801/oauth2/token","clientIdRef":"secret:file/provider-id","clientAssertionKeyRef":"secret:file/provider-key","clientAssertionAudience":"http://127.0.0.1:8801"});
     integrations.context_providers.insert(
         "source".into(),
         serde_json::from_value(binding.clone()).unwrap(),
@@ -5094,7 +5108,8 @@ fn task_context_provider_connection_requires_the_exact_distinct_authored_profile
             "baseUrl":"http://127.0.0.1:8800","statusProfile":"review-status",
             "tokenEndpoint":"http://127.0.0.1:8801/oauth2/token",
             "clientIdRef":"secret:file/provider-id",
-            "clientAssertionKeyRef":"secret:file/provider-key"
+            "clientAssertionKeyRef":"secret:file/provider-key",
+            "clientAssertionAudience":"http://127.0.0.1:8801"
         });
         if let Some(profile) = task_profile {
             value["taskGrantProfile"] = json!(profile);

@@ -497,8 +497,11 @@ Evidence does not issue, manage, revoke, or infer that authority.
 
 For an institutional agent task, Evidence consumes a complete signed grant
 context issued by an external task authority. It confines the request to a
-configured `delegated` authority path whose subjects derive from the
-authenticated grant. The agent actor kind, authenticated principal, verified
+configured authority path whose subjects derive from the authenticated grant
+(`authenticated-grant` subjects). That path may carry any authority kind the
+package's grant ceiling allows. It must be `delegated` only when the token also
+carries the separately mapped actor identity; a token without that identity can
+use an `organizational` or `statutory` path. The agent actor kind, authenticated principal, verified
 client and resource, trusted source issuer, purpose, exact
 Evidence requirement bound, effective deadline, and signed approver handle
 must all match that one path. An invalid present grant cannot fall back to
@@ -1839,8 +1842,10 @@ workload actor operating under an external task grant. The complete signed grant
 context binds the agent principal, verified client and Evidence resource,
 trusted source issuer, fixed requirement, purpose,
 subject values, effective deadline, and approver. Evidence accepts it only on a
-configured `delegated` authority path whose subjects use
-`authenticated-grant`; a partial, malformed, expired, mismatched, or non-agent
+configured authority path whose subjects use `authenticated-grant`. The path's
+authority kind is any kind the package's grant ceiling allows, and must be
+`delegated` only when the token also carries the separately mapped actor
+identity. A partial, malformed, expired, mismatched, or non-agent
 grant is refused without falling back to standing authority.
 
 The agent invokes the same fixed Evidence operations as any other authenticated

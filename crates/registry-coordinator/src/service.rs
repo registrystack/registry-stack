@@ -406,6 +406,7 @@ mod tests {
             "namespace":"coordinator_recovery_ingress",
             "connections":{"source":{"type":"breg","baseUrl":"http://127.0.0.1:9999","profile":"synthetic-reader",
                 "authorization":{"tokenEndpoint":"http://127.0.0.1:9998/token","clientId":"synthetic-client",
+                    "clientAssertionAudience":"http://127.0.0.1:9998",
                     "signingKeyRef":"secret:file/client-key","resource":"urn:example:registry","scopes":["records:read"]}}},
             "eventSources":{"registry":{
                 "source":"urn:example:synthetic-event-source",

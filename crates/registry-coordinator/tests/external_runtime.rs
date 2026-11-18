@@ -45,6 +45,7 @@ fn document() -> Value {
 fn authorization() -> Value {
     json!({
         "tokenEndpoint":"https://issuer.example.test/token", "clientId":"directory-reader",
+        "clientAssertionAudience":"https://issuer.example.test",
         "signingKeyRef":"secret:file/directory-reader", "resource":"urn:example:directory",
         "scopes":["directory:read","districts:read"]
     })
@@ -159,8 +160,6 @@ fn semantic_binding_digest_survives_secret_rotation_and_set_reordering() {
     binding["queryParameters"] = json!(["language", "district"]);
     binding["authorization"]["scopes"] = json!(["districts:read", "directory:read"]);
     binding["authorization"]["signingKeyRef"] = json!("secret:file/rotated-directory-reader");
-    binding["authorization"]["clientAssertionAudience"] =
-        binding["authorization"]["tokenEndpoint"].clone();
     assert_eq!(load(&equivalent).unwrap().binding_digest().unwrap(), digest);
 
     for (member, value) in [
@@ -182,13 +181,21 @@ fn semantic_binding_digest_survives_secret_rotation_and_set_reordering() {
             "{member} changes the reviewed call interpretation"
         );
     }
-    let mut changed_principal = original.clone();
-    changed_principal["connections"]["office-directory"]["authorization"]["clientId"] =
-        json!("another-reader");
-    assert_ne!(
-        load(&changed_principal).unwrap().binding_digest().unwrap(),
-        digest
-    );
+    for (member, value) in [
+        ("clientId", json!("another-reader")),
+        (
+            "clientAssertionAudience",
+            json!("https://another-issuer.example.test"),
+        ),
+    ] {
+        let mut changed_principal = original.clone();
+        changed_principal["connections"]["office-directory"]["authorization"][member] = value;
+        assert_ne!(
+            load(&changed_principal).unwrap().binding_digest().unwrap(),
+            digest,
+            "{member} changes the client credential binding"
+        );
+    }
     let mut invalid_schema = original;
     invalid_schema["connections"]["office-directory"]["responseSchema"] =
         json!({"$ref":"https://schemas.example.test/read"});

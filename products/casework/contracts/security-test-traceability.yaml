@@ -2,7 +2,7 @@ contract: registry.casework.security-test-traceability/v1
 scope: review-only-beta
 executionStatus: not-recorded
 entries:
-  - {id: CASEWORK-SEC-01, tests: [{file: crates/registry-casework/tests/human_identity_auth.rs, name: same_role_profiles_with_distinct_principals_require_distinct_scopes}]}
+  - {id: CASEWORK-SEC-01, tests: [{file: crates/registry-casework/tests/human_identity_auth.rs, name: same_role_profiles_on_one_principal_claim_are_selected_by_their_own_scope}, {file: crates/registry-casework/tests/human_identity_auth.rs, name: same_role_profiles_require_distinct_scopes}]}
   - {id: CASEWORK-SEC-02, tests: [{file: crates/registry-casework/tests/review_acceptance_postgres.rs, name: exact_policy_admission_and_independent_producer_authority}]}
   - {id: CASEWORK-SEC-03, tests: [{file: crates/registry-casework/tests/review_acceptance_postgres.rs, name: reference_selection_conceals_before_sort_and_rejects_stale_continuation}]}
   - {id: CASEWORK-SEC-04, tests: [{file: crates/registry-casework/tests/review_postgres.rs, name: review_task_coordination_preserves_exclusions_drafts_history_and_absence_cover}]}
@@ -17,7 +17,7 @@ entries:
   - {id: CASEWORK-SEC-13, tests: [{file: crates/registry-casework/src/http.rs, name: http_edge_returns_closed_problems_with_request_trace_and_security_headers}]}
   - {id: CASEWORK-SEC-14, tests: [{file: crates/registry-casework/tests/review_acceptance_postgres.rs, name: source_visibility_and_directory_authority_are_both_live_at_caseload_apply}]}
   - {id: CASEWORK-SEC-15, tests: [{file: crates/registry-casework/tests/review_acceptance_postgres.rs, name: clock_recompute_uses_pinned_calendar_and_fences_changed_holiday_inputs}]}
-  - {id: CASEWORK-SEC-16, tests: [{file: crates/registry-casework/tests/review_postgres.rs, name: prior_stage_identity_and_invalid_structured_result_emit_nothing}, {file: crates/registry-casework-core/src/review.rs, name: advisory_thresholds_count_mixed_decisions_and_still_require_distinct_reviewers}]}
+  - {id: CASEWORK-SEC-16, tests: [{file: crates/registry-casework/tests/review_postgres.rs, name: prior_stage_identity_and_invalid_structured_result_emit_nothing}, {file: crates/registry-casework-core/src/review.rs, name: advisory_thresholds_count_mixed_decisions_and_still_require_distinct_reviewers}, {file: crates/registry-casework-core/tests/principal_claims.rs, name: every_human_profile_kind_must_share_the_claim_of_the_others}, {file: crates/registry-casework/tests/human_identity_auth.rs, name: human_profiles_naming_different_principal_claims_are_refused_at_load}]}
   - {id: CASEWORK-SEC-17, tests: [{file: crates/registry-casework/tests/review_postgres.rs, name: terminal_retention_scrubs_private_work_and_expires_owned_idempotency}]}
   - {id: CASEWORK-SEC-18, tests: [{file: crates/registry-casework/src/task_grants/http_tests.rs, name: deferred_review_grants_ignore_drafts_but_never_revive_after_responsibility_changes}]}
   - {id: CASEWORK-SEC-19, tests: [{file: crates/registry-casework/tests/review_acceptance_postgres.rs, name: current_source_routing_is_purpose_bound_once_and_never_persists_fields}]}
