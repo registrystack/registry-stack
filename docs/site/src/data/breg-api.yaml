@@ -147,6 +147,7 @@
   columns: [Route, Profile grant, Result]
   rows:
     - ['`GET /v1/statistics/{dataset}:live`', 'Live profile with count-capable source list grant', 'Exact JSON or CSV; optional `from` and `to`.']
+    - ['`GET /v1/statistics/{dataset}:exact`', 'Profile holding `read-exact`; no record access needed', 'Exact JSON or CSV for ended periods; required `from` and `to`, one period when the dataset reads the evaluation date.']
     - ['`GET /v1/statistics/{dataset}/releases`', 'Released-data reader, publisher, or live profile', 'Version headers and `pageInfo`; `$top` and opaque `$skiptoken`.']
     - ['`GET /v1/statistics/{dataset}/releases:series`', 'Released-data access', 'Latest eligible document per period; required `from` and `to`, optional `status=final`.']
     - ['`GET /v1/statistics/{dataset}/releases/{period}`', 'Released-data access', 'Latest eligible JSON or CSV; optional `status=final`.']

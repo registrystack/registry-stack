@@ -477,6 +477,8 @@ pub(crate) struct StatisticsTerminalAudit<'a> {
     pub read: ReadTerminalAudit,
     pub dataset_id: &'a str,
     pub period_code: Option<&'a str>,
+    /// The requested range of a `read-exact` read, recorded in clear.
+    pub period_range: Option<(&'a str, &'a str)>,
     pub version: Option<i64>,
     pub status: Option<&'a str>,
     pub content_digest: Option<&'a str>,
@@ -508,6 +510,10 @@ pub(crate) fn statistics_terminal_entry(
             .audit_reference_hash("breg-statistical-period-v1", &package_revision, period)
             .map_err(|_| RegistryAuditError::InvalidContext)?;
         record.insert("periodReference".to_owned(), json!(reference));
+    }
+    if let Some((from, to)) = summary.period_range {
+        record.insert("periodFrom".to_owned(), json!(from));
+        record.insert("periodTo".to_owned(), json!(to));
     }
     for (field, value) in [
         ("version", summary.version.map(|v| json!(v))),

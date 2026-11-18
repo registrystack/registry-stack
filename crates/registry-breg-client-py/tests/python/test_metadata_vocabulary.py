@@ -28,7 +28,7 @@ def metadata(vocabulary: str) -> dict[str, object]:
         "statisticalDatasets": [{
             "id": "item-counts", "unit": "item", "periodKind": "flow",
             "granularity": "month", "firstPeriod": "2025-01",
-            "definitionDigest": REVISION, "operations": ["read-live"],
+            "definitionDigest": REVISION, "operations": ["read-live", "read-exact"],
             "dimensions": [{
                 "field": "status", "vocabulary": vocabulary,
                 "codes": ["active", "_T"],
@@ -96,6 +96,10 @@ class MetadataVocabularyTests(unittest.TestCase):
                 self.assertEqual(
                     contract.statistical_datasets[0]["dimensions"][0]["vocabulary"],
                     vocabulary,
+                )
+                self.assertEqual(
+                    contract.statistical_datasets[0]["operations"],
+                    ["read-live", "read-exact"],
                 )
                 self.assertEqual(
                     contract.actions[0]["inputs"][0]["field_type"]["vocabulary"],

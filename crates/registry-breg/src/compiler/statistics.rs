@@ -15,8 +15,8 @@ use crate::contract::{
 use crate::diagnostics::Diagnostic;
 use crate::model::{
     CompiledEntity, CompiledStatisticalDataset, CompiledStatisticalDimension,
-    CompiledStatisticalDimensionDomain, CompiledStatisticalPeriod, CompiledStatisticalReleases,
-    CompiledStatisticalValidity,
+    CompiledStatisticalDimensionDomain, CompiledStatisticalExactReads, CompiledStatisticalPeriod,
+    CompiledStatisticalReleases, CompiledStatisticalValidity,
 };
 use crate::query::{ComparisonOp, FilterExpr, FilterPredicate, Literal};
 use crate::statistics::{
@@ -129,6 +129,18 @@ pub(super) fn compile(
                 ));
             }
         }
+        for profile in &grants.read_exact {
+            if is_standing_agent(project, unit, profile) {
+                errors.push(Diagnostic::error(
+                    "breg.access-profile.standing-agent-read-exact-forbidden",
+                    format!(
+                        "project.accessProfiles[id={profile}].permissions.datasets[dataset={}].operations",
+                        source.id
+                    ),
+                    "a standing agent profile without a taskGrant cannot read exact statistics; give read-exact to a profile a person or a service uses directly",
+                ));
+            }
+        }
         if !measure_fields.is_empty() {
             let releasing = grants
                 .publish
@@ -215,7 +227,7 @@ pub(super) fn compile(
                 "breg.statistical-dataset.grants-empty",
                 &root,
                 &source.id,
-                "grant read-live, publish, or read-releases on the dataset in an access profile's permissions",
+                "grant read-live, read-exact, publish, or read-releases on the dataset in an access profile's permissions",
             ));
         }
 
@@ -234,12 +246,31 @@ pub(super) fn compile(
                     })
             })
             .collect();
+        let exact_reads = compile_exact_reads(
+            source,
+            project,
+            unit,
+            &grants.read_exact,
+            &filtered_fields,
+            &measure_fields,
+            &root,
+            &mut errors,
+        );
         for profile in &live_profiles {
-            validate_count_grant(source, unit, profile, &filtered_fields, &root, &mut errors);
+            validate_count_grant(
+                source,
+                unit,
+                profile,
+                Holder::Reader,
+                &filtered_fields,
+                &root,
+                &mut errors,
+            );
             validate_measure_fields_readable(
                 source,
                 unit,
                 profile,
+                Holder::Reader,
                 &measure_fields,
                 &root,
                 &mut errors,
@@ -250,6 +281,7 @@ pub(super) fn compile(
                 source,
                 unit,
                 &releases.publisher,
+                Holder::Reader,
                 &filtered_fields,
                 &root,
                 &mut errors,
@@ -339,6 +371,18 @@ pub(super) fn compile(
                 entities,
                 &dependency_entities,
                 &releases.publisher,
+                Holder::Publisher,
+                &root,
+                &mut errors,
+            );
+        }
+        if let Some(exact_reads) = &exact_reads {
+            validate_publisher_independence(
+                source,
+                entities,
+                &dependency_entities,
+                &exact_reads.access_profile,
+                Holder::ExactReads,
                 &root,
                 &mut errors,
             );
@@ -362,6 +406,7 @@ pub(super) fn compile(
                     source,
                     unit,
                     &releases.publisher,
+                    Holder::Reader,
                     &measure_fields,
                     &root,
                     &mut errors,
@@ -451,6 +496,7 @@ pub(super) fn compile(
                 access_profiles,
                 live_profiles,
                 releases,
+                exact_reads,
                 dependency_entities,
                 referenced_fields,
                 evaluation_date_dependent,
@@ -654,6 +700,108 @@ fn authentication_profile(
     }
 }
 
+/// Whether the profile is an agent without a task grant, declared by the
+/// project or contributed to the unit entity by a module.
+fn is_standing_agent(project: &RegistryProject, unit: &CompiledEntity, profile: &str) -> bool {
+    let standing =
+        |actor_kind, task_grant: bool| actor_kind == Some(ActorKindSource::Agent) && !task_grant;
+    project.access_profiles.iter().any(|declared| {
+        declared.id == profile && standing(declared.actor_kind, declared.task_grant.is_some())
+    }) || unit
+        .access_profiles
+        .get(profile)
+        .is_some_and(|access| standing(access.actor_kind, access.task_grant.is_some()))
+}
+
+/// Compile `exactReads` and prove its profile can serve every exact read.
+/// The profile's caller-independence over the dataset's dependencies is
+/// checked with the other dependency rules.
+#[allow(clippy::too_many_arguments)]
+fn compile_exact_reads(
+    source: &crate::contract::StatisticalDatasetSource,
+    project: &RegistryProject,
+    unit: &CompiledEntity,
+    readers: &BTreeSet<String>,
+    filtered_fields: &BTreeSet<String>,
+    measure_fields: &BTreeSet<String>,
+    root: &str,
+    errors: &mut Vec<Diagnostic>,
+) -> Option<CompiledStatisticalExactReads> {
+    let Some(declared) = &source.exact_reads else {
+        if !readers.is_empty() {
+            errors.push(error(
+                "breg.statistical-dataset.exact-reads-missing",
+                root,
+                &source.id,
+                &format!(
+                    "{} hold read-exact, which computes under the profile named by exactReads: declare exactReads with an accessProfile, or remove read-exact",
+                    quoted(readers)
+                ),
+            ));
+        }
+        return None;
+    };
+    let exact_root = format!("{root}.exactReads");
+    if readers.is_empty() {
+        errors.push(error(
+            "breg.statistical-dataset.exact-reads-unused",
+            &exact_root,
+            &source.id,
+            "no access profile holds read-exact, so nothing reads under exactReads: grant read-exact to an access profile, or remove exactReads",
+        ));
+        return None;
+    }
+    let profile = &declared.access_profile;
+    let path = Holder::ExactReads.path(root);
+    let Some(declared_profile) = project
+        .access_profiles
+        .iter()
+        .find(|candidate| &candidate.id == profile)
+    else {
+        errors.push(error(
+            "breg.statistical-dataset.exact-reads-profile-unknown",
+            &path,
+            &source.id,
+            &format!("name an access profile the project declares; `{profile}` is not one"),
+        ));
+        return None;
+    };
+    if declared_profile.actor_kind == Some(ActorKindSource::Agent)
+        || declared_profile.task_grant.is_some()
+    {
+        errors.push(error(
+            "breg.statistical-dataset.exact-reads-profile-agent",
+            &path,
+            &source.id,
+            &format!(
+                "exactReads profile `{profile}` is an agent or task-grant profile, whose visibility depends on the task: name a profile a person or a service uses directly"
+            ),
+        ));
+    }
+    validate_count_grant(
+        source,
+        unit,
+        profile,
+        Holder::ExactReads,
+        filtered_fields,
+        root,
+        errors,
+    );
+    validate_measure_fields_readable(
+        source,
+        unit,
+        profile,
+        Holder::ExactReads,
+        measure_fields,
+        root,
+        errors,
+    );
+    Some(CompiledStatisticalExactReads {
+        access_profile: profile.clone(),
+        readers: readers.clone(),
+    })
+}
+
 fn compile_period(
     source: &crate::contract::StatisticalDatasetSource,
     unit: &CompiledEntity,
@@ -850,10 +998,13 @@ fn validate_measure_fields_readable(
     source: &crate::contract::StatisticalDatasetSource,
     unit: &CompiledEntity,
     profile_id: &str,
+    holder: Holder,
     measure_fields: &BTreeSet<String>,
     root: &str,
     errors: &mut Vec<Diagnostic>,
 ) {
+    let subject = holder.subject(profile_id);
+    let path = holder.path(root);
     // A missing grant is reported by the count grant check.
     let Some(grant) = unit.access_profiles.get(profile_id) else {
         return;
@@ -861,11 +1012,11 @@ fn validate_measure_fields_readable(
     for field in measure_fields {
         if !grant.readable_fields.contains(field) {
             errors.push(error(
-                "breg.statistical-dataset.measure-field-not-readable",
-                root,
+                &holder.code("measure-field-not-readable"),
+                &path,
                 &source.id,
                 &format!(
-                    "add field `{field}` to readableFields for profile `{profile_id}` on `{}`, or remove the sum or mean over it",
+                    "add field `{field}` to readableFields for {subject} on `{}`, or remove the sum or mean over it",
                     unit.id
                 ),
             ));
@@ -1014,56 +1165,53 @@ fn validate_count_grant(
     source: &crate::contract::StatisticalDatasetSource,
     unit: &CompiledEntity,
     profile_id: &str,
+    holder: Holder,
     referenced_fields: &BTreeSet<String>,
     root: &str,
     errors: &mut Vec<Diagnostic>,
 ) {
+    let subject = holder.subject(profile_id);
+    let path = holder.path(root);
     let Some(grant) = unit.access_profiles.get(profile_id) else {
         errors.push(error(
-            "breg.statistical-dataset.count-grant-missing",
-            root,
+            &holder.code("count-grant-missing"),
+            &path,
             &source.id,
-            &format!(
-                "grant profile `{profile_id}` list access to unit entity `{}`",
-                unit.id
-            ),
+            &format!("grant {subject} list access to unit entity `{}`", unit.id),
         ));
         return;
     };
     if !grant.operations.contains(&Operation::List) {
         errors.push(error(
-            "breg.statistical-dataset.count-grant-list-required",
-            root,
+            &holder.code("count-grant-list-required"),
+            &path,
             &source.id,
-            &format!(
-                "grant profile `{profile_id}` the list operation on `{}`",
-                unit.id
-            ),
+            &format!("grant {subject} the list operation on `{}`", unit.id),
         ));
     }
     if !grant.allow_count {
         errors.push(error(
-            "breg.statistical-dataset.count-grant-count-required",
-            root,
+            &holder.code("count-grant-count-required"),
+            &path,
             &source.id,
-            &format!("set allowCount for profile `{profile_id}` on `{}`", unit.id),
+            &format!("set allowCount for {subject} on `{}`", unit.id),
         ));
     }
     if !grant.require_consent.is_empty() {
         errors.push(error(
-            "breg.statistical-dataset.count-grant-consent",
-            root,
+            &holder.code("count-grant-consent"),
+            &path,
             &source.id,
-            &format!("remove requireConsent from profile `{profile_id}` for dataset counts"),
+            &format!("remove requireConsent from {subject} for dataset counts"),
         ));
     }
     for field in referenced_fields {
         if !grant.filterable_fields.contains(field) {
             errors.push(error(
-                "breg.statistical-dataset.count-grant-field-not-filterable",
-                root,
+                &holder.code("count-grant-field-not-filterable"),
+                &path,
                 &source.id,
-                &format!("add field `{field}` to filterableFields for profile `{profile_id}`"),
+                &format!("add field `{field}` to filterableFields for {subject}"),
             ));
         }
     }
@@ -1131,9 +1279,13 @@ fn validate_publisher_independence(
     entities: &BTreeMap<String, CompiledEntity>,
     dependency_entities: &BTreeSet<String>,
     publisher: &str,
+    holder: Holder,
     root: &str,
     errors: &mut Vec<Diagnostic>,
 ) {
+    let subject = holder.independence_subject(publisher);
+    let path = holder.path(root);
+    let tail = holder.independence_tail();
     for entity_id in dependency_entities {
         let entity = &entities[entity_id];
         if entity
@@ -1142,30 +1294,30 @@ fn validate_publisher_independence(
             .is_some_and(|requirements| !requirements.row_boundaries.is_empty())
         {
             errors.push(error(
-                "breg.statistical-dataset.publisher-record-type-row-boundary",
-                root,
+                &holder.independence_code("record-type-row-boundary"),
+                &path,
                 &source.id,
                 &format!(
-                    "remove accessRequirements.rowBoundaries from dependency entity `{entity_id}` or serve the statistical dataset live only"
+                    "remove accessRequirements.rowBoundaries from dependency entity `{entity_id}` {tail}"
                 ),
             ));
         }
         let Some(grant) = entity.access_profiles.get(publisher) else {
             errors.push(error(
-                "breg.statistical-dataset.publisher-dependency-grant-missing",
-                root,
+                &holder.independence_code("dependency-grant-missing"),
+                &path,
                 &source.id,
-                &format!("grant publisher `{publisher}` access to dependency entity `{entity_id}`"),
+                &format!("grant {subject} access to dependency entity `{entity_id}`"),
             ));
             continue;
         };
         if dependency_select_operations(grant).is_empty() {
             errors.push(error(
-                "breg.statistical-dataset.publisher-dependency-read-required",
-                root,
+                &holder.independence_code("dependency-read-required"),
+                &path,
                 &source.id,
                 &format!(
-                    "grant publisher `{publisher}` get, lookup, list, batch, revisions, or snapshot access to dependency entity `{entity_id}`"
+                    "grant {subject} get, lookup, list, batch, revisions, or snapshot access to dependency entity `{entity_id}`"
                 ),
             ));
         }
@@ -1182,11 +1334,11 @@ fn validate_publisher_independence(
         };
         if let Some(member) = violation {
             errors.push(error(
-                "breg.statistical-dataset.publisher-caller-dependent",
-                root,
+                &holder.independence_code("caller-dependent"),
+                &path,
                 &source.id,
                 &format!(
-                    "remove `{member}` from publisher `{publisher}` on dependency entity `{entity_id}` or serve the statistical dataset live only"
+                    "remove `{member}` from {subject} on dependency entity `{entity_id}` {tail}"
                 ),
             ));
         }
@@ -1437,10 +1589,67 @@ fn source_field_definition<'a>(
         })
 }
 
+/// The role a profile plays when the compiler checks its access to a
+/// statistical dataset's unit and dependencies.
+#[derive(Clone, Copy)]
+enum Holder {
+    /// A live reader or a release publisher, reported against the dataset.
+    Reader,
+    /// The release publisher, reported against the dataset.
+    Publisher,
+    /// The `exactReads` profile whose visibility `read-exact` computes under.
+    ExactReads,
+}
+
+impl Holder {
+    fn code(self, base: &str) -> String {
+        match self {
+            Self::ExactReads => format!("breg.statistical-dataset.exact-reads-{base}"),
+            Self::Reader | Self::Publisher => format!("breg.statistical-dataset.{base}"),
+        }
+    }
+
+    fn independence_code(self, base: &str) -> String {
+        match self {
+            Self::ExactReads => self.code(base),
+            Self::Reader | Self::Publisher => format!("breg.statistical-dataset.publisher-{base}"),
+        }
+    }
+
+    fn path(self, root: &str) -> String {
+        match self {
+            Self::ExactReads => format!("{root}.exactReads.accessProfile"),
+            Self::Reader | Self::Publisher => root.to_owned(),
+        }
+    }
+
+    fn subject(self, profile: &str) -> String {
+        match self {
+            Self::ExactReads => format!("exactReads profile `{profile}`"),
+            Self::Reader | Self::Publisher => format!("profile `{profile}`"),
+        }
+    }
+
+    fn independence_subject(self, profile: &str) -> String {
+        match self {
+            Self::ExactReads => self.subject(profile),
+            Self::Reader | Self::Publisher => format!("publisher `{profile}`"),
+        }
+    }
+
+    fn independence_tail(self) -> &'static str {
+        match self {
+            Self::ExactReads => "or remove read-exact from the dataset",
+            Self::Reader | Self::Publisher => "or serve the statistical dataset live only",
+        }
+    }
+}
+
 /// Which access profiles hold each operation on one statistical dataset.
 #[derive(Default)]
 struct DatasetGrants {
     read_live: BTreeSet<String>,
+    read_exact: BTreeSet<String>,
     publish: BTreeSet<String>,
     read_releases: BTreeSet<String>,
     /// Profiles that name the dataset in more than one permission.
@@ -1463,6 +1672,7 @@ impl DatasetGrants {
                 for operation in permission.operations.iter() {
                     match operation {
                         DatasetOperation::ReadLive => &mut grants.read_live,
+                        DatasetOperation::ReadExact => &mut grants.read_exact,
                         DatasetOperation::Publish => &mut grants.publish,
                         DatasetOperation::ReadReleases => &mut grants.read_releases,
                     }
@@ -1476,6 +1686,7 @@ impl DatasetGrants {
     fn holders(&self) -> BTreeSet<String> {
         self.read_live
             .iter()
+            .chain(&self.read_exact)
             .chain(&self.publish)
             .chain(&self.read_releases)
             .cloned()
@@ -1705,7 +1916,7 @@ fn valid_period_code(value: &str, granularity: PeriodGranularity) -> bool {
     period_for_code(granularity, value, chrono::NaiveDate::MIN).is_ok()
 }
 
-fn error(code: &'static str, path: &str, dataset: &str, fix: &str) -> Diagnostic {
+fn error(code: &str, path: &str, dataset: &str, fix: &str) -> Diagnostic {
     Diagnostic::error(
         code,
         path,

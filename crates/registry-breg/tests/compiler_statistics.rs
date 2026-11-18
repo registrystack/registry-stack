@@ -312,6 +312,7 @@ fn access_explanation_states_who_holds_each_dataset_operation() {
             "dataset":"records-by-category",
             "display":{},
             "readLive":["analyst"],
+            "readExact":[],
             "publish":["publisher"],
             "readReleases":["analyst","publisher","reader"]
         }])
@@ -327,6 +328,7 @@ fn access_explanation_states_who_holds_each_dataset_operation() {
             "dataset":"records-by-category",
             "display":{},
             "readLive":["analyst"],
+            "readExact":[],
             "publish":[],
             "readReleases":[]
         }])
@@ -484,14 +486,14 @@ fn a_dataset_permission_is_written_with_dataset_operations_and_nothing_else() {
             json!(["read-live", "list"]),
             "config.unknown-variant",
             format!("{dataset_permission}.operations[1]"),
-            "`read-live`, `publish`, `read-releases`",
+            "`read-live`, `read-exact`, `publish`, `read-releases`",
         ),
         (
             "/accessProfiles/0/permissions/datasets/0/operations",
             json!([]),
             "config.invalid-value",
             format!("{dataset_permission}.operations"),
-            "read-live, publish, or read-releases",
+            "read-live, read-exact, publish, or read-releases",
         ),
         (
             "/accessProfiles/0/permissions/datasets/0/readableFields",
@@ -2668,5 +2670,173 @@ fn the_definition_digest_differs_between_disclosure_methods() {
         BTreeSet::from([exact, rounded, other]).len(),
         3,
         "the method and its parameters change the digest"
+    );
+}
+
+const STATISTICIAN: usize = 4;
+
+/// A minimum-count dataset with a sum and a mean, no publisher, a profile
+/// that reads exact values and holds no record access, and the analyst as
+/// the profile the exact reads compute under.
+fn exact_source() -> Value {
+    let mut value = live_measure_source(json!([
+        {"id":"count","type":"count"},
+        {"id":"total","type":"sum","field":"amount"},
+        {"id":"average","type":"mean","field":"amount","scale":1}
+    ]));
+    grant(&mut value, ANALYST, &[]);
+    value["accessProfiles"].as_array_mut().unwrap().push(json!({
+        "id":"statistician","principalClaim":"principal","requiredScopes":"unrestricted",
+        "permissions":{"datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]}
+    }));
+    value["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"analyst"});
+    value
+}
+
+fn assert_exact_refused(mutator: impl FnOnce(&mut Value), code: &str, path: &str) {
+    let mut value = exact_source();
+    mutator(&mut value);
+    let failure = compile(&value).expect_err("the exact reads are refused");
+    assert!(
+        failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == code && diagnostic.path == path),
+        "missing {code} at {path}: {:?}",
+        failure.diagnostics()
+    );
+}
+
+const EXACT: &str = "breg.statistical-dataset.exact-reads";
+const ROOT: &str = "statisticalDatasets[id=records-by-category]";
+
+#[test]
+fn exact_reads_compile_without_a_publisher_or_record_access() {
+    let compiled = compile(&exact_source()).expect("the exact dataset compiles");
+    let dataset = &compiled.statistical_datasets()["records-by-category"];
+    let exact = dataset.exact_reads.as_ref().expect("exact reads compile");
+    assert_eq!(exact.access_profile, "analyst");
+    assert_eq!(
+        exact.readers.iter().cloned().collect::<Vec<_>>(),
+        ["statistician"]
+    );
+    assert!(dataset.releases.is_none());
+    assert!(dataset.live_profiles.is_empty());
+    assert!(
+        dataset.access_profiles.contains_key("statistician"),
+        "the reader authenticates for the dataset"
+    );
+}
+
+#[test]
+fn exact_reads_stay_out_of_the_definition_digest() {
+    let with = compile(&exact_source()).unwrap();
+    let mut without = exact_source();
+    grant(&mut without, STATISTICIAN, &[]);
+    grant(&mut without, ANALYST, &["read-live"]);
+    without["statisticalDatasets"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("exactReads");
+    let without = compile(&without).unwrap();
+    assert_eq!(
+        with.statistical_datasets()["records-by-category"].definition_digest,
+        without.statistical_datasets()["records-by-category"].definition_digest
+    );
+}
+
+#[test]
+fn exact_reads_are_refused_when_missing_unused_or_unknown() {
+    assert_exact_refused(
+        |v| {
+            v["statisticalDatasets"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("exactReads");
+        },
+        &format!("{EXACT}-missing"),
+        ROOT,
+    );
+    assert_exact_refused(
+        |v| grant(v, STATISTICIAN, &["read-releases"]),
+        &format!("{EXACT}-unused"),
+        &format!("{ROOT}.exactReads"),
+    );
+    assert_exact_refused(
+        |v| v["statisticalDatasets"][0]["exactReads"]["accessProfile"] = json!("nobody"),
+        &format!("{EXACT}-profile-unknown"),
+        &format!("{ROOT}.exactReads.accessProfile"),
+    );
+}
+
+#[test]
+fn the_exact_reads_profile_is_proven_like_a_publisher() {
+    let anchor = format!("{ROOT}.exactReads.accessProfile");
+    // A caller-dependent anchor.
+    assert_exact_refused(
+        |v| {
+            v["accessProfiles"][ANALYST]["permissions"]["records"][0]["rowBoundaries"] =
+                json!([{"field":"category","claim":"categories","operator":"in"}]);
+        },
+        &format!("{EXACT}-caller-dependent"),
+        &anchor,
+    );
+    // An anchor without the count grant.
+    assert_exact_refused(
+        |v| v["accessProfiles"][ANALYST]["permissions"]["records"][0]["allowCount"] = json!(false),
+        &format!("{EXACT}-count-grant-count-required"),
+        &anchor,
+    );
+    // An anchor that cannot read a sum field.
+    assert_exact_refused(
+        |v| {
+            v["accessProfiles"][ANALYST]["permissions"]["records"][0]["readableFields"] =
+                json!(["active", "category", "event-date", "valid-from", "valid-to"]);
+        },
+        &format!("{EXACT}-measure-field-not-readable"),
+        &anchor,
+    );
+    // The publisher codes keep their meaning.
+    let failure = {
+        let mut v = exact_source();
+        v["accessProfiles"][ANALYST]["permissions"]["records"][0]["allowCount"] = json!(false);
+        compile(&v).unwrap_err()
+    };
+    assert!(failure.diagnostics().iter().all(|diagnostic| {
+        !diagnostic.code.contains("publisher")
+            && diagnostic.message.contains("exactReads profile `analyst`")
+            || !diagnostic.code.starts_with(EXACT)
+    }));
+}
+
+#[test]
+fn a_standing_agent_cannot_read_exact_or_anchor_exact_reads() {
+    assert_exact_refused(
+        |v| {
+            v["accessProfiles"][STATISTICIAN]["actorKind"] = json!("agent");
+            v["accessProfiles"][STATISTICIAN]["requesterClients"] = json!(["agent-client"]);
+        },
+        "breg.access-profile.standing-agent-read-exact-forbidden",
+        "project.accessProfiles[id=statistician].permissions.datasets[dataset=records-by-category].operations",
+    );
+    assert_exact_refused(
+        |v| {
+            v["accessProfiles"][ANALYST]["actorKind"] = json!("agent");
+            v["accessProfiles"][ANALYST]["requesterClients"] = json!(["agent-client"]);
+        },
+        &format!("{EXACT}-profile-agent"),
+        &format!("{ROOT}.exactReads.accessProfile"),
+    );
+    assert_exact_refused(
+        |v| {
+            v["accessProfiles"][ANALYST]["actorKind"] = json!("agent");
+            v["accessProfiles"][ANALYST]["requesterClients"] = json!(["agent-client"]);
+            v["accessProfiles"][ANALYST]["requiredPurposes"] = json!(["statistics"]);
+            v["accessProfiles"][ANALYST]["requiredScopes"] = json!(["statistics:read"]);
+            v["accessProfiles"][ANALYST]["taskGrant"] =
+                json!({"sourceIssuer":"https://issuer.example.test"});
+        },
+        &format!("{EXACT}-profile-agent"),
+        &format!("{ROOT}.exactReads.accessProfile"),
     );
 }

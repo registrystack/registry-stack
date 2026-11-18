@@ -89,6 +89,7 @@ test('statistics methods preserve route, representation, status and caller key',
       });
       const failures = [
         ['/statistics/missing:live', 404, 'resource.not_found', 'The requested resource was not found.', {}],
+        ['/statistics/missing:exact', 404, 'resource.not_found', 'The requested resource was not found.', {}],
         ['/statistics/release-refused/', 422, 'statistical_dataset.release_refused', 'The statistical dataset release operation is not eligible.', { refusalCode: 'period-not-ended' }],
         ['/statistics/version-conflict/', 409, 'statistical_dataset.version_conflict', 'The statistical dataset computation was superseded or its package changed.', {}],
         ['/statistics/version-withdrawn/', 410, 'statistical_dataset.version_withdrawn', 'The statistical dataset version was withdrawn.', { reasonCode: 'source-data-error' }],
@@ -130,6 +131,10 @@ test('statistics methods preserve route, representation, status and caller key',
     assert.match(live.reprDigest, /^sha-256=:/);
     await client.statisticsLive('enrolments', '2025-01');
     await client.statisticsLive('enrolments', null, '2025-02');
+    const exact = await client.statisticsExact('enrolments', '2025-01', '2025-02', 'analyst', 'csv');
+    assert.equal(exact.mediaType, 'text/csv; charset=utf-8');
+    assert.match(exact.reprDigest, /^sha-256=:/);
+    await client.statisticsExact('enrolments', '2025-01', '2025-02');
     await client.statisticsReleases('enrolments', 10, 'cursor', 'reader');
     await client.statisticsLatestRelease('enrolments', '2025-01', 'final', 'reader', 'json');
     await client.statisticsReleaseVersion('enrolments', '2025-01', 7, 'reader', 'csv');
@@ -141,12 +146,24 @@ test('statistics methods preserve route, representation, status and caller key',
     assert.equal(requests[0].url, '/v1/statistics/enrolments:live?from=2025-01&to=2025-02&accessProfile=analyst');
     assert.equal(requests[1].url, '/v1/statistics/enrolments:live?from=2025-01');
     assert.equal(requests[2].url, '/v1/statistics/enrolments:live?to=2025-02');
-    assert.equal(requests[5].accept, 'text/csv');
-    assert.equal(requests[7].body, '{"status":"final"}');
-    assert.equal(requests[7].key, 'caller-owned-key');
-    assert.equal(requests[8].body, '{"reason":"disclosure-risk"}');
+    assert.equal(requests[3].url, '/v1/statistics/enrolments:exact?from=2025-01&to=2025-02&accessProfile=analyst');
+    assert.equal(requests[3].accept, 'text/csv');
+    assert.equal(requests[4].url, '/v1/statistics/enrolments:exact?from=2025-01&to=2025-02');
+    assert.equal(requests[4].accept, 'application/json');
+    assert.equal(requests[7].accept, 'text/csv');
+    assert.equal(requests[9].body, '{"status":"final"}');
+    assert.equal(requests[9].key, 'caller-owned-key');
+    assert.equal(requests[10].body, '{"reason":"disclosure-risk"}');
     const count = requests.length;
     await assert.rejects(client.statisticsReleaseVersion('enrolments', '2025-01', 0), error => error.kind === 'invalid-request');
+    for (const bad of [
+      () => client.statisticsExact('Bad Dataset', '2025-01', '2025-02'),
+      () => client.statisticsExact('enrolments', '2025-99', '2025-02'),
+      () => client.statisticsExact('enrolments', '2025-01', '2025€'),
+    ]) {
+      await assert.rejects(bad(), error => error.kind === 'invalid-request');
+    }
+    assert.throws(() => client.statisticsExact('enrolments', '2025-01'), error => error.kind === 'invalid-request');
     assert.equal(requests.length, count);
 
     await client.statisticsLive('enrolments', '0001', '9998');
@@ -191,6 +208,10 @@ test('statistics methods preserve route, representation, status and caller key',
       error => error.kind === 'protocol' && error.code === 'representation-digest',
     );
 
+    await assert.rejects(
+      client.statisticsExact('missing', '2025-01', '2025-02'),
+      error => error.kind === 'not-found' && error.code === 'resource.not_found',
+    );
     await assert.rejects(client.statisticsLive('missing'), error => error.kind === 'not-found' && error.code === 'resource.not_found');
     await assert.rejects(
       client.statisticsPublish('release-refused', '2025-01', 'final', 'publisher', 'refusal-key'),

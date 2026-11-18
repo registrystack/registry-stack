@@ -60,41 +60,44 @@ async fn handler(
         idempotency_key,
         body,
     });
-    let problem = if uri.contains("/statistics/missing:live") {
-        Some((BRegProblemCode::ResourceNotFound, None))
-    } else if uri.contains("/statistics/release-refused/") {
-        Some((
-            BRegProblemCode::StatisticalDatasetReleaseRefused,
-            Some(("refusalCode", "period-not-ended")),
-        ))
-    } else if uri.contains("/statistics/invalid-refusal/") {
-        Some((
-            BRegProblemCode::StatisticalDatasetReleaseRefused,
-            Some(("refusalCode", "response-invented")),
-        ))
-    } else if uri.contains("/statistics/version-conflict/") {
-        Some((BRegProblemCode::StatisticalDatasetVersionConflict, None))
-    } else if uri.contains("/statistics/version-withdrawn/") {
-        Some((
-            BRegProblemCode::StatisticalDatasetVersionWithdrawn,
-            Some(("reasonCode", "source-data-error")),
-        ))
-    } else if uri.contains("/statistics/invalid-reason/") {
-        Some((
-            BRegProblemCode::StatisticalDatasetVersionWithdrawn,
-            Some(("reasonCode", "response-invented")),
-        ))
-    } else if uri.contains("/statistics/domain-violation:live") {
-        Some((
-            BRegProblemCode::StatisticalDatasetDomainViolation,
+    let problem =
+        if uri.contains("/statistics/missing:live") || uri.contains("/statistics/missing:exact") {
+            Some((BRegProblemCode::ResourceNotFound, None))
+        } else if uri.contains("/statistics/release-refused/") {
             Some((
-                "fieldPath",
-                "statisticalDatasets[id=domain-violation].dimensions[id=category]",
-            )),
-        ))
-    } else {
-        None
-    };
+                BRegProblemCode::StatisticalDatasetReleaseRefused,
+                Some(("refusalCode", "period-not-ended")),
+            ))
+        } else if uri.contains("/statistics/invalid-refusal/") {
+            Some((
+                BRegProblemCode::StatisticalDatasetReleaseRefused,
+                Some(("refusalCode", "response-invented")),
+            ))
+        } else if uri.contains("/statistics/version-conflict/") {
+            Some((BRegProblemCode::StatisticalDatasetVersionConflict, None))
+        } else if uri.contains("/statistics/version-withdrawn/") {
+            Some((
+                BRegProblemCode::StatisticalDatasetVersionWithdrawn,
+                Some(("reasonCode", "source-data-error")),
+            ))
+        } else if uri.contains("/statistics/invalid-reason/") {
+            Some((
+                BRegProblemCode::StatisticalDatasetVersionWithdrawn,
+                Some(("reasonCode", "response-invented")),
+            ))
+        } else if uri.contains("/statistics/domain-violation:live")
+            || uri.contains("/statistics/domain-violation:exact")
+        {
+            Some((
+                BRegProblemCode::StatisticalDatasetDomainViolation,
+                Some((
+                    "fieldPath",
+                    "statisticalDatasets[id=domain-violation].dimensions[id=category]",
+                )),
+            ))
+        } else {
+            None
+        };
     if let Some((code, extension)) = problem {
         let mut document = json!({
             "type": format!(
@@ -378,6 +381,101 @@ async fn statistics_documents_are_returned_as_the_exact_served_bytes() {
         .await
         .unwrap();
     assert_eq!(csv.value.as_bytes(), STATISTICS_CSV);
+}
+
+#[tokio::test]
+async fn statistics_exact_maps_route_both_periods_profile_and_media_type() {
+    let (client, captured) = client().await;
+    let json = client
+        .statistics_exact(
+            "enrolments",
+            "2025-01",
+            "2025-03",
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .unwrap();
+    assert_eq!(json.value.as_bytes(), STATISTICS_JSON);
+    let csv = client
+        .statistics_exact(
+            "enrolments",
+            "2025-01",
+            "2025-03",
+            Some("analyst"),
+            BRegStatisticsFormat::Csv,
+        )
+        .await
+        .unwrap();
+    assert_eq!(csv.value.as_bytes(), STATISTICS_CSV);
+
+    let requests = captured.lock().unwrap();
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(
+        requests[0].uri,
+        "/tenant/v1/statistics/enrolments:exact?from=2025-01&to=2025-03"
+    );
+    assert_eq!(requests[0].accept, "application/json");
+    assert_eq!(
+        requests[1].uri,
+        "/tenant/v1/statistics/enrolments:exact?from=2025-01&to=2025-03&accessProfile=analyst"
+    );
+    assert_eq!(requests[1].accept, "text/csv");
+}
+
+#[tokio::test]
+async fn statistics_exact_keeps_concealment_and_domain_problem_details() {
+    let (client, _) = client().await;
+    let missing = client
+        .statistics_exact(
+            "missing",
+            "2025-01",
+            "2025-03",
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(missing.kind(), "not-found");
+    assert_eq!(
+        missing.problem_code(),
+        Some(BRegProblemCode::ResourceNotFound)
+    );
+    let violation = client
+        .statistics_exact(
+            "domain-violation",
+            "2025-01",
+            "2025-03",
+            Some("reader"),
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        violation.problem_code(),
+        Some(BRegProblemCode::StatisticalDatasetDomainViolation)
+    );
+}
+
+#[tokio::test]
+async fn invalid_statistics_exact_arguments_fail_before_token_or_io() {
+    let token = Arc::new(CountingToken(AtomicUsize::new(0)));
+    let (client, captured) = client_with_provider(token.clone()).await;
+    for (dataset, from, to, profile) in [
+        ("Bad Dataset", "2025-01", "2025-02", None),
+        ("enrolments", "2025-99", "2025-02", None),
+        ("enrolments", "2025-01", "2025€", None),
+        ("enrolments", "9999", "9999", None),
+        ("enrolments", "", "2025-02", None),
+        ("enrolments", "2025-01", "2025-02", Some("bad profile")),
+    ] {
+        assert!(client
+            .statistics_exact(dataset, from, to, profile, BRegStatisticsFormat::Json)
+            .await
+            .is_err());
+    }
+    assert_eq!(token.0.load(Ordering::SeqCst), 0);
+    assert!(captured.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

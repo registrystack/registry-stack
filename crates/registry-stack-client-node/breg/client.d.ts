@@ -186,6 +186,7 @@ export interface BRegStatisticalDatasetDescriptor {
   readonly definitionDigest: string
   readonly operations: ReadonlyArray<
     | 'read-live'
+    | 'read-exact'
     | 'list-releases'
     | 'read-released-series'
     | 'read-latest-release'
@@ -928,6 +929,7 @@ export declare class BaseRegistryClient {
    */
   eventRecordCreationRevision(recordRoute: string, recordIdentifier: string, accessProfile?: string | null, request?: ReadRequestOptions): Promise<string | null>
   statisticsLive(dataset: string, from?: string | null, to?: string | null, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>
+  statisticsExact(dataset: string, from: string, to: string, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>
   statisticsReleases(dataset: string, top?: SafeInteger | null, skipToken?: string | null, accessProfile?: string | null): Promise<RawOutcome>
   statisticsLatestRelease(dataset: string, period: string, selection: StatisticsReleaseSelection, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>
   statisticsReleaseVersion(dataset: string, period: string, version: SafeInteger, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>

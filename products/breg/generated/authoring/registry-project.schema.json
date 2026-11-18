@@ -1763,6 +1763,11 @@
           "type": "string"
         },
         {
+          "const": "read-exact",
+          "description": "Read the dataset's exact values for ended periods, computed under the dataset's `exactReads` profile.",
+          "type": "string"
+        },
+        {
           "const": "publish",
           "description": "Publish and withdraw the dataset's releases. One profile holds it per dataset.",
           "type": "string"
@@ -1783,7 +1788,7 @@
           "description": "The statistical dataset the permission names."
         },
         "operations": {
-          "description": "What the profile may do with the dataset. A profile that holds `read-live` or `publish` on a dataset with a publisher also holds `read-releases`.",
+          "description": "What the profile may do with the dataset. A profile that holds `read-live` or `publish` on a dataset with a publisher also holds `read-releases`. `read-exact` needs the dataset's `exactReads` member.",
           "items": {
             "$ref": "#/$defs/DatasetOperation"
           },
@@ -5382,6 +5387,10 @@
           "$ref": "#/$defs/PresentationSource",
           "description": "Authored presentation only; labels never establish identity or authority."
         },
+        "exactReads": {
+          "$ref": "#/$defs/StatisticalExactReadsSource",
+          "description": "How `read-exact` reads compute. Required when a profile holds `read-exact` on the dataset, and refused otherwise."
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
@@ -5464,6 +5473,20 @@
         }
       ]
     },
+    "StatisticalExactReadsSource": {
+      "additionalProperties": false,
+      "description": "The profile whose visibility `read-exact` reads of a statistical dataset compute under.",
+      "properties": {
+        "accessProfile": {
+          "description": "The profile whose caller-independent visibility an exact read computes under.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "accessProfile"
+      ],
+      "type": "object"
+    },
     "StatisticalMeasureSource": {
       "description": "One value a statistical dataset publishes.",
       "oneOf": [
@@ -5512,7 +5535,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "The mean of an `int64` or `decimal` unit Record field over the records\nthat have a value for it, rounded half away from zero to `scale`\nfractional digits. Served on live reads only.",
+          "description": "The mean of an `int64` or `decimal` unit Record field over the records\nthat have a value for it, rounded half away from zero to `scale`\nfractional digits. Served on live and exact reads only.",
           "properties": {
             "field": {
               "description": "The unit Record field to average.",

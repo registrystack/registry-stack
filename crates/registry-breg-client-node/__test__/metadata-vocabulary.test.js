@@ -19,7 +19,7 @@ function metadata(vocabulary) {
     recordTypes: [], operations: [],
     statisticalDatasets: [{
       id: 'item-counts', unit: 'item', periodKind: 'flow', granularity: 'month',
-      firstPeriod: '2025-01', definitionDigest: revision, operations: ['read-live'],
+      firstPeriod: '2025-01', definitionDigest: revision, operations: ['read-live', 'read-exact'],
       dimensions: [{ field: 'status', vocabulary, codes: ['active', '_T'] }],
     }],
     actions: [{
@@ -60,6 +60,7 @@ test('registry contract preserves every bounded engine vocabulary string', async
     for (vocabulary of vocabularies) {
       const contract = await client.registryContract('writer');
       assert.equal(contract.statisticalDatasets[0].dimensions[0].vocabulary, vocabulary);
+      assert.deepEqual(contract.statisticalDatasets[0].operations, ['read-live', 'read-exact']);
       assert.equal(JSON.parse(contract.actions[0].inputs[0].fieldTypeJson).vocabulary, vocabulary);
       contract.selectAction('update-status', 'writer');
     }

@@ -14,7 +14,7 @@ standards_referenced: []
 This page states what the Base Registry Engine (BReg) security invariants assume, what you must do
 for them to hold, and which limits a deployment accepts.
 The operator obligations are numbered 1 to 20, and each accepted residual risk carries a stable
-identifier from `BREG-RES-01` to `BREG-RES-24`.
+identifier from `BREG-RES-01` to `BREG-RES-25`.
 The invariants themselves, each with its threat, enforcement point, refusal, and negative test, are
 the rows of the machine-checked BReg security invariant matrix in the registry-stack repository.
 This page does not repeat those rows; it names them by identifier (`BREG-SEC-NN`).
@@ -246,6 +246,8 @@ The residuals refer to these obligations by number.
     Review the population, dimensions, cadence, and release policy of every dataset (`BREG-RES-07`).
     For an exact release, classifying a Record type or field `public` is itself a disclosure decision
     (`BREG-RES-24`).
+    Grant `read-exact` only to a named service under a data-sharing agreement.
+    Review a change to the dataset's `exactReads` profile the same way (`BREG-RES-25`).
     [Publish a statistical series](../../configure/breg-statistics/#review-what-a-release-discloses)
     lists what a release discloses.
     {/* Evidence: crates/registry-breg/tests/compiler_statistics.rs,
@@ -785,6 +787,23 @@ Each lists the condition, the consequence, the mitigation, and the related matri
     breg.statistical-dataset.exact-release-not-public;
     crates/registry-breg/tests/compiler_statistics.rs,
     exact_values_are_refused_per_item_that_is_not_classified_public. */}
+
+### `BREG-RES-25`: an exact read discloses exact values to its consumer
+
+- Condition: a profile holds `read-exact` on a statistical dataset.
+- Consequence: the consumer receives exact values, cells of one included, over Records it cannot read.
+  The output is as sensitive as the Records.
+  BReg cannot control what happens to it after the response.
+  The `exactReads` profile's grants decide what every exact read covers.
+- Mitigation: grant `read-exact` only to a named service under a data-sharing agreement.
+  The agreement names the legal basis, the purpose, no onward disclosure, and retention.
+  It also names what the consumer may publish from its results, and breach notice.
+  Review a change to the `exactReads` profile as a disclosure decision.
+  Audit entries carry the caller and the period range for your review.
+- Related: `BREG-SEC-212`, `BREG-RES-07`.
+
+{/* Evidence: crates/registry-breg/tests/postgres_statistics_exact.rs,
+    an_exact_read_refuses_what_it_does_not_serve. */}
 
 ## Report a vulnerability
 

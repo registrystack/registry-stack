@@ -271,6 +271,10 @@ client.createRecordJson(create, { wide: 9007199254740992 }, 'exact-create')
 
 
 client.statisticsLive('population', null, null, 'reader', 'csv').then((raw) => raw.reprDigest?.toUpperCase())
+client.statisticsExact('population', '2025-01', '2025-03', 'reader', 'csv').then((raw) => raw.reprDigest?.toUpperCase())
+client.statisticsExact('population', '2025-01', '2025-03')
+// @ts-expect-error Both period bounds are required.
+client.statisticsExact('population', '2025-01')
 
 const once = new BaseRegistryClient({
   baseUrl: 'https://registry.example.test/',

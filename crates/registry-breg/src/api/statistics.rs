@@ -13,10 +13,10 @@ use crate::cursor::{
 };
 use crate::model::{CompiledStatisticalDataset, HttpMethod};
 use crate::postgres::{
-    StatisticsLiveRequest, StatisticsPublishRequest, StatisticsReleaseListCursor,
-    StatisticsReleaseListRequest, StatisticsReleaseRefusal, StatisticsReleaseSelection,
-    StatisticsSeriesRequest, StatisticsServiceError, StatisticsVersionReadRequest,
-    StatisticsWithdrawalRequest,
+    StatisticsExactRequest, StatisticsLiveRequest, StatisticsPublishRequest,
+    StatisticsReleaseListCursor, StatisticsReleaseListRequest, StatisticsReleaseRefusal,
+    StatisticsReleaseSelection, StatisticsSeriesRequest, StatisticsServiceError,
+    StatisticsVersionReadRequest, StatisticsWithdrawalRequest,
 };
 use crate::problem::ProblemCode;
 use crate::statistics::{
@@ -44,6 +44,7 @@ fn statistics_work_deadline(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Kind {
     Live,
+    Exact,
     List,
     Series,
     Latest,
@@ -55,6 +56,7 @@ impl Kind {
     fn name(self) -> &'static str {
         match self {
             Self::Live => "read-live",
+            Self::Exact => "read-exact",
             Self::List => "list-releases",
             Self::Series => "read-released-series",
             Self::Latest => "read-latest-release",
@@ -92,6 +94,15 @@ pub(super) fn routes(service: &HttpService) -> Router<Arc<HttpService>> {
                 get(dispatch).layer(Extension(Route {
                     dataset: dataset.id.clone(),
                     kind: Kind::Live,
+                })),
+            );
+        }
+        if dataset.exact_reads.is_some() {
+            app = app.route(
+                &format!("{root}:exact"),
+                get(dispatch).layer(Extension(Route {
+                    dataset: dataset.id.clone(),
+                    kind: Kind::Exact,
                 })),
             );
         }
@@ -145,6 +156,10 @@ pub(super) fn authorize_with_reason(
 ) -> Result<AuthorizedRequestContext, ReadRefusalReason> {
     let eligible = |id: &str| match kind {
         Kind::Live => dataset.live_profiles.contains(id),
+        Kind::Exact => dataset
+            .exact_reads
+            .as_ref()
+            .is_some_and(|exact| exact.readers.contains(id)),
         Kind::Publish | Kind::Withdraw => {
             dataset.releases.as_ref().is_some_and(|r| r.publisher == id)
         }
@@ -235,7 +250,7 @@ impl Options {
             };
             let allowed = key == "accessProfile"
                 || match kind {
-                    Kind::Live => matches!(key, "from" | "to"),
+                    Kind::Live | Kind::Exact => matches!(key, "from" | "to"),
                     Kind::Series => matches!(key, "from" | "to" | "status"),
                     Kind::List => matches!(key, "$top" | "$skiptoken"),
                     Kind::Latest => key == "status",
@@ -541,6 +556,10 @@ async fn dispatch(
             },
             dataset_id: &route.dataset,
             period_code: period,
+            period_range: (route.kind == Kind::Exact)
+                .then(|| options.get("from").zip(options.get("to")))
+                .flatten()
+                .filter(|(from, to)| [from, to].into_iter().all(|code| audit_period_code(code))),
             version: lifecycle
                 .as_ref()
                 .map(|l| l.header.version as i64)
@@ -561,6 +580,14 @@ async fn dispatch(
         return unavailable();
     };
     response
+}
+
+/// A requested period code short enough and plain enough to record in clear.
+fn audit_period_code(code: &str) -> bool {
+    code.len() <= 16
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
 struct Lifecycle {
@@ -601,6 +628,26 @@ async fn execute(
             .await
             .map_err(service_problem)
             .and_then(|d| document_response(&d, csv)),
+        Kind::Exact => {
+            let from = options
+                .get("from")
+                .ok_or_else(|| statistics_invalid_query_at("from"))?;
+            let to = options
+                .get("to")
+                .ok_or_else(|| statistics_invalid_query_at("to"))?;
+            backend
+                .exact(StatisticsExactRequest {
+                    context,
+                    dataset_id: &route.dataset,
+                    from,
+                    to,
+                    today,
+                    deadline,
+                })
+                .await
+                .map_err(service_problem)
+                .and_then(|d| document_response(&d, csv))
+        }
         Kind::Series => {
             let from = options
                 .get("from")
@@ -985,7 +1032,8 @@ pub(super) fn metadata(
         .filter_map(|dataset| {
             let selected = options.access_profile().map(String::as_str);
             let context = authorize(service, dataset, Kind::List, claims, selected)
-                .or_else(|| authorize(service, dataset, Kind::Live, claims, selected))?;
+                .or_else(|| authorize(service, dataset, Kind::Live, claims, selected))
+                .or_else(|| authorize(service, dataset, Kind::Exact, claims, selected))?;
             crate::statistical_artifacts::statistical_dataset_metadata_entry(
                 dataset,
                 context.selected_profile(),
@@ -1006,6 +1054,7 @@ pub(super) fn append_openapi(
         let selected = options.access_profile().map(String::as_str);
         let Some(context) = authorize(service, dataset, Kind::List, claims, selected)
             .or_else(|| authorize(service, dataset, Kind::Live, claims, selected))
+            .or_else(|| authorize(service, dataset, Kind::Exact, claims, selected))
         else {
             continue;
         };
@@ -1013,6 +1062,9 @@ pub(super) fn append_openapi(
         let mut dataset = dataset.clone();
         dataset.access_profiles.retain(|id, _| id == profile);
         dataset.live_profiles.retain(|id| id == profile);
+        if let Some(exact_reads) = &mut dataset.exact_reads {
+            exact_reads.readers.retain(|id| id == profile);
+        }
         if let Some(releases) = &mut dataset.releases {
             releases.readers.retain(|id| id == profile);
             if releases.publisher != profile {

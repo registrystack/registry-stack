@@ -75,6 +75,7 @@ class BRegStatisticalDatasetDescriptor(TypedDict):
     definitionDigest: str
     operations: Sequence[Literal[
         "read-live",
+        "read-exact",
         "list-releases",
         "read-released-series",
         "read-latest-release",
@@ -422,6 +423,10 @@ class BaseRegistryClient:
         self, dataset: str, *, from_period: str | None = None,
         to_period: str | None = None, access_profile: str | None = None,
         format: StatisticsFormat = "json",
+    ) -> dict[str, Any]: ...
+    def statistics_exact(
+        self, dataset: str, from_period: str, to_period: str,
+        *, access_profile: str | None = None, format: StatisticsFormat = "json",
     ) -> dict[str, Any]: ...
     def statistics_releases(
         self, dataset: str, *, top: int | None = None,

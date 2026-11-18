@@ -196,12 +196,18 @@ fn statistical_dataset_direction(
     if let Some(releases) = &mut before_definition.releases {
         releases.readers.clear();
     }
+    if let Some(exact_reads) = &mut before_definition.exact_reads {
+        exact_reads.readers.clear();
+    }
     let mut after_definition = after.clone();
     after_definition.display = Default::default();
     after_definition.live_profiles.clear();
     after_definition.access_profiles.clear();
     if let Some(releases) = &mut after_definition.releases {
         releases.readers.clear();
+    }
+    if let Some(exact_reads) = &mut after_definition.exact_reads {
+        exact_reads.readers.clear();
     }
     if before_definition != after_definition {
         return DiffClassification::AccessChange;

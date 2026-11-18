@@ -454,6 +454,7 @@ pub(crate) fn datasets(value: &Value, lines: &mut Lines) {
             2,
             &[
                 ("read live", names(&dataset["readLive"], "id")),
+                ("read exact", names(&dataset["readExact"], "id")),
                 ("publish", names(&dataset["publish"], "id")),
                 ("read releases", names(&dataset["readReleases"], "id")),
             ],

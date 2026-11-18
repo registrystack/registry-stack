@@ -112,14 +112,14 @@
       "python": ["BaseRegistryClient.list_snapshot_records.valid_at"]
     },
     "from": {
-      "rust": ["BaseRegistryClient.statistics_live.from", "BaseRegistryClient.statistics_release_series.from"],
-      "node": ["BaseRegistryClient.statisticsLive.from", "BaseRegistryClient.statisticsReleaseSeries.from"],
-      "python": ["BaseRegistryClient.statistics_live.from_period", "BaseRegistryClient.statistics_release_series.from_period"]
+      "rust": ["BaseRegistryClient.statistics_live.from", "BaseRegistryClient.statistics_exact.from", "BaseRegistryClient.statistics_release_series.from"],
+      "node": ["BaseRegistryClient.statisticsLive.from", "BaseRegistryClient.statisticsExact.from", "BaseRegistryClient.statisticsReleaseSeries.from"],
+      "python": ["BaseRegistryClient.statistics_live.from_period", "BaseRegistryClient.statistics_exact.from_period", "BaseRegistryClient.statistics_release_series.from_period"]
     },
     "to": {
-      "rust": ["BaseRegistryClient.statistics_live.to", "BaseRegistryClient.statistics_release_series.to"],
-      "node": ["BaseRegistryClient.statisticsLive.to", "BaseRegistryClient.statisticsReleaseSeries.to"],
-      "python": ["BaseRegistryClient.statistics_live.to_period", "BaseRegistryClient.statistics_release_series.to_period"]
+      "rust": ["BaseRegistryClient.statistics_live.to", "BaseRegistryClient.statistics_exact.to", "BaseRegistryClient.statistics_release_series.to"],
+      "node": ["BaseRegistryClient.statisticsLive.to", "BaseRegistryClient.statisticsExact.to", "BaseRegistryClient.statisticsReleaseSeries.to"],
+      "python": ["BaseRegistryClient.statistics_live.to_period", "BaseRegistryClient.statistics_exact.to_period", "BaseRegistryClient.statistics_release_series.to_period"]
     },
     "status": {
       "rust": ["BaseRegistryClient.statistics_latest_release.selection", "BaseRegistryClient.statistics_release_series.selection"],
@@ -457,6 +457,7 @@
       "id": "statistical-datasets",
       "rust": [
         "statistics_live",
+        "statistics_exact",
         "statistics_releases",
         "statistics_latest_release",
         "statistics_release_version",
@@ -466,6 +467,7 @@
       ],
       "node": [
         "statisticsLive",
+        "statisticsExact",
         "statisticsReleases",
         "statisticsLatestRelease",
         "statisticsReleaseVersion",
@@ -475,6 +477,7 @@
       ],
       "python": [
         "statistics_live",
+        "statistics_exact",
         "statistics_releases",
         "statistics_latest_release",
         "statistics_release_version",

@@ -153,6 +153,7 @@ postgres_targets=(
   postgres_statistics_first_period
   postgres_statistics_history
   postgres_statistics_measures
+  postgres_statistics_exact
   postgres_logical_sql_names
   schema_fingerprint_rehearsal
 )

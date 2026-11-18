@@ -156,6 +156,22 @@ fn a_profile_groups_its_permissions_by_what_each_names() {
 }
 
 #[test]
+fn a_dataset_permission_reads_read_exact() {
+    let project = read(
+        "    permissions:
+      datasets:
+        - dataset: entries-by-code
+          operations: [read-exact]
+",
+    );
+    let [dataset] = project.access_profiles[0].permissions.datasets.as_slice() else {
+        panic!("one dataset permission");
+    };
+    assert!(dataset.operations.contains(&DatasetOperation::ReadExact));
+    assert!(!dataset.operations.contains(&DatasetOperation::ReadLive));
+}
+
+#[test]
 fn the_groups_may_be_written_in_any_order() {
     let reordered = "    permissions:
       datasets:
@@ -569,7 +585,7 @@ fn a_dataset_permission_lists_at_least_one_operation() {
     assert_eq!((refusal.line, refusal.column), position(written, "[]"));
     assert_eq!(
         refusal.message,
-        "expected at least one of read-live, publish, or read-releases"
+        "expected at least one of read-live, read-exact, publish, or read-releases"
     );
 }
 

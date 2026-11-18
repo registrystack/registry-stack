@@ -2664,6 +2664,7 @@ fn parse_statistical_datasets(value: Value) -> Result<Value, BRegMetadataError> 
             !matches!(
                 operation.as_str(),
                 "read-live"
+                    | "read-exact"
                     | "list-releases"
                     | "read-released-series"
                     | "read-latest-release"

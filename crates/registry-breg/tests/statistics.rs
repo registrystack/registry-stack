@@ -7,9 +7,10 @@ use registry_breg::contract::FieldTypeSource;
 use registry_breg::statistics::{
     apply_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
     document_csv, maximum_decimal_characters, period_for_code, period_range, Cell, CellStatus,
-    CellValue, DatasetDocument, DimensionDomain, DisclosureDocument, DisclosureMethod, GroupedCell,
-    LiveDocument, Measure, PeriodDocument, PeriodGranularity, PeriodKind, ReleaseDocument,
-    ReleaseStatus, StatisticsDocument, StatisticsError, TOTAL_CODE, UNKNOWN_CODE,
+    CellValue, DatasetDocument, DimensionDomain, DisclosureDocument, DisclosureMethod,
+    ExactDocument, GroupedCell, LiveDocument, Measure, PeriodDocument, PeriodGranularity,
+    PeriodKind, ReleaseDocument, ReleaseStatus, StatisticsDocument, StatisticsError, TOTAL_CODE,
+    UNKNOWN_CODE,
 };
 
 fn date(year: i32, month: u32, day: u32) -> NaiveDate {
@@ -590,6 +591,7 @@ fn live_document_uses_the_same_wire_shape_without_disclosure() {
             evaluated_at: "2025-01-15".to_owned(),
             access_profile: "analyst".to_owned(),
         }),
+        exact: None,
         disclosure: None,
     };
     let canonical = canonical_document_and_digest(&document).unwrap();
@@ -708,6 +710,7 @@ fn release_document() -> StatisticsDocument {
             package_digest: "package-sha256".to_owned(),
         }),
         live: None,
+        exact: None,
         disclosure: Some(DisclosureDocument::from(
             DisclosureMethod::MinimumCountAndRounding {
                 minimum_count: 5,
@@ -1175,6 +1178,7 @@ fn live_document(measures: Vec<Measure>, cells: Vec<Cell>) -> StatisticsDocument
             evaluated_at: "2025-01-15".to_owned(),
             access_profile: "analyst".to_owned(),
         }),
+        exact: None,
         disclosure: None,
     }
 }
@@ -1537,4 +1541,70 @@ fn a_release_document_whose_cells_disagree_with_its_method_is_refused() {
         canonical(&not_applicable),
         invalid("a minimum-count-and-rounding release carries no not-applicable cell")
     );
+}
+
+fn exact_document(cells: Vec<Cell>) -> StatisticsDocument {
+    let mut document = live_document(
+        vec![Measure::Count {
+            id: "count".to_owned(),
+        }],
+        cells,
+    );
+    document.live = None;
+    document.exact = Some(ExactDocument {
+        evaluated_at: "2025-02-01".to_owned(),
+        access_profile: "statistician".to_owned(),
+    });
+    document
+}
+
+fn exact_cell(status: CellStatus) -> Cell {
+    Cell {
+        period: "2025-01".to_owned(),
+        dimensions: BTreeMap::new(),
+        measure: "count".to_owned(),
+        value: if status == CellStatus::Suppressed {
+            None
+        } else {
+            count(1)
+        },
+        status,
+    }
+}
+
+#[test]
+fn exact_document_validates_and_carries_only_exact_metadata() {
+    let document = exact_document(vec![exact_cell(CellStatus::Exact)]);
+    let canonical = canonical_document_and_digest(&document).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&canonical.bytes).unwrap();
+    assert_eq!(value["exact"]["accessProfile"], "statistician");
+    assert_eq!(value["exact"]["evaluatedAt"], "2025-02-01");
+    for absent in ["live", "release", "disclosure"] {
+        assert!(value.get(absent).is_none(), "{absent}");
+    }
+}
+
+#[test]
+fn exact_document_refuses_a_second_metadata_member_a_disclosure_or_a_withheld_cell() {
+    let mut both = exact_document(vec![exact_cell(CellStatus::Exact)]);
+    both.live = Some(LiveDocument {
+        evaluated_at: "2025-02-01".to_owned(),
+        access_profile: "analyst".to_owned(),
+    });
+    let mut disclosed = exact_document(vec![exact_cell(CellStatus::Exact)]);
+    disclosed.disclosure = Some(DisclosureDocument::ExactPublicValues);
+    for (case, document) in [
+        ("live and exact", both),
+        ("disclosure", disclosed),
+        (
+            "suppressed cell",
+            exact_document(vec![exact_cell(CellStatus::Suppressed)]),
+        ),
+        (
+            "rounded cell",
+            exact_document(vec![exact_cell(CellStatus::Rounded)]),
+        ),
+    ] {
+        assert!(canonical_document_and_digest(&document).is_err(), "{case}");
+    }
 }

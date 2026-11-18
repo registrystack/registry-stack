@@ -31,7 +31,7 @@ PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"BREG-V1-{index:02d}" for index in range(1, 45))
 ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 25))
-SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 212) if index not in {61, 62})
+SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 213) if index not in {61, 62})
 ACCEPTANCE_FIXTURES = {
     "BREG-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "BREG-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
@@ -184,6 +184,7 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_statistics_first_period",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_statistics_history",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_statistics_measures",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_statistics_exact",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_logical_sql_names",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test schema_fingerprint_rehearsal",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_startup",

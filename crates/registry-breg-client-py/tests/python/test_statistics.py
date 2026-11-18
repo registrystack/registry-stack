@@ -64,6 +64,7 @@ class StatisticsTests(unittest.TestCase):
                 )
                 failures = (
                     ("/statistics/missing:live", 404, "resource.not_found", "The requested resource was not found.", {}),
+                    ("/statistics/missing:exact", 404, "resource.not_found", "The requested resource was not found.", {}),
                     ("/statistics/release-refused/", 422, "statistical_dataset.release_refused", "The statistical dataset release operation is not eligible.", {"refusalCode": "period-not-ended"}),
                     ("/statistics/version-conflict/", 409, "statistical_dataset.version_conflict", "The statistical dataset computation was superseded or its package changed.", {}),
                     ("/statistics/version-withdrawn/", 410, "statistical_dataset.version_withdrawn", "The statistical dataset version was withdrawn.", {"reasonCode": "source-data-error"}),
@@ -186,6 +187,12 @@ class StatisticsTests(unittest.TestCase):
         self.assertTrue(live["repr_digest"].startswith("sha-256=:"))
         self.client.statistics_live("enrolments", from_period="2025-01")
         self.client.statistics_live("enrolments", to_period="2025-02")
+        exact = self.client.statistics_exact(
+            "enrolments", "2025-01", "2025-02", access_profile="analyst", format="csv"
+        )
+        self.assertEqual(exact["media_type"], "text/csv; charset=utf-8")
+        self.assertTrue(exact["repr_digest"].startswith("sha-256=:"))
+        self.client.statistics_exact("enrolments", "2025-01", "2025-02")
         self.client.statistics_releases("enrolments", top=10, skip_token="cursor", access_profile="reader")
         self.client.statistics_latest_release("enrolments", "2025-01", "final", access_profile="reader")
         self.client.statistics_release_version("enrolments", "2025-01", 7, access_profile="reader", format="csv")
@@ -201,12 +208,25 @@ class StatisticsTests(unittest.TestCase):
         self.assertEqual(self.requests[0][1], "/v1/statistics/enrolments:live?from=2025-01&to=2025-02&accessProfile=analyst")
         self.assertEqual(self.requests[1][1], "/v1/statistics/enrolments:live?from=2025-01")
         self.assertEqual(self.requests[2][1], "/v1/statistics/enrolments:live?to=2025-02")
-        self.assertEqual(json.loads(self.requests[7][4]), {"status": "final"})
-        self.assertEqual(self.requests[7][3], "caller-owned-key")
-        self.assertEqual(json.loads(self.requests[8][4]), {"reason": "disclosure-risk"})
+        self.assertEqual(self.requests[3][1], "/v1/statistics/enrolments:exact?from=2025-01&to=2025-02&accessProfile=analyst")
+        self.assertEqual(self.requests[3][2], "text/csv")
+        self.assertEqual(self.requests[4][1], "/v1/statistics/enrolments:exact?from=2025-01&to=2025-02")
+        self.assertEqual(self.requests[4][2], "application/json")
+        self.assertEqual(json.loads(self.requests[9][4]), {"status": "final"})
+        self.assertEqual(self.requests[9][3], "caller-owned-key")
+        self.assertEqual(json.loads(self.requests[10][4]), {"reason": "disclosure-risk"})
         count = len(self.requests)
         with self.assertRaises(BaseRegistryClientError):
             self.client.statistics_release_version("enrolments", "2025-01", 0)
+        for bad in (
+            ("Bad Dataset", "2025-01", "2025-02"),
+            ("enrolments", "2025-99", "2025-02"),
+            ("enrolments", "2025-01", "2025\u20ac"),
+        ):
+            with self.assertRaises(BaseRegistryClientError):
+                self.client.statistics_exact(*bad)
+        with self.assertRaises(TypeError):
+            self.client.statistics_exact("enrolments", "2025-01")
         self.assertEqual(len(self.requests), count)
 
         self.client.statistics_live("enrolments", from_period="0001", to_period="9998")
@@ -281,6 +301,11 @@ class StatisticsTests(unittest.TestCase):
             self.client.statistics_live("missing")
         self.assertEqual(missing.exception.kind, "not-found")
         self.assertEqual(missing.exception.code, "resource.not_found")
+
+        with self.assertRaises(BaseRegistryClientError) as missing_exact:
+            self.client.statistics_exact("missing", "2025-01", "2025-02")
+        self.assertEqual(missing_exact.exception.kind, "not-found")
+        self.assertEqual(missing_exact.exception.code, "resource.not_found")
 
         with self.assertRaises(BaseRegistryClientError) as refused:
             self.client.statistics_publish("release-refused", "2025-01", "final", "publisher", "refusal-key")

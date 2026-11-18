@@ -88,6 +88,28 @@ impl BaseRegistryClient {
         .await
     }
 
+    /// Read one bounded exact statistical document, over a required period
+    /// range, as JSON or CSV.
+    pub async fn statistics_exact(
+        &self,
+        dataset: &str,
+        from: &str,
+        to: &str,
+        access_profile: Option<&str>,
+        format: BRegStatisticsFormat,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        validate_dataset(dataset)?;
+        let mut pairs = range_query(Some(from), Some(to))?;
+        pairs.extend(access_profile_query(access_profile)?);
+        self.statistics_get_raw(
+            &["v1", "statistics", &format!("{dataset}:exact")],
+            &pairs,
+            format.media_type(),
+            true,
+        )
+        .await
+    }
+
     /// List one caller-chosen page of release version headers.
     pub async fn statistics_releases(
         &self,

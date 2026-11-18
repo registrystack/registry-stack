@@ -728,6 +728,8 @@ pub struct StatisticalDatasetAccessExplanation {
     pub access_profiles: Vec<AccessProfileSource>,
     /// Profiles that read live counts.
     pub read_live: Vec<String>,
+    /// Profiles that read exact values of ended periods.
+    pub read_exact: Vec<String>,
     /// The profile that publishes releases; empty when the dataset has none.
     pub publish: Vec<String>,
     /// Every profile that reads published releases.
@@ -1249,6 +1251,11 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
                     display: dataset.display.clone(),
                     access_profiles: dataset.access_profiles.values().cloned().collect(),
                     read_live: dataset.live_profiles.iter().cloned().collect(),
+                    read_exact: dataset
+                        .exact_reads
+                        .as_ref()
+                        .map(|exact| exact.readers.iter().cloned().collect())
+                        .unwrap_or_default(),
                     publish: releases
                         .map(|releases| releases.publisher.clone())
                         .into_iter()
