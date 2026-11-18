@@ -166,10 +166,15 @@ file digests, workspace binding and declarative facts; this mode does not read s
 from disk. Responses distinguish resolved references and impact from incomplete native or
 generated coverage.
 
-For a Studio Workspace v1 draft, `registry-language-server --workspace-lsp` serves LSP over
-standard input and output. Each `registryStudio/authorizedQuery` request carries the caller's
-authorization; a ready authorization supplies exact snapshot bytes and URI bindings. The server
-reads no workspace paths from disk in this mode and retains no snapshot between requests. Direct
-definition and references requests have no authorization payload and are refused. The embedding
-caller must authorize each query before forwarding it; this process analyzes only the supplied
-bytes.
+`definition` and `references` requests name their subject with exactly one of `target` (an
+identity) or `position` (`{"file", "line", "character"}`, zero-based, `character` counted in
+UTF-16 code units as in LSP). A position resolves to the narrowest reference or definition token
+that contains it; a position with no identity under it answers `"target": null` with empty
+results. `position` is refused on `analyze` and `impact`. The `target` echoed in the result is the
+resolved identity. Every location in a `definition` or `references` result carries `range`
+(`{start, end}` of `{line, character}`, UTF-16, end exclusive) when the file has a precise range
+for the pointer. A definition at an empty pointer returns the whole document, and a reference at
+an empty pointer (for example a native BReg part) carries no `range`.
+
+The caller authorizes each request before sending it; this process analyzes only the supplied
+bytes and retains nothing between requests.

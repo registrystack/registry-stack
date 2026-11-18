@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use registry_language_server::execute_workspace_analysis;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::process::{Command, Stdio};
 
 const API_VERSION: &str = "id.registrystack.org/formats/platform/workspace-analysis/v1alpha1";
@@ -198,7 +200,7 @@ fn explicit_authored_file_definition_query_remains_available() {
     );
     assert_eq!(
         output["definition"]["definitions"][0]["location"],
-        json!({ "file": "actions/a.yaml", "pointer": "" })
+        json!({ "file": "actions/a.yaml", "pointer": "", "range": range((0, 0), (0, 3)) })
     );
 }
 
@@ -419,4 +421,191 @@ fn mapped_breg_native_yaml_uses_the_rust_product_reference_provider() {
         .iter()
         .any(|gap| gap["code"] == "native-provider-unavailable"
             && gap["file"] == "native/module.yaml"));
+}
+
+const ACTION: &str = "kind: PlatformAction\ntitle: \"Apply 🩺\"\nname: apply\n";
+const SERVICE: &str = "kind: PlatformService\nname: nursing\nmap:\n  steps:\n    - { label: \"🩺\", action: apply }\n";
+
+fn text_file(path: &str, text: &str) -> Value {
+    let sha256 = Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    file(path, &BASE64.encode(text), &sha256)
+}
+
+/// Two YAML documents where `services/nursing.yaml` mentions the `apply` action after a
+/// non-ASCII label, so a UTF-16 column differs from a byte or scalar-value column.
+fn navigation_request(operation: &str, position: Option<(&str, u32, u32)>) -> Value {
+    let mut input = json!({
+        "apiVersion": API_VERSION,
+        "operation": operation,
+        "workspaceBinding": "workspace:test",
+        "revision": "revision-1",
+        "files": [
+            text_file("actions/apply.yaml", ACTION),
+            text_file("services/nursing.yaml", SERVICE)
+        ],
+        "facts": {
+            "definitions": [
+                {"scope":"actions","name":"apply","file":"actions/apply.yaml","pointer":"/name"},
+                {"scope":"services","name":"nursing","file":"services/nursing.yaml","pointer":"/name"}
+            ],
+            "mentions": [{
+                "source": {"scope":"services","name":"nursing"},
+                "target": {"scope":"actions","name":"apply"},
+                "kind": "service-action",
+                "file": "services/nursing.yaml",
+                "pointer": "/map/steps/0/action"
+            }],
+            "mappings": [],
+            "coverageGaps": [],
+            "checkGroups": []
+        }
+    });
+    if let Some((file, line, character)) = position {
+        input["position"] = json!({"file": file, "line": line, "character": character});
+    }
+    input
+}
+
+fn range(start: (u32, u32), end: (u32, u32)) -> Value {
+    json!({
+        "start": {"line": start.0, "character": start.1},
+        "end": {"line": end.0, "character": end.1}
+    })
+}
+
+#[test]
+fn definition_by_position_returns_location_with_range() {
+    let output = execute_workspace_analysis(navigation_request(
+        "definition",
+        Some(("services/nursing.yaml", 4, 29)),
+    ))
+    .expect("definition by position succeeds");
+    let result = &output["definition"];
+    assert_eq!(result["target"], identity("actions", "apply"));
+    assert_eq!(result["targetExists"], true);
+    let definitions = result["definitions"].as_array().expect("definitions");
+    assert_eq!(definitions.len(), 1, "{output}");
+    assert_eq!(definitions[0]["location"]["file"], "actions/apply.yaml");
+    assert_eq!(definitions[0]["location"]["pointer"], "/name");
+    assert_eq!(definitions[0]["location"]["range"], range((2, 6), (2, 11)));
+}
+
+#[test]
+fn definition_by_target_also_returns_a_range() {
+    let mut input = navigation_request("definition", None);
+    input["target"] = identity("actions", "apply");
+    let output = execute_workspace_analysis(input).expect("definition by target succeeds");
+    assert_eq!(
+        output["definition"]["definitions"][0]["location"]["range"],
+        range((2, 6), (2, 11))
+    );
+}
+
+#[test]
+fn references_by_position_returns_ranges() {
+    let output = execute_workspace_analysis(navigation_request(
+        "references",
+        Some(("actions/apply.yaml", 2, 7)),
+    ))
+    .expect("references by position succeeds");
+    let result = &output["references"];
+    assert_eq!(result["target"], identity("actions", "apply"));
+    let incoming = result["incoming"].as_array().expect("incoming");
+    assert_eq!(incoming.len(), 1, "{output}");
+    assert_eq!(incoming[0]["location"]["file"], "services/nursing.yaml");
+    assert_eq!(incoming[0]["location"]["range"], range((4, 29), (4, 34)));
+}
+
+#[test]
+fn position_counts_utf16_columns() {
+    // The emoji before `apply` is two UTF-16 code units but one scalar value, so column 29 is
+    // the first character of `apply` only when columns count UTF-16 units.
+    let at_start = execute_workspace_analysis(navigation_request(
+        "definition",
+        Some(("services/nursing.yaml", 4, 29)),
+    ))
+    .expect("position inside the token resolves");
+    assert_eq!(at_start["definition"]["targetExists"], true);
+
+    let before_token = execute_workspace_analysis(navigation_request(
+        "definition",
+        Some(("services/nursing.yaml", 4, 28)),
+    ))
+    .expect("position before the token is valid");
+    assert_eq!(before_token["definition"]["target"], Value::Null);
+    assert_eq!(before_token["definition"]["targetExists"], false);
+    assert_eq!(before_token["definition"]["definitions"], json!([]));
+
+    let at_end = execute_workspace_analysis(navigation_request(
+        "definition",
+        Some(("services/nursing.yaml", 4, 34)),
+    ))
+    .expect("position at the range end is valid");
+    assert_eq!(
+        at_end["definition"]["target"],
+        Value::Null,
+        "a range end is outside the token"
+    );
+}
+
+#[test]
+fn position_on_quoted_scalar_excludes_the_quote_punctuation() {
+    let label = |character| {
+        let output = execute_workspace_analysis(navigation_request(
+            "definition",
+            Some(("actions/apply.yaml", 1, character)),
+        ))
+        .expect("position is valid");
+        output["definition"]["target"].clone()
+    };
+    assert_eq!(label(7), Value::Null, "opening quote");
+    assert_eq!(label(16), Value::Null, "closing quote");
+}
+
+#[test]
+fn position_outside_the_file_or_snapshot_is_refused() {
+    let error = execute_workspace_analysis(navigation_request(
+        "definition",
+        Some(("services/nursing.yaml", 40, 0)),
+    ))
+    .expect_err("a line past the end is refused");
+    assert_eq!(error.code(), "invalid-input");
+
+    let error = execute_workspace_analysis(navigation_request(
+        "definition",
+        Some(("services/nursing.yaml", 4, 400)),
+    ))
+    .expect_err("a column past the line end is refused");
+    assert_eq!(error.code(), "invalid-input");
+
+    let error = execute_workspace_analysis(navigation_request(
+        "definition",
+        Some(("services/other.yaml", 0, 0)),
+    ))
+    .expect_err("a file outside the snapshot is refused");
+    assert_eq!(error.code(), "file-out-of-scope");
+}
+
+#[test]
+fn target_and_position_together_are_refused() {
+    for operation in ["definition", "references"] {
+        let mut both = navigation_request(operation, Some(("services/nursing.yaml", 4, 29)));
+        both["target"] = identity("actions", "apply");
+        let error = execute_workspace_analysis(both).expect_err("both inputs are refused");
+        assert_eq!(error.code(), "invalid-input", "{operation}");
+
+        let neither = navigation_request(operation, None);
+        let error = execute_workspace_analysis(neither).expect_err("neither input is refused");
+        assert_eq!(error.code(), "invalid-input", "{operation}");
+    }
+
+    let error = execute_workspace_analysis(navigation_request(
+        "analyze",
+        Some(("services/nursing.yaml", 4, 29)),
+    ))
+    .expect_err("position is only valid for definition and references");
+    assert_eq!(error.code(), "invalid-input");
 }

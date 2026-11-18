@@ -200,10 +200,6 @@ impl YamlPointerResolver {
         })
     }
 
-    pub(crate) fn source(&self) -> &str {
-        &self.source
-    }
-
     /// Resolve a JSON pointer into a precise token range for cursor navigation.
     ///
     /// Scalar ranges cover their content and exclude quote delimiters, as native indexing does.

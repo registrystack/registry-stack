@@ -14,7 +14,20 @@ fn standalone_binary_reports_its_version_and_usage() {
 
     let help = Command::new(binary).arg("--help").output().unwrap();
     assert!(help.status.success());
-    assert!(String::from_utf8(help.stdout).unwrap().contains(
-        "registry-language-server [--workspace-analysis|--workspace-lsp|--version|--help]"
-    ));
+    assert!(String::from_utf8(help.stdout)
+        .unwrap()
+        .contains("registry-language-server [--workspace-analysis|--version|--help]"));
+}
+
+#[test]
+fn workspace_lsp_flag_is_refused() {
+    let binary = env!("CARGO_BIN_EXE_registry-language-server");
+    let output = Command::new(binary)
+        .arg("--workspace-lsp")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("unrecognized language-server arguments"));
 }
