@@ -93,12 +93,16 @@ const FORMATS: [(FormatSpec<'static>, bool, Check); 10] = [
     (
         registry_thunderid_tooling::task_connection::FORMAT,
         false,
-        |file, bytes| Ok(registry_thunderid_tooling::check::check_bytes(file, bytes)),
+        |file, bytes| {
+            refused_on_errors(registry_thunderid_tooling::check::check_bytes(file, bytes))
+        },
     ),
     (
         registry_thunderid_tooling::container::SESSION_FORMAT,
         false,
-        |file, bytes| Ok(registry_thunderid_tooling::check::check_bytes(file, bytes)),
+        |file, bytes| {
+            refused_on_errors(registry_thunderid_tooling::check::check_bytes(file, bytes))
+        },
     ),
     (
         tooling_format!(
@@ -126,6 +130,16 @@ const FORMATS: [(FormatSpec<'static>, bool, Check); 10] = [
         Ok(source_import::check_export_manifest(file, bytes).map(|()| one_file(Vec::new()))?)
     }),
 ];
+
+/// The tooling checker returns its verdict as a report; a report with an
+/// error is a refusal.
+fn refused_on_errors(report: Report) -> Result<Report, Failure> {
+    if report.error_count() > 0 {
+        Err(Failure::Refused(report))
+    } else {
+        Ok(report)
+    }
+}
 
 /// Why a check produced no verdict of "passed".
 enum Failure {
@@ -248,9 +262,12 @@ fn check(file: &Path, label: &str) -> Result<Report, Failure> {
             Reader::new(label).scan(&bytes)?;
         }
         // No format was selected. Let the shared envelope reader report missing
-        // or unsupported kinds with the complete supported envelope list.
+        // or unsupported kinds with the complete supported envelope list. Its
+        // expression hook refuses a substitution in `kind` before any match.
         let formats: Vec<_> = FORMATS.iter().map(|(format, ..)| *format).collect();
-        Reader::new(label).read(&bytes, &Expect::new(&formats))?;
+        Reader::new(label)
+            .with_hook(&mut registry_platform_config::AuthoredExpressions)
+            .read(&bytes, &Expect::new(&formats))?;
         unreachable!("a known valid kind would have selected its owning checker")
     };
     if bytes.len() > MAXIMUM_DOCUMENT_BYTES && !may_exceed_reader_bound {
