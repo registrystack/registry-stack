@@ -19,12 +19,6 @@ use super::{
 pub(crate) const BIND_ONCE_FUNCTION: &str =
     "registry_internal.bind_external_projection_once(text,uuid,text,text,bigint,text,text,uuid)";
 pub(crate) const MAINTENANCE_FUNCTION:&str="registry_internal.maintain_external_projection_scope(text,text,uuid,text,uuid,text,text,bigint)";
-/// Withdrawal stays with migration authority: the runtime role holds no
-/// EXECUTE grant on it. The runtime bind can still move a configured
-/// projection to a fresh epoch, which discards rebuildable cache but never
-/// makes a withdrawn or replaced epoch readable again.
-pub(crate) const WITHDRAW_FUNCTION: &str =
-    "registry_internal.withdraw_external_projection(text,uuid,text,text)";
 /// Exact catalog identities include PostgreSQL argument names and spacing.
 /// ACL/install signatures above remain type-only SQL call signatures.
 /// Entries are (identity, result type, returns set, security definer, runtime execute).
@@ -32,7 +26,6 @@ pub(crate) const MANAGED_FUNCTIONS: &[(&str,&str,bool,bool,bool)] = &[
     ("registry_internal.allocate_external_projection_refresh(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_subject text, p_lease bigint)","bigint",false,true,true),
     ("registry_internal.publish_external_projection(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_sequence bigint, p_subject text, p_snapshot text, p_observed bigint, p_expires bigint, p_kind text, p_rows jsonb)","text",false,true,true),
     ("registry_internal.fail_external_projection_refresh(p_projection text, p_epoch uuid, p_sequence bigint, p_subject text, p_reason text)","boolean",false,true,true),
-    ("registry_internal.withdraw_external_projection(p_projection text, p_epoch uuid, p_binding text, p_grant text)","boolean",false,true,false),
     ("registry_internal.purge_external_projections(p_limit integer)","record",true,true,true),
     ("registry_internal.lock_external_projection_generation(p_projection text, p_epoch uuid, p_binding text, p_grant text)","bigint",false,true,true),
     ("registry_internal.bind_external_projection_once(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_ttl bigint, p_contract text, p_package text, p_activation uuid)","uuid",false,true,true),
@@ -84,28 +77,23 @@ pub(crate) fn scope_contract_digest(
 }
 
 /// Migration-only reconciliation under the existing exclusive package guard.
-/// Featureless registries install no store. Do not remove a provisioned
-/// managed queue as a side effect of retiring the last indexed projection.
+/// Featureless registries install no store. Retiring the last indexed
+/// projection drops the refresh queue first, then the store, so the retired
+/// declaration leaves no cached source data behind.
 pub(crate) async fn reconcile(
     migration: &impl GenericClient,
     registry: &crate::model::CompiledRegistry,
     runtime_role: &SqlIdentifier,
 ) -> Result<(), ProjectionError> {
     if !enabled(registry) {
-        let queue_installed: bool = migration.query_one(
-            "SELECT pg_catalog.to_regclass('registry_internal.registry_external_refresh_plans') IS NOT NULL",
-            &[],
-        ).await.map_err(|_| ProjectionError::Unavailable)?.get(0);
-        if queue_installed {
-            return Err(ProjectionError::RefreshQueueRetained);
-        }
+        uninstall_queue(migration).await?;
         let exists: bool=migration.query_one("SELECT to_regclass('registry_internal.registry_external_projection_scopes') IS NOT NULL",&[]).await.map_err(|_|ProjectionError::Unavailable)?.get(0);
         if exists {
-            for function in RUNTIME_FUNCTIONS.iter().copied().chain([
-                WITHDRAW_FUNCTION,
-                BIND_ONCE_FUNCTION,
-                MAINTENANCE_FUNCTION,
-            ]) {
+            for function in RUNTIME_FUNCTIONS
+                .iter()
+                .copied()
+                .chain([BIND_ONCE_FUNCTION, MAINTENANCE_FUNCTION])
+            {
                 migration
                     .batch_execute(&format!("DROP FUNCTION IF EXISTS {function};"))
                     .await
@@ -205,6 +193,32 @@ pub(crate) async fn reconcile(
     Ok(())
 }
 
+/// Drops the managed refresh queue: its functions, then its tables (children
+/// before `plans`) and the work sequence. Nothing happens when it is absent.
+async fn uninstall_queue(migration: &impl GenericClient) -> Result<(), ProjectionError> {
+    use super::external_refresh_queue as queue;
+    for (identity, ..) in queue::MANAGED_FUNCTIONS {
+        migration
+            .batch_execute(&format!("DROP FUNCTION IF EXISTS {identity};"))
+            .await
+            .map_err(|_| ProjectionError::Unavailable)?;
+    }
+    for (table, _) in queue::TABLE_PRIVILEGES.iter().rev() {
+        migration
+            .batch_execute(&format!("DROP TABLE IF EXISTS {table};"))
+            .await
+            .map_err(|_| ProjectionError::Unavailable)?;
+    }
+    migration
+        .batch_execute(&format!(
+            "DROP SEQUENCE IF EXISTS {};",
+            queue::WORK_SEQUENCE
+        ))
+        .await
+        .map_err(|_| ProjectionError::Unavailable)?;
+    Ok(())
+}
+
 /// Bind a migration-allowlisted projection under the exact active package.
 /// The same binding fingerprints and cache lifetime reuse the stored epoch, so
 /// a restart keeps the cache. Changed fingerprints, a changed cache lifetime, a
@@ -260,6 +274,11 @@ pub(crate) const BACKUP_EXCLUDED_TABLES: &[&str] = &[
     "registry_internal.registry_external_projection_values",
 ];
 
+/// The one `pg_dump --exclude-table-data` pattern that covers every store and
+/// queue table.
+#[cfg(test)]
+pub(crate) const BACKUP_EXCLUDED_PATTERN: &str = "registry_internal.registry_external_*";
+
 pub(crate) const SCOPES_TABLE: &str = BACKUP_EXCLUDED_TABLES[0];
 pub(crate) const REFRESHES_TABLE: &str = BACKUP_EXCLUDED_TABLES[1];
 pub(crate) const SNAPSHOTS_TABLE: &str = BACKUP_EXCLUDED_TABLES[2];
@@ -278,8 +297,6 @@ pub(crate) const RUNTIME_FUNCTIONS: &[&str] = &[
 pub(crate) enum ProjectionError {
     #[error("indexed external projections require separate migration and runtime database roles")]
     RoleSeparationRequired,
-    #[error("the managed external refresh queue requires a separate retirement migration")]
-    RefreshQueueRetained,
     #[error("external projection scope is invalid")]
     InvalidScope,
     #[error("external projection snapshot is invalid")]
@@ -298,9 +315,6 @@ pub(crate) fn kernel_error(error: ProjectionError) -> super::PostgresKernelError
     match error {
         ProjectionError::RoleSeparationRequired => super::PostgresKernelError::Configuration(
             "indexed external projections require separate migration and runtime database roles",
-        ),
-        ProjectionError::RefreshQueueRetained => super::PostgresKernelError::Configuration(
-            "removing the last indexed projection requires a separate refresh queue retirement migration; keep its declaration and remove its source binding to stop acquisition",
         ),
         _ => super::PostgresKernelError::Connection,
     }
@@ -643,12 +657,6 @@ pub(crate) async fn install(
     for function in RUNTIME_FUNCTIONS {
         migration.batch_execute(&format!("REVOKE ALL ON FUNCTION {function} FROM {revoke}; GRANT EXECUTE ON FUNCTION {function} TO {};", runtime_role.quoted())).await.map_err(|_| ProjectionError::Unavailable)?;
     }
-    migration
-        .batch_execute(&format!(
-            "REVOKE ALL ON FUNCTION {WITHDRAW_FUNCTION} FROM {revoke};"
-        ))
-        .await
-        .map_err(|_| ProjectionError::Unavailable)?;
     Ok(())
 }
 
@@ -979,16 +987,18 @@ pub(crate) async fn snapshots_current(
     Ok(row.get(0))
 }
 
-/// Tests withdraw under migration authority; operators use the maintenance
-/// function, and the runtime role holds no EXECUTE grant on either.
+/// Ends a scope as the maintenance `purge` action does, for fixtures that do
+/// not install the maintenance function. The runtime role holds no EXECUTE
+/// grant on that function and no table DML.
 #[cfg(all(test, feature = "postgres-test"))]
 pub(crate) async fn withdraw_scope(
     migration: &impl GenericClient,
     scope: &ProjectionScope,
 ) -> Result<(), ProjectionError> {
-    let row = migration
-        .query_one(
-            "SELECT registry_internal.withdraw_external_projection($1,$2,$3,$4)",
+    let ended = migration
+        .execute(
+            "UPDATE registry_internal.registry_external_projection_scopes SET active=false,generation=generation+1
+             WHERE projection_id=$1 AND epoch=$2 AND binding_digest=$3 AND grant_digest=$4 AND active",
             &[
                 &scope.projection_id,
                 &scope.epoch,
@@ -998,7 +1008,7 @@ pub(crate) async fn withdraw_scope(
         )
         .await
         .map_err(|_| ProjectionError::Unavailable)?;
-    if !row.get::<_, bool>(0) {
+    if ended == 0 {
         return Err(ProjectionError::ScopeChanged);
     }
     Ok(())
@@ -1325,16 +1335,6 @@ BEGIN
     RETURN FOUND;
 END $body$;
 
-CREATE OR REPLACE FUNCTION registry_internal.withdraw_external_projection(
-    p_projection text,p_epoch uuid,p_binding text,p_grant text
-) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = pg_catalog, registry_internal AS $body$
-BEGIN
-    UPDATE registry_internal.registry_external_projection_scopes SET active=false,generation=generation+1
-        WHERE projection_id=p_projection AND epoch=p_epoch AND binding_digest=p_binding AND grant_digest=p_grant AND active;
-    RETURN FOUND;
-END $body$;
-
 -- One row per projection, reason and lane: the snapshot lane fills
 -- snapshots_pruned, the receipt lane fills refreshes_pruned. The reason is a
 -- fixed category (withdrawn, replaced or expired) and never a stored value.
@@ -1404,7 +1404,7 @@ DECLARE allowed jsonb := __COMPILED_EXTERNAL_ALLOWLIST__;
     expected jsonb; scope registry_internal.registry_external_projection_scopes;
     package_digest text; activation_id uuid; current_status text; counters jsonb := '{}'::jsonb;
 BEGIN
-    IF p_action IS NULL OR p_action NOT IN ('inspect','withdraw','rotate') THEN
+    IF p_action IS NULL OR p_action NOT IN ('inspect','purge') THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='external projection maintenance action is invalid';
     END IF;
     IF p_action='inspect' THEN
@@ -1428,27 +1428,11 @@ BEGIN
             OR p_epoch IS DISTINCT FROM scope.epoch THEN
             RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='external projection maintenance identity changed';
         END IF;
-        IF p_action='withdraw' THEN
-            IF scope.projection_id IS NULL THEN
-                RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='external projection scope is not bound';
-            END IF;
-            UPDATE registry_internal.registry_external_projection_scopes SET active=false,generation=generation+1
-                WHERE projection_id=p_projection RETURNING * INTO scope;
-        ELSE
-            IF p_binding IS NULL OR octet_length(p_binding) NOT BETWEEN 1 AND 1024
-                OR p_grant IS NULL OR octet_length(p_grant) NOT BETWEEN 1 AND 1024
-                OR p_ttl IS NULL OR p_ttl NOT BETWEEN 1 AND (expected->>'ttl')::bigint THEN
-                RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='external projection maintenance binding is invalid';
-            END IF;
-            INSERT INTO registry_internal.registry_external_projection_scopes AS current
-                (projection_id,contract_digest,epoch,binding_digest,grant_digest,cache_ttl_seconds)
-                VALUES (p_projection,expected->>'contract',gen_random_uuid(),p_binding,p_grant,p_ttl)
-                ON CONFLICT (projection_id) DO UPDATE SET contract_digest=EXCLUDED.contract_digest,
-                    epoch=EXCLUDED.epoch,binding_digest=EXCLUDED.binding_digest,grant_digest=EXCLUDED.grant_digest,
-                    cache_ttl_seconds=EXCLUDED.cache_ttl_seconds,
-                    active=true,generation=current.generation+1
-                RETURNING * INTO scope;
+        IF scope.projection_id IS NULL THEN
+            RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='external projection scope is not bound';
         END IF;
+        UPDATE registry_internal.registry_external_projection_scopes SET active=false,generation=generation+1
+            WHERE projection_id=p_projection RETURNING * INTO scope;
         DELETE FROM registry_internal.registry_external_projection_snapshots WHERE projection_id=p_projection;
         DELETE FROM registry_internal.registry_external_projection_refreshes WHERE projection_id=p_projection;
     END IF;
@@ -1632,17 +1616,18 @@ mod tests {
     #[test]
     fn backup_policy_excludes_every_projection_table() {
         assert_eq!(BACKUP_EXCLUDED_TABLES.len(), 4);
-        for table in BACKUP_EXCLUDED_TABLES {
-            assert!(table.starts_with("registry_internal.registry_external_projection_"));
-            assert!(INSTALL_SQL.contains(table));
-        }
-        assert_eq!(
-            super::super::external_refresh_queue::BACKUP_EXCLUDED_TABLES.len(),
-            3
-        );
-        for table in super::super::external_refresh_queue::BACKUP_EXCLUDED_TABLES {
-            assert!(table.starts_with("registry_internal.registry_external_refresh_"));
-            assert!(super::super::external_refresh_queue::INSTALL_SQL.contains(table));
+        let (prefix, wildcard) = BACKUP_EXCLUDED_PATTERN.split_once('*').unwrap();
+        assert_eq!(wildcard, "", "the pattern is one trailing wildcard");
+        let queue_tables = super::super::external_refresh_queue::BACKUP_EXCLUDED_TABLES;
+        for table in BACKUP_EXCLUDED_TABLES.iter().chain(queue_tables) {
+            assert!(
+                table.starts_with(prefix),
+                "{table} is covered by {BACKUP_EXCLUDED_PATTERN}"
+            );
+            assert!(
+                INSTALL_SQL.contains(table)
+                    || super::super::external_refresh_queue::INSTALL_SQL.contains(table)
+            );
         }
     }
 }
@@ -1988,34 +1973,91 @@ pub(crate) mod postgres_tests {
             .await
             .is_err());
         drop(runtime);
-        let rotated: Value = migration
+        // `inspect` and `purge` are the only maintenance verbs.
+        for refused in ["rotate", "withdraw"] {
+            assert!(migration
+                .query_one(
+                    maintenance,
+                    &[
+                        &refused,
+                        &"projection",
+                        &Some(bound.epoch),
+                        &package,
+                        &activation,
+                        &"renewed-binding",
+                        &"renewed-grant",
+                        &20_i64,
+                    ]
+                )
+                .await
+                .is_err());
+        }
+        // Purge is operator authority: the runtime credential cannot call it.
+        let runtime = pool.get().await.unwrap();
+        let denied = runtime
             .query_one(
                 maintenance,
                 &[
-                    &"rotate",
+                    &"purge",
                     &"projection",
                     &Some(bound.epoch),
                     &package,
                     &activation,
-                    &"renewed-binding",
-                    &"renewed-grant",
+                    &"",
+                    &"",
+                    &20_i64,
+                ],
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            denied.code(),
+            Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE)
+        );
+        drop(runtime);
+        // A stale epoch is refused.
+        assert!(migration
+            .query_one(
+                maintenance,
+                &[
+                    &"purge",
+                    &"projection",
+                    &Some(Uuid::new_v4()),
+                    &package,
+                    &activation,
+                    &"",
+                    &"",
+                    &20_i64,
+                ]
+            )
+            .await
+            .is_err());
+        let purged: Value = migration
+            .query_one(
+                maintenance,
+                &[
+                    &"purge",
+                    &"projection",
+                    &Some(bound.epoch),
+                    &package,
+                    &activation,
+                    &"",
+                    &"",
                     &20_i64,
                 ],
             )
             .await
             .unwrap()
             .get(0);
-        let new_epoch = Uuid::parse_str(rotated["epoch"].as_str().unwrap()).unwrap();
-        assert_ne!(bound.epoch, new_epoch);
-        assert_eq!(rotated["active"], true);
-        assert!(rotated.get("retentionSeconds").is_none());
+        assert_eq!(purged["active"], false);
+        assert_eq!(purged["epoch"], json!(bound.epoch));
         let inspected: Value = migration
             .query_one(
                 maintenance,
                 &[
                     &"inspect",
                     &"projection",
-                    &Some(new_epoch),
+                    &Some(bound.epoch),
                     &package,
                     &activation,
                     &"",
@@ -2036,53 +2078,31 @@ pub(crate) mod postgres_tests {
             .unwrap()
             .values()
             .all(|count| count == 0));
-        assert!(migration
-            .query_one(
-                maintenance,
-                &[
-                    &"withdraw",
-                    &"projection",
-                    &Some(bound.epoch),
-                    &package,
-                    &activation,
-                    &"",
-                    &"",
-                    &20_i64,
-                ]
-            )
+        let without = super::super::external_view_query::tests::registry_with_external(false);
+        // Removing the last indexed projection retires the queue, then the store.
+        reconcile(&migration, &without, &database.runtime_role)
             .await
-            .is_err());
-        let withdrawn: Value = migration
+            .unwrap();
+        let remaining: i64 = migration
             .query_one(
-                maintenance,
-                &[
-                    &"withdraw",
-                    &"projection",
-                    &Some(new_epoch),
-                    &package,
-                    &activation,
-                    &"",
-                    &"",
-                    &20_i64,
-                ],
+                "SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+                 WHERE n.nspname='registry_internal' AND c.relname LIKE 'registry\\_external\\_%'",
+                &[],
             )
             .await
             .unwrap()
             .get(0);
-        assert_eq!(withdrawn["active"], false);
-        let without = super::super::external_view_query::tests::registry_with_external(false);
-        // Queue retirement is a separate operation. Removing the last
-        // projection cannot modify this catalog or its retained state.
-        assert_eq!(
-            reconcile(&migration, &without, &database.runtime_role).await,
-            Err(ProjectionError::RefreshQueueRetained),
-        );
-        let intact: bool = migration.query_one(
-            "SELECT to_regclass('registry_internal.registry_external_refresh_plans') IS NOT NULL
-                AND to_regclass('registry_internal.registry_external_projection_scopes') IS NOT NULL",
-            &[],
-        ).await.unwrap().get(0);
-        assert!(intact);
+        assert_eq!(remaining, 0);
+        let functions: i64 = migration
+            .query_one(
+                "SELECT count(*) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+                 WHERE n.nspname='registry_internal' AND (p.proname LIKE '%external\\_projection%' OR p.proname LIKE '%external\\_refresh%')",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(functions, 0);
         drop(pool);
         migration_task.abort();
         drop(migration);
@@ -2208,24 +2228,9 @@ pub(crate) mod postgres_tests {
         assert_eq!(runtime.query_one("SELECT kind FROM registry_internal.registry_external_projection_snapshots WHERE subject_key='parent'", &[]).await.unwrap().get::<_,String>(0), "complete-collection");
 
         let pending = allocate_inner(&runtime, &scope, "subject").await.unwrap();
-        // Withdrawal is operator authority: a runtime credential cannot end a
-        // scope, and so cannot force the next start to rebind it.
-        let refused = runtime
-            .query_one(
-                "SELECT registry_internal.withdraw_external_projection($1,$2,$3,$4)",
-                &[
-                    &scope.projection_id,
-                    &scope.epoch,
-                    &scope.binding_digest,
-                    &scope.grant_digest,
-                ],
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(
-            refused.code(),
-            Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE)
-        );
+        // Ending a scope is operator authority: a runtime credential holds no
+        // table DML (checked above) and no maintenance function, so it cannot
+        // force the next start to rebind.
         assert!(migration.query_one("SELECT active FROM registry_internal.registry_external_projection_scopes WHERE projection_id=$1",&[&scope.projection_id]).await.unwrap().get::<_,bool>(0));
         withdraw_scope(&migration, &scope).await.unwrap();
         assert_eq!(
@@ -2548,17 +2553,14 @@ pub(crate) mod postgres_tests {
     pub(crate) fn two_projection_project() -> Value {
         let mut project = super::super::external_view_query::tests::project();
         project["externalProjections"].as_array_mut().unwrap().push(json!({
-            "id":"other","recordType":"external-record","operation":"batch","operationVersion":"1",
-            "purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys",
+            "id":"other","recordType":"external-record","sourceRoute":"batch","sourceRouteVersion":"1",
+            "purpose":"consultation","scope":"eligible",
             "mode":"indexed","cardinality":"one","cacheTtlSeconds":120,"fields":["label"]
         }));
         project["externalViews"][0]["links"]
             .as_array_mut()
             .unwrap()
-            .push(
-                json!({"id":"other-link","projection":"other","fromField":"subject-key",
-                "identifierScheme":"urn:test:keys","fields":["label"]}),
-            );
+            .push(json!({"id":"other-link","projection":"other","fromField":"subject-key"}));
         project["accessProfiles"][0]["permissions"]["externalViews"][0]["links"]
             .as_array_mut()
             .unwrap()
