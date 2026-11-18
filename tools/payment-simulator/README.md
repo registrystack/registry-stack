@@ -139,7 +139,8 @@ uv run payment-simulator collection-scenario --database .state/payments.sqlite -
 Use `--outcome cancelled` for a payer who cancels: it reports `RJC/FAILED` with
 `failureReason: payer-cancelled`. To make one named test person always decline,
 map their `payerFiDetails.financialAddress` to an outcome. A payer rule beats
-the biller's scenario, and `--remove` deletes it:
+the biller's scenario and the hosted page: the request is final as soon as it is
+created, and the page only shows the result. `--remove` deletes the rule:
 
 ```sh
 uv run payment-simulator payer-outcome --database .state/payments.sqlite \
@@ -177,7 +178,8 @@ The redirect is a hint. The front end must still poll
 reference before it acts. The page needs no bearer token: the transfer ID is a
 random UUIDv4 and acts as the capability, and each submission carries a form
 token stored with the request. A request with a return URL stays `PND/PENDING`
-until the payer decides, and the decision settles it at once. Requests without
+until the payer decides, and the decision settles it at once, unless a payer rule
+settles it at creation. Requests without
 a return URL behave as before. See [the P2G profile](P2G-SPEC.md#hosted-payment-page)
 for precedence and refusals.
 
