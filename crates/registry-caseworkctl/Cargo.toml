@@ -42,6 +42,7 @@ registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true
 registry-platform-yaml.workspace = true
+registry-rstack-dev.workspace = true
 registry-cli-api.workspace = true
 registry-thunderid-tooling = { workspace = true, features = ["session"] }
 registry-casework-breg.workspace = true

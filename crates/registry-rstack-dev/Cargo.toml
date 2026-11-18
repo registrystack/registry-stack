@@ -1,0 +1,61 @@
+[package]
+name = "registry-rstack-dev"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Product-free development runner that each rstack dev host CLI links."
+repository.workspace = true
+publish = false
+
+[[test]]
+name = "dev_schema"
+required-features = ["schema"]
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Derives the JSON Schemas of the development plan and scenario files, for
+# the `dev-schema` generator and its drift check.
+schema = [
+    "dep:schemars",
+    "registry-platform-config/schema",
+    "registry-platform-yaml/schema",
+]
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+base64.workspace = true
+clap.workspace = true
+getrandom.workspace = true
+postgres-protocol.workspace = true
+registry-cli-report.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-platform-config.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-yaml.workspace = true
+reqwest.workspace = true
+rustix.workspace = true
+rustls.workspace = true
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+sha2.workspace = true
+signal-hook.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
+url.workspace = true
+uuid = { workspace = true, features = ["serde"] }
+zeroize.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true

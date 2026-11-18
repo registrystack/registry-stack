@@ -75,6 +75,14 @@ fn versioned_tool(binary: &str, body: &str) -> String {
     )
 }
 
+/// A stand-in for a product CLI that hosts the development runner: it reports
+/// its name, its arguments, and the environment the launcher passed it.
+fn host_body(name: &str) -> String {
+    format!(
+        "printf 'host:{name}\\n'\nprintf 'arg:%s\\n' \"$@\"\nif [[ -n \"${{EXPECTED_DATABASE_URL:-}}\" ]]; then\n  [[ \"${{RSTACK_DEV_DATABASE_URL:-}}\" == \"$EXPECTED_DATABASE_URL\" ]]\n  printf 'database:matched\\n'\nelse\n  printf 'database:%s\\n' \"${{RSTACK_DEV_DATABASE_URL:+set}}\"\nfi\nprintf 'generation:%s\\n' \"${{RSTACK_GENERATION_DIR:-}}\"\nprintf 'release:%s\\n' \"${{RSTACK_RELEASE_TAG:-}}\"\nprintf 'bregctl:%s\\n' \"${{RSTACK_BREGCTL_BIN:-}}\"\nprintf 'breg:%s\\n' \"${{RSTACK_BREG_BIN:-}}\"\nprintf 'caseworkctl:%s\\n' \"${{RSTACK_CASEWORKCTL_BIN:-}}\"\nprintf 'casework:%s\\n' \"${{RSTACK_CASEWORK_BIN:-}}\"\n"
+    )
+}
+
 struct ManagedInstall {
     _scratch: tempfile::TempDir,
     root: PathBuf,
@@ -90,18 +98,19 @@ fn managed_install() -> ManagedInstall {
     let launcher_body = format!(
         "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${{1:-}}\" == '--version' ]]; then printf 'rstack {CURRENT_VERSION}\\n'; exit 0; fi\nif [[ -n \"${{REGISTRY_CARGO_RUNTIME_LIBRARY_PATH:-}}\" ]]; then export DYLD_FALLBACK_LIBRARY_PATH=\"$REGISTRY_CARGO_RUNTIME_LIBRARY_PATH\"; fi\nexec '{executable}' \"$@\"\n"
     );
-    let helper_body = versioned_tool(
-        "bregctl",
-        "printf 'arg:%s\\n' \"$@\"\nprintf 'request:%s\\n' \"${RSTACK_PROJECT_DEV_REQUEST:?}\"\n[[ \"${RSTACK_DEV_DATABASE_URL:-}\" == \"${EXPECTED_DATABASE_URL:?}\" ]]\nprintf 'database:matched\\n'\nprintf 'generation:%s\\n' \"${RSTACK_GENERATION_DIR:?}\"\nprintf 'release:%s\\n' \"${RSTACK_RELEASE_TAG:?}\"\nprintf 'bregctl:%s\\n' \"${RSTACK_BREGCTL_BIN:?}\"\nprintf 'breg:%s\\n' \"${RSTACK_BREG_BIN:?}\"\nprintf 'caseworkctl:%s\\n' \"${RSTACK_CASEWORKCTL_BIN:?}\"\nprintf 'casework:%s\\n' \"${RSTACK_CASEWORK_BIN:?}\"\n",
-    );
     let (launcher_name, launcher_bytes) = release_asset(&assets, "rstack", &launcher_body, false);
-    let (bregctl_name, bregctl_bytes) = release_asset(&assets, "bregctl", &helper_body, true);
+    let (bregctl_name, bregctl_bytes) = release_asset(
+        &assets,
+        "bregctl",
+        &versioned_tool("bregctl", &host_body("bregctl")),
+        true,
+    );
     let (breg_name, breg_bytes) =
         release_asset(&assets, "breg", &versioned_tool("breg", "exit 0\n"), true);
     let (caseworkctl_name, caseworkctl_bytes) = release_asset(
         &assets,
         "caseworkctl",
-        &versioned_tool("caseworkctl", "exit 0\n"),
+        &versioned_tool("caseworkctl", &host_body("caseworkctl")),
         true,
     );
     let (casework_name, casework_bytes) = release_asset(
@@ -228,14 +237,19 @@ impl SourceTools {
         let install_root = scratch.path().join("uninstalled");
         let bin_dir = scratch.path().join("bin");
         let bregctl = scratch.path().join("bregctl");
-        executable(
-            &bregctl,
-            "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'arg:%s\\n' \"$@\"\nprintf 'request:%s\\n' \"${RSTACK_PROJECT_DEV_REQUEST:?}\"\nif [[ -n \"${EXPECTED_DATABASE_URL:-}\" ]]; then\n  [[ \"${RSTACK_DEV_DATABASE_URL:-}\" == \"$EXPECTED_DATABASE_URL\" ]]\n  printf 'database:matched\\n'\nelse\n  printf 'database:%s\\n' \"${RSTACK_DEV_DATABASE_URL:+set}\"\nfi\nprintf 'bregctl:%s\\n' \"${RSTACK_BREGCTL_BIN:-}\"\nprintf 'breg:%s\\n' \"${RSTACK_BREG_BIN:-}\"\nprintf 'caseworkctl:%s\\n' \"${RSTACK_CASEWORKCTL_BIN:-}\"\nprintf 'casework:%s\\n' \"${RSTACK_CASEWORK_BIN:-}\"\n",
-        );
-        let breg = scratch.path().join("breg");
         let caseworkctl = scratch.path().join("caseworkctl");
+        for (path, name) in [(&bregctl, "bregctl"), (&caseworkctl, "caseworkctl")] {
+            executable(
+                path,
+                &format!(
+                    "#!/usr/bin/env bash\nset -euo pipefail\n{}",
+                    host_body(name)
+                ),
+            );
+        }
+        let breg = scratch.path().join("breg");
         let casework = scratch.path().join("casework");
-        for path in [&breg, &caseworkctl, &casework] {
+        for path in [&breg, &casework] {
             executable(path, "#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n");
         }
         Self {
@@ -274,15 +288,6 @@ impl SourceTools {
     }
 }
 
-fn request(output: &Output) -> Value {
-    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
-    let request = stdout
-        .lines()
-        .find_map(|line| line.strip_prefix("request:"))
-        .unwrap_or_else(|| panic!("missing request in {stdout:?}"));
-    serde_json::from_str(request).unwrap()
-}
-
 fn output_field<'a>(output: &'a str, name: &str) -> &'a str {
     output
         .lines()
@@ -290,9 +295,33 @@ fn output_field<'a>(output: &'a str, name: &str) -> &'a str {
         .unwrap_or_else(|| panic!("missing {name} in {output}"))
 }
 
+/// The host CLI the launcher ran, and the arguments it passed that host.
+fn hosted(output: &Output) -> (String, Vec<String>) {
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    let host = output_field(&stdout, "host").to_owned();
+    let arguments = stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("arg:"))
+        .map(str::to_owned)
+        .collect();
+    (host, arguments)
+}
+
+/// The arguments a host receives: the hidden runner subcommand, the action,
+/// its options, and the project or run ID after `--`.
+fn runner_arguments(action: &str, options: &[&str], target: &Path) -> Vec<String> {
+    ["rstack-dev", action]
+        .into_iter()
+        .chain(options.iter().copied())
+        .map(str::to_owned)
+        .chain(["--".to_owned(), target.to_str().unwrap().to_owned()])
+        .collect()
+}
+
 #[test]
 fn managed_start_uses_one_release_generation_on_supported_platforms() {
     let install = managed_install();
+    write_plan(&install.project, &["casework", "breg"]);
     let database_url = "postgresql://example.invalid/managed-secret";
     let output = Command::new(install.bin.join("rstack"))
         .arg("--install-root")
@@ -310,20 +339,14 @@ fn managed_start_uses_one_release_generation_on_supported_platforms() {
     assert!(output.stderr.is_empty(), "{output:?}");
     let stdout = String::from_utf8(output.stdout.clone()).unwrap();
     assert!(!stdout.contains(database_url), "{stdout}");
+    assert!(stdout.contains("database:matched\n"), "{stdout}");
+    // BReg comes first in the hosting order, whatever order the plan lists.
     assert_eq!(
-        stdout
-            .lines()
-            .filter(|line| line.starts_with("arg:"))
-            .collect::<Vec<_>>(),
-        ["arg:project-dev"]
-    );
-    assert_eq!(
-        request(&output),
-        serde_json::json!({
-            "action":"start",
-            "project":install.project,
-            "json":false
-        })
+        hosted(&output),
+        (
+            "bregctl".to_owned(),
+            runner_arguments("start", &[], &install.project)
+        )
     );
     let generation = PathBuf::from(output_field(&stdout, "generation"));
     assert_eq!(
@@ -344,8 +367,9 @@ fn managed_start_uses_one_release_generation_on_supported_platforms() {
 }
 
 #[test]
-fn source_start_sends_one_json_request_and_binary_set() {
+fn source_start_passes_one_argument_list_and_binary_set() {
     let tools = SourceTools::new();
+    write_plan(&tools.project, &["breg", "casework"]);
     let database_url = "postgresql://example.invalid/dev-secret";
     let output = tools
         .command()
@@ -360,36 +384,24 @@ fn source_start_sends_one_json_request_and_binary_set() {
     assert!(output.stderr.is_empty(), "{output:?}");
     let stdout = String::from_utf8(output.stdout.clone()).unwrap();
     assert_eq!(
-        stdout
-            .lines()
-            .filter(|line| line.starts_with("arg:"))
-            .collect::<Vec<_>>(),
-        ["arg:project-dev"]
-    );
-    assert_eq!(
-        request(&output),
-        serde_json::json!({
-            "action":"start",
-            "project":tools.project,
-            "ttl":"45m",
-            "json":true
-        })
+        hosted(&output),
+        (
+            "bregctl".to_owned(),
+            runner_arguments("start", &["--ttl=45m", "--json"], &tools.project)
+        )
     );
     assert!(stdout.contains("database:matched\n"));
     assert!(stdout.contains(&format!("bregctl:{}\n", tools.bregctl.display())));
     assert!(stdout.contains(&format!("breg:{}\n", tools.breg.display())));
     assert!(stdout.contains(&format!("caseworkctl:{}\n", tools.caseworkctl.display())));
     assert!(stdout.contains(&format!("casework:{}\n", tools.casework.display())));
-    assert!(!stdout
-        .lines()
-        .any(|line| line == format!("arg:{database_url}")));
-    assert!(!request(&output).to_string().contains(database_url));
     assert!(!stdout.contains(database_url));
 }
 
 #[test]
 fn source_start_passes_a_built_application_root_to_the_runner() {
     let tools = SourceTools::new();
+    write_plan(&tools.project, &["breg"]);
     let database_url = "postgresql://example.invalid/dev-secret";
     let application_root = tools.project.join("built-application");
     let output = tools
@@ -404,14 +416,22 @@ fn source_start_passes_a_built_application_root_to_the_runner() {
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
-        request(&output)["application_root"],
-        application_root.to_str().unwrap()
+        hosted(&output).1,
+        runner_arguments(
+            "start",
+            &[&format!(
+                "--application-root={}",
+                application_root.to_str().unwrap()
+            )],
+            &tools.project
+        )
     );
 }
 
 #[test]
 fn dev_actions_encode_the_public_contract_and_launcher_json_format() {
     let tools = SourceTools::new();
+    let run = |id: &str| PathBuf::from(id);
     for (arguments, expected) in [
         (
             vec![
@@ -421,47 +441,41 @@ fn dev_actions_encode_the_public_contract_and_launcher_json_format() {
                 "--deny-warnings",
                 "--json",
             ],
-            serde_json::json!({
-                "action":"check",
-                "project":tools.project,
-                "deny_warnings":true,
-                "json":true
-            }),
+            runner_arguments("check", &["--deny-warnings", "--json"], &tools.project),
         ),
         (
             vec!["--format", "json", "dev", "status", "run-1"],
-            serde_json::json!({"action":"status","run_id":"run-1","json":true}),
+            runner_arguments("status", &["--json"], &run("run-1")),
         ),
         (
             vec!["dev", "token", "run-2", "--as", "reviewer", "--json"],
-            serde_json::json!({
-                "action":"token",
-                "run_id":"run-2",
-                "person":"reviewer",
-                "json":true
-            }),
+            runner_arguments("token", &["--as=reviewer", "--json"], &run("run-2")),
         ),
         (
             vec!["dev", "stop", "run-3"],
-            serde_json::json!({"action":"stop","run_id":"run-3","json":false}),
+            runner_arguments("stop", &[], &run("run-3")),
         ),
         (
             vec!["dev", "stop", "run-4", "--json"],
-            serde_json::json!({"action":"stop","run_id":"run-4","json":true}),
+            runner_arguments("stop", &["--json"], &run("run-4")),
         ),
         (
             vec!["dev", "stop", "run-5", "--recover", "--json"],
-            serde_json::json!({"action":"stop","run_id":"run-5","recover":true,"json":true}),
+            runner_arguments("stop", &["--recover", "--json"], &run("run-5")),
+        ),
+        (
+            vec!["dev", "status", "--", "-run-6"],
+            runner_arguments("status", &[], &run("-run-6")),
         ),
     ] {
         let output = tools
             .empty_command()
-            .args(arguments)
+            .args(&arguments)
             .env("RSTACK_BREGCTL_BIN", &tools.bregctl)
             .output()
             .unwrap();
-        assert!(output.status.success(), "{output:?}");
-        assert_eq!(request(&output), expected);
+        assert!(output.status.success(), "{arguments:?}: {output:?}");
+        assert_eq!(hosted(&output), ("bregctl".to_owned(), expected));
     }
 }
 
@@ -488,7 +502,10 @@ fn recover_passes_the_administrator_url_through_the_environment_only() {
     let stdout = String::from_utf8(output.stdout.clone()).unwrap();
     assert!(stdout.contains("database:matched\n"), "{stdout}");
     assert!(!stdout.contains(database_url));
-    assert!(!request(&output).to_string().contains(database_url));
+    assert_eq!(
+        hosted(&output).1,
+        runner_arguments("stop", &["--recover"], Path::new("run-6"))
+    );
 }
 
 #[test]
@@ -514,6 +531,7 @@ fn database_url_is_refused_for_stop_without_recover() {
 #[test]
 fn start_requires_the_complete_source_binary_set_without_an_installation() {
     let tools = SourceTools::new();
+    write_plan(&tools.project, &["breg", "casework"]);
     let output = tools
         .empty_command()
         .args(["dev", "start"])
@@ -648,9 +666,140 @@ fn breg_only_plan_does_not_require_casework_binaries() {
         .unwrap();
 
     assert!(output.status.success(), "{output:?}");
+    assert_eq!(hosted(&output).0, "bregctl");
     let stdout = String::from_utf8(output.stdout.clone()).unwrap();
     assert_eq!(output_field(&stdout, "caseworkctl"), "");
     assert_eq!(output_field(&stdout, "casework"), "");
+}
+
+#[test]
+fn casework_only_plan_needs_no_breg_binaries() {
+    let tools = SourceTools::new();
+    write_plan(&tools.project, &["casework"]);
+    let missing = tools._scratch.path().join("not-installed");
+    let launch = |arguments: &[&str]| {
+        tools
+            .empty_command()
+            .args(arguments)
+            .arg(&tools.project)
+            .env("RSTACK_BREGCTL_BIN", missing.join("bregctl"))
+            .env("RSTACK_BREG_BIN", missing.join("breg"))
+            .env("RSTACK_CASEWORKCTL_BIN", &tools.caseworkctl)
+            .env("RSTACK_CASEWORK_BIN", &tools.casework)
+            .output()
+            .unwrap()
+    };
+
+    let checked = launch(&["dev", "check"]);
+    assert!(checked.status.success(), "{checked:?}");
+    assert_eq!(
+        hosted(&checked),
+        (
+            "caseworkctl".to_owned(),
+            runner_arguments("check", &[], &tools.project)
+        )
+    );
+
+    let started = launch(&["dev", "start"]);
+    assert!(started.status.success(), "{started:?}");
+    assert_eq!(
+        hosted(&started),
+        (
+            "caseworkctl".to_owned(),
+            runner_arguments("start", &[], &tools.project)
+        )
+    );
+}
+
+#[test]
+fn casework_only_check_names_the_casework_install_and_override() {
+    let tools = SourceTools::new();
+    write_plan(&tools.project, &["casework"]);
+    let output = tools
+        .empty_command()
+        .args(["dev", "check"])
+        .arg(&tools.project)
+        .env("RSTACK_BREGCTL_BIN", &tools.bregctl)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("rstack install casework"), "{stderr}");
+    assert!(stderr.contains("RSTACK_CASEWORKCTL_BIN"), "{stderr}");
+    assert!(!stderr.contains("RSTACK_BREGCTL_BIN"), "{stderr}");
+    assert!(!stderr.contains("RSTACK_CASEWORK_BIN"), "{stderr}");
+}
+
+#[test]
+fn run_id_actions_use_the_first_available_host_cli() {
+    let tools = SourceTools::new();
+    let missing = tools._scratch.path().join("not-installed");
+    for action in [
+        &["dev", "status", "run-1"][..],
+        &["dev", "token", "run-1", "--as", "reviewer"][..],
+        &["dev", "stop", "run-1"][..],
+    ] {
+        let casework_only = tools
+            .empty_command()
+            .args(action)
+            .env("RSTACK_BREGCTL_BIN", missing.join("bregctl"))
+            .env("RSTACK_CASEWORKCTL_BIN", &tools.caseworkctl)
+            .output()
+            .unwrap();
+        assert!(casework_only.status.success(), "{casework_only:?}");
+        assert_eq!(hosted(&casework_only).0, "caseworkctl", "{action:?}");
+
+        let both = tools.command().args(action).output().unwrap();
+        assert!(both.status.success(), "{both:?}");
+        assert_eq!(hosted(&both).0, "bregctl", "{action:?}");
+    }
+
+    let none = tools
+        .empty_command()
+        .args(["dev", "status", "run-1"])
+        .output()
+        .unwrap();
+    assert_eq!(none.status.code(), Some(1), "{none:?}");
+    let stderr = String::from_utf8(none.stderr).unwrap();
+    for text in [
+        "rstack install breg",
+        "rstack install casework",
+        "RSTACK_BREGCTL_BIN",
+        "RSTACK_CASEWORKCTL_BIN",
+    ] {
+        assert!(stderr.contains(text), "{stderr}");
+    }
+}
+
+#[test]
+fn managed_casework_plan_runs_through_the_installed_casework_cli() {
+    let install = managed_install();
+    write_plan(&install.project, &["casework"]);
+    let output = Command::new(install.bin.join("rstack"))
+        .arg("--install-root")
+        .arg(&install.root)
+        .arg("--bin-dir")
+        .arg(&install.bin)
+        .args(["dev", "check"])
+        .arg(&install.project)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        hosted(&output),
+        (
+            "caseworkctl".to_owned(),
+            runner_arguments("check", &[], &install.project)
+        )
+    );
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    let generation = PathBuf::from(output_field(&stdout, "generation"));
+    assert_eq!(
+        PathBuf::from(output_field(&stdout, "caseworkctl")),
+        generation.join("components/casework/caseworkctl/caseworkctl")
+    );
 }
 
 #[test]
@@ -726,20 +875,41 @@ fn casework_text_outside_the_products_list_does_not_require_casework() {
     assert!(output.status.success(), "{output:?}");
 }
 
+/// The host reports a plan the launcher cannot read with the positioned
+/// diagnostics the configuration conformance corpus asserts, so the launcher
+/// hands such a plan to the first available host instead of refusing it.
 #[test]
-fn unparsable_plan_still_requires_casework() {
+fn unreadable_plan_is_reported_by_the_first_available_host() {
     let tools = SourceTools::new();
-    fs::write(tools.project.join("dev.yaml"), "products: [\n").unwrap();
-    let output = tools
-        .empty_command()
-        .args(["dev", "start"])
-        .arg(&tools.project)
-        .env("RSTACK_BREGCTL_BIN", &tools.bregctl)
-        .env("RSTACK_BREG_BIN", &tools.breg)
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(String::from_utf8(output.stderr)
-        .unwrap()
-        .contains("rstack install casework"));
+    let missing = tools._scratch.path().join("not-installed");
+    for plan in [
+        Some("products: [\n"),
+        Some("issuer: https://issuer.example\n"),
+        Some("products:\n  - {product: coordinator, project: c, audience: c}\n"),
+        None,
+    ] {
+        match plan {
+            Some(text) => fs::write(tools.project.join("dev.yaml"), text).unwrap(),
+            None => fs::remove_file(tools.project.join("dev.yaml")).unwrap(),
+        }
+        for action in ["check", "start"] {
+            let output = tools
+                .empty_command()
+                .args(["dev", action])
+                .arg(&tools.project)
+                .env("RSTACK_BREGCTL_BIN", missing.join("bregctl"))
+                .env("RSTACK_CASEWORKCTL_BIN", &tools.caseworkctl)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{plan:?} {action}: {output:?}");
+            assert_eq!(
+                hosted(&output),
+                (
+                    "caseworkctl".to_owned(),
+                    runner_arguments(action, &[], &tools.project)
+                ),
+                "{plan:?}"
+            );
+        }
+    }
 }

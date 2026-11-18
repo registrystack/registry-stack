@@ -10,9 +10,9 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultDocsRoot = resolve(scriptDir, '..');
 const defaultRepoRoot = resolve(defaultDocsRoot, '../..');
 
-const contract = (status, reference) => (entry) => ({
+const contract = (status, reference, root = 'products/breg/generated') => (entry) => ({
   ...entry,
-  file: `products/breg/generated/${entry.file}`,
+  file: `${root}/${entry.file}`,
   status,
   reference: `docs/site/src/content/docs/${reference ?? entry.reference}`,
 });
@@ -23,22 +23,27 @@ export const CONTRACTS = [
   { id: 'runtime', title: 'runtime.yaml', file: 'runtime/runtime.schema.json' },
 ].map(contract('beta', 'configure/breg.mdx'));
 
-// Files `bregctl` reads beside a project: adopter tooling, published by the
-// `tool-schema` example under products/breg/generated/tools. Listed in the
-// order an adopter meets them; the generated inventory preserves this order.
-export const TOOL_CONTRACTS = [
+// Files `rstack dev` reads beside a project: the development plan and its
+// scenarios, published by the registry-rstack-dev `dev-schema` example under
+// products/platform/generated/dev.
+const DEV_CONTRACTS = [
   {
     id: 'project-dev',
     title: 'dev.yaml',
-    file: 'tools/project-dev.v1alpha1.schema.json',
+    file: 'project-dev.v1alpha1.schema.json',
     reference: 'reference/breg-configuration.mdx',
   },
   {
     id: 'rstack-scenarios',
     title: 'tests/scenarios.yaml',
-    file: 'tools/scenarios.v1alpha1.schema.json',
+    file: 'scenarios.v1alpha1.schema.json',
     reference: 'configure/run-a-project-with-rstack-dev.mdx',
   },
+].map(contract('tooling', undefined, 'products/platform/generated/dev'));
+
+// Files `bregctl` reads beside a project: adopter tooling, published by the
+// `tool-schema` example under products/breg/generated/tools.
+const BREG_TOOL_CONTRACTS = [
   {
     id: 'dev-clients',
     title: 'dev-clients.yaml',
@@ -82,6 +87,10 @@ export const TOOL_CONTRACTS = [
     reference: 'reference/bregctl-publicschema-wizard.mdx',
   },
 ].map(contract('tooling'));
+
+// The tool files listed in the order an adopter meets them; the generated
+// inventory preserves this order.
+export const TOOL_CONTRACTS = [...DEV_CONTRACTS, ...BREG_TOOL_CONTRACTS];
 
 // The runtime documents of the supporting services beside the engine.
 export const SERVICE_CONTRACTS = [

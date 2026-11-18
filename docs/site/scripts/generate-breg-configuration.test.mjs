@@ -56,9 +56,12 @@ test('BReg reference includes module extensions, hook conditions, and runtime de
 });
 
 test('BReg covers every committed tool schema, in the order an adopter meets the files', async () => {
-  const root = new URL('../../../products/breg/generated/tools/', import.meta.url);
-  assert.deepEqual((await readdir(root)).map((name) => `tools/${name}`).sort(),
-    TOOL_CONTRACTS.map((entry) => entry.file.split('/generated/')[1]).sort());
+  const committed = async (directory) => (await readdir(new URL(`../../../${directory}/`, import.meta.url)))
+    .map((name) => `${directory}/${name}`);
+  assert.deepEqual([
+    ...await committed('products/breg/generated/tools'),
+    ...await committed('products/platform/generated/dev'),
+  ].sort(), TOOL_CONTRACTS.map((entry) => entry.file).sort());
   assert.deepEqual(TOOL_CONTRACTS.map((entry) => entry.id), ['project-dev', 'rstack-scenarios', 'dev-clients', 'example-scenarios',
     'journeys', 'schema-test-credentials', 'migration-descriptor', 'backup-binding', 'model-selection']);
 });
@@ -67,9 +70,9 @@ test('BReg tool and service references read the committed schemas they name', as
   const document = await buildBRegConfiguration();
   assert.deepEqual(document.tools.map((entry) => entry.id), TOOL_CONTRACTS.map((entry) => entry.id));
   assert.deepEqual(document.services.map((entry) => entry.id), ['mcp-runtime', 'review-runtime']);
-  const root = new URL('../../../products/breg/generated/', import.meta.url);
+  const root = new URL('../../../', import.meta.url);
   for (const entry of [...TOOL_CONTRACTS, ...SERVICE_CONTRACTS]) {
-    const schema = JSON.parse(await readFile(new URL(entry.file.split('/generated/')[1], root), 'utf8'));
+    const schema = JSON.parse(await readFile(new URL(entry.file, root), 'utf8'));
     assert.ok(typeof schema.title === 'string' && schema.title.length > 0, entry.file);
     if (entry.id === 'project-dev') {
       assert.equal(schema.$id,
@@ -86,7 +89,7 @@ test('BReg tool and service references read the committed schemas they name', as
   const projectDev = fields('tools', 'project-dev');
   assert.deepEqual(projectDev.get('kind').values, ['BRegProjectDev']);
   assert.ok(projectDev.has('products[].product'));
-  assert.ok(projectDev.has('journey.steps[].expect.status'));
+  assert.ok(fields('tools', 'rstack-scenarios').has('scenarios[].steps[].expect.status'));
 
   const descriptor = fields('tools', 'migration-descriptor');
   assert.deepEqual(descriptor.get('steps[].type').values,

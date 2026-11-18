@@ -3314,6 +3314,63 @@ on:
                 self.assertIn("messaging", selected)
                 self.assertIn("developer-tools", selected)
 
+    def test_development_host_changes_run_the_rstack_dev_tests_with_built_hosts(
+        self,
+    ) -> None:
+        """The registry-rstack dev_run tests drive the bregctl and caseworkctl
+        built beside rstack, which link registry-rstack-dev and host
+        `rstack dev`. A change to the library or to either host runs them, and
+        the shard builds both hosts before it tests."""
+        for path, packages in (
+            (
+                "crates/registry-rstack-dev/src/lib.rs",
+                {"registry-rstack-dev", "registry-rstack"},
+            ),
+            ("crates/registry-bregctl/src/lib.rs", {"registry-rstack"}),
+            ("crates/registry-caseworkctl/src/lib.rs", {"registry-rstack"}),
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                selected = next(
+                    (
+                        row["packages"]
+                        for row in outputs["rust_matrix"]["include"]
+                        if row["name"] == "developer-tools"
+                    ),
+                    [],
+                )
+                self.assertLessEqual(packages, set(selected))
+        steps = self.workflow_jobs["rust-tests"]["steps"]
+        names = [step.get("name") for step in steps]
+        build = next(
+            step
+            for step in steps
+            if step.get("run")
+            == "cargo build --locked -p registry-bregctl -p registry-caseworkctl --bins"
+        )
+        self.assertEqual(
+            build.get("if"),
+            "matrix.name == 'developer-tools' && contains(matrix.packages, 'registry-rstack')",
+        )
+        self.assertLess(steps.index(build), names.index("Test affected packages"))
+
+    def test_development_schema_drift_runs_in_the_conformance_job(self) -> None:
+        for path in (
+            "products/platform/generated/dev/project-dev.v1alpha1.schema.json",
+            "products/platform/generated/dev/scenarios.v1alpha1.schema.json",
+            "products/platform/scripts/check-dev-schemas.sh",
+            "crates/registry-rstack-dev/src/schema.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["config_conformance"])
+        steps = self.workflow_jobs["config-conformance"]["steps"]
+        self.assertTrue(
+            any(
+                step.get("run") == "products/platform/scripts/check-dev-schemas.sh"
+                for step in steps
+            )
+        )
+
     def test_docs_rebuild_from_generator_inputs_without_rendered_changes(self) -> None:
         for path in (
             "crates/registry-cli-docs/catalog.json",

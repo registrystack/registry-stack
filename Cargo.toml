@@ -61,6 +61,7 @@ members = [
     "crates/registry-manifest-core",
     "crates/registry-manifest-cli",
     "crates/registry-rstack",
+    "crates/registry-rstack-dev",
     "crates/registry-record",
     "crates/registry-render",
     "crates/registry-render-client",
@@ -148,6 +149,7 @@ registry-linkml = { path = "crates/registry-linkml", version = "0.46.1" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.46.1" }
 registry-manifest-cli = { path = "crates/registry-manifest-cli", version = "0.46.1" }
 registry-rstack = { path = "crates/registry-rstack", version = "0.46.1" }
+registry-rstack-dev = { path = "crates/registry-rstack-dev", version = "0.46.1" }
 registry-record = { path = "crates/registry-record", version = "0.46.1" }
 registry-render = { path = "crates/registry-render", version = "0.46.1" }
 registry-render-client = { path = "crates/registry-render-client", version = "0.46.1" }

@@ -706,7 +706,7 @@ def verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env)
             report["products"][process["product"]]
         )
     worker = command(
-        "pgrep", "-f", f"project-dev --worker {re.escape(str(state / run))}"
+        "pgrep", "-f", f"rstack-dev supervisor {re.escape(str(state / run))}"
     )
     [supervisor] = worker.stdout.split()
     os.kill(int(supervisor), signal.SIGKILL)
@@ -746,7 +746,7 @@ def lose_supervisor(bin_dir, checkout, state, env):
     report = dev(bin_dir, env, checkout, "start", ".")
     run = report["run_id"]
     worker = command(
-        "pgrep", "-f", f"project-dev --worker {re.escape(str(state / run))}"
+        "pgrep", "-f", f"rstack-dev supervisor {re.escape(str(state / run))}"
     )
     [supervisor] = worker.stdout.split()
     os.kill(int(supervisor), signal.SIGKILL)
@@ -964,7 +964,7 @@ os.execv(os.environ["RSTACK_TEST_BREGCTL"], sys.argv)
         assert not (run_root / "processes.json").exists()
         assert inventory(pg, pg_env) != baseline
         worker = command(
-            "pgrep", "-f", f"project-dev --worker {re.escape(str(run_root))}"
+            "pgrep", "-f", f"rstack-dev supervisor {re.escape(str(run_root))}"
         )
         [supervisor] = worker.stdout.split()
         os.kill(int(supervisor), signal.SIGKILL)

@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! `rstack dev` runs, driven through the launcher in source mode against the
+//! development hosts built beside it. Cargo builds only the binaries of the
+//! package under test, so build the hosts first:
+//! `cargo build --locked -p registry-bregctl -p registry-caseworkctl --bins`.
+
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::{
     fs,
@@ -8,6 +13,55 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+/// A development host CLI built beside `rstack`.
+fn host(name: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(env!("CARGO_BIN_EXE_rstack")).with_file_name(name);
+    assert!(
+        path.is_file(),
+        "{} is missing; build the development hosts first: cargo build --locked -p registry-bregctl -p registry-caseworkctl --bins",
+        path.display()
+    );
+    path
+}
+
+/// `rstack dev` in source mode, with run state under `state` and the JSON
+/// report format when `json` is set: no managed installation, the `bregctl`
+/// built beside rstack as the BReg host and tool, no Casework tool, and the
+/// system `false` as every product runtime, since these runs stop before a
+/// service starts.
+fn rstack_dev(state: &std::path::Path, json: bool) -> Command {
+    let uninstalled = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("dev-run-uninstalled");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rstack"));
+    command
+        .arg("--install-root")
+        .arg(uninstalled.join("install"))
+        .arg("--bin-dir")
+        .arg(uninstalled.join("bin"));
+    if json {
+        command.args(["--format", "json"]);
+    }
+    command
+        .arg("dev")
+        .env("RSTACK_DEV_STATE_DIR", state)
+        .env("RSTACK_BREGCTL_BIN", host("bregctl"))
+        .env("RSTACK_BREG_BIN", system_binary("false"))
+        .env_remove("RSTACK_CASEWORKCTL_BIN")
+        .env("RSTACK_CASEWORK_BIN", system_binary("false"))
+        .env_remove("RSTACK_DEV_DATABASE_URL")
+        .env_remove("RSTACK_DEV_DATABASE_CA");
+    command
+}
+
+/// Runs `rstack --format json dev ARGUMENTS` with run state under `state`.
+fn dev_json(state: &std::path::Path, arguments: &[&str]) -> std::process::Output {
+    rstack_dev(state, true).args(arguments).output().unwrap()
+}
+
+/// A path argument as UTF-8, which every test scratch path is.
+fn utf8(path: &std::path::Path) -> &str {
+    path.to_str().unwrap()
+}
 
 struct GuardFixture {
     guard: Child,
@@ -25,7 +79,15 @@ impl Drop for GuardFixture {
 }
 
 #[test]
-fn hidden_project_dev_guard_dispatch_reaps_workload_when_controller_closes() {
+fn every_host_runs_the_service_guard() {
+    for name in ["bregctl", "caseworkctl"] {
+        hidden_guard_dispatch_reaps_workload_when_controller_closes(&host(name));
+    }
+}
+
+/// The supervisor runs each service under `HOST rstack-dev guard`, where HOST
+/// is the CLI that runs the supervisor.
+fn hidden_guard_dispatch_reaps_workload_when_controller_closes(host: &std::path::Path) {
     let scratch = tempfile::tempdir().unwrap();
     let lock = scratch.path().join("guard.lock");
     let pid_file = scratch.path().join("guard.pid");
@@ -37,8 +99,8 @@ fn hidden_project_dev_guard_dispatch_reaps_workload_when_controller_closes() {
         .open(&lock)
         .unwrap();
     let sleep = system_binary("sleep");
-    let guard = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("project-dev-guard")
+    let guard = Command::new(host)
+        .args(["rstack-dev", "guard"])
         .arg("--lock")
         .arg(&lock)
         .arg("--pid-file")
@@ -70,11 +132,13 @@ fn hidden_project_dev_guard_dispatch_reaps_workload_when_controller_closes() {
         }
         assert!(
             fixture.guard.try_wait().unwrap().is_none(),
-            "hidden guard exited before publishing its workload PID"
+            "{} guard exited before publishing its workload PID",
+            host.display()
         );
         assert!(
             Instant::now() < launch_deadline,
-            "hidden guard did not publish its workload PID"
+            "{} guard did not publish its workload PID",
+            host.display()
         );
         thread::sleep(Duration::from_millis(10));
     };
@@ -89,7 +153,8 @@ fn hidden_project_dev_guard_dispatch_reaps_workload_when_controller_closes() {
         }
         assert!(
             Instant::now() < stop_deadline,
-            "hidden guard did not stop after its controller closed"
+            "{} guard did not stop after its controller closed",
+            host.display()
         );
         thread::sleep(Duration::from_millis(10));
     }
@@ -163,16 +228,6 @@ fn assert_error_envelope(report: &serde_json::Value, class: &str) {
     assert_eq!(report["error"]["class"], class, "{report}");
 }
 
-fn helper(request: serde_json::Value, state: &std::path::Path) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("project-dev")
-        .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
-        .env("RSTACK_DEV_STATE_DIR", state)
-        .env_remove("RSTACK_DEV_DATABASE_URL")
-        .output()
-        .unwrap()
-}
-
 /// A run directory whose supervisor is gone: its lock file exists, unlocked.
 fn lost_run(state: &std::path::Path) -> std::path::PathBuf {
     let root = state.join(RUN_ID);
@@ -193,61 +248,61 @@ fn every_helper_failure_prints_the_error_envelope() {
     let cases = [
         (
             "start of a missing project",
-            serde_json::json!({"action": "start", "project": missing_project, "json": true}),
+            vec!["start", utf8(&missing_project)],
             "domain",
             1,
         ),
         (
             "start with a bad ttl",
-            serde_json::json!({"action": "start", "project": scratch.path(), "ttl": "9", "json": true}),
+            vec!["start", utf8(scratch.path()), "--ttl", "9"],
             "usage",
             2,
         ),
         (
             "status with a malformed run ID",
-            serde_json::json!({"action": "status", "run_id": "../x", "json": true}),
+            vec!["status", "../x"],
             "usage",
             2,
         ),
         (
             "token with a malformed person",
-            serde_json::json!({"action": "token", "run_id": other_run, "person": "../x", "json": true}),
+            vec!["token", other_run, "--as", "../x"],
             "usage",
             2,
         ),
         (
             "token for a run that is not ready",
-            serde_json::json!({"action": "token", "run_id": other_run, "person": "operator", "json": true}),
+            vec!["token", other_run, "--as", "operator"],
             "domain",
             1,
         ),
         (
             "stop with a malformed run ID",
-            serde_json::json!({"action": "stop", "run_id": "../x", "json": true}),
+            vec!["stop", "../x"],
             "usage",
             2,
         ),
         (
             "recover with a malformed run ID",
-            serde_json::json!({"action": "stop", "run_id": "../x", "json": true, "recover": true}),
+            vec!["stop", "../x", "--recover"],
             "usage",
             2,
         ),
         (
             "status of a run whose supervisor is lost",
-            serde_json::json!({"action": "status", "run_id": RUN_ID, "json": true}),
+            vec!["status", RUN_ID],
             "operational",
             3,
         ),
         (
             "stop of a run whose supervisor is lost",
-            serde_json::json!({"action": "stop", "run_id": RUN_ID, "json": true}),
+            vec!["stop", RUN_ID],
             "operational",
             3,
         ),
     ];
-    for (name, request, class, exit) in cases {
-        let output = helper(request, &state);
+    for (name, arguments, class, exit) in cases {
+        let output = dev_json(&state, &arguments);
         assert_eq!(output.status.code(), Some(exit), "{name}: {output:?}");
         assert!(output.stderr.is_empty(), "{name}: {output:?}");
         let report: serde_json::Value = serde_json::from_slice(&output.stdout)
@@ -279,16 +334,10 @@ fn declared_application_requires_a_built_root_before_allocating_a_run() {
     .unwrap();
     fs::write(scratch.path().join("deployment.json"), "{}").unwrap();
     let state = scratch.path().join("state");
-    let checked = helper(
-        serde_json::json!({"action":"check", "project":scratch.path(), "deny_warnings":false, "json":true}),
-        &state,
-    );
+    let checked = dev_json(&state, &["check", utf8(scratch.path())]);
     assert!(checked.status.success(), "{checked:?}");
     assert!(!state.exists());
-    let result = helper(
-        serde_json::json!({"action":"start", "project":scratch.path(), "json":true}),
-        &state,
-    );
+    let result = dev_json(&state, &["start", utf8(scratch.path())]);
     assert_eq!(result.status.code(), Some(1), "{result:?}");
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_error_envelope(&report, "domain");
@@ -304,10 +353,10 @@ fn a_helper_failure_without_json_prints_one_line_and_the_same_exit_class() {
     let scratch = tempfile::tempdir().unwrap();
     let state = scratch.path().join("state");
     lost_run(&state);
-    let output = helper(
-        serde_json::json!({"action": "status", "run_id": RUN_ID, "json": false}),
-        &state,
-    );
+    let output = rstack_dev(&state, false)
+        .args(["status", RUN_ID])
+        .output()
+        .unwrap();
     assert_eq!(output.status.code(), Some(3), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
     let text = String::from_utf8(output.stderr).unwrap();
@@ -316,10 +365,7 @@ fn a_helper_failure_without_json_prints_one_line_and_the_same_exit_class() {
 }
 
 fn recover(state: &std::path::Path, run_id: &str) -> std::process::Output {
-    helper(
-        serde_json::json!({"action": "stop", "run_id": run_id, "json": true, "recover": true}),
-        state,
-    )
+    dev_json(state, &["stop", run_id, "--recover"])
 }
 
 #[test]
@@ -467,29 +513,14 @@ fn authored_stack_scenarios_coexist_with_native_breg_fixture_journeys() {
 }
 
 fn check(root: &std::path::Path, state: &std::path::Path, json: bool) -> std::process::Output {
-    let request = serde_json::json!({
-        "action": "check", "project": root, "deny_warnings": true, "json": json,
-    });
-    Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("project-dev")
-        .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
-        .env("RSTACK_DEV_STATE_DIR", state)
-        .env_remove("RSTACK_DEV_DATABASE_URL")
+    rstack_dev(state, json)
+        .args(["check", utf8(root), "--deny-warnings"])
         .output()
         .unwrap()
 }
 
 fn start(root: &std::path::Path, state: &std::path::Path) -> std::process::Output {
-    let request = serde_json::json!({
-        "action": "start", "project": root, "json": true,
-    });
-    Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("project-dev")
-        .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
-        .env("RSTACK_DEV_STATE_DIR", state)
-        .env_remove("RSTACK_DEV_DATABASE_URL")
-        .output()
-        .unwrap()
+    dev_json(state, &["start", utf8(root)])
 }
 
 fn check_with_casework_tool(
@@ -497,16 +528,9 @@ fn check_with_casework_tool(
     state: &std::path::Path,
     tool: &std::path::Path,
 ) -> std::process::Output {
-    let request = serde_json::json!({
-        "action": "check", "project": root, "deny_warnings": true, "json": true,
-    });
-    Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("project-dev")
-        .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
-        .env("RSTACK_DEV_STATE_DIR", state)
+    rstack_dev(state, true)
+        .args(["check", utf8(root), "--deny-warnings"])
         .env("RSTACK_CASEWORKCTL_BIN", tool)
-        .env_remove("RSTACK_CASEWORK_BIN")
-        .env_remove("RSTACK_DEV_DATABASE_URL")
         .output()
         .unwrap()
 }
@@ -516,16 +540,9 @@ fn start_with_casework_tool(
     state: &std::path::Path,
     tool: &std::path::Path,
 ) -> std::process::Output {
-    let request = serde_json::json!({
-        "action": "start", "project": root, "json": true,
-    });
-    Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("project-dev")
-        .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
-        .env("RSTACK_DEV_STATE_DIR", state)
+    rstack_dev(state, true)
+        .args(["start", utf8(root)])
         .env("RSTACK_CASEWORKCTL_BIN", tool)
-        .env_remove("RSTACK_CASEWORK_BIN")
-        .env_remove("RSTACK_DEV_DATABASE_URL")
         .output()
         .unwrap()
 }
@@ -1347,17 +1364,8 @@ fn start_reports_an_actionable_value_free_unstarted_grant() {
     let scratch = tempfile::tempdir().unwrap();
     let state = scratch.path().join("state");
     semantic_project(scratch.path(), "casework", "");
-    let request = serde_json::json!({
-        "action": "start", "project": scratch.path(), "json": true,
-    });
 
-    let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("project-dev")
-        .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
-        .env("RSTACK_DEV_STATE_DIR", &state)
-        .env_remove("RSTACK_DEV_DATABASE_URL")
-        .output()
-        .unwrap();
+    let result = start(scratch.path(), &state);
 
     assert_eq!(result.status.code(), Some(1));
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
@@ -1720,19 +1728,10 @@ fn check_distinguishes_an_unavailable_casework_helper_from_an_invalid_project() 
     let scratch = tempfile::tempdir().unwrap();
     let state = scratch.path().join("state");
     let tool = casework_reference_project(scratch.path(), "reviewer", "");
-    let request = serde_json::json!({
-        "action": "check", "project": scratch.path(), "deny_warnings": true, "json": true,
-    });
 
-    let unavailable = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("project-dev")
-        .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
-        .env("RSTACK_DEV_STATE_DIR", &state)
-        .env_remove("RSTACK_CASEWORKCTL_BIN")
-        .env_remove("RSTACK_CASEWORK_BIN")
-        .env_remove("RSTACK_DEV_DATABASE_URL")
-        .output()
-        .unwrap();
+    // `check` needs only its host, so the launcher runs it without the
+    // Casework tool and the runner reports that tool at its plan entry.
+    let unavailable = check(scratch.path(), &state, true);
 
     assert_eq!(unavailable.status.code(), Some(3), "{unavailable:?}");
     let report: serde_json::Value = serde_json::from_slice(&unavailable.stdout).unwrap();
@@ -1821,16 +1820,9 @@ fn a_malformed_plan_names_its_field_before_allocating_run_state() {
         "apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\nkind: BRegProjectDev\nissuer: https://example.test\nproducts: [{product: coordinator, project: registry, audience: test}]\npeople: {}\nscenarioFile: tests/scenarios.yaml\n",
     )
     .unwrap();
-    let request = serde_json::json!({
-        "action": "start", "project": scratch.path(), "json": true,
-    });
-    let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("project-dev")
-        .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
-        .env("RSTACK_DEV_STATE_DIR", &state)
-        .env_remove("RSTACK_DEV_DATABASE_URL")
-        .output()
-        .unwrap();
+    // The plan lists no hosting product, so the first available host reports
+    // the plan error.
+    let result = start(scratch.path(), &state);
     assert_eq!(result.status.code(), Some(1), "{result:?}");
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_error_envelope(&report, "domain");
@@ -1848,15 +1840,7 @@ fn a_malformed_plan_names_its_field_before_allocating_run_state() {
 #[test]
 fn a_run_id_cannot_name_a_path() {
     let scratch = tempfile::tempdir().unwrap();
-    let request = serde_json::json!({
-        "action": "stop", "run_id": "../other-run", "json": true,
-    });
-    let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("project-dev")
-        .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
-        .env("RSTACK_DEV_STATE_DIR", scratch.path())
-        .output()
-        .unwrap();
+    let result = dev_json(scratch.path(), &["stop", "../other-run"]);
     assert!(!result.status.success());
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     assert!(report["error"]["message"]
@@ -1905,19 +1889,17 @@ fn closed_loopback_port() -> u16 {
 }
 
 /// Start a BReg run whose product tool and runtime are the given binaries and
-/// whose PostgreSQL administrator URL is `database_url`.
+/// whose PostgreSQL administrator URL is `database_url`. The launcher would run
+/// the stand-in tool as the host, so the test runs the built host directly.
 fn start_with_breg_binaries(
     root: &std::path::Path,
     state: &std::path::Path,
     (tool, runtime): (&std::path::Path, &std::path::Path),
     database_url: &str,
 ) -> std::process::Output {
-    let request = serde_json::json!({
-        "action": "start", "project": root, "json": true,
-    });
-    Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("project-dev")
-        .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
+    Command::new(host("bregctl"))
+        .args(["rstack-dev", "start", "--json", "--"])
+        .arg(root)
         .env("RSTACK_DEV_STATE_DIR", state)
         .env("RSTACK_DEV_DATABASE_URL", database_url)
         .env_remove("RSTACK_DEV_DATABASE_CA")
@@ -2048,6 +2030,169 @@ fn start_reports_an_unreachable_postgresql_server_as_operational() {
     }
 }
 
+/// A project whose plan lists only Casework: the standalone decision example
+/// and one scenario that reads its review policies.
+fn casework_only_project(root: &std::path::Path) {
+    fs::create_dir_all(root.join("casework")).unwrap();
+    fs::write(
+        root.join("casework/casework.yaml"),
+        include_str!("../../../products/casework/examples/standalone-decision/casework.yaml"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("dev.yaml"),
+        concat!(
+            "apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\n",
+            "kind: BRegProjectDev\n",
+            "issuer: https://issuer.example.invalid\n",
+            "products:\n",
+            "  - {product: casework, project: casework, audience: \"urn:example:review\"}\n",
+            "people:\n",
+            "  staff:\n",
+            "    subject: staff\n",
+            "    client: staff-client\n",
+            "    grants:\n",
+            "      casework: {profile: staff, scopes: [\"casework:staff\"], claims: {registry_actor_kind: human}}\n",
+            "scenarioFile: tests/scenarios.yaml\n",
+        ),
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("tests")).unwrap();
+    fs::write(
+        root.join("tests/scenarios.yaml"),
+        concat!(
+            "apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1\n",
+            "kind: RStackScenarios\n",
+            "scenarios:\n",
+            "  - id: smoke\n",
+            "    steps:\n",
+            "      - {id: read, product: casework, as: staff, method: GET, path: /v1/review-policies, expect: {status: 200}}\n",
+        ),
+    )
+    .unwrap();
+}
+
+/// `rstack dev` with only the Casework tools: no BReg binary is set and none
+/// is installed, so the launcher runs the built `caseworkctl` as the host.
+fn casework_only_dev(state: &std::path::Path) -> Command {
+    let mut command = rstack_dev(state, true);
+    command
+        .env_remove("RSTACK_BREGCTL_BIN")
+        .env_remove("RSTACK_BREG_BIN")
+        .env("RSTACK_CASEWORKCTL_BIN", host("caseworkctl"));
+    command
+}
+
+#[test]
+fn a_casework_only_run_is_supervised_by_its_casework_host() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let project = scratch.path().join("project");
+    casework_only_project(&project);
+
+    let checked = casework_only_dev(&state)
+        .args(["check", utf8(&project), "--deny-warnings"])
+        .output()
+        .unwrap();
+    assert!(checked.status.success(), "{checked:?}");
+
+    // The supervisor opens the PostgreSQL administrator session, so a refused
+    // session proves `caseworkctl rstack-dev supervisor` ran the run.
+    let result = casework_only_dev(&state)
+        .args(["start", utf8(&project)])
+        .env(
+            "RSTACK_DEV_DATABASE_URL",
+            format!(
+                "postgresql://admin:unused@127.0.0.1:{}/postgres",
+                closed_loopback_port()
+            ),
+        )
+        .output()
+        .unwrap();
+
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_error_envelope(&report, "operational");
+    assert_eq!(result.status.code(), Some(3), "{report}");
+    assert!(
+        report["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot establish the PostgreSQL administrator session"),
+        "{report}"
+    );
+    assert_eq!(live_runs(&state), Vec::<String>::new());
+}
+
+#[test]
+#[ignore = "requires RSTACK_DEV_DATABASE_URL, RSTACK_DEV_DATABASE_CA and built caseworkctl and casework binaries"]
+fn a_casework_only_run_starts_reports_and_stops_without_breg() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let project = scratch.path().join("project");
+    casework_only_project(&project);
+    let casework = host("casework");
+
+    let started = with_test_database(
+        casework_only_dev(&state)
+            .args(["start", utf8(&project)])
+            .env("RSTACK_CASEWORK_BIN", &casework),
+    )
+    .output()
+    .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
+    let run_id = report["run_id"].as_str().unwrap_or_default().to_owned();
+    let stop = || dev_json(&state, &["stop", &run_id]);
+    if !started.status.success() {
+        stop();
+        panic!("{started:?}");
+    }
+    assert_eq!(report["status"], "ready", "{report}");
+    assert_eq!(report["scenarios"][0]["result"], "passed", "{report}");
+
+    // Run-ID actions find a host without any BReg binary.
+    let status = casework_only_dev(&state)
+        .args(["status", &run_id])
+        .output()
+        .unwrap();
+    let token = casework_only_dev(&state)
+        .args(["token", &run_id, "--as", "staff"])
+        .output()
+        .unwrap();
+    let stopped = casework_only_dev(&state)
+        .args(["stop", &run_id])
+        .output()
+        .unwrap();
+    if !stopped.status.success() {
+        stop();
+    }
+
+    assert!(status.status.success(), "{status:?}");
+    let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["status"], "ready", "{status}");
+    // The token report holds a credential, so only its exit status is shown.
+    assert!(token.status.success(), "{:?}", token.status);
+    assert!(stopped.status.success(), "{stopped:?}");
+    let stopped: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(stopped["status"], "stopped", "{stopped}");
+    assert_eq!(live_runs(&state), Vec::<String>::new());
+}
+
+/// Points `command` at the TLS PostgreSQL test server that
+/// `RSTACK_DEV_DATABASE_URL` and `RSTACK_DEV_DATABASE_CA` name.
+fn with_test_database(command: &mut Command) -> &mut Command {
+    let variable = |name: &str| {
+        std::env::var(name).unwrap_or_else(|_| panic!("set {name} to a TLS PostgreSQL server"))
+    };
+    command
+        // The runner requires a password in the URL; a trust-authenticated
+        // test server ignores it.
+        .env(
+            "RSTACK_DEV_DATABASE_URL",
+            variable("RSTACK_DEV_DATABASE_URL").replacen("postgres@", "postgres:unused@", 1),
+        )
+        .env("RSTACK_DEV_DATABASE_CA", variable("RSTACK_DEV_DATABASE_CA"))
+}
+
 #[test]
 #[ignore = "requires an independently built matching Casework CLI, no database"]
 fn normal_check_uses_owning_casework_tool_for_exact_run_producer_chain() {
@@ -2105,10 +2250,16 @@ fn normal_check_uses_owning_casework_tool_for_exact_run_producer_chain() {
     );
     assert!(!start_report.to_string().contains("--application-root"));
     assert!(!state.exists());
-    let extra_root = helper(
-        serde_json::json!({"action":"start","project":project,"application_root":scratch.path(),"json":true}),
-        &state,
-    );
+    let extra_root = rstack_dev(&state, true)
+        .args([
+            "start",
+            utf8(&project),
+            "--application-root",
+            utf8(scratch.path()),
+        ])
+        .env("RSTACK_CASEWORKCTL_BIN", &tool)
+        .output()
+        .unwrap();
     let root_report: serde_json::Value = serde_json::from_slice(&extra_root.stdout).unwrap();
     assert_eq!(extra_root.status.code(), Some(1));
     assert!(root_report["error"]["message"]
@@ -2123,7 +2274,7 @@ fn normal_check_uses_owning_casework_tool_for_exact_run_producer_chain() {
     let report: serde_json::Value = serde_json::from_slice(&refused.stdout).unwrap();
     assert_eq!(
         report["diagnostics"][0]["path"],
-        "/bindings/bregReviewAuthority/runIssuerBinding"
+        "/bindings/bregReviewAuthority/runIssuerBinding/producer/expectedSubject"
     );
     assert!(!report.to_string().contains("mismatched-test-subject"));
     assert!(!state.exists());
@@ -2131,551 +2282,6 @@ fn normal_check_uses_owning_casework_tool_for_exact_run_producer_chain() {
         original,
         fs::read(project.join("casework/casework.yaml")).unwrap()
     );
-}
-
-/// Match the existing BReg dev-client normalizer, not a new issuer default.
-fn public_parity_client_claims(
-    client: &serde_json::Value,
-) -> serde_json::Map<String, serde_json::Value> {
-    let mut claims = client["claims"].as_object().unwrap().clone();
-    claims
-        .entry("registry_actor_kind".to_owned())
-        .or_insert_with(|| serde_json::json!("service"));
-    assert!(
-        client["allowHumanFixture"].as_bool().unwrap_or(false)
-            == (claims["registry_actor_kind"] == "human"),
-        "human fixtures require the existing authored opt-in"
-    );
-    claims
-}
-
-#[test]
-fn public_parity_clients_preserve_existing_machine_contract() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/examples/minimal/dev-clients.yaml");
-    let clients = registry_platform_yaml::Reader::new(path.display().to_string())
-        .scan(&fs::read(&path).unwrap())
-        .unwrap()
-        .unwrap()
-        .to_json_value();
-    for client in clients["clients"].as_array().unwrap() {
-        let raw = client["claims"].as_object().unwrap();
-        assert!(!raw.contains_key("registry_actor_kind"));
-        let normalized = public_parity_client_claims(client);
-        assert!(normalized.len() == raw.len() + 1);
-        assert!(raw
-            .iter()
-            .all(|(key, value)| normalized.get(key) == Some(value)));
-        assert!(normalized["registry_actor_kind"] == "service");
-        for kind in ["agent", "service", "human"] {
-            let mut explicit = client.clone();
-            explicit["claims"]["registry_actor_kind"] = serde_json::json!(kind);
-            explicit["allowHumanFixture"] = serde_json::json!(kind == "human");
-            assert!(public_parity_client_claims(&explicit)["registry_actor_kind"] == kind);
-        }
-    }
-}
-
-/// A closed receipt, not a redacted copy of arbitrary native error text.
-fn public_parity_start_result(
-    started: &serde_json::Value,
-    exit: Option<i32>,
-    source_unchanged: bool,
-) -> serde_json::Value {
-    let (schema, status) = match (
-        started["schema_version"].as_str(),
-        started["status"].as_str(),
-    ) {
-        (Some("registry.rstack.dev.v1"), Some("ready")) => {
-            (Some("registry.rstack.dev.v1"), Some("ready"))
-        }
-        (Some("registry.rstack.error.v1"), Some("refused")) => {
-            (Some("registry.rstack.error.v1"), Some("refused"))
-        }
-        _ => (None, None),
-    };
-    let class = if status == Some("refused") {
-        match started["error"]["class"].as_str() {
-            Some("domain") => Some("domain"),
-            Some("usage") => Some("usage"),
-            Some("operational") => Some("operational"),
-            _ => None,
-        }
-    } else {
-        None
-    };
-    let exit = exit.filter(|code| (0..=3).contains(code));
-    let valid = matches!(
-        (status, class, exit),
-        (Some("ready"), None, Some(0 | 1))
-            | (Some("refused"), Some("domain"), Some(1))
-            | (Some("refused"), Some("usage"), Some(2))
-            | (Some("refused"), Some("operational"), Some(3))
-    );
-    // Preserve only membership of this one existing contract diagnostic.
-    // Neither its surrounding text nor any prefix-derived code is copied.
-    let reserved = status == Some("refused")
-        && started["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("breg.registry.canonical-base-iri-reserved"));
-    serde_json::json!({"phase":"native-start","startExit":exit,"schema":schema,"status":status,
-        "class":class,"protocolEnvelopeValid":valid,"reservedIdentityDiagnostic":reserved,
-        "sourceBytesUnchanged":source_unchanged})
-}
-
-#[test]
-fn public_parity_retention_excludes_short_claim_message_and_forged_codes() {
-    for canary in [
-        "unallowlisted-claim-canary auth.unallowlisted-canary",
-        "tiny-token-abc",
-        "config.short-canary source.short-canary test.forged-canary",
-    ] {
-        let report = serde_json::json!({"schema_version":"registry.rstack.error.v1","status":"refused",
-            "error":{"class":"domain","message":canary,"code":canary},
-            "claims":{"short":canary},"boundedRedactedSummary":canary,"diagnosticCodes":[canary]});
-        let result = public_parity_start_result(&report, Some(1), true);
-        let encoded = result.to_string();
-        for word in canary.split_whitespace() {
-            assert!(!encoded.contains(word));
-        }
-        assert!(result.get("boundedRedactedSummary").is_none());
-        assert!(result.get("diagnosticCodes").is_none());
-        assert!(result.as_object().unwrap().len() == 8);
-        assert!(result["protocolEnvelopeValid"] == true);
-        assert!(result["reservedIdentityDiagnostic"] == false);
-    }
-    let report = serde_json::json!({"schema_version":"registry.rstack.error.v1","status":"refused",
-        "error":{"class":"domain","message":"breg.registry.canonical-base-iri-reserved short-claim-canary auth.forged-canary"}});
-    let result = public_parity_start_result(&report, Some(1), false);
-    assert!(result["reservedIdentityDiagnostic"] == true);
-    assert!(result["sourceBytesUnchanged"] == false);
-    assert!(!result.to_string().contains("canary"));
-}
-
-#[test]
-fn public_parity_retention_accepts_only_fixed_protocol_enums() {
-    for (class, exit) in [("domain", 1), ("usage", 2), ("operational", 3)] {
-        let report = serde_json::json!({"schema_version":"registry.rstack.error.v1","status":"refused","error":{"class":class}});
-        let result = public_parity_start_result(&report, Some(exit), true);
-        assert!(result["protocolEnvelopeValid"] == true);
-        assert!(result["class"] == class);
-        for field in ["schema_version", "status", "class"] {
-            let mut forged = report.clone();
-            if field == "class" {
-                forged["error"][field] = serde_json::json!("short-enum-canary");
-            } else {
-                forged[field] = serde_json::json!("short-enum-canary");
-            }
-            let result = public_parity_start_result(&forged, Some(exit), true);
-            assert!(!result.to_string().contains("canary"));
-            assert!(result["class"].is_null());
-            assert!(result["protocolEnvelopeValid"] == false);
-        }
-    }
-    let ready = serde_json::json!({"schema_version":"registry.rstack.dev.v1","status":"ready","error":{"class":"short-enum-canary"}});
-    for exit in [0, 1] {
-        let result = public_parity_start_result(&ready, Some(exit), true);
-        assert!(result["protocolEnvelopeValid"] == true && result["class"].is_null());
-        assert!(!result.to_string().contains("canary"));
-    }
-    for exit in [None, Some(-1), Some(4), Some(101), Some(i32::MAX)] {
-        let result = public_parity_start_result(&ready, exit, true);
-        assert!(result["startExit"].is_null() && result["protocolEnvelopeValid"] == false);
-    }
-}
-
-/// Public native lifecycle regression. The caller supplies a fresh owner-only
-/// directory and a disposable TLS PostgreSQL, never a retained developer DB.
-#[test]
-#[ignore = "requires RSTACK_PARITY_ROOT, RSTACK_PARITY_DATABASE_URL_FILE, RSTACK_PARITY_DATABASE_CA, RSTACK_PARITY_RSTACK_BIN and RSTACK_PARITY_BREG_BIN"]
-fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
-    use registry_breg::package::{
-        load_package, load_predecessor_package, PackageError, PackageLoadContext,
-    };
-    use std::collections::BTreeMap;
-    use std::path::{Path, PathBuf};
-
-    fn required(name: &str) -> PathBuf {
-        std::env::var_os(name)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| panic!("set {name}"))
-    }
-    fn copy(source: &Path, target: &Path) {
-        fs::create_dir(target).unwrap();
-        for entry in fs::read_dir(source).unwrap() {
-            let entry = entry.unwrap();
-            let destination = target.join(entry.file_name());
-            assert!(!entry.file_type().unwrap().is_symlink());
-            if entry.file_type().unwrap().is_dir() {
-                copy(&entry.path(), &destination);
-            } else {
-                fs::copy(entry.path(), destination).unwrap();
-            }
-        }
-    }
-    fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
-        fn visit(root: &Path, directory: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
-            for entry in fs::read_dir(directory).unwrap() {
-                let entry = entry.unwrap();
-                if entry.file_type().unwrap().is_dir() {
-                    visit(root, &entry.path(), files);
-                } else {
-                    files.insert(
-                        entry.path().strip_prefix(root).unwrap().to_owned(),
-                        fs::read(entry.path()).unwrap(),
-                    );
-                }
-            }
-        }
-        let mut files = BTreeMap::new();
-        visit(root, root, &mut files);
-        files
-    }
-    struct OwnedRun {
-        rstack: PathBuf,
-        install: PathBuf,
-        state: PathBuf,
-        run: Option<String>,
-    }
-    impl OwnedRun {
-        fn command(&self, operation: &str, subject: &Path) -> Command {
-            let mut command = Command::new(&self.rstack);
-            command
-                .args(["--install-root"])
-                .arg(&self.install)
-                .args(["dev", operation])
-                .arg(subject)
-                .arg("--json")
-                .env("RSTACK_DEV_STATE_DIR", &self.state)
-                .env("RSTACK_BREGCTL_BIN", env!("CARGO_BIN_EXE_bregctl"))
-                .env("RSTACK_BREG_BIN", required("RSTACK_PARITY_BREG_BIN"));
-            command
-        }
-        fn stop(&mut self) {
-            if let Some(id) = self.run.clone() {
-                let stopped = self.command("stop", Path::new(&id)).output().unwrap();
-                assert!(stopped.status.success(), "owned normal stop failed");
-                let report: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
-                assert!(
-                    report["status"] == "stopped",
-                    "owned status must be stopped"
-                );
-                self.run = None;
-                let later = self.command("status", Path::new(&id)).output().unwrap();
-                assert!(later.status.success());
-                let report: serde_json::Value = serde_json::from_slice(&later.stdout).unwrap();
-                assert!(
-                    report["status"] == "stopped",
-                    "owned status must be stopped"
-                );
-            }
-        }
-    }
-    impl Drop for OwnedRun {
-        fn drop(&mut self) {
-            if self.run.is_some() {
-                self.stop();
-            }
-        }
-    }
-
-    let parent = required("RSTACK_PARITY_ROOT").canonicalize().unwrap();
-    let scratch = tempfile::Builder::new()
-        .prefix("public-local-package-")
-        .tempdir_in(&parent)
-        .unwrap();
-    let root = scratch.path();
-    let project = root.join("project");
-    copy(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/minimal"),
-        &project,
-    );
-    let source = fs::read_to_string(project.join("registry.yaml")).unwrap();
-    assert_eq!(source.matches("https://directory.example.gov").count(), 1);
-    fs::write(
-        project.join("registry.yaml"),
-        source.replace(
-            "https://directory.example.gov",
-            "https://directory.example.invalid",
-        ),
-    )
-    .unwrap();
-
-    // Derive identities and exact fixture-step assignments from the public
-    // project's existing authored clients and journeys, without widening them.
-    let yaml = |name: &str| -> serde_json::Value {
-        let path = project.join(name);
-        registry_platform_yaml::Reader::new(path.display().to_string())
-            .scan(&fs::read(&path).unwrap())
-            .unwrap()
-            .unwrap()
-            .to_json_value()
-    };
-    let clients = yaml("dev-clients.yaml");
-    let journeys = yaml("tests/journeys.yaml");
-    let mut people = serde_json::Map::new();
-    for client in clients["clients"].as_array().unwrap() {
-        let alias = client["id"].as_str().unwrap();
-        assert_eq!(client["accessProfiles"].as_array().unwrap().len(), 1);
-        let mut claims = public_parity_client_claims(client);
-        let subject = claims.remove("registry_principal").unwrap();
-        people.insert(alias.to_owned(), serde_json::json!({"subject":subject,"client":alias,
-            "grants":{"breg":{"profile":client["accessProfiles"][0],"scopes":client["scopes"],"claims":claims}}}));
-    }
-    let mut assignments = serde_json::Map::new();
-    for journey in journeys["journeys"].as_array().unwrap() {
-        let mut steps = serde_json::Map::new();
-        for step in journey["steps"].as_array().unwrap() {
-            let selected: Vec<_> = clients["clients"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|client| {
-                    client["claims"]["registry_principal"] == step["claims"]["principal"]
-                        && client["accessProfiles"][0] == step["accessProfile"]
-                        && client["scopes"] == step["claims"]["scopes"]
-                        && client["claims"]["registry_purpose"] == step["claims"]["purpose"]
-                })
-                .collect();
-            assert_eq!(
-                selected.len(),
-                1,
-                "one existing authored client must bind each fixture step"
-            );
-            steps.insert(
-                step["id"].as_str().unwrap().to_owned(),
-                selected[0]["id"].clone(),
-            );
-        }
-        assignments.insert(journey["id"].as_str().unwrap().to_owned(), steps.into());
-    }
-    fs::write(project.join("dev.yaml"), serde_json::to_vec_pretty(&serde_json::json!({
-        "apiVersion":"id.registrystack.org/formats/breg/project-dev/v1alpha1","kind":"BRegProjectDev",
-        "issuer":"https://issuer.example.invalid",
-        "products":[{"product":"breg","project":".","audience":"registry"}],
-        "people":people,"schemaTestPeople":assignments,
-        "scenarioFile":"tests/scenarios.yaml"
-    })).unwrap()).unwrap();
-    fs::write(project.join("tests/scenarios.yaml"), serde_json::to_vec_pretty(&serde_json::json!({
-        "apiVersion":"id.registrystack.org/formats/rstack/scenarios/v1alpha1","kind":"RStackScenarios",
-        "scenarios":[{"id":"public-directory","steps":[{"id":"read-registry","product":"breg","as":"editor","method":"GET","path":"/v1/registry","expect":{"status":200}}]}]
-    })).unwrap()).unwrap();
-    let original = snapshot(&project);
-    let mut owned = OwnedRun {
-        rstack: required("RSTACK_PARITY_RSTACK_BIN"),
-        install: root.join("install"),
-        state: root.join("state"),
-        run: None,
-    };
-    let checked = owned.command("check", &project).output().unwrap();
-    assert!(
-        checked.status.success(),
-        "public authored project-dev check failed"
-    );
-    let database = fs::read_to_string(required("RSTACK_PARITY_DATABASE_URL_FILE")).unwrap();
-    let output = owned
-        .command("start", &project)
-        .args(["--ttl", "5m"])
-        .env("RSTACK_DEV_DATABASE_URL", database.trim())
-        .env(
-            "RSTACK_DEV_DATABASE_CA",
-            required("RSTACK_PARITY_DATABASE_CA"),
-        )
-        .output()
-        .unwrap();
-    let started: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    if let Some(id) = started["run_id"].as_str() {
-        owned.run = Some(id.to_owned());
-    }
-    fn retain_failure(root: &Path, parent: &Path) {
-        if !root.is_dir() {
-            return;
-        }
-        for entry in fs::read_dir(root).unwrap() {
-            let entry = entry.unwrap();
-            if entry.file_type().unwrap().is_dir() {
-                retain_failure(&entry.path(), parent);
-            } else if entry.file_name() == "breg-test-report.json" {
-                let bytes = fs::read(entry.path()).unwrap();
-                let _: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-                use std::io::Write as _;
-                fs::OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .mode(0o600)
-                    .open(parent.join("first-failure.json"))
-                    .unwrap()
-                    .write_all(&bytes)
-                    .unwrap();
-            }
-        }
-    }
-    retain_failure(&owned.state, &parent);
-    let safe = public_parity_start_result(
-        &started,
-        output.status.code(),
-        snapshot(&project) == original,
-    );
-    fs::write(
-        parent.join("result.json"),
-        serde_json::to_vec_pretty(&safe).unwrap(),
-    )
-    .unwrap();
-    assert!(
-        output.status.success(),
-        "public placeholder start refused; see bounded result.json"
-    );
-    assert!(started["status"] == "ready", "native start must be ready");
-    assert!(
-        started["scenarios"][0]["result"] == "passed",
-        "native journey must pass"
-    );
-    let id = owned.run.as_deref().unwrap();
-    let run_root = owned.state.join(id);
-    let receipt = run_root.join("schema-test-receipt.json");
-    let receipt_value: serde_json::Value =
-        serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
-    assert!(
-        receipt_value["successfulJourneyIds"] == serde_json::json!(["directory-contact"]),
-        "receipt must bind the authored journey"
-    );
-    fs::copy(&receipt, parent.join("schema-test-receipt.json")).unwrap();
-    let package = run_root.join("breg-build/package");
-    load_package(
-        &package,
-        &PackageLoadContext {
-            database_initialization_environment: "local",
-        },
-    )
-    .unwrap();
-    assert!(matches!(
-        load_package(
-            &package,
-            &PackageLoadContext {
-                database_initialization_environment: "production"
-            }
-        ),
-        Err(PackageError::DeploymentIdentity)
-    ));
-    load_predecessor_package(
-        &package,
-        &PackageLoadContext {
-            database_initialization_environment: "production",
-        },
-    )
-    .unwrap();
-    let deployment = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("package")
-        .arg(&project)
-        .arg("--test-receipt")
-        .arg(&receipt)
-        .arg("--output")
-        .arg(root.join("deployment-build"))
-        .args(["--format", "json"])
-        .output()
-        .unwrap();
-    assert!(!deployment.status.success());
-    let refused: serde_json::Value = serde_json::from_slice(&deployment.stdout).unwrap();
-    assert!(refused["diagnostics"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|d| d["code"] == "breg.registry.canonical-base-iri-reserved"));
-    assert!(!root.join("deployment-build").exists());
-    let status = owned.command("status", Path::new(id)).output().unwrap();
-    assert!(status.status.success());
-    let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
-    assert!(status["status"] == "ready", "native status must be ready");
-    assert!(
-        status["scenarios"] == started["scenarios"],
-        "native status must match the start journey"
-    );
-    owned.stop();
-    assert!(live_runs(&owned.state).is_empty());
-    assert!(
-        snapshot(&project) == original,
-        "authored source must remain byte-identical"
-    );
-    fs::write(parent.join("result.json"), serde_json::to_vec_pretty(&serde_json::json!({"checkPassed":true,"startReady":true,"authoredNativeJourneyReceiptPassed":true,"journeyPassed":true,"localPackageAdmitted":true,"productionPackageRefused":true,"productionTargetLoadRefused":true,"predecessorRecoveryReadable":true,"statusReady":true,"stopStopped":true,"postStopStatusStopped":true,"stateEmpty":true,"sourceBytesUnchanged":true})).unwrap()).unwrap();
-}
-
-#[test]
-fn local_package_public_command_keeps_reserved_identity_refusal() {
-    let root = tempfile::tempdir().unwrap();
-    let project = root.path().join("project");
-    let initialized = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("init")
-        .arg(&project)
-        .args(["--format", "json"])
-        .output()
-        .unwrap();
-    assert!(
-        initialized.status.success(),
-        "normal public initialization must succeed"
-    );
-    let path = project.join("registry.yaml");
-    let original = fs::read_to_string(&path).unwrap();
-    assert!(original.matches("https://directory.example.gov").count() == 1);
-    let source = original.replace(
-        "https://directory.example.gov",
-        "https://directory.example.invalid",
-    );
-    fs::write(&path, &source).unwrap();
-    let output = root.path().join("deployment-build");
-    let refused = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("package")
-        .arg(&project)
-        .arg("--schema-fingerprint")
-        .arg(format!("sha256:{}", "0".repeat(64)))
-        .arg("--test-receipt")
-        .arg(root.path().join("missing-receipt.json"))
-        .arg("--output")
-        .arg(&output)
-        .args(["--format", "json"])
-        .output()
-        .unwrap();
-    assert!(
-        !refused.status.success(),
-        "ordinary package must refuse reserved identity"
-    );
-    let report: serde_json::Value = serde_json::from_slice(&refused.stdout).unwrap();
-    assert!(report["diagnostics"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|item| item["code"] == "breg.registry.canonical-base-iri-reserved"));
-    assert!(!output.exists());
-    assert!(fs::read_to_string(&path).unwrap() == source);
-}
-
-#[test]
-fn native_schema_test_runtime_path_refusal_has_closed_report_envelope() {
-    let scratch = tempfile::tempdir().unwrap();
-    fixture_project(scratch.path(), "");
-    let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .arg("test")
-        .arg(scratch.path())
-        .args([
-            "--runtime-config",
-            "relative-private-canary",
-            "--credentials",
-            "relative-private-canary",
-            "--output",
-        ])
-        .arg(scratch.path().join("receipt.json"))
-        .args(["--format", "json"])
-        .output()
-        .unwrap();
-    assert!(!result.status.success());
-    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
-    assert_eq!(report["ok"], false);
-    assert_eq!(report["command"], "test");
-    assert_eq!(
-        report["diagnostics"][0]["code"],
-        "test.runtime-config.path-invalid"
-    );
-    assert_eq!(report["diagnostics"][0]["path"], "runtimeConfig");
-    assert!(!scratch.path().join("receipt.json").exists());
 }
 
 /// The reviewed-evidence acceptance project, copied beside `root` so a test
@@ -2723,7 +2329,7 @@ impl AcceptanceRun {
             .replace("issuer: https://issuer.example.test", "issuer: run");
         let binding = Self::ISSUER_BINDING.replace("SUBJECT", expected_subject);
         fs::write(project.join("dev.yaml"), format!("{head}{binding}{rest}")).unwrap();
-        let bin = std::path::Path::new(env!("CARGO_BIN_EXE_bregctl"))
+        let bin = std::path::Path::new(env!("CARGO_BIN_EXE_rstack"))
             .parent()
             .unwrap()
             .to_owned();
@@ -2765,23 +2371,7 @@ impl AcceptanceRun {
         bregctl: &std::path::Path,
         caseworkctl: &std::path::Path,
     ) -> std::process::Output {
-        let request = serde_json::json!({
-            "action": "start", "project": self.project, "json": true,
-        });
-        let variable = |name: &str| {
-            std::env::var(name).unwrap_or_else(|_| panic!("set {name} to a TLS PostgreSQL server"))
-        };
-        Command::new(env!("CARGO_BIN_EXE_bregctl"))
-            .arg("project-dev")
-            .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
-            .env("RSTACK_DEV_STATE_DIR", &self.state)
-            // The runner requires a password in the URL; a trust-authenticated
-            // test server ignores it.
-            .env(
-                "RSTACK_DEV_DATABASE_URL",
-                variable("RSTACK_DEV_DATABASE_URL").replacen("postgres@", "postgres:unused@", 1),
-            )
-            .env("RSTACK_DEV_DATABASE_CA", variable("RSTACK_DEV_DATABASE_CA"))
+        with_test_database(rstack_dev(&self.state, true).args(["start", utf8(&self.project)]))
             .env("RSTACK_BREGCTL_BIN", bregctl)
             .env("RSTACK_BREG_BIN", self.bin.join("breg"))
             .env("RSTACK_CASEWORKCTL_BIN", caseworkctl)
@@ -2793,18 +2383,13 @@ impl AcceptanceRun {
     /// Stop a run a test left running.
     fn stop(&self, started: &serde_json::Value) {
         if let Some(run) = started["run_id"].as_str() {
-            let request = serde_json::json!({"action": "stop", "run_id": run, "json": true});
-            let _ = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-                .arg("project-dev")
-                .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
-                .env("RSTACK_DEV_STATE_DIR", &self.state)
-                .output();
+            let _ = dev_json(&self.state, &["stop", run]);
         }
     }
 }
 
 #[test]
-#[ignore = "requires RSTACK_DEV_DATABASE_URL, RSTACK_DEV_DATABASE_CA and built breg, casework and caseworkctl binaries"]
+#[ignore = "requires RSTACK_DEV_DATABASE_URL, RSTACK_DEV_DATABASE_CA and built bregctl, breg, caseworkctl and casework binaries"]
 fn casework_run_issuer_binding_needs_no_run_source_command() {
     let scratch = tempfile::tempdir().unwrap();
     let run = AcceptanceRun::new(scratch.path(), "producer");
@@ -2831,7 +2416,7 @@ fn casework_run_issuer_binding_needs_no_run_source_command() {
 }
 
 #[test]
-#[ignore = "requires RSTACK_DEV_DATABASE_URL, RSTACK_DEV_DATABASE_CA and built breg, casework and caseworkctl binaries"]
+#[ignore = "requires RSTACK_DEV_DATABASE_URL, RSTACK_DEV_DATABASE_CA and built bregctl, breg, caseworkctl and casework binaries"]
 fn casework_run_issuer_mismatch_names_the_dev_yaml_pointer() {
     let scratch = tempfile::tempdir().unwrap();
     let run = AcceptanceRun::new(scratch.path(), "not-the-producer");
@@ -2848,7 +2433,7 @@ fn casework_run_issuer_mismatch_names_the_dev_yaml_pointer() {
 }
 
 #[test]
-#[ignore = "requires RSTACK_DEV_DATABASE_URL, RSTACK_DEV_DATABASE_CA and built breg, casework and caseworkctl binaries"]
+#[ignore = "requires RSTACK_DEV_DATABASE_URL, RSTACK_DEV_DATABASE_CA and built bregctl, breg, caseworkctl and casework binaries"]
 fn breg_schema_test_failure_passes_the_tool_report_through() {
     let scratch = tempfile::tempdir().unwrap();
     let run = AcceptanceRun::new(scratch.path(), "producer");

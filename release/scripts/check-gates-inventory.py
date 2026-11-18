@@ -173,6 +173,15 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "rstack dependency boundary tests",
         "run: python3 -m unittest products/platform/scripts/test_check_rstack_dependencies.py",
     ),
+    (
+        "rstack dev hosts built before the rstack tests",
+        "if: matrix.name == 'developer-tools' && contains(matrix.packages, 'registry-rstack')\n"
+        "        run: cargo build --locked -p registry-bregctl -p registry-caseworkctl --bins",
+    ),
+    (
+        "rstack dev plan and scenario schema drift check",
+        "run: products/platform/scripts/check-dev-schemas.sh",
+    ),
     ("Runtime configuration conformance job", "config-conformance:"),
     (
         "Runtime configuration conformance path filter",

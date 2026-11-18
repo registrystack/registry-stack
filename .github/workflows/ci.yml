@@ -659,6 +659,12 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # The rstack dev_run tests drive the development hosts built beside
+      # rstack, and fail with this command when they are missing.
+      - name: Build the rstack dev hosts
+        if: matrix.name == 'developer-tools' && contains(matrix.packages, 'registry-rstack')
+        run: cargo build --locked -p registry-bregctl -p registry-caseworkctl --bins
+
       - name: Test affected packages
         run: python3 .github/scripts/run_cargo_packages.py test
 
@@ -1944,6 +1950,9 @@ jobs:
 
       - name: Check Coordinator configuration schemas
         run: products/coordinator/scripts/check-schemas.sh
+
+      - name: Check the rstack dev plan and scenario schemas
+        run: products/platform/scripts/check-dev-schemas.sh
 
       - name: Check BReg citizen service runtime schemas
         run: cargo test --locked -p registry-breg-mcp -p registry-breg-review --features registry-breg-mcp/schema,registry-breg-review/schema --lib schema::tests

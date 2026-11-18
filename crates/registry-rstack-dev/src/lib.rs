@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The private runner behind the rstack launcher. The bootstrap binary does
-//! not link the database, HTTP server, or signing libraries.
+//! The development runner behind `rstack dev`. The launcher stays a plain
+//! bootstrap binary that links no database, HTTP server, or signing library,
+//! so each product CLI that `rstack dev` supports links this crate behind the
+//! hidden [`COMMAND`] subcommand and the launcher execs that host. `check`
+//! and `start` run in the CLI of the plan's first product in the order breg,
+//! casework, because the plan needs that CLI anyway. `status`, `token`, and
+//! `stop` run in the first host available: a run keeps its state in its run
+//! directory, so any host of the same release serves a run another host
+//! started. This crate links no product crate; it drives each product through
+//! that product's own CLI and runtime binaries.
 
 mod bindings;
 mod browser;
@@ -12,6 +20,8 @@ mod journey;
 pub(crate) mod plan;
 mod products;
 mod recovery;
+#[cfg(feature = "schema")]
+pub mod schema;
 
 use anyhow::{bail, ensure, Context, Result};
 use registry_platform_yaml::{Diagnostic, Report};
@@ -29,7 +39,7 @@ use std::{
         process::CommandExt,
     },
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, ExitCode, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
@@ -58,7 +68,6 @@ const CHECK_REPORT_API_VERSION: &str = "id.registrystack.org/formats/breg/ctl-re
 const CHECK_REPORT_KIND: &str = "BRegCtlReport";
 const SCHEMA: &str = "registry.rstack.dev.v1";
 const ERROR_SCHEMA: &str = "registry.rstack.error.v1";
-const REQUEST: &str = "RSTACK_PROJECT_DEV_REQUEST";
 const DATABASE_URL: &str = "RSTACK_DEV_DATABASE_URL";
 const CA_FILE: &str = "RSTACK_DEV_DATABASE_CA";
 const REPORT: &str = "report.json";
@@ -75,53 +84,61 @@ const MAXIMUM_CAPTURED_INPUT_BYTES: u64 =
     16 * registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES as u64;
 const MAXIMUM_RUN_REPORT_BYTES: u64 = 512 * 1024;
 
+/// The hidden subcommand under which each hosting product CLI runs this
+/// runner. `rstack dev` execs `<host CLI> rstack-dev <action> [options] --
+/// <project or run ID>`, and the supervisor and guard re-enter the same host
+/// under it.
+pub const COMMAND: &str = "rstack-dev";
+
+/// The arguments of the hidden `rstack-dev` subcommand a hosting product CLI
+/// adds. Pass them to [`run`].
 #[derive(clap::Args, Debug)]
-pub(crate) struct Args {
-    #[arg(long, hide = true)]
-    worker: Option<PathBuf>,
+pub struct Args {
+    #[command(subcommand)]
+    entry: Entry,
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-enum Request {
+#[derive(clap::Subcommand, Debug)]
+enum Entry {
     Check {
-        project: PathBuf,
+        #[arg(long)]
         deny_warnings: bool,
+        #[arg(long)]
         json: bool,
+        project: PathBuf,
     },
     Start {
-        project: PathBuf,
+        #[arg(long)]
         application_root: Option<PathBuf>,
+        #[arg(long)]
         ttl: Option<String>,
+        #[arg(long)]
         json: bool,
+        project: PathBuf,
     },
     Status {
-        run_id: String,
+        #[arg(long)]
         json: bool,
+        run_id: String,
     },
     Token {
-        run_id: String,
+        #[arg(long = "as")]
         person: String,
+        #[arg(long)]
         json: bool,
+        run_id: String,
     },
     Stop {
-        run_id: String,
-        json: bool,
-        #[serde(default)]
+        #[arg(long)]
         recover: bool,
+        #[arg(long)]
+        json: bool,
+        run_id: String,
     },
-}
-
-impl Request {
-    fn json(&self) -> bool {
-        match self {
-            Self::Check { json, .. }
-            | Self::Start { json, .. }
-            | Self::Status { json, .. }
-            | Self::Token { json, .. }
-            | Self::Stop { json, .. } => *json,
-        }
-    }
+    /// The run supervisor `start` spawns; it owns the run until it stops.
+    Supervisor { root: PathBuf },
+    /// The process guard the supervisor spawns around each workload.
+    Guard(guard::Args),
 }
 
 #[derive(Deserialize, Serialize)]
@@ -375,65 +392,65 @@ fn startup_error(root: &Path, run_id: &str, error: anyhow::Error) -> anyhow::Err
     }
 }
 
-pub(crate) fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) -> u8 {
-    if let Some(root) = args.worker {
-        // The CLI panic hook exits immediately. In the supervisor, unwind so
-        // its startup boundary can release the run without exposing payloads.
-        std::panic::set_hook(Box::new(|_| {}));
-        return match worker(&root, stdout) {
-            Ok(()) => 0,
-            Err(error) => {
-                let _ = reply(stdout, &WorkerReply::failed(&error));
-                3
-            }
-        };
-    }
-    let request = env::var(REQUEST)
-        .ok()
-        .and_then(|text| serde_json::from_str::<Request>(&text).ok());
-    let Some(request) = request else {
-        let _ = writeln!(
-            stderr,
-            "run project development commands through rstack dev"
-        );
-        return 2;
-    };
-    let machine = request.json();
-    let starting = matches!(&request, Request::Start { .. });
-    let outcome = match request {
-        Request::Check {
+/// Run one `rstack-dev` entry inside its hosting product CLI.
+pub fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
+    let (machine, outcome) = match args.entry {
+        Entry::Supervisor { root } => {
+            // The CLI panic hook exits immediately. In the supervisor, unwind
+            // so its startup boundary can release the run without exposing
+            // payloads.
+            std::panic::set_hook(Box::new(|_| {}));
+            return match worker(&root, stdout) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    let _ = reply(stdout, &WorkerReply::failed(&error));
+                    ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+                }
+            };
+        }
+        Entry::Guard(args) => return guard::run(args),
+        Entry::Check {
             project,
             deny_warnings,
-            ..
-        } => return check(&project, deny_warnings, machine, stdout, stderr),
-        Request::Start {
+            json,
+        } => {
+            return ExitCode::from(check(&project, deny_warnings, json, stdout, stderr));
+        }
+        Entry::Start {
             project,
             application_root,
             ttl,
-            ..
-        } => start(&project, application_root.as_deref(), ttl.as_deref()),
-        Request::Status { run_id, .. } => status(&run_id),
-        Request::Token { run_id, person, .. } => token(&run_id, &person),
-        Request::Stop {
-            run_id, recover, ..
+            json,
         } => {
-            if recover {
+            let outcome = start(&project, application_root.as_deref(), ttl.as_deref());
+            let failed = outcome.as_ref().is_ok_and(|value| {
+                value["scenarios"].as_array().is_some_and(|scenarios| {
+                    scenarios.iter().any(|item| item["result"] == "failed")
+                })
+            });
+            (json, outcome.map(|value| (value, u8::from(failed))))
+        }
+        Entry::Status { run_id, json } => (json, status(&run_id).map(|value| (value, 0))),
+        Entry::Token {
+            run_id,
+            person,
+            json,
+        } => (json, token(&run_id, &person).map(|value| (value, 0))),
+        Entry::Stop {
+            run_id,
+            recover,
+            json,
+        } => {
+            let outcome = if recover {
                 recover_run(&run_id)
             } else {
                 stop(&run_id)
-            }
+            };
+            (json, outcome.map(|value| (value, 0)))
         }
     };
     let (result, code) = match outcome {
-        Ok(value) => {
-            let code = u8::from(
-                starting
-                    && value["scenarios"].as_array().is_some_and(|scenarios| {
-                        scenarios.iter().any(|item| item["result"] == "failed")
-                    }),
-            );
-            (emit(stdout, &value, machine), code)
-        }
+        Ok((value, code)) => (emit(stdout, &value, machine), code),
         Err(error) => {
             let (report, code) = error_report(&error);
             if machine {
@@ -443,11 +460,11 @@ pub(crate) fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) ->
             }
         }
     };
-    if result.is_ok() {
+    ExitCode::from(if result.is_ok() {
         code
     } else {
-        3
-    }
+        OPERATIONAL_FAILURE_EXIT
+    })
 }
 
 /// The failure of an environment or of a run's resources, as opposed to a
@@ -756,10 +773,9 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
         write_private(&root.join(POSTGRES_IDENTITY), b"null")?;
         let supervisor_log = open_supervisor_log(&root)?;
         Command::new(env::current_exe()?)
-            .arg("project-dev")
-            .arg("--worker")
+            .arg(COMMAND)
+            .arg("supervisor")
             .arg(&root)
-            .env_remove(REQUEST)
             .process_group(0)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

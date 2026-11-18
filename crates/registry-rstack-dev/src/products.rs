@@ -22,7 +22,7 @@ use std::{
 };
 
 use super::{
-    bindings::{Bindings, RuntimeBindings},
+    bindings::{Bindings, BregReviewAuthority, RunIssuerBinding, RuntimeBindings},
     browser::BrowserClient,
     clock,
     database::{Database, DatabaseUrls},
@@ -247,7 +247,6 @@ fn bounded_version(node: &Path, script: Option<&Path>) -> Result<String> {
     command
         .arg("--version")
         .env_remove("RSTACK_DEV_DATABASE_URL")
-        .env_remove("RSTACK_PROJECT_DEV_REQUEST")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -1180,8 +1179,8 @@ fn logged_tool_result(
 }
 
 /// Exercise the log/result boundary in unit tests without routing a shell
-/// through the Rust test harness as if it were the bregctl binary. The
-/// `project_dev` integration test covers the real hidden guard dispatch.
+/// through the Rust test harness as if it were a host CLI. The rstack
+/// `dev_run` integration test covers the real hidden guard dispatch.
 #[cfg(test)]
 fn run_logged_tool_direct(
     binary: &Path,
@@ -1495,16 +1494,13 @@ fn breg_authority(
     let Some(project) = product_root(root, plan, Product::Breg)? else {
         return Ok(None);
     };
-    // A check that names no BReg tool asks this binary, which is `bregctl`.
-    let tool = super::product_tool(Product::Breg)
-        .or_else(|_| std::env::current_exe().map_err(anyhow::Error::from))
-        .map_err(|_| {
-            InspectionUnavailable::new(
-                &project.field,
-                "The BReg project cannot be inspected because its owning tool is unavailable.",
-                "Install the matching BReg tools or provide RSTACK_BREGCTL_BIN, then run the check again.",
-            )
-        })?;
+    let tool = super::product_tool(Product::Breg).map_err(|_| {
+        InspectionUnavailable::new(
+            &project.field,
+            "The BReg project cannot be inspected because its owning tool is unavailable.",
+            "Install the matching BReg tools or provide RSTACK_BREGCTL_BIN, then run the check again.",
+        )
+    })?;
     let facts = match breg_facts(&tool, &project.root, terminate) {
         Ok(facts) => facts,
         Err(error) => match error.downcast::<InvalidBregProject>() {
@@ -1672,6 +1668,9 @@ fn casework_principals(
         .and_then(|person| person.grants.get(&Product::Breg))
         .map(|grant| grant.profile.as_str());
     validate_casework_binding_ids(&plan.bindings, &facts, status_profile)?;
+    if has_run_source(plan) {
+        checked_casework_run_issuer(plan, &project.root)?;
+    }
     if let Some(binding) = &plan.bindings.casework_context_provider {
         check_casework_binding(&tool, &project, plan, binding, terminate)?;
     }
@@ -2108,7 +2107,6 @@ pub(super) fn child_command(binary: &Path) -> Command {
     let mut command = Command::new(binary);
     command
         .env_remove("RSTACK_DEV_DATABASE_URL")
-        .env_remove("RSTACK_PROJECT_DEV_REQUEST")
         .process_group(0)
         .stdin(Stdio::null())
         .stderr(Stdio::null());
@@ -2428,6 +2426,26 @@ const RUN_ISSUER_BINDING: &str = "/bindings/bregReviewAuthority/runIssuerBinding
 /// binding names an initiator. The caller then runs the public `caseworkctl
 /// check` and `package` on the copy, which refuse every other policy error.
 fn bind_casework_run_issuer(plan: &Plan, project: &Path, bound: &Path) -> Result<()> {
+    let mut document = checked_casework_run_issuer(plan, project)?;
+    let (binding, guard) = run_issuer_binding(plan)?;
+    ensure!(
+        is_loopback_run_issuer(&plan.issuer),
+        "the run issuer {} is not a loopback URL of the form http://127.0.0.1:<port>",
+        plan.issuer
+    );
+    let entry = &mut document["trustedProducers"][&binding.producer];
+    entry["issuer"] = json!(plan.issuer);
+    if guard.initiator.is_some() {
+        entry["trustedInitiatorIssuer"] = json!(plan.issuer);
+    }
+    copy_project(project, bound)?;
+    write_private(
+        &bound.join("casework.yaml"),
+        serde_norway::to_string(&document)?.as_bytes(),
+    )
+}
+
+fn run_issuer_binding(plan: &Plan) -> Result<(&BregReviewAuthority, &RunIssuerBinding)> {
     let binding = plan
         .bindings
         .breg_review_authority
@@ -2437,6 +2455,15 @@ fn bind_casework_run_issuer(plan: &Plan, project: &Path, bound: &Path) -> Result
         .run_issuer_binding
         .as_ref()
         .context("the review authority binding has no run issuer binding")?;
+    Ok((binding, guard))
+}
+
+/// Reads the Casework project's `casework.yaml` and refuses, at the dev.yaml
+/// pointer, a run issuer binding that does not match the trusted producer it
+/// names. `check` runs this before any product starts; `start` runs it again
+/// before binding the run issuer.
+fn checked_casework_run_issuer(plan: &Plan, project: &Path) -> Result<Value> {
+    let (binding, guard) = run_issuer_binding(plan)?;
     let refuse = |pointer: String, message: &str, action: &str| {
         anyhow::Error::from(plan::SemanticRefusal::new(&pointer, message, action))
     };
@@ -2449,7 +2476,7 @@ fn bind_casework_run_issuer(plan: &Plan, project: &Path, bound: &Path) -> Result
 
     let source = project.join("casework.yaml");
     let bytes = fs::read(&source).with_context(|| format!("cannot read {}", source.display()))?;
-    let mut document = registry_platform_yaml::Reader::new(source.display().to_string())
+    let document = registry_platform_yaml::Reader::new(source.display().to_string())
         .scan(&bytes)
         .map_err(|_| anyhow::anyhow!("{} is not valid YAML", source.display()))?
         .with_context(|| format!("{} is empty", source.display()))?
@@ -2510,21 +2537,7 @@ fn bind_casework_run_issuer(plan: &Plan, project: &Path, bound: &Path) -> Result
             ));
         }
     }
-    ensure!(
-        is_loopback_run_issuer(&plan.issuer),
-        "the run issuer {} is not a loopback URL of the form http://127.0.0.1:<port>",
-        plan.issuer
-    );
-    let entry = &mut document["trustedProducers"][&binding.producer];
-    entry["issuer"] = json!(plan.issuer);
-    if guard.initiator.is_some() {
-        entry["trustedInitiatorIssuer"] = json!(plan.issuer);
-    }
-    copy_project(project, bound)?;
-    write_private(
-        &bound.join("casework.yaml"),
-        serde_norway::to_string(&document)?.as_bytes(),
-    )
+    Ok(document)
 }
 
 /// Only a reserved loopback run URL is bound, never a remote issuer.
@@ -2542,7 +2555,7 @@ fn has_run_source(plan: &Plan) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project_dev::bindings::{Bindings, BregReviewAuthority, CaseworkContextProvider};
+    use crate::bindings::{Bindings, BregReviewAuthority, CaseworkContextProvider};
     use std::{
         io::{BufRead, BufReader},
         os::unix::fs::PermissionsExt,
@@ -2603,7 +2616,7 @@ mod tests {
         assert!(error.to_string().contains("test.step.failed"));
         let path = root.join("logs/breg-test-report.json");
         assert!(fs::metadata(&path).unwrap().permissions().mode() & 0o777 == 0o600);
-        let kept = crate::project_dev::keep_logs(&root, id).unwrap().unwrap();
+        let kept = crate::keep_logs(&root, id).unwrap().unwrap();
         fs::remove_dir(&root).unwrap();
         assert_eq!(
             fs::read(kept.join("breg-test-report.json")).unwrap(),
@@ -3635,7 +3648,7 @@ mod tests {
             ApplicationLaunch {
                 program: std::env::current_exe().unwrap(),
                 arguments: vec![
-                    "project_dev::products::tests::guarded_application_fixture".into(),
+                    "products::tests::guarded_application_fixture".into(),
                     "--exact".into(),
                     "--nocapture".into(),
                 ],

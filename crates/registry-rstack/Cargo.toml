@@ -32,4 +32,6 @@ tempfile.workspace = true
 ureq.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 jsonschema.workspace = true
+serde_norway.workspace = true
