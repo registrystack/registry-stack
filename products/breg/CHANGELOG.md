@@ -42,6 +42,14 @@
 - `bregctl project-dev` runs BReg projects, including spatial projects, from a
   `breg/project-dev` v1alpha1 plan. It is an alpha format and may change.
   `rstack dev` is its entry point.
+- BREAKING: `bregctl explain access` emits `v1alpha9` and `bregctl explain
+  model` emits `v1alpha8`. Access adds the required
+  `claimContract.requesterClients` (every client a Record profile, statistical
+  dataset, Action or Proposal permission restricts its requester to) and now
+  requires `claimContract.purposeRequired`; Model adds the required
+  `requiresPostgis`. A consumer that pins the earlier versions must accept the
+  new `apiVersion` values. See the [explain contract
+  policy](contracts/explain/README.md).
 - A `crs84-polygon` field stores a bounded `Polygon` or `MultiPolygon` in
   WGS 84 longitude and latitude. It takes `precision`, `maximumPositions` and
   an optional `bbox`, and the compiler validates it with PostGIS and generates

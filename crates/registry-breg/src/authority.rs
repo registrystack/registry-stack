@@ -14,6 +14,9 @@ use crate::model::{CompiledEntity, CompiledRegistry};
 pub struct AuthorityInventory {
     pub principal_claims: BTreeSet<String>,
     pub purpose_required: bool,
+    /// Every client any grant restricts its requester to, across Record
+    /// profiles, statistical datasets, Action and Proposal permissions.
+    pub requester_clients: BTreeSet<String>,
     pub direct_claims: BTreeMap<String, DirectClaimExpectation>,
 }
 
@@ -68,6 +71,7 @@ pub fn authority_inventory(
                 Some(profile.principal_claim.as_str()),
                 &profile.required_purposes,
             )?;
+            inventory.clients(&profile.requester_clients);
             let surface = format!("recordTypes/{}/profiles/{}", entity.id, profile.id);
             inventory.boundaries(entity, &profile.id, &surface, &profile.row_boundaries)?;
             for lookup in profile
@@ -107,11 +111,13 @@ pub fn authority_inventory(
                 Some(profile.principal_claim.as_str()),
                 &profile.required_purposes,
             )?;
+            inventory.clients(&profile.requester_clients);
         }
     }
     for action in &registry.actions().actions {
         for grant in &action.permissions {
             inventory.profile(grant.principal_claim.as_deref(), &grant.required_purposes)?;
+            inventory.clients(&grant.requester_clients);
             for target in grant.entity_target_locks() {
                 inventory.boundaries(
                     target_entity(registry, &target.entity_id)?,
@@ -127,6 +133,7 @@ pub fn authority_inventory(
         if let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution {
             for grant in &proposal.permissions {
                 inventory.profile(grant.principal_claim.as_deref(), &grant.required_purposes)?;
+                inventory.clients(&grant.requester_clients);
                 for target in &grant.targets {
                     inventory.boundaries(
                         target_entity(registry, &target.entity_id)?,
@@ -155,6 +162,10 @@ fn target_entity<'a>(
 }
 
 impl AuthorityInventory {
+    fn clients(&mut self, clients: &BTreeSet<String>) {
+        self.requester_clients.extend(clients.iter().cloned());
+    }
+
     fn profile(
         &mut self,
         principal: Option<&str>,

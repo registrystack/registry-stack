@@ -1071,7 +1071,7 @@
       "revision": "sha256:5b5de70fa9b8f831387fc08e520f16fccd71863f18f3efe8b7999728927910f6"
     }
   ],
-  "apiVersion": "id.registrystack.org/formats/breg/model-explanation/v1alpha7",
+  "apiVersion": "id.registrystack.org/formats/breg/model-explanation/v1alpha8",
   "authoring": {
     "documents": [
       {
@@ -2653,6 +2653,7 @@
     }
   ],
   "registryId": "facility-registry",
+  "requiresPostgis": false,
   "reviewAuthorities": [
     {
       "display": {

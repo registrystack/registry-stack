@@ -240,7 +240,7 @@ enum Command {
     /// The package is the promotable unit `bregctl apply` activates: it is built from a project
     /// `bregctl test` passed, so it needs that run's --test-receipt. `caseworkctl package` is a
     /// different verb that writes a Casework project's checked policy to its own package.
-    Package(PackageArgs),
+    Package(PackageCommandArgs),
     /// Execute the production schema-test journey suite for one package candidate.
     Test(TestArgs),
     /// Apply one built package using the configured migration authority.
@@ -808,6 +808,19 @@ struct PackageArgs {
     /// One printable line recorded in the published package as REVISION.
     #[arg(long, value_name = "TEXT")]
     revision: Option<String>,
+}
+
+/// The `package` command line: the package inputs plus the hidden `--local`
+/// switch for native local owners that package their own loopback session.
+#[derive(Debug, Args)]
+struct PackageCommandArgs {
+    #[command(flatten)]
+    package: PackageArgs,
+
+    /// Skip the refusals for identity a deployable package must not carry,
+    /// such as the reserved placeholder `canonicalBaseIri`.
+    #[arg(long, hide = true)]
+    local: bool,
 }
 
 #[derive(Debug, Args)]
@@ -3038,7 +3051,7 @@ where
             };
         }
         Command::Package(args) => {
-            return match package(&args, true) {
+            return match package(&args.package, !args.local) {
                 Ok(report) => write_package_success(&report, format, stdout, stderr),
                 Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
@@ -6138,8 +6151,8 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
 /// Build a package from a schema-tested candidate. A `deployment` package
 /// also applies the refusals for identity a deployable package must not
 /// carry; native local owners (`bregctl dev` and `rstack dev`), packaging for
-/// their own loopback sessions, pass `false`. No public package command-line
-/// spelling reaches that mode.
+/// their own loopback sessions, pass `false`. The command line reaches that
+/// mode only through the hidden `bregctl package --local`.
 fn package(args: &PackageArgs, deployment: bool) -> Result<PackageSuccessReport, Refusal> {
     // The receipt names the fingerprint its rehearsal reached, so an operator who
     // does not restate it still packages against that exact managed catalogue.
@@ -9311,11 +9324,11 @@ struct ExplainFormat {
 }
 
 const MODEL_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/model-explanation/v1alpha7",
+    api_version: "id.registrystack.org/formats/breg/model-explanation/v1alpha8",
     kind: "BRegModelExplanation",
 };
 const ACCESS_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/access-explanation/v1alpha8",
+    api_version: "id.registrystack.org/formats/breg/access-explanation/v1alpha9",
     kind: "BRegAccessExplanation",
 };
 const ACCESS_PREVIEW: ExplainFormat = ExplainFormat {
@@ -10913,6 +10926,7 @@ fn explain_model(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
     inspection["version"] = json!(compiled.version());
     inspection["moduleOrder"] = json!(compiled.module_order());
     inspection["moduleClosure"] = json!(compiled.module_closure());
+    inspection["requiresPostgis"] = json!(compiled.ddl().requires_postgis);
     if !compiled.external_views().is_empty() {
         inspection["externalViews"] = serde_json::to_value(compiled.external_views())?;
     }

@@ -27,11 +27,11 @@ const ACCESS_SCENARIOS: &[(&str, &str)] = &[
 fn envelope(contract: &str) -> (&'static str, &'static str) {
     match contract {
         "ModelExplanation" => (
-            "id.registrystack.org/formats/breg/model-explanation/v1alpha7",
+            "id.registrystack.org/formats/breg/model-explanation/v1alpha8",
             "BRegModelExplanation",
         ),
         "AccessExplanation" => (
-            "id.registrystack.org/formats/breg/access-explanation/v1alpha8",
+            "id.registrystack.org/formats/breg/access-explanation/v1alpha9",
             "BRegAccessExplanation",
         ),
         "AccessPreview" => (
@@ -710,6 +710,85 @@ fn access_claim_contract_pins_principal_claims() {
     assert!(
         schema.is_valid(&passthrough),
         "AccessExplanation seals authority inventory members that remain opaque"
+    );
+}
+
+/// The dev runner reads these facts from `bregctl explain access`, so the
+/// contract pins them rather than leaving them in the opaque passthrough.
+#[test]
+fn access_claim_contract_pins_purpose_required_and_requester_clients() {
+    let schema = load_schema("AccessExplanation");
+    let facility = fixture_path("products/breg/examples/facility");
+    let explanation = explain("access", &facility);
+    assert_matches_contract("facility", "AccessExplanation", &explanation);
+    assert_eq!(explanation["claimContract"]["purposeRequired"], true);
+    assert_eq!(
+        explanation["claimContract"]["requesterClients"],
+        json!(["casework-service"])
+    );
+
+    // A project whose profiles name no client and require no purpose says so.
+    let minimal = explain("access", &fixture_path("products/breg/examples/minimal"));
+    assert_matches_contract("minimal", "AccessExplanation", &minimal);
+    assert_eq!(minimal["claimContract"]["requesterClients"], json!([]));
+
+    for member in ["purposeRequired", "requesterClients"] {
+        let mut missing = explanation.clone();
+        missing["claimContract"]
+            .as_object_mut()
+            .unwrap()
+            .remove(member);
+        assert!(
+            !schema.is_valid(&missing),
+            "AccessExplanation accepts an inventory without {member}"
+        );
+    }
+    for malformed in [
+        json!([""]),
+        json!(["casework-service", "casework-service"]),
+        json!([1]),
+        json!("casework-service"),
+    ] {
+        let mut document = explanation.clone();
+        document["claimContract"]["requesterClients"] = malformed.clone();
+        assert!(
+            !schema.is_valid(&document),
+            "AccessExplanation accepts malformed requesterClients {malformed}"
+        );
+    }
+    let mut document = explanation.clone();
+    document["claimContract"]["purposeRequired"] = json!("yes");
+    assert!(
+        !schema.is_valid(&document),
+        "AccessExplanation accepts a non-boolean purposeRequired"
+    );
+}
+
+#[test]
+fn model_explanation_pins_requires_postgis() {
+    let schema = load_schema("ModelExplanation");
+    let plain = explain("model", &fixture_path("products/breg/examples/facility"));
+    assert_matches_contract("facility", "ModelExplanation", &plain);
+    assert_eq!(plain["requiresPostgis"], false);
+
+    let spatial = explain(
+        "model",
+        &fixture_path("products/breg/acceptance/spatial-service-sites"),
+    );
+    assert_matches_contract("spatial", "ModelExplanation", &spatial);
+    assert_eq!(spatial["requiresPostgis"], true);
+
+    let mut missing = plain.clone();
+    missing.as_object_mut().unwrap().remove("requiresPostgis");
+    assert!(
+        !schema.is_valid(&missing),
+        "ModelExplanation accepts a document without requiresPostgis"
+    );
+    let mut malformed = plain;
+    malformed["requiresPostgis"] = json!("false");
+    assert!(
+        !schema.is_valid(&malformed),
+        "ModelExplanation accepts a non-boolean requiresPostgis"
     );
 }
 

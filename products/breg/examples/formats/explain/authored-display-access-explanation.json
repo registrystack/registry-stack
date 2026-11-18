@@ -264,13 +264,14 @@
       }
     ]
   },
-  "apiVersion": "id.registrystack.org/formats/breg/access-explanation/v1alpha8",
+  "apiVersion": "id.registrystack.org/formats/breg/access-explanation/v1alpha9",
   "claimContract": {
     "directClaims": {},
     "principalClaims": [
       "registry_principal"
     ],
-    "purposeRequired": false
+    "purposeRequired": false,
+    "requesterClients": []
   },
   "claimContractError": null,
   "consent": null,

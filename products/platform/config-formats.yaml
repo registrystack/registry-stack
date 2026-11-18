@@ -1123,17 +1123,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha8
+      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha9
       kind: BRegAccessExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: ACCESS_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha8
+      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha9
       kind: BRegAccessExplanation
     schema:
       path: products/breg/contracts/explain/AccessExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha8.schema.json
+      id: https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha9.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -1303,17 +1303,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha7
+      apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha8
       kind: BRegModelExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: MODEL_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha7
+      apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha8
       kind: BRegModelExplanation
     schema:
       path: products/breg/contracts/explain/ModelExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha7.schema.json
+      id: https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha8.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none

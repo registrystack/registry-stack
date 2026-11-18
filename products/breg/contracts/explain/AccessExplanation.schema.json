@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha8.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha9.schema.json",
   "title": "AccessExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain access` without `--scenario`. Evaluation-rule strings are pinned. Record grants retain compiled authority with inspection-only explicit row boundaries and allowCount. Routes, actions and rowReach follow the compiled model, except pinned routes.entries[].recordType. timers pins autonomous policy writers and the exact product-owned future-effect ceiling without inventing a public profile. claimContract remains opaque except principalClaims and its success/error relationship with claimContractError. Consent and statisticalDatasets are pinned in full.",
   "type": "object",
@@ -28,7 +28,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/access-explanation/v1alpha8"
+      "const": "id.registrystack.org/formats/breg/access-explanation/v1alpha9"
     },
     "kind": {
       "const": "BRegAccessExplanation"
@@ -315,15 +315,30 @@
         "object",
         "null"
       ],
-      "description": "Passthrough of the compiled authority inventory, or null when that inventory failed. `principalClaims` is pinned for exact contract inspection; every other member follows AuthorityInventory and remains outside this contract version. Casework provider pairing verifies a sealed purpose-bound context export and grants no BReg authority.",
-      "x-registry-passthrough": "bregctl writes the compiled authority inventory as the engine holds it; only principalClaims is pinned, and its other members follow AuthorityInventory outside this contract version.",
+      "description": "Passthrough of the compiled authority inventory, or null when that inventory failed. `principalClaims`, `purposeRequired` and `requesterClients` are pinned for exact contract inspection; every other member follows AuthorityInventory and remains outside this contract version. Casework provider pairing verifies a sealed purpose-bound context export and grants no BReg authority.",
+      "x-registry-passthrough": "bregctl writes the compiled authority inventory as the engine holds it; only principalClaims, purposeRequired and requesterClients are pinned, and its other members follow AuthorityInventory outside this contract version.",
       "required": [
-        "principalClaims"
+        "principalClaims",
+        "purposeRequired",
+        "requesterClients"
       ],
       "properties": {
         "principalClaims": {
           "type": "array",
           "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "purposeRequired": {
+          "type": "boolean",
+          "description": "True when any grant requires a purpose."
+        },
+        "requesterClients": {
+          "type": "array",
+          "uniqueItems": true,
+          "description": "Every client any Record profile, statistical dataset, Action or Proposal permission restricts its requester to.",
           "items": {
             "type": "string",
             "minLength": 1
