@@ -658,6 +658,45 @@ unavailable durable audit.
 `a_revision_keeps_due_occurrences_unless_its_schedule_changed` and
 `an_audit_outage_admits_and_reschedules_nothing` (PostgreSQL).
 
+### COORDINATOR-INV-15: a connection credential names one assertion audience, and a live Run keeps it
+
+**Threat.** A client assertion whose audience is implicit or shared can be
+replayed to another authorization server, or to another endpoint of the same
+one (RFC 10070 section 4). A configuration that moves a connection to another
+audience while Runs are live would carry their later steps under an identity
+they were not admitted with.
+
+**Enforcement.** Every connection `authorization` and
+`observationAuthorization` in `runtime.yaml` states `clientAssertionAudience`.
+There is no default: a configuration without it fails to load with
+`config.missing-key` naming the member, and `AuthorizationConfig::findings`
+(`src/runtime.rs`) refuses a value that is not a bounded absolute URI. The
+token client built in `src/adapters.rs` sends it as the assertion's only
+audience, and the shared signer sets the header
+`typ: client-authentication+jwt`. A Scheduling `observationAuthorization`
+states the same audience, token endpoint, client and resource as its primary
+`authorization`. The audience is part of the connection's binding identity,
+so `scan_live_definitions` (`src/store/recovery.rs`) refuses normal serving
+and apply with `live-binding-conflict` while a live Run was admitted under
+another binding. `coordinatorctl deployment-status` reports the conflict, and
+`coordinator --recovery-only` inspects the Run with admissions and dispatch
+disabled.
+
+**Refused.** A connection credential without `clientAssertionAudience`, or with
+a value that is not a bounded absolute URI; an `observationAuthorization` whose
+audience differs from its primary's; normal serving or apply while a live Run's
+retained binding differs from the configuration.
+
+**Tests.** `crates/registry-coordinator/tests/runtime_config.rs`:
+`every_connection_credential_states_its_client_assertion_audience`,
+`runtime_authorization_syntax_is_checked_offline_without_values`,
+`task_bound_scheduling_requires_non_task_observation_authorization_offline`
+and
+`binding_identity_never_resolves_secrets_and_pins_audience_and_task_authority`.
+`tests/deployment_postgres.rs`:
+`split_activation_and_real_router_enforce_owned_progress_and_operator_recovery`
+(PostgreSQL).
+
 ## 3. Operator obligations
 
 1. Provide idempotency for external commands: the provider must deduplicate on
@@ -699,6 +738,13 @@ unavailable durable audit.
     check this.
 12. Run workflows that must not share a Casework producer identity in separate
     deployments: one deployment is one trust domain.
+13. Set each connection's `clientAssertionAudience` to the authorization
+    server's issuer identifier, exactly as its metadata publishes it. Finish
+    live Runs on the earlier release before upgrading to one that requires the
+    audience: a Run admitted without it no longer matches its binding, so
+    `deployment-status` reports `live-binding-conflict` and normal serving
+    refuses while it remains; `coordinator --recovery-only` inspects it
+    (COORDINATOR-INV-15).
 
 ## 4. Accepted residuals
 
