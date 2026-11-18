@@ -750,7 +750,7 @@ fn spatial_bbox_role(names: &Names) -> String {
 
 /// The no-login role BReg expects to own its spatial candidate views:
 /// `<runtime>__spatial_bbox` when that fits PostgreSQL's 63-byte identifier
-/// limit, else `breg_bbox_` and the first 8 hex digits of the SHA-256 of
+/// limit, else `breg_bbox_` and the first 16 hex digits of the SHA-256 of
 /// `breg/spatial-bbox-role/v1:<runtime>`.
 fn spatial_bbox_role_for(runtime_role: &str) -> String {
     let candidate = format!("{runtime_role}__spatial_bbox");
@@ -758,7 +758,7 @@ fn spatial_bbox_role_for(runtime_role: &str) -> String {
         return candidate;
     }
     let digest = Sha256::digest(format!("breg/spatial-bbox-role/v1:{runtime_role}").as_bytes());
-    let prefix: String = digest[..4]
+    let prefix: String = digest[..8]
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
@@ -1529,8 +1529,9 @@ mod tests {
         }
     }
 
-    /// Vectors computed with BReg's `spatial_bbox_role`, which names the role
-    /// BReg checks for at startup.
+    /// Vectors for BReg's `spatial_bbox_role`, which names the role BReg
+    /// checks for at startup. The run-shaped vector is the name BReg looked up
+    /// on a PostgreSQL server for that runtime role.
     #[test]
     fn spatial_bbox_role_matches_breg() {
         assert_eq!(
@@ -1542,7 +1543,14 @@ mod tests {
             spatial_bbox_role_for(&at_the_limit),
             format!("{at_the_limit}__spatial_bbox")
         );
-        assert_eq!(spatial_bbox_role_for(&"r".repeat(60)), "breg_bbox_254fe84b");
+        assert_eq!(
+            spatial_bbox_role_for(&"r".repeat(60)),
+            "breg_bbox_254fe84b299dbd51"
+        );
+        assert_eq!(
+            spatial_bbox_role_for("rstack_9e563cecd9554dcca89e0615844796bd_breg_test_runtime"),
+            "breg_bbox_a49e726b4d6452da"
+        );
     }
 
     #[test]
