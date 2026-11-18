@@ -58,7 +58,7 @@ fn help_honours_the_global_json_format_with_the_catalog_schema() {
             .iter()
             .map(|command| command["name"].as_str().expect("name"))
             .collect();
-        for expected in ["check", "target", "dev", "source"] {
+        for expected in ["check", "target", "source"] {
             assert!(names.contains(&expected), "missing {expected}: {names:?}");
         }
     }

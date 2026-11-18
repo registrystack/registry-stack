@@ -67,7 +67,9 @@ pub(crate) fn read_and_check(path: &Path, check: impl FnOnce(&str, &[u8]) -> Rep
     }
 }
 
-fn check_bytes(file: &str, bytes: &[u8]) -> Report {
+/// Check one document's bytes, naming `file` in every diagnostic. The
+/// envelope says whether it is a task connection or a session state file.
+pub fn check_bytes(file: &str, bytes: &[u8]) -> Report {
     let mut hook = registry_platform_config::AuthoredExpressions;
     let formats = [task_connection::FORMAT, SESSION_FORMAT];
     let document = match Reader::new(file)

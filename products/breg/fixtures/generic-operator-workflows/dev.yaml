@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+# Synthetic local callers, one per access profile that tests/journeys.yaml uses
+# plus the evidence-source reader. A run signs their test tokens with a
+# throwaway local key under this logical issuer, so nothing here is a
+# credential and none of it belongs in a deployment. The scenario file sits
+# under dev/, not tests/, because bregctl check reads every YAML file directly
+# under tests/ as a BReg test.
+issuer: https://identity.generic-registry.example.test
+products:
+  - {product: breg, project: ., audience: "urn:example:generic-registry"}
+people:
+  operator:
+    subject: generic-registry-operator
+    client: operator
+    grants:
+      breg:
+        profile: operator
+        scopes: ["registry:generic:operate"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: registry-operations
+  reader:
+    subject: generic-registry-reader
+    client: reader
+    grants:
+      breg:
+        profile: record-reader
+        scopes: ["registry:generic:read"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: registry-reporting
+          registry_record_status: active
+  source:
+    subject: generic-registry-source
+    client: source
+    grants:
+      breg:
+        profile: evidence-source
+        scopes: ["registry:evidence:lookup"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: evidence-source-read
+scenarioFile: dev/scenarios.yaml

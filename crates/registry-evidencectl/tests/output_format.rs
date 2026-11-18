@@ -91,20 +91,6 @@ const HUMAN_ONLY_COMMANDS: &[(&str, &[&str])] = &[
             "contracts.json",
         ],
     ),
-    (
-        "__dev-supervisor",
-        &[
-            "__dev-supervisor",
-            "--dev-root",
-            "dev",
-            "--evidence-bin",
-            "evidence",
-            "--docker-bin",
-            "docker",
-            "--ready-timeout-seconds",
-            "1",
-        ],
-    ),
 ];
 
 #[test]

@@ -200,7 +200,7 @@ clients:
 
 `secret:env/NAME` reads the key from an environment variable instead, when
 `secretProviders` declares `environment: {}`. Check a connection file
-offline, without resolving its key, with `evidencectl dev check FILE`. The
+offline, without resolving its key, with `evidencectl check --file FILE`. The
 schema is `products/platform/schemas/task-connection.schema.json`, and
 `products/platform/examples/task-connection.yaml` is a complete example.
 

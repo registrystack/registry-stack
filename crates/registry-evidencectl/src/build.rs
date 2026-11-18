@@ -253,36 +253,6 @@ pub(crate) fn compile_target_fixture_project(
     })
 }
 
-pub(crate) fn local_dev_target_inputs(target: &Path) -> Result<(Value, Value)> {
-    let path = if target.is_dir() {
-        target.join("target.yaml")
-    } else {
-        target.to_path_buf()
-    };
-    let bytes = crate::authored::read_authored_file(&path, "local EvidenceTarget")?;
-    let target =
-        registry_evidence_authoring::target::read_target(&path.to_string_lossy(), &bytes)?.value;
-    if target.assurance_profile.is_some_and(|profile| {
-        profile != registry_evidence_authoring::target::TargetAssuranceProfile::Local
-    }) {
-        bail!("dev requires a local target");
-    }
-    let connections = target
-        .connections
-        .iter()
-        .map(|(id, value)| Ok((id.to_string(), value.governed_value()?)))
-        .collect::<Result<BTreeMap<_, _>>>()?;
-    let mut outbound_tls = crate::normalized::root_runtime_outbound_tls(&target)
-        .map(serde_json::to_value)
-        .transpose()?
-        .unwrap_or_else(|| json!({"systemRoots":true,"trustProfiles":{}}));
-    rebase_outbound_tls(
-        crate::normalized::target_directory(&path),
-        &mut outbound_tls,
-    )?;
-    Ok((json!(connections), outbound_tls))
-}
-
 struct BuildInterruption {
     requested: Arc<AtomicBool>,
     registrations: Vec<signal_hook::SigId>,
@@ -1065,78 +1035,6 @@ fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> 
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
-
-    fn local_tls_target(root: &Path, oidc_profile: Option<&str>) -> PathBuf {
-        let mut target =
-            include_str!("../../../products/evidence/examples/standalone/local-target.yaml")
-                .replace(
-                    "        origin: http://127.0.0.1:8081\n",
-                    "        origin: https://source.invalid\n        tlsTrustProfile: source-ca\n",
-                );
-        if let Some(profile) = oidc_profile {
-            target = target.replace(
-                "    issuer: http://127.0.0.1:8082\n",
-                &format!("    issuer: https://issuer.invalid\n    tlsTrustProfile: {profile}\n"),
-            );
-            target = target.replace(
-                "      uri: http://127.0.0.1:8082/oauth2/jwks\n",
-                "      uri: https://issuer.invalid/oauth2/jwks\n",
-            );
-        }
-        fs::write(root.join("source-ca.pem"), "synthetic source CA").unwrap();
-        let mut trust_profiles = "    source-ca:\n      caBundleFile: source-ca.pem\n".to_owned();
-        if let Some(profile) = oidc_profile {
-            fs::write(root.join("oidc-ca.pem"), "synthetic OIDC CA").unwrap();
-            trust_profiles.push_str(&format!(
-                "    {profile}:\n      caBundleFile: oidc-ca.pem\n"
-            ));
-        }
-        target.push_str(&format!(
-            "outboundTls:\n  systemRoots: true\n  trustProfiles:\n{trust_profiles}"
-        ));
-        let path = root.join("local-target.yaml");
-        fs::write(&path, target).unwrap();
-        path
-    }
-
-    #[test]
-    fn local_dev_target_inputs_keep_a_source_only_ca_out_of_root_tls() {
-        let temporary = tempfile::tempdir().unwrap();
-        let path = local_tls_target(temporary.path(), None);
-
-        let (connections, outbound_tls) = local_dev_target_inputs(&path).unwrap();
-
-        assert_eq!(outbound_tls["trustProfiles"], json!({}));
-        assert_eq!(
-            connections["synthetic-register"]["endpoints"][0]["tlsTrustProfile"],
-            "source-ca"
-        );
-    }
-
-    #[test]
-    fn local_dev_target_inputs_keep_disjoint_oidc_and_source_cas_scoped() {
-        let temporary = tempfile::tempdir().unwrap();
-        let path = local_tls_target(temporary.path(), Some("oidc-ca"));
-
-        let (connections, outbound_tls) = local_dev_target_inputs(&path).unwrap();
-
-        assert_eq!(
-            outbound_tls["trustProfiles"]
-                .as_object()
-                .unwrap()
-                .keys()
-                .collect::<Vec<_>>(),
-            vec!["oidc-ca"]
-        );
-        assert_eq!(
-            outbound_tls["trustProfiles"]["oidc-ca"]["caBundleFile"],
-            temporary.path().join("oidc-ca.pem").to_str().unwrap()
-        );
-        assert_eq!(
-            connections["synthetic-register"]["endpoints"][0]["tlsTrustProfile"],
-            "source-ca"
-        );
-    }
 
     #[test]
     fn sibling_candidate_parent_is_allowed_after_each_component_is_checked() {

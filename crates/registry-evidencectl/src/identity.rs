@@ -3,9 +3,7 @@
 //! stated once from its own configuration.
 //!
 //! `evidencectl generate identity-facts` derives them from the project, its
-//! deployment target and the public client registrations. `evidencectl dev`
-//! writes its local clients' claims through the same [`ClaimNames`], so a
-//! deployment and a development session declare the same claims.
+//! deployment target and the public client registrations.
 //!
 //! The facts name no path and no secret. The target is read for its
 //! `authentication.oidc` and `authority` members only; no secret reference in
@@ -59,26 +57,6 @@ impl Default for ClaimNames {
 }
 
 impl ClaimNames {
-    /// The claims of a client that requests assertions for itself.
-    pub(crate) fn requester_claims(
-        &self,
-        actor_kind: &str,
-        requester_tags: &[String],
-        evidence_audience: &str,
-    ) -> BTreeMap<String, Value> {
-        BTreeMap::from([
-            (self.actor_kind.clone(), json!(actor_kind)),
-            (self.requester_tags.clone(), json!(requester_tags)),
-            (self.evidence_audience.clone(), json!(evidence_audience)),
-        ])
-    }
-
-    /// The claims of a client that presents a task authority assertion; the
-    /// issuer derives the rest from the exchange.
-    pub(crate) fn exchange_claims(&self, actor_kind: &str) -> BTreeMap<String, Value> {
-        BTreeMap::from([(self.actor_kind.clone(), json!(actor_kind))])
-    }
-
     fn declared(&self) -> BTreeMap<String, ClaimType> {
         let mut claims = BTreeMap::from([
             (self.actor_kind.clone(), ClaimType::String),
@@ -571,29 +549,6 @@ pub(crate) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// `evidencectl dev` issues its local clients' claims through
-    /// [`ClaimNames`]; these are the maps it has always issued.
-    #[test]
-    fn the_development_claims_keep_their_names_and_shapes() {
-        let names = ClaimNames::default();
-        assert_eq!(
-            names.requester_claims(
-                "service",
-                &["profile-one".to_owned()],
-                "urn:evidence:caller"
-            ),
-            BTreeMap::from([
-                ("registry_actor_kind".to_owned(), json!("service")),
-                ("evidence_tags".to_owned(), json!(["profile-one"])),
-                ("evidence_audience".to_owned(), json!("urn:evidence:caller")),
-            ])
-        );
-        assert_eq!(
-            names.exchange_claims("agent"),
-            BTreeMap::from([("registry_actor_kind".to_owned(), json!("agent"))])
-        );
-    }
 
     fn gate(value: Value) -> registry_evidence_authoring::target::TargetAdmissionGate {
         serde_json::from_value(value).expect("admission gate")

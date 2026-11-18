@@ -1,7 +1,8 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json
 apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
 kind: BRegDevClients
-# Synthetic local callers. `bregctl dev` creates their keys and short-lived tokens.
+# Synthetic local callers for the schema tests. `rstack dev` signs the tokens
+# for the people in dev.yaml.
 clients:
   - id: editor
     accessProfiles: [directory-editor]

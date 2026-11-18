@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+# One synthetic service caller. A run signs its test tokens with a throwaway
+# local key under this logical issuer. The scenario file sits under dev/, not
+# tests/, because bregctl check reads every YAML file directly under tests/ as
+# a BReg test.
+issuer: https://identity.portability.example.test
+products:
+  - {product: breg, project: ., audience: "urn:example:issuer-portability"}
+people:
+  clerk-service:
+    subject: urn:institution:service-clerk
+    client: clerk-service
+    grants:
+      breg:
+        profile: clerk
+        scopes: ["registry:read"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: registry-administration
+          districts: district-a
+scenarioFile: dev/scenarios.yaml

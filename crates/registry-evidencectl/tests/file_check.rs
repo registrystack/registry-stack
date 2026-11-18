@@ -9,7 +9,7 @@ use std::{
 use serde_json::Value;
 
 /// Every format the command reads, with its registered example.
-const EXAMPLES: [(&str, &str); 7] = [
+const EXAMPLES: [(&str, &str); 6] = [
     (
         "evidence/client-profile",
         "evidence/examples/client-profile/client-profile.json",
@@ -17,10 +17,6 @@ const EXAMPLES: [(&str, &str); 7] = [
     (
         "evidence/client-contracts",
         "evidence/examples/client-contracts/evidence.contracts.json",
-    ),
-    (
-        "evidence/dev-state",
-        "evidence/examples/formats/dev-session/.evidence/dev/state.json",
     ),
     (
         "evidence/source-import-journal",
@@ -97,6 +93,24 @@ fn every_registered_example_passes_in_json_output() {
         assert_eq!(report["status"], "complete", "{format}");
         assert_eq!(report["kind"], "EvidenceCtlReport", "{format}");
         assert_eq!(report["diagnostics"], Value::Array(Vec::new()), "{format}");
+    }
+}
+
+#[test]
+fn platform_task_connection_and_session_files_are_checked_offline() {
+    for relative in [
+        "platform/examples/task-connection.yaml",
+        "platform/examples/thunderid/session.json",
+    ] {
+        let output = check_file(&example(relative), &["--format", "json"]);
+        assert_eq!(output.status.code(), Some(0), "{relative}");
+        let report = json_report(&output);
+        assert_eq!(report["status"], "complete", "{relative}");
+        assert_eq!(
+            report["diagnostics"],
+            Value::Array(Vec::new()),
+            "{relative}"
+        );
     }
 }
 

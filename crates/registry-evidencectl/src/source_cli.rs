@@ -13,19 +13,10 @@ use anyhow::{bail, Context as _, Result};
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
-use crate::{authoring, build, source_add, source_import, source_mock, suggest, OutputFormat};
+use crate::{authoring, build, source_import, source_mock, suggest, OutputFormat};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum SourceCommand {
-    /// Connect a retained local registry through its public lookup export.
-    ///
-    /// This command reviews the connection by default and reports the choices
-    /// it would apply; re-run it with --apply to perform them.
-    ///
-    /// It drives the public Base Registry Engine commands, so a bregctl binary
-    /// of this same version must be on PATH, or named by --bregctl-bin or
-    /// BREGCTL_BIN.
-    Add(source_add::SourceAddArgs),
     /// Suggest source configuration from an OpenAPI document.
     Suggest(suggest::SuggestArgs),
     /// Generate, inspect, and serve a local synthetic source API.
@@ -74,7 +65,6 @@ pub(crate) struct SourceDetachArgs {
 
 pub(crate) fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
-        SourceCommand::Add(args) => source_add::run(args, format),
         SourceCommand::Suggest(args) => suggest::run(suggest::SourceCommand::Suggest(args), format),
         SourceCommand::Mock(command) => source_mock::run(command, format),
         SourceCommand::Diff(args) => diff(args, format),

@@ -322,30 +322,6 @@ pub(crate) fn ensure_local_key_material(out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Generate one private development keypair without reporting key material or
-/// paths. Both halves remain owner-only because the pair lives in ephemeral
-/// private supervisor state rather than in a public JWKS artifact.
-pub(crate) fn generate_dev_keypair(
-    out_dir: &Path,
-    private_filename: &str,
-    public_filename: &str,
-) -> Result<(PathBuf, PathBuf)> {
-    ensure_private_dir(out_dir)?;
-    run_keypair_impl(
-        generate_p256_keypair()?,
-        out_dir,
-        None,
-        private_filename,
-        public_filename,
-        GenerationReport::Silent,
-        PRIVATE_FILE_MODE,
-    )?;
-    Ok((
-        out_dir.join(private_filename),
-        out_dir.join(public_filename),
-    ))
-}
-
 /// Both halves of one generated keypair, rendered as the files a keypair
 /// command writes.
 struct KeypairFiles {

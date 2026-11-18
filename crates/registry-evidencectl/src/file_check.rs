@@ -28,7 +28,7 @@ use registry_platform_yaml::{
 };
 use serde_json::{json, Value};
 
-use crate::{access, dev, report, source_import, OutputFormat};
+use crate::{access, report, source_import, OutputFormat};
 
 type Check = fn(&str, &[u8]) -> Result<Report, Failure>;
 
@@ -60,7 +60,7 @@ macro_rules! tooling_format {
     };
 }
 
-const FORMATS: [(FormatSpec<'static>, bool, Check); 9] = [
+const FORMATS: [(FormatSpec<'static>, bool, Check); 10] = [
     (
         registry_platform_yaml::CHECK_ACCEPTANCES_FORMAT,
         false,
@@ -90,9 +90,16 @@ const FORMATS: [(FormatSpec<'static>, bool, Check); 9] = [
         false,
         |file, bytes| Ok(read_client_profile(file, bytes).map(|_| one_file(Vec::new()))?),
     ),
-    (dev::DEV_STATE_FORMAT, false, |file, bytes| {
-        Ok(dev::check_state_document(file, bytes).map(|()| one_file(Vec::new()))?)
-    }),
+    (
+        registry_thunderid_tooling::task_connection::FORMAT,
+        false,
+        |file, bytes| Ok(registry_thunderid_tooling::check::check_bytes(file, bytes)),
+    ),
+    (
+        registry_thunderid_tooling::container::SESSION_FORMAT,
+        false,
+        |file, bytes| Ok(registry_thunderid_tooling::check::check_bytes(file, bytes)),
+    ),
     (
         tooling_format!(
             source_import::JOURNAL_KIND,

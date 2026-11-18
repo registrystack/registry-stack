@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: generated-application-numbers
+    steps:
+      - id: create-zone-a-first
+        product: breg
+        as: clerk-a
+        method: POST
+        path: /v1/records/applications
+        headers: {Idempotency-Key: create-zone-a-first}
+        body: {data: {jurisdiction: zone-a, applicant: First applicant}}
+        expect:
+          status: 201
+          json: {/data/domainData/number: APP-0001}
+        capture: {first-application: {type: pointer, pointer: /data/recordIdentifier}}
+      - id: create-zone-a-second
+        product: breg
+        as: clerk-a
+        method: POST
+        path: /v1/records/applications
+        headers: {Idempotency-Key: create-zone-a-second}
+        body: {data: {jurisdiction: zone-a, applicant: Second applicant}}
+        expect:
+          status: 201
+          json: {/data/domainData/number: APP-0002}
+      - id: create-zone-b
+        product: breg
+        as: clerk-b
+        method: POST
+        path: /v1/records/applications
+        headers: {Idempotency-Key: create-zone-b}
+        body: {data: {jurisdiction: zone-b, applicant: Third applicant}}
+        expect:
+          status: 201
+          json: {/data/domainData/number: APP-0001}
+      - id: read-zone-a-first
+        product: breg
+        as: clerk-a
+        method: GET
+        path: "/v1/records/applications/{{first-application}}"
+        expect:
+          status: 200
+          json: {/data/domainData/number: APP-0001}

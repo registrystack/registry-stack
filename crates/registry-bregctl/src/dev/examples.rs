@@ -2,7 +2,6 @@
 //! Bounded, explicitly initiated examples against this project's owned dev instance.
 use super::{config, private, Clients, State, Status, MAX_BYTES};
 mod proposals;
-mod review;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE};
@@ -36,8 +35,6 @@ enum ExamplesAction {
     },
     /// Run or resume an example against the project's ready owned development instance.
     Run(RunArgs),
-    /// Create and connect fresh facility and canonical Casework development projects.
-    Review(review::ReviewArgs),
 }
 #[derive(Debug, Args)]
 struct RunArgs {
@@ -1024,7 +1021,6 @@ fn inherit_captures(attempt: &mut Attempt, parent: &Attempt, catalogue: &Catalog
 
 pub fn run(args: ExamplesArgs) -> Result<Value> {
     match args.action {
-        ExamplesAction::Review(args) => review::prepare(args),
         ExamplesAction::List { project } => {
             let project = super::project(&project)?;
             let (catalogue, _) = catalogue(&project)?;

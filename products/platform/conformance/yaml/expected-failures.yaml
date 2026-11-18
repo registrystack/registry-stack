@@ -57,8 +57,6 @@ unreachedFormats:
   reason: syntax json; the corpus mutates YAML text
 - format: evidence/client-profile
   reason: syntax json; the corpus mutates YAML text
-- format: evidence/dev-state
-  reason: syntax json; the corpus mutates YAML text
 - format: evidence/source-import-journal
   reason: syntax json; the corpus mutates YAML text
 - format: evidence/source-import-state

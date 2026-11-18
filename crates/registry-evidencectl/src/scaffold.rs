@@ -85,29 +85,6 @@ pub(crate) fn run_with_format(
     create(args, Some(command), format)
 }
 
-/// Start source-first authoring through the same staged project and key setup
-/// used by `new`. There is no question until its author supplies its meaning.
-pub(crate) fn create_source_project(directory: &Path) -> Result<()> {
-    let starter = tempfile::tempdir().context("staging the source-first project description")?;
-    write_new_file(
-        &starter.path().join("README.md"),
-        b"# Evidence source project\n\nThis normalized EvidenceProject can receive imported Sources and Functions. Review its AssertionDefinitions and complete source bindings before deployment. Source credentials grant no Evidence caller authority.\n",
-        0o644,
-    )?;
-    create(
-        NewArgs {
-            directory: directory.to_path_buf(),
-            openapi: None,
-            transport: None,
-            starter: Some(starter.path().to_path_buf()),
-            profile: Some(AuthoringProfile::Local),
-        },
-        None,
-        OutputFormat::Human,
-    )?;
-    Ok(())
-}
-
 /// Create the project; `report` names the command whose report is written,
 /// and is `None` when another command creates the project on its behalf.
 fn create(

@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: list-empty-registry
+    steps:
+      - id: list
+        product: breg
+        as: clerk-service
+        method: GET
+        path: /v1/records/records
+        expect:
+          status: 200
+          checks:
+            - {pointer: /items, length: 0}

@@ -4259,9 +4259,9 @@ fn package_rebuild_refuses_linked_receipts_and_public_runtime_bindings() {
     assert!(runtime.exists());
 }
 
-/// `dev prepare-source` is the owning operation `evidencectl source add`
-/// drives, not a step an adopter runs by hand, so `bregctl dev --help` lists
-/// the lifecycle commands only. It stays a working command behind that help.
+/// `dev prepare-source` is an advanced step DEV.md documents, so
+/// `bregctl dev --help` lists the everyday lifecycle commands only. It stays a
+/// working command behind that help.
 #[test]
 fn prepare_source_stays_runnable_while_dev_help_omits_it() {
     let cli = <crate::Cli as clap::CommandFactory>::command();

@@ -1023,12 +1023,6 @@ mod tests {
     #[test]
     fn supported_cli_constraints_are_published() {
         let catalog = catalog();
-        let audit_show = find_command(&catalog.binaries, "evidencectl audit show");
-        assert!(audit_show.constraints.iter().any(|constraint| {
-            constraint.kind == ConstraintKind::RequiredExactlyOne
-                && constraint.arguments == ["--last-operation"]
-        }));
-
         let evidencectl_init = find_command(&catalog.binaries, "evidencectl init");
         assert!(evidencectl_init.constraints.iter().any(|constraint| {
             constraint.kind == ConstraintKind::RequiredExactlyOne
@@ -1097,13 +1091,6 @@ mod tests {
             constraint.kind == ConstraintKind::RequiredExactlyOne
                 && constraint.arguments == ["--subject <SUBJECT>", "--subjects-file <PATH>"]
         }));
-
-        let dev = find_command(&catalog.binaries, "evidencectl dev");
-        assert_eq!(dev.usage, "evidencectl dev [OPTIONS] <COMMAND>");
-        assert_eq!(
-            find_command(&catalog.binaries, "evidencectl dev start").usage,
-            "evidencectl dev start [OPTIONS] [PROJECT]"
-        );
 
         assert!(find_command(&catalog.binaries, "evidence-oid4vci check")
             .options
