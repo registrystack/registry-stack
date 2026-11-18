@@ -13,6 +13,8 @@ import uvicorn
 from .api import Settings, create_app
 from .store import Store, dumps
 
+OUTCOMES = ("paid", "failed", "expired", "cancelled")
+
 
 def parser():
     root = argparse.ArgumentParser(description=__doc__)
@@ -37,6 +39,7 @@ def parser():
         "payer-account",
         "biller",
         "callback-url",
+        "return-url",
         "currency",
     ):
         serve.add_argument(f"--{option}", action="append")
@@ -54,7 +57,19 @@ def parser():
     collection.add_argument("--producer", default="registry")
     collection.add_argument("--tenant", default="pilot")
     collection.add_argument("--biller", default="ministry")
-    collection.add_argument("--outcome", choices=("paid", "failed", "expired"), required=True)
+    collection.add_argument("--outcome", choices=OUTCOMES, required=True)
+
+    payer = commands.add_parser(
+        "payer-outcome", help="choose the outcome for one payer financial address"
+    )
+    payer.add_argument("--database", type=Path, required=True)
+    payer.add_argument("--producer", default="registry")
+    payer.add_argument("--tenant", default="pilot")
+    payer.add_argument("--biller", default="ministry")
+    payer.add_argument("--address", required=True, help="payerFiDetails.financialAddress")
+    choice = payer.add_mutually_exclusive_group(required=True)
+    choice.add_argument("--outcome", choices=OUTCOMES)
+    choice.add_argument("--remove", action="store_true", help="delete the rule for --address")
 
     advance = commands.add_parser(
         "advance", help="advance persisted instructions one or more steps"
@@ -110,6 +125,7 @@ def serve_settings(args):
         payer_accounts=tuple(args.payer_account or defaults.payer_accounts),
         billers=tuple(args.biller or defaults.billers),
         callback_urls=tuple(args.callback_url or defaults.callback_urls),
+        return_urls=tuple(args.return_url or defaults.return_urls),
         currencies=currencies,
         modes=tuple(args.mode or defaults.modes),
         manual=args.manual,
@@ -130,6 +146,12 @@ def serve_settings(args):
         if len(url) > 100 or parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError(
                 "--callback-url must be an absolute HTTP(S) URL of at most 100 characters"
+            )
+    for url in settings.return_urls:
+        parsed = urlsplit(url)
+        if len(url) > 200 or parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(
+                "--return-url must be an absolute HTTP(S) URL of at most 200 characters"
             )
     settings.token()  # Fail at startup with a useful error; re-read for each request on rotation.
     if args.token_file.stat().st_mode & 0o077:
@@ -171,6 +193,17 @@ def main():
                 raise ValueError("collection scenario scope exceeds its profile length")
             Store(args.database).collection_scenario(
                 args.producer, args.tenant, args.biller, args.outcome
+            )
+        elif args.command == "payer-outcome":
+            if not (
+                1 <= len(args.producer) <= 50
+                and 1 <= len(args.tenant) <= 20
+                and 1 <= len(args.biller) <= 20
+                and 1 <= len(args.address) <= 30
+            ):
+                raise ValueError("payer outcome scope or address exceeds its profile length")
+            Store(args.database).payer_outcome(
+                args.producer, args.tenant, args.biller, args.address, args.outcome
             )
         elif args.command == "inspect":
             print(dumps(Store(args.database, create=False).inspect(args.batch_id), indent=2))

@@ -50,4 +50,4 @@ class CollectionStatus(WireModel):
     paymentStatus: Literal["PENDING", "PAID", "FAILED", "EXPIRED"]
     lastUpdateDate: Annotated[int, Field(ge=0, description="Unix timestamp in seconds")]
     PaymentReferenceID: Id20 | None = None
-    failureReason: Literal["payer-rejected", "request-expired"] | None = None
+    failureReason: Literal["payer-rejected", "request-expired", "payer-cancelled"] | None = None
