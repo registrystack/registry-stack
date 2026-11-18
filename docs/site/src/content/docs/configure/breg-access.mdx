@@ -116,7 +116,7 @@ claims:
 
 A missing `in` claim or a scalar in its place fails closed. When journeys need another claim
 variant for a refusal, bind that client to the exact step with
-[`testBindings`](../../reference/breg-configuration/#development-clients).
+[`testBindings`](../../reference/bregctl-dev/#explicit-teaching-clients).
 
 Every boundary on a permission must hold. Reads leave other rows out, and writes check both the
 stored row and the row as it would be after the change. A permission that creates must keep its
