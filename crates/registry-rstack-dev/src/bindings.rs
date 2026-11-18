@@ -28,7 +28,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     net::{Ipv4Addr, TcpListener},
     path::Path,
-    sync::{Arc, Mutex, Weak},
+    sync::{Arc, Weak},
     thread,
     time::Duration,
 };
@@ -53,7 +53,6 @@ const TOKEN_LIFETIME_SECONDS: u64 = 300;
 /// How long stop lets the token endpoint finish requests already in progress.
 const TOKEN_SERVER_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const CLOCK_LEEWAY_SECONDS: u64 = 5;
-const MAXIMUM_REPLAY_ENTRIES: usize = 256;
 
 /// Run-local connections between BReg and Casework. Configuring either one requires both products.
 #[derive(Default, Deserialize, Serialize)]
@@ -581,7 +580,6 @@ struct TokenState {
     issuer: Weak<Issuer>,
     clients: Vec<MachineClient>,
     audience: String,
-    replay: Mutex<BTreeMap<String, u64>>,
 }
 
 fn start_token_server(
@@ -601,7 +599,6 @@ fn start_token_server(
         input,
         issuer: Arc::downgrade(&issuer),
         clients,
-        replay: Mutex::new(BTreeMap::new()),
     });
     let app = Router::new()
         .route("/oauth2/token", post(token))
@@ -752,16 +749,6 @@ async fn issue_token(state: Arc<TokenState>, headers: HeaderMap, body: Bytes) ->
         || !(1..=ASSERTION_LIFETIME_SECONDS).contains(&claims.exp.saturating_sub(claims.iat))
     {
         return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
-    }
-    {
-        let Ok(mut replay) = state.replay.lock() else {
-            return oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable");
-        };
-        replay.retain(|_, expiry| *expiry > now);
-        if replay.contains_key(&claims.jti) || replay.len() >= MAXIMUM_REPLAY_ENTRIES {
-            return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
-        }
-        replay.insert(claims.jti, claims.exp);
     }
     let Some(person) = state.input.plan.people.get(&client.person) else {
         return oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable");
@@ -1256,7 +1243,7 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_accepts_one_assertion_and_refuses_replay_tampering_and_wrong_resource() {
+    fn endpoint_accepts_a_repeated_assertion_and_refuses_tampering_and_wrong_resource() {
         exercise_endpoint(plan());
     }
 
@@ -1356,7 +1343,8 @@ mod tests {
         let replay = request_runtime
             .block_on(client.post(&endpoint).form(&form).send())
             .unwrap();
-        assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+        // The token server is local to a run, so it keeps no replay cache.
+        assert_eq!(replay.status(), StatusCode::OK);
 
         let mut tampered = assertion.clone().into_bytes();
         let last = tampered.last_mut().unwrap();

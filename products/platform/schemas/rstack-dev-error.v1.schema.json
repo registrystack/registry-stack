@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/platform/rstack-dev-error/rstack-dev-error.v1.schema.json",
   "title": "rstack error report",
-  "description": "The one JSON object that rstack and rstack dev print on stdout when --json is set and a command is refused or fails.",
+  "description": "The one JSON object that rstack and rstack dev print on stdout when --format json is set and a command is refused or fails.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "status", "error"],
@@ -31,7 +32,7 @@
       "additionalProperties": false,
       "required": ["kind", "run_directory"],
       "properties": {
-        "kind": {"enum": ["lost-supervisor", "cleanup-pending"]},
+        "kind": {"const": "lost-supervisor"},
         "run_directory": {"type": "string"},
         "processes": {
           "type": "array",

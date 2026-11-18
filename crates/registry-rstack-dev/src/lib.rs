@@ -24,7 +24,7 @@ mod recovery;
 #[cfg(feature = "schema")]
 pub mod schema;
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use registry_platform_yaml::{Diagnostic, Report};
 use rustix::fs::{flock, FlockOperation};
 use serde::{Deserialize, Serialize};
@@ -73,9 +73,11 @@ const ERROR_SCHEMA: &str = "registry.rstack.error.v1";
 const DATABASE_URL: &str = "RSTACK_DEV_DATABASE_URL";
 const CA_FILE: &str = "RSTACK_DEV_DATABASE_CA";
 const REPORT: &str = "report.json";
-const PENDING: &str = "cleanup-pending.json";
 const POSTGRES_IDENTITY: &str = "postgres-identity.json";
-const CLEANUP_CAP: Duration = Duration::from_secs(30 * 60);
+/// How long the supervisor retries releasing a run's resources before it
+/// leaves them for `rstack dev stop --recover`.
+const CLEANUP_BUDGET: Duration = Duration::from_secs(60);
+const CLEANUP_PAUSE: Duration = Duration::from_secs(2);
 const POLL: Duration = Duration::from_millis(100);
 // A capture can contain the 1 MiB development plan after JSON escaping,
 // selections derived from a second 1 MiB journeys document, facts selected
@@ -228,13 +230,6 @@ fn restore_failure(error: String, operational: bool) -> anyhow::Error {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("run {run_id} still needs cleanup: {detail}; run rstack dev stop {run_id} --recover to release its resources")]
-struct CleanupPending {
-    run_id: String,
-    detail: String,
-}
-
 /// A run that cannot finish by itself: its supervisor is gone, or cleanup
 /// gave up. `facts` carries what an operator needs to release it by hand.
 #[derive(Debug, thiserror::Error)]
@@ -247,15 +242,15 @@ struct RecoveryNeeded {
 fn recovery_message(run_id: &str, facts: &Value) -> String {
     let mut text = if let Some(reason) = facts["reason"].as_str() {
         format!("run {run_id} could not be recovered: {reason}; release these resources by hand")
+    } else if let Some(detail) = facts["detail"].as_str() {
+        format!(
+            "run {run_id} gave up cleanup after {} seconds ({detail}); run rstack dev stop {run_id} --recover or release these resources by hand",
+            CLEANUP_BUDGET.as_secs()
+        )
     } else {
-        match facts["kind"].as_str() {
-            Some("cleanup-pending") => format!(
-                "run {run_id} gave up cleanup; run rstack dev stop {run_id} --recover or release these resources by hand"
-            ),
-            _ => format!(
-                "run {run_id} lost its supervisor before cleanup; run rstack dev stop {run_id} --recover or release these resources by hand"
-            ),
-        }
+        format!(
+            "run {run_id} lost its supervisor before cleanup; run rstack dev stop {run_id} --recover or release these resources by hand"
+        )
     };
     let mut line = |entry: String| {
         text.push_str("\n  ");
@@ -381,24 +376,107 @@ fn provisioned_objects(root: &Path, run_id: &str) -> Result<Vec<Value>> {
         .collect()
 }
 
-fn pending_report(run_id: &str, names: Vec<String>, processes: Value) -> Value {
-    json!({"run_id": run_id, "databases_and_roles": names, "processes": processes})
+/// The runs in `base` whose supervisor is alive.
+fn live_run_ids(base: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(base) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = entries
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| {
+            let root = base.join(name);
+            run_dir_name(name)
+                && ensure_private(&root, false).is_ok()
+                && root.join("worker.lock").exists()
+                && supervisor_running(&root).unwrap_or(false)
+        })
+        .collect();
+    ids.sort();
+    ids
 }
 
-/// The delays between cleanup attempts: 2 s doubling to 30 s, until their
-/// sum reaches the cap.
-fn cleanup_schedule(cap: Duration) -> impl Iterator<Item = Duration> {
-    let mut next = Duration::from_secs(2);
-    let mut total = Duration::ZERO;
-    std::iter::from_fn(move || {
-        if total >= cap {
-            return None;
-        }
-        let delay = next;
-        total += delay;
-        next = (next * 2).min(Duration::from_secs(30));
-        Some(delay)
+/// One line telling an operator who starts a run that others are live.
+fn live_run_notice(ids: &[String]) -> Option<String> {
+    let (first, rest) = ids.split_first()?;
+    Some(if rest.is_empty() {
+        format!("rstack dev: run {first} is still live; stop it with rstack dev stop {first}")
+    } else {
+        format!(
+            "rstack dev: {} runs are still live ({}); stop one with rstack dev stop {first}",
+            ids.len(),
+            ids.join(", ")
+        )
     })
+}
+
+/// The supervisor's log line for a panic: its message and where it happened.
+fn panic_line(
+    payload: &(dyn std::any::Any + Send),
+    location: Option<&std::panic::Location<'_>>,
+) -> String {
+    let message = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("a non-text payload");
+    let message = message.replace('\n', " ");
+    match location {
+        Some(at) => format!(
+            "rstack dev: supervisor panicked at {}:{}: {message}",
+            at.file(),
+            at.line()
+        ),
+        None => format!("rstack dev: supervisor panicked: {message}"),
+    }
+}
+
+/// Name the variable that fixes a PostgreSQL server certificate the run does
+/// not trust.
+fn with_ca_hint(error: anyhow::Error) -> anyhow::Error {
+    let unknown_issuer = error
+        .chain()
+        .any(|cause| format!("{cause} {cause:?}").contains("UnknownIssuer"));
+    if unknown_issuer {
+        operational(anyhow::anyhow!(
+            "{error:#}; the server's certificate is not signed by a CA this run trusts, so set {CA_FILE} to the file holding the server's CA certificate"
+        ))
+    } else {
+        error
+    }
+}
+
+/// Run `attempt` until it succeeds or `budget` has passed, pausing between
+/// failures and calling `failed` after each. Returns the last failure.
+fn retry_cleanup(
+    budget: Duration,
+    pause: Duration,
+    mut attempt: impl FnMut() -> Result<()>,
+    mut failed: impl FnMut(),
+) -> Result<()> {
+    let deadline = Instant::now() + budget;
+    loop {
+        match attempt() {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                failed();
+                if Instant::now() >= deadline {
+                    return Err(error);
+                }
+            }
+        }
+        thread::sleep(pause);
+    }
+}
+
+/// The failure left when cleanup cannot finish: the run's resources stay
+/// behind for `rstack dev stop --recover`.
+fn cleanup_gave_up(root: &Path, run_id: &str, cause: &anyhow::Error) -> RecoveryNeeded {
+    let mut facts = lost_supervisor_facts(root, run_id);
+    facts["detail"] = json!(format!("{cause:#}"));
+    RecoveryNeeded {
+        run_id: run_id.to_owned(),
+        facts,
+    }
 }
 
 /// The wall clock decides expiry, because the monotonic clock stops while a
@@ -409,9 +487,11 @@ fn expired(now_unix: u64, expires_at: u64) -> bool {
 
 fn startup_error(root: &Path, run_id: &str, error: anyhow::Error) -> anyhow::Error {
     if root.exists() {
-        CleanupPending {
+        let mut facts = lost_supervisor_facts(root, run_id);
+        facts["detail"] = json!(format!("{error:#}"));
+        RecoveryNeeded {
             run_id: run_id.to_owned(),
-            detail: format!("{error:#}"),
+            facts,
         }
         .into()
     } else {
@@ -424,12 +504,15 @@ pub fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCo
     let (machine, outcome) = match args.entry {
         Entry::Supervisor { root } => {
             // The CLI panic hook exits immediately. In the supervisor, unwind
-            // so its startup boundary can release the run without exposing
-            // payloads.
-            std::panic::set_hook(Box::new(|_| {}));
+            // so its startup boundary can release the run, and record the
+            // panic in the supervisor log, which is its stderr.
+            std::panic::set_hook(Box::new(|info| {
+                eprintln!("{}", panic_line(info.payload(), info.location()));
+            }));
             return match worker(&root, stdout) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
+                    eprintln!("rstack dev: supervisor failed: {error:#}");
                     let _ = reply(stdout, &WorkerReply::failed(&error));
                     ExitCode::from(OPERATIONAL_FAILURE_EXIT)
                 }
@@ -449,6 +532,9 @@ pub fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCo
             ttl,
             json,
         } => {
+            if let Some(notice) = live_run_notice(&live_run_ids(&state_dir())) {
+                let _ = writeln!(stderr, "{notice}");
+            }
             let outcome = start(&project, application_root.as_deref(), ttl.as_deref());
             let failed = outcome.as_ref().is_ok_and(|value| {
                 value["scenarios"].as_array().is_some_and(|scenarios| {
@@ -510,14 +596,13 @@ fn operational(error: anyhow::Error) -> anyhow::Error {
 /// A malformed argument, refused before any project or run state is read.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
-struct Usage(&'static str);
+struct Usage(String);
 
 /// The error envelope and exit code for a failed command. It is the launcher's
 /// `registry.rstack.error.v1` object, plus `run_id` and `recovery` when a run
 /// still has resources to release.
 fn error_report(error: &anyhow::Error) -> (Value, u8) {
     let operational = error.is::<Operational>()
-        || error.is::<CleanupPending>()
         || error.is::<RecoveryNeeded>()
         || error.is::<products::InspectionUnavailable>();
     let (class, code) = if operational {
@@ -532,9 +617,6 @@ fn error_report(error: &anyhow::Error) -> (Value, u8) {
         "status": "refused",
         "error": {"class": class, "message": format!("{error:#}")},
     });
-    if let Some(pending) = error.downcast_ref::<CleanupPending>() {
-        report["run_id"] = json!(pending.run_id);
-    }
     if let Some(recovery) = error.downcast_ref::<RecoveryNeeded>() {
         report["run_id"] = json!(recovery.run_id);
         report["recovery"] = recovery.facts.clone();
@@ -549,12 +631,6 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
     let run = report["run_id"].as_str().expect("run report");
     let status = report["status"].as_str().expect("run status");
     writeln!(output, "Run {run} {status}")?;
-    if status == "cleanup-pending" {
-        let message = recovery_message(run, &report["recovery"]);
-        for line in message.lines().skip(1) {
-            writeln!(output, "{line}")?;
-        }
-    }
     if let Some(recovered) = report.get("recovered") {
         for group in recovered["stopped_process_groups"]
             .as_array()
@@ -599,7 +675,7 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
         };
         writeln!(
             output,
-            "  Journey {} {result}",
+            "  Scenario {} {result}",
             journey["id"].as_str().expect("journey ID")
         )?;
         if let Some(steps) = journey["steps"].as_array() {
@@ -649,7 +725,12 @@ fn check(
 ) -> u8 {
     let outcome = project
         .canonicalize()
-        .context("cannot open the development project directory")
+        .with_context(|| {
+            format!(
+                "cannot open the development project directory {}",
+                project.display()
+            )
+        })
         .and_then(|project| plan::check(&project));
     let (report, exit) = match outcome {
         Ok(report) => {
@@ -661,7 +742,7 @@ fn check(
             Err(error) => {
                 if let Some(unavailable) = error.downcast_ref::<products::InspectionUnavailable>() {
                     let report = Report::new(vec![Diagnostic::error(
-                        "breg.project-dev.check-unavailable",
+                        "rstack.dev.check-unavailable",
                         unavailable.field(),
                         unavailable.reason(),
                         unavailable.remedy(),
@@ -676,13 +757,13 @@ fn check(
                 }
                 let (code, action, exit) = if error.is::<io::Error>() {
                     (
-                        "breg.project-dev.check-unavailable",
+                        "rstack.dev.check-unavailable",
                         "Name a project directory containing a readable dev.yaml.",
                         OPERATIONAL_FAILURE_EXIT,
                     )
                 } else {
                     (
-                        "breg.project-dev.invalid-plan",
+                        "rstack.dev.invalid-plan",
                         "Correct the development plan at the reported field.",
                         DOMAIN_REFUSAL_EXIT,
                     )
@@ -744,9 +825,12 @@ fn write_check_json(stdout: &mut dyn Write, mut payload: Value) -> Result<()> {
 
 fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> Result<Value> {
     let ttl_seconds = parse_ttl(ttl.unwrap_or("30m"))?;
-    let project = project
-        .canonicalize()
-        .context("cannot open the development project directory")?;
+    let project = project.canonicalize().with_context(|| {
+        format!(
+            "cannot open the development project directory {}",
+            project.display()
+        )
+    })?;
     let loaded = plan::load(&project)?;
     let mut plan = loaded.plan;
     ensure!(
@@ -755,9 +839,9 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
     );
     let application_root = application_root
         .map(|path| {
-            let root = path
-                .canonicalize()
-                .context("cannot open the built application root")?;
+            let root = path.canonicalize().with_context(|| {
+                format!("cannot open the built application root {}", path.display())
+            })?;
             ensure!(root.is_dir(), "built application root must be a directory");
             Ok::<_, anyhow::Error>(root)
         })
@@ -1024,7 +1108,8 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             (admin, ca)
         };
         let issuer = Arc::new(Issuer::create(root)?);
-        let connected = Database::connect(&admin, ca.as_deref(), &input.run_id)?;
+        let connected =
+            Database::connect(&admin, ca.as_deref(), &input.run_id).map_err(with_ca_hint)?;
         // The cluster identity must be recorded before anything can create a database or role.
         write_private(
             &root.join(POSTGRES_IDENTITY),
@@ -1120,45 +1205,33 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     drop(browser.take());
     let mark_stopping = write_private(&root.join(REPORT), &serde_json::to_vec(&stopped)?);
     let mut told_parent = false;
-    let mut delays = cleanup_schedule(CLEANUP_CAP);
-    loop {
-        // Keep the exact ownership list until both the supervised processes
-        // and their database resources have been released. A run's own
-        // server goes with its container, so nothing in it is dropped first.
-        let cleanup = products.stop().and_then(|()| {
-            if input.managed_database {
-                drop(database.take());
-                docker
-                    .as_ref()
-                    .map_or(Ok(()), |docker| docker.remove(&input.run_id).map(drop))
-            } else {
-                database.as_mut().map_or(Ok(()), Database::cleanup)
+    // Keep the exact ownership list until both the supervised processes and
+    // their database resources have been released. A run's own server goes
+    // with its container, so nothing in it is dropped first.
+    let cleanup = retry_cleanup(
+        CLEANUP_BUDGET,
+        CLEANUP_PAUSE,
+        || {
+            products.stop().and_then(|()| {
+                if input.managed_database {
+                    drop(database.take());
+                    docker
+                        .as_ref()
+                        .map_or(Ok(()), |docker| docker.remove(&input.run_id).map(drop))
+                } else {
+                    database.as_mut().map_or(Ok(()), Database::cleanup)
+                }
+            })
+        },
+        || {
+            if let Some(failed) = failure.as_ref().filter(|_| !told_parent) {
+                let _ = reply(output, failed);
+                told_parent = true;
             }
-        });
-        if cleanup.is_ok() {
-            break;
-        }
-        if let Some(failed) = failure.as_ref().filter(|_| !told_parent) {
-            let _ = reply(output, failed);
-            told_parent = true;
-        }
-        let Some(delay) = delays.next() else {
-            let names = database
-                .as_ref()
-                .map_or_else(Vec::new, Database::pending_names);
-            let mut pending = pending_report(&input.run_id, names, recorded_processes(root));
-            if input.managed_database {
-                pending["container"] = json!(docker::container_name(&input.run_id));
-            }
-            write_private(&root.join(PENDING), &serde_json::to_vec(&pending)?)?;
-            bail!(
-                "run {} gave up cleanup after {} minutes; run rstack dev status {} for the resources to release",
-                input.run_id,
-                CLEANUP_CAP.as_secs() / 60,
-                input.run_id
-            );
-        };
-        thread::sleep(delay);
+        },
+    );
+    if let Err(error) = cleanup {
+        return Err(cleanup_gave_up(root, &input.run_id, &error).into());
     }
     // A failed run keeps its logs outside the run directory.
     let removed = if failure.is_some() {
@@ -1192,12 +1265,13 @@ fn reply(output: &mut dyn Write, message: &WorkerReply) -> Result<()> {
 fn status(run_id: &str) -> Result<Value> {
     let root = run_dir(run_id)?;
     if !root.exists() {
-        return Ok(simple_report(run_id, "stopped"));
+        return Err(Usage(format!(
+            "no development run {run_id} in {}; it never started, or it has stopped and been cleaned up",
+            state_dir().display()
+        ))
+        .into());
     }
     let observed = (|| {
-        if let Ok(pending) = read_json::<Value>(&root.join(PENDING), MAXIMUM_RUN_REPORT_BYTES) {
-            return Ok(pending_status(&root, run_id, pending));
-        }
         if supervisor_gone(&root)? {
             return Err(RecoveryNeeded {
                 run_id: run_id.to_owned(),
@@ -1221,23 +1295,22 @@ fn status(run_id: &str) -> Result<Value> {
     observed
 }
 
-fn pending_status(root: &Path, run_id: &str, pending: Value) -> Value {
-    let mut report = simple_report(run_id, "cleanup-pending");
-    report["recovery"] = json!({
-        "kind": "cleanup-pending",
-        "run_directory": root,
-        "databases_and_roles": pending["databases_and_roles"],
-        "processes": pending["processes"],
-    });
-    if let Some(container) = pending["container"].as_str() {
-        report["recovery"]["container"] = json!(container);
-    }
-    name_field_key(root, &mut report["recovery"]);
-    report
+/// The refusal for a test person the run's plan does not name.
+fn unknown_person<V>(person: &str, people: &BTreeMap<String, V>) -> anyhow::Error {
+    let names: Vec<_> = people.keys().map(String::as_str).collect();
+    anyhow::anyhow!(
+        "test person \"{person}\" is not in the run's plan; the plan names {}",
+        names.join(", ")
+    )
 }
 
 fn token(run_id: &str, person: &str) -> Result<Value> {
-    ensure!(plan::identifier(person), Usage("invalid test person name"));
+    ensure!(
+        plan::identifier(person),
+        Usage(format!(
+            "invalid test person name \"{person}\"; start with a lowercase letter and use lowercase letters, digits, underscores, and hyphens"
+        ))
+    );
     let report = status(run_id)?;
     ensure!(
         report["status"] == "ready",
@@ -1255,7 +1328,7 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
         .plan
         .people
         .get(person)
-        .context("test person is not in the run's plan")?;
+        .ok_or_else(|| unknown_person(person, &input.plan.people))?;
     let mut credentials = Vec::new();
     for (product, grant) in &subject.grants {
         let token = signer.token(&input, subject, *product, expires)?;
@@ -1315,13 +1388,6 @@ fn stop(run_id: &str) -> Result<Value> {
         thread::sleep(POLL);
         if !root.exists() {
             break;
-        }
-        if let Ok(pending) = read_json::<Value>(&root.join(PENDING), MAXIMUM_RUN_REPORT_BYTES) {
-            return Err(RecoveryNeeded {
-                run_id: run_id.to_owned(),
-                facts: pending_status(&root, run_id, pending)["recovery"].clone(),
-            }
-            .into());
         }
         let gone = supervisor_gone(&root);
         if root.exists() && gone? {
@@ -1397,6 +1463,7 @@ fn recover_run(run_id: &str) -> Result<Value> {
                     .transpose()
                     .context("cannot read the PostgreSQL CA file")?;
                 Database::connect_for_recovery(&admin, ca.as_deref(), run_id, &expected)
+                    .map_err(with_ca_hint)
             })
             .transpose()?;
         let stopped_groups = recovery::wait_for_guards(&root)?;
@@ -1506,9 +1573,9 @@ fn binaries(product: Product) -> Result<Binaries> {
 
 fn parse_ttl(value: &str) -> Result<u64> {
     let error = || {
-        anyhow::Error::new(Usage(
-            "--ttl must be between 1s and 24h, with an s, m, or h suffix",
-        ))
+        anyhow::Error::new(Usage(format!(
+            "--ttl must be between 1s and 24h, with an s, m, or h suffix, got \"{value}\""
+        )))
     };
     let (number, unit) = value
         .split_at_checked(value.len().saturating_sub(1))
@@ -1534,13 +1601,19 @@ fn state_dir() -> PathBuf {
     )
 }
 
+fn run_dir_name(run_id: &str) -> bool {
+    run_id.len() == 32
+        && run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 fn run_dir(run_id: &str) -> Result<PathBuf> {
     ensure!(
-        run_id.len() == 32
-            && run_id
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-        Usage("invalid run ID; use the ID printed by rstack dev start")
+        run_dir_name(run_id),
+        Usage(format!(
+            "invalid run ID \"{run_id}\"; use the 32-character ID printed by rstack dev start"
+        ))
     );
     Ok(state_dir().join(run_id))
 }
@@ -1760,6 +1833,23 @@ mod tests {
         assert!(text.contains("Application http://127.0.0.1:4201"), "{text}");
     }
 
+    #[test]
+    fn human_run_report_calls_authored_scenarios_scenarios() {
+        let mut output = Vec::new();
+        emit(
+            &mut output,
+            &json!({
+                "run_id": RUN_ID, "status": "ready",
+                "scenarios": [{"id": "apply-and-read", "result": "passed"}]
+            }),
+            false,
+        )
+        .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("Scenario apply-and-read passed"), "{text}");
+        assert!(!text.contains("Journey"), "{text}");
+    }
+
     fn fake_run(root: &Path, products: Value, postgis: bool) {
         let input = json!({
             "run_id": RUN_ID, "project": "/project", "ttl_seconds": 60,
@@ -1802,13 +1892,164 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_backs_off_from_two_to_thirty_seconds_and_stops_at_the_cap() {
-        let delays: Vec<_> = cleanup_schedule(CLEANUP_CAP).map(|d| d.as_secs()).collect();
-        assert_eq!(delays[..6], [2, 4, 8, 16, 30, 30]);
-        let total: u64 = delays.iter().sum();
-        assert!(total >= CLEANUP_CAP.as_secs());
-        assert!(total - delays.last().unwrap() < CLEANUP_CAP.as_secs());
-        assert_eq!(cleanup_schedule(Duration::ZERO).count(), 0);
+    fn cleanup_gives_up_after_60_seconds_with_recovery_command() {
+        assert_eq!(CLEANUP_BUDGET, Duration::from_secs(60));
+        let mut attempts = 0;
+        let mut failures = 0;
+        let started = Instant::now();
+        let outcome = retry_cleanup(
+            Duration::from_millis(60),
+            Duration::from_millis(10),
+            || {
+                attempts += 1;
+                Err(anyhow::anyhow!("database unreachable"))
+            },
+            || failures += 1,
+        );
+        assert!(outcome
+            .unwrap_err()
+            .to_string()
+            .contains("database unreachable"));
+        assert!(attempts >= 2, "{attempts} attempts");
+        assert_eq!(attempts, failures);
+        assert!(started.elapsed() >= Duration::from_millis(60));
+        let mut calls = 0;
+        retry_cleanup(
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            || {
+                calls += 1;
+                Ok(())
+            },
+            || panic!("a successful cleanup is not a failure"),
+        )
+        .unwrap();
+        assert_eq!(calls, 1);
+
+        let scratch = tempfile::tempdir().unwrap();
+        fake_run(
+            scratch.path(),
+            json!([{"product": "breg", "project": ".", "audience": "registry"}]),
+            false,
+        );
+        let gave_up = cleanup_gave_up(
+            scratch.path(),
+            RUN_ID,
+            &anyhow::anyhow!("database unreachable"),
+        );
+        let message = gave_up.to_string();
+        assert!(
+            message.contains(&format!("rstack dev stop {RUN_ID} --recover")),
+            "{message}"
+        );
+        assert!(message.contains("database unreachable"), "{message}");
+        assert!(!message.contains("30 minutes"), "{message}");
+        assert_eq!(
+            error_report(&gave_up.into()).0["recovery"]["kind"],
+            "lost-supervisor"
+        );
+    }
+
+    #[test]
+    fn status_of_unknown_run_is_a_usage_error() {
+        // Run IDs are random, so the all-zero ID is never a real run.
+        let unknown = "0".repeat(32);
+        let error = status(&unknown).unwrap_err();
+        let text = format!("{error:#}");
+        assert!(error.is::<Usage>(), "{text}");
+        assert!(text.contains(&unknown), "{text}");
+        let (_, code) = error_report(&error);
+        assert_eq!(code, 2);
+    }
+
+    #[test]
+    fn bad_ttl_names_the_value() {
+        let error = format!("{:#}", parse_ttl("45").unwrap_err());
+        assert!(error.contains("\"45\""), "{error}");
+        assert!(error.contains("1s and 24h"), "{error}");
+    }
+
+    #[test]
+    fn bad_run_ids_person_names_and_paths_name_the_value() {
+        let error = format!("{:#}", run_dir("../x").unwrap_err());
+        assert!(error.contains("\"../x\""), "{error}");
+        let error = format!("{:#}", token(RUN_ID, "Bad Name").unwrap_err());
+        assert!(error.contains("\"Bad Name\""), "{error}");
+
+        let missing = Path::new("/definitely/missing/project");
+        let error = format!("{:#}", start(missing, None, None).unwrap_err());
+        assert!(error.contains("/definitely/missing/project"), "{error}");
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_ne!(check(missing, false, false, &mut out, &mut err), 0);
+        let err = String::from_utf8(err).unwrap();
+        assert!(err.contains("/definitely/missing/project"), "{err}");
+
+        let scratch = tempfile::tempdir().unwrap();
+        fake_run(
+            scratch.path(),
+            json!([{"product": "breg", "project": ".", "audience": "registry"}]),
+            false,
+        );
+        let plan = captured_input(scratch.path()).unwrap().plan;
+        let error = unknown_person("reviewer", &plan.people).to_string();
+        assert!(error.contains("\"reviewer\""), "{error}");
+        assert!(error.contains("operator"), "{error}");
+    }
+
+    #[test]
+    fn second_start_prints_a_notice() {
+        let scratch = tempfile::tempdir().unwrap();
+        let base = scratch.path().canonicalize().unwrap();
+        fs::set_permissions(&base, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+        let live = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let dead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let starting = "cccccccccccccccccccccccccccccccc";
+        for name in [live, dead, starting, "failed"] {
+            private_directory(&base.join(name)).unwrap();
+        }
+        let held = File::create(base.join(live).join("worker.lock")).unwrap();
+        flock(&held, FlockOperation::NonBlockingLockExclusive).unwrap();
+        File::create(base.join(dead).join("worker.lock")).unwrap();
+
+        assert_eq!(live_run_ids(&base), [live]);
+        let notice = live_run_notice(&live_run_ids(&base)).unwrap();
+        assert!(!notice.contains('\n'), "{notice}");
+        assert!(notice.contains(live), "{notice}");
+        assert!(
+            notice.contains(&format!("rstack dev stop {live}")),
+            "{notice}"
+        );
+        assert_eq!(live_run_notice(&[]), None);
+        assert!(live_run_ids(&base.join("missing")).is_empty());
+    }
+
+    #[test]
+    fn panic_is_logged_with_location() {
+        let location = std::panic::Location::caller();
+        let line = panic_line(&"boom", Some(location));
+        assert!(line.contains("boom"), "{line}");
+        assert!(
+            line.contains(&format!("{}:{}", location.file(), location.line())),
+            "{line}"
+        );
+        assert!(!line.contains('\n'), "{line}");
+        let owned = panic_line(&String::from("owned boom"), None);
+        assert!(owned.contains("owned boom"), "{owned}");
+        let other = panic_line(&42_u8, None);
+        assert!(other.contains("panicked"), "{other}");
+    }
+
+    #[test]
+    fn an_unknown_ca_names_the_variable_that_fixes_it() {
+        let error = with_ca_hint(operational(anyhow::anyhow!(
+            "cannot connect: invalid peer certificate: UnknownIssuer"
+        )));
+        let text = format!("{error:#}");
+        assert!(text.contains("UnknownIssuer"), "{text}");
+        assert!(text.contains(CA_FILE), "{text}");
+        assert!(error.is::<Operational>());
+        let other = with_ca_hint(anyhow::anyhow!("connection refused"));
+        assert_eq!(other.to_string(), "connection refused");
     }
 
     #[test]
@@ -1874,19 +2115,13 @@ mod tests {
         assert_eq!(facts["container"], container, "{facts}");
         assert_eq!(facts["objects"], json!([]), "{facts}");
         assert!(facts.get("unavailable").is_none(), "{facts}");
-        let mut pending = pending_report(RUN_ID, vec![], json!([]));
-        pending["container"] = json!(container);
-        let pending = pending_status(root, RUN_ID, pending)["recovery"].clone();
-        assert_eq!(pending["container"], container, "{pending}");
-        for facts in [facts, pending] {
-            let text = recovery_message(RUN_ID, &facts);
-            assert!(
-                text.contains(&format!(
-                    "PostgreSQL container {container}, label org.registrystack.rstack.dev-run={RUN_ID}"
-                )),
-                "{text}"
-            );
-        }
+        let text = recovery_message(RUN_ID, &facts);
+        assert!(
+            text.contains(&format!(
+                "PostgreSQL container {container}, label org.registrystack.rstack.dev-run={RUN_ID}"
+            )),
+            "{text}"
+        );
     }
 
     #[test]
@@ -1912,32 +2147,22 @@ mod tests {
         );
         let facts = lost_supervisor_facts(root, RUN_ID);
         assert!(facts.get("field_encryption_key").is_none(), "{facts}");
-        let pending = pending_status(root, RUN_ID, pending_report(RUN_ID, vec![], json!([])));
-        assert!(
-            pending["recovery"].get("field_encryption_key").is_none(),
-            "{pending}"
-        );
 
         let canary = "field-key-canary-value";
         fs::write(root.join(products::FIELD_KEY), canary).unwrap();
         let key = root.join(products::FIELD_KEY);
-        for facts in [
-            lost_supervisor_facts(root, RUN_ID),
-            pending_status(root, RUN_ID, pending_report(RUN_ID, vec![], json!([])))["recovery"]
-                .clone(),
-        ] {
-            assert_eq!(facts["field_encryption_key"], json!(key), "{facts}");
-            assert!(!facts.to_string().contains(canary), "{facts}");
-            let text = recovery_message(RUN_ID, &facts);
-            assert!(
-                text.contains(&format!(
-                    "development field-encryption key {}",
-                    key.display()
-                )),
-                "{text}"
-            );
-            assert!(!text.contains(canary), "{text}");
-        }
+        let facts = lost_supervisor_facts(root, RUN_ID);
+        assert_eq!(facts["field_encryption_key"], json!(key), "{facts}");
+        assert!(!facts.to_string().contains(canary), "{facts}");
+        let text = recovery_message(RUN_ID, &facts);
+        assert!(
+            text.contains(&format!(
+                "development field-encryption key {}",
+                key.display()
+            )),
+            "{text}"
+        );
+        assert!(!text.contains(canary), "{text}");
     }
 
     #[test]
@@ -1966,10 +2191,17 @@ mod tests {
             (Some("operational"), 3)
         );
 
-        let pending = anyhow::Error::new(CleanupPending {
-            run_id: RUN_ID.to_owned(),
-            detail: "database unreachable".to_owned(),
-        })
+        let scratch = tempfile::tempdir().unwrap();
+        fake_run(
+            scratch.path(),
+            json!([{"product": "breg", "project": ".", "audience": "registry"}]),
+            false,
+        );
+        let pending = startup_error(
+            scratch.path(),
+            RUN_ID,
+            anyhow::anyhow!("database unreachable"),
+        )
         .context("start failed");
         let (report, code) = error_report(&pending);
         assert_eq!(
@@ -2089,17 +2321,6 @@ mod tests {
         assert!(supervisor_gone(&root).unwrap());
         flock(&lock, FlockOperation::NonBlockingLockExclusive).unwrap();
         assert!(!supervisor_gone(&root).unwrap());
-    }
-
-    #[test]
-    fn pending_cleanup_reports_resources_and_processes() {
-        let report = pending_report(RUN_ID, vec!["db".into(), "role".into()], json!([]));
-        assert_eq!(report["databases_and_roles"], json!(["db", "role"]));
-        let status = pending_status(Path::new("/run"), RUN_ID, report);
-        assert_eq!(status["status"], "cleanup-pending");
-        assert_eq!(status["recovery"]["databases_and_roles"][1], "role");
-        let text = recovery_message(RUN_ID, &status["recovery"]);
-        assert!(text.contains("database or role role"), "{text}");
     }
 
     #[test]
