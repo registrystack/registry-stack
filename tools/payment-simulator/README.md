@@ -58,8 +58,9 @@ server binds to `127.0.0.1:8008`, advances instructions automatically, and
 serves its OpenAPI at `/openapi.json` and interactive documentation at `/docs`.
 The token is read on every request, so replacing its contents rotates the
 credential while preserving the producer identity and replay records.
-An existing version 1 database is upgraded to version 2 in one additive
-transaction when the server starts, preserving its G2P records and credits.
+An existing version 1 or 2 database is upgraded to version 3 in one additive
+transaction when the server starts, preserving its G2P records, credits and
+collection requests.
 
 In another terminal in this directory:
 
@@ -140,11 +141,50 @@ uv run python examples/collect_payment.py --token-file .state/token --run-id exp
 uv run payment-simulator collection-scenario --database .state/payments.sqlite --outcome paid
 ```
 
+Use `--outcome cancelled` for a payer who cancels: it reports `RJC/FAILED` with
+`failureReason: payer-cancelled`. To make one named test person always decline,
+map their `payerFiDetails.financialAddress` to an outcome. A payer rule beats
+the biller's scenario, and `--remove` deletes it:
+
+```sh
+uv run payment-simulator payer-outcome --database .state/payments.sqlite \
+  --address citizen-decline --outcome failed
+uv run payment-simulator payer-outcome --database .state/payments.sqlite \
+  --address citizen-decline --remove
+```
+
 Each run ID here represents a different synthetic bill. The profile allows one
 request per bill, including failed and expired requests; it has no reissue or
 refund policy. Keep the original run ID when recovering an uncertain payment.
 Expiry is a fixture outcome, not a configured real-time deadline. In manual
 mode, the existing `advance` command advances both G2P and P2G in two steps.
+
+## Send a citizen to pay
+
+A citizen-facing front end can hand the citizen to a hosted page and get them
+back. Start `serve` with the front end's return URL, then add `X-Return-URL` to
+`POST /rtpRequest`:
+
+```sh
+uv run payment-simulator serve --database .state/payments.sqlite \
+  --token-file .state/token --return-url https://portal.example.test/paid
+```
+
+Send the citizen to `GET /pay/{transferRequestId}` on the simulator's origin.
+The page shows a "Synthetic payment simulator, no real money" banner, the
+biller, bill and amount, and three buttons: Pay, Decline and Cancel. The browser
+posts the choice back, and the simulator answers `303` to the return URL with
+`transferRequestId` and `status` (`paid`, `failed` or `cancelled`) added to its
+query. Without a return URL the page shows the result instead.
+
+The redirect is a hint. The front end must still poll
+`GET /transferRequests/{transferRequestId}` and check the payment status and
+reference before it acts. The page needs no bearer token: the transfer ID is a
+random UUIDv4 and acts as the capability, and each submission carries a form
+token stored with the request. A request with a return URL stays `PND/PENDING`
+until the payer decides, and the decision settles it at once. Requests without
+a return URL behave as before. See [the P2G profile](P2G-SPEC.md#hosted-payment-page)
+for precedence and refusals.
 
 ## Configuration and boundaries
 
@@ -158,6 +198,7 @@ The local credential belongs to one producer per server. The defaults are:
 | Programme | `cash-support` | `--program` |
 | Payer account | `programme-account` | `--payer-account` |
 | P2G biller | `ministry` | `--biller` |
+| Accepted return URLs | none (any `X-Return-URL` is refused) | `--return-url` |
 | Currency and decimal scale | `USD:2` | `--currency` |
 | Submission mode | `00` | `--mode` (`00`, `01`, `03`) |
 | Accepted callback URLs | `https://programme.example.test/callback`, `https://programme.example.test/api/v1/batch` | `--callback-url` |
@@ -173,7 +214,8 @@ Use polling. Receipts are retained for the lifetime of this disposable
 database. There is no receipt expiry, reset API, real rail, production identity
 provider, high availability or container publishing. An
 unsupported database version is refused; only the additive v1-to-v2 upgrade is
-provided. Programme funding and real citizen checkout are outside this mock.
+provided. Programme funding and real citizen checkout are outside this mock. The hosted
+page is a synthetic stand-in with no card or bank entry.
 Do not use real beneficiary data or expose this development server as a
 payment service.
 
