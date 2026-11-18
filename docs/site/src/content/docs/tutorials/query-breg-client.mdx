@@ -35,7 +35,7 @@ application uses, or run both against the same registry.
 ## Get a token for your programs
 
 In the project directory, find the run's address and request a token for the `editor` test caller.
-Put both, where your programs will read them:
+Put both where your programs will read them:
 
 ```sh test-cwd="tutorial-work/project"
 RUN="$(awk '$1 == "Run" {print $2}' dev-run.txt)"
