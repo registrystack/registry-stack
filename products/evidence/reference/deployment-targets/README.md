@@ -75,7 +75,7 @@ raises it immediately, removes the public JWK, and deny-lists the thumbprint in
 affected consumers.
 
 Local private JWKs and audit masters are disposable files created outside Git.
-`evidencectl init` and `evidencectl dev` remain the normal application-developer
+`evidencectl init` and `rstack dev` remain the normal application-developer
 path; the local target documents disposable bindings and cannot be packaged
 as a production candidate.
 

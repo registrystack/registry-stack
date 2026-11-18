@@ -27,7 +27,7 @@ to be running.
   outcome="An adult-status decision replayed at its recorded instant and a tampered copy refused."
   time="About 5 minutes"
   level="Local verification with synthetic data"
-  prerequisites={['The project and three files from Request Evidence from your application', 'The Python environment from that tutorial, activated again in a new terminal']}
+  prerequisites={['The project and three files from Request Evidence from your application', 'The Python environment from that tutorial, activated again in a new terminal, and its run's `run_id` to stop at the end']}
 />
 
 ## What the application kept
@@ -51,6 +51,26 @@ adult-status.verified-at.txt
 
 {/* Evidence: crates/registry-evidence-client/src/retained.rs, RetainedEvidenceVerification,
     from_prepared. */}
+
+## Verify from the command line
+
+The retained verification is also the context the command line verifies against, so you can check
+the kept response without Python:
+
+```sh
+rstack evidence verify adult-status.response.jws \
+  --context adult-status.retained.json \
+  --output adult-status.replayed.json
+```
+
+```text test-expect
+VERIFIED
+```
+
+This judges the response against the current time. The next section replays the decision at the
+instant the application recorded.
+
+{/* Evidence: crates/registry-evidencectl/src/verify.rs, run (retained context only). */}
 
 ## Replay the decision and refuse a change
 
@@ -140,19 +160,30 @@ replayed means one of two things:
 
 ## Clean up
 
-You are done with the local session. Registry Evidence is already stopped, so remove its state,
-including the audit history `audit show` reads. Keep the project directory: building and deploying
-the project starts what it needs itself.
+You are done with the local run. Stop it, which removes its generated keys and state. Keep the
+project directory: building and deploying the project starts what it needs itself.
+
+In a new terminal, read the run back from `run.json` and redefine the helper that fetches a token
+header file:
+
+```sh test-cwd="first-evidence-assertion/adult-status"
+run_id="$(jq -r .run_id run.json)"
+evidence_url="$(jq -r .products.evidence run.json)"
+runtime_config="$(jq -r .runtimeConfigs.evidence run.json)"
+headers_for() {
+  rstack dev token "$run_id" --as "$1" | awk '$1 == "evidence" && $2 == "headers" {print $3}'
+}
+```
 
 ```sh
-rstack evidence dev clean .
+rstack dev stop "$run_id"
 ```
 
 ```text test-expect
-Removed stopped local Evidence state
+Run <run-id> stopped
 ```
 
-{/* Evidence: crates/registry-evidencectl/src/dev.rs, clean_dev. */}
+{/* Evidence: products/platform/PROJECT-DEV.md, stop. */}
 
 ## Next
 

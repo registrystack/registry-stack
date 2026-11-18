@@ -19,8 +19,8 @@ tutorial_test:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 If you build an application that asks Registry Evidence for an assertion, you give it its own
-client identity, request one assertion through the maintained Python client, decide from the
-verified value, and keep what you need to stand behind that decision later.
+identity, send one request from a small program, verify the response before you read it, decide
+from the verified value, and keep what you need to stand behind that decision later.
 
 <QuickstartMeta
   outcome="An application that decides from a verified assertion and keeps it for replay."
@@ -28,7 +28,7 @@ verified value, and keep what you need to stand behind that decision later.
   level="Local development with synthetic data"
   prerequisites={[
     'The project from Your first assertion',
-    'Docker, Python 3.11 or later, and optionally Node.js',
+    'Python 3.11 or later, and the registry-stack-client package',
   ]}
 />
 
@@ -36,89 +36,83 @@ verified value, and keep what you need to stand behind that decision later.
 
 You continue the `adult-status` project from
 [Your first assertion](../first-evidence-assertion/), with its synthetic source answering on port
-8081. If you stopped it, start it again in another terminal:
+8081 and the run it started, in the terminal that holds `run_id`, `evidence_url`,
+`runtime_config` and `headers_for`. If you stopped the source, start it again in another terminal:
 
 ```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
-python3 serve-source.py \
-  --port 8081 \
-  --token-file .generated/secrets/synthetic-source-token
+python3 serve-source.py --port 8081
 ```
 
-## Register the application
+## Give the application an identity
 
-The deployment's operator registers your application as a client under an
-[access profile](../../reference/glossary/#access-profile). Here you play the operator, from the
-project directory. Registry Evidence reads its clients only as it starts, and
-`rstack evidence` refuses a client change while it runs, so stop it first:
+Under `rstack dev`, an application is a person: a subject, a client name, and the token claims its
+calls carry. Add `age-check-app` to `dev.yaml` with the same grant `caller` holds:
+
+```diff lang="yaml" title="dev.yaml" test-edit
+         claims: {evidence_audience: "urn:example:audience:standalone-app"}
++  age-check-app:
++    subject: "urn:registrystack:evidence:local:client:age-check-app"
++    client: age-check-app
++    grants:
++      evidence:
++        profile: standalone-service
++        scopes: ["evidence:request"]
++        claims: {evidence_audience: "urn:example:audience:standalone-app"}
+ scenarioFile: tests/scenarios.yaml
+```
+
+In a new terminal, read the run back from `run.json` and redefine the helper that fetches a token
+header file:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
-rstack evidence dev stop .
+run_id="$(jq -r .run_id run.json)"
+evidence_url="$(jq -r .products.evidence run.json)"
+runtime_config="$(jq -r .runtimeConfigs.evidence run.json)"
+headers_for() {
+  rstack dev token "$run_id" --as "$1" | awk '$1 == "evidence" && $2 == "headers" {print $3}'
+}
 ```
 
-```text test-expect
-Local Evidence stopped
-```
-
-Register the application:
-
-```sh
-rstack evidence access client add age-check-app \
-  --access-profile standalone-service \
-  --generate-local-key
-```
-
-```text test-expect
-Added client age-check-app with access profile standalone-service.
-```
-
-The client's private key stays owner-only at `.evidence/clients/age-check-app/private.jwk`.
-Start Registry Evidence again with the same ports, so it loads the client:
-
-```sh
-rstack evidence dev start . \
-  --target local-target.yaml \
-  --evidence-port 18080 \
-  --issuer-port 8082
+```sh test-cwd="first-evidence-assertion/adult-status"
+rstack dev stop "$run_id"
+rstack dev check .
+rstack --format json dev start . --ttl 2h > run.json
+run_id="$(jq -r .run_id run.json)"
+evidence_url="$(jq -r .products.evidence run.json)"
+runtime_config="$(jq -r .runtimeConfigs.evidence run.json)"
+jq -c .people run.json
 ```
 
 ```text test-excerpt
-Evidence ready at http://127.0.0.1:18080
-Issuer ready at http://127.0.0.1:8082
+["age-check-app","caller"]
 ```
 
-{/* Evidence: crates/registry-evidencectl/src/access.rs, add_client, active_client_ids;
-    crates/registry-evidencectl/src/dev.rs, start or restart. */}
+{/* Evidence: products/platform/PROJECT-DEV.md, people and grants. */}
 
-## Create the client profile
+## Prepare the request
 
-A client profile holds everything your code would otherwise hard-code about the deployment:
+Preparation writes the request body and the verification context: the provider keys and
+expectations the application will hold the response to, fixed before anything is sent. It takes the
+run's Evidence address, the application's token and the run's runtime configuration, which names the
+trusted keys:
 
 ```sh
-rstack evidence client profile create \
-  --base-url http://127.0.0.1:18080 \
-  --client-id age-check-app \
-  --private-key-file .evidence/clients/age-check-app/private.jwk \
-  --local-loopback-discovery \
-  --client-assertion-audience http://127.0.0.1:8082 \
-  --resource urn:registrystack:evidence:local:gateway \
-  --scope evidence:request \
-  --expected-audience urn:example:audience:standalone-app \
-  --expected-issuer urn:registrystack:evidence:local:issuer \
-  --expected-provider urn:registrystack:evidence:local:provider \
-  --output age-check-client.json
+rstack evidence request prepare adult-status \
+  --evidence-url "$evidence_url" \
+  --header @"$(headers_for age-check-app)" \
+  --runtime-config "$runtime_config" \
+  --purpose age-check \
+  --subject subject:record-id=adult \
+  --name age-check-app
 ```
 
 ```text test-expect
-Created client profile
+Prepared request: .evidence/requests/age-check-app/request.json
+Prepared verification context: .evidence/requests/age-check-app/verification.json
+Prepared authorization: .evidence/requests/age-check-app/authorization.curl
 ```
 
-It pins the base URL, issuer, provider, and audience the client insists on, and the token request
-it makes ([Request an access token](../../configure/request-an-access-token/) explains those
-values). It refers to the private key without containing it. For a deployed service the operator
-gives you each value; `--local-loopback-discovery` is for loopback only.
-
-{/* Evidence: crates/registry-evidencectl/src/client.rs, create_profile, validate_base_url;
-    crates/registry-evidence-client/src/profile.rs, EvidenceClientProfile, ExpectedServiceProfile. */}
+{/* Evidence: crates/registry-evidencectl/src/request.rs, prepare. */}
 
 ## Request and decide in Python
 
@@ -130,43 +124,59 @@ python3 -m venv .venv
 python -m pip install "registry-stack-client==<version>"
 ```
 
-Save this program as `request_adult_status.py`:
+Save this program as `request_adult_status.py`. It sends the prepared request with the
+application's token, verifies the signed response against the prepared context before it returns
+a value, and keeps three files:
 
 ```python title="request_adult_status.py" test-file
+import sys
 import time
+import urllib.request
 from pathlib import Path
 
-from registry_client.evidence import EvidenceClient
+from registry_client.evidence import verify_retained
 
-client = EvidenceClient.from_profile("age-check-client.json")
-verified = client.request("adult-status", **{"record-id": "adult"})
+url, headers_file, prepared = sys.argv[1], sys.argv[2], Path(sys.argv[3])
+header_name, header_value = Path(headers_file).read_text().strip().split(": ", 1)
+
+request = urllib.request.Request(
+    f"{url}/v1/evidence",
+    data=(prepared / "request.json").read_bytes(),
+    headers={
+        "Content-Type": "application/json",
+        "Accept": "application/jose+json",
+        header_name: header_value,
+    },
+)
+with urllib.request.urlopen(request) as reply:
+    response = reply.read()
 decided_at = int(time.time())
 
-Path("adult-status.response.jws").write_bytes(verified.assertion)
-Path("adult-status.retained.json").write_bytes(verified.retained_verification)
+context = (prepared / "verification.json").read_bytes()
+verified = verify_retained(context, response)
+
+Path("adult-status.response.jws").write_bytes(response)
+Path("adult-status.retained.json").write_bytes(context)
 Path("adult-status.verified-at.txt").write_text(f"{decided_at}\n")
 
-if verified.values["adult"] is not True:
+if verified.evidence["supportedValues"][0]["value"] is not True:
     raise RuntimeError("not an adult")
 print("VERIFIED adult=true")
 ```
 
-`from_profile` reads the client profile. The first argument of `request` is the assertion
-definition's handle, and each selector is a keyword argument (`record-id` is spelled as a dictionary
-because of its hyphen). `request` gets a token, sends once, and verifies the signed response before
-it returns, so `verified.values` is the only thing to decide from.
-
-The program keeps three files:
+`verify_retained` checks the response against the prepared context and raises `VerificationError`
+when it does not hold, so `verified.evidence` is the only thing to decide from. The program keeps
+three files:
 
 - `adult-status.response.jws`, the signed assertion exactly as received.
 - `adult-status.retained.json`, the retained verification: the keys and expectations fixed before
   the request was sent, without selector values.
 - `adult-status.verified-at.txt`, the decision instant in Unix seconds.
 
-Run it:
+Tokens last at most five minutes, so ask for the header file as you run it:
 
 ```sh
-python3 request_adult_status.py
+python3 request_adult_status.py "$evidence_url" "$(headers_for age-check-app)" .evidence/requests/age-check-app
 ```
 
 ```text test-expect
@@ -174,64 +184,44 @@ VERIFIED adult=true
 ```
 
 {/* Evidence: crates/registry-evidence-client-py/python/registry_evidence_client/__init__.pyi,
-    VerifiedAssertion, retained_verification;
+    verify_retained, VerifiedEvidence;
     crates/registry-evidence-client/src/retained.rs, RetainedEvidenceVerification. */}
 
-### The same program in Node
+## Create the client profile
 
-With `@registrystack/client` at the same version, this writes the same three files and prints the
-same line. Run one program, not both.
+Against a deployed service, the maintained client requests and verifies in one call from a client
+profile. The profile holds everything your code would otherwise hard-code about the deployment. A
+run issues tokens only through `rstack dev token`, so this page sends the request itself; create the
+profile when the operator has registered your application and given you these values:
 
-```js title="request_adult_status.js"
-const fs = require('node:fs');
-const { evidence } = require('@registrystack/client');
-
-(async () => {
-  const client = evidence.EvidenceClient.fromProfile('age-check-client.json');
-  const result = await client.request({
-    handle: 'adult-status',
-    selectors: { 'record-id': 'adult' },
-  });
-  const decidedAt = Math.floor(Date.now() / 1000);
-
-  fs.writeFileSync('adult-status.response.jws', result.assertion);
-  fs.writeFileSync('adult-status.retained.json', result.retainedVerification);
-  fs.writeFileSync('adult-status.verified-at.txt', `${decidedAt}\n`);
-
-  if (result.values.adult !== true) {
-    throw new Error('not an adult');
-  }
-  console.log('VERIFIED adult=true');
-})();
+```sh test-skip="needs a deployed service and the client registration its operator issues"
+rstack evidence client profile create \
+  --base-url https://evidence.example.com \
+  --client-id age-check-app \
+  --private-key-file app-key/client-assertion-p384-private-jwk \
+  --expected-audience urn:example:audience:standalone-app \
+  --expected-issuer <issuer> \
+  --expected-provider <provider> \
+  --resource <resource> \
+  --scope evidence:request \
+  --output age-check-client.json
 ```
 
-```sh test-skip="the gate supplies no Node package"
-node request_adult_status.js
-```
+It pins the base URL, issuer, provider, and audience the client insists on, and the token request
+it makes ([Request an access token](../../configure/request-an-access-token/) explains those
+values). It refers to the private key without containing it. Then
+`EvidenceClient.from_profile("age-check-client.json").request("adult-status", **{"record-id": "adult"})`
+returns the verified values and the retained verification this page builds from the prepared
+context.
 
-{/* Evidence: crates/registry-evidence-client-node/client.d.ts, AudienceScopedRequest,
-    retainedVerification; crates/registry-stack-client-node/evidence/client.d.ts, fromProfile. */}
+{/* Evidence: crates/registry-evidencectl/src/client.rs, create_profile, validate_base_url;
+    crates/registry-evidence-client/src/profile.rs, EvidenceClientProfile, ExpectedServiceProfile. */}
 
-## Stop and inspect the audit
+## Keep the files
 
-The audit view reads a stopped session, so stop Registry Evidence first:
-
-```sh
-rstack evidence dev stop .
-rstack evidence audit show --last-operation
-```
-
-```text test-excerpt
-Local Evidence stopped
-ACCESS AUTHORIZED adult-status age-check requester=<pseudonym>
-DISCLOSURE RELEASED adult
-```
-
-The gateway recorded who asked, for which purpose, and which value it released, under a pseudonym
-rather than your client identifier. Press `Ctrl+C` in the source's terminal. Keep the project and
-the three files.
-
-{/* Evidence: crates/registry-evidencectl/src/audit_view.rs, render_authorized. */}
+Leave the source and the run going if you continue to the next tutorial; it replays the three files
+and needs neither. When you are finished, stop the run and press `Ctrl+C` in the source's terminal.
+Keep the project and the three files.
 
 ## Next
 

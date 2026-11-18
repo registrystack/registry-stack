@@ -1,7 +1,7 @@
 # Standalone Evidence example
 
 This project issues fixed assertions from a synthetic HTTP source. It runs with
-Evidence, a local OAuth issuer, and an independent relying client. Each definition
+Evidence alone under `rstack dev`, which is its own token issuer. Each definition
 has an explicit grant ceiling, a pinned Adapter pack route, a derivation Function,
 and an output allowlist. The pack owns provider requests and native fact extraction. The person Source
 selects the project-owned `projections/person-facts.rhai` and versioned
@@ -19,11 +19,11 @@ Private source facts stay inside Evidence.
 
 Use an active `rstack` installation that includes the Evidence component. Use
 `evidence` and `evidencectl` native tools that match that installation, plus
-Python 3 and Docker.
+Python 3. It needs no Docker and no database.
 Start from a writable copy outside the repository. Keep the example's generated
 credentials and responses private. The commands below run in that copy.
-The tracked `access/clients/example-caller.yaml` demonstrates the public client
-format only; the commands create the private local `demo` client used below.
+`dev.yaml` is the development plan: the people who may call, and the scenario
+in `tests/scenarios.yaml` that the run checks before it reports ready.
 
 ```sh
 umask 077
@@ -35,26 +35,35 @@ evidencectl check . --target local-target.yaml
 evidencectl test . --target local-target.yaml
 evidencectl explain . --target local-target.yaml
 evidencectl types . --language typescript --output .generated/evidence.ts
-evidencectl access client add demo --access-profile standalone-service --generate-local-key
 ```
 
 In another terminal, run the source from the same directory:
 
 ```sh
-python3 serve-source.py --port 8081 --token-file .generated/secrets/synthetic-source-token
+python3 serve-source.py --port 8081
 ```
 
-Start Evidence and its local issuer. The first run may fetch the pinned issuer
-image. The source uses port 8081 and the issuer uses 8082. If 8080 is occupied,
-set `EVIDENCE_PORT=18080` before running this block; select another free Evidence
-port when needed.
+Start the run. It packages a copy of the project, starts Evidence on a free port and
+reports the address. A caller needs a short-lived token header file, so fetch
+one for each call:
 
 ```sh
-EVIDENCE_PORT=${EVIDENCE_PORT:-8080}
-evidencectl dev start . --target local-target.yaml --evidence-port "$EVIDENCE_PORT" --issuer-port 8082
-evidencectl request prepare adult-status --client demo --purpose age-check --subject subject:record-id=adult --name adult
+rstack dev check .
+rstack --format json dev start . --ttl 2h > run.json
+run_id="$(jq -r .run_id run.json)"
+evidence_url="$(jq -r .products.evidence run.json)"
+runtime_config="$(jq -r .runtimeConfigs.evidence run.json)"
+headers_for() {
+  rstack dev token "$run_id" --as "$1" | awk '$1 == "evidence" && $2 == "headers" {print $3}'
+}
+evidencectl request prepare adult-status \
+  --evidence-url "$evidence_url" \
+  --header @"$(headers_for caller)" \
+  --runtime-config "$runtime_config" \
+  --purpose age-check --subject subject:record-id=adult --name adult
 rstack evidence api /v1/evidence \
-  --client demo \
+  --url "$evidence_url" \
+  --header @"$(headers_for caller)" \
   --input .evidence/requests/adult/request.json \
   --accept application/jose+json \
   --output .evidence/requests/adult/response.json
@@ -95,8 +104,9 @@ evidencectl package . --target local-target.yaml --output ../evidence-candidate
 The candidate contains `bundle/`, `runtime.yaml`, and `compiled-authority.yaml`.
 Install the bundle at the path declared in the emitted runtime, provision the
 referenced secrets, then activate and check the complete target authority. For
-this fresh local project, the generated secrets already exist. Keep the local
-issuer running until preflight finishes so its verification keys are available:
+this fresh local project, the generated secrets already exist. Preflight fetches
+the token issuer's keys, so run `doctor` where the issuer the target names is
+reachable:
 
 ```sh
 candidate=$(cd ../evidence-candidate && pwd)
@@ -111,9 +121,8 @@ a separately derived revision and durable activation history. Authority changes
 require a process restart to adopt the new snapshot; ongoing requests keep their
 original snapshot and live task-grant release checks.
 
-Stop and clean the local services when finished, then interrupt the source:
+Stop the run when finished, then interrupt the source:
 
 ```sh
-evidencectl dev stop .
-evidencectl dev clean .
+rstack dev stop "$run_id"
 ```

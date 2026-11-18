@@ -827,10 +827,7 @@ authorized-material entries use `registry.evidence.audit/v3`; retained
 `registry.evidence.audit/v2` entries remain readable history. A semantic reader
 selects the record shape by the envelope's `schema` member. Readers must accept
 the new authorized `/v3` schema before operators route traffic to the changed
-runtime. `evidencectl audit show` keeps its internal
-`registry.evidence.local-audit-operation/v2` projection and reads retained
-authorized `/v2` history alongside `/v3`; that projection is not an entry
-schema.
+runtime.
 
 Every singular and request-batch `/v3` access-attempt record requires exactly
 one closed `executionBounds` object with three positive integers:
@@ -965,7 +962,7 @@ standard error whatever the destination is, so the stream carries audit entries
 alone, each with its `schema` member. Durability, rotation, and retention then belong to the collector, and
 an entry is accepted once the line is written to the stream. `evidence check
 --require-audit-under` refuses a `stdout` destination, because there is no
-local file to contain, and `evidencectl audit show` has nothing local to read.
+local file to contain.
 
 Stop the service with SIGTERM, which is what a service manager and a container
 runtime both send, or with Ctrl-C for an interactive process. The server stops

@@ -48,8 +48,7 @@ evidencectl target new ./configured-target --local --project ./evidence
 ```
 
 Add a `registry` connection to `configured-target/target.yaml`, with the registry
-origin and its operator-approved authentication references. For a retained local
-registry, [guided connection](#guided-local-connection) derives those bindings.
+origin and its operator-approved authentication references.
 The offline proof uses synthetic loopback bindings and resolves no credentials.
 Run the completed project:
 
@@ -63,22 +62,13 @@ The candidate contains the immutable `bundle/` and a separate target handoff.
 Packaging is offline and does not deploy it. Keep generated exports, credentials
 and candidates outside this maintained input tree and out of version control.
 
-## Guided local connection
+## Connecting a registry
 
-For a registry already used through `bregctl dev`, stop its retained session
-normally and review `evidencectl source add ./registry ./evidence`. Choose an
-existing required unique field, the facts, and explicit record scope. The command
-reviews by default; `--apply` performs the reviewed connection through public BReg
-commands. Its public selector flag is `--entity`, while BReg export uses
-`--record-type`. Matching `bregctl` must be on `PATH`.
-
-Guided setup is optional and requires a retained session. It prepares a dedicated
-lookup client and policy successor, imports the Source and copies credentials
-privately. It does not authorize Evidence callers or define an assertion.
-Use the maintained [retained-session procedure](https://docs.registrystack.org/reference/bregctl-dev/#prepare-a-source-after-using-a-registry)
-for activation and recovery. A source identity already present in a project must
-be reviewed through `source diff` and `source update`, rather than attached again
-under conflicting choices.
+Generate the export with `bregctl generate evidence-source` and add it with
+`evidencectl source import`, as above. The import does not authorize Evidence
+callers or define an assertion. A source identity already present in a project
+must be reviewed through `source diff` and `source update`, rather than attached
+again under conflicting choices.
 
 The explicit source profile permits registry-wide exact lookups, expressed as
 `rowBoundaries: unrestricted`. It cannot list, create or patch records and cannot

@@ -23,12 +23,13 @@ case "$#:${1-}" in
   1:--debug) build_profile=debug ;;
   *) usage ;;
 esac
+# `rstack dev` runs at most 256 test people, and each load client is one person.
 load_clients="${LOAD_CLIENTS:-128}"
 if [[ ! "$load_clients" =~ ^[0-9]+$ ]] || ((load_clients < 1 || load_clients > 256)); then
   printf '%s\n' 'LOAD_CLIENTS must be an integer between 1 and 256.' >&2
   exit 2
 fi
-required_commands=(cargo docker python3)
+required_commands=(cargo python3)
 # The launcher proves it owns the source mock by its working directory, which
 # only Linux exposes under /proc; elsewhere lsof reads it.
 if [[ "$(uname -s)" != Linux ]]; then required_commands+=(lsof); fi
@@ -55,14 +56,22 @@ export CARGO_PROFILE_TEST_DEBUG=0
 . "$repository_root/scripts/cargo-runtime-library-path.sh"
 cargo_profile_arguments=()
 if [[ "$build_profile" == release ]]; then cargo_profile_arguments=(--release); fi
-printf '%s\n' "== Building Evidence and evidencectl ($build_profile profile)"
+printf '%s\n' "== Building Evidence, evidencectl and rstack ($build_profile profile)"
 registry_cargo_build "$repository_root" --manifest-path "$repository_root/Cargo.toml" --locked \
   "${cargo_profile_arguments[@]}" \
-  -p registry-evidence -p registry-evidencectl --bins >/dev/null
-evidence_bin="$repository_root/target/$build_profile/evidence"
+  -p registry-evidence -p registry-evidencectl -p registry-rstack --bins >/dev/null
+rstack="$repository_root/target/$build_profile/rstack"
 evidencectl="$repository_root/target/$build_profile/evidencectl"
-export EVIDENCE_BIN="$evidence_bin"
+# A source build resolves the sibling tools through these overrides, on every
+# rstack dev call.
+export RSTACK_EVIDENCE_BIN="$repository_root/target/$build_profile/evidence"
+export RSTACK_EVIDENCECTL_BIN="$evidencectl"
+export RSTACK_DEV_STATE_DIR="$run_dir/state"
+rstack_dev() {
+  "$rstack" --install-root "$repository_root/target/$build_profile" --format json dev "$@"
+}
 project="$run_dir/project"
+run_id=""
 mock_pid=""
 
 stop_owned_mock() {
@@ -76,11 +85,10 @@ stop_owned_mock() {
 cleanup_failed_start() {
   local status=$?
   if [[ "$status" -ne 0 ]]; then
-    if [[ -f "$project/.evidence/dev/state.json" ]]; then
-      printf '%s\n' 'Load-test startup failed; stopping only the project-owned dev session.' >&2
-      "$evidencectl" --format json dev stop "$project" >/dev/null 2>&1 || :
-      "$evidencectl" --format json dev clean "$project" >/dev/null 2>&1 ||
-        printf '%s\n' "Automatic owned-session cleanup did not complete; inspect $project/.evidence." >&2
+    if [[ -n "$run_id" ]]; then
+      printf '%s\n' 'Load-test startup failed; stopping only the run this script started.' >&2
+      rstack_dev stop "$run_id" >/dev/null 2>&1 ||
+        printf '%s\n' "Automatic cleanup failed; run: rstack dev stop $run_id" >&2
     fi
     if [[ -n "$mock_pid" ]]; then
       printf '%s\n' 'Stopping the source mock this launcher started.' >&2
@@ -91,7 +99,7 @@ cleanup_failed_start() {
 }
 trap cleanup_failed_start EXIT
 
-read -r mock_port evidence_port issuer_port < <(python3 "$support" ports)
+mock_port=$(python3 "$support" port)
 
 printf '%s\n' '== Preparing the synthetic adult-status project'
 python3 "$support" openapi --template "$tracked/source.openapi.yaml" --port "$mock_port" --out "$run_dir/source.openapi.yaml"
@@ -100,7 +108,8 @@ python3 "$support" local-project \
   --project "$project" \
   --pool "$run_dir/pool" \
   --source-openapi "$run_dir/source.openapi.yaml" \
-  --mock-port "$mock_port"
+  --mock-port "$mock_port" \
+  --clients "$load_clients"
 {
   "$evidencectl" keygen signing \
     --output-dir "$project/.generated/secrets"
@@ -116,23 +125,8 @@ python3 "$support" local-project \
 "$evidencectl" source mock check "$project" >"$run_dir/mock-check.log"
 
 # Each load client is a distinct principal, so the per-principal limit of the
-# stock development bundle applies to each one separately. Clients must exist
-# before dev start because the compiled bundle fixes the authority profiles.
-printf '%s\n' "== Registering $load_clients synthetic load clients"
-(
-  # evidencectl creates access/ with mode 0755 through the process umask and
-  # then requires exactly 0755, so these commands need the stock umask. The
-  # project stays inside the owner-only .run directory, and the client keys
-  # are still written owner-only by evidencectl itself.
-  umask 022
-  cd -- "$project"
-  while IFS= read -r client; do
-    "$evidencectl" access client add "$client" \
-      --access-profile standalone-service \
-      --generate-local-key >/dev/null
-  done < <(python3 "$support" clients --count "$load_clients")
-)
-
+# local target applies to each one separately. The clients are the people of
+# the generated run plan, fixed for the life of the run.
 printf '%s\n' "== Starting the synthetic source mock on 127.0.0.1:$mock_port"
 # The materialized plan path is project-relative and resolved against the
 # working directory, so the mock runs inside the project. The subshell ignores
@@ -161,26 +155,29 @@ if [[ "$(<"$run_dir/mock.log")" != *'Source mock ready:'* ]]; then
   exit 1
 fi
 
-printf '%s\n' '== Starting the stock evidencectl development lifecycle'
-"$evidencectl" --format json dev start \
-  --evidence-bin "$evidence_bin" \
-  --docker-bin "$(command -v docker)" \
-  --evidence-port "$evidence_port" \
-  --issuer-port "$issuer_port" \
-  "$project" >"$run_dir/dev-report.json"
+printf '%s\n' '== Starting the Evidence development run'
+# A failed run keeps its logs, so a start that exits non-zero is still stopped
+# once its run id is known.
+rstack_dev start "$project" >"$run_dir/dev-report.json" || {
+  run_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("run_id",""))' "$run_dir/dev-report.json" 2>/dev/null || true)
+  exit 1
+}
+run_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$run_dir/dev-report.json")
 python3 "$support" environment \
   --root "$run_dir" \
-  --dev-report "$run_dir/dev-report.json" \
+  --run-report "$run_dir/dev-report.json" \
+  --rstack "$rstack" \
   --evidencectl "$evidencectl" \
   --build-profile "$build_profile" \
   --runtime-library-path "${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH-}" \
   --mock-pid "$mock_pid" \
   --mock-port "$mock_port" \
   --clients "$load_clients"
+evidence_url=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["products"]["evidence"])' "$run_dir/dev-report.json")
 
 printf '\n%s\n' 'Evidence load-test environment is ready.'
-printf '  Evidence:               http://127.0.0.1:%s\n' "$evidence_port"
-printf '  Identity provider:      stock evidencectl dev issuer on 127.0.0.1:%s\n' "$issuer_port"
+printf '  Evidence:               %s\n' "$evidence_url"
+printf '  Identity provider:      the rstack dev run issuer (run %s)\n' "$run_id"
 printf '  Source mock:            evidencectl source mock on 127.0.0.1:%s (pid %s)\n' "$mock_port" "$mock_pid"
 printf '  Evidence build profile: %s\n' "$build_profile"
 printf '  Load clients:           %s (each limited to 60 requests per minute)\n' "$load_clients"

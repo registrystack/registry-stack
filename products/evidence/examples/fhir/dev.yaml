@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+# Evidence alone: no BReg, no Casework, no database. The run uses this
+# project's local-target.yaml and dev-authority.yaml, and is its own token
+# issuer: it signs the test tokens with a throwaway local key and serves the
+# matching public keys on loopback. Start the read-through helper first, as the
+# README shows: `python3 serve-source.py`.
+issuer: run
+products:
+  - {product: evidence, project: ., audience: "urn:example:resource:fhir-record-evidence"}
+people:
+  caller:
+    subject: "urn:registrystack:evidence:local:client:fhir-client"
+    client: fhir-client
+    grants:
+      evidence:
+        # The requester tag dev-authority.yaml admits.
+        profile: fhir-service
+        scopes: ["evidence:request"]
+        claims: {evidence_audience: "urn:example:audience:fhir-record-evidence"}
+  stranger:
+    subject: "urn:registrystack:evidence:local:client:stranger"
+    client: stranger
+    grants:
+      evidence:
+        # A tag no access profile admits, so every request is refused.
+        profile: unlisted-service
+        scopes: ["evidence:request"]
+        claims: {evidence_audience: "urn:example:audience:fhir-record-evidence"}
+scenarioFile: tests/scenarios.yaml

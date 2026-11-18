@@ -10,3 +10,26 @@ scenarios:
         method: GET
         path: /v1/messages/missing
         expect: {status: 404}
+  - id: send-a-reminder-sms
+    steps:
+      - id: case-system-sends-a-reminder
+        product: messaging
+        as: case-system
+        method: POST
+        path: /v1/messages
+        headers: {Idempotency-Key: send-a-reminder-sms}
+        body:
+          senderProfile: reminders-sms
+          to: {phone: "+15555550100"}
+          template: {id: appointment-reminder-sms, version: "1"}
+          locale: en
+          data: {name: Ada Lovelace, day: "2026-10-01", office: Central Registry Office}
+        expect: {status: [201, 202]}
+        capture: {message: {type: pointer, pointer: /id}}
+      - id: the-gateway-reports-it-delivered
+        product: messaging
+        as: case-system
+        method: GET
+        path: /v1/messages/{{message}}
+        poll: {maximumWaitMilliseconds: 20000, pollIntervalMilliseconds: 250}
+        expect: {status: 200, json: {/report: delivered}}

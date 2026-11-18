@@ -112,10 +112,13 @@ fn serve_jwks(mut stream: TcpStream, body: &[u8]) {
 impl ProductRunner<'_> {
     /// Prepares the project for a run and returns the runtime configuration
     /// `evidence serve` reads. The project is copied so the run never writes
-    /// into the adopter's tree. `evidencectl target new --local` makes the
-    /// target and its development secrets, the target is pointed at the run's
-    /// listener, issuer and key set, and the package and authority are built
-    /// and activated the way a deployment would.
+    /// into the adopter's tree. A project's own `local-target.yaml` and the
+    /// authority it names are copied into the run's target, with development
+    /// secrets generated for every secret it references. A project without one
+    /// gets `evidencectl target new --local`, which derives a target and
+    /// authority from the definitions' ceilings. The target is pointed at the
+    /// run's listener, issuer and key set, and the package and authority are
+    /// built and activated the way a deployment would.
     pub(super) fn activate_evidence(&mut self, project: &Path, bind: &str) -> Result<PathBuf> {
         let plan = &self.input.plan;
         let work = self.root.join("evidence-project");
@@ -125,16 +128,19 @@ impl ProductRunner<'_> {
         let package_root = self.root.join(PACKAGE_DIRECTORY);
         // `target new` prints no JSON report, so it runs without `--format json`.
         self.ensure_active()?;
+        let secrets = work.join(".generated").join("secrets");
+        let authored_target = work.join(AUTHORED_TARGET_FILE);
+        let mut new_target: Vec<&std::ffi::OsStr> =
+            vec!["target".as_ref(), "new".as_ref(), target_dir.as_os_str()];
+        if authored_target.try_exists()? {
+            self.generate_authored_secrets(&authored_target, &work, &secrets)?;
+            new_target.extend(["--settings".as_ref(), authored_target.as_os_str()]);
+        } else {
+            new_target.extend(["--local".as_ref(), "--project".as_ref(), work.as_os_str()]);
+        }
         run_logged_tool(
             &self.input.binaries[&Product::Evidence].tool,
-            &[
-                "target".as_ref(),
-                "new".as_ref(),
-                target_dir.as_os_str(),
-                "--local".as_ref(),
-                "--project".as_ref(),
-                work.as_os_str(),
-            ],
+            &new_target,
             self.root,
             ("evidence", "target"),
             false,
@@ -145,7 +151,6 @@ impl ProductRunner<'_> {
             .take()
             .context("the run issuer listener is not reserved")?;
         let jwks = JwksServer::start(listener, &self.issuer_jwks()?)?;
-        let secrets = work.join(".generated").join("secrets");
         let target_file = target_dir.join("target.yaml");
         let missing = self.point_target_at_run(
             &target_file,
@@ -206,6 +211,81 @@ impl ProductRunner<'_> {
         Ok(config)
     }
 
+    /// Makes the development secrets an authored target references, in the
+    /// secret root the run points the target at: the signing keypair at the
+    /// target's own `publicJwkFile`, the subject-binding and audit hash keys.
+    /// Source tokens are made after the target is pointed at the run. A secret
+    /// that already exists is kept.
+    fn generate_authored_secrets(
+        &self,
+        authored_target: &Path,
+        work: &Path,
+        secrets: &Path,
+    ) -> Result<()> {
+        let target = read_yaml(authored_target)?;
+        let secret_name = |reference: &Value| {
+            reference
+                .as_str()
+                .and_then(|text| text.strip_prefix("secret:file/"))
+                .map(str::to_owned)
+        };
+        if target["signer"]["type"] == "local-jwk" {
+            let private = secret_name(&target["signer"]["privateKeyRef"]).context(
+                "the authored target's signer privateKeyRef must be a secret:file/ reference",
+            )?;
+            let public = Path::new(
+                target["signer"]["publicJwkFile"]
+                    .as_str()
+                    .context("the authored target's signer needs a publicJwkFile")?,
+            );
+            ensure!(
+                public.is_relative()
+                    && public
+                        .components()
+                        .all(|part| matches!(part, std::path::Component::Normal(_))),
+                "the authored target's publicJwkFile must be a path inside the project"
+            );
+            ensure!(
+                private == GENERATED_SIGNING_KEY,
+                "the run generates its signing key as secret:file/{GENERATED_SIGNING_KEY}; \
+                 name that key as the authored target's signer privateKeyRef"
+            );
+            if !secrets.join(&private).exists() {
+                self.tool(
+                    Product::Evidence,
+                    "keygen",
+                    &[
+                        "signing".as_ref(),
+                        "--output-dir".as_ref(),
+                        secrets.as_os_str(),
+                        "--public-output".as_ref(),
+                        work.join(public).as_os_str(),
+                    ],
+                )?;
+            }
+        }
+        for reference in [
+            &target["subjectBinding"]["secretRef"],
+            &target["audit"]["hashKeyRef"],
+        ] {
+            let Some(name) = secret_name(reference) else {
+                continue;
+            };
+            if !secrets.join(&name).exists() {
+                self.tool(
+                    Product::Evidence,
+                    "keygen",
+                    &[
+                        "secret".as_ref(),
+                        "--output".as_ref(),
+                        secrets.join(name).as_os_str(),
+                    ],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn issuer_jwks(&self) -> Result<Value> {
         self.issuer
             .as_ref()
@@ -223,12 +303,7 @@ impl ProductRunner<'_> {
         package: &Path,
         audience: &str,
     ) -> Result<Vec<String>> {
-        let text = fs::read_to_string(target_file).context("cannot read the Evidence target")?;
-        let mut target = registry_platform_yaml::Reader::new(target_file.display().to_string())
-            .scan(text.as_bytes())
-            .map_err(|_| anyhow::anyhow!("the Evidence target is not valid YAML"))?
-            .context("the Evidence target is empty")?
-            .to_json_value();
+        let mut target = read_yaml(target_file)?;
         let oidc = &mut target["authentication"]["oidc"];
         // The run issuer is the key set server's own origin: a local Evidence
         // target accepts only a canonical loopback issuer whose key set is
@@ -236,6 +311,7 @@ impl ProductRunner<'_> {
         oidc["issuer"] = json!(self.input.plan.issuer);
         oidc["jwksSource"] = json!({"type": "uri", "uri": jwks_uri});
         oidc["audience"] = json!(audience);
+        read_run_issuer_claims(oidc);
         target["listener"]["bind"] = json!(bind);
         target["service"]["publicOrigin"] = json!(format!("http://{bind}"));
         target["package"]["root"] = json!(package);
@@ -249,6 +325,41 @@ impl ProductRunner<'_> {
             .filter(|name| !secrets.join(name).exists())
             .collect())
     }
+}
+
+/// Points a target's token settings at what the run issuer emits. The issuer
+/// signs ES256 access tokens and names the claims the same way for every
+/// project, so an authored target's own algorithm and claim names, including
+/// renamed actor-kind and grant claims, give way to its defaults.
+fn read_run_issuer_claims(oidc: &mut Value) {
+    oidc["tokenTypes"] = json!(["at+jwt"]);
+    oidc["algorithms"] = json!(["ES256"]);
+    oidc["principalClaim"] = json!("sub");
+    oidc["requesterTagsClaim"] = json!("evidence_tags");
+    oidc["evidenceAudienceClaim"] = json!("evidence_audience");
+    if let Some(settings) = oidc.as_object_mut() {
+        settings.remove("claims");
+    }
+}
+
+/// The target a project authors beside its Sources.
+const AUTHORED_TARGET_FILE: &str = "local-target.yaml";
+
+/// The signing key's file name in the secret root, which `evidencectl keygen
+/// signing` fixes.
+const GENERATED_SIGNING_KEY: &str = "signing-p256-private-jwk";
+
+/// Reads a YAML file as JSON.
+fn read_yaml(path: &Path) -> Result<Value> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+    Ok(
+        registry_platform_yaml::Reader::new(path.display().to_string())
+            .scan(text.as_bytes())
+            .map_err(|_| anyhow::anyhow!("{} is not valid YAML", path.display()))?
+            .with_context(|| format!("{} is empty", path.display()))?
+            .to_json_value(),
+    )
 }
 
 /// The run's Evidence package directory name, inside the run directory.
@@ -307,5 +418,33 @@ fn collect_file_secrets(value: &Value, names: &mut Vec<String>) {
             .values()
             .for_each(|item| collect_file_secrets(item, names)),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_authored_target_reads_the_run_issuer_claims() {
+        let mut oidc = json!({
+            "tokenTypes": ["JWT"],
+            "algorithms": ["RS256"],
+            "principalClaim": "client_id",
+            "requesterTagsClaim": "roles",
+            "evidenceAudienceClaim": "aud_evidence",
+            "claims": {"actorKind": "kind", "purpose": "why"},
+        });
+        read_run_issuer_claims(&mut oidc);
+        assert_eq!(
+            oidc,
+            json!({
+                "tokenTypes": ["at+jwt"],
+                "algorithms": ["ES256"],
+                "principalClaim": "sub",
+                "requesterTagsClaim": "evidence_tags",
+                "evidenceAudienceClaim": "evidence_audience",
+            })
+        );
     }
 }

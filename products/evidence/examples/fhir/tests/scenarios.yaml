@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: unlisted-caller-is-refused
+    steps:
+      - id: request-coverage-status
+        product: evidence
+        as: stranger
+        method: POST
+        path: /v1/evidence
+        body:
+          requestNonce: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          requirement: urn:example:requirement:coverage-record:v1
+          purpose: coverage-record-verification
+          subjects:
+            - role: patient
+              selector: {profile: patient-by-id, values: {patient_id: synthetic-patient}}
+            - role: coverage-record
+              selector: {profile: coverage-by-id, values: {coverage_id: synthetic-coverage}}
+        expect: {status: 403}

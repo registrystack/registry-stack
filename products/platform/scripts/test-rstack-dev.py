@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise rstack dev with real BReg, Casework, Evidence and a disposable TLS PostgreSQL."""
+"""Exercise rstack dev with real BReg, Casework, Evidence, Messaging and a disposable TLS PostgreSQL."""
 
 from __future__ import annotations
 
@@ -527,6 +527,135 @@ def verify_evidence_alone(root, bin_dir):
     finally:
         source.terminate()
         source.wait(timeout=10)
+
+
+MESSAGING = STACK / "products/messaging/examples/starter"
+
+
+def post_json(url, headers, body):
+    """POST `body` as JSON and return the status with the decoded answer."""
+    request = Request(
+        url,
+        data=json.dumps(body).encode(),
+        headers={**headers, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with HTTP.open(request, timeout=10) as response:
+            return response.status, json.loads(response.read())
+    except HTTPError as error:
+        return error.code, error.read().decode()
+
+
+def get_json(url):
+    with HTTP.open(url, timeout=5) as response:
+        return json.loads(response.read())
+
+
+def verify_messaging_alone(root, bin_dir):
+    """Messaging runs from its own starter with no other product. The run's own
+    PostgreSQL server and a Mailpit for the smtp provider run in Docker, the
+    http provider sends to the run's in-process gateway, and every one of them
+    goes with the run."""
+    checkout = root / "alone-messaging"
+    shutil.copytree(MESSAGING, checkout)
+    state = root / "messaging-runs"
+    missing = str(root / "no-such-binary")
+    env = {
+        **{
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"RSTACK_DEV_DATABASE_URL", "RSTACK_DEV_DATABASE_CA"}
+        },
+        "RSTACK_DEV_STATE_DIR": str(state),
+        "RSTACK_MESSAGINGCTL_BIN": str(bin_dir / "messagingctl"),
+        "RSTACK_MESSAGING_BIN": str(bin_dir / "messaging"),
+        **{
+            f"RSTACK_{name}_BIN": missing
+            for name in ("BREGCTL", "BREG", "CASEWORKCTL", "CASEWORK", "EVIDENCECTL")
+        },
+    }
+    baseline = labelled_containers()
+    run = None
+    try:
+        report = dev(bin_dir, env, checkout, "start", ".")
+        run = report["run_id"]
+        assert report["scenarios"][-1]["result"] == "passed", report
+        assert list(report["products"]) == ["messaging"], report
+        config = Path(report["runtimeConfigs"]["messaging"])
+        assert config.is_absolute() and config.is_file(), report
+        sinks = report["sinks"]
+        assert sorted(sinks) == ["mail-relay", "sms-gateway"], report
+
+        # Two labelled containers: the run's PostgreSQL server and its Mailpit.
+        containers = labelled_containers(run)
+        assert len(containers) == 2, containers
+        mailpit = sinks["mail-relay"]
+        host, smtp_port = mailpit["smtp"].rsplit(":", 1)
+        mailpit_url = mailpit["url"]
+        assert host == "127.0.0.1" and mailpit_url.startswith("http://127.0.0.1:"), mailpit
+        [mailpit_container] = [
+            container
+            for container in containers
+            if "mailpit"
+            in checked("docker", "inspect", "--format", "{{.Config.Image}}", container).decode()
+        ]
+        published = checked("docker", "port", mailpit_container).decode().splitlines()
+        assert published and all(
+            line.split(" -> ")[1].startswith("127.0.0.1:") for line in published
+        ), published
+
+        # The SMS scenario reached the gateway.
+        gateway = sinks["sms-gateway"]["url"]
+        sent = get_json(gateway)["sent"]
+        assert [entry["provider"] for entry in sent] == ["sms-gateway"], sent
+        assert sent[0]["body"]["to"] == "+15555550100", sent
+
+        # An email reaches Mailpit.
+        headers = credential(bin_dir, env, checkout, run, "case-system")
+        status, answer = post_json(
+            report["products"]["messaging"] + "/v1/messages",
+            {**headers, "Idempotency-Key": "harness-email"},
+            {
+                "senderProfile": "transactional",
+                "to": {"email": "ada@example.org"},
+                "template": {"id": "appointment-reminder", "version": "1"},
+                "locale": "en",
+                "data": {
+                    "name": "Ada Lovelace",
+                    "day": "2026-10-01",
+                    "office": "Central Registry Office",
+                },
+            },
+        )
+        assert status in (201, 202), (status, answer)
+        eventually(
+            lambda: get_json(mailpit_url + "/api/v1/messages")["total"] == 1,
+            "Mailpit did not receive the email",
+        )
+        [message] = get_json(mailpit_url + "/api/v1/messages")["messages"]
+        assert message["To"][0]["Address"] == "ada@example.org", message
+
+        stopped = dev(bin_dir, env, checkout, "stop", run)
+        assert stopped["status"] == "stopped", stopped
+        assert labelled_containers(run) == set()
+        assert labelled_containers() == baseline
+        for address in (gateway, mailpit_url, report["products"]["messaging"]):
+            eventually(
+                lambda address=address: not accepts_connections(address),
+                f"{address} is still listening",
+            )
+        nothing_left_behind(state)
+        run = None
+        print(
+            "messaging alone sent an SMS to the run's gateway and an email to its Mailpit, "
+            "then removed every container"
+        )
+    finally:
+        if run is not None:
+            dev(bin_dir, env, checkout, "stop", run)
+        for container in labelled_containers() - baseline:
+            checked("docker", "rm", "--force", "--volumes", container)
 
 
 def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
@@ -1742,7 +1871,19 @@ def main():
         action="store_true",
         help="only verify Evidence alone, which needs no database and no Docker",
     )
+    parser.add_argument(
+        "--messaging",
+        action="store_true",
+        help="only verify Messaging alone, which runs its own PostgreSQL server "
+        "and a Mailpit in Docker",
+    )
     args = parser.parse_args()
+    if args.messaging:
+        with tempfile.TemporaryDirectory(
+            prefix="rstack-dev-", dir=args.scratch_parent
+        ) as directory:
+            verify_messaging_alone(Path(directory), args.bin_dir.resolve())
+        return
     if args.evidence:
         with tempfile.TemporaryDirectory(
             prefix="rstack-dev-", dir=args.scratch_parent

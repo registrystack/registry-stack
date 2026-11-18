@@ -23,30 +23,42 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 If your relying parties expect a Selective Disclosure JWT Verifiable Credential (SD-JWT VC),
 permit that representation for `adult-status`, then request and verify one. You continue in the
 project from [Assert a role-bound relationship](../assert-a-role-bound-relationship/), with the
-source and Registry Evidence still running, and finish by stopping both and reading the audit.
+source and the run still going, and finish with the run still going.
 
 <QuickstartMeta
-  outcome="A verified SD-JWT VC adult-status response, a refused tampered copy, and the audit of the request."
+  outcome="A verified SD-JWT VC adult-status response and a refused tampered copy."
   time="About 10 minutes"
   level="Local development with synthetic data"
-  prerequisites={['The project, source, and Registry Evidence left running by Assert a role-bound relationship']}
+  prerequisites={['The project, source, and run left going by Assert a role-bound relationship']}
 />
 
 ## Permit the representation
 
-Registry Evidence reads the project only as it starts. In `first-evidence-assertion/adult-status`,
-stop it while you change the project; the source keeps running:
+A run reads the project only as it starts. In `first-evidence-assertion/adult-status`, stop the
+run while you change the project; the source keeps running:
+
+In a new terminal, read the run back from `run.json` and redefine the helper that fetches a token
+header file:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
-rstack evidence dev stop .
+run_id="$(jq -r .run_id run.json)"
+evidence_url="$(jq -r .products.evidence run.json)"
+runtime_config="$(jq -r .runtimeConfigs.evidence run.json)"
+headers_for() {
+  rstack dev token "$run_id" --as "$1" | awk '$1 == "evidence" && $2 == "headers" {print $3}'
+}
+```
+
+```sh test-cwd="first-evidence-assertion/adult-status"
+rstack dev stop "$run_id"
 ```
 
 ```text test-expect
-Local Evidence stopped
+Run <run-id> stopped
 ```
 
-A definition's `representations` lists the encodings it may emit. Add `sd-jwt-vc` to
-`adult-status`:
+A definition's `representations` lists the encodings it may emit, and a grant in
+`dev-authority.yaml` lists the ones it admits. Add `sd-jwt-vc` to `adult-status`:
 
 ```diff lang="yaml" title="evidence.yaml" test-edit
     subjectBinding: audience-scoped
@@ -70,9 +82,10 @@ Add it to the `adult-status` grant too:
       subjectBinding: audience-scoped
 ```
 
-Both lists must name it. The grant belongs to the `standalone-service` profile, so every client
-on that profile, `tutorial-client` and `example-caller` alike, may now ask for the SD-JWT VC
-representation. Check the project:
+Both lists must name it, and the grant keeps `signed-jws`, so the run's own scenario still
+passes. The grant belongs to the `standalone-service` profile, so every caller
+on that profile may ask for the SD-JWT VC representation once a deployment applies it. Check the
+project:
 
 ```sh
 rstack evidence check . --target local-target.yaml
@@ -85,19 +98,16 @@ rstack evidence check . --target local-target.yaml
 {/* Evidence: products/evidence/examples/standalone/evidence.yaml, representations;
     products/evidence/examples/standalone/dev-authority.yaml, standalone-service. */}
 
-## Start Registry Evidence with the change
+## Start a run with the change
 
-Start Registry Evidence again with the same ports, so it loads the changed definition and grant:
+Start a run again, so it loads the changed definition:
 
 ```sh
-rstack evidence dev start . \
-  --target local-target.yaml \
-  --evidence-port 18080 \
-  --issuer-port 8082
-```
-
-```text test-excerpt
-Evidence ready at http://127.0.0.1:18080
+rstack dev check .
+rstack --format json dev start . --ttl 2h > run.json
+run_id="$(jq -r .run_id run.json)"
+evidence_url="$(jq -r .products.evidence run.json)"
+runtime_config="$(jq -r .runtimeConfigs.evidence run.json)"
 ```
 
 ## Request and verify an SD-JWT VC
@@ -107,13 +117,16 @@ response:
 
 ```sh
 rstack evidence request prepare adult-status \
-  --client tutorial-client \
+  --evidence-url "$evidence_url" \
+  --header @"$(headers_for caller)" \
+  --runtime-config "$runtime_config" \
   --purpose age-check \
   --subject subject:record-id=adult \
   --response-format sd-jwt-vc \
   --name adult-status-vc
 rstack evidence api /v1/evidence \
-  --client tutorial-client \
+  --url "$evidence_url" \
+  --header @"$(headers_for caller)" \
   --input .evidence/requests/adult-status-vc/request.json \
   --accept application/dc+sd-jwt \
   --output adult-status.sd-jwt-vc
@@ -178,40 +191,9 @@ evidencectl: Evidence response verification failed
 
 {/* Evidence: crates/registry-platform-sdjwt/src/lib.rs, issue_disclosure. */}
 
-## Stop and read the audit
+## Leave the run going
 
-Registry Evidence wrote an audit event before it read the source and another before the response
-left. `rstack evidence audit show` reads them only from a stopped session, so stop it and show the last
-operation, your SD-JWT VC request:
-
-```sh
-rstack evidence dev stop .
-rstack evidence audit show --last-operation
-```
-
-```text test-excerpt
-ACCESS AUTHORIZED adult-status age-check requester=<pseudonym>
-DISCLOSURE RELEASED adult
-```
-
-A pseudonymous requester was authorized for `adult-status` under `age-check`, and the `adult`
-output was released. The value is not shown.
-
-`dev clean` removes the stopped session's generated state, including those audit files. The
-project, its keys, and its clients stay:
-
-```sh
-rstack evidence dev clean .
-```
-
-```text test-expect
-Removed stopped local Evidence state
-```
-
-Press `Ctrl+C` in the source's terminal to stop the source.
-
-{/* Evidence: crates/registry-evidencectl/src/audit_view.rs, no_stopped_session, render_authorized;
-    crates/registry-evidencectl/src/dev.rs, clean_dev, remove_completed_dev_root. */}
+Leave the source and the run going; the next tutorial continues with them.
 
 ## Next
 

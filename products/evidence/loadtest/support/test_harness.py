@@ -29,6 +29,9 @@ loadenv = importlib.util.module_from_spec(LOADENV_SPEC)
 LOADENV_SPEC.loader.exec_module(loadenv)
 
 
+RUN_ID = "0123456789abcdef0123456789abcdef"
+
+
 def _b64url(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
@@ -45,6 +48,7 @@ def _owned_root(repository: Path, build_profile: str = "release") -> tuple[Path,
     (root / ".launcher-owned").write_text(f"{loadenv.MARKER}\n", encoding="ascii")
     evidencectl = repository / "target" / build_profile / "evidencectl"
     evidencectl.parent.mkdir(parents=True, exist_ok=True)
+    (repository / "target" / build_profile / "rstack").write_text("", encoding="utf-8")
     return root, evidencectl
 
 
@@ -52,6 +56,8 @@ def _write_environment(root: Path, executable: Path, **overrides: object) -> dic
     environment: dict[str, object] = {
         "evidence_url": "http://127.0.0.1:1234",
         "evidencectl": str(executable),
+        "rstack": str(executable.parent / "rstack"),
+        "run_id": RUN_ID,
         "build_profile": "release",
         "project": str(root / "project"),
         "clients": 3,
@@ -267,7 +273,7 @@ class EvidenceHarnessTests(unittest.TestCase):
             loadenv.render_openapi(LOADTEST / "project/source.openapi.yaml", 4711, source_openapi)
             pool = root / "pool"
             canonical = REPOSITORY / "products/evidence/examples/standalone"
-            loadenv.local_project(canonical, project, pool, source_openapi, 4711)
+            loadenv.local_project(canonical, project, pool, source_openapi, 4711, 3)
             plan = (project / "mocks/source.yaml").read_text(encoding="utf-8")
             self.assertEqual(plan.count("      - name: lt-subject-"), loadenv.SUBJECTS)
             self.assertLessEqual(loadenv.SUBJECTS, 256, "evidencectl source mock allows 256 cases per operation")
@@ -294,8 +300,24 @@ class EvidenceHarnessTests(unittest.TestCase):
                 (project / "local-target.yaml").read_text(),
             )
             self.assertFalse((project / "access").exists())
+            # The local target names this file, so `check` needs it. The run compiles
+            # its own authority from the plan.
+            self.assertTrue((project / "dev-authority.yaml").is_file())
+            for directory in ("fixtures", "functions", "projections", "schemas", "adapter-packs"):
+                self.assertTrue((project / directory).is_dir(), directory)
+            dev_plan = (project / "dev.yaml").read_text(encoding="utf-8")
+            self.assertIn("kind: RStackDev", dev_plan)
+            self.assertIn("issuer: run", dev_plan)
+            self.assertIn("scenarioFile: tests/scenarios.yaml", dev_plan)
+            self.assertEqual(dev_plan.count("profile: standalone-service"), 3)
+            for client in ("loadtest-001", "loadtest-002", "loadtest-003"):
+                self.assertIn(f"  {client}:\n", dev_plan)
+            self.assertNotIn("loadtest-004", dev_plan)
+            scenario = (project / "tests/scenarios.yaml").read_text(encoding="utf-8")
+            self.assertIn("as: loadtest-001", scenario)
+            self.assertIn("record-id: lt-subject-0001", scenario)
             with self.assertRaises(loadenv.LoadtestError):
-                loadenv.local_project(canonical, project, root / "second-pool", source_openapi, 4711)
+                loadenv.local_project(canonical, project, root / "second-pool", source_openapi, 4711, 3)
             with self.assertRaises(loadenv.LoadtestError):
                 loadenv.local_project(
                     root / "missing",
@@ -303,6 +325,7 @@ class EvidenceHarnessTests(unittest.TestCase):
                     root / "third-pool",
                     source_openapi,
                     4711,
+                    3,
                 )
 
     def test_birth_dates_are_deterministic_and_minors_stay_minors_for_years(self) -> None:
@@ -346,81 +369,73 @@ class EvidenceHarnessTests(unittest.TestCase):
             with self.assertRaises(loadenv.LoadtestError):
                 loadenv.client_ids(count)
 
+    def _fake_rstack(self, path: Path, header: Path, report: dict[str, object]) -> None:
+        path.write_text(
+            f"#!/bin/sh\nprintf '%s\\n' '{json.dumps(report)}'\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o700)
+
     def test_dev_header_must_be_the_owned_private_session_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            project = Path(directory) / "project"
-            header = project / ".evidence/dev/generated/keys/loadtest-001.header"
+            state = Path(directory) / "state"
+            header = state / "runs" / RUN_ID / "tokens" / "loadtest-001.header"
             header.parent.mkdir(parents=True)
             header.write_text("Authorization: Bearer header.payload.signature\n", encoding="ascii")
             header.chmod(0o600)
-            fake = Path(directory) / "evidencectl"
-            fake.write_text(
-                f"#!/bin/sh\nprintf '%s\\n' '{{\"ok\":true,\"status\":\"ready\",\"headerFile\":\"{header}\"}}'\n",
-                encoding="utf-8",
-            )
-            fake.chmod(0o700)
+            fake = Path(directory) / "rstack"
+            good = {"alias": "loadtest-001", "credentials": [{"product": "evidence", "header_file": str(header)}]}
+            self._fake_rstack(fake, header, good)
+            self.assertEqual(loadenv.fresh_header(fake, RUN_ID, state, "loadtest-001"), header.resolve())
+            for bad in (
+                {"alias": "loadtest-001", "credentials": []},
+                {"alias": "loadtest-001", "credentials": [good["credentials"][0], good["credentials"][0]]},
+                {"alias": "loadtest-001"},
+            ):
+                self._fake_rstack(fake, header, bad)
+                with self.assertRaises(loadenv.LoadtestError):
+                    loadenv.fresh_header(fake, RUN_ID, state, "loadtest-001")
+            self._fake_rstack(fake, header, good)
             with self.assertRaises(loadenv.LoadtestError):
-                loadenv.fresh_header(fake, project, "loadtest-001")
-            fake.write_text(
-                f"#!/bin/sh\nprintf '%s\\n' '{{\"ok\":true,\"status\":\"complete\",\"headerFile\":\"{header}\"}}'\n",
-                encoding="utf-8",
-            )
-            with self.assertRaises(loadenv.LoadtestError):
-                loadenv.fresh_header(fake, project, "loadtest-001")
-            fake.write_text(
-                f"#!/bin/sh\nprintf '%s\\n' '{{\"ok\":true,\"status\":\"complete\",\"outcome\":\"starting\",\"headerFile\":\"{header}\"}}'\n",
-                encoding="utf-8",
-            )
-            with self.assertRaises(loadenv.LoadtestError):
-                loadenv.fresh_header(fake, project, "loadtest-001")
-            fake.write_text(
-                f"#!/bin/sh\nprintf '%s\\n' '{{\"ok\":false,\"status\":\"complete\",\"outcome\":\"ready\",\"headerFile\":\"{header}\"}}'\n",
-                encoding="utf-8",
-            )
-            with self.assertRaises(loadenv.LoadtestError):
-                loadenv.fresh_header(fake, project, "loadtest-001")
-            fake.write_text(
-                f"#!/bin/sh\nprintf '%s\\n' '{{\"ok\":true,\"status\":\"complete\",\"outcome\":\"ready\",\"headerFile\":\"{header}\"}}'\n",
-                encoding="utf-8",
-            )
-            self.assertEqual(loadenv.fresh_header(fake, project, "loadtest-001"), header.resolve())
-            with self.assertRaises(loadenv.LoadtestError):
-                loadenv.fresh_header(fake, project, "loadtest-002")
+                loadenv.fresh_header(fake, "not-a-run-id", state, "loadtest-001")
             header.chmod(0o644)
             with self.assertRaises(loadenv.LoadtestError):
-                loadenv.fresh_header(fake, project, "loadtest-001")
+                loadenv.fresh_header(fake, RUN_ID, state, "loadtest-001")
 
-    def _fake_token_evidencectl(self, evidencectl: Path, expires_in: int) -> None:
-        # Writes one owner-only header per requested client, then reports it.
-        evidencectl.write_text(
+    def _fake_token_rstack(self, rstack: Path, expires_in: int) -> None:
+        # Writes one owner-only header per requested person, then reports it
+        # the way `rstack dev token` does.
+        rstack.write_text(
             "#!/usr/bin/env python3\n"
             "import base64, json, os, sys, time\n"
-            "client, project = sys.argv[5], sys.argv[6]\n"
+            "args = sys.argv[1:]\n"
+            "client = args[args.index('--as') + 1]\n"
+            "run_id = args[args.index('token') + 1]\n"
             "b = lambda v: base64.urlsafe_b64encode(v).rstrip(b'=').decode()\n"
             f"claims = b(json.dumps({{'exp': int(time.time()) + {expires_in}}}).encode())\n"
-            "path = os.path.join(project, '.evidence/dev/generated/keys', client + '.header')\n"
+            "path = os.path.join(os.environ['RSTACK_DEV_STATE_DIR'], 'runs', run_id, 'tokens', client + '.header')\n"
             "os.makedirs(os.path.dirname(path), exist_ok=True)\n"
             "fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)\n"
             "os.write(fd, ('Authorization: Bearer ' + b(b'{}') + '.' + claims + '.' + b(client.encode()) + '\\n').encode())\n"
             "os.close(fd)\n"
-            "print(json.dumps({'ok': True, 'operation': 'dev-token', 'status': 'complete', "
-            "'outcome': 'ready', 'headerFile': path}))\n",
+            "print(json.dumps({'alias': client, 'credentials': [{'product': 'evidence', 'header_file': path}]}))\n",
             encoding="utf-8",
         )
-        evidencectl.chmod(0o700)
+        rstack.chmod(0o700)
 
     def test_fresh_headers_fetch_every_client_and_refuse_short_lived_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory).resolve()
             root, evidencectl = _owned_root(repository)
+            rstack = evidencectl.parent / "rstack"
             _write_environment(root, evidencectl)
-            self._fake_token_evidencectl(evidencectl, 300)
+            self._fake_token_rstack(rstack, 300)
             listing = loadenv.fresh_headers(root, repository)
             paths = listing.read_text(encoding="utf-8").split()
             self.assertEqual([Path(path).name for path in paths], [f"loadtest-00{i}.header" for i in (1, 2, 3)])
             self.assertEqual(listing.stat().st_mode & 0o077, 0)
             self.assertNotIn("Bearer", listing.read_text(encoding="utf-8"))
-            self._fake_token_evidencectl(evidencectl, 120)
+            self._fake_token_rstack(rstack, 120)
             with self.assertRaises(loadenv.LoadtestError):
                 loadenv.fresh_headers(root, repository)
 
@@ -434,9 +449,16 @@ class EvidenceHarnessTests(unittest.TestCase):
             environment = _write_environment(root, evidencectl, runtime_library_path=str(library))
             self.assertEqual(
                 loadenv.describe(root, repository),
-                ("http://127.0.0.1:1234", str(evidencectl), str(root / "project"), "3", str(library)),
+                (
+                    "http://127.0.0.1:1234",
+                    str(evidencectl.parent / "rstack"),
+                    RUN_ID,
+                    str(root / "state"),
+                    "3",
+                    str(library),
+                ),
             )
-            for override in ({"build_profile": "debug"}, {"clients": 0}, {"evidence_url": "http://192.0.2.1:1234"}):
+            for override in ({"build_profile": "debug"}, {"clients": 0}, {"run_id": "short"}, {"evidence_url": "http://192.0.2.1:1234"}):
                 _write_environment(root, evidencectl, **{**environment, **override})
                 with self.assertRaises(loadenv.LoadtestError):
                     loadenv.describe(root, repository)
@@ -514,24 +536,25 @@ class EvidenceHarnessTests(unittest.TestCase):
             repository = Path(directory).resolve()
             root, evidencectl = _owned_root(repository)
             evidencectl.write_text("", encoding="utf-8")
+            rstack = evidencectl.parent / "rstack"
             project = root / "project"
-            bundle = project / ".evidence/dev/bundle/evidence.yaml"
-            bundle.parent.mkdir(parents=True)
-            bundle.write_text(
-                f"requirement: {loadenv.REQUIREMENT}\nprofile: {loadenv.SELECTOR_PROFILE}\n"
-                "rateLimits:\n  requestsPerPrincipalPerMinute: 60\n  burstPerPrincipal: 10\n"
-                "  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10\n",
+            runtime = root / "state/runs" / RUN_ID / "evidence-candidate/runtime.yaml"
+            (runtime.parent / "bundle").mkdir(parents=True)
+            runtime.write_text("kind: EvidenceRuntimeConfig\n", encoding="utf-8")
+            (runtime.parent / "bundle/evidence.yaml").write_text(
+                "rateLimits:\n  burstPerPrincipal: 16\n"
+                "  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10\n"
+                "  requestsPerPrincipalPerMinute: 60\n",
                 encoding="utf-8",
             )
             (root / "pool").mkdir()
             (root / "pool/pool-facts.json").write_text(json.dumps({"subjects": 200}), encoding="utf-8")
             report = root / "dev-report.json"
             ready = {
-                "ok": True,
-                "status": "complete",
-                "outcome": "ready",
-                "project": str(project),
-                "evidenceOrigin": "http://127.0.0.1:5555",
+                "run_id": RUN_ID,
+                "products": {"evidence": "http://127.0.0.1:5555"},
+                "runtimeConfigs": {"evidence": str(runtime)},
+                "scenarios": [{"id": "ask-adult-status", "result": "passed"}],
             }
             expected = loadenv.mock_command(evidencectl, 4711)
             with (
@@ -539,24 +562,20 @@ class EvidenceHarnessTests(unittest.TestCase):
                 unittest.mock.patch.object(loadenv, "_process_cwd", return_value=str(project.resolve())),
             ):
                 for stale in (
-                    {
-                        **{key: value for key, value in ready.items() if key != "outcome"},
-                        "status": "ready",
-                    },
-                    {key: value for key, value in ready.items() if key != "outcome"},
-                    {**ready, "outcome": "starting"},
-                    {**ready, "ok": False},
+                    {key: value for key, value in ready.items() if key != "run_id"},
+                    {**ready, "run_id": "short"},
+                    {**ready, "products": {"evidence": "http://192.0.2.1:5555"}},
+                    {key: value for key, value in ready.items() if key != "runtimeConfigs"},
+                    {**ready, "runtimeConfigs": {"evidence": str(root / "missing.yaml")}},
                 ):
                     report.write_text(json.dumps(stale), encoding="utf-8")
                     with self.assertRaises(loadenv.LoadtestError):
-                        loadenv.write_environment(root, report, evidencectl, "release", "", 4242, 4711, 3)
-                report.write_text(
-                    json.dumps(ready),
-                    encoding="utf-8",
-                )
-                loadenv.write_environment(root, report, evidencectl, "release", "", 4242, 4711, 3)
+                        loadenv.write_environment(root, report, rstack, evidencectl, "release", "", 4242, 4711, 3)
+                report.write_text(json.dumps(ready), encoding="utf-8")
+                loadenv.write_environment(root, report, rstack, evidencectl, "release", "", 4242, 4711, 3)
             environment = json.loads((root / "env.json").read_text(encoding="utf-8"))
             self.assertEqual(environment["evidence_url"], "http://127.0.0.1:5555")
+            self.assertEqual(environment["run_id"], RUN_ID)
             self.assertEqual(environment["mock"], {"pid": 4242, "port": 4711})
             self.assertEqual(environment["clients"], 3)
             summary = json.loads((root / "pool/pool-summary.json").read_text(encoding="utf-8"))
@@ -566,7 +585,7 @@ class EvidenceHarnessTests(unittest.TestCase):
             with unittest.mock.patch.object(loadenv, "_process_command", return_value="/usr/bin/unrelated"):
                 (root / "env.json").unlink()
                 with self.assertRaises(loadenv.LoadtestError):
-                    loadenv.write_environment(root, report, evidencectl, "release", "", 4242, 4711, 3)
+                    loadenv.write_environment(root, report, rstack, evidencectl, "release", "", 4242, 4711, 3)
 
     def test_runner_refuses_to_disable_thresholds_or_replace_the_offered_load(self) -> None:
         runner = LOADTEST / "run.sh"
@@ -650,14 +669,18 @@ class EvidenceHarnessTests(unittest.TestCase):
         self.assertIn("cargo-runtime-library-path.sh", up)
         self.assertIn("registry_cargo_build", up)
         self.assertIn("--runtime-library-path", up)
-        self.assertIn('evidencectl" --format json dev start', up)
+        self.assertIn('--format json dev "$@"', up)
+        self.assertIn("rstack_dev start", up)
+        self.assertIn("RSTACK_EVIDENCE_BIN", up)
+        self.assertNotIn("docker", up)
+        self.assertNotIn("access client", up)
         self.assertIn("DYLD_FALLBACK_LIBRARY_PATH", run)
         self.assertIn("DYLD_FALLBACK_LIBRARY_PATH", down)
         self.assertIn("--secret-file", run)
         self.assertEqual(run.count("--seed-pool"), 3)
         self.assertIn('private-canaries.txt"', run)
         self.assertIn("dev stop", down)
-        self.assertIn("dev clean", down)
+        self.assertNotIn("dev clean", down)
         self.assertIn("mock-pid", down)
         for source in (up, run, down):
             self.assertNotIn("rm -rf", source)

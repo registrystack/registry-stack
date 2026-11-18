@@ -18,39 +18,36 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-In about fifteen minutes you will register two applications under access profiles of their own,
-send the same region request as each, and see one answered and the other refused. You continue in
-the project from [Return a governed value](../return-a-governed-value/), with the source and
-Registry Evidence still running.
+In about fifteen minutes you will give two applications access profiles of their own, send the
+same region request as each, and see one answered and the other refused. You continue in the project from
+[Return a governed value](../return-a-governed-value/), with the source and the run still going.
 
 <QuickstartMeta
-  outcome="Two clients with distinct access profiles, one region request answered and one refused."
+  outcome="Two callers with distinct access profiles, one region request answered and one refused."
   time="About 15 minutes"
   level="Local development with synthetic data"
-  prerequisites={['The project, source, and Registry Evidence left running by Return a governed value']}
+  prerequisites={['The project, source, and run left going by Return a governed value']}
 />
 
 ## See who may ask today
 
-In `first-evidence-assertion/adult-status`, list the clients the project knows:
+In `first-evidence-assertion/adult-status`, list the people the run knows:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
-rstack evidence access client list --format json | jq -c '.entries[]'
+jq -c .people run.json
 ```
 
 ```text test-expect
-{"accessProfiles":["standalone-service"],"id":"example-caller","status":"active"}
-{"accessProfiles":["standalone-service"],"id":"tutorial-client","status":"active"}
+["caller"]
 ```
 
-A client is one application's identity. Both hold `standalone-service`, so both may ask every
-question that access profile grants. `example-caller`
-comes with the project; you added `tutorial-client` in Your first assertion.
+A person is one caller's identity: a subject, and a requester tag its token carries. `caller` carries
+`standalone-service`, a tag the project's `dev-authority.yaml` admits. That profile grants every
+question the project defines, so `caller` may ask them all.
 
-## Add two access profiles
-
-Give each new application a profile with one grant. Add these profiles to the end of
-`dev-authority.yaml`, at the same indentation as `standalone-service`:
+A deployment names who may ask in its target authority. Give two applications a profile with one
+grant each. Add these profiles to the end of `dev-authority.yaml`, at the same indentation as
+`standalone-service`:
 
 ```yaml title="dev-authority.yaml" test-append
   age-checker-service:
@@ -101,52 +98,65 @@ rstack evidence check . --target local-target.yaml
 {/* Evidence: products/evidence/reference/request-adapter/deployment-projects/CONFIG.md, requesterTags;
     products/evidence/examples/standalone/local-target.yaml, requesterTagsClaim. */}
 
-## Register a client for each profile
+The run reads `dev-authority.yaml` through `local-target.yaml` when it starts, so a profile you add
+takes effect after you restart the run.
 
-Registry Evidence reads profiles and clients only as it starts, and `rstack evidence` refuses a
-client change while it runs, so stop it first:
+## Add a person for each profile
+
+Add one person per application to `dev.yaml`. Each token carries its profile's tag:
+
+```diff lang="yaml" title="dev.yaml" test-edit
+         claims: {evidence_audience: "urn:example:audience:standalone-app"}
++  age-checker:
++    subject: "urn:registrystack:evidence:local:client:age-checker"
++    client: age-checker
++    grants:
++      evidence:
++        profile: age-checker-service
++        scopes: ["evidence:request"]
++        claims: {evidence_audience: "urn:example:audience:standalone-app"}
++  region-router:
++    subject: "urn:registrystack:evidence:local:client:region-router"
++    client: region-router
++    grants:
++      evidence:
++        profile: region-router-service
++        scopes: ["evidence:request"]
++        claims: {evidence_audience: "urn:example:audience:standalone-app"}
+ scenarioFile: tests/scenarios.yaml
+```
+
+In a new terminal, read the run back from `run.json` and redefine the helper that fetches a token
+header file:
+
+```sh test-cwd="first-evidence-assertion/adult-status"
+run_id="$(jq -r .run_id run.json)"
+evidence_url="$(jq -r .products.evidence run.json)"
+runtime_config="$(jq -r .runtimeConfigs.evidence run.json)"
+headers_for() {
+  rstack dev token "$run_id" --as "$1" | awk '$1 == "evidence" && $2 == "headers" {print $3}'
+}
+```
+
+A run takes its people when it starts, so stop it and start a new one. The source keeps running:
 
 ```sh
-rstack evidence dev stop .
-```
-
-```text test-expect
-Local Evidence stopped
-```
-
-Register one client per profile; the local issuer puts each profile's tags in its client's tokens:
-
-```sh
-rstack evidence access client add age-checker \
-  --access-profile age-checker-service \
-  --generate-local-key
-rstack evidence access client add region-router \
-  --access-profile region-router-service \
-  --generate-local-key
-```
-
-```text test-expect
-Added client age-checker with access profile age-checker-service.
-Added client region-router with access profile region-router-service.
-```
-
-Start Registry Evidence again with the same ports, so it loads the profiles and clients:
-
-```sh
-rstack evidence dev start . \
-  --target local-target.yaml \
-  --evidence-port 18080 \
-  --issuer-port 8082
+rstack dev stop "$run_id"
+rstack dev check .
+rstack --format json dev start . --ttl 2h > run.json
+run_id="$(jq -r .run_id run.json)"
+evidence_url="$(jq -r .products.evidence run.json)"
+runtime_config="$(jq -r .runtimeConfigs.evidence run.json)"
+jq -c .people run.json
 ```
 
 ```text test-excerpt
-Evidence ready at http://127.0.0.1:18080
+["age-checker","caller","region-router"]
 ```
 
-The source kept running throughout.
-
-{/* Evidence: crates/registry-evidencectl/src/access.rs, require_stopped_or_absent_session, requester_tags;
-    crates/registry-evidencectl/src/dev.rs, retain_completed_dev_root. */}
+{/* Evidence: products/platform/PROJECT-DEV.md, people and grants;
+    crates/registry-rstack-dev/src/issuer.rs, evidence_tags;
+    products/evidence/examples/standalone/dev-authority.yaml, requesterTags. */}
 
 ## Ask for a purpose the definition does not declare
 
@@ -154,60 +164,63 @@ The source kept running throughout.
 
 ```sh test-exit="1"
 rstack evidence request prepare adult-status \
-  --client age-checker \
+  --evidence-url "$evidence_url" \
+  --header @"$(headers_for caller)" \
+  --runtime-config "$runtime_config" \
   --purpose residence-check \
   --subject subject:record-id=adult \
   --name adult-wrong-purpose
 ```
 
 ```text test-expect
-evidencectl: purpose does not match the active local tutorial definition
+evidencectl: purpose does not match the published definition
 ```
 
 Preparation refuses it, so nothing reaches Registry Evidence.
 
-## Send the region request as each client
+## Send the region request as each person
 
-Preparation checks the request against the project, not the grants, so both succeed:
+Preparation checks the request against the definitions the service publishes, not against the
+caller's grants. Prepare the region request once:
 
 ```sh
 rstack evidence request prepare residence-region \
-  --client region-router \
+  --evidence-url "$evidence_url" \
+  --header @"$(headers_for caller)" \
+  --runtime-config "$runtime_config" \
   --purpose residence-check \
   --subject subject:record-id=adult \
-  --name region-by-router
-rstack evidence request prepare residence-region \
-  --client age-checker \
-  --purpose residence-check \
-  --subject subject:record-id=adult \
-  --name region-by-checker
+  --name region-request
 ```
 
-Send the request as `region-router`; Registry Evidence applies that client's grants:
+Send it as `region-router`; Registry Evidence applies the grants the profile for its tag admits,
+and `region-router-service` grants `residence-region`:
 
 ```sh
 rstack evidence api /v1/evidence \
-  --client region-router \
-  --input .evidence/requests/region-by-router/request.json \
+  --url "$evidence_url" \
+  --header @"$(headers_for region-router)" \
+  --input .evidence/requests/region-request/request.json \
   --accept application/jose+json \
   --output region-by-router.response
 ```
 
-Send the other prepared request as `age-checker`. The API writes the refusal body and exits 1 for
-the HTTP 403 response:
+Send the same request as `age-checker`. `age-checker-service` grants only `adult-status`, so the
+API writes the refusal body and exits 1 for the HTTP 403 response:
 
 ```sh test-exit="1"
 rstack evidence api /v1/evidence \
-  --client age-checker \
-  --input .evidence/requests/region-by-checker/request.json \
+  --url "$evidence_url" \
+  --header @"$(headers_for age-checker)" \
+  --input .evidence/requests/region-request/request.json \
   --accept application/jose+json \
-  --output region-by-checker.response
+  --output region-by-age-checker.response
 ```
 
 Read the refusal `age-checker` received:
 
 ```sh
-jq . region-by-checker.response
+jq . region-by-age-checker.response
 ```
 
 ```json test-expect
@@ -224,7 +237,7 @@ jq . region-by-checker.response
 `evidence.denied` does not name the missing grant.
 [Evidence problems](../../reference/evidence-problems/) lists every code.
 
-Leave the source and Registry Evidence running; the next tutorial continues with them.
+Leave the source and the run going; the next tutorial continues with them.
 
 {/* Evidence: crates/registry-evidencectl/src/request.rs, validate_closed_inputs;
     crates/registry-evidence/src/problem.rs, NotAuthorized;

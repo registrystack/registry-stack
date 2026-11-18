@@ -691,8 +691,7 @@ const evidenceProduct = productToolset({
   profileVariable: 'EVIDENCE_TUTORIAL_CARGO_PROFILE',
   targetName: 'evidence-tutorial-source',
   managedComponents: { evidence: { entrypoint: 'evidencectl', binaries: ['evidencectl', 'evidence', 'evidence-oid4vci'] } },
-  sessions: [['evidencectl', '.evidence/dev/control.sock']],
-  stopArgs: (project) => ['dev', 'stop', project],
+  devRuns: true,
 });
 
 let fhirMock;
@@ -705,7 +704,7 @@ const evidence = {
       (step.kind === 'file' && PYTHON_CLIENT.test(step.text)),
     );
     const wheel = needsPythonClient ? clientWheel() : undefined;
-    await evidenceProduct.prepare({ repoRoot, binDir, workRoot });
+    const devEnv = await evidenceProduct.prepare({ repoRoot, binDir, workRoot });
     await packageExamples(join(repoRoot, 'products/evidence/examples'), join(readerDir, 'evidence-examples.tar.gz'));
     let pythonPath;
     if (wheel !== undefined) {
@@ -716,6 +715,7 @@ const evidence = {
     }
     fhirMock = await startFhirMock(workRoot);
     return {
+      ...devEnv,
       ...(pythonPath === undefined ? {} : { PYTHONPATH: pythonPath }),
       EVIDENCE_OID4VCI_BIN: join(binDir, 'evidence-oid4vci'),
       FHIR_TUTORIAL_TEST_BASE_URL: FHIR_BASE_URL,

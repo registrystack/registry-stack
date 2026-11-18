@@ -1,7 +1,8 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
 apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
 kind: RStackDev
-# Evidence alone: no BReg, no Casework, no database. Evidence's local target
+# Evidence alone: no BReg, no Casework, no database. The run uses this
+# project's local-target.yaml and dev-authority.yaml. Evidence's local target
 # accepts only a loopback issuer, so the run is its own issuer: it signs the
 # test tokens with a throwaway local key and serves the matching public keys on
 # loopback. Start the synthetic source first, as the README shows:
@@ -15,8 +16,8 @@ people:
     client: example-caller
     grants:
       evidence:
-        # The requester tag the local target's compiled authority admits.
-        profile: local-service
+        # The requester tag dev-authority.yaml admits.
+        profile: standalone-service
         scopes: ["evidence:request"]
         claims: {evidence_audience: "urn:example:audience:standalone-app"}
 scenarioFile: tests/scenarios.yaml

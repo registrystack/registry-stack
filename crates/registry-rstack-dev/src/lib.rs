@@ -23,6 +23,7 @@ mod products;
 mod recovery;
 #[cfg(feature = "schema")]
 pub mod schema;
+mod sinks;
 
 use anyhow::{ensure, Context, Result};
 use registry_platform_yaml::{Diagnostic, Report};
@@ -71,6 +72,9 @@ const CHECK_REPORT_KIND: &str = "BRegCtlReport";
 const SCHEMA: &str = "registry.rstack.dev.v1";
 const ERROR_SCHEMA: &str = "registry.rstack.error.v1";
 const DATABASE_URL: &str = "RSTACK_DEV_DATABASE_URL";
+/// The run-directory file recording that the run began starting a Mailpit
+/// container, so recovery knows to ask Docker for it.
+const MAILPIT_MARKER: &str = "mailpit";
 const CA_FILE: &str = "RSTACK_DEV_DATABASE_CA";
 const REPORT: &str = "report.json";
 const POSTGRES_IDENTITY: &str = "postgres-identity.json";
@@ -275,6 +279,12 @@ fn recovery_message(run_id: &str, facts: &Value) -> String {
             docker::LABEL
         ));
     }
+    if let Some(container) = facts["mailpit"].as_str() {
+        line(format!(
+            "Mailpit container {container}, label {}={run_id}",
+            docker::LABEL
+        ));
+    }
     for process in facts["processes"].as_array().into_iter().flatten() {
         let name = process["product"]
             .as_str()
@@ -333,6 +343,9 @@ fn lost_supervisor_facts(root: &Path, run_id: &str) -> Value {
             Err(error) => facts["unavailable"] = json!(format!("{error:#}")),
         },
         Err(error) => facts["unavailable"] = json!(format!("{error:#}")),
+    }
+    if root.join(MAILPIT_MARKER).exists() {
+        facts["mailpit"] = json!(docker::mailpit_name(run_id));
     }
     name_field_key(root, &mut facts);
     facts
@@ -665,7 +678,7 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
         for container in recovered["containers"].as_array().into_iter().flatten() {
             writeln!(
                 output,
-                "  removed PostgreSQL container {}",
+                "  removed container {}",
                 container.as_str().unwrap_or("?")
             )?;
         }
@@ -673,6 +686,32 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
     if let Some(products) = report["products"].as_object() {
         for (product, url) in products {
             writeln!(output, "  {product} {}", url.as_str().expect("product URL"))?;
+        }
+    }
+    if let Some(configs) = report["runtimeConfigs"].as_object() {
+        for (product, path) in configs {
+            writeln!(
+                output,
+                "  {product} runtime config {}",
+                path.as_str().expect("runtime config path")
+            )?;
+        }
+    }
+    if let Some(sinks) = report["sinks"].as_object() {
+        for (provider, sink) in sinks {
+            let kind = sink["type"].as_str().expect("sink type");
+            let url = sink["url"].as_str().expect("sink URL");
+            match kind {
+                "smtp" => writeln!(
+                    output,
+                    "  Messaging provider {provider} sends to Mailpit at {} (messages at {url})",
+                    sink["smtp"].as_str().expect("sink SMTP address")
+                )?,
+                _ => writeln!(
+                    output,
+                    "  Messaging provider {provider} sends to the mock gateway (messages at {url})"
+                )?,
+            }
         }
     }
     if let Some(issuer) = report["issuer"].as_str() {
@@ -887,6 +926,9 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
             .as_ref()
             .is_some_and(|authority| authority.requires_postgis);
         Docker::connect()?.ensure_image(Image::for_plan(requires_postgis))?;
+    }
+    if products::needs_mailpit(&project, &plan)? {
+        Docker::connect()?.ensure_image(Image::mailpit())?;
     }
     let binaries = plan
         .products
@@ -1145,6 +1187,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         };
         let urls = products.start(
             connected.map(|connected| &mut *database.insert(connected)),
+            &mut docker,
             issuer.clone(),
         )?;
         let journey_reports = input
@@ -1187,6 +1230,11 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         } else {
             json!({"mode": "address"})
         };
+        let sinks = products.sinks();
+        if sinks.as_object().is_some_and(|sinks| !sinks.is_empty()) {
+            report["sinks"] = sinks;
+        }
+        report["runtimeConfigs"] = products.runtime_configs();
         report["scenarios"] = json!(journey_reports);
         report["scenarioDigest"] = json!(input.scenario_digest);
         let application = application_url.map(|url| {
@@ -1238,7 +1286,8 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     let mut told_parent = false;
     // Keep the exact ownership list until both the supervised processes and
     // their database resources have been released. A run's own server goes
-    // with its container, so nothing in it is dropped first.
+    // with its container, so nothing in it is dropped first. The run's
+    // containers, its server and any Mailpit, are removed by label.
     let cleanup = retry_cleanup(
         CLEANUP_BUDGET,
         CLEANUP_PAUSE,
@@ -1246,12 +1295,12 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             products.stop().and_then(|()| {
                 if input.managed_database {
                     drop(database.take());
-                    docker
-                        .as_ref()
-                        .map_or(Ok(()), |docker| docker.remove(&input.run_id).map(drop))
                 } else {
-                    database.as_mut().map_or(Ok(()), Database::cleanup)
+                    database.as_mut().map_or(Ok(()), Database::cleanup)?;
                 }
+                docker
+                    .as_ref()
+                    .map_or(Ok(()), |docker| docker.remove(&input.run_id).map(drop))
             })
         },
         || {
@@ -1473,10 +1522,11 @@ fn recover_run(run_id: &str) -> Result<Value> {
             &serde_json::to_vec(&simple_report(run_id, "stopping"))?,
         )
         .context("cannot mark the run as stopping")?;
+        let mailpit = root.join(MAILPIT_MARKER).exists();
         if captured_input(&root)?.managed_database {
             // The run's own server holds every database and role it made, so
             // removing its container releases them without an administrator
-            // URL.
+            // URL. The same label removes the run's Mailpit.
             let docker = Docker::connect()?;
             let stopped_groups = recovery::wait_for_guards(&root)?;
             let containers = docker.remove(run_id)?;
@@ -1509,8 +1559,13 @@ fn recover_run(run_id: &str) -> Result<Value> {
             dropped = database.pending_names();
             database.cleanup()?;
         }
+        let containers = if mailpit {
+            Docker::connect()?.remove(run_id)?
+        } else {
+            Vec::new()
+        };
         remove_run_dir(&root)?;
-        Ok((stopped_groups, dropped, Vec::new()))
+        Ok((stopped_groups, dropped, containers))
     })()
     .map_err(|error| unrecovered(format!("{error:#}")))?;
     let mut report = simple_report(run_id, "stopped");
@@ -1876,6 +1931,41 @@ mod tests {
         let text = String::from_utf8(output).unwrap();
         assert!(text.contains("Issuer http://127.0.0.1:4200"), "{text}");
         assert!(text.contains("Application http://127.0.0.1:4201"), "{text}");
+    }
+
+    #[test]
+    fn human_run_report_names_runtime_configs_and_sinks() {
+        let mut output = Vec::new();
+        emit(
+            &mut output,
+            &json!({
+                "run_id": RUN_ID, "status": "ready",
+                "runtimeConfigs": {"evidence": "/run/evidence-candidate/runtime.yaml"},
+                "sinks": {
+                    "mail-relay": {"type": "smtp", "smtp": "127.0.0.1:1025", "url": "http://127.0.0.1:8025"},
+                    "sms-gateway": {"type": "http", "url": "http://127.0.0.1:9000/sent"}
+                }
+            }),
+            false,
+        )
+        .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(
+            text.contains("evidence runtime config /run/evidence-candidate/runtime.yaml"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "mail-relay sends to Mailpit at 127.0.0.1:1025 (messages at http://127.0.0.1:8025)"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "sms-gateway sends to the mock gateway (messages at http://127.0.0.1:9000/sent)"
+            ),
+            "{text}"
+        );
     }
 
     #[test]

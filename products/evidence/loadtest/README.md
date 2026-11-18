@@ -5,19 +5,18 @@ A local environment for measuring Evidence with one synthetic assertion:
 a private run copy of the maintained normalized standalone project, points that
 copy at a generated source mock, and serves 200 synthetic people through
 `evidencectl source mock serve`. It then delegates the service
-lifecycle to `evidencectl dev`: the retained local issuer container, the
-compiled development bundle, signing keys, and the supervised `evidence`
-process. Load evidence and the synthetic subject pool live under
+lifecycle to `rstack dev`: the run issuer, the compiled authority, the
+signing keys, and the supervised `evidence` process. Load evidence and the synthetic subject pool live under
 `loadtest/.run` and are never committed.
 
 ## Prerequisites
 
-- `cargo`, `docker`, `python3`
+- `cargo`, `python3`
 - `lsof` on hosts other than Linux (macOS ships it), to confirm the source
   mock's working directory
 - `k6` (`brew install k6`)
 
-`up.sh` builds `evidence` and `evidencectl` with the release profile, because
+`up.sh` builds `evidence`, `evidencectl` and `rstack` with the release profile, because
 latency and capacity from an unoptimized build are not representative.
 `up.sh --debug` builds the development profile instead, for iterating on the
 harness itself; every run manifest records which profile was measured. On
@@ -35,13 +34,13 @@ products/evidence/loadtest/run.sh --profile burst
 products/evidence/loadtest/down.sh
 ```
 
-`up.sh` refuses any existing `.run` path and does not clear it. It picks free
-loopback ports for the source mock, Evidence, and the issuer, and records them
-with the mock's PID in `.run/env.json`. If startup fails, it stops only the
-dev session and the mock that it started itself.
+`up.sh` refuses any existing `.run` path and does not clear it. It picks a free
+loopback port for the source mock and records it with the mock's PID and the
+run id in `.run/env.json`. `rstack dev` allocates the Evidence and issuer ports.
+If startup fails, it stops only the run and the mock that it started itself.
 
 `down.sh` first validates the launcher's ownership marker. It then runs
-`evidencectl dev stop` and `evidencectl dev clean` for that exact project. It
+`rstack dev stop` for the recorded run id. It
 signals the source mock only while the recorded PID still runs the exact
 command the launcher started, so a reused PID is never signalled. The load
 evidence and subject pool are kept. Move the stopped `.run` directory aside
@@ -56,15 +55,16 @@ measure the rate limiter, not the service, above one request per second.
 
 The harness keeps the stock limits and does not patch private runtime
 configuration behind the lifecycle's ownership boundary. Instead, `up.sh`
-registers `LOAD_CLIENTS` synthetic clients (default 128, at most 256), named
-`loadtest-001` onward, under the project's `standalone-service` access profile.
+writes a run plan (`dev.yaml`) with `LOAD_CLIENTS` synthetic people (default
+128, at most 256, the most people one `rstack dev` plan allows), named
+`loadtest-001` onward, each with the `standalone-service` grant profile.
 Each one is a distinct principal with its own bucket. The workload assigns
 iterations to clients round-robin, so each principal receives `rate /
 LOAD_CLIENTS` requests per second.
 
 `run.sh` refuses any offered or peak rate above 90% of `LOAD_CLIENTS`
-requests per second (115 ops/s at the default). To offer more, start a fresh
-environment with a larger `LOAD_CLIENTS`. The `limiter` profile shows that the
+requests per second (115 ops/s at the default of 128 clients). The `burst`
+profile's peak defaults to 100 operations/s, capped at that limit. The `limiter` profile shows that the
 stock limit is still enforced for a single principal.
 
 Consequences to keep in mind when reading results:
@@ -72,9 +72,8 @@ Consequences to keep in mind when reading results:
 - the rate limiter is exercised with many small buckets, not one hot bucket;
 - the per-principal audit and authorization work is spread over many
   pseudonyms, as it would be for many relying parties;
-- clients must exist before `dev start`, because the compiled bundle fixes the
-  authority profiles, so `LOAD_CLIENTS` is fixed for the life of an
-  environment.
+- a run takes its people at start, so `LOAD_CLIENTS` is fixed for the life of
+  an environment.
 
 ## Profiles
 
@@ -105,8 +104,8 @@ above the per-request cost measured locally: two durable audit appends, a
 loopback source call, and an ES256 signature. It is not a production SLO.
 
 The harness deliberately does not benchmark the issuer. Before every k6
-process, `run.sh` calls `evidencectl dev token` for every load client (16 at a
-time, about 14 s for 128 clients). It validates each reported owner-only
+process, `run.sh` calls `rstack dev token` for every load client (16 at a
+time). It validates each reported owner-only
 header file and checks that every token outlives the run window. It then gives
 k6 only the list of header paths. Each k6 invocation must fit within four
 minutes.
@@ -127,7 +126,7 @@ without thresholds has no verdict.
 Profile-specific environment variables are:
 
 - `steady`: `OPS=20`, `DURATION=2m`
-- `burst`: `OPS=20`, `PEAK_OPS=100`, `BASELINE_DURATION=30s`, `RAMP_DURATION=15s`, `PEAK_DURATION=30s`, `RECOVERY_DURATION=90s`
+- `burst`: `OPS=20`, `PEAK_OPS=100` (capped at 90% of `LOAD_CLIENTS`), `BASELINE_DURATION=30s`, `RAMP_DURATION=15s`, `PEAK_DURATION=30s`, `RECOVERY_DURATION=90s`
 - all profiles: `RANDOM_SEED`
 - `up.sh`: `LOAD_CLIENTS=128`
 
@@ -152,7 +151,7 @@ Casework harnesses. Each run gets an owner-only directory under
 
 - `manifest.json`: Git revision and dirty state, non-secret host and tool
   versions, build profile, subject-pool counts, the load-client count and the
-  three stock rate-limit values read from the compiled bundle, exact profile
+  three stock rate-limit values read from the run's compiled Evidence bundle, exact profile
   parameters, and timestamps;
 - `k6-summary.json` and `k6-samples.json`: threshold data and raw metric
   samples, with the system tag set restricted to status, method, operation
@@ -165,8 +164,8 @@ Casework harnesses. Each run gets an owner-only directory under
 
 The harness never saves bearer tokens, nonces, signed assertions, source
 records, raw principals, or request or response bodies. The only
-authorization files are the owner-only headers managed by `evidencectl dev`
-inside the project's ignored private state. `.run/header-files.txt` lists
+authorization files are the owner-only headers that `rstack dev token` writes
+inside the run's private state under `.run/state`. `.run/header-files.txt` lists
 their paths, not their contents.
 
 ## Interpreting results
@@ -183,7 +182,7 @@ their paths, not their contents.
 - The issuer runs in Docker; on macOS that is a VM. It is used only between
   runs, so it does not affect request latency.
 - A 429 in `steady` or `burst` means the offered rate outran the load
-  clients' combined stock limit, not the service. Raise `LOAD_CLIENTS`.
+  clients' combined stock limit, not the service. Lower the offered rate, or raise `LOAD_CLIENTS` up to 256.
 - Recovery is a separate burst scenario. Do not average it together with the
   peak.
 

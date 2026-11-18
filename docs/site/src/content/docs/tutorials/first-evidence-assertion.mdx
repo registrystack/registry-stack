@@ -22,14 +22,13 @@ what Registry Evidence gives them. You run it over a synthetic source, ask wheth
 test person is an adult, and read `"value": true` from a verified response with no birth date.
 
 <QuickstartMeta
-  outcome="A verified adult-status assertion, with the source and Registry Evidence left running."
+  outcome="A verified adult-status assertion, with the source and a Registry Evidence run left running."
   time="About 15 minutes, plus the first image download"
   level="Local development with synthetic data"
   prerequisites={[
-    'Running Docker',
-    'Python 3, tar, and jq',
+    'Python 3, tar, jq, and curl',
     'The tools required by the release verification procedure',
-    'Free loopback ports 8081, 8082, and 18080',
+    'Free loopback port 8081',
   ]}
 />
 
@@ -65,15 +64,8 @@ mv first-evidence-assertion/standalone first-evidence-assertion/adult-status
 cd first-evidence-assertion/adult-status
 ```
 
-Generate disposable owner-only keys and secrets:
-
-```sh
-umask 077
-rstack evidence keygen signing --output-dir .generated/secrets
-rstack evidence keygen secret --output .generated/secrets/audit-hmac-key
-rstack evidence keygen secret --output .generated/secrets/subject-binding-hmac-key
-rstack evidence keygen token --output .generated/secrets/synthetic-source-token
-```
+The project holds no keys. `rstack dev` makes disposable signing keys and secrets for each run, in a
+directory of its own outside your project.
 
 ## Check and explain the project
 
@@ -85,11 +77,13 @@ rstack evidence check . --target local-target.yaml
 Evidence project check: complete
 Project: .
 Target: local-target.yaml
+Deployment inputs missing: signer.publicJwkFile; the compiled-target bundle check was skipped. Supply them and rerun check to prove the target.
 0 errors, 0 warnings in 1 file
 ```
 
-`check` compiled `evidence.yaml` against `local-target.yaml`, which holds the local ports, keys,
-and source address. Ask what the project answers:
+`check` compiled `evidence.yaml` against `local-target.yaml`, which holds the source address and the
+places a deployment keeps its keys. It skips the bundle check because you have made no keys, and a
+run makes its own. Ask what the project answers:
 
 ```sh
 rstack evidence explain . --target local-target.yaml
@@ -124,64 +118,93 @@ rstack evidence test . --target local-target.yaml
 PASS: fixtures/adult-status.yaml (10 cases)
 ```
 
-Register the caller you will send the request as:
-
-```sh
-rstack evidence access client add tutorial-client \
-  --access-profile standalone-service \
-  --generate-local-key
-```
-
-```text test-expect
-Added client tutorial-client with access profile standalone-service.
-```
-
-{/* Evidence: crates/registry-evidencectl/src/{check,fixtures,access}.rs, render_human, run_fixtures,
-    add_client; products/evidence/examples/standalone/{evidence,local-target}.yaml, assertionDefinitions. */}
+{/* Evidence: crates/registry-evidencectl/src/{check,fixtures}.rs, render_human, run_fixtures;
+    products/evidence/examples/standalone/{evidence,local-target}.yaml, assertionDefinitions. */}
 
 ## Start the synthetic source
 
 In a second terminal, in the same directory, start the source that stands in for your system:
 
 ```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
-python3 serve-source.py \
-  --port 8081 \
-  --token-file .generated/secrets/synthetic-source-token
+python3 serve-source.py --port 8081
 ```
 
-It serves records only to the token `local-target.yaml` gives Evidence. Leave it running.
+It serves its synthetic records to any caller on this machine. Leave it running.
 
 {/* Evidence: products/evidence/examples/standalone/serve-source.py, healthz. */}
 
 ## Start Registry Evidence
 
-Port `18080` avoids a clash with any service on the default `8080`. `dev start` also runs a token issuer in
-Docker; the first start pulls its image.
+`dev.yaml` is the development plan. It lists Evidence as the one product and names one synthetic
+person, `caller`, who may request evidence:
 
 ```sh
-rstack evidence dev start . \
-  --target local-target.yaml \
-  --evidence-port 18080 \
-  --issuer-port 8082
+cat dev.yaml
 ```
 
-```text test-excerpt
-Evidence ready at http://127.0.0.1:18080
-Issuer ready at http://127.0.0.1:8082
+```yaml
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+issuer: run
+products:
+  - {product: evidence, project: ., audience: "urn:example:resource:standalone-evidence"}
+people:
+  caller:
+    subject: "urn:registrystack:evidence:local:client:example-caller"
+    client: example-caller
+    grants:
+      evidence:
+        profile: standalone-service
+        scopes: ["evidence:request"]
+        claims: {evidence_audience: "urn:example:audience:standalone-app"}
+scenarioFile: tests/scenarios.yaml
 ```
 
-If a port is in use, stop what holds it and start again.
+The run is its own token issuer, so it needs no Docker and no database. `scenarioFile` names one
+scenario that asks for adult status as `caller` before the run reports ready. Check the plan, then
+start the run. [Run a project with rstack dev](../../configure/run-a-project-with-rstack-dev/)
+explains the options and how to recover a failed run:
 
-{/* Evidence: crates/registry-evidencectl/src/dev.rs, prepare_and_start. */}
+```sh
+rstack dev check .
+rstack --format json dev start . --ttl 2h > run.json
+run_id="$(jq -r .run_id run.json)"
+evidence_url="$(jq -r .products.evidence run.json)"
+runtime_config="$(jq -r .runtimeConfigs.evidence run.json)"
+jq -r '.scenarios[] | "\(.id): \(.result)"' run.json
+```
+
+```text test-expect
+Development plan is valid
+0 errors, 0 warnings in 1 file
+ask-adult-status: passed
+```
+
+The run packaged a copy of your project, activated its authority, and started Registry Evidence on
+a free port, named by `evidence_url`. `runtime_config` is the runtime configuration of that service.
+Each call below needs a short-lived token for `caller`. This function asks for one and prints the
+header file to pass to the commands:
+
+```sh
+headers_for() {
+  rstack dev token "$run_id" --as "$1" | awk '$1 == "evidence" && $2 == "headers" {print $3}'
+}
+```
+
+{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack-dev/src/evidence.rs, activate_evidence;
+    products/evidence/examples/standalone/dev.yaml. */}
 
 ## Prepare, send, and verify one request
 
-`request prepare` gets a token from the issuer and sends nothing to Registry Evidence. It fixes
-what a valid answer must match before any response exists.
+`request prepare` sends nothing to Registry Evidence. It fixes what a valid answer must match before
+any response exists, using the service's runtime configuration to pin the signing key.
 
 ```sh
 rstack evidence request prepare adult-status \
-  --client tutorial-client \
+  --evidence-url "$evidence_url" \
+  --header @"$(headers_for caller)" \
+  --runtime-config "$runtime_config" \
   --purpose age-check \
   --subject subject:record-id=adult \
   --name adult-status
@@ -193,12 +216,13 @@ Prepared verification context: .evidence/requests/adult-status/verification.json
 Prepared authorization: .evidence/requests/adult-status/authorization.curl
 ```
 
-Send the prepared JSON as `tutorial-client`. The API command obtains a fresh token in memory,
-uses `POST` because `--input` is present, and writes the signed response to the named file.
+Send the prepared JSON as `caller`. The API command uses `POST` because `--input` is present, and
+writes the signed response to the named file. It takes a fresh header file for each call:
 
 ```sh
 rstack evidence api /v1/evidence \
-  --client tutorial-client \
+  --url "$evidence_url" \
+  --header @"$(headers_for caller)" \
   --input .evidence/requests/adult-status/request.json \
   --accept application/jose+json \
   --output adult-status.jws.json
@@ -238,16 +262,15 @@ This [assertion](../../reference/glossary/#assertion) answers the Requirement UR
 for the `adult` output's concept. The source holds a birth date for record `adult`; the
 assertion carries only `true`.
 
-{/* Evidence: crates/registry-evidencectl/src/{request,dev,verify}.rs, prepare_local, obtain_issuer_token,
+{/* Evidence: crates/registry-evidencectl/src/{request,verify}.rs, prepare_local,
     rename_noreplace; crates/registry-cli-api/src/api.rs, run_api, request_method;
     products/evidence/examples/standalone/serve-source.py, birth_date. */}
 
 ## Leave it running
 
-The next tutorial continues with this project, with the source and Registry Evidence still
-running, so leave both as they are. When you are finished with them, run
-`rstack evidence dev stop .` and then `rstack evidence dev clean .` in this directory, and press
-`Ctrl+C` in the source's terminal.
+The next tutorial continues with this project, with the source and the run still going, so leave
+both as they are. The run stops by itself after two hours. When you are finished with it, run
+`rstack dev stop "$run_id"` and press `Ctrl+C` in the source's terminal.
 
 ## Next
 

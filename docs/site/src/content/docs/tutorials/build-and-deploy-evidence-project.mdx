@@ -34,24 +34,15 @@ dependencies before it opens a listener.
 
 You continue the `adult-status` project from
 [Your first assertion](../first-evidence-assertion/). The deployment reaches the same synthetic
-source on port 8081 and trusts the same local token issuer on port 8082. If you stopped the
+source on port 8081 and trusts the token issuer your operator names. If you stopped the
 source, start it again in another terminal:
 
 ```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
-python3 serve-source.py \
-  --port 8081 \
-  --token-file .generated/secrets/synthetic-source-token
+python3 serve-source.py --port 8081
 ```
 
-If you stopped the development session, start it again from the project directory, so the token
-issuer answers on `8082`:
-
-```sh test-skip="the session from Your first assertion is still running"
-rstack evidence dev start . \
-  --target local-target.yaml \
-  --evidence-port 18080 \
-  --issuer-port 8082
-```
+The deployment you build here does not need the run from your first assertion; stop it with
+`rstack dev stop RUN_ID` if it is still going.
 
 ## Write the deployment target
 
@@ -124,8 +115,8 @@ relative to the target directory:
 +  path: audit/evidence.jsonl
 ```
 
-The development session holds `18080`, so listen on `18090`, changing the bind and the public
-origin together:
+Listen on `18090` rather than the port the project's local target names, changing the bind and the
+public origin together:
 
 ```diff lang="yaml" title="deploy-target/target.yaml" test-edit
 -  publicOrigin: http://127.0.0.1:8080
@@ -224,19 +215,20 @@ a target for another host with that host's paths.
 ## Activate on the target host
 
 Only the candidate travels to the target host, here this same directory. Provision each secret the summary named beneath
-`secretProviders.file.root`. The source token is the source owner's to issue, and the running
-source accepts only the one it was started with, so copy that one:
+`secretProviders.file.root`. The source token is the source owner's to issue. The synthetic source
+accepts any bearer value, so generate one:
 
 ```sh
 rstack evidence keygen secret --output deploy-target/secrets/audit-hmac-key
 rstack evidence keygen secret --output deploy-target/secrets/subject-binding-hmac-key
-cp adult-status/.generated/secrets/synthetic-source-token deploy-target/secrets/
+rstack evidence keygen token --output deploy-target/secrets/synthetic-source-token
 cp -R candidate/bundle deploy-target/package
 ```
 
 ```text test-expect
 wrote deploy-target/secrets/audit-hmac-key
 wrote deploy-target/secrets/subject-binding-hmac-key
+wrote deploy-target/secrets/synthetic-source-token
 ```
 
 Activate the authority against the installed package:
@@ -266,11 +258,11 @@ The digest matches the one `package` printed. Then prove the startup dependencie
 resolves every secret, proves the signer, opens the audit log, and fetches the token issuer's
 keys, as startup does. Name the runtime file by absolute path:
 
-```sh
+```sh test-skip="needs the token issuer your operator names"
 rstack evidence doctor --runtime-config "$PWD/candidate/runtime.yaml"
 ```
 
-```text test-excerpt
+```text
 Dependency preflight passed for <runtime-file>
 ```
 

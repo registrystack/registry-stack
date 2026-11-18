@@ -10,7 +10,10 @@ use std::{
     fs,
     io::{Read, Seek, SeekFrom},
     net::{Ipv4Addr, TcpListener},
-    os::unix::{fs::OpenOptionsExt, process::CommandExt},
+    os::unix::{
+        fs::{OpenOptionsExt, PermissionsExt},
+        process::CommandExt,
+    },
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
@@ -26,12 +29,15 @@ use super::{
     browser::BrowserClient,
     clock,
     database::{Database, DatabaseUrls},
+    docker::Docker,
     explain::{breg_facts, BregFacts, InvalidBregProject},
     guard,
     issuer::Issuer,
     operational,
     plan::{self, ApplicationPlan, Plan, Product},
-    private_directory, stopping, write_private, BregAuthority, RunInput, POLL,
+    private_directory,
+    sinks::GatewayServer,
+    stopping, write_private, BregAuthority, RunInput, MAILPIT_MARKER, POLL,
 };
 
 #[path = "evidence.rs"]
@@ -319,6 +325,17 @@ pub(super) struct ProductRunner<'a> {
     issuer_listener: Option<TcpListener>,
     /// The loopback key set server Evidence's target names, stopped with the run.
     jwks: Option<evidence::JwksServer>,
+    /// The mock gateway Messaging's `http` providers send to, stopped with the
+    /// run.
+    gateway: Option<GatewayServer>,
+    /// Where each Messaging provider's sent messages can be read, by provider
+    /// ID.
+    sinks: BTreeMap<String, Value>,
+    /// The `providers` member of Messaging's runtime configuration, once the
+    /// run has started the sinks the providers send to.
+    messaging_providers: Option<Value>,
+    /// The runtime configuration the run wrote for each product.
+    runtime_configs: BTreeMap<Product, PathBuf>,
 }
 
 impl<'a> ProductRunner<'a> {
@@ -345,6 +362,10 @@ impl<'a> ProductRunner<'a> {
             issuer: None,
             issuer_listener: None,
             jwks: None,
+            gateway: None,
+            sinks: BTreeMap::new(),
+            messaging_providers: None,
+            runtime_configs: BTreeMap::new(),
         })
     }
 
@@ -387,9 +408,24 @@ impl<'a> ProductRunner<'a> {
         Ok(())
     }
 
+    /// Where each Messaging provider's sent messages can be read, by provider
+    /// ID. It is empty unless the run started Messaging.
+    pub(super) fn sinks(&self) -> Value {
+        json!(self.sinks)
+    }
+
+    /// The absolute path of the runtime configuration the run wrote for each
+    /// started product.
+    pub(super) fn runtime_configs(&self) -> Value {
+        json!(self.runtime_configs)
+    }
+
+    /// Starts every product in the plan. `docker` is the run's Docker
+    /// connection when it has one, and is connected here when a sink needs it.
     pub(super) fn start(
         &mut self,
         mut database: Option<&mut Database>,
+        docker: &mut Option<Docker>,
         issuer: Arc<Issuer>,
     ) -> Result<BTreeMap<Product, String>> {
         self.issuer = Some(issuer.clone());
@@ -447,6 +483,7 @@ impl<'a> ProductRunner<'a> {
                 Product::Evidence => self.activate_evidence(&project, bind)?,
                 Product::Messaging => self.activate_messaging(
                     database.as_deref_mut().context(NEEDS_DATABASE)?,
+                    docker,
                     &project,
                     bind,
                 )?,
@@ -461,7 +498,8 @@ impl<'a> ProductRunner<'a> {
             if product == Product::Evidence {
                 command.arg("serve");
             }
-            command.arg("--runtime-config").arg(config);
+            command.arg("--runtime-config").arg(&config);
+            self.runtime_configs.insert(product, config);
             if matches!(product, Product::Casework | Product::Messaging) {
                 command.arg("serve");
             }
@@ -941,9 +979,15 @@ impl<'a> ProductRunner<'a> {
                 config
             }
             Product::Casework => casework_config(plan, name, self.root, package, &identity, bind),
-            Product::Messaging => {
-                messaging::messaging_config(plan, name, self.root, package, &identity, bind)
-            }
+            Product::Messaging => messaging::messaging_config(
+                plan,
+                name,
+                self.root,
+                package,
+                &identity,
+                bind,
+                self.messaging_providers.as_ref(),
+            ),
             Product::Evidence => {
                 unreachable!("Evidence writes its runtime configuration by packaging")
             }
@@ -1078,6 +1122,7 @@ impl<'a> ProductRunner<'a> {
         );
         drop(self.bindings.take());
         drop(self.jwks.take());
+        drop(self.gateway.take());
         Ok(())
     }
 
@@ -1376,6 +1421,9 @@ fn random_secret() -> Result<zeroize::Zeroizing<String>> {
     Ok(encoded)
 }
 
+/// Copies a project into the run. The copy is private to the owner whatever
+/// the caller's umask, because products refuse a secret directory that other
+/// users can read.
 fn copy_project(source: &Path, target: &Path) -> Result<()> {
     fn copy_dir(
         source: &Path,
@@ -1388,7 +1436,7 @@ fn copy_project(source: &Path, target: &Path) -> Result<()> {
             depth <= 16,
             "Casework project directories exceed the depth limit"
         );
-        fs::create_dir(target)?;
+        super::private_directory(target)?;
         for entry in fs::read_dir(source)? {
             let entry = entry?;
             if entry.file_name() == ".git" {
@@ -1413,7 +1461,9 @@ fn copy_project(source: &Path, target: &Path) -> Result<()> {
                     *bytes <= 32 * 1024 * 1024,
                     "Casework project exceeds the copy size limit"
                 );
-                fs::copy(entry.path(), destination)?;
+                fs::copy(entry.path(), &destination)?;
+                let owner_only = info.permissions().mode() & 0o700;
+                fs::set_permissions(&destination, fs::Permissions::from_mode(owner_only))?;
             }
         }
         Ok(())
@@ -1493,12 +1543,16 @@ struct SelectedProduct {
     root: PathBuf,
 }
 
+/// Whether the project's Messaging providers need the run to start Mailpit.
+pub(super) fn needs_mailpit(root: &Path, plan: &Plan) -> Result<bool> {
+    messaging::needs_mailpit(root, plan)
+}
+
 pub(super) fn inspect(
     root: &Path,
     plan: &Plan,
     terminate: &AtomicBool,
 ) -> Result<ProductInspection> {
-    messaging::refuse_providers_without_a_sink(root, plan)?;
     let breg_authority = breg_authority(root, plan, terminate)?;
     let casework_principals = casework_principals(root, plan, breg_authority.as_ref(), terminate)?;
     Ok(ProductInspection {
@@ -2634,6 +2688,30 @@ mod tests {
         os::unix::fs::PermissionsExt,
         sync::mpsc,
     };
+
+    #[test]
+    fn the_project_copy_is_private_to_the_owner() {
+        let scratch = tempfile::tempdir().unwrap();
+        let source = scratch.path().join("source");
+        fs::create_dir_all(source.join("keys")).unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(source.join("keys"), fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(source.join("keys/signing.key"), "secret").unwrap();
+        fs::set_permissions(
+            source.join("keys/signing.key"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        fs::write(source.join("run.sh"), "#!/bin/sh\n").unwrap();
+        fs::set_permissions(source.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+        let target = scratch.path().join("copy");
+        copy_project(&source, &target).unwrap();
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&target), 0o700);
+        assert_eq!(mode(&target.join("keys")), 0o700);
+        assert_eq!(mode(&target.join("keys/signing.key")), 0o600);
+        assert_eq!(mode(&target.join("run.sh")), 0o700);
+    }
 
     #[test]
     fn breg_validation_refusal_carries_the_tool_diagnostics() {

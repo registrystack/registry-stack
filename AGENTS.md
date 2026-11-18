@@ -166,7 +166,7 @@ with another product only through that product's public HTTP contract and
 maintained product client, under a dependency gate that names what it may
 reach; outside its tests, a runtime never drives another product's CLI or
 links another product's runtime or tooling crates. Adopter tooling may drive
-the other product's public CLI (`evidencectl source add` drives the `bregctl`
+the other product's public CLI (`caseworkctl source add` drives the `bregctl`
 of the same version on `PATH`), never a crate dependency. No product inherits
 another product's authorization, and no product writes to another product's
 database. Each product's own guide states the full boundary; the paragraphs

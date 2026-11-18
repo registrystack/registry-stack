@@ -29,7 +29,7 @@ const authorizations = new SharedArray('authorizations', function () {
     if (path.trim() === '') continue;
     const header = open(path.trim(), 'r').trim();
     if (!header.startsWith('Authorization: Bearer ') || header.split('.').length !== 3) {
-      throw new Error('HEADER_FILES_LIST must name evidencectl dev Authorization header files');
+      throw new Error('HEADER_FILES_LIST must name rstack dev token Authorization header files');
     }
     values.push(header.slice('Authorization: '.length));
   }

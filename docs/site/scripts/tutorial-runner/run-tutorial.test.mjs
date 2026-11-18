@@ -1041,16 +1041,16 @@ async function fakeEvidenceBinaries(dir, calls) {
   return env;
 }
 
-test('the evidence toolset serves its binaries, the client package, and the FHIR mock, and stops dev sessions', async () => {
+test('the evidence toolset serves its binaries, the client package, and the FHIR mock, and stops rstack dev runs', async () => {
   const body =
     '## Start\n\n' +
     fence(
       'sh',
-      'evidence --version\nevidencectl dev\n"$EVIDENCE_OID4VCI_BIN" --version\n' +
+      'evidence --version\nrstack dev start .\n"$EVIDENCE_OID4VCI_BIN" --version\n' +
         "python3 - <<'PY'\nimport registry_client\nprint(registry_client.NAME)\nPY\n" +
         'python3 -c "import os, urllib.request; print(urllib.request.urlopen(os.environ[\'FHIR_TUTORIAL_TEST_BASE_URL\'] + \'/healthz\').status)"\n' +
         'tar -tzf evidence-examples.tar.gz | grep -x fhir/.gitignore\n' +
-        'mkdir -p work/project/.evidence/dev\ntouch work/project/.evidence/dev/control.sock',
+        'mkdir -p -m 700 "$RSTACK_DEV_STATE_DIR/0123abcd"',
     ) +
     fence('text test-expect', 'unpacked\n200\nfhir/.gitignore') +
     fence('sh', 'false');
@@ -1059,13 +1059,12 @@ test('the evidence toolset serves its binaries, the client package, and the FHIR
     const env = await fakeEvidenceBinaries(dir, calls);
     const { code, output } = await run(['--toolset', 'evidence', page], {
       ...env,
+      RSTACK_FAKE_CALLS: calls,
       REGISTRY_CLIENT_PY_WHEEL: await fakeWheel(dir),
     });
     assert.equal(code, 1, output);
     const log = (await readFile(calls, 'utf8')).trim().split('\n');
-    assert.deepEqual(log.slice(0, 3), ['evidence --version', 'evidencectl dev', 'evidence-oid4vci --version']);
-    assert.match(log[3], /^evidencectl dev stop \/\S+\/work\/project$/u);
-    assert.equal(log.length, 4);
+    assert.deepEqual(log, ['evidence --version', 'rstack dev start .', 'evidence-oid4vci --version', 'rstack dev stop 0123abcd']);
     await assert.rejects(fetch('http://127.0.0.1:8003/healthz'), 'the FHIR mock must stop with the journey');
   });
 });

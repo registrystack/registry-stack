@@ -427,7 +427,7 @@ representation must permit it.
 An `EvidenceAccessClient` may declare `actorKind` as `human`, `agent`, or
 `service`. When omitted, local tooling infers an actor only if the assigned
 access profiles and exchange mode admit one compatible choice. An ambiguous
-choice requires `evidencectl access client add --actor-kind`. Selecting an
+choice is refused until the document names `actorKind`. Selecting an
 actor never widens a definition's ceiling or the target's complete grants;
 each request remains subject to its own definition and authority checks.
 
@@ -533,8 +533,8 @@ contacts Sources or initializes a deployed signer/audit destination.
 
 Fixture execution is explicit: `evidencectl test <project> --target <target>`
 delegates to the actual Evidence fixture kernel. The SQLite starter supports
-this offline lane; `dev start` refuses SQLite serving rather than pretending
-to provide a live SQLite source. Use `evidencectl dev start` for the local HTTP
+this offline lane; `rstack dev start` refuses SQLite serving rather than pretending
+to provide a live SQLite source. Use `rstack dev start` for the local HTTP
 journey and `doctor --runtime-config <absolute-file>` for live dependencies.
 
 A pack Source fixture case's `source` is the exact transcript the pack would

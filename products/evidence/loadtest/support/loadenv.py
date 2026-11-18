@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Bounded helpers for the Evidence load-test development session.
 
-The stock ``evidencectl dev`` lifecycle owns the issuer container, the signing
-bundle, and the Evidence process. ``evidencectl source mock serve`` owns the
-synthetic source. This module prepares only the authored load-test project and
-its synthetic subject pool, and validates the non-secret references that the
+``rstack dev`` owns the run issuer, the compiled authority, and the Evidence
+process. ``evidencectl source mock serve`` owns the synthetic source. This
+module prepares only the authored load-test project (its run plan, scenario,
+and synthetic subject pool) and validates the non-secret references that the
 load harness consumes.
 """
 
@@ -28,6 +28,8 @@ from urllib.parse import urlparse
 
 
 MARKER = "registry-stack-evidence-loadtest-v1"
+STATE_DIRECTORY = "state"
+RUN_ID = re.compile(r"[0-9a-f]{32}")
 BUILD_PROFILES = ("debug", "release")
 REQUIREMENT = "urn:example:requirement:adult-status:v1"
 SELECTOR_PROFILE = "record-by-id"
@@ -37,7 +39,8 @@ CLIENT_PREFIX = "loadtest-"
 DEFAULT_CLIENTS = 128
 # Every fetched token must outlive the fetch plus the 4-minute run window that
 # run.sh enforces, so the whole client set has to be fetched well inside the
-# issuer's token lifetime.
+# 300-second token lifetime of `rstack dev token`.
+# `rstack dev` runs at most 256 test people, and each load client is one person.
 MAXIMUM_CLIENTS = 256
 MINIMUM_TOKEN_SECONDS = 245
 TOKEN_FETCH_PARALLELISM = 16
@@ -97,18 +100,14 @@ def _require_root(root: Path) -> Path:
     return resolved
 
 
-def reserve_ports() -> tuple[int, int, int]:
-    """Return free loopback ports for the source mock, Evidence, and the issuer."""
-    listeners: list[socket.socket] = []
+def reserve_port() -> int:
+    """Return a free loopback port for the source mock."""
+    listener = socket.socket()
     try:
-        for _ in range(3):
-            listener = socket.socket()
-            listener.bind(("127.0.0.1", 0))
-            listeners.append(listener)
-        return tuple(listener.getsockname()[1] for listener in listeners)  # type: ignore[return-value]
+        listener.bind(("127.0.0.1", 0))
+        return listener.getsockname()[1]
     finally:
-        for listener in listeners:
-            listener.close()
+        listener.close()
 
 
 def client_ids(count: int) -> list[str]:
@@ -169,14 +168,72 @@ def _mock_plan(count: int) -> str:
     return "\n".join(lines) + "\n"
 
 
+DEV_AUDIENCE = "urn:example:resource:standalone-evidence"
+
+
+def dev_plan(clients: int) -> str:
+    """The `rstack dev` plan: one person per load client, each its own principal."""
+    lines = [
+        "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1",
+        "kind: RStackDev",
+        "issuer: run",
+        "products:",
+        f'  - {{product: evidence, project: ., audience: "{DEV_AUDIENCE}"}}',
+        "people:",
+    ]
+    for client in client_ids(clients):
+        lines.extend(
+            [
+                f"  {client}:",
+                f'    subject: "urn:registrystack:evidence:local:client:{client}"',
+                f"    client: {client}",
+                "    grants:",
+                "      evidence:",
+                "        profile: standalone-service",
+                '        scopes: ["evidence:request"]',
+                '        claims: {evidence_audience: "urn:example:audience:standalone-app"}',
+            ]
+        )
+    lines.append("scenarioFile: tests/scenarios.yaml")
+    return "\n".join(lines) + "\n"
+
+
+def scenarios_plan() -> str:
+    """One adult-status request that proves the run answers before it is reported ready."""
+    return "\n".join(
+        [
+            "apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1",
+            "kind: RStackScenarios",
+            "scenarios:",
+            "  - id: ask-adult-status",
+            "    steps:",
+            "      - id: request-adult-status",
+            "        product: evidence",
+            f"        as: {client_ids(1)[0]}",
+            "        method: POST",
+            "        path: /v1/evidence",
+            "        body:",
+            '          requestNonce: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"',
+            f"          requirement: {REQUIREMENT}",
+            f"          purpose: {PURPOSE}",
+            "          subjects:",
+            "            - role: subject",
+            f"              selector: {{profile: {SELECTOR_PROFILE}, values: {{record-id: {subject_id(1)}}}}}",
+            "        expect: {status: 200}",
+            "",
+        ]
+    )
+
+
 def local_project(
     tracked: Path,
     project: Path,
     pool: Path,
     source_openapi: Path,
     mock_port: int,
+    clients: int,
 ) -> None:
-    """Copy the canonical project and add the load-test source mock and subject pool."""
+    """Copy the canonical project, add the source mock and subject pool, and write the run plan."""
     if tracked.is_symlink() or not tracked.is_dir():
         raise LoadtestError("canonical Evidence project must be an ordinary directory")
     if any(path.is_symlink() for path in tracked.rglob("*")):
@@ -191,7 +248,7 @@ def local_project(
         raise LoadtestError("source mock port must be a TCP port")
 
     files = (".gitignore", "evidence.yaml", "local-target.yaml", "dev-authority.yaml")
-    directories = ("fixtures", "functions")
+    directories = ("adapter-packs", "fixtures", "functions", "projections", "schemas")
     for relative in files:
         if not (tracked / relative).is_file():
             raise LoadtestError(f"canonical Evidence project is missing {relative}")
@@ -217,6 +274,8 @@ def local_project(
         encoding="utf-8",
     )
     shutil.copyfile(source_openapi, project / "source.openapi.yaml")
+    _write_new(project / "dev.yaml", dev_plan(clients))
+    _write_new(project / "tests/scenarios.yaml", scenarios_plan())
 
     mocks = project / "mocks"
     (mocks / "cases").mkdir(parents=True, exist_ok=True)
@@ -250,12 +309,12 @@ def local_project(
 
 
 def bundle_rate_limits(bundle_text: str) -> dict[str, int]:
-    """Read the per-principal limits the development bundle actually enforces."""
+    """Read the per-principal limits the run's compiled Evidence bundle enforces."""
     limits = {}
     for key in RATE_LIMIT_KEYS:
         matches = re.findall(rf'"?{key}"?\s*:\s*([0-9]+)', bundle_text)
         if len(matches) != 1:
-            raise LoadtestError(f"development bundle does not state exactly one {key}")
+            raise LoadtestError(f"Evidence bundle does not state exactly one {key}")
         limits[key] = int(matches[0])
     return limits
 
@@ -311,7 +370,8 @@ def _is_owned_mock(pid: int, evidencectl: Path, project: Path, port: int) -> boo
 
 def write_environment(
     root: Path,
-    dev_report: Path,
+    run_report: Path,
+    rstack: Path,
     evidencectl: Path,
     build_profile: str,
     runtime_library_path: str,
@@ -320,37 +380,44 @@ def write_environment(
     clients: int,
 ) -> None:
     root = _require_root(root)
-    report = _read_json_object(dev_report)
+    report = _read_json_object(run_report)
     project = (root / "project").resolve()
+    run_id = report.get("run_id")
+    products = report.get("products")
+    configs = report.get("runtimeConfigs")
     if (
-        Path(report.get("project", "")).resolve() != project
-        or report.get("ok") is not True
-        or report.get("status") != "complete"
-        or report.get("outcome") != "ready"
+        not isinstance(run_id, str)
+        or not RUN_ID.fullmatch(run_id)
+        or not isinstance(products, dict)
+        or not isinstance(configs, dict)
     ):
-        raise LoadtestError("evidencectl dev did not report the expected ready project")
-    origin = urlparse(str(report.get("evidenceOrigin", "")))
+        raise LoadtestError("rstack dev did not report a ready run with an Evidence runtime config")
+    origin = urlparse(str(products.get("evidence", "")))
     if origin.scheme != "http" or origin.hostname != "127.0.0.1" or origin.port is None:
-        raise LoadtestError("evidencectl dev reported a non-loopback Evidence origin")
-    executable = evidencectl.resolve()
-    if not executable.is_file():
-        raise LoadtestError("evidencectl path must be a regular file")
+        raise LoadtestError("rstack dev reported a non-loopback Evidence origin")
+    for tool, label in ((rstack, "rstack"), (evidencectl, "evidencectl")):
+        if not tool.resolve().is_file():
+            raise LoadtestError(f"{label} path must be a regular file")
     if build_profile not in BUILD_PROFILES:
         raise LoadtestError("build profile must be debug or release")
     if ":" in runtime_library_path or (runtime_library_path and not Path(runtime_library_path).is_dir()):
         raise LoadtestError("runtime library path must be one existing directory")
     client_ids(clients)
-    if not _is_owned_mock(mock_pid, executable, project, mock_port):
+    if not _is_owned_mock(mock_pid, evidencectl.resolve(), project, mock_port):
         raise LoadtestError("the recorded source mock process is not the one this launcher started")
-    bundle = project / ".evidence/dev/bundle/evidence.yaml"
-    bundle_text = bundle.read_text(encoding="utf-8")
-    for expected in (REQUIREMENT, SELECTOR_PROFILE):
-        if expected not in bundle_text:
-            raise LoadtestError("development bundle does not publish the load-test requirement")
-    limits = bundle_rate_limits(bundle_text)
+    runtime_config = Path(str(configs.get("evidence", "")))
+    if runtime_config.is_symlink() or not runtime_config.is_file():
+        raise LoadtestError("rstack dev reported no readable Evidence runtime config")
+    # The bundle the runtime config points at sits beside it in the run.
+    bundle = runtime_config.parent / "bundle/evidence.yaml"
+    if bundle.is_symlink() or not bundle.is_file():
+        raise LoadtestError("the run's compiled Evidence bundle is missing")
+    limits = bundle_rate_limits(bundle.read_text(encoding="utf-8"))
     environment = {
         "evidence_url": f"http://127.0.0.1:{origin.port}",
-        "evidencectl": str(executable),
+        "rstack": str(rstack.resolve()),
+        "evidencectl": str(evidencectl.resolve()),
+        "run_id": run_id,
         "build_profile": build_profile,
         "runtime_library_path": runtime_library_path,
         "project": str(project),
@@ -367,18 +434,23 @@ def write_environment(
     _write_new(root / "pool/pool-summary.json", json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
 
-def describe(root: Path, repository: Path) -> tuple[str, str, str, str, str]:
+def describe(root: Path, repository: Path) -> tuple[str, str, str, str, str, str]:
     """Validate an owned environment and return its non-secret shell fields."""
     root = _require_root(root)
     environment = _read_json_object(root / "env.json")
     build_profile = environment.get("build_profile", "debug")
     if build_profile not in BUILD_PROFILES:
         raise LoadtestError("environment records an unknown build profile")
+    build_dir = repository.resolve() / "target" / build_profile
+    rstack = Path(str(environment.get("rstack", "")))
     evidencectl = Path(str(environment.get("evidencectl", "")))
-    if evidencectl != repository.resolve() / "target" / build_profile / "evidencectl" or not evidencectl.is_file():
+    if rstack != build_dir / "rstack" or evidencectl != build_dir / "evidencectl" or not rstack.is_file():
         raise LoadtestError(
-            "the evidencectl recorded by this environment is unavailable; preserve state and restore the matching build"
+            "the tools recorded by this environment are unavailable; preserve state and restore the matching build"
         )
+    run_id = str(environment.get("run_id", ""))
+    if not RUN_ID.fullmatch(run_id):
+        raise LoadtestError("environment records no valid run id")
     project = Path(str(environment.get("project", "")))
     if project != root / "project":
         raise LoadtestError("load-test environment references paths outside its owned checkout state")
@@ -389,13 +461,14 @@ def describe(root: Path, repository: Path) -> tuple[str, str, str, str, str]:
     library_path = str(environment.get("runtime_library_path", ""))
     if ":" in library_path or any(character.isspace() for character in library_path):
         raise LoadtestError("runtime library path must be one directory without separators")
-    for value in (str(evidencectl), str(project)):
+    state_dir = root / STATE_DIRECTORY
+    for value in (str(rstack), str(state_dir)):
         if any(character.isspace() for character in value) or ":" in value:
             raise LoadtestError("load-test paths must not contain whitespace or colons")
     origin = urlparse(str(environment.get("evidence_url", "")))
     if origin.scheme != "http" or origin.hostname != "127.0.0.1" or origin.port is None:
         raise LoadtestError("load-test environment records a non-loopback Evidence origin")
-    return str(environment["evidence_url"]), str(evidencectl), str(project), str(clients), library_path
+    return str(environment["evidence_url"]), str(rstack), run_id, str(state_dir), str(clients), library_path
 
 
 def owned_mock_pid(root: Path) -> int | None:
@@ -419,41 +492,51 @@ def _token_seconds_remaining(header: str) -> float:
     claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
     expiry = claims.get("exp") if isinstance(claims, dict) else None
     if not isinstance(expiry, (int, float)) or isinstance(expiry, bool):
-        raise LoadtestError("evidencectl dev token returned a token without an expiry")
+        raise LoadtestError("rstack dev token returned a token without an expiry")
     return float(expiry) - time.time()
 
 
-def fresh_header(evidencectl: Path, project: Path, client: str) -> Path:
+def fresh_header(rstack: Path, run_id: str, state_dir: Path, client: str) -> Path:
+    if not RUN_ID.fullmatch(run_id):
+        raise LoadtestError("run id must be 32 lowercase hexadecimal characters")
+    # `--install-root` names the directory that holds the sibling built tools.
     result = subprocess.run(
-        [str(evidencectl), "--format", "json", "dev", "token", client, str(project)],
+        [
+            str(rstack),
+            "--install-root",
+            str(rstack.resolve().parent),
+            "--format",
+            "json",
+            "dev",
+            "token",
+            run_id,
+            "--as",
+            client,
+        ],
         check=True,
         capture_output=True,
         text=True,
         timeout=45,
+        env={**os.environ, "RSTACK_DEV_STATE_DIR": str(state_dir)},
     )
-    report = json.loads(result.stdout)
-    expected = project.resolve() / f".evidence/dev/generated/keys/{client}.header"
-    reported = Path(report.get("headerFile", "")).resolve()
-    if (
-        report.get("ok") is not True
-        or report.get("status") != "complete"
-        or report.get("outcome") != "ready"
-        or reported != expected
-    ):
-        raise LoadtestError("evidencectl dev token reported a header outside the owned session")
-    _owner_only_regular(reported, "authorization header")
+    credentials = json.loads(result.stdout).get("credentials")
+    if not isinstance(credentials, list) or len(credentials) != 1:
+        raise LoadtestError("rstack dev token must report exactly one credential")
+    reported = _owner_only_regular(Path(str(credentials[0].get("header_file", ""))), "authorization header")
     value = reported.read_text(encoding="ascii")
     if not value.startswith("Authorization: Bearer ") or value.count(".") != 2 or not value.endswith("\n"):
-        raise LoadtestError("evidencectl dev token returned a malformed authorization header")
+        raise LoadtestError("rstack dev token returned a malformed authorization header")
     return reported
 
 
 def fresh_headers(root: Path, repository: Path) -> Path:
     """Fetch one fresh header per load client and write the list of their paths."""
-    _, evidencectl, project, clients, _ = describe(root, repository)
+    _, rstack, run_id, state_dir, clients, _ = describe(root, repository)
     identifiers = client_ids(int(clients))
     with ThreadPoolExecutor(max_workers=TOKEN_FETCH_PARALLELISM) as pool:
-        paths = list(pool.map(lambda client: fresh_header(Path(evidencectl), Path(project), client), identifiers))
+        paths = list(
+            pool.map(lambda client: fresh_header(Path(rstack), run_id, Path(state_dir), client), identifiers)
+        )
     # The earliest fetched token expires first; check every one after the batch.
     shortest = min(_token_seconds_remaining(path.read_text(encoding="ascii")) for path in paths)
     if shortest < MINIMUM_TOKEN_SECONDS:
@@ -468,7 +551,7 @@ def fresh_headers(root: Path, repository: Path) -> Path:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
-    commands.add_parser("ports")
+    commands.add_parser("port")
     clients = commands.add_parser("clients")
     clients.add_argument("--count", type=int, required=True)
     openapi = commands.add_parser("openapi")
@@ -481,9 +564,11 @@ def parser() -> argparse.ArgumentParser:
     local.add_argument("--pool", type=Path, required=True)
     local.add_argument("--source-openapi", type=Path, required=True)
     local.add_argument("--mock-port", type=int, required=True)
+    local.add_argument("--clients", type=int, required=True)
     environment = commands.add_parser("environment")
     environment.add_argument("--root", type=Path, required=True)
-    environment.add_argument("--dev-report", type=Path, required=True)
+    environment.add_argument("--run-report", type=Path, required=True)
+    environment.add_argument("--rstack", type=Path, required=True)
     environment.add_argument("--evidencectl", type=Path, required=True)
     environment.add_argument("--build-profile", choices=BUILD_PROFILES, required=True)
     environment.add_argument("--runtime-library-path", default="")
@@ -501,8 +586,8 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     arguments = parser().parse_args()
     try:
-        if arguments.command == "ports":
-            print(" ".join(str(port) for port in reserve_ports()))
+        if arguments.command == "port":
+            print(reserve_port())
         elif arguments.command == "clients":
             print("\n".join(client_ids(arguments.count)))
         elif arguments.command == "openapi":
@@ -514,11 +599,13 @@ def main() -> int:
                 arguments.pool,
                 arguments.source_openapi,
                 arguments.mock_port,
+                arguments.clients,
             )
         elif arguments.command == "environment":
             write_environment(
                 arguments.root,
-                arguments.dev_report,
+                arguments.run_report,
+                arguments.rstack,
                 arguments.evidencectl,
                 arguments.build_profile,
                 arguments.runtime_library_path,

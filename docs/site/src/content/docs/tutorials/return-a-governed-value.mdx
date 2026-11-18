@@ -26,18 +26,33 @@ see why no other answer could have come back: the project lists every value the 
   outcome="A verified residence-region assertion carrying one declared value."
   time="About 10 minutes"
   level="Local development with synthetic data"
-  prerequisites={['The project, source, and Registry Evidence left running by Your first assertion']}
+  prerequisites={['The project, source, and run left going by Your first assertion']}
 />
 
 ## Request the region
 
-Work in `first-evidence-assertion/adult-status`, where the source and Registry Evidence from
-Your first assertion are still running. Prepare a request for the `residence-region` assertion
+Work in `first-evidence-assertion/adult-status`, where the source and the run from
+Your first assertion are still going, in the terminal that holds its `run_id`, `evidence_url`,
+`runtime_config` and `headers_for`. Prepare a request for the `residence-region` assertion
 definition:
+
+In a new terminal, read the run back from `run.json` and redefine the helper that fetches a token
+header file:
+
+```sh test-cwd="first-evidence-assertion/adult-status"
+run_id="$(jq -r .run_id run.json)"
+evidence_url="$(jq -r .products.evidence run.json)"
+runtime_config="$(jq -r .runtimeConfigs.evidence run.json)"
+headers_for() {
+  rstack dev token "$run_id" --as "$1" | awk '$1 == "evidence" && $2 == "headers" {print $3}'
+}
+```
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
 rstack evidence request prepare residence-region \
-  --client tutorial-client \
+  --evidence-url "$evidence_url" \
+  --header @"$(headers_for caller)" \
+  --runtime-config "$runtime_config" \
   --purpose residence-check \
   --subject subject:record-id=adult \
   --name residence-region
@@ -53,7 +68,8 @@ Send the request, then verify the response before reading it:
 
 ```sh
 rstack evidence api /v1/evidence \
-  --client tutorial-client \
+  --url "$evidence_url" \
+  --header @"$(headers_for caller)" \
   --input .evidence/requests/residence-region/request.json \
   --accept application/jose+json \
   --output residence-region.jws.json
@@ -135,7 +151,8 @@ grantCeiling:
 ```
 
 `dev-authority.yaml` grants one exact request shape within it, to the `standalone-service`
-access profile that `tutorial-client` holds:
+access profile, for a deployment. The run reads this file through `local-target.yaml`, and
+`caller`'s token carries the profile's tag, `standalone-service`:
 
 ```yaml title="dev-authority.yaml" test-excerpt="dev-authority.yaml"
 - definition: residence-region
@@ -150,7 +167,7 @@ access profile that `tutorial-client` holds:
     valueOrigin: request
 ```
 
-Leave the source and Registry Evidence running; the next tutorial continues with them.
+Leave the source and the run going; the next tutorial continues with them.
 
 {/* Evidence: products/evidence/examples/standalone/evidence.yaml, assertionDefinitions.residence-region.grantCeiling;
     products/evidence/examples/standalone/dev-authority.yaml, accessProfiles.standalone-service;
