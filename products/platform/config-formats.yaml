@@ -730,20 +730,20 @@ formats:
       apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1
       kind: BRegProjectDev
       checkedBy:
-        file: crates/registry-bregctl/src/project_dev/plan.rs
+        file: crates/registry-rstack-dev/src/plan.rs
         symbol: API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1
       kind: BRegProjectDev
     schema:
-      path: products/breg/generated/tools/project-dev.v1alpha1.schema.json
+      path: products/platform/generated/dev/project-dev.v1alpha1.schema.json
       id: https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json
       origin: generated
-      generator: cargo run -p registry-bregctl --features schema --example tool-schema -- --output products/breg/generated/tools
-      driftCheck: products/breg/scripts/check-tool-schemas.sh
+      generator: cargo run -p registry-rstack-dev --features schema --example dev-schema -- --output products/platform/generated/dev
+      driftCheck: products/platform/scripts/check-dev-schemas.sh
     reader:
-      crate: registry-bregctl
-      file: crates/registry-bregctl/src/project_dev/plan.rs
+      crate: registry-rstack-dev
+      file: crates/registry-rstack-dev/src/plan.rs
       function: load
       type: Plan
     check: rstack dev check {project}
@@ -817,20 +817,20 @@ formats:
       apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
       kind: RStackScenarios
       checkedBy:
-        file: crates/registry-bregctl/src/project_dev/plan.rs
+        file: crates/registry-rstack-dev/src/plan.rs
         symbol: SCENARIOS_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
       kind: RStackScenarios
     schema:
-      path: products/breg/generated/tools/scenarios.v1alpha1.schema.json
+      path: products/platform/generated/dev/scenarios.v1alpha1.schema.json
       id: https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
       origin: generated
-      generator: cargo run -p registry-bregctl --features schema --example tool-schema -- --output products/breg/generated/tools
-      driftCheck: products/breg/scripts/check-tool-schemas.sh
+      generator: cargo run -p registry-rstack-dev --features schema --example dev-schema -- --output products/platform/generated/dev
+      driftCheck: products/platform/scripts/check-dev-schemas.sh
     reader:
-      crate: registry-bregctl
-      file: crates/registry-bregctl/src/project_dev/plan.rs
+      crate: registry-rstack-dev
+      file: crates/registry-rstack-dev/src/plan.rs
       function: read_scenarios
       type: ScenarioFile
     check: rstack dev check {project}

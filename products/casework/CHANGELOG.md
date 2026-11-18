@@ -18,6 +18,9 @@
   Migration: set the audience member to the authorization server's issuer
   identifier, exactly as its metadata publishes it.
 
+- `rstack dev` runs Casework projects through the installed `caseworkctl`, so a
+  plan with only Casework projects needs no `bregctl`. See
+  [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/).
 - Let a review stage choose a subset of the policy's outcomes with
   `stages[].outcomes`. The runtime enforces the stage's choices, and
   `caseworkctl explain` lists them. A stage that omits the list offers every

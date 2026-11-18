@@ -39,9 +39,8 @@
   identifier, as one string. It refuses any other type, its token endpoint URL
   as the audience, and an audience array.
 
-- `bregctl project-dev` runs BReg projects, including spatial projects, from a
-  `breg/project-dev` v1alpha1 plan. It is an alpha format and may change.
-  `rstack dev` is its entry point.
+- `rstack dev` runs BReg projects, including spatial projects, through the
+  installed `bregctl`. See [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/).
 - BREAKING: `bregctl explain access` emits `v1alpha9` and `bregctl explain
   model` emits `v1alpha8`. Access adds the required
   `claimContract.requesterClients` (every client a Record profile, statistical

@@ -52,11 +52,11 @@ hmac.workspace = true
 inquire.workspace = true
 jsonschema.workspace = true
 p256.workspace = true
-postgres-protocol.workspace = true
 rcgen.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-config.workspace = true
 registry-platform-yaml.workspace = true
+registry-rstack-dev.workspace = true
 registry-platform-hooks.workspace = true
 registry-platform-httputil.workspace = true
 registry-platform-httpsec = { workspace = true, default-features = false }
@@ -71,7 +71,6 @@ registry-linkml.workspace = true
 registry-manifest-core.workspace = true
 reqwest.workspace = true
 rustix.workspace = true
-rustls.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
@@ -82,8 +81,6 @@ tempfile.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["rt"] }
-tokio-postgres.workspace = true
-tokio-postgres-rustls.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 zeroize.workspace = true
 registry-platform-crypto.workspace = true
@@ -92,4 +89,7 @@ url.workspace = true
 [dev-dependencies]
 registry-breg.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
+rustls.workspace = true
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
 wat = "1.259.0"

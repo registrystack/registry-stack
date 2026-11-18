@@ -32,14 +32,6 @@ const EXAMPLES: &[(&str, &str)] = &[
         "products/breg/acceptance/facility/dev-clients.yaml",
     ),
     (
-        "project-dev.v1alpha1.schema.json",
-        "products/platform/examples/licensing/dev.yaml",
-    ),
-    (
-        "scenarios.v1alpha1.schema.json",
-        "products/platform/conformance/projects/breg-project-dev/tests/scenarios.yaml",
-    ),
-    (
         "example-scenarios.v1alpha1.schema.json",
         "products/breg/examples/minimal/examples/scenarios.json",
     ),
@@ -89,118 +81,6 @@ fn every_committed_example_satisfies_its_generated_schema() {
         };
         assert!(problems.is_empty(), "{path} under {file}: {problems:?}");
     }
-}
-
-fn project_dev_with_studio_identifiers() -> Value {
-    let mut plan = example("products/platform/examples/licensing/dev.yaml");
-    let applicant = plan["people"]
-        .as_object_mut()
-        .expect("people is a mapping")
-        .remove("applicant")
-        .expect("the licensing example has an applicant");
-    plan["people"]["date_of_birth"] = applicant;
-    plan["people"]["date_of_birth"]["grants"]["breg"]["profile"] = json!("date_of_birth");
-    plan["schemaTestPeople"] = json!({
-        "review_flow": {"read.v1": "date_of_birth"}
-    });
-    plan
-}
-
-fn scenarios_with_studio_identifiers() -> Value {
-    let mut scenarios =
-        example("products/platform/conformance/projects/breg-project-dev/tests/scenarios.yaml");
-    scenarios["scenarios"][0]["id"] = json!("review_flow");
-    scenarios["scenarios"][0]["steps"][0]["id"] = json!("read.v1");
-    scenarios["scenarios"][0]["steps"][0]["as"] = json!("date_of_birth");
-    scenarios["scenarios"][0]["steps"][0]["capture"] =
-        json!({"draftEtag": {"type": "pointer", "pointer": "/etag"}});
-    scenarios
-}
-
-#[test]
-fn project_dev_schema_accepts_the_readers_local_and_derived_identifiers() {
-    let documents = documents().expect("the tool schemas generate");
-    let schema = compile(&documents["project-dev.v1alpha1.schema.json"]);
-
-    assert!(schema.is_valid(&project_dev_with_studio_identifiers()));
-}
-
-#[test]
-fn scenarios_schema_accepts_the_readers_local_derived_and_capture_identifiers() {
-    let documents = documents().expect("the tool schemas generate");
-    let schema = compile(&documents["scenarios.v1alpha1.schema.json"]);
-
-    assert!(schema.is_valid(&scenarios_with_studio_identifiers()));
-}
-
-#[test]
-fn project_dev_schema_refuses_identifiers_the_reader_refuses() {
-    let documents = documents().expect("the tool schemas generate");
-    let schema = compile(&documents["project-dev.v1alpha1.schema.json"]);
-    let valid = project_dev_with_studio_identifiers();
-
-    for person in ["-person", "1person", "Person", "person.name"] {
-        let mut changed = valid.clone();
-        let value = changed["people"]
-            .as_object_mut()
-            .unwrap()
-            .remove("date_of_birth")
-            .unwrap();
-        changed["people"][person] = value;
-        assert!(!schema.is_valid(&changed), "person identifier: {person}");
-    }
-
-    let mut bad_step_reference = valid.clone();
-    bad_step_reference["schemaTestPeople"]["review_flow"] = json!({"read..v1": "date_of_birth"});
-    assert!(!schema.is_valid(&bad_step_reference));
-
-    let mut bad_journey_reference = valid.clone();
-    let people = bad_journey_reference["schemaTestPeople"]
-        .as_object_mut()
-        .unwrap()
-        .remove("review_flow")
-        .unwrap();
-    bad_journey_reference["schemaTestPeople"]["review.flow"] = people;
-    assert!(!schema.is_valid(&bad_journey_reference));
-
-    let mut bad_person_reference = valid.clone();
-    bad_person_reference["schemaTestPeople"]["review_flow"] = json!({"read.v1": "date.of.birth"});
-    assert!(!schema.is_valid(&bad_person_reference));
-
-    let mut inline_journey = valid;
-    inline_journey["journey"] = json!({"id": "inline", "steps": []});
-    assert!(!schema.is_valid(&inline_journey));
-}
-
-#[test]
-fn scenarios_schema_refuses_identifiers_the_reader_refuses() {
-    let documents = documents().expect("the tool schemas generate");
-    let schema = compile(&documents["scenarios.v1alpha1.schema.json"]);
-    let valid = scenarios_with_studio_identifiers();
-
-    for step in ["-read", "1read", ".read", "read.", "read..v1", "read.-v1"] {
-        let mut changed = valid.clone();
-        changed["scenarios"][0]["steps"][0]["id"] = json!(step);
-        assert!(!schema.is_valid(&changed), "step identifier: {step}");
-    }
-    for capture in ["1draft", "draft_etag", "draft.etag"] {
-        let mut changed = valid.clone();
-        let value = changed["scenarios"][0]["steps"][0]["capture"]
-            .as_object_mut()
-            .unwrap()
-            .remove("draftEtag")
-            .unwrap();
-        changed["scenarios"][0]["steps"][0]["capture"][capture] = value;
-        assert!(!schema.is_valid(&changed), "capture identifier: {capture}");
-    }
-
-    let mut bad_person_alias = valid.clone();
-    bad_person_alias["scenarios"][0]["steps"][0]["as"] = json!("date.of.birth");
-    assert!(!schema.is_valid(&bad_person_alias));
-
-    let mut bad_scenario_id = valid;
-    bad_scenario_id["scenarios"][0]["id"] = json!("review.flow");
-    assert!(!schema.is_valid(&bad_scenario_id));
 }
 
 #[test]
@@ -521,48 +401,15 @@ fn a_wrong_header_a_missing_header_and_an_explicit_null_are_refused() {
 }
 
 /// The identifiers the catalog records, in file-name order.
-const IDENTIFIERS: [&str; 9] = [
+const IDENTIFIERS: [&str; 7] = [
     "https://id.registrystack.org/schemas/breg/backup-binding/backup-binding.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/example-scenarios/example-scenarios.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json",
     "https://id.registrystack.org/schemas/breg/migration-descriptor/migration-descriptor.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/model-selection/model-selection.v1alpha1.schema.json",
-    "https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json",
-    "https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/schema-test-credentials/schema-test-credentials.v1.schema.json",
 ];
-
-#[test]
-fn authored_scenarios_schema_closes_the_envelope_and_reuses_runner_steps() {
-    let documents = documents().expect("the tool schemas generate");
-    let schema = compile(&documents["scenarios.v1alpha1.schema.json"]);
-    let valid =
-        example("products/platform/conformance/projects/breg-project-dev/tests/scenarios.yaml");
-    assert!(schema.is_valid(&valid));
-    let mut unknown = valid.clone();
-    unknown["unexpected"] = json!(true);
-    assert!(!schema.is_valid(&unknown));
-    let mut invalid_step = valid;
-    invalid_step["scenarios"][0]["steps"][0]["product"] = json!("other");
-    assert!(!schema.is_valid(&invalid_step));
-}
-
-#[test]
-fn project_dev_schema_requires_a_scenario_file_and_refuses_an_inline_journey() {
-    let documents = documents().expect("the tool schemas generate");
-    let schema = compile(&documents["project-dev.v1alpha1.schema.json"]);
-    let valid = example("products/platform/examples/licensing/dev.yaml");
-    assert!(schema.is_valid(&valid));
-
-    let mut inline = valid.clone();
-    inline["journey"] = json!({"id": "inline", "steps": []});
-    assert!(!schema.is_valid(&inline));
-
-    let mut missing = valid;
-    missing.as_object_mut().unwrap().remove("scenarioFile");
-    assert!(!schema.is_valid(&missing));
-}
 
 #[test]
 fn each_identifier_names_the_format_and_its_version() {

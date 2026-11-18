@@ -840,7 +840,7 @@ struct AssertionClaims {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project_dev::{
+    use crate::{
         plan::{Grant, ProductPlan},
         BregAuthority,
     };

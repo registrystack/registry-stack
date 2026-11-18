@@ -6358,7 +6358,6 @@ dependencies = [
  "inquire",
  "jsonschema",
  "p256",
- "postgres-protocol",
  "rcgen",
  "registry-breg",
  "registry-breg-client",
@@ -6373,10 +6372,11 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-hooks",
- "registry-platform-httputil",
  "registry-platform-httpsec",
+ "registry-platform-httputil",
  "registry-platform-testing",
  "registry-platform-yaml",
+ "registry-rstack-dev",
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
  "rustix 1.1.6",
@@ -6587,6 +6587,7 @@ dependencies = [
  "registry-platform-crypto",
  "registry-platform-httputil",
  "registry-platform-yaml",
+ "registry-rstack-dev",
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
  "rustix 1.1.6",
@@ -8201,6 +8202,7 @@ dependencies = [
 name = "registry-rstack"
 version = "0.46.1"
 dependencies = [
+ "base64 0.23.1",
  "clap",
  "fs2",
  "hex",
@@ -8213,9 +8215,47 @@ dependencies = [
  "rustix 1.1.6",
  "serde",
  "serde_json",
+ "serde_norway",
  "sha2 0.11.1",
  "tempfile",
  "ureq",
+]
+
+[[package]]
+name = "registry-rstack-dev"
+version = "0.46.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.23.1",
+ "clap",
+ "getrandom 0.4.3",
+ "jsonschema",
+ "postgres-protocol",
+ "registry-cli-report",
+ "registry-platform-buildinfo",
+ "registry-platform-config",
+ "registry-platform-crypto",
+ "registry-platform-httputil",
+ "registry-platform-yaml",
+ "reqwest 0.12.28",
+ "rustix 1.1.6",
+ "rustls",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sha2 0.11.1",
+ "signal-hook 0.4.6",
+ "tempfile",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "url",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

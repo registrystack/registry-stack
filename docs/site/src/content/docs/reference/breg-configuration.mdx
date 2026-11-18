@@ -39,9 +39,11 @@ runtime also check cross-field rules and references that no table can show.
 {/* Generated from src/data/generated/breg-configuration.json by
     docs/site/scripts/generate-breg-configuration.mjs. Run npm run generate from docs/site.
     The source schemas are products/breg/generated/authoring/, products/breg/generated/runtime/,
-    and products/breg/generated/tools/. The authoring-schema and runtime-schema examples of
-    registry-breg and the tool-schema example of registry-bregctl regenerate them, and
-    products/breg/scripts/check-generated.sh and check-tool-schemas.sh hold them to the Rust types. */}
+    products/breg/generated/tools/ and products/platform/generated/dev/. The authoring-schema and
+    runtime-schema examples of registry-breg, the tool-schema example of registry-bregctl and the
+    dev-schema example of registry-rstack-dev regenerate them, and
+    products/breg/scripts/check-generated.sh, check-tool-schemas.sh and
+    products/platform/scripts/check-dev-schemas.sh hold them to the Rust types. */}
 
 <ConfigurationReference contracts={reference.contracts} prefix="server" />
 

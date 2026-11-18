@@ -125,6 +125,8 @@ enum Command {
     DevSupervisor(dev::SupervisorArgs),
     #[command(name = "__dev-service-guard", hide = true)]
     DevServiceGuard(dev::ServiceGuardArgs),
+    #[command(name = "rstack-dev", hide = true)]
+    RstackDev(registry_rstack_dev::Args),
 }
 
 #[derive(Debug, Args)]
@@ -341,6 +343,7 @@ pub fn main_entry_from(
         Command::Connection { command } => {
             return connection(command, format, format_supplied, stderr);
         }
+        Command::RstackDev(args) => return registry_rstack_dev::run(args, stdout, stderr),
         command => command,
     };
     let kind = command_kind(&command);
@@ -628,6 +631,7 @@ impl Command {
             Self::Api(_) => "api",
             Self::Connection { .. } => "connection",
             Self::DevSupervisor(_) | Self::DevServiceGuard(_) => "internal",
+            Self::RstackDev(_) => "rstack-dev",
         }
     }
 }
@@ -765,6 +769,7 @@ fn run(command: Command) -> Result<Value> {
         Command::Api(_) | Command::Connection { .. } => {
             unreachable!("raw API commands bypass report dispatch")
         }
+        Command::RstackDev(_) => unreachable!("the rstack dev runner bypasses report dispatch"),
         Command::DevSupervisor(args) => {
             dev::run_supervisor(args)?;
             Ok(json!({"ok":true}))

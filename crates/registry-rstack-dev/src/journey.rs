@@ -654,7 +654,7 @@ async fn read_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project_dev::plan::ExpectedStatus;
+    use crate::plan::ExpectedStatus;
     use serde_json::json;
     use std::{
         io::{Read, Write},

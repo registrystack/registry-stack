@@ -250,6 +250,14 @@
       "description": "Configurable Registry Stack MCP gateway runtime configuration JSON Schema."
     },
     {
+      "glob": "products/platform/generated/dev/*.schema.json",
+      "sourcePath": "crates/registry-rstack-dev/src/schema.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Development plan and scenario JSON Schemas that `rstack dev` reads."
+    },
+    {
       "glob": "products/coordinator/generated/project/*.schema.json",
       "sourcePath": "crates/registry-coordinator/src/authoring.rs",
       "owner": "coordinator",

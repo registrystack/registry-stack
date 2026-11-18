@@ -5,7 +5,6 @@ use crate::install::{self, BootstrapOptions};
 use crate::store::{GenerationStore, InvocationLease};
 use crate::ReleaseManifest;
 use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
-use serde::Serialize;
 use serde_json::{json, Value};
 use std::ffi::OsString;
 use std::fs;
@@ -234,39 +233,6 @@ enum DevCommand {
         database_url: Option<String>,
         /// Emit the runner's JSON report.
         #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Serialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum DevRequest<'a> {
-    Check {
-        project: &'a std::path::Path,
-        deny_warnings: bool,
-        json: bool,
-    },
-    Start {
-        project: &'a std::path::Path,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        application_root: Option<&'a std::path::Path>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        ttl: Option<&'a str>,
-        json: bool,
-    },
-    Status {
-        run_id: &'a str,
-        json: bool,
-    },
-    Token {
-        run_id: &'a str,
-        person: &'a str,
-        json: bool,
-    },
-    Stop {
-        run_id: &'a str,
-        #[serde(skip_serializing_if = "std::ops::Not::not")]
-        recover: bool,
         json: bool,
     },
 }
@@ -1366,42 +1332,93 @@ fn first_path_rstack() -> Option<PathBuf> {
     None
 }
 
-/// What a development action needs from the installed components. Only
-/// `start` runs services; Casework is needed only when the plan lists it.
-#[derive(Default)]
-struct Needs {
+/// The hidden subcommand under which a hosting product CLI runs the
+/// development runner; `registry_rstack_dev::COMMAND` names the same one.
+const DEV_RUNNER_COMMAND: &str = "rstack-dev";
+
+/// A product whose CLI hosts the development runner.
+struct DevHost {
+    component: &'static str,
+    tool: &'static str,
+    tool_variable: &'static str,
+    runtime_variable: &'static str,
+}
+
+/// The hosting products in the order that picks the host. The first one a
+/// plan lists hosts `check` and `start`, because the plan needs that CLI
+/// anyway. The first one available hosts `status`, `token` and `stop`: a run
+/// keeps its state in its run directory, so any host of the same release
+/// serves a run another host started.
+const DEV_HOSTS: [DevHost; 2] = [
+    DevHost {
+        component: "breg",
+        tool: "bregctl",
+        tool_variable: "RSTACK_BREGCTL_BIN",
+        runtime_variable: "RSTACK_BREG_BIN",
+    },
+    DevHost {
+        component: "casework",
+        tool: "caseworkctl",
+        tool_variable: "RSTACK_CASEWORKCTL_BIN",
+        runtime_variable: "RSTACK_CASEWORK_BIN",
+    },
+];
+
+/// The binaries a development action needs before the launcher runs its host.
+struct DevNeeds {
+    /// The products whose binaries the action needs, the host first. Empty
+    /// when the first available host serves the action.
+    products: Vec<&'static DevHost>,
+    /// `start` runs services, so it needs each product's runtime as well.
     services: bool,
-    casework: bool,
 }
 
-impl Needs {
-    fn components(&self) -> Vec<&'static str> {
-        if self.casework {
-            vec!["breg", "casework"]
-        } else {
-            vec!["breg"]
+impl DevNeeds {
+    /// The run-ID actions need any host and no other binary.
+    fn any_host() -> Self {
+        Self {
+            products: Vec::new(),
+            services: false,
         }
     }
 
+    /// `check` needs only its host; the runner reports another listed
+    /// product whose tool is unavailable at that product's plan entry.
+    fn check(project: &std::path::Path) -> Self {
+        let mut products = plan_dev_products(project);
+        products.truncate(1);
+        Self {
+            products,
+            services: false,
+        }
+    }
+
+    /// `start` needs the tool and runtime of every product the plan lists.
+    fn start(project: &std::path::Path) -> Self {
+        Self {
+            products: plan_dev_products(project),
+            services: true,
+        }
+    }
+
+    /// The source binary overrides the action needs, the host's tool first.
     fn variables(&self) -> Vec<&'static str> {
-        let mut variables = vec!["RSTACK_BREGCTL_BIN"];
-        if self.services {
-            variables.push("RSTACK_BREG_BIN");
-        }
-        if self.services && self.casework {
-            variables.push("RSTACK_CASEWORKCTL_BIN");
-            variables.push("RSTACK_CASEWORK_BIN");
-        }
-        variables
+        self.products
+            .iter()
+            .flat_map(|product| {
+                std::iter::once(product.tool_variable)
+                    .chain(self.services.then_some(product.runtime_variable))
+            })
+            .collect()
     }
 }
 
-/// Whether the project's dev.yaml lists a casework product under
-/// `/products/*/product`. A missing, unreadable, oversized or unparsable plan,
-/// or one without a products list, counts as using Casework, so the launcher
-/// never skips a binary the helper might need; the helper reports the real
-/// plan error.
-fn plan_uses_casework(project: &std::path::Path) -> bool {
+/// The hosting products the project's dev.yaml lists under
+/// `/products/*/product`, in hosting order. A missing, unreadable, oversized
+/// or unparsable plan, or one without a products list, lists none: the first
+/// available host then reports the real plan error, with the positioned
+/// diagnostics every product gives for a malformed configuration file.
+fn plan_dev_products(project: &std::path::Path) -> Vec<&'static DevHost> {
     use registry_platform_yaml::{NodeValue, Reader, MAXIMUM_DOCUMENT_BYTES};
     use std::io::Read;
     let limit = MAXIMUM_DOCUMENT_BYTES as u64;
@@ -1410,38 +1427,71 @@ fn plan_uses_casework(project: &std::path::Path) -> bool {
     let read = std::fs::File::open(&file)
         .and_then(|handle| handle.take(limit + 1).read_to_end(&mut bytes));
     if read.is_err() || bytes.len() as u64 > limit {
-        return true;
+        return Vec::new();
     }
     let Ok(Some(root)) = Reader::new(file.display().to_string()).scan(&bytes) else {
-        return true;
+        return Vec::new();
     };
-    let Some(NodeValue::Sequence(products)) = root.pointer("/products").map(|node| &node.value)
+    let Some(NodeValue::Sequence(entries)) = root.pointer("/products").map(|node| &node.value)
     else {
-        return true;
+        return Vec::new();
     };
-    products.iter().any(|entry| {
-        !matches!(
-            entry.pointer("/product").map(|node| &node.value),
-            Some(NodeValue::String(text)) if text.text != "casework"
-        )
-    })
+    DEV_HOSTS
+        .iter()
+        .filter(|host| {
+            entries.iter().any(|entry| {
+                matches!(
+                    entry.pointer("/product").map(|node| &node.value),
+                    Some(NodeValue::String(text)) if text.text == host.component
+                )
+            })
+        })
+        .collect()
+}
+
+/// The refusal when no host is available for an action that any host serves.
+fn no_dev_host(managed: bool) -> CliFailure {
+    let installs = DEV_HOSTS
+        .iter()
+        .map(|host| format!("rstack install {}", host.component))
+        .collect::<Vec<_>>()
+        .join(" or ");
+    if managed {
+        return CliFailure::domain(format!(
+            "no installed component can run rstack dev; run {installs}"
+        ));
+    }
+    let overrides = DEV_HOSTS
+        .iter()
+        .map(|host| host.tool_variable)
+        .collect::<Vec<_>>()
+        .join(" or ");
+    CliFailure::domain(format!(
+        "without a managed installation, run {installs}, or set an existing source binary override: {overrides}"
+    ))
 }
 
 fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<(), CliFailure> {
-    let launcher_json = matches!(format, ReportFormat::Json);
-    let (request, database_url, needs) = match action {
+    let option = |name: &str, value: &std::ffi::OsStr| {
+        let mut option = OsString::from(format!("--{name}="));
+        option.push(value);
+        option
+    };
+    let (name, mut options, json, target, database_url, needs) = match action {
         DevCommand::Check {
             project,
             deny_warnings,
             json,
         } => (
-            DevRequest::Check {
-                project,
-                deny_warnings: *deny_warnings,
-                json: *json || launcher_json,
-            },
+            "check",
+            deny_warnings
+                .then(|| OsString::from("--deny-warnings"))
+                .into_iter()
+                .collect::<Vec<_>>(),
+            *json,
+            project.as_os_str(),
             None,
-            Needs::default(),
+            DevNeeds::check(project),
         ),
         DevCommand::Start {
             project,
@@ -1450,38 +1500,36 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
             ttl,
             json,
         } => (
-            DevRequest::Start {
-                project,
-                application_root: application_root.as_deref(),
-                ttl: ttl.as_deref(),
-                json: *json || launcher_json,
-            },
+            "start",
+            application_root
+                .iter()
+                .map(|root| option("application-root", root.as_os_str()))
+                .chain(ttl.iter().map(|ttl| option("ttl", ttl.as_ref())))
+                .collect(),
+            *json,
+            project.as_os_str(),
             database_url.as_deref(),
-            Needs {
-                services: true,
-                casework: plan_uses_casework(project),
-            },
+            DevNeeds::start(project),
         ),
         DevCommand::Status { run_id, json } => (
-            DevRequest::Status {
-                run_id,
-                json: *json || launcher_json,
-            },
+            "status",
+            Vec::new(),
+            *json,
+            run_id.as_ref(),
             None,
-            Needs::default(),
+            DevNeeds::any_host(),
         ),
         DevCommand::Token {
             run_id,
             person,
             json,
         } => (
-            DevRequest::Token {
-                run_id,
-                person,
-                json: *json || launcher_json,
-            },
+            "token",
+            vec![option("as", person.as_ref())],
+            *json,
+            run_id.as_ref(),
             None,
-            Needs::default(),
+            DevNeeds::any_host(),
         ),
         DevCommand::Stop {
             run_id,
@@ -1489,45 +1537,67 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
             database_url,
             json,
         } => (
-            DevRequest::Stop {
-                run_id,
-                recover: *recover,
-                json: *json || launcher_json,
-            },
+            "stop",
+            recover
+                .then(|| OsString::from("--recover"))
+                .into_iter()
+                .collect(),
+            *json,
+            run_id.as_ref(),
             database_url.as_deref(),
-            Needs::default(),
+            DevNeeds::any_host(),
         ),
     };
-    let request = serde_json::to_string(&request).map_err(|error| {
-        CliFailure::operational(format!("cannot encode development request: {error}"))
-    })?;
+    if json || matches!(format, ReportFormat::Json) {
+        options.push(OsString::from("--json"));
+    }
 
     let selected = selected_state(cli)?;
     let (mut command, lease) = if let Some((lease, selection, manifest)) = selected {
-        for component in needs.components() {
-            if !selection.components.iter().any(|name| name == component) {
-                return Err(CliFailure::domain(format!(
-                    "component {component} is missing; run rstack install {component}"
+        let installed = |component: &str| selection.components.iter().any(|name| name == component);
+        let host_path = |host: &DevHost| {
+            lease
+                .path()
+                .join("components")
+                .join(host.component)
+                .join(host.tool)
+                .join(host.tool)
+        };
+        let host = if let Some(first) = needs.products.first() {
+            for product in &needs.products {
+                if !installed(product.component) {
+                    return Err(CliFailure::domain(format!(
+                        "component {component} is missing; run rstack install {component}",
+                        component = product.component
+                    )));
+                }
+            }
+            let host = host_path(first);
+            if !host.is_file() {
+                return Err(CliFailure::operational(format!(
+                    "selected {} component lacks its {} binary",
+                    first.component, first.tool
                 )));
             }
-        }
-        let executable = lease.path().join("components/breg/bregctl/bregctl");
-        if !executable.is_file() {
-            return Err(CliFailure::operational(
-                "selected BReg helper is missing".into(),
-            ));
-        }
-        let mut command = ProcessCommand::new(executable);
+            host
+        } else {
+            DEV_HOSTS
+                .iter()
+                .filter(|host| installed(host.component))
+                .map(host_path)
+                .find(|path| path.is_file())
+                .ok_or_else(|| no_dev_host(true))?
+        };
+        let mut command = ProcessCommand::new(host);
         set_selected_generation_environment(&mut command, lease.path(), &selection, &manifest)?;
-        let required_variables = needs.variables();
-        let missing: Vec<_> = required_variables
-            .iter()
+        let missing: Vec<_> = needs
+            .variables()
+            .into_iter()
             .filter(|variable| {
-                !command.get_envs().any(|(name, value)| {
-                    name == std::ffi::OsStr::new(**variable) && value.is_some()
-                })
+                !command
+                    .get_envs()
+                    .any(|(name, value)| name == std::ffi::OsStr::new(variable) && value.is_some())
             })
-            .copied()
             .collect();
         if !missing.is_empty() {
             return Err(CliFailure::operational(format!(
@@ -1537,53 +1607,57 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
         }
         (command, Some(lease))
     } else {
-        let variables = needs.variables();
-        let mut paths = Vec::with_capacity(variables.len());
-        let mut missing = Vec::new();
-        for variable in variables {
-            let path = std::env::var_os(variable)
+        let source = |variable: &str| {
+            std::env::var_os(variable)
                 .filter(|value| !value.is_empty())
-                .map(PathBuf::from);
-            match path {
-                Some(path) if path.is_file() => paths.push((variable, path)),
-                _ => missing.push(variable),
-            }
-        }
+                .map(PathBuf::from)
+                .filter(|path| path.is_file())
+        };
+        let missing: Vec<_> = needs
+            .variables()
+            .into_iter()
+            .filter(|variable| source(variable).is_none())
+            .collect();
         if !missing.is_empty() {
             return Err(CliFailure::domain(format!(
                 "without a managed installation, run rstack install {}, or set existing source binary overrides: {}",
                 needs
-                    .components()
-                    .into_iter()
-                    .filter(|component| {
-                        missing
-                            .iter()
-                            .any(|variable| variable.starts_with(&format!("RSTACK_{}", component.to_ascii_uppercase())))
-                    })
+                    .products
+                    .iter()
+                    .filter(|product| missing.iter().any(|variable| {
+                        *variable == product.tool_variable || *variable == product.runtime_variable
+                    }))
+                    .map(|product| product.component)
                     .collect::<Vec<_>>()
                     .join(" "),
                 missing.join(", ")
             )));
         }
-        let mut command = ProcessCommand::new(&paths[0].1);
-        for (variable, path) in paths {
-            command.env(variable, path);
+        let host = match needs.products.first() {
+            Some(first) => source(first.tool_variable),
+            None => DEV_HOSTS.iter().find_map(|host| source(host.tool_variable)),
         }
-        (command, None)
+        .ok_or_else(|| no_dev_host(false))?;
+        (ProcessCommand::new(host), None)
     };
 
     command
-        .arg("project-dev")
-        .env("RSTACK_PROJECT_DEV_REQUEST", request);
+        .arg(DEV_RUNNER_COMMAND)
+        .arg(name)
+        .args(options)
+        .arg("--")
+        .arg(target);
     if let Some(database_url) = database_url {
         command.env("RSTACK_DEV_DATABASE_URL", database_url);
     }
     if let Some(lease) = &lease {
         inherit_invocation_lease(lease)?;
     }
+    let host = PathBuf::from(command.get_program());
+    let error = command.exec();
     Err(CliFailure::operational(format!(
-        "cannot launch development helper: {}",
-        command.exec()
+        "cannot launch development host {}: {error}",
+        host.display()
     )))
 }
 

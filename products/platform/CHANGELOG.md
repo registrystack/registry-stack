@@ -3,9 +3,12 @@
 ## Unreleased
 
 - `rstack dev check|start|status|token|stop` runs a checkout's BReg and Casework
-  projects together against a PostgreSQL server you supply. See
+  projects, alone or together, against a PostgreSQL server you supply. See
   [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/). It is an alpha developer tool and may
-  change.
+  change. `rstack` hands the plan to the CLI of its first product (`bregctl`
+  for BReg, otherwise `caseworkctl`), so install only the products the plan
+  names. The plan and scenario schemas are published under
+  [generated/dev](generated/dev/).
 - `rstack dev stop RUN_ID --recover` releases a run whose supervisor is gone.
   It waits for the process guards to finish, drops the run's databases and roles
   on the original PostgreSQL cluster, and removes the run directory. You can

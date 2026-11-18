@@ -53,7 +53,8 @@ pub(crate) struct Args {
     command: Vec<OsString>,
 }
 
-/// The hidden bregctl entry point used by a development worker.
+/// The hidden `<host CLI> rstack-dev guard` entry point a development
+/// supervisor spawns around each workload.
 pub(crate) fn run(args: Args) -> ExitCode {
     match run_inner(args) {
         Ok(status) => exit_code(status),
@@ -98,9 +99,7 @@ fn workload_command(
     if clean_env {
         command.env_clear();
     } else {
-        command
-            .env_remove("RSTACK_DEV_DATABASE_URL")
-            .env_remove("RSTACK_PROJECT_DEV_REQUEST");
+        command.env_remove("RSTACK_DEV_DATABASE_URL");
     }
     if let Some(workdir) = workdir {
         command.current_dir(workdir);
@@ -120,7 +119,7 @@ fn workload_command(
             "invalid guarded environment name"
         );
         ensure!(
-            name != "RSTACK_DEV_DATABASE_URL" && name != "RSTACK_PROJECT_DEV_REQUEST",
+            name != "RSTACK_DEV_DATABASE_URL",
             "administrator environment cannot reach a guarded workload"
         );
         command.env(name, value);
@@ -437,7 +436,8 @@ impl Command {
         let mut command = process::Command::new(std::env::current_exe()?);
         #[cfg(not(test))]
         command
-            .arg("project-dev-guard")
+            .arg(crate::COMMAND)
+            .arg("guard")
             .arg("--lock")
             .arg(&lock)
             .arg("--pid-file")
@@ -446,7 +446,7 @@ impl Command {
             .arg(&state_file);
         #[cfg(test)]
         command
-            .arg("project_dev::guard::tests::guard_process_entry")
+            .arg("guard::tests::guard_process_entry")
             .arg("--exact")
             .arg("--nocapture");
         #[cfg(not(test))]
@@ -463,7 +463,7 @@ impl Command {
                     "invalid guarded environment name"
                 );
                 ensure!(
-                    name != "RSTACK_DEV_DATABASE_URL" && name != "RSTACK_PROJECT_DEV_REQUEST",
+                    name != "RSTACK_DEV_DATABASE_URL",
                     "administrator environment cannot reach a guarded workload"
                 );
                 ensure!(
@@ -478,7 +478,6 @@ impl Command {
         command.arg("--").arg(binary);
         command
             .env_remove("RSTACK_DEV_DATABASE_URL")
-            .env_remove("RSTACK_PROJECT_DEV_REQUEST")
             .process_group(0)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -671,7 +670,7 @@ mod tests {
     }
 
     /// Test-only re-entry for `Command`: the Rust unit-test executable stands
-    /// in for the bregctl binary while this function runs the real guard loop.
+    /// in for the host CLI while this function runs the real guard loop.
     #[test]
     fn guard_process_entry() {
         let Some(encoded) = std::env::var_os(TEST_GUARD_LAUNCH) else {

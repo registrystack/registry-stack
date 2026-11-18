@@ -129,6 +129,7 @@ SHARDS = {
         "registry-coordinator-client-py",
         "registry-thunderid-tooling",
         "registry-rstack",
+        "registry-rstack-dev",
         "registry-cli-docs",
         "registry-cli-reference",
         "registry-cli-report",
@@ -154,6 +155,10 @@ DOCUMENTS_POSTGRES_PACKAGES = DOCUMENTS_PACKAGES | {"registry-render"}
 # through the affected closure.
 EVIDENCE_POSTGRES_PACKAGES = frozenset({"registry-evidence", "registry-evidence-oid4vci"})
 STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
+# The product CLIs that link registry-rstack-dev and host `rstack dev`. The
+# registry-rstack dev_run tests drive the hosts built beside rstack, so a
+# change to either host runs them; the shard builds both before it tests.
+RSTACK_DEV_HOST_PACKAGES = frozenset({"registry-bregctl", "registry-caseworkctl"})
 
 # The runtime configuration conformance gate reads the sources of the runtimes
 # it holds rows for, their generated runtime schemas, and the canonical shared
@@ -1240,6 +1245,8 @@ def classify(
         if force_all
         else workspace.affected_packages(seeds)
     )
+    if affected & RSTACK_DEV_HOST_PACKAGES:
+        affected.add("registry-rstack")
     complete = run_all or force_all
 
     # The heavy integration tier: PostgreSQL suites, the WebAssembly build and

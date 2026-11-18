@@ -107,7 +107,7 @@ other local users in the process list. For a spatial project, install PostGIS fo
 create the administrator as a superuser instead.
 
 {/* Evidence: crates/registry-rstack/src/cli.rs dispatch_dev;
-    crates/registry-bregctl/src/project_dev/database.rs RSTACK_DEV_DATABASE_CA, sslrootcert. */}
+    crates/registry-rstack-dev/src/database.rs RSTACK_DEV_DATABASE_CA, sslrootcert. */}
 
 ## Adapt the development plan
 
@@ -135,6 +135,8 @@ To adapt the plan to your own project, change these parts and leave the structur
   refused, so move those steps into the file. Each step names a person, a product, a method, a path
   starting with `/v1/`, and what it expects back. The file path cannot contain `..` or backslashes.
   The start and status reports include `scenarioDigest` for the exact file bytes captured at start.
+  When the BReg project is the development project root (`project: .`), keep the scenario file out
+  of `tests/`: `bregctl check` reads every YAML file there as a BReg test.
   A scenario takes its BReg access profile from the test person's grant, so do not repeat it as
   `accessProfile` in a step path. A path that names a different profile than the grant's is
   refused at check time.
@@ -220,8 +222,8 @@ test, because that test has no key. Exercise those Record types in an authored S
 file instead.
 
 {/* Evidence: crates/registry-rstack/src/cli.rs dispatch_dev;
-    crates/registry-bregctl/src/project_dev/issuer.rs TOKEN_LIFETIME_SECONDS;
-    crates/registry-bregctl/src/project_dev/products.rs field-key, local-file. */}
+    crates/registry-rstack-dev/src/issuer.rs TOKEN_LIFETIME_SECONDS;
+    crates/registry-rstack-dev/src/products.rs field-key, local-file. */}
 
 ## Stop the run
 
@@ -288,8 +290,8 @@ step fails, the report explains what to inspect before retrying.
 [Recover a run](#recover-a-run) lists the manual steps and the recovery fields.
 
 {/* Evidence: crates/registry-rstack/src/cli.rs dispatch_dev;
-    crates/registry-bregctl/src/project_dev/mod.rs CLEANUP_CAP, cleanup-pending.json;
-    crates/registry-bregctl/src/project_dev/journey.rs JOURNEY_ATTEMPT_LIMIT. */}
+    crates/registry-rstack-dev/src/lib.rs CLEANUP_CAP, cleanup-pending.json;
+    crates/registry-rstack-dev/src/journey.rs JOURNEY_ATTEMPT_LIMIT. */}
 
 ## PostgreSQL server requirements
 
@@ -316,7 +318,7 @@ The URL accepts these query parameters and refuses all others:
 - `sslrootcert` is refused.
   Set `RSTACK_DEV_DATABASE_CA` instead.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/database.rs createrole_self_grant, btree_gist, pg_control_system, RSTACK_DEV_DATABASE_CA, sslrootcert, application_name. */}
+{/* Evidence: crates/registry-rstack-dev/src/database.rs createrole_self_grant, btree_gist, pg_control_system, RSTACK_DEV_DATABASE_CA, sslrootcert, application_name. */}
 {/* TODO[evidence]: the PostgreSQL 17 minimum has no located anchor in the runner. */}
 
 ### Spatial projects
@@ -325,7 +327,7 @@ A spatial BReg project needs PostGIS 3.5 or later installed on the server.
 The administrator must be allowed to `CREATE EXTENSION postgis`, which normally means a superuser or the managed service's equivalent.
 The run checks that the server offers a supported PostGIS before it creates anything.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/database.rs postgis. */}
+{/* Evidence: crates/registry-rstack-dev/src/database.rs postgis. */}
 
 ## Write the development plan
 
@@ -344,7 +346,7 @@ The error names the plan pointer, for example `/people/NAME/grants/breg/profile`
 A Casework grant must name an access profile of the Casework project, reported at `/people/NAME/grants/casework/profile`.
 The run does not compare scopes with the profile: a profile's required scopes are a per-entity rule, and a mismatch appears as a failed journey step.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/plan.rs schemaTestPeople;
+{/* Evidence: crates/registry-rstack-dev/src/plan.rs schemaTestPeople;
     products/breg/generated/tools/project-dev.v1alpha1.schema.json maximumWaitMilliseconds. */}
 {/* TODO[evidence]: the plan pointers `/people/NAME/grants/breg/profile` and `/people/NAME/grants/casework/profile` were not located literally. */}
 
@@ -368,8 +370,8 @@ Both grants declare the same scopes and additional claims.
 Casework reads the token subject or the BReg principal claim.
 The token carries both audiences and the authority explicitly shared by both grants.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/products.rs service-status;
-    crates/registry-bregctl/src/project_dev/bindings.rs bregReviewAuthority, caseworkContextProvider, caseworkContext. */}
+{/* Evidence: crates/registry-rstack-dev/src/products.rs service-status;
+    crates/registry-rstack-dev/src/bindings.rs bregReviewAuthority, caseworkContextProvider, caseworkContext. */}
 
 ### Authored scenario file
 
@@ -405,7 +407,7 @@ The BReg project's `tests/journeys.yaml` remains its separate native schema test
 The Stack scenario file does not replace or change it.
 Existing plans with one inline `journey` remain supported, but a plan cannot specify both forms or neither.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/plan.rs SCENARIOS_API_VERSION, SCENARIOS_KIND, scenarioFile;
+{/* Evidence: crates/registry-rstack-dev/src/plan.rs SCENARIOS_API_VERSION, SCENARIOS_KIND, scenarioFile;
     products/breg/generated/tools/scenarios.v1alpha1.schema.json RStackScenarios. */}
 
 ### Journey steps
@@ -446,8 +448,8 @@ Use a bounded GET `poll` for asynchronous delivery or result retrieval.
 Set `maximumWaitMilliseconds` up to 60 seconds and choose a `pollIntervalMilliseconds` from 50 to 5000.
 A journey can make at most 512 requests and transfer at most 8 MiB of request and response bodies in total.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/plan.rs maximumWaitMilliseconds, pollIntervalMilliseconds;
-    crates/registry-bregctl/src/project_dev/journey.rs JOURNEY_ATTEMPT_LIMIT, JOURNEY_TRANSFER_LIMIT. */}
+{/* Evidence: crates/registry-rstack-dev/src/plan.rs maximumWaitMilliseconds, pollIntervalMilliseconds;
+    crates/registry-rstack-dev/src/journey.rs JOURNEY_ATTEMPT_LIMIT, JOURNEY_TRANSFER_LIMIT. */}
 
 ### Token report
 
@@ -457,8 +459,8 @@ Pass the file to curl with `--header @HEADER_FILE`.
 With BReg, include the selected profile as the `accessProfile` query parameter.
 With Casework, the header file carries the profile.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/issuer.rs TOKEN_LIFETIME_SECONDS;
-    crates/registry-bregctl/src/project_dev/mod.rs header_file. */}
+{/* Evidence: crates/registry-rstack-dev/src/issuer.rs TOKEN_LIFETIME_SECONDS;
+    crates/registry-rstack-dev/src/lib.rs header_file. */}
 
 ## Start a declared application
 
@@ -480,9 +482,9 @@ The ready report adds `issuer` and `application` URLs.
 Configuration commands and built hosts are trusted local code supplied by the operator; the runner does not fetch or build them.
 A later `start` creates a fresh disposable run and databases; it does not restore unfinished application work.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/plan.rs prepareVersion;
-    crates/registry-bregctl/src/project_dev/mod.rs application-root;
-    crates/registry-bregctl/src/project_dev/products.rs PreparedApplication. */}
+{/* Evidence: crates/registry-rstack-dev/src/plan.rs prepareVersion;
+    crates/registry-rstack-dev/src/lib.rs application-root;
+    crates/registry-rstack-dev/src/products.rs PreparedApplication. */}
 
 ### Browser issuer
 
@@ -498,8 +500,8 @@ The authored BReg and Casework profiles still decide which client and person can
 Declare the browser client in the relevant BReg requester profiles; the runner adds it to the runtime's accepted-client list but does not change the authored package.
 Browser tokens last at most 15 minutes and expire with the run; `rstack dev token` continues to issue five-minute CLI tokens.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/browser.rs S256, prompt;
-    crates/registry-bregctl/src/project_dev/issuer.rs BROWSER_TOKEN_LIFETIME_SECONDS, TOKEN_LIFETIME_SECONDS. */}
+{/* Evidence: crates/registry-rstack-dev/src/browser.rs S256, prompt;
+    crates/registry-rstack-dev/src/issuer.rs BROWSER_TOKEN_LIFETIME_SECONDS, TOKEN_LIFETIME_SECONDS. */}
 
 ### Bind an existing Casework producer to a run
 
@@ -551,8 +553,8 @@ Products use the pinned static JWKS; CLI tokens and the separately served run-lo
 The worker holds the reservation until cleanup.
 `issuer: run` without application and without this exact paired binding is refused, including BReg-only plans; fixed HTTP remains refused.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/bindings.rs runIssuerBinding, run-test-people;
-    crates/registry-bregctl/src/project_dev/plan.rs runIssuerBinding. */}
+{/* Evidence: crates/registry-rstack-dev/src/bindings.rs runIssuerBinding, run-test-people;
+    crates/registry-rstack-dev/src/plan.rs runIssuerBinding. */}
 {/* TODO[evidence]: the `caseworkctl generate run-source` call and the receipt contents were not individually anchored. */}
 
 ### Explicit browser roles with separate human source credentials
@@ -570,8 +572,8 @@ Browser tokens keep one audience and only that product's narrowed grant.
 The shared-audience CLI `caseworkContext` compatibility path is unchanged.
 Review and save the authored source and declaration through normal tooling before using a new generated host configuration; post-generation JSON injection is unsupported.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/plan.rs caseworkSourceCredentialRoles;
-    crates/registry-bregctl/src/project_dev/bindings.rs humanSourceAuthentication. */}
+{/* Evidence: crates/registry-rstack-dev/src/plan.rs caseworkSourceCredentialRoles;
+    crates/registry-rstack-dev/src/bindings.rs humanSourceAuthentication. */}
 
 ## Run isolation
 
@@ -582,7 +584,7 @@ Use synthetic test people and keep the issuer's private directory under your use
 Stop and TTL expiry terminate the services and remove the databases, roles, keys, and run files.
 A spatial BReg run also creates a `NOLOGIN` role whose name starts with `breg_bbox_`; cleanup removes it with the others.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/database.rs breg_bbox_. */}
+{/* Evidence: crates/registry-rstack-dev/src/database.rs breg_bbox_. */}
 {/* TODO[evidence]: the NOLOGIN attribute of the breg_bbox_ role was not individually anchored. */}
 
 ### Encrypted fields
@@ -601,8 +603,8 @@ Exercise those Record types in the plan's `journey` instead.
 This key custody is for development only.
 A deployment supplies its key as [Encrypt a field](../breg-field-encryption/) describes.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/products.rs field-key, local-file;
-    crates/registry-bregctl/src/project_dev/mod.rs field_encryption_key. */}
+{/* Evidence: crates/registry-rstack-dev/src/products.rs field-key, local-file;
+    crates/registry-rstack-dev/src/lib.rs field_encryption_key. */}
 
 ### State directory
 
@@ -612,7 +614,7 @@ Set `RSTACK_DEV_STATE_DIR` to use another location.
 A run directory is renamed to `.<run_id>.removing` before it is deleted, and `status` and `stop` ignore that name.
 If the deletion is interrupted, delete that directory yourself; the run's field-encryption key is deleted before the rename, so it holds no key material.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/mod.rs RSTACK_DEV_STATE_DIR, .removing. */}
+{/* Evidence: crates/registry-rstack-dev/src/lib.rs RSTACK_DEV_STATE_DIR, .removing. */}
 
 ## Recover a run
 
@@ -652,8 +654,8 @@ If you need to finish cleanup by hand, do it in this order:
 4. Remove the run directory.
    It holds the run's development field-encryption key when `field_encryption_key` is listed.
 
-{/* Evidence: crates/registry-bregctl/src/project_dev/mod.rs cleanup-pending.json, stopped_process_groups, lost-supervisor, CLEANUP_CAP;
-    crates/registry-bregctl/src/project_dev/recovery.rs. */}
+{/* Evidence: crates/registry-rstack-dev/src/lib.rs cleanup-pending.json, stopped_process_groups, lost-supervisor, CLEANUP_CAP;
+    crates/registry-rstack-dev/src/recovery.rs. */}
 
 ## Error report fields
 
@@ -676,7 +678,7 @@ The reports of `rstack dev check` use `BRegCtlReport` instead.
 A helper started without the launcher's request prints a plain message and exits 2.
 
 {/* Evidence: crates/registry-rstack/src/cli.rs registry.rstack.error.v1;
-    crates/registry-bregctl/src/project_dev/mod.rs registry.rstack.error.v1, lost-supervisor, field_encryption_key;
+    crates/registry-rstack-dev/src/lib.rs registry.rstack.error.v1, lost-supervisor, field_encryption_key;
     products/platform/schemas/rstack-dev-error.v1.schema.json. */}
 
 ## Next

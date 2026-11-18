@@ -4776,7 +4776,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "d92f37649bcc2a29ae516772f460919abe82489a3e4a8ad348b73005bf69433e"
+        "sha256": "7b4cee96f3149fc660933051e881429c9665565dd825d9b1f8307292a1ae8afa"
       },
       "artifact": {
         "path": "products/breg/generated/tools/backup-binding.v1alpha1.schema.json",
@@ -4794,7 +4794,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "d92f37649bcc2a29ae516772f460919abe82489a3e4a8ad348b73005bf69433e"
+        "sha256": "7b4cee96f3149fc660933051e881429c9665565dd825d9b1f8307292a1ae8afa"
       },
       "artifact": {
         "path": "products/breg/generated/tools/dev-clients.v1alpha1.schema.json",
@@ -4848,7 +4848,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "d92f37649bcc2a29ae516772f460919abe82489a3e4a8ad348b73005bf69433e"
+        "sha256": "7b4cee96f3149fc660933051e881429c9665565dd825d9b1f8307292a1ae8afa"
       },
       "artifact": {
         "path": "products/breg/generated/tools/example-scenarios.v1alpha1.schema.json",
@@ -4866,7 +4866,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "d92f37649bcc2a29ae516772f460919abe82489a3e4a8ad348b73005bf69433e"
+        "sha256": "7b4cee96f3149fc660933051e881429c9665565dd825d9b1f8307292a1ae8afa"
       },
       "artifact": {
         "path": "products/breg/generated/tools/journeys.v1.schema.json",
@@ -4920,7 +4920,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "d92f37649bcc2a29ae516772f460919abe82489a3e4a8ad348b73005bf69433e"
+        "sha256": "7b4cee96f3149fc660933051e881429c9665565dd825d9b1f8307292a1ae8afa"
       },
       "artifact": {
         "path": "products/breg/generated/tools/migration-descriptor.v1alpha1.schema.json",
@@ -4956,7 +4956,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "d92f37649bcc2a29ae516772f460919abe82489a3e4a8ad348b73005bf69433e"
+        "sha256": "7b4cee96f3149fc660933051e881429c9665565dd825d9b1f8307292a1ae8afa"
       },
       "artifact": {
         "path": "products/breg/generated/tools/model-selection.v1alpha1.schema.json",
@@ -4987,16 +4987,16 @@
       "kind": "schema",
       "status": "active",
       "compatibilityLine": "v1alpha1",
-      "owner": "breg",
+      "owner": "platform",
       "title": "Registry Stack project development plan",
-      "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
+      "description": "Development plan and scenario JSON Schemas that `rstack dev` reads.",
       "source": {
-        "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "d92f37649bcc2a29ae516772f460919abe82489a3e4a8ad348b73005bf69433e"
+        "path": "crates/registry-rstack-dev/src/schema.rs",
+        "sha256": "c94d75ab7da04759babceb7b4f8a2f96ffcaa28953eafeb62fd6a1eb7bf63fef"
       },
       "artifact": {
-        "path": "products/breg/generated/tools/project-dev.v1alpha1.schema.json",
-        "sha256": "0a2a40e11b50a544d5cdb407cb6b7c8b1d75ca6d18a4ae701729196d08847d92",
+        "path": "products/platform/generated/dev/project-dev.v1alpha1.schema.json",
+        "sha256": "5292882ab58ab7752211b252b2ece252baf54d017e5836848b5afb623e03c5e1",
         "mediaType": "application/schema+json"
       }
     },
@@ -5118,7 +5118,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "d92f37649bcc2a29ae516772f460919abe82489a3e4a8ad348b73005bf69433e"
+        "sha256": "7b4cee96f3149fc660933051e881429c9665565dd825d9b1f8307292a1ae8afa"
       },
       "artifact": {
         "path": "products/breg/generated/tools/schema-test-credentials.v1.schema.json",
@@ -6085,15 +6085,15 @@
       "kind": "schema",
       "status": "active",
       "compatibilityLine": "v1alpha1",
-      "owner": "breg",
+      "owner": "platform",
       "title": "Registry Stack authored development scenarios",
-      "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
+      "description": "Development plan and scenario JSON Schemas that `rstack dev` reads.",
       "source": {
-        "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "d92f37649bcc2a29ae516772f460919abe82489a3e4a8ad348b73005bf69433e"
+        "path": "crates/registry-rstack-dev/src/schema.rs",
+        "sha256": "c94d75ab7da04759babceb7b4f8a2f96ffcaa28953eafeb62fd6a1eb7bf63fef"
       },
       "artifact": {
-        "path": "products/breg/generated/tools/scenarios.v1alpha1.schema.json",
+        "path": "products/platform/generated/dev/scenarios.v1alpha1.schema.json",
         "sha256": "fff83d0a9395e70a9aeb1c22493945c64585d2aa114ca7cf9b579cb9285a2766",
         "mediaType": "application/schema+json"
       }
