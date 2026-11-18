@@ -164,7 +164,7 @@ impl TargetBatch {
             .filter_map(|(_, key)| key.clone())
             .collect();
         let roots = rows.rows.iter().map(|(root, _)| *root).collect();
-        if matches!(&target.target, WorkTarget::SourceHint { .. }) {
+        if matches!(&target.target, WorkTarget::SourceChange { .. }) {
             self.required.extend(keys.iter().cloned());
         }
         self.selected.push(SelectedTarget {
@@ -684,17 +684,9 @@ impl PostgresExternalViewService {
             .transaction(&mut session, claims, request.deadline)
             .await?;
         fence.check(&transaction, &[]).await?;
-        if checkpoint.phase == "complete" {
-            *checkpoint = SweepCheckpoint {
-                phase: "roots".to_owned(),
-                baseline_sequence: 0,
-                continuation: None,
-                completed: false,
-                acquisition_failures: 0,
-            };
-        }
         let (plan, scope, parent) = match checkpoint.phase.as_str() {
-            "roots" => (primary, &scopes.primary, None),
+            // `prepare_sweep` restarts a completed sweep at the roots.
+            "roots" | "complete" => (primary, &scopes.primary, None),
             "labels" => {
                 let label = labels.ok_or(ExternalViewError::Unavailable)?;
                 (
@@ -709,6 +701,25 @@ impl PostgresExternalViewService {
             _ => return Err(ExternalViewError::Unavailable),
         };
         active_scope(&transaction, plan.source, plan.projection.id.as_str()).await?;
+        let proposed_baseline =
+            if checkpoint.phase == "complete" || checkpoint.baseline_sequence == 0 {
+                store::next_refresh_sequence(&transaction, scope)
+                    .await
+                    .map_err(unavailable)?
+            } else {
+                checkpoint.baseline_sequence
+            };
+        // Save the baseline before source I/O so replaying this position
+        // reuses keys published before an interrupted page checkpoint.
+        *checkpoint = queue::prepare_sweep(
+            &transaction,
+            &config.id,
+            &config.authority_digest,
+            fence.lease,
+            proposed_baseline,
+        )
+        .await
+        .map_err(unavailable)?;
         let mut after = None;
         if let Some(cursor) = &checkpoint.continuation {
             let binding = self.managed_position_binding(
@@ -733,24 +744,6 @@ impl PostgresExternalViewService {
                 }
             }
         }
-        let proposed_baseline = if checkpoint.baseline_sequence == 0 {
-            store::next_refresh_sequence(&transaction, scope)
-                .await
-                .map_err(unavailable)?
-        } else {
-            checkpoint.baseline_sequence
-        };
-        // Save the baseline before source I/O so replaying this position
-        // reuses keys published before an interrupted page checkpoint.
-        *checkpoint = queue::prepare_sweep(
-            &transaction,
-            &config.id,
-            &config.authority_digest,
-            fence.lease,
-            proposed_baseline,
-        )
-        .await
-        .map_err(unavailable)?;
         let page = self
             .refresh_rows(
                 &transaction,
@@ -801,14 +794,15 @@ impl PostgresExternalViewService {
             .managed_transaction(&mut session, request.deadline)
             .await?;
         fence.check(&transaction, &[]).await?;
+        let first_delay = i64::try_from(queue::RETRY_DELAYS[0]).map_err(unavailable)?;
+        let mut refused = 0_usize;
         for (key, outcome) in tally.by_key {
             if outcome.failure().is_some_and(retryable) {
                 let expires = self.work_expiry(scope)?;
-                let ready_at = Utc::now().timestamp().saturating_add(15);
-                if ready_at < expires {
+                if Utc::now().timestamp().saturating_add(first_delay) < expires {
                     let scheme = plan.projection.selector_scheme.as_str();
                     let target = self.source_target_digest(scope.epoch, scheme, &key)?;
-                    queue::enqueue_sweep_retry(
+                    if queue::enqueue_sweep_retry(
                         &transaction,
                         &config.id,
                         &config.authority_digest,
@@ -817,15 +811,24 @@ impl PostgresExternalViewService {
                         scope.epoch,
                         scheme,
                         &key,
-                        1,
-                        ready_at,
                         expires,
                     )
                     .await
-                    .map_err(unavailable)?;
-                    report.retried += 1;
+                    .map_err(unavailable)?
+                    {
+                        report.retried += 1;
+                    } else {
+                        refused += 1;
+                    }
                 }
             }
+        }
+        if refused > 0 {
+            // The key waits for the next sweep, which is its reconciliation.
+            tracing::warn!(
+                plan = %config.id, refused,
+                "external refresh queue is full; failed sweep keys wait for the next sweep"
+            );
         }
         if let Some(after) = page.next {
             let binding = self.managed_position_binding(
@@ -919,8 +922,10 @@ impl PostgresExternalViewService {
         let limit = (usize::from(config.page_size) / targets.len().max(1)).max(1) as u16;
         report.processed = targets.len();
         for target in targets {
-            if target.attempts > 4 || target.expires_at <= Utc::now().timestamp() {
-                let reason = if target.attempts > 4 {
+            if target.attempts >= queue::ATTEMPTS_CEILING
+                || target.expires_at <= Utc::now().timestamp()
+            {
+                let reason = if target.attempts >= queue::ATTEMPTS_CEILING {
                     Settlement::AttemptsExhausted
                 } else {
                     Settlement::Expired
@@ -935,7 +940,7 @@ impl PostgresExternalViewService {
                     let page = targeted::exact_root(&transaction, primary, *record_id).await?;
                     roots.push(page, target, None)?;
                 }
-                WorkTarget::SourceHint {
+                WorkTarget::SourceChange {
                     projection_epoch,
                     selector_scheme,
                     selector,
@@ -945,7 +950,7 @@ impl PostgresExternalViewService {
                     let page = targeted::primary_selector(&transaction, primary, selector).await?;
                     roots.push(page, target, None)?;
                 }
-                WorkTarget::SourceHint {
+                WorkTarget::SourceChange {
                     projection_epoch,
                     selector_scheme,
                     selector,
@@ -1091,6 +1096,9 @@ impl PostgresExternalViewService {
         Ok((work, reused))
     }
 
+    /// Records the batch one acquisition chunk at a time and settles each
+    /// claimed target as soon as every key it selected is recorded, so a slow
+    /// chunk never holds back the settlements before it.
     #[allow(clippy::too_many_arguments)] // Settlement uses the exact batch and source scope just acquired.
     async fn finish_target_batch(
         &self,
@@ -1108,29 +1116,83 @@ impl PostgresExternalViewService {
         let Some(page) = batch.page else {
             return Ok(());
         };
-        let attempted = work.len();
-        let tally = self
-            .execute_refresh(
+        report.reused += reused;
+        let authority = self.refresh_authority(claims, scope, parent, &page, Some(fence));
+        let mut tally = RefreshTally::default();
+        let mut waiting = batch.selected;
+        let mut chunks = refresh_chunks(plan, work).into_iter();
+        loop {
+            if let Some(chunk) = chunks.next() {
+                let attempted = chunk.len();
+                let recorded = self
+                    .refresh_chunk(
+                        request,
+                        plan,
+                        claims,
+                        scope,
+                        parent,
+                        &page,
+                        &authority,
+                        chunk,
+                        chunks.as_slice(),
+                        Some(fence),
+                    )
+                    .await?;
+                report.published += recorded.published;
+                report.unavailable += attempted - recorded.published;
+                tally.merge(recorded);
+            }
+            let unrecorded = chunks
+                .as_slice()
+                .iter()
+                .flatten()
+                .map(|item| item.key.as_str())
+                .collect::<BTreeSet<_>>();
+            let (decided, rest): (Vec<_>, Vec<_>) = waiting.into_iter().partition(|selected| {
+                selected
+                    .keys
+                    .iter()
+                    .all(|key| !unrecorded.contains(key.as_str()))
+            });
+            waiting = rest;
+            self.settle_targets(
                 request,
                 plan,
-                claims,
-                scope,
-                parent,
-                &page,
-                work,
-                Some(fence),
+                fence,
+                decided,
+                &tally,
+                enqueue_labels,
+                report,
             )
             .await?;
-        report.published += tally.published;
-        report.reused += reused;
-        report.unavailable += attempted - tally.published;
+            if chunks.as_slice().is_empty() {
+                return Ok(());
+            }
+        }
+    }
 
+    /// Settles or retries claimed targets whose selected keys are all
+    /// recorded, in one transaction under the plan lease.
+    #[allow(clippy::too_many_arguments)] // See `finish_target_batch`.
+    async fn settle_targets(
+        &self,
+        request: &ExternalViewRequest,
+        plan: &Plan<'_>,
+        fence: &LeaseFence,
+        decided: Vec<SelectedTarget>,
+        tally: &RefreshTally,
+        enqueue_labels: Option<&ProjectionScope>,
+        report: &mut StepReport,
+    ) -> Result<()> {
+        if decided.is_empty() {
+            return Ok(());
+        }
         let mut session = self.session().await?;
         let transaction = self
             .managed_transaction(&mut session, request.deadline)
             .await?;
         fence.check(&transaction, &[]).await?;
-        for selected in batch.selected {
+        for selected in decided {
             let failures = selected.keys.iter().filter_map(|key| {
                 tally
                     .by_key
@@ -1249,32 +1311,25 @@ async fn retry_or_settle(
     claimed: &ClaimedTarget,
     report: &mut StepReport,
 ) -> Result<()> {
-    let delay = match claimed.attempts {
-        1 => 15,
-        2 => 30,
-        3 => 60,
-        _ => 0,
+    let reason = match queue::retry_delay(claimed.attempts) {
+        None => Some(Settlement::AttemptsExhausted),
+        Some(delay)
+            if Utc::now()
+                .timestamp()
+                .saturating_add(i64::try_from(delay.as_secs()).map_err(unavailable)?)
+                >= claimed.expires_at =>
+        {
+            Some(Settlement::Expired)
+        }
+        Some(_) => None,
     };
-    if delay == 0 || Utc::now().timestamp().saturating_add(delay) >= claimed.expires_at {
-        let reason = if delay == 0 {
-            Settlement::AttemptsExhausted
-        } else {
-            Settlement::Expired
-        };
+    if let Some(reason) = reason {
         if settle(transaction, fence, claimed, reason).await? {
             report.settled += 1;
         }
         return Ok(());
     }
-    match queue::retry_target(
-        transaction,
-        &fence.id,
-        fence.lease,
-        claimed,
-        Duration::from_secs(delay as u64),
-    )
-    .await
-    {
+    match queue::retry_target(transaction, &fence.id, fence.lease, claimed).await {
         Ok(()) => report.retried += 1,
         Err(QueueError::StaleLease) => {}
         Err(error) => return Err(unavailable(error)),

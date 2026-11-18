@@ -690,7 +690,7 @@ impl PostgresExternalViewService {
             };
             live_acquisition(
                 plan.projection.id.as_str(),
-                self.acquire(request, plan, source_request, &fields, None, None)
+                self.acquire(request.deadline, plan, source_request, &fields, None, None)
                     .await,
             )
         } else {
@@ -1053,7 +1053,7 @@ impl PostgresExternalViewService {
 
     async fn acquire(
         &self,
-        request: &ExternalViewRequest,
+        deadline: Instant,
         plan: &Plan<'_>,
         source_request: ProjectionRequest,
         fields: &BTreeSet<String>,
@@ -1070,7 +1070,7 @@ impl PostgresExternalViewService {
             grant_until = grant_until.min(cutoff);
         }
         let hooks = Arc::new(AcquisitionGate {
-            deadline: request.deadline,
+            deadline,
             grant_until,
             route: plan.projection.operation.as_str().to_owned(),
             refresh_authority,
@@ -1925,6 +1925,9 @@ impl PostgresExternalViewService {
         Ok((work, reused, invalid))
     }
 
+    /// Acquires and records a page one source request at a time. Each
+    /// chunk's outcomes commit before the next chunk is requested, so a slow
+    /// chunk never holds back the publications before it.
     #[allow(clippy::too_many_arguments)] // Both manual and managed pages carry the selected authority.
     async fn execute_refresh(
         &self,
@@ -1940,7 +1943,38 @@ impl PostgresExternalViewService {
         if work.is_empty() {
             return Ok(RefreshTally::default());
         }
-        let authority = Arc::new(RefreshAuthority {
+        let authority = self.refresh_authority(claims, scope, parent, page, managed);
+        let mut tally = RefreshTally::default();
+        let mut chunks = refresh_chunks(plan, work).into_iter();
+        while let Some(chunk) = chunks.next() {
+            tally.merge(
+                self.refresh_chunk(
+                    request,
+                    plan,
+                    claims,
+                    scope,
+                    parent,
+                    page,
+                    &authority,
+                    chunk,
+                    chunks.as_slice(),
+                    managed,
+                )
+                .await?,
+            );
+        }
+        Ok(tally)
+    }
+
+    fn refresh_authority(
+        &self,
+        claims: &ClaimContext,
+        scope: &ProjectionScope,
+        parent: Option<&(ProjectionScope, ProjectionGeneration)>,
+        page: &RefreshRows,
+        managed: Option<&managed::LeaseFence>,
+    ) -> Arc<RefreshAuthority> {
+        Arc::new(RefreshAuthority {
             pool: self.pool.clone(),
             expected: self.expected.clone(),
             lock_key: self.lock_key,
@@ -1949,9 +1983,33 @@ impl PostgresExternalViewService {
             parent: parent.cloned(),
             supporting: page.supporting.clone(),
             managed: managed.map(|lease| managed::AcquisitionAuthority::new(lease, claims, page)),
-        });
+        })
+    }
+
+    /// Acquires one chunk and records its outcomes. `unfetched` holds the
+    /// page's later chunks, which an abandoned page fails with this one.
+    #[allow(clippy::too_many_arguments)] // See `execute_refresh`.
+    async fn refresh_chunk(
+        &self,
+        request: &ExternalViewRequest,
+        plan: &Plan<'_>,
+        claims: &ClaimContext,
+        scope: &ProjectionScope,
+        parent: Option<&(ProjectionScope, ProjectionGeneration)>,
+        page: &RefreshRows,
+        authority: &Arc<RefreshAuthority>,
+        chunk: Vec<RefreshWork>,
+        unfetched: &[Vec<RefreshWork>],
+        managed: Option<&managed::LeaseFence>,
+    ) -> Result<RefreshTally> {
         let outcomes = self
-            .fetch_refresh(request, plan, &work, page.supporting_until, authority)
+            .fetch_chunk(
+                request,
+                plan,
+                &chunk,
+                page.supporting_until,
+                authority.for_work(&chunk),
+            )
             .await;
         self.record_refresh(
             request,
@@ -1960,7 +2018,8 @@ impl PostgresExternalViewService {
             scope,
             parent.map(|(_, generation)| generation),
             page,
-            work.into_iter().zip(outcomes).collect(),
+            chunk.into_iter().zip(outcomes).collect(),
+            unfetched,
             managed,
         )
         .await
@@ -1981,12 +2040,13 @@ impl PostgresExternalViewService {
         parent: Option<&ProjectionGeneration>,
         page: &RefreshRows,
         results: Vec<(RefreshWork, RefreshResult)>,
+        unfetched: &[Vec<RefreshWork>],
         managed: Option<&managed::LeaseFence>,
     ) -> Result<RefreshTally> {
         let mut tally = RefreshTally::default();
         let recorded = self
             .record_outcomes(
-                request, plan, claims, scope, parent, page, results, &mut tally, managed,
+                request, plan, claims, scope, parent, page, results, unfetched, &mut tally, managed,
             )
             .await;
         tally.log(plan.projection.id.as_str());
@@ -2003,6 +2063,7 @@ impl PostgresExternalViewService {
         parent: Option<&ProjectionGeneration>,
         page: &RefreshRows,
         results: Vec<(RefreshWork, RefreshResult)>,
+        unfetched: &[Vec<RefreshWork>],
         tally: &mut RefreshTally,
         managed: Option<&managed::LeaseFence>,
     ) -> Result<()> {
@@ -2037,7 +2098,10 @@ impl PostgresExternalViewService {
                         .supporting_until
                         .is_some_and(|cutoff| Utc::now().timestamp() >= cutoff)
                 {
-                    let abandoned = std::iter::once(work).chain(results.map(|(work, _)| work));
+                    let unrecorded = results.map(|(work, _)| work).collect::<Vec<_>>();
+                    let abandoned = std::iter::once(&work)
+                        .chain(&unrecorded)
+                        .chain(unfetched.iter().flatten());
                     let mut keys = 0usize;
                     for work in abandoned {
                         store::fail_refresh(&transaction, &work.ticket, RefreshFailure::Abandoned)
@@ -2115,11 +2179,14 @@ impl PostgresExternalViewService {
         Ok(())
     }
 
-    async fn fetch_refresh(
+    /// Acquires one chunk's keys. The acquisition ends early enough to record
+    /// its outcomes before the page deadline; a source that has not answered
+    /// by then fails the chunk's keys as unavailable.
+    async fn fetch_chunk(
         &self,
         request: &ExternalViewRequest,
         plan: &Plan<'_>,
-        work: &[RefreshWork],
+        chunk: &[RefreshWork],
         supporting_until: Option<i64>,
         authority: Arc<RefreshAuthority>,
     ) -> Vec<RefreshResult> {
@@ -2130,72 +2197,77 @@ impl PostgresExternalViewService {
             .map(|field| field.as_str().to_owned())
             .collect();
         let expires_at = plan.source.grant_valid_until().timestamp();
-        let mut results = Vec::with_capacity(work.len());
+        let deadline = acquisition_deadline(request.deadline);
+        let mut results = Vec::with_capacity(chunk.len());
         match plan.projection.cardinality {
             ExternalCardinality::One => {
-                for chunk in work.chunks(plan.source.maximum_batch_keys().max(1)) {
-                    let observed_at = Utc::now().timestamp();
-                    let acquired = self
-                        .acquire(
-                            request,
-                            plan,
-                            ProjectionRequest::Batch {
-                                keys: chunk.iter().map(|item| item.key.clone()).collect(),
-                            },
-                            &approved_fields,
-                            supporting_until,
-                            Some(authority.for_work(chunk)),
-                        )
-                        .await;
-                    match acquired {
-                        Ok(ProjectionResult::Batch { records }) => {
-                            let mut records = records
-                                .into_iter()
-                                .map(|record| (record.key().to_owned(), record))
-                                .collect::<BTreeMap<_, _>>();
-                            results.extend(chunk.iter().map(|item| {
-                                records.remove(&item.key).map_or(
-                                    RefreshResult::Failed(RefreshFailure::Incomplete),
-                                    |record| {
-                                        accepted_record(
-                                            &self.cursors,
-                                            plan.source.binding_fingerprint(),
-                                            record,
-                                            observed_at,
-                                            expires_at,
-                                        )
-                                    },
-                                )
-                            }));
-                        }
-                        result => {
-                            let failure = acquisition_failure(result.err());
-                            results.extend(chunk.iter().map(|_| RefreshResult::Failed(failure)));
-                        }
+                let observed_at = Utc::now().timestamp();
+                let acquired = timeout_at(
+                    deadline,
+                    self.acquire(
+                        deadline,
+                        plan,
+                        ProjectionRequest::Batch {
+                            keys: chunk.iter().map(|item| item.key.clone()).collect(),
+                        },
+                        &approved_fields,
+                        supporting_until,
+                        Some(Arc::clone(&authority)),
+                    ),
+                )
+                .await;
+                match acquired {
+                    Ok(Ok(ProjectionResult::Batch { records })) => {
+                        let mut records = records
+                            .into_iter()
+                            .map(|record| (record.key().to_owned(), record))
+                            .collect::<BTreeMap<_, _>>();
+                        results.extend(chunk.iter().map(|item| {
+                            records.remove(&item.key).map_or(
+                                RefreshResult::Failed(RefreshFailure::Incomplete),
+                                |record| {
+                                    accepted_record(
+                                        &self.cursors,
+                                        plan.source.binding_fingerprint(),
+                                        record,
+                                        observed_at,
+                                        expires_at,
+                                    )
+                                },
+                            )
+                        }));
+                    }
+                    // A timed-out acquisition is unavailable.
+                    result => {
+                        let failure =
+                            acquisition_failure(result.ok().and_then(|acquired| acquired.err()));
+                        results.extend(chunk.iter().map(|_| RefreshResult::Failed(failure)));
                     }
                 }
             }
             ExternalCardinality::Many => {
-                for item in work {
+                for item in chunk {
                     let observed_at = Utc::now().timestamp();
-                    let acquired = self
-                        .acquire(
-                            request,
+                    let acquired = timeout_at(
+                        deadline,
+                        self.acquire(
+                            deadline,
                             plan,
                             ProjectionRequest::ByParent {
                                 parent_key: item.key.clone(),
                             },
                             &approved_fields,
                             supporting_until,
-                            Some(authority.for_work(std::slice::from_ref(item))),
-                        )
-                        .await;
+                            Some(Arc::clone(&authority)),
+                        ),
+                    )
+                    .await;
                     let result = match acquired {
-                        Ok(ProjectionResult::ByParent {
+                        Ok(Ok(ProjectionResult::ByParent {
                             parent_key,
                             snapshot,
                             rows,
-                        }) if parent_key == item.key => {
+                        })) if parent_key == item.key => {
                             let rows = rows
                                 .into_iter()
                                 .map(|row| ProjectionRow::new(&row.key, Value::Object(row.fields)))
@@ -2220,7 +2292,10 @@ impl PostgresExternalViewService {
                                 RefreshResult::Accepted,
                             )
                         }
-                        result => RefreshResult::Failed(acquisition_failure(result.err())),
+                        // A timed-out acquisition is unavailable.
+                        result => RefreshResult::Failed(acquisition_failure(
+                            result.ok().and_then(|acquired| acquired.err()),
+                        )),
                     };
                     results.push(result);
                 }
@@ -2228,6 +2303,21 @@ impl PostgresExternalViewService {
         }
         results
     }
+}
+
+/// Splits a page's work into source requests: batches of the source's batch
+/// size for single records, and one parent key per request for collections.
+fn refresh_chunks(plan: &Plan<'_>, work: Vec<RefreshWork>) -> Vec<Vec<RefreshWork>> {
+    let size = match plan.projection.cardinality {
+        ExternalCardinality::One => plan.source.maximum_batch_keys().max(1),
+        ExternalCardinality::Many => 1,
+    };
+    let mut chunks = Vec::with_capacity(work.len().div_ceil(size));
+    let mut work = work.into_iter().peekable();
+    while work.peek().is_some() {
+        chunks.push(work.by_ref().take(size).collect());
+    }
+    chunks
 }
 
 fn accepted_record(
@@ -2282,6 +2372,17 @@ fn refresh_lease(deadline: Instant) -> Duration {
         + REFRESH_LEASE_MARGIN
 }
 
+/// The most time a refresh chunk keeps back from its acquisition to record
+/// its outcomes before the page deadline.
+const RECORDING_RESERVE: Duration = Duration::from_secs(2);
+
+/// A chunk's acquisition ends early enough to record its outcomes: it keeps
+/// back a quarter of the time left, at most `RECORDING_RESERVE`.
+fn acquisition_deadline(deadline: Instant) -> Instant {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    deadline - (remaining / 4).min(RECORDING_RESERVE)
+}
+
 /// Committed outcomes of one refresh page: published keys and failed keys by
 /// reason category.
 #[derive(Default)]
@@ -2316,6 +2417,14 @@ impl RefreshOutcome {
 impl RefreshTally {
     fn failed(&mut self, failure: RefreshFailure, keys: usize) {
         *self.failed.entry(failure.as_str()).or_default() += keys;
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.published += other.published;
+        for (reason, keys) in other.failed {
+            *self.failed.entry(reason).or_default() += keys;
+        }
+        self.by_key.extend(other.by_key);
     }
 
     fn log(&self, projection: &str) {
@@ -2587,6 +2696,21 @@ mod tests {
             "{lease:?}"
         );
         assert_eq!(refresh_lease(Instant::now()), REFRESH_LEASE_MARGIN);
+    }
+
+    #[test]
+    fn a_refresh_chunk_keeps_time_to_record_its_outcomes() {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        assert_eq!(
+            acquisition_deadline(deadline),
+            deadline - Duration::from_secs(2)
+        );
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let acquired_by = acquisition_deadline(deadline);
+        assert!(acquired_by >= deadline - Duration::from_secs(1));
+        assert!(acquired_by < deadline - Duration::from_millis(900));
+        let passed = Instant::now();
+        assert_eq!(acquisition_deadline(passed), passed);
     }
 }
 
@@ -3295,6 +3419,7 @@ mod postgres_tests {
                 None,
                 &page,
                 results,
+                &[],
                 None,
             ),
             read_during_refresh,
@@ -4283,7 +4408,7 @@ mod postgres_tests {
         );
 
         // Move the fixture clock's due point instead of waiting for a
-        // production-sized interval. No source hint arrives for the third root.
+        // production-sized interval. No source change arrives for the third root.
         served.fixture.migration.execute(
             "UPDATE registry_internal.registry_external_refresh_plans SET next_due_at=clock_timestamp() WHERE plan_id='holders'", &[],
         ).await.unwrap();
@@ -4784,6 +4909,188 @@ mod postgres_tests {
         served.fixture.cleanup().await;
     }
 
+    /// A page of 65 keys needs two requests to the batch route, which takes
+    /// at most 64 keys. The first chunk's keys are published before the
+    /// second chunk is requested, so a slow later chunk cannot hold back
+    /// values already acquired.
+    #[tokio::test]
+    async fn each_acquisition_chunk_is_published_before_the_next_chunk_is_requested() {
+        const BARRIER: i64 = 732_995_012;
+        let extra = (0..62)
+            .map(|index| {
+                (
+                    format!("00000000-0000-4000-8000-{:012}", 100 + index),
+                    format!("key-{index:02}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut keys = ROOTS[..3]
+            .iter()
+            .map(|(_, key, _)| (*key).to_owned())
+            .chain(extra.iter().map(|(_, key)| key.clone()))
+            .collect::<Vec<_>>();
+        keys.sort();
+        let batch = |keys: &[String]| {
+            json!({
+                "request":{"endpoint":"synthetic-registry","method":"POST","path":"/people/batch","body":{
+                    "type":"batch","keys":keys,"fields":["family-name"]
+                }},
+                "response":{"status":200,"body":{"records":keys.iter().map(|key| json!({
+                    "subject":key,"state":"found","properties":{"family-name":format!("family-{key}")}
+                })).collect::<Vec<_>>()}}
+            })
+        };
+        let transcript = Arc::new(
+            registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                serde_json::from_value(
+                    json!([{"type":"endpoint","endpoint":"synthetic-registry"}]),
+                )
+                .unwrap(),
+                serde_json::from_value(json!([batch(&keys[..64]), batch(&keys[64..])])).unwrap(),
+            ),
+        );
+        let mut sources = indexed_sources();
+        crate::external_source::tests::add_indexed_binding(
+            &mut sources,
+            "people",
+            "family-name",
+            Arc::clone(&transcript),
+        );
+        let served = Served::with(&indexed_person_project(), sources, Duration::from_secs(2)).await;
+        insert_roots(
+            &served,
+            &extra
+                .iter()
+                .map(|(id, key)| (id.as_str(), Some(key.as_str()), "allowed"))
+                .collect::<Vec<_>>(),
+        )
+        .await;
+        let refresh = request("people-link");
+        let plan = served.service.plan(&refresh, None).ok().unwrap();
+        let claims = ClaimContext::for_compiled(
+            &served.service.registry,
+            &plan.root.id,
+            Some("reader-principal".to_owned()),
+            "reader",
+            Some("consultation".to_owned()),
+            vec![crate::postgres::context::RowBoundaryContext::Equals {
+                field: "tenant".to_owned(),
+                value: "allowed".to_owned(),
+            }],
+        )
+        .unwrap();
+        let scope = bound_scope(&served.fixture, "people").await;
+        let mut session = served.service.session().await.ok().unwrap();
+        let transaction = served
+            .service
+            .transaction(&mut session, &claims, refresh.deadline)
+            .await
+            .ok()
+            .unwrap();
+        let mut page = served
+            .service
+            .refresh_rows(&transaction, &refresh, &plan, None, None, 70)
+            .await
+            .ok()
+            .unwrap();
+        let baseline = store::next_refresh_sequence(&transaction, &scope)
+            .await
+            .unwrap();
+        let (work, _, _) = served
+            .service
+            .prepare_refresh(
+                &transaction,
+                &refresh,
+                &plan,
+                &scope,
+                &page,
+                baseline,
+                &BTreeSet::new(),
+            )
+            .await
+            .ok()
+            .unwrap();
+        transaction.commit().await.unwrap();
+        session.disarm();
+        drop(session);
+        assert_eq!(work.len(), 65);
+        // The first key's publication pauses in its eligibility recheck.
+        page.eligibility = format!(
+            "SELECT 1 FROM ({}) AS eligible
+             WHERE CASE WHEN $6::text='first'
+                 THEN pg_catalog.pg_advisory_xact_lock({BARRIER}) IS NOT NULL
+                 ELSE true END",
+            page.eligibility
+        );
+        served
+            .fixture
+            .migration
+            .execute(&format!("SELECT pg_advisory_lock({BARRIER})"), &[])
+            .await
+            .unwrap();
+        let observe_first_publication = async {
+            let waited = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let waiting: bool = served
+                        .fixture
+                        .database
+                        .admin
+                        .query_one(
+                            &format!(
+                                "SELECT EXISTS (SELECT 1 FROM pg_locks
+                                 WHERE locktype='advisory' AND NOT granted AND objid={BARRIER})"
+                            ),
+                            &[],
+                        )
+                        .await
+                        .unwrap()
+                        .get(0);
+                    if waiting {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .is_ok();
+            let consumed = transcript.finish();
+            served
+                .fixture
+                .migration
+                .execute(&format!("SELECT pg_advisory_unlock({BARRIER})"), &[])
+                .await
+                .unwrap();
+            assert!(waited, "the first publication reached the barrier");
+            consumed
+        };
+        let (refreshed, consumed) = tokio::join!(
+            served
+                .service
+                .execute_refresh(&refresh, &plan, &claims, &scope, None, &page, work, None,),
+            observe_first_publication,
+        );
+        assert_eq!(
+            consumed,
+            Err(registry_adapter_engine::replay::ReplayFailure::Leftover),
+            "the second chunk was requested before the first chunk was published"
+        );
+        assert_eq!(refreshed.ok().map(|tally| tally.published), Some(65));
+        transcript.finish().unwrap();
+        let stored: i64 = served
+            .fixture
+            .migration
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_external_projection_snapshots
+                 WHERE projection_id='people'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(stored, 65);
+        served.fixture.cleanup().await;
+    }
+
     /// The person projection fixture plus a by-parent member projection whose
     /// link labels each member through the person projection, and a service
     /// profile that may refresh both.
@@ -5101,6 +5408,7 @@ mod postgres_tests {
                 None,
                 &page,
                 results,
+                &[],
                 None,
             )
             .with_subscriber(captured.subscriber())
