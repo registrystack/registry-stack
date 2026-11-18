@@ -201,7 +201,12 @@ pub(crate) fn append_statistics_openapi(
                 ),
             );
         }
-        if let Some(exact_reads) = &dataset.exact_reads {
+        // A caller who does not hold read-exact sees no exact operation.
+        if let Some(exact_reads) = dataset
+            .exact_reads
+            .as_ref()
+            .filter(|exact_reads| !exact_reads.readers.is_empty())
+        {
             let admission_readers = admission_dataset
                 .exact_reads
                 .as_ref()

@@ -1417,6 +1417,37 @@ fn the_widest_decimal_a_measure_can_carry_follows_its_field() {
 }
 
 #[test]
+fn a_decimal_whose_precision_equals_its_scale_keeps_its_leading_zero() {
+    let fractional = FieldTypeSource::Decimal {
+        precision: 2,
+        scale: 2,
+        minimum: None,
+        maximum: None,
+    };
+    let mean = |scale| Measure::Mean {
+        id: "m".to_owned(),
+        field: "f".to_owned(),
+        scale,
+    };
+    let percentile = |scale| Measure::Percentile {
+        id: "m".to_owned(),
+        field: "f".to_owned(),
+        percentile: 50,
+        scale,
+    };
+    // PostgreSQL prints `-0.99` and `-0.9999`: a sign, a zero, a point, the digits.
+    for (scale, widest) in [(2, "-0.99"), (4, "-0.9999")] {
+        for measure in [mean(scale), percentile(scale)] {
+            assert_eq!(
+                maximum_decimal_characters(&measure, &fractional),
+                Some(widest.len()),
+                "{measure:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn exact_public_values_leave_every_cell_as_computed() {
     let mut cells = vec![
         measure_cell("count", count(1), CellStatus::Exact),

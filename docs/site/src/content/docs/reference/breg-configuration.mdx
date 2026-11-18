@@ -104,7 +104,7 @@ whose items are tagged by `type`: `{id, type: count}`, `{id, type: sum, field}`,
 `{id, type: percentile, field, percentile, scale}`, where `scale` is required and an integer from 0 to 38, and
 `percentile` is an integer from 1 to 99. Omitting the list
 declares one count measure with the id `count`. `bregctl check` refuses an empty list
-(`breg.statistical-dataset.measures-empty`), a repeated id (`breg.statistical-dataset.measure-duplicate`),
+(`breg.statistical-dataset.measures-empty`), a repeated id (`breg.statistical-dataset.measure-duplicate`), ids that differ only by `-` versus `_` (`breg.statistical-dataset.measure-id-collision`, reported at the second id),
 and more than one `count` measure (`breg.statistical-dataset.measure-count-duplicate`). The `field` of a sum,
 a mean, a percentile, or a distinct count must be a declared, unencrypted field of the unit
 (`breg.statistical-dataset.field-unknown`, `breg.statistical-dataset.field-encrypted`) of type `int64` or
@@ -122,7 +122,7 @@ values, records with no value being left out, is `(x[j] + x[j+1]) / 2` when `n *
 number `j`, and `x[ceil(n * percentile / 100)]` otherwise, with the values sorted as `x[1]` to `x[n]` (Hyndman
 and Fan definition 2), rounded to `scale` digits. A ratio's and a percentile's `value` is a decimal string with
 exactly `scale` digits, or null with status `not-applicable` for a zero denominator or a cell with no values.
-Every profile with `read-live` on the dataset must
+Every profile with `read-live` on the dataset, the publisher, and the `exactReads` profile must
 be able to read that field (`breg.statistical-dataset.measure-field-not-readable`). Every measure type is
 available on `read-live`, `read-exact`, and a release under `exact-public-values`; a dataset with a mean,
 a ratio, or a percentile cannot have a `publish` or `read-releases` grant under `minimum-count-and-rounding`
@@ -164,8 +164,10 @@ needs a `read-exact` grant (`breg.statistical-dataset.exact-reads-unused`) and a
 (`breg.statistical-dataset.exact-reads-profile-unknown`). The compiler checks the profile as it checks a
 publisher: its visibility must not depend on the caller, its `list` grant must cover what the dataset filters
 and groups by, and it must be able to read each sum, mean, percentile, or distinct-count field; those checks report codes beginning
-`breg.statistical-dataset.exact-reads-`. A standing agent cannot hold `read-exact`, and a standing-agent or
-task-grant profile cannot be the `exactReads` profile. `read-exact` works under either disclosure method and
+`breg.statistical-dataset.exact-reads-`. A standing agent cannot hold `read-exact`
+(`breg.access-profile.standing-agent-read-exact-forbidden`), and a standing-agent or
+task-grant profile, from the project or contributed by a module, cannot be the `exactReads` profile
+(`breg.statistical-dataset.exact-reads-profile-agent`). `read-exact` works under either disclosure method and
 needs no publisher. `exactReads` and `read-exact` grants do not change the definition digest. See [Publish a statistical
 series](../../configure/breg-statistics/).
 

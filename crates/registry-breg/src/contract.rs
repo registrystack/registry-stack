@@ -796,7 +796,7 @@ pub struct StatisticalDatasetSource {
     pub unit: String,
     pub population: String,
     pub period: StatisticalPeriodSource,
-    /// Unit Record fields used to group counts. Each field must be boolean or
+    /// Unit Record fields used to group every measure. Each field must be boolean or
     /// vocabulary-code, and each may appear once. `period`, `measure`, `value`,
     /// and `status` are reserved output columns and cannot be dimension field
     /// names. At most 12 dimensions.
@@ -1038,11 +1038,12 @@ pub struct StatisticalValidityFieldsSource {
 pub enum StatisticalDisclosureSource {
     /// Count, distinct-count and sum cells below `minimumCount` are suppressed
     /// and counts are rounded to a multiple of `roundingBase`. A release
-    /// carries counts, distinct counts and sums; a mean, ratio or percentile is
-    /// read live or released exactly. A dataset that declares a sum and grants
-    /// `publish` also names who a value belongs to (`contributor`) and the
-    /// share one contributor may hold before a cell is withheld
-    /// (`dominancePercent`); every other dataset omits both.
+    /// carries counts and distinct counts; a sum is held until its disclosure
+    /// rules are reviewed, and a mean, ratio or percentile is read live or
+    /// released exactly. A dataset that declares a sum and grants `publish`
+    /// also names who a value belongs to (`contributor`) and the share one
+    /// contributor may hold before a cell is withheld (`dominancePercent`);
+    /// every other dataset omits both.
     MinimumCountAndRounding {
         #[serde(deserialize_with = "bounded_u64::<_, 2, MAX_EXACT_JSON_INTEGER>")]
         #[cfg_attr(

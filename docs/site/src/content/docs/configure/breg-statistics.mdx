@@ -13,7 +13,7 @@ standards_referenced:
   - sdmx
 ---
 
-If your institution publishes counts from a Base Registry Engine (BReg) registry to a dashboard, statistics office, or republisher, declare a statistical dataset and publish its ended periods. Release readers see small counts suppressed and the rest rounded, without permission on the records behind them.
+If your institution publishes counts from a Base Registry Engine (BReg) registry to a dashboard, statistics office, or republisher, declare a statistical dataset and publish its ended periods. Release readers see small counts suppressed and the rest rounded under `minimum-count-and-rounding`, or every measure exactly under `exact-public-values`, without permission on the records behind them.
 
 ## What a statistical dataset fixes
 
@@ -412,7 +412,7 @@ accessProfiles:
             - read-exact
 ```
 
-The `statistics-scope` profile must see the same records whoever calls. `bregctl check` refuses it if its visibility depends on the caller (row or membership boundaries, required purposes or consent, or no read access to a record type the dataset depends on), if its `list` grant does not cover what the dataset filters and groups by, or if it cannot read a sum, mean, percentile, or distinct-count field. A `read-exact` grant without `exactReads` is refused with `breg.statistical-dataset.exact-reads-missing`, `exactReads` without a `read-exact` grant with `breg.statistical-dataset.exact-reads-unused`, and an unknown profile with `breg.statistical-dataset.exact-reads-profile-unknown`. A standing agent profile cannot hold `read-exact` or be the `exactReads` profile. The grant works under either disclosure method and needs no publisher, so the sum above, whose release under `minimum-count-and-rounding` is held for review, is still served exactly.
+The `statistics-scope` profile must see the same records whoever calls. `bregctl check` refuses it if its visibility depends on the caller (row or membership boundaries, required purposes or consent, or no read access to a record type the dataset depends on), if its `list` grant does not cover what the dataset filters and groups by, or if it cannot read a sum, mean, percentile, or distinct-count field. A `read-exact` grant without `exactReads` is refused with `breg.statistical-dataset.exact-reads-missing`, `exactReads` without a `read-exact` grant with `breg.statistical-dataset.exact-reads-unused`, and an unknown profile with `breg.statistical-dataset.exact-reads-profile-unknown`. A standing agent profile cannot hold `read-exact` (`breg.access-profile.standing-agent-read-exact-forbidden`), and a standing agent or task-grant profile cannot be the `exactReads` profile (`breg.statistical-dataset.exact-reads-profile-agent`). The grant works under either disclosure method and needs no publisher, so the sum above, whose release under `minimum-count-and-rounding` is held for review, is still served exactly.
 
 The consumer reads one range of ended periods. Both `from` and `to` are required, because the current period has not ended. A dataset that depends on the evaluation date accepts one period per request:
 

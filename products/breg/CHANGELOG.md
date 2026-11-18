@@ -138,7 +138,7 @@
   starts a new release series.
 - A statistical dataset has a fourth operation, `read-exact`, beside
   `read-live`, `publish`, and `read-releases`. It serves exact statistics
-  (counts, sums, means, and cells of one) to a named machine consumer, such as
+  (every measure type, and cells of one) to a named machine consumer, such as
   a policy-simulation or costing service, over records it cannot read itself.
   The route is `GET /v1/statistics/{dataset}:exact?from=<period>&to=<period>`;
   both parameters are required, `accessProfile` and `Accept` (JSON or CSV) work
@@ -154,9 +154,12 @@
   unknown profile (`breg.statistical-dataset.exact-reads-profile-unknown`);
   its other checks report codes beginning
   `breg.statistical-dataset.exact-reads-`. A standing agent cannot hold
-  `read-exact`. The document carries `exact` with `evaluatedAt` and the
-  caller's `accessProfile` instead of `live`, no `release`, and no
-  `disclosure`; statuses are `exact` and `not-applicable`. Each read is audited
+  `read-exact` (`breg.access-profile.standing-agent-read-exact-forbidden`), and
+  a profile with `actorKind: agent` or a `taskGrant`, from the project or
+  contributed by a module, cannot be the `exactReads` profile
+  (`breg.statistical-dataset.exact-reads-profile-agent`). The document carries
+  `exact` with `evaluatedAt` and the caller's `accessProfile` instead of
+  `live`, no `release`, and no `disclosure`; statuses are `exact` and `not-applicable`. Each read is audited
   as `read-exact` with the caller's profile and the range in clear
   (`periodFrom`, `periodTo`). `exactReads` and `read-exact` grants do not
   change the definition digest. The clients gain `statistics_exact` (Rust and
@@ -185,7 +188,8 @@
   review (`breg.statistical-dataset.sum-release-held`). The security model
   gains BREG-SEC-211 and BREG-RES-24.
 - BREAKING: A statistical dataset may declare `measures`, a list of `id` and
-  `type` pairs, and every cell names its measure. `count` is the only type. A
+  `type` pairs, and every cell names its measure. `count` is the only type in
+  this entry; the entries above add the others. A
   dataset that declares none has one count measure with the id `count`, so no
   registry configuration change is required. In the JSON document,
   `dataset.measure` (the string `"count"`) is gone and `dataset.measures` is an
@@ -198,9 +202,13 @@
   the extra column. `measure` is a reserved column name, so a dimension with
   that id is refused. The compiler refuses an empty `measures` list
   (`breg.statistical-dataset.measures-empty`), two measures with one id
-  (`breg.statistical-dataset.measure-duplicate`) and more than one `count`
+  (`breg.statistical-dataset.measure-duplicate`), two measures whose ids
+  differ only by `-` versus `_`
+  (`breg.statistical-dataset.measure-id-collision`), and more than one `count`
   measure (`breg.statistical-dataset.measure-count-duplicate`). The definition
-  digest covers the measures, so every dataset's digest changes once on
+  digest covers the measures, their ids and order included (renaming or
+  reordering a measure starts a new release series, and `display` does not),
+  so every dataset's digest changes once on
   upgrade. Releases published before the upgrade belong to an earlier series
   that stays in storage and is no longer served; republish the periods you
   still need.

@@ -6,7 +6,9 @@ mod source_bytes;
 use std::collections::BTreeSet;
 
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
-use registry_breg::contract::{parse_project_json, parse_project_yaml, ModuleAssetSource};
+use registry_breg::contract::{
+    parse_module_json, parse_project_json, parse_project_yaml, ModuleAssetSource,
+};
 use registry_breg::diagnostics::{CompileFailure, Diagnostic, DiagnosticSeverity};
 #[cfg(feature = "runtime")]
 use registry_breg::package::{
@@ -2605,11 +2607,16 @@ fn the_publisher_must_read_the_measure_fields_of_an_exact_release() {
         "quantity"
     ]);
     let failure = compile(&value).expect_err("the publisher cannot read the measure field");
-    assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "breg.statistical-dataset.measure-field-not-readable"
-            && diagnostic.message.contains("amount")
-            && diagnostic.message.contains("publisher")
-    }));
+    let refusals = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "breg.statistical-dataset.measure-field-not-readable"
+                && diagnostic.message.contains("amount")
+                && diagnostic.message.contains("publisher")
+        })
+        .count();
+    assert_eq!(refusals, 1, "{:?}", failure.diagnostics());
 }
 
 #[test]
@@ -2808,6 +2815,24 @@ fn the_exact_reads_profile_is_proven_like_a_publisher() {
 }
 
 #[test]
+fn measure_ids_that_differ_only_by_a_separator_are_refused() {
+    let value = live_measure_source(json!([
+        {"id":"mean-amount","type":"mean","field":"amount","scale":1},
+        {"id":"mean_amount","type":"mean","field":"quantity","scale":1}
+    ]));
+    let refusals = read_refusals(&value);
+    assert!(
+        refusals.iter().any(|(code, path, message)| {
+            code == "breg.statistical-dataset.measure-id-collision"
+                && path == "project.statisticalDatasets[0].measures[1].id"
+                && message.contains("`mean-amount`")
+                && message.contains("`mean_amount`")
+        }),
+        "{refusals:#?}"
+    );
+}
+
+#[test]
 fn a_standing_agent_cannot_read_exact_or_anchor_exact_reads() {
     assert_exact_refused(
         |v| {
@@ -2836,6 +2861,120 @@ fn a_standing_agent_cannot_read_exact_or_anchor_exact_reads() {
         },
         &format!("{EXACT}-profile-agent"),
         &format!("{ROOT}.exactReads.accessProfile"),
+    );
+}
+
+/// The exact source with the project profile `stats` (a dataset grant holder
+/// with no record permission) and a module contributing the unit profile of the
+/// same id. `profile` is merged into the module's profile.
+fn exact_source_with_unit_profile(profile: Value) -> (Value, Value) {
+    let mut project = exact_source();
+    project["modules"] = json!([{"id":"stats-module","version":"1"}]);
+    project["accessProfiles"].as_array_mut().unwrap().push(json!({
+        "id":"stats","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{}
+    }));
+    let mut contributed = json!({
+        "id":"stats","principalClaim":"principal","requiredScopes":"unrestricted",
+        "operations":["list"],
+        "readableFields":["active","category","event-date","valid-from","valid-to","amount","quantity"],
+        "filterableFields":["active","category","event-date","valid-from","valid-to"],
+        "allowCount":true,"rowBoundaries":"unrestricted"
+    });
+    contributed
+        .as_object_mut()
+        .unwrap()
+        .extend(profile.as_object().unwrap().clone());
+    let module = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule","id":"stats-module","version":"1",
+        "extendRecordTypes":[{"recordType":"record","accessProfiles":[contributed]}]
+    });
+    (project, module)
+}
+
+fn compile_with_module(
+    project: &Value,
+    module: &Value,
+) -> Result<registry_breg::CompiledRegistry, CompileFailure> {
+    let project =
+        parse_project_json(&serde_json::to_vec(project).unwrap()).expect("project parses");
+    let module = parse_module_json(&serde_json::to_vec(module).unwrap()).expect("module parses");
+    compile_project(&project, &[module], CompileProfile::Authoring)
+}
+
+fn standing_agent_unit_profile() -> Value {
+    json!({"actorKind":"agent","requesterClients":["agent-client"]})
+}
+
+#[test]
+fn exact_reads_resolve_a_profile_a_module_contributes_to_the_unit() {
+    let (mut project, module) = exact_source_with_unit_profile(json!({}));
+    project["accessProfiles"].as_array_mut().unwrap().pop();
+    project["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"stats"});
+    let compiled = compile_with_module(&project, &module)
+        .expect("a unit profile a module contributes anchors exactReads");
+    assert_eq!(
+        compiled.statistical_datasets()["records-by-category"]
+            .exact_reads
+            .as_ref()
+            .expect("exact reads compile")
+            .access_profile,
+        "stats"
+    );
+}
+
+#[test]
+fn an_agent_unit_profile_cannot_anchor_exact_reads() {
+    let (mut project, module) = exact_source_with_unit_profile(standing_agent_unit_profile());
+    project["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"stats"});
+    let failure =
+        compile_with_module(&project, &module).expect_err("an agent unit profile is refused");
+    assert!(
+        failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == format!("{EXACT}-profile-agent")
+                && diagnostic.path == format!("{ROOT}.exactReads.accessProfile")
+        }),
+        "missing the refusal: {:?}",
+        failure.diagnostics()
+    );
+
+    // A module cannot contribute a task grant, so a unit profile with one is
+    // always a project profile's, which the project-profile check covers.
+    let (project, module) = exact_source_with_unit_profile(json!({
+        "actorKind":"agent","requesterClients":["agent-client"],
+        "requiredPurposes":["statistics"],"requiredScopes":["statistics:read"],
+        "taskGrant":{
+            "sourceIssuer":"https://issuer.example.test",
+            "permissions":[{"collection":"records","operations":["list"]}]
+        }
+    }));
+    let failure =
+        compile_with_module(&project, &module).expect_err("a module task grant is refused");
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.access-profile.task-grant-module-forbidden"));
+}
+
+#[test]
+fn read_exact_names_the_unit_profile_that_makes_it_a_standing_agent() {
+    let (mut project, module) = exact_source_with_unit_profile(standing_agent_unit_profile());
+    project["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .last_mut()
+        .unwrap()["permissions"] = json!({
+        "datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]
+    });
+    let failure = compile_with_module(&project, &module)
+        .expect_err("a read-exact holder whose unit profile is a standing agent is refused");
+    assert!(
+        failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "breg.access-profile.standing-agent-read-exact-forbidden"
+                && diagnostic.path == "recordTypes[id=record].accessProfiles[id=stats]"
+        }),
+        "missing the refusal at the unit profile: {:?}",
+        failure.diagnostics()
     );
 }
 
@@ -3067,6 +3206,24 @@ fn a_distinct_count_is_released_with_rounding_but_a_sum_beside_it_is_not() {
     assert!(!failure.diagnostics().iter().any(|diagnostic| {
         diagnostic.code == "breg.statistical-dataset.measure-release-unsupported"
     }));
+}
+
+#[test]
+fn the_publisher_of_a_rounded_release_must_read_a_distinct_count_field() {
+    let mut value = distinct_source(distinct_measures());
+    grant(&mut value, ANALYST, &["read-live", "read-releases"]);
+    grant(&mut value, PUBLISHER, &["publish", "read-releases"]);
+    let failure = compile(&value).expect_err("the publisher cannot read the owner field");
+    let refusals = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "breg.statistical-dataset.measure-field-not-readable"
+                && diagnostic.message.contains("`owner`")
+                && diagnostic.message.contains("publisher")
+        })
+        .count();
+    assert_eq!(refusals, 1, "{:?}", failure.diagnostics());
 }
 
 #[test]

@@ -379,6 +379,52 @@ async fn an_evaluation_date_dependent_dataset_reads_one_period_at_its_reference_
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_openapi_document_shows_the_exact_operation_only_to_a_read_exact_holder() {
+    let (database, migration_task, app) =
+        fixture_for(registry_source("category"), &assets(), &[]).await;
+    let exact_path = "/v1/statistics/records-by-category:exact";
+
+    for profile in ["live-reader", "analyst"] {
+        let response = get(
+            &app,
+            &format!("/openapi.json?accessProfile={profile}"),
+            Some("openapi-reader"),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "{profile}");
+        let document = body_json(response).await;
+        assert!(
+            document["paths"].get(exact_path).is_none(),
+            "{profile} sees the exact operation"
+        );
+        assert!(
+            document["paths"]
+                .get("/v1/statistics/records-by-category:live")
+                .is_some(),
+            "{profile} keeps the live operation"
+        );
+    }
+
+    let response = get(
+        &app,
+        "/openapi.json?accessProfile=statistician",
+        Some("openapi-reader"),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let document = body_json(response).await;
+    assert_eq!(
+        document["paths"][exact_path]["get"]["x-registry-accessProfile"],
+        "statistician"
+    );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
 async fn fixture_for(
     source: Value,
     assets: &[ModuleAssetSource],

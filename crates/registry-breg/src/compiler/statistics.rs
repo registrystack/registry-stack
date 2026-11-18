@@ -27,9 +27,10 @@ use crate::statistics::{
 pub const MAX_STATISTICAL_CELLS_PER_PERIOD: usize = 10_000;
 /// PostgreSQL accepts at most twelve elements in one `CUBE`, which computes the totals.
 pub const MAX_STATISTICAL_DIMENSIONS: usize = 12;
-/// A dataset with a non-additive measure (a distinct count, a percentile) or a
-/// released sum computes its totals over the records, not the base cells, which
-/// is dearer per dimension.
+/// A dataset with a non-additive measure (a distinct count or a percentile) or a
+/// sum released under minimum-count-and-rounding (see `uses_row_cube`) computes
+/// its totals over the records, not the base cells, which is dearer per
+/// dimension.
 pub const MAX_NON_ADDITIVE_DIMENSIONS: usize = 4;
 
 pub(super) fn compile(
@@ -105,28 +106,7 @@ pub(super) fn compile(
         // same id, which a module contributes when the project profile grants
         // nothing on that entity, so that profile meets the ceiling too.
         for profile in &grants.publish {
-            let standing_agent = |actor_kind, task_grant: bool| {
-                actor_kind == Some(ActorKindSource::Agent) && !task_grant
-            };
-            let path = if project.access_profiles.iter().any(|declared| {
-                &declared.id == profile
-                    && standing_agent(declared.actor_kind, declared.task_grant.is_some())
-            }) {
-                Some(format!(
-                    "project.accessProfiles[id={profile}].permissions.datasets[dataset={}].operations",
-                    source.id
-                ))
-            } else if unit.access_profiles.get(profile).is_some_and(|access| {
-                standing_agent(access.actor_kind, access.task_grant.is_some())
-            }) {
-                Some(format!(
-                    "recordTypes[id={}].accessProfiles[id={profile}]",
-                    unit.id
-                ))
-            } else {
-                None
-            };
-            if let Some(path) = path {
+            if let Some(path) = standing_agent_path(project, unit, profile, &source.id) {
                 errors.push(Diagnostic::error(
                     "breg.access-profile.standing-agent-publish-forbidden",
                     path,
@@ -135,13 +115,10 @@ pub(super) fn compile(
             }
         }
         for profile in &grants.read_exact {
-            if is_standing_agent(project, unit, profile) {
+            if let Some(path) = standing_agent_path(project, unit, profile, &source.id) {
                 errors.push(Diagnostic::error(
                     "breg.access-profile.standing-agent-read-exact-forbidden",
-                    format!(
-                        "project.accessProfiles[id={profile}].permissions.datasets[dataset={}].operations",
-                        source.id
-                    ),
+                    path,
                     "a standing agent profile without a taskGrant cannot read exact statistics; give read-exact to a profile a person or a service uses directly",
                 ));
             }
@@ -293,6 +270,15 @@ pub(super) fn compile(
                 &releases.publisher,
                 Holder::Reader,
                 &filtered_fields,
+                &root,
+                &mut errors,
+            );
+            validate_measure_fields_readable(
+                source,
+                unit,
+                &releases.publisher,
+                Holder::Reader,
+                &measure_fields,
                 &root,
                 &mut errors,
             );
@@ -469,17 +455,6 @@ pub(super) fn compile(
                 &root,
                 &mut errors,
             );
-            if let Some(releases) = &releases {
-                validate_measure_fields_readable(
-                    source,
-                    unit,
-                    &releases.publisher,
-                    Holder::Reader,
-                    &measure_fields,
-                    &root,
-                    &mut errors,
-                );
-            }
         }
         'compile: {
             let Some(period) = period else {
@@ -811,17 +786,35 @@ fn authentication_profile(
     }
 }
 
-/// Whether the profile is an agent without a task grant, declared by the
-/// project or contributed to the unit entity by a module.
-fn is_standing_agent(project: &RegistryProject, unit: &CompiledEntity, profile: &str) -> bool {
+/// Where the profile is an agent without a task grant, declared by the
+/// project or contributed to the unit entity by a module: the project profile's
+/// dataset permission, or the unit entity's profile.
+fn standing_agent_path(
+    project: &RegistryProject,
+    unit: &CompiledEntity,
+    profile: &str,
+    dataset: &str,
+) -> Option<String> {
     let standing =
         |actor_kind, task_grant: bool| actor_kind == Some(ActorKindSource::Agent) && !task_grant;
-    project.access_profiles.iter().any(|declared| {
+    if project.access_profiles.iter().any(|declared| {
         declared.id == profile && standing(declared.actor_kind, declared.task_grant.is_some())
-    }) || unit
+    }) {
+        Some(format!(
+            "project.accessProfiles[id={profile}].permissions.datasets[dataset={dataset}].operations"
+        ))
+    } else if unit
         .access_profiles
         .get(profile)
         .is_some_and(|access| standing(access.actor_kind, access.task_grant.is_some()))
+    {
+        Some(format!(
+            "recordTypes[id={}].accessProfiles[id={profile}]",
+            unit.id
+        ))
+    } else {
+        None
+    }
 }
 
 /// Compile `exactReads` and prove its profile can serve every exact read.
@@ -864,21 +857,31 @@ fn compile_exact_reads(
     }
     let profile = &declared.access_profile;
     let path = Holder::ExactReads.path(root);
-    let Some(declared_profile) = project
+    // The runtime resolves the anchor through the unit entity's profile, which
+    // a module may contribute, as it does for a publisher.
+    let project_profile = project
         .access_profiles
         .iter()
-        .find(|candidate| &candidate.id == profile)
-    else {
+        .find(|candidate| &candidate.id == profile);
+    let unit_profile = unit.access_profiles.get(profile);
+    if project_profile.is_none() && unit_profile.is_none() {
         errors.push(error(
             "breg.statistical-dataset.exact-reads-profile-unknown",
             &path,
             &source.id,
-            &format!("name an access profile the project declares; `{profile}` is not one"),
+            &format!(
+                "name an access profile the project declares or a module contributes to `{}`; `{profile}` is not one",
+                unit.id
+            ),
         ));
         return None;
-    };
-    if declared_profile.actor_kind == Some(ActorKindSource::Agent)
-        || declared_profile.task_grant.is_some()
+    }
+    let task_dependent =
+        |actor_kind, task_grant: bool| actor_kind == Some(ActorKindSource::Agent) || task_grant;
+    if project_profile
+        .is_some_and(|declared| task_dependent(declared.actor_kind, declared.task_grant.is_some()))
+        || unit_profile
+            .is_some_and(|access| task_dependent(access.actor_kind, access.task_grant.is_some()))
     {
         errors.push(error(
             "breg.statistical-dataset.exact-reads-profile-agent",
