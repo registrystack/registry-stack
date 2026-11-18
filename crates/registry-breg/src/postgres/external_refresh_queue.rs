@@ -11,14 +11,12 @@ use uuid::Uuid;
 
 use super::{GuardedTransaction, RuntimeRevoke, SqlIdentifier};
 
-const DEFAULT_RECEIPT_RETENTION_SECONDS: i64 = 24 * 60 * 60;
 const MAX_KEY_BYTES: usize = 1024;
 
 #[cfg(test)]
 pub(crate) const TABLES: &[&str] = &[
     "registry_internal.registry_external_refresh_plans",
     "registry_internal.registry_external_refresh_work",
-    "registry_internal.registry_external_refresh_receipts",
 ];
 
 pub(crate) const TABLE_PRIVILEGES: &[(&str, &[&str])] = &[
@@ -28,10 +26,6 @@ pub(crate) const TABLE_PRIVILEGES: &[(&str, &[&str])] = &[
     ),
     (
         "registry_internal.registry_external_refresh_work",
-        &["DELETE", "INSERT", "SELECT", "UPDATE"],
-    ),
-    (
-        "registry_internal.registry_external_refresh_receipts",
         &["DELETE", "INSERT", "SELECT", "UPDATE"],
     ),
 ];
@@ -44,7 +38,6 @@ pub(crate) const BACKUP_EXCLUDED_TABLES: &[&str] = TABLES;
 
 pub(crate) const INDEXES: &[&str] = &[
     "registry_internal.registry_external_refresh_work_due_idx",
-    "registry_internal.registry_external_refresh_receipts_expiry_idx",
     "registry_internal.registry_external_refresh_plan_capture_idx",
 ];
 
@@ -81,10 +74,6 @@ pub(crate) enum QueueError {
     AuthorityChanged,
     #[error("external refresh queue lease is stale")]
     StaleLease,
-    #[error("external refresh queue is at capacity")]
-    AtCapacity,
-    #[error("external refresh hint conflicts with an accepted receipt")]
-    Conflict,
     #[error("external refresh queue is unavailable")]
     Unavailable,
 }
@@ -203,9 +192,9 @@ pub(crate) struct StepState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HintAdmission {
+pub(crate) enum SourceChangeAdmission {
     Accepted,
-    Duplicate,
+    AtCapacity,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -264,7 +253,6 @@ impl fmt::Debug for SweepCheckpoint {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PurgedQueueState {
     pub(crate) work: u64,
-    pub(crate) receipts: u64,
     pub(crate) plans: u64,
 }
 
@@ -521,41 +509,36 @@ pub(crate) async fn capture_local_record(
     .await
 }
 
-/// Admit a source hint after HTTP authentication and source-binding checks.
-/// The selector is retained only in pending work; the replay receipt keeps a
-/// keyed digest and fixed outcome, never the selector itself.
+/// Admit a source change after HTTP authentication and source-binding checks.
+/// The change upserts the plan's one work row for its target, so a repeated
+/// change refreshes that row instead of queueing another. The selector is
+/// retained only in pending work.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn enqueue_hint(
+pub(crate) async fn enqueue_source_change(
     transaction: &GuardedTransaction<'_>,
     plan_id: &str,
     authority_digest: &str,
-    notifier_digest: &str,
-    hint_id_digest: &str,
-    payload_digest: &str,
     target_digest: &str,
     projection_epoch: Uuid,
     selector_scheme: &str,
     selector: &str,
     expires_at: i64,
-) -> Result<HintAdmission, QueueError> {
+) -> Result<SourceChangeAdmission, QueueError> {
     if [
         plan_id,
         authority_digest,
-        notifier_digest,
-        hint_id_digest,
-        payload_digest,
         target_digest,
         selector_scheme,
         selector,
     ]
     .iter()
     .any(|value| !valid_key(value))
-        || notifier_digest.len() + hint_id_digest.len() + 1 > MAX_KEY_BYTES
         || expires_at <= 0
     {
         return Err(QueueError::Invalid);
     }
-    // Wait for the plan lock before opening the receipt query's snapshot.
+    // Wait for the plan lock before opening the admission query's snapshot,
+    // so the capacity count sees work a concurrent admission committed.
     let client = transaction.transaction();
     let row = client
         .query_opt(
@@ -570,28 +553,22 @@ pub(crate) async fn enqueue_hint(
     }
     let row = client
         .query_one(
-            ENQUEUE_HINT_SQL,
+            ENQUEUE_SOURCE_CHANGE_SQL,
             &[
                 &plan_id,
                 &authority_digest,
-                &notifier_digest,
-                &hint_id_digest,
-                &payload_digest,
                 &target_digest,
                 &projection_epoch,
                 &selector_scheme,
                 &selector,
                 &expires_at,
-                &DEFAULT_RECEIPT_RETENTION_SECONDS,
             ],
         )
         .await
         .map_err(|_| QueueError::Unavailable)?;
     match row.get::<_, &str>(0) {
-        "accepted" => Ok(HintAdmission::Accepted),
-        "duplicate" => Ok(HintAdmission::Duplicate),
-        "conflict" => Err(QueueError::Conflict),
-        "capacity" => Err(QueueError::AtCapacity),
+        "accepted" => Ok(SourceChangeAdmission::Accepted),
+        "capacity" => Ok(SourceChangeAdmission::AtCapacity),
         "authority-changed" => Err(QueueError::AuthorityChanged),
         _ => Err(QueueError::Unavailable),
     }
@@ -953,8 +930,9 @@ FROM claimed ORDER BY ready_at,work_id
 "#;
 
 /// Enqueue runtime-derived follow-on work, currently the bounded continuation
-/// of a related-label pass. Source hints use `enqueue_hint` because they also
-/// owe replay/conflict receipts.
+/// of a related-label pass. Source changes use `enqueue_source_change`, which
+/// is fenced by plan authority and projection epoch instead of a lease and
+/// reports a full queue to its caller.
 pub(crate) async fn enqueue_internal_target(
     transaction: &GuardedTransaction<'_>,
     plan_id: &str,
@@ -1204,17 +1182,6 @@ WITH valid AS (
     FROM settled
     WHERE plan.plan_id=$1 AND $7 IN ('expired','attempts-exhausted','authority-changed')
     RETURNING plan.plan_id
-), receipt AS (
-INSERT INTO registry_internal.registry_external_refresh_receipts
-    (plan_id,receipt_digest,payload_digest,outcome,expires_at)
-SELECT $1,'work:'||$5::text,'generation:'||$6::text,$7,
-       clock_timestamp()+interval '24 hours' FROM settled
-WHERE (SELECT count(*) FROM registry_internal.registry_external_refresh_receipts
-       WHERE plan_id=$1)<100000
-   OR EXISTS (SELECT 1 FROM registry_internal.registry_external_refresh_receipts
-              WHERE plan_id=$1 AND receipt_digest='work:'||$5::text)
-ON CONFLICT (plan_id,receipt_digest) DO UPDATE SET outcome=EXCLUDED.outcome,expires_at=EXCLUDED.expires_at
-RETURNING 1
 )
 SELECT count(*) FROM settled
 "#;
@@ -1271,7 +1238,8 @@ pub(crate) async fn retry_target(
 }
 
 /// Persist one bounded step and release its lease. Alternating the next turn
-/// prevents either sustained hints or a long sweep from starving the other.
+/// prevents either sustained source changes or a long sweep from starving the
+/// other.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn finish_step(
     transaction: &GuardedTransaction<'_>,
@@ -1385,17 +1353,12 @@ pub(crate) async fn purge_expired(
         )
         .await
         .map_err(|_| QueueError::Unavailable)?;
-    let mut purged = PurgedQueueState {
-        work: 0,
-        receipts: 0,
-        plans: 0,
-    };
+    let mut purged = PurgedQueueState { work: 0, plans: 0 };
     for row in rows {
         let kind: String = row.get(0);
         let count = u64::try_from(row.get::<_, i64>(1)).map_err(|_| QueueError::Unavailable)?;
         match kind.as_str() {
             "work" => purged.work += count,
-            "receipt" => purged.receipts += count,
             "plan" => purged.plans += count,
             _ => return Err(QueueError::Unavailable),
         }
@@ -1404,7 +1367,7 @@ pub(crate) async fn purge_expired(
 }
 
 /// Value-free operator status. Counts and fixed categories intentionally omit
-/// Record IDs, source selectors, cursors, receipt digests and authority bytes.
+/// Record IDs, source selectors, cursors and authority bytes.
 pub(crate) async fn plan_status(
     transaction: &GuardedTransaction<'_>,
     plan_id: &str,
@@ -1524,20 +1487,9 @@ CREATE TABLE IF NOT EXISTS registry_internal.registry_external_refresh_work (
     CONSTRAINT registry_external_refresh_work_lease_pair CHECK ((lease_token IS NULL)=(lease_expires_at IS NULL)),
     UNIQUE (plan_id,target_digest)
 );
-CREATE TABLE IF NOT EXISTS registry_internal.registry_external_refresh_receipts (
-    plan_id text NOT NULL REFERENCES registry_internal.registry_external_refresh_plans(plan_id) ON DELETE CASCADE,
-    receipt_digest text NOT NULL CHECK (octet_length(receipt_digest) BETWEEN 1 AND 1024),
-    payload_digest text NOT NULL CHECK (octet_length(payload_digest) BETWEEN 1 AND 1024),
-    outcome text NOT NULL CHECK (outcome IN ('accepted','published','authorized-absence','empty-collection',
-        'fresh-reuse','no-eligible-witness','denied','retention-refused','expired','attempts-exhausted','authority-changed')),
-    expires_at timestamptz NOT NULL,
-    PRIMARY KEY (plan_id,receipt_digest)
-);
 CREATE INDEX IF NOT EXISTS registry_external_refresh_work_due_idx
     ON registry_internal.registry_external_refresh_work(plan_id,ready_at,work_id)
     WHERE lease_token IS NULL;
-CREATE INDEX IF NOT EXISTS registry_external_refresh_receipts_expiry_idx
-    ON registry_internal.registry_external_refresh_receipts(expires_at,plan_id,receipt_digest);
 CREATE INDEX IF NOT EXISTS registry_external_refresh_plan_capture_idx
     ON registry_internal.registry_external_refresh_plans(root_entity_id,active,plan_id);
 
@@ -1651,22 +1603,12 @@ BEGIN
         WHERE plan.plan_id IN (SELECT plan_id FROM removed WHERE reconcile)
         RETURNING plan.plan_id
     ) SELECT 'work',count(*) FROM removed;
-    RETURN QUERY WITH expired AS (
-        SELECT plan_id,receipt_digest FROM registry_internal.registry_external_refresh_receipts
-        WHERE expires_at<=clock_timestamp() ORDER BY expires_at,plan_id,receipt_digest
-        LIMIT p_limit FOR UPDATE SKIP LOCKED
-    ), removed AS (
-        DELETE FROM registry_internal.registry_external_refresh_receipts receipt USING expired
-        WHERE receipt.plan_id=expired.plan_id AND receipt.receipt_digest=expired.receipt_digest RETURNING 1
-    ) SELECT 'receipt',count(*) FROM removed;
     RETURN QUERY WITH retired AS (
         SELECT plan.plan_id FROM registry_internal.registry_external_refresh_plans plan
         WHERE NOT plan.active
           AND plan.updated_at<=clock_timestamp()-interval '24 hours'
           AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_external_refresh_work work
                           WHERE work.plan_id=plan.plan_id)
-          AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_external_refresh_receipts receipt
-                          WHERE receipt.plan_id=plan.plan_id)
         ORDER BY plan.plan_id LIMIT p_limit FOR UPDATE SKIP LOCKED
     ), removed AS (
         DELETE FROM registry_internal.registry_external_refresh_plans plan USING retired
@@ -1675,45 +1617,31 @@ BEGIN
 END $body$;
 "#;
 
-const ENQUEUE_HINT_SQL: &str = r#"
+/// One statement admits a source change: it checks the plan's authority and
+/// epoch, counts the plan's current work rows against `max_pending`, and
+/// upserts the target's work row. A change to an already queued target takes
+/// no new capacity; a refused change asks for a sweep instead.
+const ENQUEUE_SOURCE_CHANGE_SQL: &str = r#"
 WITH plan AS MATERIALIZED (
     SELECT * FROM registry_internal.registry_external_refresh_plans
     WHERE plan_id=$1
-), existing AS MATERIALIZED (
-    SELECT payload_digest FROM registry_internal.registry_external_refresh_receipts
-    WHERE plan_id=$1 AND receipt_digest=$3||':'||$4 AND expires_at>clock_timestamp()
 ), status AS MATERIALIZED (
     SELECT CASE
-        WHEN NOT EXISTS (SELECT 1 FROM plan WHERE active AND authority_digest=$2 AND $7=ANY(projection_epochs))
+        WHEN NOT EXISTS (SELECT 1 FROM plan WHERE active AND authority_digest=$2 AND $4=ANY(projection_epochs))
             OR NOT EXISTS (SELECT 1 FROM registry_internal.registry_external_projection_scopes
-                           WHERE epoch=$7 AND active)
+                           WHERE epoch=$4 AND active)
             THEN 'authority-changed'
-        WHEN EXISTS (SELECT 1 FROM existing WHERE payload_digest<>$5) THEN 'conflict'
-        WHEN EXISTS (SELECT 1 FROM existing WHERE payload_digest=$5) THEN 'duplicate'
-        WHEN (SELECT count(*) FROM registry_internal.registry_external_refresh_receipts receipt
-              JOIN plan USING (plan_id))>=100000 THEN 'capacity'
         WHEN (SELECT count(*) FROM registry_internal.registry_external_refresh_work work
               JOIN plan USING (plan_id) WHERE work.plan_generation=plan.plan_generation)>=(SELECT max_pending FROM plan)
              AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_external_refresh_work
-                             WHERE plan_id=$1 AND target_digest=$6)
+                             WHERE plan_id=$1 AND target_digest=$3)
             THEN 'capacity'
         ELSE 'accepted' END AS value
-), receipt AS (
-    INSERT INTO registry_internal.registry_external_refresh_receipts
-        (plan_id,receipt_digest,payload_digest,outcome,expires_at)
-    SELECT $1,$3||':'||$4,$5,'accepted',
-           clock_timestamp()+make_interval(secs => $11::bigint::double precision)
-    WHERE (SELECT value FROM status)='accepted'
-    ON CONFLICT (plan_id,receipt_digest) DO UPDATE SET
-        payload_digest=EXCLUDED.payload_digest,outcome=EXCLUDED.outcome,expires_at=EXCLUDED.expires_at
-    WHERE registry_external_refresh_receipts.expires_at<=clock_timestamp()
-    RETURNING 1
 ), work AS (
     INSERT INTO registry_internal.registry_external_refresh_work
         (plan_id,plan_generation,kind,projection_epoch,selector_scheme,selector,target_digest,expires_at)
-    SELECT plan_id,plan_generation,'source',$7,$8,$9,
-           $6,
-           to_timestamp($10::bigint) FROM plan CROSS JOIN receipt
+    SELECT plan_id,plan_generation,'source',$4,$5,$6,$3,to_timestamp($7::bigint)
+    FROM plan CROSS JOIN status WHERE status.value='accepted'
     ON CONFLICT (plan_id,target_digest) DO UPDATE SET
         plan_generation=EXCLUDED.plan_generation,
         enqueue_generation=registry_external_refresh_work.enqueue_generation+1,
@@ -1729,7 +1657,7 @@ WITH plan AS MATERIALIZED (
     WHERE current.plan_id=$1 AND status.value='capacity'
     RETURNING 1
 )
-SELECT CASE WHEN value='accepted' AND NOT EXISTS (SELECT 1 FROM receipt)
+SELECT CASE WHEN value='accepted' AND NOT EXISTS (SELECT 1 FROM work)
             THEN 'unavailable' ELSE value END
 FROM status
 "#;
@@ -1739,22 +1667,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn managed_queue_state_is_backup_excluded_and_value_free_receipts_are_separate() {
-        assert_eq!(BACKUP_EXCLUDED_TABLES.len(), 3);
+    fn managed_queue_state_is_backup_excluded_and_keeps_no_receipts() {
+        assert_eq!(BACKUP_EXCLUDED_TABLES.len(), 2);
         assert!(BACKUP_EXCLUDED_TABLES
             .iter()
             .all(|table| INSTALL_SQL.contains(table)));
-        assert!(INSTALL_SQL.contains("payload_digest text NOT NULL"));
-        let receipts = INSTALL_SQL
-            .split(
-                "CREATE TABLE IF NOT EXISTS registry_internal.registry_external_refresh_receipts",
-            )
-            .nth(1)
-            .unwrap()
-            .split("CREATE INDEX")
-            .next()
-            .unwrap();
-        assert!(!receipts.contains("selector"));
+        assert!(!INSTALL_SQL.contains("receipt"));
+        assert!(!INDEXES.iter().any(|index| index.contains("receipt")));
     }
 
     #[test]
@@ -1787,9 +1706,7 @@ mod tests {
     }
 
     #[test]
-    fn queue_sql_bounds_receipts_and_clamps_crash_reclaims() {
-        assert!(ENQUEUE_HINT_SQL.contains(">=100000 THEN 'capacity'"));
-        assert!(SETTLE_TARGET_SQL.contains(")<100000"));
+    fn queue_sql_clamps_crash_reclaims() {
         assert!(CLAIM_TARGETS_SQL.contains("attempts=least(attempts+1,5)"));
         assert!(INSTALL_SQL.contains("attempts BETWEEN 0 AND 5"));
     }
@@ -1815,12 +1732,7 @@ mod postgres_tests {
     use super::*;
     use crate::postgres::external_projection::postgres_tests::Activated;
 
-    #[derive(Clone, Copy)]
-    struct HintInput<'a> {
-        payload_digest: &'a str,
-        target_digest: &'a str,
-        selector: &'a str,
-    }
+    const EXPIRES_AT: i64 = 4_102_444_800;
 
     async fn transaction<'a>(
         runtime: &'a mut deadpool_postgres::Client,
@@ -1857,17 +1769,42 @@ mod postgres_tests {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn race_hint_after_plan_lock(
+    /// Admit one source change in its own committed transaction.
+    async fn admit(
         fixture: &Activated,
         registry: &crate::model::CompiledRegistry,
         projection_epoch: Uuid,
-        receipt: &str,
-        first: HintInput<'_>,
-        second: HintInput<'_>,
-        first_attempts: Option<i16>,
-    ) -> (bool, Result<HintAdmission, QueueError>) {
-        let (plan_id, authority_digest, expires_at) = ("plan", "authority", 4_102_444_800_i64);
+        selector: &str,
+    ) -> Result<SourceChangeAdmission, QueueError> {
+        let mut runtime = fixture.pool.get().await.unwrap();
+        let tx = transaction(&mut runtime, registry, &fixture.expected).await;
+        let admitted = enqueue_source_change(
+            &tx,
+            "plan",
+            "authority",
+            &format!("target-{selector}"),
+            projection_epoch,
+            "urn:test:keys",
+            selector,
+            EXPIRES_AT,
+        )
+        .await;
+        tx.commit().await.unwrap();
+        admitted
+    }
+
+    /// Admit the same source change from two transactions, the second
+    /// blocked on the plan row lock the first holds. The first sets the
+    /// work row's attempts before it commits.
+    async fn race_source_change_after_plan_lock(
+        fixture: &Activated,
+        registry: &crate::model::CompiledRegistry,
+        projection_epoch: Uuid,
+        selector: &str,
+        first_attempts: i16,
+    ) -> (bool, Result<SourceChangeAdmission, QueueError>) {
+        let (plan_id, authority_digest) = ("plan", "authority");
+        let target_digest = format!("target-{selector}");
         let mut first_runtime = fixture.pool.get().await.unwrap();
         let mut second_runtime = fixture.pool.get().await.unwrap();
         let first_tx = transaction(&mut first_runtime, registry, &fixture.expected).await;
@@ -1893,18 +1830,15 @@ mod postgres_tests {
             .await
             .unwrap()
             .get(0);
-        let second_admission = enqueue_hint(
+        let second_admission = enqueue_source_change(
             &second_tx,
             plan_id,
             authority_digest,
-            "notifier",
-            receipt,
-            second.payload_digest,
-            second.target_digest,
+            &target_digest,
             projection_epoch,
             "urn:test:keys",
-            second.selector,
-            expires_at,
+            selector,
+            EXPIRES_AT,
         );
         let commit_first = async {
             let waited = tokio::time::timeout(Duration::from_secs(5), async {
@@ -1927,37 +1861,32 @@ mod postgres_tests {
             })
             .await
             .is_ok();
-            let admitted = enqueue_hint(
+            let admitted = enqueue_source_change(
                 &first_tx,
                 plan_id,
                 authority_digest,
-                "notifier",
-                receipt,
-                first.payload_digest,
-                first.target_digest,
+                &target_digest,
                 projection_epoch,
                 "urn:test:keys",
-                first.selector,
-                expires_at,
+                selector,
+                EXPIRES_AT,
             )
             .await;
-            if let Some(attempts) = first_attempts {
-                first_tx
-                    .transaction()
-                    .execute(
-                        "UPDATE registry_internal.registry_external_refresh_work
-                         SET attempts=$3 WHERE plan_id=$1 AND target_digest=$2",
-                        &[&plan_id, &first.target_digest, &attempts],
-                    )
-                    .await
-                    .unwrap();
-            }
+            first_tx
+                .transaction()
+                .execute(
+                    "UPDATE registry_internal.registry_external_refresh_work
+                     SET attempts=$3 WHERE plan_id=$1 AND target_digest=$2",
+                    &[&plan_id, &target_digest, &first_attempts],
+                )
+                .await
+                .unwrap();
             let committed = first_tx.commit().await;
             (waited, admitted, committed)
         };
         let (second_admission, (waited, first_admission, first_commit)) =
             tokio::join!(second_admission, commit_first);
-        assert_eq!(first_admission.unwrap(), HintAdmission::Accepted);
+        assert_eq!(first_admission.unwrap(), SourceChangeAdmission::Accepted);
         first_commit.unwrap();
         second_tx.commit().await.unwrap();
         drop(first_runtime);
@@ -2065,7 +1994,7 @@ mod postgres_tests {
     }
 
     #[tokio::test]
-    async fn hint_admission_refreshes_snapshot_after_waiting_for_the_plan_lock() {
+    async fn source_change_admission_updates_the_work_row_committed_while_it_waited() {
         let registry = super::super::external_view_query::tests::registry();
         let fixture = Activated::new(&registry).await;
         let scope = fixture
@@ -2079,78 +2008,88 @@ mod postgres_tests {
         tx.commit().await.unwrap();
         drop(runtime);
 
-        let duplicate = HintInput {
-            payload_digest: "duplicate-payload",
-            target_digest: "duplicate-target",
-            selector: "duplicate-selector",
-        };
-        let (waited, duplicate_result) = race_hint_after_plan_lock(
-            &fixture,
-            &registry,
-            scope.epoch,
-            "duplicate-receipt",
-            duplicate,
-            duplicate,
-            Some(3),
-        )
-        .await;
+        let (waited, admitted) =
+            race_source_change_after_plan_lock(&fixture, &registry, scope.epoch, "subject", 3)
+                .await;
         assert!(
             waited,
             "the second admission must wait on the plan row lock"
         );
-        assert_eq!(duplicate_result.unwrap(), HintAdmission::Duplicate);
-        let attempts: i16 = fixture
-            .migration
-            .query_one(
-                "SELECT attempts FROM registry_internal.registry_external_refresh_work
-                 WHERE plan_id='plan' AND target_digest='duplicate-target'",
-                &[],
-            )
-            .await
-            .unwrap()
-            .get(0);
-        assert_eq!(attempts, 3, "an exact replay must not reset retry state");
-
-        let first = HintInput {
-            payload_digest: "first-payload",
-            target_digest: "first-target",
-            selector: "first-selector",
-        };
-        let conflicting = HintInput {
-            payload_digest: "conflicting-payload",
-            target_digest: "conflicting-target",
-            selector: "conflicting-selector",
-        };
-        let (waited, conflict_result) = race_hint_after_plan_lock(
-            &fixture,
-            &registry,
-            scope.epoch,
-            "conflict-receipt",
-            first,
-            conflicting,
-            None,
-        )
-        .await;
-        assert!(
-            waited,
-            "the conflicting admission must wait on the plan row lock"
-        );
-        assert_eq!(conflict_result.unwrap_err(), QueueError::Conflict);
-        let targets: Vec<String> = fixture
+        assert_eq!(admitted.unwrap(), SourceChangeAdmission::Accepted);
+        let rows = fixture
             .migration
             .query(
-                "SELECT target_digest FROM registry_internal.registry_external_refresh_work
-                 WHERE plan_id='plan'
-                   AND target_digest IN ('first-target','conflicting-target')
-                 ORDER BY target_digest",
+                "SELECT enqueue_generation,attempts
+                 FROM registry_internal.registry_external_refresh_work
+                 WHERE plan_id='plan' AND target_digest='target-subject'",
                 &[],
             )
             .await
-            .unwrap()
-            .into_iter()
-            .map(|row| row.get(0))
-            .collect();
-        assert_eq!(targets, vec!["first-target".to_owned()]);
+            .unwrap();
+        assert_eq!(rows.len(), 1, "both admissions share one work row");
+        assert_eq!(rows[0].get::<_, i64>(0), 2);
+        assert_eq!(
+            rows[0].get::<_, i16>(1),
+            0,
+            "a newer source change restarts the retry budget"
+        );
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn source_change_capacity_counts_pending_work_rows() {
+        let registry = super::super::external_view_query::tests::registry();
+        let fixture = Activated::new(&registry).await;
+        let scope = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let mut registration = registration(&fixture, "plan", "authority", vec![scope.epoch]);
+        registration.max_pending = 2;
+        let mut runtime = fixture.pool.get().await.unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        register_plans(&tx, &[registration]).await.unwrap();
+        tx.transaction()
+            .execute(
+                "UPDATE registry_internal.registry_external_refresh_plans
+                 SET reconciliation_due=false,next_due_at=clock_timestamp()+interval '1 hour'",
+                &[],
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        drop(runtime);
+
+        for selector in ["first", "first", "second"] {
+            assert_eq!(
+                admit(&fixture, &registry, scope.epoch, selector).await,
+                Ok(SourceChangeAdmission::Accepted),
+                "{selector}"
+            );
+        }
+        assert_eq!(
+            admit(&fixture, &registry, scope.epoch, "third").await,
+            Ok(SourceChangeAdmission::AtCapacity)
+        );
+        assert_eq!(
+            admit(&fixture, &registry, scope.epoch, "first").await,
+            Ok(SourceChangeAdmission::Accepted),
+            "a change to a queued target takes no new capacity"
+        );
+        let state = fixture
+            .migration
+            .query_one(
+                "SELECT (SELECT count(*) FROM registry_internal.registry_external_refresh_work
+                         WHERE plan_id='plan'),
+                        reconciliation_due,next_due_at<=clock_timestamp()+interval '60 seconds'
+                 FROM registry_internal.registry_external_refresh_plans WHERE plan_id='plan'",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(state.get::<_, i64>(0), 2);
+        assert!(state.get::<_, bool>(1), "a refused change asks for a sweep");
+        assert!(state.get::<_, bool>(2), "the sweep is due within a minute");
         fixture.cleanup().await;
     }
 
@@ -2338,7 +2277,6 @@ mod postgres_tests {
         let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
         let purged = purge_expired(&tx, 1000).await.unwrap();
         assert_eq!(purged.work, 1);
-        assert_eq!(purged.receipts, 0);
         assert_eq!(purged.plans, 0);
         tx.commit().await.unwrap();
         drop(runtime);

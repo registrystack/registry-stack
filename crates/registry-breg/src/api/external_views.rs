@@ -76,16 +76,13 @@ struct ManagedRefreshStep {
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct ExternalRefreshHint {
-    pub(crate) hint_id: String,
+pub(crate) struct ExternalSourceChange {
     pub(crate) projection: String,
-    pub(crate) selector_scheme: String,
     pub(crate) selector: String,
 }
 
-pub(crate) enum HintAdmission {
+pub(crate) enum SourceChangeAdmission {
     Accepted,
-    Conflict,
     AtCapacity,
 }
 
@@ -113,14 +110,14 @@ pub(crate) trait ExternalViewService: Send + Sync {
         Box::pin(async { Err(ExternalViewError::Concealed) })
     }
 
-    fn admit_hint(
+    fn admit_source_change(
         &self,
         _plan: String,
         _claims: VerifiedRequestClaims,
         _correlation: RequestCorrelation,
         _deadline: tokio::time::Instant,
-        _hint: ExternalRefreshHint,
-    ) -> ServiceFuture<'_, Result<HintAdmission, ExternalViewError>> {
+        _change: ExternalSourceChange,
+    ) -> ServiceFuture<'_, Result<SourceChangeAdmission, ExternalViewError>> {
         Box::pin(async { Err(ExternalViewError::Concealed) })
     }
 }
@@ -147,7 +144,10 @@ pub(super) fn routes(registry: &CompiledRegistry) -> Router<Arc<HttpService>> {
         {
             app = app
                 .route("/v1/external-refresh-plans/{plan}/step", post(managed_step))
-                .route("/v1/external-refresh-plans/{plan}/hints", post(admit_hint));
+                .route(
+                    "/v1/external-refresh-plans/{plan}/source-changes",
+                    post(admit_source_change),
+                );
         }
     }
     app
@@ -308,7 +308,7 @@ async fn managed_step(
     })
 }
 
-async fn admit_hint(
+async fn admit_source_change(
     State(service): State<Arc<HttpService>>,
     Authenticated(claims): Authenticated,
     Extension(correlation): Extension<RequestCorrelation>,
@@ -331,33 +331,29 @@ async fn admit_hint(
     if !plan.notifiers.values().any(permits) {
         return concealed();
     }
-    let Some(hint) = refresh_body::<ExternalRefreshHint>(request).await else {
+    let Some(change) = refresh_body::<ExternalSourceChange>(request).await else {
         return invalid_request();
     };
-    if !plan.notifiers.get(&hint.projection).is_some_and(permits) {
+    if !plan.notifiers.get(&change.projection).is_some_and(permits) {
         return concealed();
     }
-    let Some(projection) = service
+    if !service
         .registry
         .external_views()
         .projections
-        .get(&hint.projection)
-    else {
-        return concealed();
-    };
-    if !valid_idempotency_key(&hint.hint_id)
-        || projection.selector_scheme.as_str() != hint.selector_scheme
-        || !registry_adapter_core::projection_token_valid(&hint.selector)
+        .contains_key(&change.projection)
     {
+        return concealed();
+    }
+    if !registry_adapter_core::projection_token_valid(&change.selector) {
         return invalid_request();
     }
     let result = backend
-        .admit_hint(id, claims, correlation, refresh_deadline(deadline), hint)
+        .admit_source_change(id, claims, correlation, refresh_deadline(deadline), change)
         .await;
     no_store(match result {
-        Ok(HintAdmission::Accepted) => StatusCode::ACCEPTED.into_response(),
-        Ok(HintAdmission::Conflict) => fixed_problem(ProblemCode::IdempotencyConflict),
-        Ok(HintAdmission::AtCapacity) => (
+        Ok(SourceChangeAdmission::Accepted) => StatusCode::ACCEPTED.into_response(),
+        Ok(SourceChangeAdmission::AtCapacity) => (
             StatusCode::TOO_MANY_REQUESTS,
             [(axum::http::header::RETRY_AFTER, "30")],
         )

@@ -23,8 +23,8 @@ use tokio::time::{timeout_at, Instant};
 use uuid::Uuid;
 
 use crate::api::external_views::{
-    ExternalQuery, ExternalQueryMode, ExternalRefreshHint, ExternalViewError, ExternalViewRequest,
-    ExternalViewService, HintAdmission, RefreshMode,
+    ExternalQuery, ExternalQueryMode, ExternalSourceChange, ExternalViewError, ExternalViewRequest,
+    ExternalViewService, RefreshMode, SourceChangeAdmission,
 };
 use crate::api::{
     AuthorizedRequestContext, RowBoundaryOperator, ServiceFuture, VerifiedRequestClaims,
@@ -425,23 +425,16 @@ impl PostgresExternalViewService {
                 .commit()
                 .await
                 .map_err(|_| RetentionFailureReason::Database)?;
-            if queued.work != 0 || queued.receipts != 0 || queued.plans != 0 {
+            if queued.work != 0 || queued.plans != 0 {
                 tracing::info!(
                     work = queued.work,
-                    receipts = queued.receipts,
                     plans = queued.plans,
                     "external refresh retention removed queue state"
                 );
             }
-            if [
-                snapshots,
-                receipts,
-                queued.work,
-                queued.receipts,
-                queued.plans,
-            ]
-            .into_iter()
-            .all(|count| count < u64::from(BATCH))
+            if [snapshots, receipts, queued.work, queued.plans]
+                .into_iter()
+                .all(|count| count < u64::from(BATCH))
             {
                 session.disarm();
                 return Ok(());
@@ -1241,18 +1234,18 @@ impl ExternalViewService for PostgresExternalViewService {
         })
     }
 
-    fn admit_hint(
+    fn admit_source_change(
         &self,
         plan: String,
         claims: VerifiedRequestClaims,
         correlation: RequestCorrelation,
         deadline: Instant,
-        hint: ExternalRefreshHint,
-    ) -> ServiceFuture<'_, Result<HintAdmission>> {
+        change: ExternalSourceChange,
+    ) -> ServiceFuture<'_, Result<SourceChangeAdmission>> {
         Box::pin(async move {
             timeout_at(
                 deadline,
-                self.run_hint(&plan, claims, correlation, deadline, hint),
+                self.run_source_change(&plan, claims, correlation, deadline, change),
             )
             .await
             .map_err(|_| ExternalViewError::Unavailable)?
@@ -2629,19 +2622,32 @@ mod postgres_tests {
         lock_timeout: Duration,
         sources: crate::external_source::ExternalSourceService,
     ) -> PostgresExternalViewService {
-        PostgresExternalViewService::new(
+        service_capturing(registry, fixture, lock_timeout, sources).0
+    }
+
+    /// The service and the capture holding every audit entry it writes.
+    fn service_capturing(
+        registry: &CompiledRegistry,
+        fixture: &Activated,
+        lock_timeout: Duration,
+        sources: crate::external_source::ExternalSourceService,
+    ) -> (
+        PostgresExternalViewService,
+        crate::audit::test_support::AuditCapture,
+    ) {
+        let (audit, capture) = crate::audit::test_support::capturing(
+            registry_platform_audit::AuditProfile::production_from_secret_bytes(
+                vec![0x81; 32].into(),
+            )
+            .unwrap(),
+        );
+        let service = PostgresExternalViewService::new(
             fixture.pool.clone(),
             Arc::new(registry.clone()),
             fixture.expected.clone(),
             RegistryLockKey::derive(registry.registry_id()).unwrap(),
             lock_timeout,
-            crate::audit::test_support::capturing(
-                registry_platform_audit::AuditProfile::production_from_secret_bytes(
-                    vec![0x81; 32].into(),
-                )
-                .unwrap(),
-            )
-            .0,
+            audit,
             Arc::new(
                 CursorCodec::new(
                     zeroize::Zeroizing::new(vec![7; 32]),
@@ -2650,7 +2656,8 @@ mod postgres_tests {
                 .unwrap(),
             ),
             sources,
-        )
+        );
+        (service, capture)
     }
 
     fn request(link: &str) -> ExternalViewRequest {
@@ -2778,6 +2785,7 @@ mod postgres_tests {
         router: axum::Router,
         service: Arc<PostgresExternalViewService>,
         scope: ProjectionScope,
+        audit: crate::audit::test_support::AuditCapture,
     }
 
     impl Served {
@@ -2803,7 +2811,8 @@ mod postgres_tests {
                 project,
             ));
             let fixture = Activated::new(&registry).await;
-            let mut service = service_from(&registry, &fixture, lock_timeout, sources);
+            let (mut service, audit) =
+                service_capturing(&registry, &fixture, lock_timeout, sources);
             service.bind_configured_scopes(true).await.ok().unwrap();
             if let Some(refresh) = refresh {
                 service
@@ -2861,7 +2870,34 @@ mod postgres_tests {
                 fixture,
                 service,
                 scope,
+                audit,
             }
+        }
+
+        /// POST `body` to the named action of the `holders` refresh plan,
+        /// returning the status and the JSON body (null when empty).
+        async fn post_plan(
+            &self,
+            action: &str,
+            claims: crate::api::VerifiedRequestClaims,
+            body: Value,
+        ) -> (axum::http::StatusCode, Value) {
+            use tower::ServiceExt;
+            let mut request =
+                axum::http::Request::post(format!("/v1/external-refresh-plans/holders/{action}"))
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap();
+            request.extensions_mut().insert(claims);
+            let response = self.router.clone().oneshot(request).await.unwrap();
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            (
+                status,
+                serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
+            )
         }
 
         async fn generation(&self) -> i64 {
@@ -3331,17 +3367,14 @@ mod postgres_tests {
             .as_array_mut()
             .unwrap()
             .push(json!({
-                "id":"holder","recordType":"person","operation":"person-exact","operationVersion":"1",
-                "purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys",
+                "id":"holder","recordType":"person","sourceRoute":"person-exact","sourceRouteVersion":"1",
+                "purpose":"consultation","scope":"eligible",
                 "mode":"live","cardinality":"one","fields":["family-name"]
             }));
         project["externalViews"][0]["links"]
             .as_array_mut()
             .unwrap()
-            .push(json!({
-                "id":"holder-link","projection":"holder","fromField":"subject-key",
-                "identifierScheme":"urn:test:keys","fields":["family-name"]
-            }));
+            .push(json!({"id":"holder-link","projection":"holder","fromField":"subject-key"}));
         project["accessProfiles"][0]["permissions"]["externalViews"][0]["links"]
             .as_array_mut()
             .unwrap()
@@ -3982,17 +4015,14 @@ mod postgres_tests {
             .as_array_mut()
             .unwrap()
             .push(json!({
-                "id":"people","recordType":"person","operation":"person-batch","operationVersion":"1",
-                "purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys",
+                "id":"people","recordType":"person","sourceRoute":"person-batch","sourceRouteVersion":"1",
+                "purpose":"consultation","scope":"eligible",
                 "mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["family-name"]
             }));
         project["externalViews"][0]["links"]
             .as_array_mut()
             .unwrap()
-            .push(json!({
-                "id":"people-link","projection":"people","fromField":"subject-key",
-                "identifierScheme":"urn:test:keys","fields":["family-name"]
-            }));
+            .push(json!({"id":"people-link","projection":"people","fromField":"subject-key"}));
         project["accessProfiles"][0]["permissions"]["externalViews"][0]["links"]
             .as_array_mut()
             .unwrap()
@@ -4153,11 +4183,7 @@ mod postgres_tests {
                 )
             }
         };
-        let hint = |id: &str, selector: &str| {
-            json!({
-                "hintId":id, "projection":"people", "selectorScheme":"urn:test:keys", "selector":selector
-            })
-        };
+        let change = |selector: &str| json!({"projection":"people", "selector":selector});
         assert_eq!(
             post("step", wrong_worker, json!({})).await.0,
             StatusCode::NOT_FOUND
@@ -4167,7 +4193,7 @@ mod postgres_tests {
             StatusCode::NOT_FOUND
         );
         assert_eq!(
-            post("hints", worker.clone(), hint("invalid", "first"))
+            post("source-changes", worker.clone(), change("first"))
                 .await
                 .0,
             StatusCode::NOT_FOUND
@@ -4192,22 +4218,31 @@ mod postgres_tests {
         };
         let original_expiry = expiry().await;
 
-        let accepted = post("hints", notifier.clone(), hint("event-person", "first")).await;
+        let accepted = post("source-changes", notifier.clone(), change("first")).await;
         assert_eq!(accepted.0, StatusCode::ACCEPTED);
         assert_eq!(
-            post("hints", notifier.clone(), hint("event-person", "first")).await,
+            post("source-changes", notifier.clone(), change("first")).await,
             accepted
         );
+        let queued: i64 = served
+            .fixture
+            .migration
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_external_refresh_work
+                 WHERE plan_id='holders' AND kind='source'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
         assert_eq!(
-            post("hints", notifier.clone(), hint("event-person", "second"))
-                .await
-                .0,
-            StatusCode::CONFLICT
+            queued, 1,
+            "a repeated source change updates its one work row"
         );
         // The protected fixture root is indistinguishable from the eligible
         // one at admission, but never causes a source request.
         assert_eq!(
-            post("hints", notifier, hint("event-protected", ROOTS[3].1)).await,
+            post("source-changes", notifier, change(ROOTS[3].1)).await,
             accepted
         );
         let (_, targeted) = post("step", worker.clone(), json!({})).await;
@@ -4392,14 +4427,12 @@ mod postgres_tests {
                 )
             }
         };
-        let hint = |id: &str, selector: &str| {
-            json!({
-                "hintId":id, "projection":"people", "selectorScheme":"urn:test:keys", "selector":selector
-            })
-        };
-        for (id, selector) in [("label-approved", "alpha"), ("label-protected", "hidden")] {
+        let change = |selector: &str| json!({"projection":"people", "selector":selector});
+        for selector in ["alpha", "hidden"] {
             assert_eq!(
-                post("hints", notifier.clone(), hint(id, selector)).await.0,
+                post("source-changes", notifier.clone(), change(selector))
+                    .await
+                    .0,
                 StatusCode::ACCEPTED
             );
         }
@@ -4436,9 +4469,7 @@ mod postgres_tests {
         assert_eq!(parent_step["reused"], 1, "{parent_step}");
         assert_eq!(parent_step["moreWork"], true, "{parent_step}");
         assert_eq!(
-            post("hints", notifier, hint("label-detached", "alpha"))
-                .await
-                .0,
+            post("source-changes", notifier, change("alpha")).await.0,
             StatusCode::ACCEPTED
         );
         let (status, label_step) = post("step", worker, json!({})).await;
@@ -4447,6 +4478,159 @@ mod postgres_tests {
         assert_eq!(label_step["published"], 1, "{label_step}");
         transcript.finish().unwrap();
         parent_transcript.finish().unwrap();
+        served.fixture.cleanup().await;
+    }
+
+    /// A service caller in the `allowed` tenant, as the refresh worker and
+    /// the source notifier authenticate.
+    fn service_actor(
+        client: &str,
+        principal: &str,
+        scope: &str,
+    ) -> crate::api::VerifiedRequestClaims {
+        crate::api::VerifiedRequestClaims::authenticated(
+            "registry_principal",
+            principal,
+            BTreeSet::from([scope.to_owned()]),
+            Some("consultation".to_owned()),
+            BTreeMap::from([(
+                "tenant".to_owned(),
+                crate::api::VerifiedClaimValue::direct_string_set(["allowed"]).unwrap(),
+            )]),
+        )
+        .unwrap()
+        .with_contextual_authority(
+            Some(registry_platform_oidc::ActorKind::Service),
+            Some(client.to_owned()),
+            None,
+            None,
+            BTreeMap::new(),
+        )
+        .unwrap()
+    }
+
+    /// Settled work leaves no queue row and no receipt. The audit log is the
+    /// durable record: every step and every admitted source change writes an
+    /// attempt and a terminal entry under its own operation.
+    #[tokio::test]
+    async fn settled_refresh_work_leaves_paired_audit_entries_and_no_receipt() {
+        use axum::http::StatusCode;
+        let batch = |keys: &[&str], revision: &str| {
+            json!({
+                "request":{"endpoint":"synthetic-registry","method":"POST","path":"/people/batch","body":{
+                    "type":"batch","keys":keys,"fields":["family-name"]
+                }},
+                "response":{"status":200,"body":{"records":keys.iter().map(|key| json!({
+                    "subject":key,"state":"found","properties":{"family-name":format!("family-{key}-{revision}")}
+                })).collect::<Vec<_>>()}}
+            })
+        };
+        let transcript = Arc::new(
+            registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                serde_json::from_value(
+                    json!([{"type":"endpoint","endpoint":"synthetic-registry"}]),
+                )
+                .unwrap(),
+                serde_json::from_value(json!([
+                    batch(&["first", "second"], "initial"),
+                    batch(&["third"], "initial"),
+                    batch(&["first"], "corrected"),
+                ]))
+                .unwrap(),
+            ),
+        );
+        let mut sources = indexed_sources();
+        crate::external_source::tests::add_indexed_binding(
+            &mut sources,
+            "people",
+            "family-name",
+            Arc::clone(&transcript),
+        );
+        let served = Served::with_refresh(
+            &labelled_members_project(),
+            sources,
+            Duration::from_secs(2),
+            Some(managed_person_plan()),
+        )
+        .await;
+        let receipts_absent: bool = served
+            .fixture
+            .migration
+            .query_one(
+                "SELECT to_regclass('registry_internal.registry_external_refresh_receipts') IS NULL",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert!(receipts_absent, "install creates no refresh receipts table");
+        let worker = service_actor("worker", "worker-principal", "registry.refresh");
+        let notifier = service_actor("people-notifier", "notifier-principal", "people.changed");
+
+        let (status, first) = served.post_plan("step", worker.clone(), json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{first}");
+        assert_eq!(first["published"], 2, "{first}");
+        let (status, second) = served.post_plan("step", worker.clone(), json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{second}");
+        assert_eq!(second["sweepCompleted"], true, "{second}");
+        let (status, _) = served
+            .post_plan(
+                "source-changes",
+                notifier,
+                json!({"projection":"people","selector":"first"}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let (status, targeted) = served.post_plan("step", worker, json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{targeted}");
+        assert_eq!(targeted["settled"], 1, "{targeted}");
+        assert_eq!(targeted["published"], 1, "{targeted}");
+        let queued: i64 = served
+            .fixture
+            .migration
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_external_refresh_work
+                 WHERE plan_id='holders'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(queued, 0, "settlement removes the work row");
+
+        let entries = served.audit.entries();
+        let phase = |operation: &str, phase: &str| {
+            entries
+                .iter()
+                .filter(|entry| {
+                    entry["record"]["operationId"] == operation && entry["record"]["phase"] == phase
+                })
+                .map(|entry| {
+                    (
+                        entry["record"]["requestId"].as_str().unwrap().to_owned(),
+                        entry["record"]["outcome"].clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        for (operation, count) in [
+            ("external-refresh-plan-step", 3),
+            ("external-refresh-plan-source-change", 1),
+        ] {
+            let attempts = phase(operation, "attempt");
+            let terminals = phase(operation, "terminal");
+            assert_eq!(attempts.len(), count, "{operation}: {entries:?}");
+            assert_eq!(
+                attempts.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+                terminals.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+                "{operation}: each attempt has its own terminal entry"
+            );
+            assert!(
+                terminals.iter().all(|(_, outcome)| outcome == "returned"),
+                "{operation}: {terminals:?}"
+            );
+        }
+        transcript.finish().unwrap();
         served.fixture.cleanup().await;
     }
 
@@ -4616,7 +4800,7 @@ mod postgres_tests {
             .as_array_mut()
             .unwrap()
             .push(json!({
-                "id":"members","recordType":"member","operation":"members","operationVersion":"1",
+                "id":"members","recordType":"member","sourceRoute":"members","sourceRouteVersion":"1",
                 "purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys",
                 "mode":"indexed","cardinality":"many","cacheTtlSeconds":60,"fields":["holder"]
             }));
@@ -4625,8 +4809,7 @@ mod postgres_tests {
             .unwrap()
             .push(json!({
                 "id":"members-link","projection":"members","fromField":"subject-key",
-                "identifierScheme":"urn:test:keys","fields":["holder"],
-                "label":{"projection":"people","fromField":"holder","identifierScheme":"urn:test:keys","fields":["family-name"]}
+                "label":{"projection":"people","fromField":"holder"}
             }));
         project["accessProfiles"]
             .as_array_mut()
@@ -4951,12 +5134,11 @@ mod postgres_tests {
             .migration
             .batch_execute(
                 "UPDATE registry_internal.registry_external_projection_snapshots
-                 SET observed_at=0,expires_at=1 WHERE projection_id='projection';
-                 SELECT registry_internal.withdraw_external_projection(
-                     projection_id,epoch,binding_digest,grant_digest)
-                 FROM registry_internal.registry_external_projection_scopes
-                 WHERE projection_id='other';",
+                 SET observed_at=0,expires_at=1 WHERE projection_id='projection'",
             )
+            .await
+            .unwrap();
+        store::withdraw_scope(&served.fixture.migration, &other)
             .await
             .unwrap();
 
@@ -5014,15 +5196,7 @@ mod postgres_tests {
         let other = bound_scope(&served.fixture, "other").await;
         served.fixture.cache(&other).await;
         // A withdrawn scope's rows are not what the projection serves.
-        served
-            .fixture
-            .migration
-            .batch_execute(
-                "SELECT registry_internal.withdraw_external_projection(
-                     projection_id,epoch,binding_digest,grant_digest)
-                 FROM registry_internal.registry_external_projection_scopes
-                 WHERE projection_id='other'",
-            )
+        store::withdraw_scope(&served.fixture.migration, &other)
             .await
             .unwrap();
         let status = served.service.projection_status().await.ok().unwrap();

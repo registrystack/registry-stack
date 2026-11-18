@@ -2,7 +2,7 @@
 //! Durable refresh steps driven by an admitted worker, one bounded unit at a time.
 
 use super::*;
-use crate::api::external_views::{ExternalRefreshHint, HintAdmission};
+use crate::api::external_views::{ExternalSourceChange, SourceChangeAdmission};
 use crate::api::{AuthorizedRequestContext, VerifiedRequestClaims};
 use crate::audit::begin_statistics_pre_io_audit;
 use crate::correlation::RequestCorrelation;
@@ -13,7 +13,7 @@ use queue::{ClaimedTarget, QueueError, Settlement, StepKind, SweepCheckpoint, Wo
 
 const MAX_PENDING: i32 = 10_000;
 const STEP: &str = "external-refresh-plan-step";
-const HINT: &str = "external-refresh-plan-hint";
+const SOURCE_CHANGE: &str = "external-refresh-plan-source-change";
 
 fn unavailable<T>(_: T) -> ExternalViewError {
     ExternalViewError::Unavailable
@@ -361,14 +361,14 @@ impl PostgresExternalViewService {
         active_scope(transaction, self.bound_source(projection)?, id).await
     }
 
-    pub(super) async fn run_hint(
+    pub(super) async fn run_source_change(
         &self,
         id: &str,
         claims: VerifiedRequestClaims,
         correlation: RequestCorrelation,
         deadline: Instant,
-        hint: ExternalRefreshHint,
-    ) -> Result<HintAdmission> {
+        change: ExternalSourceChange,
+    ) -> Result<SourceChangeAdmission> {
         let config = self
             .managed_refresh
             .get(id)
@@ -387,7 +387,7 @@ impl PostgresExternalViewService {
             PreIoAudit {
                 kind: PreIoAuditKind::Attempt,
                 method: HttpMethod::Post,
-                operation_id: HINT,
+                operation_id: SOURCE_CHANGE,
                 target_record: None,
                 refusal_reason: None,
                 correlation: &correlation,
@@ -395,85 +395,61 @@ impl PostgresExternalViewService {
         )
         .await
         .map_err(unavailable)?;
-        let result = self.store_hint(config, &claims, deadline, hint).await;
+        let result = self.store_source_change(config, deadline, change).await;
         if !attempt.is_answered() {
             self.terminal_for(
                 &context,
                 &correlation,
                 None,
                 None,
-                HINT,
+                SOURCE_CHANGE,
                 HttpMethod::Post,
-                matches!(result, Ok(HintAdmission::Accepted)),
+                matches!(result, Ok(SourceChangeAdmission::Accepted)),
             )
             .await?;
         }
         result
     }
 
-    async fn store_hint(
+    /// Upsert the work row for one source change. The selector scheme is the
+    /// compiled projection's, so a notifier names only what changed.
+    async fn store_source_change(
         &self,
         config: &ResolvedExternalRefreshPlan,
-        claims: &VerifiedRequestClaims,
         deadline: Instant,
-        hint: ExternalRefreshHint,
-    ) -> Result<HintAdmission> {
-        // Only the authenticated client can replay its hint ID. The payload
-        // receipt contains a keyed digest, so settled selectors are gone.
-        let client = claims
-            .requester_client()
-            .ok_or(ExternalViewError::Concealed)?;
-        let digest = |domain: &'static [u8], data: Value| {
-            self.cursors
-                .binding_digest(domain, &data)
-                .map_err(unavailable)
-        };
+        change: ExternalSourceChange,
+    ) -> Result<SourceChangeAdmission> {
         let mut session = self.session().await?;
         let transaction = self.managed_transaction(&mut session, deadline).await?;
         let scopes = self.managed_scopes(&transaction, config).await?;
         let scope = std::iter::once(&scopes.primary)
             .chain(scopes.labels.as_ref())
-            .find(|scope| scope.projection_id == hint.projection)
+            .find(|scope| scope.projection_id == change.projection)
             .ok_or(ExternalViewError::Concealed)?;
-        let notifier = digest(
-            b"breg-external-refresh-notifier-v1",
-            json!([
-                config.id,
-                config.authority_digest,
-                client,
-                scope.projection_id,
-                scope.epoch
-            ]),
-        )?;
-        let receipt = digest(
-            b"breg-external-refresh-hint-v1",
-            json!([notifier, hint.hint_id]),
-        )?;
-        let payload = digest(
-            b"breg-external-refresh-hint-payload-v1",
-            json!([hint.selector_scheme, hint.selector]),
-        )?;
-        let target =
-            self.source_target_digest(scope.epoch, &hint.selector_scheme, &hint.selector)?;
+        let scheme = self
+            .registry
+            .external_views()
+            .projections
+            .get(&scope.projection_id)
+            .ok_or(ExternalViewError::Unavailable)?
+            .selector_scheme
+            .as_str();
+        let target = self.source_target_digest(scope.epoch, scheme, &change.selector)?;
         let expires_at = self.work_expiry(scope)?;
-        let result = queue::enqueue_hint(
+        let response = match queue::enqueue_source_change(
             &transaction,
             &config.id,
             &config.authority_digest,
-            &notifier,
-            &receipt,
-            &payload,
             &target,
             scope.epoch,
-            &hint.selector_scheme,
-            &hint.selector,
+            scheme,
+            &change.selector,
             expires_at,
         )
-        .await;
-        let response = match result {
-            Ok(_) => HintAdmission::Accepted,
-            Err(QueueError::Conflict) => HintAdmission::Conflict,
-            Err(QueueError::AtCapacity) => HintAdmission::AtCapacity,
+        .await
+        {
+            Ok(queue::SourceChangeAdmission::Accepted) => SourceChangeAdmission::Accepted,
+            Ok(queue::SourceChangeAdmission::AtCapacity) => SourceChangeAdmission::AtCapacity,
             Err(error) => return Err(unavailable(error)),
         };
         transaction.commit().await.map_err(unavailable)?;
