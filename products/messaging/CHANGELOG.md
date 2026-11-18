@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The SMTP client moves to lettre 0.11.24, which fixes RUSTSEC-2026-0560 to RUSTSEC-2026-0565: STARTTLS reply injection, missing dot-stuffing after a bare CR or LF, quoted local parts sent to the wrong address, two panics on hostile input, and unbounded buffering of a server reply.
+
 ## 0.46.0 - 2026-11-08
 
 - Each access profile may carry an optional `label` and `description`, accepted for authoring and tooling; Messaging does not serve them until a view exists. Neither is matched against a caller, and a profile that writes neither reads as before.

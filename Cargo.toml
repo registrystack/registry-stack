@@ -264,7 +264,7 @@ jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_r
 # Messaging SMTP only. Default features stay off: no connection pool, no
 # native-tls, no hostname lookup, and no sendmail or file transport. `tracing`
 # stays off because it logs every written line, the AUTH exchange included.
-lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+lettre = { version = "0.11.24", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 # Every default feature stays off here; each member enables only the features
 # its own templates need, and states why in its manifest.
 minijinja = { version = "2.24", default-features = false }
