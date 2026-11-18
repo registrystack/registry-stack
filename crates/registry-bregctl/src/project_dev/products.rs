@@ -1357,8 +1357,6 @@ fn copy_project(source: &Path, target: &Path) -> Result<()> {
 pub(super) struct ProductInspection {
     pub(super) breg_authority: Option<BregAuthority>,
     pub(super) casework_principals: BTreeMap<String, String>,
-    /// Always `None`: the run binds its issuer in a copy, with no source digest.
-    pub(super) casework_source_digest: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1431,13 +1429,11 @@ pub(super) fn inspect(
     plan: &Plan,
     terminate: &AtomicBool,
 ) -> Result<ProductInspection> {
-    super::bindings::check_with_breg_reader(plan)?;
     let breg_authority = breg_authority(root, plan, terminate)?;
     let casework_principals = casework_principals(root, plan, breg_authority.as_ref(), terminate)?;
     Ok(ProductInspection {
         breg_authority,
         casework_principals,
-        casework_source_digest: None,
     })
 }
 
@@ -2615,31 +2611,26 @@ mod tests {
         );
     }
 
-    fn read_public_fixture(path: &Path, format: &registry_platform_yaml::FormatSpec<'_>) -> Value {
-        registry_platform_yaml::Reader::new(path.display().to_string())
-            .read(
-                &fs::read(path).unwrap(),
-                &registry_platform_yaml::Expect::one(format),
-            )
-            .unwrap()
-            .to_json_value()
-    }
-
     #[test]
     fn minimal_schema_tokens_preserve_exact_client_and_fixture_claims() {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/examples/minimal")
-            .canonicalize()
-            .unwrap();
-        let clients = read_public_fixture(
-            &source.join("dev-clients.yaml"),
-            &crate::dev::DEV_CLIENTS_FORMAT,
-        );
-        let fixtures = read_public_fixture(
-            &source.join("tests/journeys.yaml"),
-            &registry_breg::fixtures::JOURNEYS_FORMAT,
-        );
+        // The shapes a BReg development project declares for its clients and
+        // journey steps, written out so the test needs no product library.
+        let clients = json!({"clients": [{
+            "id": "registry-editor",
+            "accessProfiles": ["editor"],
+            "scopes": ["registry.read", "registry.write"],
+            "claims": {"registry_principal": "editor-1", "registry_purpose": "intake"}
+        }]});
+        let fixtures = json!({"journeys": [{"steps": [{
+            "accessProfile": "editor",
+            "claims": {
+                "principal": "editor-1",
+                "purpose": "intake",
+                "directClaims": {"registry_purpose": "intake"},
+                "scopes": ["registry.read", "registry.write"]
+            }
+        }]}]});
         let root = tempfile::tempdir().unwrap();
         let issuer = Issuer::create(root.path()).unwrap();
         let mut input = breg_input(false);
@@ -2735,74 +2726,6 @@ mod tests {
                 assert!(scopes == expected);
             }
         }
-    }
-
-    /// Real signer and verifier, with a static local JWKS. No database,
-    /// discovery request, listener or product process is involved.
-    #[test]
-    fn minimal_schema_authentication_requires_the_existing_machine_default() {
-        use registry_breg::auth::{AuthenticationError, RegistryAuthenticator};
-        let source =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/minimal");
-        let clients = read_public_fixture(
-            &source.join("dev-clients.yaml"),
-            &crate::dev::DEV_CLIENTS_FORMAT,
-        );
-        let client = &clients["clients"][0];
-        let mut claims = client["claims"].as_object().unwrap().clone();
-        let subject = claims.remove("registry_principal").unwrap();
-        let person:plan::TestPerson=serde_json::from_value(json!({"subject":subject,"client":client["id"],
-            "grants":{"breg":{"profile":client["accessProfiles"][0],"scopes":client["scopes"],"claims":claims}}})).unwrap();
-        let mut input = breg_input(false);
-        input.breg_authority.as_mut().unwrap().principal = "registry_principal".into();
-        input.breg_authority.as_mut().unwrap().purpose = true;
-        input.plan.people.clear();
-        input.plan.people.insert("editor".into(), person);
-        let root = tempfile::tempdir().unwrap();
-        let root = root.path().canonicalize().unwrap();
-        let issuer = Issuer::create(&root).unwrap();
-        let input = Arc::new(input);
-        let terminate = Arc::new(AtomicBool::new(false));
-        let runner = ProductRunner::new(Arc::clone(&input), &root, &terminate).unwrap();
-        // Only configuration decoding is exercised; no package is loaded or activated.
-        private_directory(&root.join("package")).unwrap();
-        let _ = breg_config(&runner, &root, "breg");
-        let config =
-            registry_breg::runtime_config::load_runtime_config(&root.join("breg-runtime.yaml"))
-                .unwrap();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let keys = runtime.block_on(config.oidc_key_source()).unwrap();
-        let compiled = minimal_registry(str::to_owned);
-        let authenticator = RegistryAuthenticator::new(
-            &compiled,
-            config.authentication().oidc().token_verifier_config(),
-            keys,
-            config.authentication().authority_claim_config(),
-        )
-        .unwrap();
-        let person = &input.plan.people["editor"];
-        let token = issuer
-            .token(&input, person, Product::Breg, clock().unwrap() + 300)
-            .unwrap();
-        assert!(matches!(
-            runtime.block_on(authenticator.authenticate(&token)),
-            Err(AuthenticationError::MissingActorKind)
-        ));
-        let mut normalized: plan::TestPerson =
-            serde_json::from_value(serde_json::to_value(person).unwrap()).unwrap();
-        normalized
-            .grants
-            .get_mut(&Product::Breg)
-            .unwrap()
-            .claims
-            .insert("registry_actor_kind".into(), json!("service"));
-        let token = issuer
-            .token(&input, &normalized, Product::Breg, clock().unwrap() + 300)
-            .unwrap();
-        assert!(runtime.block_on(authenticator.authenticate(&token)).is_ok());
     }
 
     #[test]
@@ -3804,18 +3727,6 @@ mod tests {
         );
     }
 
-    fn minimal_registry(edit: impl FnOnce(&str) -> String) -> registry_breg::CompiledRegistry {
-        let source =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/minimal");
-        let scratch = tempfile::tempdir().unwrap();
-        let project = scratch.path().join("project");
-        copy_project(&source, &project).unwrap();
-        let registry = project.join("registry.yaml");
-        fs::write(&registry, edit(&fs::read_to_string(&registry).unwrap())).unwrap();
-        crate::compile(&project, crate::ProfileArg::Production, "project-dev-test")
-            .unwrap_or_else(|_| panic!("the edited project must compile"))
-    }
-
     fn breg_person(profile: &str) -> plan::TestPerson {
         serde_json::from_value(json!({
             "subject": "someone", "client": "client",
@@ -3876,7 +3787,6 @@ mod tests {
                 named_clients: BTreeSet::new(),
             }),
             casework_principals: BTreeMap::new(),
-            casework_source_digest: None,
             binaries: BTreeMap::new(),
         }
     }

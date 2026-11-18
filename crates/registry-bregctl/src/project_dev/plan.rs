@@ -2,10 +2,12 @@
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE};
+use registry_platform_config::contains_environment_expression;
+use registry_platform_httputil::valid_scope_token;
 use registry_platform_yaml::{
     escape_pointer_segment, ApiVersion, BoundedU32, Decoded, EnvelopeRule, Expect, FormatSpec,
-    Identified, LocalId, Reader, RemovedKey, Report, Severity, UniqueIdList, UniqueList,
+    Identified, LocalId, Reader, Refusal, RemovedKey, Report, ScalarHook, ScalarSite, Severity,
+    UniqueIdList, UniqueList,
 };
 #[cfg(feature = "schema")]
 use registry_platform_yaml::{ExternalId, Url as PlatformUrl};
@@ -18,6 +20,42 @@ use std::{
     io::Read,
     path::{Component, Path, PathBuf},
 };
+
+/// Refuses every `${...}` substitution expression in a development file: the
+/// plan and the scenarios are read as written (CFG-SEC-2). Text that is not an
+/// expression, such as a lone `${`, is accepted.
+struct LiteralText {
+    /// What to write instead, the refusal's suggested action.
+    remedy: &'static str,
+}
+
+/// The remedy for a file whose values are written as they are meant.
+const WRITE_THE_VALUE: &str = "Write the value in the file directly.";
+
+impl LiteralText {
+    fn check(&self, text: &str) -> std::result::Result<(), Refusal> {
+        if contains_environment_expression(text) {
+            return Err(Refusal {
+                code: "config.substitution-not-allowed".to_owned(),
+                message: "a `${...}` expression is written in a file BReg reads as written; \
+                          substitution applies to runtime.yaml only"
+                    .to_owned(),
+                suggested_action: self.remedy.to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl ScalarHook for LiteralText {
+    fn key(&mut self, site: &ScalarSite<'_>) -> std::result::Result<(), Refusal> {
+        self.check(site.text)
+    }
+
+    fn value(&mut self, site: &ScalarSite<'_>) -> std::result::Result<Option<String>, Refusal> {
+        self.check(site.text).map(|()| None)
+    }
+}
 use url::Url as ParsedUrl;
 
 pub(crate) const API_VERSION: &str = "id.registrystack.org/formats/breg/project-dev/v1alpha1";
@@ -314,7 +352,7 @@ pub(super) struct Grant {
     /// Local identifier of the product profile this grant uses.
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub profile: String,
-    /// Distinct scopes written into the token, at most 32, each 1 to 256 characters without whitespace or control characters.
+    /// Distinct scopes written into the token, at most 32, each an OAuth scope-token of 1 to 256 bytes: printable ASCII without spaces, double quotes or backslashes.
     #[serde(deserialize_with = "deserialize_scopes")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "scopes_schema"))]
     pub scopes: Vec<String>,
@@ -928,6 +966,12 @@ impl Plan {
             && self.products.iter().any(|p| p.product == Product::Casework)
     }
 
+    /// Puts the products in the order a run starts them: BReg before Casework,
+    /// which pairs with the BReg package. The author may list them either way.
+    pub(super) fn order_products_for_start(&mut self) {
+        self.products.sort_by_key(|entry| entry.product);
+    }
+
     pub(super) fn product(&self, product: Product) -> &ProductPlan {
         self.products
             .iter()
@@ -947,12 +991,7 @@ impl Plan {
             "The scenario file path must be relative to the project without `.`, `..`, or backslashes.",
             "Use normal relative path components inside the development project.",
         )?;
-        require(
-            resolves_to_file_inside(root, path),
-            "/scenarioFile",
-            "The authored scenario file must be inside the development project.",
-            "Provide the declared scenario file inside the development project.",
-        )?;
+        require_file_inside(root, path, "/scenarioFile", "authored scenario file")?;
         require(
             self.issuer == "run" || ParsedUrl::parse(&self.issuer).is_ok_and(|url| {
                 url.scheme() == "https"
@@ -1019,11 +1058,11 @@ impl Plan {
                     "Use normal relative path components without `.` or `..`.",
                 )?;
             }
-            require(
-                resolves_to_file_inside(root, &application.deployment),
+            require_file_inside(
+                root,
+                &application.deployment,
                 "/application/deployment",
-                "The deployment file must be inside the development project.",
-                "Provide the declared deployment file in the development project.",
+                "deployment file",
             )?;
             require(
                 bounded_atom(&application.config_schema),
@@ -1088,11 +1127,11 @@ impl Plan {
                 Product::Breg => "registry.yaml",
                 Product::Casework => "casework.yaml",
             };
-            require(
-                resolves_to_file_inside(root, &entry.project.join(manifest)),
+            require_file_inside(
+                root,
+                &entry.project.join(manifest),
                 &format!("{field}/project"),
-                format!("The product project must contain {manifest} inside the development project directory."),
-                format!("Create {manifest} at this project path inside the development project directory."),
+                &format!("{manifest} of the product project"),
             )?;
         }
         if self.application.is_some() {
@@ -1159,14 +1198,15 @@ impl Plan {
                     "The grant profile must be a local identifier.",
                     "Set profile to a lowercase local identifier of at most 64 characters.",
                 )?;
-                let scopes = grant.scopes.iter().collect::<BTreeSet<_>>();
                 require(
-                    scopes.len() == grant.scopes.len()
-                        && scopes.len() <= 32
-                        && scopes.iter().all(|scope| bounded_atom(scope)),
+                    grant.scopes.len() <= 32
+                        && grant
+                            .scopes
+                            .iter()
+                            .all(|scope| scope.len() <= 256 && valid_scope_token(scope)),
                     &format!("{field}/scopes"),
-                    "The grant must contain at most 32 distinct bounded scopes.",
-                    "Remove duplicate or excess scopes, and keep each scope within 256 characters without whitespace or control characters.",
+                    "The grant must contain at most 32 scopes, each an OAuth scope-token.",
+                    "Remove excess scopes, and keep each scope within 256 bytes of printable ASCII without spaces, double quotes or backslashes.",
                 )?;
                 for claim in grant.claims.keys() {
                     if self.application.is_some() && browser_host_claim(claim) {
@@ -1265,15 +1305,14 @@ impl Journey {
             "The journey must contain 1 to 32 steps.",
             "Add or remove steps until the journey contains between 1 and 32 steps.",
         )?;
-        let mut ids = BTreeSet::new();
         let mut captures = BTreeSet::new();
         for (index, step) in self.steps.iter().enumerate() {
             let field = format!("{base}/steps/{index}");
             require(
-                step_identifier(&step.id) && ids.insert(&step.id),
+                step_identifier(&step.id),
                 &format!("{field}/id"),
-                "The step ID must be a unique local or dotted derived identifier.",
-                "Set id to a unique lowercase local identifier or dotted sequence of local identifiers.",
+                "The step ID must be a local or dotted derived identifier.",
+                "Set id to a lowercase local identifier or dotted sequence of local identifiers.",
             )?;
             require(
                 plan.people
@@ -1308,11 +1347,10 @@ impl Journey {
             let statuses = step.expect.status.values();
             require(
                 (1..=16).contains(&statuses.len())
-                    && statuses.iter().all(|status| (200..=599).contains(status))
                     && statuses.iter().collect::<BTreeSet<_>>().len() == statuses.len(),
                 &format!("{field}/expect/status"),
-                "Expected status must contain 1 to 16 distinct HTTP statuses from 200 to 599.",
-                "List between 1 and 16 distinct HTTP status numbers from 200 to 599.",
+                "Expected status must contain 1 to 16 distinct HTTP statuses.",
+                "List between 1 and 16 distinct HTTP status numbers.",
             )?;
             require(
                 step.body.is_none() || step.raw.is_none(),
@@ -1579,17 +1617,34 @@ pub(super) fn path_access_profile(path: &str) -> Option<String> {
         .map(|(_, value)| value.into_owned())
 }
 
-/// Whether `relative` under `root` resolves, symlinks included, to a file that
-/// is still inside the resolved `root`. Both sides are resolved so a project
-/// reached through a symlinked parent is accepted while a link leading outside
-/// it is refused.
-fn resolves_to_file_inside(root: &Path, relative: &Path) -> bool {
-    let Ok(root) = root.canonicalize() else {
-        return false;
-    };
-    root.join(relative)
+/// Refuses unless `relative` under `root` resolves, symlinks included, to a
+/// regular file still inside the resolved `root`. Both sides are resolved so a
+/// project reached through a symlinked parent is accepted while a link leading
+/// outside it is refused. A path that does not exist or is not a regular file is
+/// refused as not found, apart from one that resolves outside the project.
+fn require_file_inside(
+    root: &Path,
+    relative: &Path,
+    field: &str,
+    subject: &str,
+) -> SemanticResult<()> {
+    let resolved = root
         .canonicalize()
-        .is_ok_and(|file| file.starts_with(&root) && file.is_file())
+        .ok()
+        .and_then(|root| Some((root.join(relative).canonicalize().ok()?, root)));
+    match resolved {
+        Some((file, root)) if !file.starts_with(&root) => refuse(
+            field,
+            &format!("The {subject} resolves outside the development project."),
+            "Point the path at a file inside the development project, and remove any symlink that leads outside it.",
+        ),
+        Some((file, _)) if file.is_file() => Ok(()),
+        _ => refuse(
+            field,
+            &format!("The {subject} was not found or is not a regular file."),
+            "Create the file at the declared path inside the development project.",
+        ),
+    }
 }
 
 pub(super) fn valid_path(value: &str) -> bool {
@@ -1932,16 +1987,12 @@ mod tests {
     #[cfg(feature = "schema")]
     #[test]
     fn display_name_schema_matches_display_text_and_length_bounds() {
-        let documents = crate::tool_schema::documents().unwrap();
-        let document: Value =
-            serde_json::from_str(&documents["project-dev.v1alpha1.schema.json"]).unwrap();
+        let document = serde_json::to_value(schema()).unwrap();
         let schema = jsonschema::JSONSchema::options()
             .with_draft(jsonschema::Draft::Draft202012)
             .compile(&document)
             .unwrap();
         let valid = json!({
-            "apiVersion": "id.registrystack.org/formats/breg/project-dev/v1alpha1",
-            "kind": "BRegProjectDev",
             "issuer": "https://issuer.example.invalid",
             "products": [{"product": "breg", "project": ".", "audience": "registry"}],
             "people": {"operator": {
@@ -2083,7 +2134,6 @@ mod tests {
                     named_clients: BTreeSet::new(),
                 }),
                 casework_principals: BTreeMap::new(),
-                casework_source_digest: None,
             };
 
             let refusal = validate_application_authority(&plan, &inspection).unwrap_err();
@@ -2109,7 +2159,6 @@ mod tests {
                     encrypts_fields: false,
                     named_clients: BTreeSet::new(),
                 }),
-                casework_source_digest: None,
                 casework_principals: BTreeMap::from([(
                     "reviewer".to_owned(),
                     principal.to_owned(),
@@ -2230,9 +2279,46 @@ mod tests {
 
         assert!(refusal.contains("/scenarioFile"), "{refusal}");
         assert!(
-            refusal.contains("inside the development project"),
+            refusal.contains("resolves outside the development project"),
             "{refusal}"
         );
+        assert!(!refusal.contains("not found"), "{refusal}");
+    }
+
+    #[test]
+    fn products_start_in_the_order_breg_then_casework_whatever_the_author_wrote() {
+        let (_root, mut plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        plan.products.insert(
+            0,
+            serde_json::from_value(
+                json!({"product": "casework", "project": "casework", "audience": "review"}),
+            )
+            .unwrap(),
+        );
+        plan.order_products_for_start();
+        let order: Vec<_> = plan.products.iter().map(|entry| entry.product).collect();
+        assert_eq!(order, [Product::Breg, Product::Casework]);
+    }
+
+    #[test]
+    fn a_missing_scenario_file_is_reported_as_not_found() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        fs::remove_file(root.path().join("tests/scenarios.yaml")).unwrap();
+
+        let refusal = plan.validate(root.path()).unwrap_err().to_string();
+
+        assert!(refusal.contains("/scenarioFile"), "{refusal}");
+        assert!(
+            refusal.contains("not found or is not a regular file"),
+            "{refusal}"
+        );
+        assert!(!refusal.contains("resolves outside"), "{refusal}");
     }
 
     #[test]

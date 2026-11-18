@@ -3,7 +3,6 @@
 
 use anyhow::{ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use registry_platform_httpsec::{response_trace_id, ProblemDocument, TraceId};
 use reqwest::header::{HeaderMap, ETAG};
 use serde::Serialize;
 use serde_json::Value;
@@ -40,105 +39,19 @@ pub(super) struct StepReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    failure: Option<FailureMetadata>,
+    problem: Option<Value>,
 }
 
-// Public response metadata is diagnostic only, never an expectation or grant.
+/// The largest problem document a failed step reports.
 const PROBLEM_LIMIT: usize = 16 * 1024;
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum FailureKind {
-    KnownProblem,
-    UnknownProblem,
-    InvalidProblem,
-    NonProblem,
-    Unavailable,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum HttpClass {
-    ClientError,
-    ServerError,
-}
-
-#[derive(Clone, Serialize)]
-struct FailureMetadata {
-    kind: FailureKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    code: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    http_class: Option<HttpClass>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    trace_id: Option<TraceId>,
-}
-
-impl FailureMetadata {
-    fn new(kind: FailureKind, status: u16) -> Self {
-        Self {
-            kind,
-            code: None,
-            http_class: match status {
-                400..=499 => Some(HttpClass::ClientError),
-                500..=599 => Some(HttpClass::ServerError),
-                _ => None,
-            },
-            trace_id: None,
-        }
-    }
-}
-
-fn known_problem_code(product: Product, problem: &ProblemDocument) -> Option<&'static str> {
-    match product {
-        Product::Breg => registry_breg::problem::ProblemCode::ALL
-            .iter()
-            .find(|known| {
-                known.code() == problem.code
-                    && known.status() == problem.status
-                    && registry_breg::problem::type_uri(known.code()) == problem.type_uri
-            })
-            .map(|known| known.code()),
-        Product::Casework => {
-            // Consume the existing public generated catalog, not the runtime crate
-            // or a second hand-maintained code vocabulary. Only its fixed consts
-            // can enter a receipt; incoming strings are never returned.
-            static CATALOG: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-            let catalog = CATALOG.get_or_init(|| {
-                serde_json::from_str(include_str!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../products/casework/generated/registry-casework.openapi.json"
-                )))
-                .unwrap_or(Value::Null)
-            });
-            catalog
-                .pointer("/components/schemas")?
-                .as_object()?
-                .values()
-                .filter_map(|schema| schema.get("allOf")?.as_array())
-                .flatten()
-                .filter_map(|part| part.get("properties"))
-                .find_map(|properties| {
-                    let code = properties.pointer("/code/const")?.as_str()?;
-                    (code == problem.code
-                        && properties.pointer("/status/const")?.as_u64()?
-                            == u64::from(problem.status)
-                        && properties.pointer("/type/const")?.as_str()? == problem.type_uri)
-                        .then_some(code)
-                })
-        }
-    }
-}
-
-fn failure_metadata(
-    product: Product,
-    status: u16,
-    headers: &HeaderMap,
-    bytes: &[u8],
-) -> FailureMetadata {
-    // This smaller diagnostic budget never changes the transport/body budget.
+/// The product's problem document exactly as received, for a response that is
+/// `application/problem+json`, fits `PROBLEM_LIMIT` and parses as a JSON
+/// object. Any other response carries none; the step's `status` and `reason`
+/// still report it.
+fn problem_as_received(headers: &HeaderMap, bytes: &[u8]) -> Option<Value> {
     if bytes.len() > PROBLEM_LIMIT {
-        return FailureMetadata::new(FailureKind::Unavailable, status);
+        return None;
     }
     let mut content_types = headers.get_all(reqwest::header::CONTENT_TYPE).iter();
     let is_problem = match (content_types.next(), content_types.next()) {
@@ -152,25 +65,11 @@ fn failure_metadata(
         _ => false,
     };
     if !is_problem {
-        return FailureMetadata::new(FailureKind::NonProblem, status);
+        return None;
     }
-    let Ok(problem) = ProblemDocument::parse_exact(bytes, PROBLEM_LIMIT) else {
-        return FailureMetadata::new(FailureKind::InvalidProblem, status);
-    };
-    if problem.status != status {
-        return FailureMetadata::new(FailureKind::InvalidProblem, status);
-    }
-    let Some(code) = known_problem_code(product, &problem) else {
-        return FailureMetadata::new(FailureKind::UnknownProblem, status);
-    };
-    let trace_id = response_trace_id(headers)
+    serde_json::from_slice::<Value>(bytes)
         .ok()
-        .filter(|trace| *trace == problem.trace_id);
-    FailureMetadata {
-        code: Some(code),
-        trace_id,
-        ..FailureMetadata::new(FailureKind::KnownProblem, status)
-    }
+        .filter(Value::is_object)
 }
 
 const REASON_LIMIT: usize = 512;
@@ -184,14 +83,14 @@ struct StepOutcome {
     status: u16,
     reason: Option<String>,
     updates: BTreeMap<String, Value>,
-    failure: Option<FailureMetadata>,
+    problem: Option<Value>,
 }
 
 struct ResponseData {
     status: u16,
     headers: HeaderMap,
     body: Value,
-    failure: Option<FailureMetadata>,
+    problem: Option<Value>,
 }
 
 pub(super) fn run(
@@ -242,7 +141,7 @@ pub(super) fn run(
                     status: 0,
                     reason: Some(bounded_reason(&format!("{error:#}"))),
                     updates: BTreeMap::new(),
-                    failure: None,
+                    problem: None,
                 }
             }
         };
@@ -256,7 +155,7 @@ pub(super) fn run(
             expected_status: step.expect.status.first(),
             result: if passed { "passed" } else { "failed" },
             reason: outcome.reason,
-            failure: outcome.failure,
+            problem: outcome.problem,
         });
         if !passed {
             report.result = "failed";
@@ -323,12 +222,12 @@ fn execute_step(
         .map(|poll| Instant::now() + Duration::from_millis(poll.timeout_ms));
     let mut last_status = 0;
     let mut last_reason = None;
-    let mut last_failure = None;
+    let mut last_problem = None;
 
     loop {
         active()?;
         if poll_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return Ok(poll_timed_out(last_status, last_reason, last_failure));
+            return Ok(poll_timed_out(last_status, last_reason, last_problem));
         }
         add_attempt(attempts)?;
         add_transfer(transferred, request_bytes)?;
@@ -351,15 +250,10 @@ fn execute_step(
                 .header(reqwest::header::CONTENT_TYPE, &spec.content_type)
                 .body(body.clone());
         }
-        let Some(response) = read_response_before_deadline(
-            runtime,
-            request,
-            poll_deadline,
-            transferred,
-            step.product,
-        )?
+        let Some(response) =
+            read_response_before_deadline(runtime, request, poll_deadline, transferred)?
         else {
-            return Ok(poll_timed_out(last_status, last_reason, last_failure));
+            return Ok(poll_timed_out(last_status, last_reason, last_problem));
         };
         last_status = response.status;
         let reason = match first_mismatch(step, &response, lookup)? {
@@ -370,7 +264,7 @@ fn execute_step(
                         status: response.status,
                         reason: None,
                         updates,
-                        failure: None,
+                        problem: None,
                     })
                 }
                 Err(error) => format!("capture failed: {error:#}"),
@@ -380,7 +274,7 @@ fn execute_step(
             status: response.status,
             reason: Some(bounded_reason(reason)),
             updates: BTreeMap::new(),
-            failure: response.failure.clone(),
+            problem: response.problem.clone(),
         };
         let Some((poll, deadline)) = step.poll.as_ref().zip(poll_deadline) else {
             return Ok(failed(&reason));
@@ -390,18 +284,14 @@ fn execute_step(
             return Ok(failed(&reason));
         }
         last_reason = Some(reason);
-        last_failure = response.failure;
+        last_problem = response.problem;
         thread::sleep(Duration::from_millis(poll.interval_ms).min(deadline - now));
     }
 }
 
 /// A poll whose deadline passed keeps the last completed status and says why
 /// that response did not match.
-fn poll_timed_out(
-    status: u16,
-    last_reason: Option<String>,
-    failure: Option<FailureMetadata>,
-) -> StepOutcome {
+fn poll_timed_out(status: u16, last_reason: Option<String>, problem: Option<Value>) -> StepOutcome {
     let reason = match last_reason {
         Some(reason) => format!("poll deadline passed; last response: {reason}"),
         None => "poll deadline passed before a response arrived".to_owned(),
@@ -410,7 +300,7 @@ fn poll_timed_out(
         status,
         reason: Some(bounded_reason(&reason)),
         updates: BTreeMap::new(),
-        failure,
+        problem,
     }
 }
 
@@ -719,9 +609,8 @@ fn read_response_before_deadline(
     request: reqwest::RequestBuilder,
     deadline: Option<Instant>,
     transferred: &mut usize,
-    product: Product,
 ) -> Result<Option<ResponseData>> {
-    let response = read_response(request, transferred, product);
+    let response = read_response(request, transferred);
     let Some(deadline) = deadline else {
         return runtime.block_on(response).map(Some);
     };
@@ -739,7 +628,6 @@ fn read_response_before_deadline(
 async fn read_response(
     request: reqwest::RequestBuilder,
     transferred: &mut usize,
-    product: Product,
 ) -> Result<ResponseData> {
     let mut response = request.send().await?;
     let status = response.status().as_u16();
@@ -753,13 +641,13 @@ async fn read_response(
         bytes.extend_from_slice(&chunk);
         add_transfer(transferred, chunk.len())?;
     }
-    let failure = Some(failure_metadata(product, status, &headers, &bytes));
+    let problem = problem_as_received(&headers, &bytes);
     let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     Ok(ResponseData {
         status,
         headers,
         body,
-        failure,
+        problem,
     })
 }
 
@@ -931,7 +819,6 @@ mod tests {
                 named_clients: Default::default(),
             }),
             casework_principals: BTreeMap::new(),
-            casework_source_digest: None,
             binaries: BTreeMap::new(),
         }
     }
@@ -1038,7 +925,6 @@ mod tests {
             request,
             Some(Instant::now()),
             &mut transferred,
-            Product::Breg,
         )
         .unwrap();
 
@@ -1146,7 +1032,7 @@ mod tests {
         let response = ResponseData {
             status: 409,
             headers: HeaderMap::new(),
-            failure: None,
+            problem: None,
             body: json!({"code": "missing"}),
         };
         assert!(first_mismatch(&step, &response, no_capture)
@@ -1172,7 +1058,7 @@ mod tests {
                 let response = ResponseData {
                     status: 200,
                     headers: HeaderMap::new(),
-                    failure: None,
+                    problem: None,
                     body,
                 };
                 assert_eq!(
@@ -1197,7 +1083,7 @@ mod tests {
         let mut response = ResponseData {
             status: 500,
             headers: HeaderMap::new(),
-            failure: None,
+            problem: None,
             body: json!({"state": "closed"}),
         };
         assert_eq!(
@@ -1220,18 +1106,13 @@ mod tests {
     }
 
     #[test]
-    fn failure_receipt_public_http_status_mismatch_keeps_known_problem() {
-        // A public neutral problem, unrelated to any retained private scenario.
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let url = format!("http://{}/", listener.local_addr().unwrap());
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let (selected_profile, bearer_present) = read_request(&mut stream);
-            assert!(selected_profile && bearer_present);
-            let body = r#"{"type":"https://id.registrystack.org/problems/registry-breg/request/invalid","title":"Invalid request","status":400,"detail":"synthetic ignored detail","code":"request.invalid","traceId":"11111111111111111111111111111111"}"#;
-            let response = format!("HTTP/1.1 400 Result\r\nContent-Type: application/problem+json\r\ntraceparent: 00-11111111111111111111111111111111-2222222222222222-01\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
-            write_to_client(&mut stream, response.as_bytes());
-        });
+    fn failed_step_carries_the_product_problem_verbatim() {
+        let body = r#"{"type":"https://example.invalid/problems/not-in-any-catalog","title":"Odd","status":400,"code":"made.up","traceId":"11111111111111111111111111111111","extension":{"nested":[1,2]}}"#;
+        let server = synthetic_server_with_headers(
+            vec![(Duration::ZERO, 400, body)],
+            "application/problem+json",
+            PUBLIC_TRACE_HEADER,
+        );
         let root = tempfile::tempdir().unwrap();
         let issuer = Issuer::create(root.path()).unwrap();
         let mut input = polling_input(1000, 50);
@@ -1240,33 +1121,18 @@ mod tests {
         let report = run(
             &input,
             &issuer,
-            &BTreeMap::from([(Product::Breg, url)]),
+            &BTreeMap::from([(Product::Breg, server.url.clone())]),
             &input.scenarios[0],
             || Ok(()),
         )
         .unwrap();
-        server.join().unwrap();
         let value = serde_json::to_value(report).unwrap();
-        assert_eq!(value["result"], "failed");
-        assert_eq!(value["steps"][0]["status"], 400);
-        assert_eq!(value["steps"][0]["expected_status"], 404);
         assert_eq!(
-            value["steps"][0]["reason"],
-            "/status expected 404 observed 400"
+            value["steps"][0]["problem"],
+            serde_json::from_str::<Value>(body).unwrap()
         );
-        assert_eq!(value["steps"][0]["failure"]["code"], "request.invalid");
-        assert_eq!(
-            value["steps"][0]["failure"]["trace_id"],
-            "11111111111111111111111111111111"
-        );
-    }
-
-    fn public_problem() -> Value {
-        json!({
-            "type": "https://id.registrystack.org/problems/registry-breg/request/invalid",
-            "title": "ignored", "detail": "ignored", "status": 400,
-            "code": "request.invalid", "traceId": "11111111111111111111111111111111"
-        })
+        assert!(value["steps"][0].get("failure").is_none());
+        server.finish();
     }
 
     fn problem_headers() -> HeaderMap {
@@ -1284,238 +1150,31 @@ mod tests {
         headers
     }
 
-    fn projection(body: &[u8], headers: &HeaderMap) -> Value {
-        serde_json::to_value(failure_metadata(Product::Breg, 400, headers, body)).unwrap()
-    }
-
     #[test]
-    fn failure_receipt_retains_only_closed_fields_not_short_canaries_or_forged_codes() {
-        for canary in ["x", "sub", "secret42", "request.secret42"] {
-            let mut body = public_problem();
-            body["title"] = json!(canary);
-            body["detail"] = json!(canary);
-            body["fieldPath"] = json!(canary);
-            body["class"] = json!(canary);
-            body["schema"] = json!(canary);
-            body["extension"] = json!({"token": canary});
-            let result = projection(&serde_json::to_vec(&body).unwrap(), &problem_headers());
-            assert_eq!(
-                result,
-                json!({"kind":"known_problem", "code":"request.invalid", "http_class":"client_error", "trace_id":"11111111111111111111111111111111"})
-            );
-            body["code"] = json!(format!("request.{canary}"));
-            assert_eq!(
-                projection(&serde_json::to_vec(&body).unwrap(), &problem_headers()),
-                json!({"kind":"unknown_problem", "http_class":"client_error"})
-            );
-        }
-    }
-
-    #[test]
-    fn failure_receipt_rejects_malformed_duplicates_unknown_types_and_status_bindings() {
+    fn only_a_problem_document_within_the_budget_is_carried() {
         let headers = problem_headers();
-        for bytes in [
-            b"{".as_slice(),
-            b"[]",
-            b"null",
-            b"",
-            br#"{"code":"request.invalid","code":"secret42"}"#,
-        ] {
-            assert_eq!(
-                projection(bytes, &headers),
-                json!({"kind":"invalid_problem", "http_class":"client_error"})
-            );
-        }
-        let body = serde_json::to_string(&public_problem()).unwrap();
-        for member in [
-            r#""code":"secret42""#,
-            r#""extension":"secret42","extension":"secret42""#,
-        ] {
-            let duplicate = format!("{{{member},{}", &body[1..]);
-            assert_eq!(
-                projection(duplicate.as_bytes(), &headers),
-                json!({"kind":"invalid_problem", "http_class":"client_error"})
-            );
-        }
-        for (member, value, kind) in [
-            ("code", json!("request.invalid.secret42"), "unknown_problem"),
-            (
-                "type",
-                json!("https://secret.example.invalid/request/invalid"),
-                "unknown_problem",
-            ),
-            ("status", json!(404), "invalid_problem"),
-            ("code", json!("resource.not_found"), "unknown_problem"),
-        ] {
-            let mut body = public_problem();
-            body[member] = value;
-            assert_eq!(
-                projection(&serde_json::to_vec(&body).unwrap(), &headers),
-                json!({"kind":kind, "http_class":"client_error"})
-            );
-        }
-    }
-
-    #[test]
-    fn failure_receipt_trace_requires_valid_body_and_exactly_one_matching_header() {
-        let bytes = serde_json::to_vec(&public_problem()).unwrap();
-        for header in [
-            None,
-            Some("secret42"),
-            Some("00-00000000000000000000000000000000-2222222222222222-01"),
-            Some("00-33333333333333333333333333333333-2222222222222222-01"),
-            Some("00-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-2222222222222222-01"),
-        ] {
-            let mut headers = problem_headers();
-            headers.remove("traceparent");
-            if let Some(value) = header {
-                headers.insert("traceparent", value.parse().unwrap());
-            }
-            let result = projection(&bytes, &headers);
-            assert_eq!(result["code"], "request.invalid");
-            assert!(result.get("trace_id").is_none());
-        }
-        let mut headers = problem_headers();
-        headers.append(
-            "traceparent",
-            "00-11111111111111111111111111111111-2222222222222222-01"
-                .parse()
-                .unwrap(),
-        );
-        assert!(projection(&bytes, &headers).get("trace_id").is_none());
-        for trace in [
-            "secret42".to_owned(),
-            "0".repeat(32),
-            "A".repeat(32),
-            "1".repeat(33),
-        ] {
-            let mut body = public_problem();
-            body["traceId"] = json!(trace);
-            assert_eq!(
-                projection(&serde_json::to_vec(&body).unwrap(), &problem_headers())["kind"],
-                "invalid_problem"
-            );
-        }
-    }
-
-    #[test]
-    fn failure_receipt_diagnostic_budget_media_and_http_classes_are_fixed() {
-        let headers = problem_headers();
-        let mut body = serde_json::to_vec(&public_problem()).unwrap();
-        body.resize(PROBLEM_LIMIT, b' ');
-        assert_eq!(projection(&body, &headers)["kind"], "known_problem");
-        body.push(b' ');
+        let body = br#"{"code":"request.invalid","extra":[1]}"#;
         assert_eq!(
-            projection(&body, &headers),
-            json!({"kind":"unavailable", "http_class":"client_error"})
+            problem_as_received(&headers, body),
+            Some(json!({"code": "request.invalid", "extra": [1]}))
         );
+        for bytes in [b"{".as_slice(), b"[]", b"null", b""] {
+            assert!(problem_as_received(&headers, bytes).is_none());
+        }
+        let mut oversize = body.to_vec();
+        oversize.resize(PROBLEM_LIMIT + 1, b' ');
+        assert!(problem_as_received(&headers, &oversize).is_none());
         for value in ["application/json", "text/plain"] {
             let mut other = headers.clone();
             other.insert(reqwest::header::CONTENT_TYPE, value.parse().unwrap());
-            assert_eq!(projection(b"secret42", &other)["kind"], "non_problem");
+            assert!(problem_as_received(&other, body).is_none());
         }
         let mut duplicate = headers.clone();
         duplicate.append(
             reqwest::header::CONTENT_TYPE,
             "application/problem+json".parse().unwrap(),
         );
-        assert_eq!(projection(b"secret42", &duplicate)["kind"], "non_problem");
-        for (status, class) in [
-            (200, None),
-            (399, None),
-            (400, Some("client_error")),
-            (499, Some("client_error")),
-            (500, Some("server_error")),
-            (599, Some("server_error")),
-        ] {
-            let result = serde_json::to_value(failure_metadata(
-                Product::Breg,
-                status,
-                &HeaderMap::new(),
-                b"secret42",
-            ))
-            .unwrap();
-            assert_eq!(result.get("http_class").and_then(Value::as_str), class);
-        }
-    }
-
-    #[test]
-    fn failure_receipt_closed_catalogs_bind_each_product_type_and_status() {
-        for code in registry_breg::problem::ProblemCode::ALL {
-            let mut body = public_problem();
-            body["code"] = json!(code.code());
-            body["status"] = json!(code.status());
-            body["type"] = json!(registry_breg::problem::type_uri(code.code()));
-            let document =
-                ProblemDocument::parse_exact(&serde_json::to_vec(&body).unwrap(), PROBLEM_LIMIT)
-                    .unwrap();
-            assert_eq!(
-                known_problem_code(Product::Breg, &document),
-                Some(code.code())
-            );
-            assert!(known_problem_code(Product::Casework, &document).is_none());
-        }
-        let catalog: Value = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../products/casework/generated/registry-casework.openapi.json"
-        )))
-        .unwrap();
-        let mut checked = 0;
-        for schema in catalog["components"]["schemas"]
-            .as_object()
-            .unwrap()
-            .values()
-        {
-            if let Some(parts) = schema["allOf"].as_array() {
-                for part in parts {
-                    let properties = &part["properties"];
-                    if let (Some(code), Some(status), Some(uri)) = (
-                        properties["code"]["const"].as_str(),
-                        properties["status"]["const"].as_u64(),
-                        properties["type"]["const"].as_str(),
-                    ) {
-                        let mut body = public_problem();
-                        body["code"] = json!(code);
-                        body["status"] = json!(status);
-                        body["type"] = json!(uri);
-                        let document = ProblemDocument::parse_exact(
-                            &serde_json::to_vec(&body).unwrap(),
-                            PROBLEM_LIMIT,
-                        )
-                        .unwrap();
-                        assert_eq!(known_problem_code(Product::Casework, &document), Some(code));
-                        assert!(known_problem_code(Product::Breg, &document).is_none());
-                        checked += 1;
-                    }
-                }
-            }
-        }
-        assert!(checked > 0);
-    }
-
-    #[test]
-    fn failure_receipt_poll_retains_last_completed_response_and_none_before_any_response() {
-        let first = failure_metadata(
-            Product::Breg,
-            400,
-            &problem_headers(),
-            &serde_json::to_vec(&public_problem()).unwrap(),
-        );
-        let last = failure_metadata(Product::Breg, 503, &HeaderMap::new(), b"secret42");
-        let outcome = poll_timed_out(503, Some("last status mismatch".into()), Some(last));
-        let result = serde_json::to_value(outcome.failure).unwrap();
-        assert_eq!(
-            result,
-            json!({"kind":"non_problem","http_class":"server_error"})
-        );
-        assert!(poll_timed_out(0, None, None).failure.is_none());
-        assert_eq!(
-            serde_json::to_value(
-                poll_timed_out(400, Some("status mismatch".into()), Some(first)).failure
-            )
-            .unwrap()["code"],
-            "request.invalid"
-        );
+        assert!(problem_as_received(&duplicate, body).is_none());
     }
 
     const PUBLIC_INVALID: &str = r#"{"type":"https://id.registrystack.org/problems/registry-breg/request/invalid","title":"ignored","detail":"ignored","status":400,"code":"request.invalid","traceId":"11111111111111111111111111111111"}"#;
@@ -1524,7 +1183,7 @@ mod tests {
         "traceparent: 00-11111111111111111111111111111111-2222222222222222-01\r\n";
 
     #[test]
-    fn failure_receipt_expected_error_passes_and_failed_capture_updates_stay_empty() {
+    fn an_expected_error_passes_and_a_failed_capture_updates_nothing() {
         for expected_status in [400, 404] {
             let server = synthetic_server_with_headers(
                 vec![(Duration::ZERO, 400, PUBLIC_INVALID)],
@@ -1565,7 +1224,7 @@ mod tests {
             assert_eq!(result.status, 400);
             if expected_status == 400 {
                 assert!(result.reason.is_none());
-                assert!(result.failure.is_none());
+                assert!(result.problem.is_none());
                 assert_eq!(
                     result.updates.get("observed"),
                     Some(&json!("request.invalid"))
@@ -1573,17 +1232,14 @@ mod tests {
             } else {
                 assert!(result.reason.is_some());
                 assert!(result.updates.is_empty());
-                assert_eq!(
-                    serde_json::to_value(result.failure).unwrap()["code"],
-                    "request.invalid"
-                );
+                assert_eq!(result.problem.unwrap()["code"], "request.invalid");
             }
             assert_eq!(server.finish(), 1);
         }
     }
 
     #[test]
-    fn failure_receipt_actual_poll_keeps_last_completed_problem_not_late_response() {
+    fn a_timed_out_poll_keeps_the_last_completed_problem_not_a_late_response() {
         let _lock = POLL_TEST_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -1609,15 +1265,13 @@ mod tests {
         .unwrap();
         assert_eq!(report.result, "failed");
         assert_eq!(report.steps[0].status, 503);
-        let failure = serde_json::to_value(&report.steps[0].failure).unwrap();
-        assert_eq!(failure["code"], "service.unavailable");
-        assert_eq!(failure["http_class"], "server_error");
-        assert_eq!(failure["trace_id"], "11111111111111111111111111111111");
+        let problem = report.steps[0].problem.as_ref().unwrap();
+        assert_eq!(problem["code"], "service.unavailable");
         assert_eq!(server.finish(), 3);
     }
 
     #[test]
-    fn failure_receipt_does_not_change_existing_transport_response_limit() {
+    fn a_problem_report_does_not_change_the_transport_response_limit() {
         static BODY: [u8; RESPONSE_LIMIT + 1] = [b'x'; RESPONSE_LIMIT + 1];
         let body = std::str::from_utf8(&BODY).unwrap();
         let server = synthetic_server(vec![(Duration::ZERO, 400, body)]);
@@ -1630,7 +1284,6 @@ mod tests {
         let result = runtime.block_on(read_response(
             client.get(format!("{}v1/result", server.url)),
             &mut transferred,
-            Product::Breg,
         ));
         assert!(result.is_err());
         assert!(transferred <= RESPONSE_LIMIT);
@@ -1646,7 +1299,7 @@ mod tests {
             expected_status: 200,
             result: "passed",
             reason: None,
-            failure: None,
+            problem: None,
         };
         let value = serde_json::to_value(&report).unwrap();
         assert!(value.get("reason").is_none());
@@ -1664,7 +1317,7 @@ mod tests {
         let response = ResponseData {
             status: 200,
             headers: HeaderMap::new(),
-            failure: None,
+            problem: None,
             body: json!({"items": [
                 {"id": "one", "revision": 1}, {"id": "two", "revision": 2}
             ]}),

@@ -125,7 +125,8 @@ owner-only scratch directory.
 To adapt the plan to your own project, change these parts and leave the structure alone:
 
 - `issuer` names the identity issuer the local test tokens claim. Use a name that is yours.
-- `products` lists each product's project directory and token audience, in startup order.
+- `products` lists each product's project directory and token audience, in any order. The run
+  starts BReg before Casework.
 - `people` declares synthetic test people, each with a subject and one grant per product. A grant
   selects an access profile of that product's project, its scopes, and extra claims. A BReg grant
   must name a profile the BReg project declares.

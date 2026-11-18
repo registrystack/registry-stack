@@ -75,7 +75,7 @@
     },
     "Bindings": {
       "additionalProperties": false,
-      "description": "Run-local connections between BReg and Casework. Configuring either one requires both products, with BReg listed before Casework.",
+      "description": "Run-local connections between BReg and Casework. Configuring either one requires both products.",
       "properties": {
         "bregReviewAuthority": {
           "$ref": "#/$defs/BregReviewAuthority",
@@ -179,7 +179,7 @@
           "description": "Local identifier of the product profile this grant uses."
         },
         "scopes": {
-          "description": "Distinct scopes written into the token, at most 32, each 1 to 256 characters without whitespace or control characters.",
+          "description": "Distinct scopes written into the token, at most 32, each an OAuth scope-token of 1 to 256 bytes: printable ASCII without spaces, double quotes or backslashes.",
           "items": {
             "$ref": "#/$defs/ExternalId"
           },

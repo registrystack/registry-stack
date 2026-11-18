@@ -48,6 +48,14 @@ use self::{
     products::{ProductRunner, SchemaPerson},
 };
 
+/// Exit codes of the `rstack` launcher: a domain refusal, a malformed
+/// invocation, and an operational failure.
+const DOMAIN_REFUSAL_EXIT: u8 = 1;
+const USAGE_EXIT: u8 = 2;
+const OPERATIONAL_FAILURE_EXIT: u8 = 3;
+/// The `apiVersion` and `kind` a `--format json` check report opens with.
+const CHECK_REPORT_API_VERSION: &str = "id.registrystack.org/formats/breg/ctl-report/v1alpha1";
+const CHECK_REPORT_KIND: &str = "BRegCtlReport";
 const SCHEMA: &str = "registry.rstack.dev.v1";
 const ERROR_SCHEMA: &str = "registry.rstack.error.v1";
 const REQUEST: &str = "RSTACK_PROJECT_DEV_REQUEST";
@@ -133,8 +141,6 @@ struct RunInput {
     schema_people: Vec<SchemaPerson>,
     breg_authority: Option<BregAuthority>,
     casework_principals: BTreeMap<String, String>,
-    #[serde(default)]
-    casework_source_digest: Option<String>,
     binaries: BTreeMap<Product, Binaries>,
 }
 
@@ -471,11 +477,11 @@ fn error_report(error: &anyhow::Error) -> (Value, u8) {
         || error.is::<RecoveryNeeded>()
         || error.is::<products::InspectionUnavailable>();
     let (class, code) = if operational {
-        ("operational", crate::OPERATIONAL_FAILURE_EXIT)
+        ("operational", OPERATIONAL_FAILURE_EXIT)
     } else if error.is::<Usage>() {
-        ("usage", crate::USAGE_EXIT)
+        ("usage", USAGE_EXIT)
     } else {
-        ("domain", crate::DOMAIN_REFUSAL_EXIT)
+        ("domain", DOMAIN_REFUSAL_EXIT)
     };
     let mut report = json!({
         "schema_version": ERROR_SCHEMA,
@@ -600,7 +606,7 @@ fn check(
             (report, u8::from(refused))
         }
         Err(error) => match error.downcast::<Report>() {
-            Ok(report) => (report, crate::DOMAIN_REFUSAL_EXIT),
+            Ok(report) => (report, DOMAIN_REFUSAL_EXIT),
             Err(error) => {
                 if let Some(unavailable) = error.downcast_ref::<products::InspectionUnavailable>() {
                     let report = Report::new(vec![Diagnostic::error(
@@ -611,7 +617,7 @@ fn check(
                     )]);
                     return write_check_report(
                         report,
-                        crate::OPERATIONAL_FAILURE_EXIT,
+                        OPERATIONAL_FAILURE_EXIT,
                         machine,
                         stdout,
                         stderr,
@@ -621,13 +627,13 @@ fn check(
                     (
                         "breg.project-dev.check-unavailable",
                         "Name a project directory containing a readable dev.yaml.",
-                        crate::OPERATIONAL_FAILURE_EXIT,
+                        OPERATIONAL_FAILURE_EXIT,
                     )
                 } else {
                     (
                         "breg.project-dev.invalid-plan",
                         "Correct the development plan at the reported field.",
-                        crate::DOMAIN_REFUSAL_EXIT,
+                        DOMAIN_REFUSAL_EXIT,
                     )
                 };
                 (
@@ -654,7 +660,7 @@ fn write_check_report(
             "status": registry_cli_report::Status::from_exit(exit).as_str(),
             "diagnostics": report.to_json_value(),
         });
-        crate::write_ctl_report(stdout, &payload)
+        write_check_json(stdout, payload)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else if exit == 0 {
@@ -667,8 +673,22 @@ fn write_check_report(
         exit
     } else {
         let _ = writeln!(stderr, "rstack dev check: output could not be written");
-        crate::OPERATIONAL_FAILURE_EXIT
+        OPERATIONAL_FAILURE_EXIT
     }
+}
+
+/// Writes the machine-readable check report: the payload under the report
+/// header, inside the shared CLI report envelope.
+fn write_check_json(stdout: &mut dyn Write, mut payload: Value) -> Result<()> {
+    let members = payload
+        .as_object_mut()
+        .context("a check report must be an object")?;
+    members.insert("apiVersion".to_owned(), json!(CHECK_REPORT_API_VERSION));
+    members.insert("kind".to_owned(), json!(CHECK_REPORT_KIND));
+    let report =
+        registry_cli_report::Report::new(&payload, registry_platform_buildinfo::DISPLAY_VERSION)?;
+    serde_json::to_writer_pretty(stdout, &report)?;
+    Ok(())
 }
 
 fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> Result<Value> {
@@ -677,7 +697,7 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
         .canonicalize()
         .context("cannot open the development project directory")?;
     let loaded = plan::load(&project)?;
-    let plan = loaded.plan;
+    let mut plan = loaded.plan;
     ensure!(
         plan.application.is_some() == application_root.is_some(),
         "supply --application-root exactly when dev.yaml declares application"
@@ -701,6 +721,7 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
     let signals = signals()?;
     let inspection = products::inspect(&project, &plan, &signals)?;
     plan::validate_application_authority(&plan, &inspection)?;
+    plan.order_products_for_start();
     ensure!(
         env::var_os(DATABASE_URL).is_some_and(|value| !value.is_empty()),
         "supply --database-url or {DATABASE_URL} for a TLS PostgreSQL development server"
@@ -727,7 +748,6 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
         schema_people,
         breg_authority: inspection.breg_authority,
         casework_principals: inspection.casework_principals,
-        casework_source_digest: inspection.casework_source_digest,
         binaries,
     };
     let preparation = (|| {
@@ -1956,10 +1976,9 @@ mod tests {
         assert!(run_dir(&doomed.file_name().unwrap().to_string_lossy()).is_err());
         let original = base.join("original-casework.yaml");
         fs::write(&original, b"authored-source").unwrap();
-        for name in ["casework-source", "casework-bound", "casework-paired"] {
+        for name in ["casework-bound", "casework-paired"] {
             private_directory(&root.join(name)).unwrap();
             write_private(&root.join(name).join("casework.yaml"), b"private-run-copy").unwrap();
-            write_private(&root.join(name).join("run-source-receipt.json"), b"{}").unwrap();
         }
         remove_run_dir(&root).unwrap();
         assert!(!root.exists());
