@@ -55,6 +55,41 @@
   `requiresPostgis`. A consumer that pins the earlier versions must accept the
   new `apiVersion` values. See the [explain contract
   policy](https://docs.registrystack.org/reference/bregctl-explain/#schemas-and-compatibility).
+- A publisher can dry-run a publication:
+  `POST /v1/statistics/{dataset}/releases/{period}/versions:dry-run` takes the
+  same body as a publication (`status`) and no `Idempotency-Key`, and is open
+  to the publisher only, for every dataset with releases. It runs the
+  publication's computation and checks and returns the release document a
+  publication made at that moment would store, including its next version
+  number, plus `suppressions`: for each suppressed cell, its index in
+  `document.cells` and the reason (`minimum-count`, `minimum-contributors`,
+  `dominance`, or `contains-suppressed-sum`; the list may grow). It stores
+  nothing, reserves no version, and writes one audit entry. The clients gain
+  `statistics_release_dry_run` (Rust and Python) and `statisticsReleaseDryRun`
+  (Node.js). This change is additive.
+- A release under `minimum-count-and-rounding` is built to carry sums, with
+  rules for disclosure control: the `disclosure` block takes `contributor`
+  (`{type: field, field}` over a `reference` field of the unit, or
+  `{type: each-record}`) and `dominancePercent`, an integer from 1 to 100,
+  both required when a dataset that grants `publish` declares a sum and
+  refused otherwise, with no defaults. A cell is suppressed when it has fewer
+  than `minimumCount` contributors, and a sum is suppressed by the p% rule
+  when the total less the two largest contributor totals is below p percent of
+  the largest. A suppressed sum suppresses the same measure in every total
+  that contains it. A sum over an `int64` field is rounded to `roundingBase`;
+  a sum over a `decimal` field is exact. A publication refuses with refusal
+  code `negative-value` when a summed value is negative, and the compiler
+  refuses a decimal field without a `minimum` of zero or more, day periods,
+  more than 4 dimensions, and two datasets whose sums over one field, unit,
+  and population have nested dimensions. The compiler also refuses a
+  `publish` or `read-releases` grant on such a dataset
+  (`breg.statistical-dataset.sum-release-held`) until a statistician has
+  reviewed the rules and their implementation; until then, sums are served
+  through `read-live`, `read-exact`, or an `exact-public-values` release. The
+  release document states `contributor`, `dominanceRule`, and `sumTotals`,
+  never p; the contributor joins the definition digest and p does not. The
+  security model gains BREG-RES-26.
+
 - A statistical dataset can declare a `ratio` measure,
   `{type: ratio, id, numerator, denominator, scale}`, and a `percentile`
   measure, `{type: percentile, id, field, percentile, scale}`. A ratio divides
@@ -73,9 +108,10 @@
   status `not-applicable` for a zero denominator or a cell with no values.
   Every measure type is available on `read-live`, `read-exact`, and a release
   under `exact-public-values`; a release under `minimum-count-and-rounding`
-  carries counts and distinct counts only, and a dataset that declares a sum, a
-  mean, a ratio, or a percentile with a `publish` or `read-releases` grant under
-  it is refused with `breg.statistical-dataset.measure-release-unsupported`. A
+  carries counts and distinct counts, and sums once their rules are reviewed
+  (see the sum entry above), and a dataset that declares a mean, a ratio, or a
+  percentile with a `publish` or `read-releases` grant under it is refused with
+  `breg.statistical-dataset.measure-release-unsupported`. A
   percentile is not additive, so a dataset that declares one declares at most 4
   dimensions (`breg.statistical-dataset.non-additive-dimensions`), as for a
   distinct count. Adding either measure changes the definition digest and starts
@@ -96,8 +132,9 @@
   as for a sum or a mean, and classified `public` under `exact-public-values`.
   A distinct count may appear in a `minimum-count-and-rounding` release, where
   the minimum count and rounding apply to each distinct-count cell on its own
-  value, independently of the record count of the same cell; sums and means
-  stay refused there. Adding a distinct count changes the definition digest and
+  value, independently of the record count of the same cell; means, ratios,
+  and percentiles stay refused there, and sums follow the rules of the sum
+  entry above. Adding a distinct count changes the definition digest and
   starts a new release series.
 - A statistical dataset has a fourth operation, `read-exact`, beside
   `read-live`, `publish`, and `read-releases`. It serves exact statistics
@@ -137,14 +174,15 @@
   periods you still need. The released document's `disclosure` member is the
   existing minimum-count object or exactly `{"method": "exact-public-values"}`.
   A second method, `type: exact-public-values`, takes no other member and
-  releases exact counts, sums, and means, with cell statuses `exact` or
+  releases exact values of every measure type, with cell statuses `exact` or
   `not-applicable` only. It compiles only when the unit record type, every
   field the dataset reads, and every source record type of a derived field it
   reads are classified `public`; otherwise the compiler refuses with
   `breg.statistical-dataset.exact-release-not-public`, one diagnostic per item
-  to reclassify. A dataset with a sum or a mean can be published only under
-  this method; under `minimum-count-and-rounding` it is still refused with
-  `breg.statistical-dataset.measure-release-unsupported`. The security model
+  to reclassify. A dataset with a mean can be published only under this
+  method; under `minimum-count-and-rounding` it is refused with
+  `breg.statistical-dataset.measure-release-unsupported`, and a sum is held for
+  review (`breg.statistical-dataset.sum-release-held`). The security model
   gains BREG-SEC-211 and BREG-RES-24.
 - BREAKING: A statistical dataset may declare `measures`, a list of `id` and
   `type` pairs, and every cell names its measure. `count` is the only type. A
@@ -166,13 +204,15 @@
   upgrade. Releases published before the upgrade belong to an earlier series
   that stays in storage and is no longer served; republish the periods you
   still need.
-- BREAKING: A statistical dataset declares at most 12 dimensions. The compiler refuses a
-  longer list with `breg.statistical-dataset.dimensions-exceeded`, and the
-  authoring schema bounds `dimensions` at 12 items. PostgreSQL now computes
-  every total in the query that counts the cells, and 12 is the most one
-  `CUBE` accepts.
+- BREAKING: A statistical dataset declares at most 12 dimensions. The
+  compiler refuses a longer list with
+  `breg.statistical-dataset.dimensions-exceeded`, and the authoring schema
+  bounds `dimensions` at 12 items. PostgreSQL now computes every total in the
+  query that counts the cells, and 12 is the most one `CUBE` accepts.
 - BREAKING: A statistical dataset may declare two more measure types, served
-  on live reads only. `{id, type: sum, field}` is the sum of a unit entity
+  by `read-live`, `read-exact`, and `exact-public-values` releases (a
+  `minimum-count-and-rounding` release carries counts and distinct counts, with
+  sums held for review). `{id, type: sum, field}` is the sum of a unit entity
   field over the records in a cell, and `{id, type: mean, field, scale}` is
   the mean, with `scale` a required integer from 0 to 38. A cell's `value` may
   be a decimal string such as `"1234.50"` for a sum or a mean, so readers must
@@ -184,8 +224,10 @@
   (`breg.statistical-dataset.measure-field-type`), a field that a `read-live`
   profile cannot read
   (`breg.statistical-dataset.measure-field-not-readable`), and a `publish` or
-  `read-releases` grant on a dataset with a sum or a mean
-  (`breg.statistical-dataset.measure-release-unsupported`). Datasets that
+  `read-releases` grant under `minimum-count-and-rounding` on a dataset with a
+  mean (`breg.statistical-dataset.measure-release-unsupported`) or, while the
+  sum rules are held for review, a sum
+  (`breg.statistical-dataset.sum-release-held`). Datasets that
   declare only counts, and their documents, are unchanged by this entry.
 - A `crs84-polygon` field stores a bounded `Polygon` or `MultiPolygon` in
   WGS 84 longitude and latitude. It takes `precision`, `maximumPositions` and

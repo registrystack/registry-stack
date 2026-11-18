@@ -205,6 +205,11 @@ impl Measure {
         matches!(self, Self::Count { .. } | Self::DistinctCount { .. })
     }
 
+    /// True for a sum.
+    pub fn is_sum(&self) -> bool {
+        matches!(self, Self::Sum { .. })
+    }
+
     /// The value of a cell no record falls into: a count, a distinct count and
     /// a sum are zero, and a mean, a ratio and a percentile have none.
     fn empty_value(&self) -> Option<CellValue> {
@@ -491,17 +496,39 @@ pub struct ExactDocument {
     rename_all_fields = "camelCase"
 )]
 pub enum DisclosureDocument {
+    /// The three members after `totals` are present exactly when the dataset
+    /// declares a sum. They state who a value belongs to and which rules
+    /// withhold a sum; the percentage of the dominance rule is never stated.
     MinimumCountAndRounding {
         minimum_count: u64,
         rounding_base: u64,
         rounding_rule: String,
         totals: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contributor: Option<Contributor>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dominance_rule: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sum_totals: Option<String>,
     },
     ExactPublicValues,
 }
 
+/// The `dominanceRule` a release of sums states.
+pub const DOMINANCE_RULE: &str = "p-percent";
+/// The `sumTotals` a release of sums states.
+pub const SUM_TOTALS_RULE: &str = "suppressed-when-containing-a-suppressed-sum";
+
 impl From<DisclosureMethod> for DisclosureDocument {
     fn from(method: DisclosureMethod) -> Self {
+        Self::for_release(method, None)
+    }
+}
+
+impl DisclosureDocument {
+    /// The disclosure a release document states: `sums` is present when the
+    /// dataset releases a sum under minimum-count-and-rounding.
+    pub fn for_release(method: DisclosureMethod, sums: Option<&SumDisclosure>) -> Self {
         match method {
             DisclosureMethod::MinimumCountAndRounding {
                 minimum_count,
@@ -511,10 +538,52 @@ impl From<DisclosureMethod> for DisclosureDocument {
                 rounding_base,
                 rounding_rule: "nearest-multiple-halves-up".to_owned(),
                 totals: "rounded-independently".to_owned(),
+                contributor: sums.map(|sums| sums.contributor.clone()),
+                dominance_rule: sums.map(|_| DOMINANCE_RULE.to_owned()),
+                sum_totals: sums.map(|_| SUM_TOTALS_RULE.to_owned()),
             },
             DisclosureMethod::ExactPublicValues => Self::ExactPublicValues,
         }
     }
+}
+
+/// Who a value belongs to when the dominance and contributor rules count
+/// contributors.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    deny_unknown_fields,
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum Contributor {
+    /// The value of a `reference` field of the unit record.
+    Field { field: String },
+    /// Each record is its own contributor.
+    EachRecord,
+}
+
+/// What a minimum-count-and-rounding release of sums needs beyond
+/// `DisclosureMethod`: the contributor, the percentage of the dominance rule,
+/// and which sums are over an `int64` field (rounded) rather than a `decimal`
+/// field (exact). The percentage is a secret of the publisher: it appears in
+/// no release document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SumDisclosure {
+    pub contributor: Contributor,
+    /// p of the p% rule, 1 to 100.
+    pub dominance_percent: u8,
+    /// The ids of the sum measures over an `int64` field.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub integer_sums: BTreeSet<String>,
+}
+
+/// True when the dataset computes its totals over the records rather than from
+/// its base cells: a measure that is not additive, or a released sum, whose
+/// contributor counts and largest contributions are not additive either.
+pub fn uses_row_cube(measures: &[Measure], releases_sums: bool) -> bool {
+    releases_sums || measures.iter().any(|measure| !measure.is_additive())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -821,6 +890,244 @@ pub fn apply_disclosure(
         }
     }
     Ok(())
+}
+
+/// What 8b's SQL computes for one cell of a protected release. Never
+/// serialized: no document carries it.
+///
+/// Records with no value for the contributor field form one contributor
+/// together, the cautious reading, so an optional contributor field never
+/// inflates the count.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CellDisclosureInput {
+    /// The distinct contributors in the cell (for a sum cell, among the
+    /// records with a value for the summed field); `None` when the dataset
+    /// declares no contributor.
+    pub contributors: Option<u64>,
+    /// For a sum cell, whether the p% rule holds, from
+    /// `dominance_predicate_sql`. False for every other measure.
+    pub dominant: bool,
+}
+
+/// Why a cell was suppressed. Reported to the publisher's dry run, never in a
+/// release document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SuppressionReason {
+    MinimumCount,
+    MinimumContributors,
+    Dominance,
+    ContainsSuppressedSum,
+}
+
+/// The reason one cell, by its index, was suppressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellSuppression {
+    pub cell: usize,
+    pub reason: SuppressionReason,
+}
+
+/// The SQL text of the p% dominance rule: the cell's sum `total` is dominated
+/// when what remains after its two largest contributions `largest` and
+/// `second` is under `percent` per cent of the largest, that is
+/// `100 * (T - x1 - x2) < p * x1`. Each argument is a SQL expression; the
+/// comparison runs in PostgreSQL `numeric`, which holds a decimal field's
+/// precision exactly. Equality is not sensitive.
+pub fn dominance_predicate_sql(total: &str, largest: &str, second: &str, percent: &str) -> String {
+    format!(
+        "(100::numeric * (({total}) - ({largest}) - ({second})) < ({percent})::numeric * ({largest}))"
+    )
+}
+
+/// Applies minimum-count-and-rounding to every cell of a release that may
+/// carry sums and returns why each suppressed cell is suppressed, ordered by
+/// cell index. `inputs` has one entry per cell; `integer_sums` names the sum
+/// measures over an `int64` field, which are rounded like counts, while the
+/// other sums are exact. Each cell takes the first reason that applies:
+/// minimum count, contributor minimum, dominance, then containing a suppressed
+/// sum.
+pub fn apply_protected_disclosure(
+    cells: &mut [Cell],
+    inputs: &[CellDisclosureInput],
+    method: DisclosureMethod,
+    measures: &[Measure],
+    integer_sums: &BTreeSet<String>,
+) -> Result<Vec<CellSuppression>, StatisticsError> {
+    let DisclosureMethod::MinimumCountAndRounding {
+        minimum_count,
+        rounding_base,
+    } = method
+    else {
+        return Ok(Vec::new());
+    };
+    if minimum_count < 2 || rounding_base < 2 {
+        return Err(StatisticsError::InvalidDisclosureParameters);
+    }
+    if inputs.len() != cells.len() {
+        return Err(StatisticsError::InvalidDocument(
+            "disclosure control needs one input per cell",
+        ));
+    }
+    let sums: BTreeSet<&str> = measures
+        .iter()
+        .filter(|measure| measure.is_sum())
+        .map(Measure::id)
+        .collect();
+    let mut reasons: Vec<Option<SuppressionReason>> = vec![None; cells.len()];
+    let mut primary_sums = Vec::new();
+    for (index, (cell, input)) in cells.iter().zip(inputs).enumerate() {
+        let is_sum = sums.contains(cell.measure.as_str());
+        let below_contributors = input
+            .contributors
+            .is_some_and(|contributors| contributors > 0 && contributors < minimum_count);
+        reasons[index] = if is_sum {
+            if below_contributors {
+                Some(SuppressionReason::MinimumContributors)
+            } else if input.dominant {
+                Some(SuppressionReason::Dominance)
+            } else {
+                None
+            }
+        } else {
+            let Some(CellValue::Count(value)) = cell.value else {
+                return Err(StatisticsError::InvalidDocument(
+                    "disclosure control requires exact count cells",
+                ));
+            };
+            if value > 0 && value < minimum_count {
+                Some(SuppressionReason::MinimumCount)
+            } else if below_contributors {
+                Some(SuppressionReason::MinimumContributors)
+            } else {
+                None
+            }
+        };
+        if is_sum && reasons[index].is_some() {
+            primary_sums.push(index);
+        }
+    }
+
+    // A sum withheld for its contributors is recoverable from the totals that
+    // contain it, so every such total of the same measure and period goes too.
+    // Containment is transitive, so enumerating each primary cell's ancestors
+    // once reaches every level.
+    let by_key: BTreeMap<(&str, &str, &BTreeMap<String, String>), usize> = cells
+        .iter()
+        .enumerate()
+        .map(|(index, cell)| {
+            (
+                (
+                    cell.period.as_str(),
+                    cell.measure.as_str(),
+                    &cell.dimensions,
+                ),
+                index,
+            )
+        })
+        .collect();
+    let mut contained = Vec::new();
+    for index in primary_sums {
+        let cell = &cells[index];
+        let open: Vec<&String> = cell
+            .dimensions
+            .iter()
+            .filter(|(_, code)| code.as_str() != TOTAL_CODE)
+            .map(|(field, _)| field)
+            .collect();
+        if open.len() > MAX_ANCESTOR_DIMENSIONS {
+            return Err(StatisticsError::InvalidDocument(
+                "a sum cell has more dimensions than a totals check covers",
+            ));
+        }
+        for mask in 1_usize..(1 << open.len()) {
+            let mut ancestor = cell.dimensions.clone();
+            for (bit, field) in open.iter().enumerate() {
+                if mask & (1 << bit) != 0 {
+                    ancestor.insert((*field).clone(), TOTAL_CODE.to_owned());
+                }
+            }
+            if let Some(found) =
+                by_key.get(&(cell.period.as_str(), cell.measure.as_str(), &ancestor))
+            {
+                contained.push(*found);
+            }
+        }
+    }
+    for index in contained {
+        reasons[index].get_or_insert(SuppressionReason::ContainsSuppressedSum);
+    }
+
+    for (index, (cell, input)) in cells.iter_mut().zip(inputs).enumerate() {
+        if reasons[index].is_some() {
+            cell.value = None;
+            cell.status = CellStatus::Suppressed;
+        } else if sums.contains(cell.measure.as_str()) {
+            if input.contributors == Some(0) {
+                cell.status = CellStatus::Exact;
+            } else if integer_sums.contains(&cell.measure) {
+                let Some(CellValue::Decimal(text)) = &cell.value else {
+                    return Err(StatisticsError::InvalidDocument(
+                        "a sum cell carries a decimal string",
+                    ));
+                };
+                let value = parse_whole_number(text)?;
+                cell.value = Some(CellValue::Decimal(
+                    round_halves_up_wide(value, u128::from(rounding_base))?.to_string(),
+                ));
+                cell.status = CellStatus::Rounded;
+            } else {
+                cell.status = CellStatus::Exact;
+            }
+        } else {
+            let Some(CellValue::Count(value)) = cell.value else {
+                return Err(StatisticsError::InvalidDocument(
+                    "disclosure control requires exact count cells",
+                ));
+            };
+            if value == 0 {
+                cell.status = CellStatus::Exact;
+            } else {
+                cell.value = Some(CellValue::Count(round_halves_up(value, rounding_base)?));
+                cell.status = CellStatus::Rounded;
+            }
+        }
+    }
+    Ok(reasons
+        .iter()
+        .enumerate()
+        .filter_map(|(cell, reason)| reason.map(|reason| CellSuppression { cell, reason }))
+        .collect())
+}
+
+/// The most open dimensions of one cell whose totals are enumerated.
+const MAX_ANCESTOR_DIMENSIONS: usize = 12;
+
+/// An `int64` sum as a non-negative whole number; a negative or fractional
+/// value is an internal error, since the publish path refuses negative inputs
+/// before disclosure control runs.
+fn parse_whole_number(text: &str) -> Result<u128, StatisticsError> {
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(StatisticsError::InvalidDocument(
+            "an int64 sum is a non-negative whole number",
+        ));
+    }
+    text.parse().map_err(|_| StatisticsError::CountOverflow)
+}
+
+fn round_halves_up_wide(value: u128, base: u128) -> Result<u128, StatisticsError> {
+    let quotient = value / base;
+    let halfway = base / 2 + base % 2;
+    let rounded = if value % base >= halfway {
+        quotient
+            .checked_add(1)
+            .ok_or(StatisticsError::CountOverflow)?
+    } else {
+        quotient
+    };
+    rounded
+        .checked_mul(base)
+        .ok_or(StatisticsError::CountOverflow)
 }
 
 pub fn canonical_document(document: &StatisticsDocument) -> Result<Vec<u8>, StatisticsError> {
@@ -1220,18 +1527,34 @@ fn validate_document(document: &StatisticsDocument) -> Result<(), StatisticsErro
         .iter()
         .map(|measure| (measure.id(), measure))
         .collect();
-    if matches!(
-        document.disclosure,
-        Some(DisclosureDocument::MinimumCountAndRounding { .. })
-    ) && document
-        .dataset
-        .measures
-        .iter()
-        .any(|measure| !measure.is_count_like())
+    if let Some(DisclosureDocument::MinimumCountAndRounding {
+        contributor,
+        dominance_rule,
+        sum_totals,
+        ..
+    }) = &document.disclosure
     {
-        return Err(StatisticsError::InvalidDocument(
-            "a minimum-count-and-rounding release carries counts and distinct counts only",
-        ));
+        if document
+            .dataset
+            .measures
+            .iter()
+            .any(|measure| !measure.is_count_like() && !measure.is_sum())
+        {
+            return Err(StatisticsError::InvalidDocument(
+                "a minimum-count-and-rounding release carries counts, distinct counts and sums only",
+            ));
+        }
+        let declares_sum = document.dataset.measures.iter().any(Measure::is_sum);
+        let states_sum_rules = contributor.is_some()
+            && dominance_rule.as_deref() == Some(DOMINANCE_RULE)
+            && sum_totals.as_deref() == Some(SUM_TOTALS_RULE);
+        let states_nothing =
+            contributor.is_none() && dominance_rule.is_none() && sum_totals.is_none();
+        if (declares_sum && !states_sum_rules) || (!declares_sum && !states_nothing) {
+            return Err(StatisticsError::InvalidDocument(
+                "a minimum-count-and-rounding release states its contributor and sum rules exactly when it carries a sum",
+            ));
+        }
     }
     let mut seen_cells = BTreeSet::new();
     for cell in &document.cells {
@@ -1260,6 +1583,19 @@ fn validate_document(document: &StatisticsDocument) -> Result<(), StatisticsErro
                 ))
             }
             _ => {}
+        }
+        if matches!(
+            document.disclosure,
+            Some(DisclosureDocument::MinimumCountAndRounding { .. })
+        ) && cell.status == CellStatus::Rounded
+            && matches!(
+                document.dataset.measures.iter().find(|measure| measure.id() == cell.measure),
+                Some(Measure::Sum { scale, .. }) if *scale != 0
+            )
+        {
+            return Err(StatisticsError::InvalidDocument(
+                "a rounded sum is over a whole-number field",
+            ));
         }
         if !period_codes.contains(cell.period.as_str()) {
             return Err(StatisticsError::InvalidDocument(

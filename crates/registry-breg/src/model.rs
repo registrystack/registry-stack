@@ -172,6 +172,10 @@ pub struct CompiledStatisticalDataset {
     /// The declared measures, or the one `count` measure when none is declared.
     pub measures: Vec<crate::statistics::Measure>,
     pub disclosure: crate::statistics::DisclosureMethod,
+    /// The contributor, dominance percentage and integer sums of a dataset that
+    /// releases sums under minimum-count-and-rounding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sum_disclosure: Option<crate::statistics::SumDisclosure>,
     /// Authentication requirements for every dataset grant, including
     /// release readers which need no entity permission.
     pub access_profiles: BTreeMap<String, AccessProfileSource>,
@@ -2164,4 +2168,12 @@ impl CompiledRegistry {
 
 pub(crate) fn display_is_empty(display: &crate::contract::DisplaySource) -> bool {
     display.label.is_none() && display.description.is_none() && display.title_field.is_none()
+}
+
+impl CompiledStatisticalDataset {
+    /// True when the dataset computes its totals over the records, not its base
+    /// cells: it declares a measure that is not additive or releases a sum.
+    pub fn uses_row_cube(&self) -> bool {
+        crate::statistics::uses_row_cube(&self.measures, self.sum_disclosure.is_some())
+    }
 }

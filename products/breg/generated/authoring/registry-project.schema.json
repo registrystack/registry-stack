@@ -5369,6 +5369,44 @@
       },
       "type": "object"
     },
+    "StatisticalContributorSource": {
+      "description": "Who a summed value belongs to, for the contributor minimum and the\ndominance rule of a minimum-count-and-rounding release.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value belongs to the Record its `reference` field names, so one\ncontributor may own many unit Records.",
+          "properties": {
+            "field": {
+              "description": "The unit Record `reference` field naming the contributor. The\npublisher must be able to read it.",
+              "type": "string"
+            },
+            "type": {
+              "const": "field",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "field"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Each unit Record is its own contributor.",
+          "properties": {
+            "type": {
+              "const": "each-record",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "StatisticalDatasetSource": {
       "additionalProperties": false,
       "properties": {
@@ -5431,8 +5469,19 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "Count cells below `minimumCount` are suppressed and the others are\nrounded to a multiple of `roundingBase`. A release carries counts only.",
+          "description": "Count, distinct-count and sum cells below `minimumCount` are suppressed\nand counts are rounded to a multiple of `roundingBase`. A release\ncarries counts, distinct counts and sums; a mean, ratio or percentile is\nread live or released exactly. A dataset that declares a sum and grants\n`publish` also names who a value belongs to (`contributor`) and the\nshare one contributor may hold before a cell is withheld\n(`dominancePercent`); every other dataset omits both.",
           "properties": {
+            "contributor": {
+              "$ref": "#/$defs/StatisticalContributorSource",
+              "description": "Who a summed value belongs to. A cell is withheld when fewer than\n`minimumCount` contributors stand behind it. Required when the\ndataset declares a sum and grants `publish`, and refused otherwise."
+            },
+            "dominancePercent": {
+              "description": "The p of the p% rule, 1 to 100: a sum cell is withheld when the\nvalues outside its two largest contributors total less than p% of\nthe largest. Required when the dataset declares a sum and grants\n`publish`, and refused otherwise.",
+              "format": "uint32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            },
             "minimumCount": {
               "format": "uint64",
               "maximum": 9007199254740991,

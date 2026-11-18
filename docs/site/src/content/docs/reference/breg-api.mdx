@@ -913,6 +913,16 @@ date accepts one period per request (`from` equal to `to`). The document carries
 under the dataset's `exactReads` profile, not the caller's; each read is audited as `read-exact` with
 `periodFrom` and `periodTo`.
 
+`POST /v1/statistics/{dataset}/releases/{period}/versions:dry-run` is the publisher's dry run, for every
+dataset with releases. It takes the body of a publication, `{"status":"provisional"}` or `{"status":"final"}`,
+and no `Idempotency-Key`. It runs the publication's computation and checks and answers `200` with
+`{"document", "suppressions"}`: `document` is the release document a publication made at that moment would
+store, including its next version number, and `suppressions` lists each suppressed cell as its index in
+`document.cells` and a `reason`, one of `minimum-count`, `minimum-contributors`, `dominance`, or
+`contains-suppressed-sum`. The list of reasons can grow. A dry run stores nothing, reserves no version, and
+writes one audit entry. It is refused as a publication is, with `422` `statistical_dataset.release_refused`
+and a `refusalCode` such as `negative-value`.
+
 Document reads from the live, exact, series, latest-version, and exact-version routes send
 `Cache-Control: no-store`, `Vary: authorization, accept`, and `Repr-Digest` for the exact JSON or
 CSV bytes. The release listing omits `Repr-Digest`. A version header's `contentDigest` identifies
@@ -923,12 +933,13 @@ in `measure`. A count's and a distinct count's `value` is a JSON integer. A sum'
 `"1234.50"` with exactly the measure's `scale` digits after the point, or null for a mean or a percentile over no values and
 for a ratio with a zero denominator, whose status is `not-applicable`. Statuses are `exact`, `suppressed`, `rounded`, and `not-applicable`; the
 vocabulary can grow, so treat an unknown status as no usable value. A release under
-`minimum-count-and-rounding` uses `exact`, `suppressed`, and `rounded`, and carries counts and distinct counts only; sums, means,
-ratios, and percentiles are read live or exactly. A release under `exact-public-values` uses `exact` and `not-applicable` only, and
+`minimum-count-and-rounding` uses `exact`, `suppressed`, and `rounded`, and carries counts, distinct counts, and sums
+(whose publication is held for review); means, ratios, and percentiles are read live or exactly. A release under `exact-public-values` uses `exact` and `not-applicable` only, and
 carries every measure type.
 
 A released document's `disclosure` member has one of two shapes. Under `minimum-count-and-rounding` it is
-an object with `method`, `minimumCount`, `roundingBase`, `roundingRule`, and `totals`. Under
+an object with `method`, `minimumCount`, `roundingBase`, `roundingRule`, and `totals`, and, for a dataset that
+releases a sum, `contributor`, `dominanceRule`, and `sumTotals`, never the dominance percentage. Under
 `exact-public-values` it is exactly `{"method": "exact-public-values"}`. CSV columns are `period,periodStart,periodEnd,<dimension field IDs...>,measure,value,status`.
 A suppressed or null value is blank, and a decimal string is written as it is; a zero stays zero with its status. Totals round independently; see
 [publish statistics](../../configure/breg-statistics/#review-what-a-release-discloses) for the

@@ -35,7 +35,7 @@ The facility template declares none; add one under the root `statisticalDatasets
 - `measures`, optional, a list tagged by `type`: `count`; `sum` with a `field`; `mean` with a `field` and a `scale` from 0 to 38; `distinct-count` with a `reference` `field`; `ratio` with a `numerator`, a `denominator`, and a `scale` from 0 to 38; `percentile` with a `field`, a `percentile` from 1 to 99, and a `scale` from 0 to 38. Omitting the list gives one count measure with the id `count`
 - `disclosure`, tagged by a required `type`: `minimum-count-and-rounding` with `minimumCount` and `roundingBase`, each at least 2; or `exact-public-values` with no other member
 
-One period, with every dimension code, every total, and every measure, must fit in 10,000 cells. A dataset declares at most 12 dimensions. A dimension cannot be named `measure`, which is a reserved column name. A sum, a mean, or a percentile needs an unencrypted `int64` or `decimal` field of the unit, and a distinct count an unencrypted `reference` field, each readable by every `read-live` profile. Every measure type is available on the exact paths: `read-live`, `read-exact`, and a release under `exact-public-values`. A release under `minimum-count-and-rounding` carries counts and distinct counts only, so a dataset with a sum, a mean, a ratio, or a percentile cannot be released under it (`breg.statistical-dataset.measure-release-unsupported`) and reads them live or exactly:
+One period, with every dimension code, every total, and every measure, must fit in 10,000 cells. A dataset declares at most 12 dimensions. A dimension cannot be named `measure`, which is a reserved column name. A sum, a mean, or a percentile needs an unencrypted `int64` or `decimal` field of the unit, and a distinct count an unencrypted `reference` field, each readable by every `read-live` profile. Every measure type is available on the exact paths: `read-live`, `read-exact`, and a release under `exact-public-values`. A release under `minimum-count-and-rounding` carries counts, distinct counts, and sums under the rules in [Release sums](#release-sums), which are held for review. A dataset with a mean, a ratio, or a percentile cannot be released under it (`breg.statistical-dataset.measure-release-unsupported`) and reads them live or exactly; a reader of a release who wants a mean divides a released sum by a released count:
 
 ```yaml
 measures:
@@ -146,7 +146,7 @@ and CSV representation, so a dimension cannot use one of them.
 
 ## Live counts and releases
 
-A live value is computed on request from current data. It is exact, and filtered by the same rules as the profile's ordinary list query, so a live count is one the profile could already obtain by listing records. A live sum, mean, distinct count, ratio, or percentile is exact and can reveal one record's value in a small cell, so it is granted only to a profile that can read the records and the field, and it is not disclosure-controlled. Under `minimum-count-and-rounding`, releases carry counts and distinct counts only.
+A live value is computed on request from current data. It is exact, and filtered by the same rules as the profile's ordinary list query, so a live count is one the profile could already obtain by listing records. A live sum, mean, distinct count, ratio, or percentile is exact and can reveal one record's value in a small cell, so it is granted only to a profile that can read the records and the field, and it is not disclosure-controlled. Under `minimum-count-and-rounding`, releases carry counts, distinct counts, and sums.
 
 A release is a stored, numbered version of one ended period, computed against one snapshot and transformed for disclosure. A final release can be corrected by a later final release, and a provisional release is refused once a final exists. Each release carries a definition digest of the population, sources, publisher visibility, dimensions, measures, and the disclosure method and its parameters. Changing who may read a dataset keeps the series; changing what it counts, adding a distinct count included, starts another one, and so does changing the disclosure method.
 
@@ -182,6 +182,40 @@ The `read-releases` and `read-live` grants and `firstPeriod` do not change it.
     publication_uses_null_snapshot_until_erased_history_is_rebaselined;
     crates/registry-breg/tests/compiler_statistics.rs
     definition_digest_excludes_grants_and_first_period_but_covers_values. */}
+## Release sums
+
+Released sums are held for review. The rules below are implemented and tested, but `bregctl check` refuses a `publish` or `read-releases` grant on a dataset that declares a sum under `minimum-count-and-rounding` (`breg.statistical-dataset.sum-release-held`) until a statistician has reviewed the rules and their implementation. Until then, serve sums through `read-live`, `read-exact`, or a release under `exact-public-values`.
+
+A sum released under `minimum-count-and-rounding` needs a contributor, the party a value belongs to, and a dominance percentage:
+
+```yaml
+disclosure:
+  type: minimum-count-and-rounding
+  minimumCount: 5
+  roundingBase: 5
+  contributor:
+    type: field
+    field: owner
+  dominancePercent: 15
+```
+
+`contributor` is `type: field` with a `reference` field of the unit, such as the owner of a parcel, or `type: each-record`, which states that every record is its own contributor. `dominancePercent` is an integer from 1 to 100. Both are required when a dataset that grants `publish` declares a sum, and refused otherwise; there are no defaults.
+
+In brief, the rules apply in this order:
+
+1. A cell with at least one and fewer than `minimumCount` contributors is suppressed. Five parcels owned by one farmer are a cell of one.
+2. A sum is suppressed when the cell without its two largest contributors is smaller than `dominancePercent` percent of the largest (the p% rule). The second-largest contributor can estimate the largest by subtracting its own value from the total, and the rule bounds how close that estimate gets.
+3. A suppressed sum suppresses the same measure in every total that contains it, so one small district can blank a national total. BReg does not choose extra cells to suppress.
+4. A sum over an `int64` field is rounded to `roundingBase`; a sum over a `decimal` field is exact.
+5. Values must not be negative: a summed `decimal` field declares a `minimum` of zero or more, and a publication is refused with `negative-value` when a value is negative.
+6. Day periods are refused, a dataset declares at most 4 dimensions, and two datasets that release a sum of the same field over the same unit and population with nested dimensions are refused.
+
+A suppressed cell has no value, and the document never says why. The release document states the `contributor`, `dominanceRule: p-percent`, and `sumTotals`, but never `dominancePercent`, which is also left out of the definition digest. Changing the contributor starts a new release series; changing the percentage does not. The [configuration reference](../../reference/breg-configuration/#statistical-dataset-declarations) lists every member and refusal code.
+
+A release is immutable, so dry-run a publication to see which cells and totals will be blank before you publish. The publisher sends the publication's body to `POST /v1/statistics/<dataset>/releases/<period>/versions:dry-run`, with no `Idempotency-Key`. The response is the release document a publication made at that moment would store, with its next version number, and `suppressions`: for each suppressed cell, its index in `document.cells` and the reason (`minimum-count`, `minimum-contributors`, `dominance`, or `contains-suppressed-sum`; the list of reasons may grow). A dry run stores nothing, reserves no version, and writes one audit entry. The clients offer `statistics_release_dry_run` (Rust and Python) and `statisticsReleaseDryRun` (Node.js).
+
+{/* Evidence: products/breg/STATISTICS.md, "Releasing sums";
+    products/breg/SECURITY-MODEL.md, BREG-RES-26. */}
 
 ## Decide who reads a dataset
 
@@ -378,7 +412,7 @@ accessProfiles:
             - read-exact
 ```
 
-The `statistics-scope` profile must see the same records whoever calls. `bregctl check` refuses it if its visibility depends on the caller (row or membership boundaries, required purposes or consent, or no read access to a record type the dataset depends on), if its `list` grant does not cover what the dataset filters and groups by, or if it cannot read a sum, mean, percentile, or distinct-count field. A `read-exact` grant without `exactReads` is refused with `breg.statistical-dataset.exact-reads-missing`, `exactReads` without a `read-exact` grant with `breg.statistical-dataset.exact-reads-unused`, and an unknown profile with `breg.statistical-dataset.exact-reads-profile-unknown`. A standing agent profile cannot hold `read-exact` or be the `exactReads` profile. The grant works under either disclosure method and needs no publisher, so the sum above, which cannot be released under `minimum-count-and-rounding`, is still served exactly.
+The `statistics-scope` profile must see the same records whoever calls. `bregctl check` refuses it if its visibility depends on the caller (row or membership boundaries, required purposes or consent, or no read access to a record type the dataset depends on), if its `list` grant does not cover what the dataset filters and groups by, or if it cannot read a sum, mean, percentile, or distinct-count field. A `read-exact` grant without `exactReads` is refused with `breg.statistical-dataset.exact-reads-missing`, `exactReads` without a `read-exact` grant with `breg.statistical-dataset.exact-reads-unused`, and an unknown profile with `breg.statistical-dataset.exact-reads-profile-unknown`. A standing agent profile cannot hold `read-exact` or be the `exactReads` profile. The grant works under either disclosure method and needs no publisher, so the sum above, whose release under `minimum-count-and-rounding` is held for review, is still served exactly.
 
 The consumer reads one range of ended periods. Both `from` and `to` are required, because the current period has not ended. A dataset that depends on the evaluation date accepts one period per request:
 
@@ -402,7 +436,7 @@ A release is disclosed under the method the dataset's `disclosure.type` names.
 
 ### Minimum count and rounding
 
-A release under `minimum-count-and-rounding` suppresses positive counts below `minimumCount` and rounds the rest to the nearest multiple of `roundingBase`, halves up. Exact zeros stay zero, and each total is transformed on its own, so totals need not equal the sum of visible cells. A distinct-count cell is transformed on its own value, independently of the record count of the same cell, so a cell can show 10 parcels and a suppressed number of owners.
+A release under `minimum-count-and-rounding` suppresses positive counts below `minimumCount` and rounds the rest to the nearest multiple of `roundingBase`, halves up. Exact zeros stay zero, and each total is transformed on its own, so totals need not equal the sum of visible cells. A distinct-count cell is transformed on its own value, independently of the record count of the same cell, so a cell can show 10 parcels and a suppressed number of owners. A released sum follows the rules in [Release sums](#release-sums).
 
 Suppression does not keep a cell unknown. With minimum five and base five, two suppressed cells under a published total of ten must each be four. The minimum counts records, not people, so a cell can describe fewer subjects than the minimum. A suppressed cell at minimum two holds exactly one. A count below half the rounding base publishes as zero with status `rounded`. BReg applies no privacy budget across versions; dimensions, cadence, and readers remain your institution's disclosure decision.
 
@@ -503,7 +537,7 @@ bregctl api \
 
 A suppressed value is blank, not zero; a period without a release has no cells. A JSON document lists the declared measures in `dataset.measures`, and each cell names its measure in `measure`, with one cell per period, dimension combination, and measure.
 
-A sum, a mean, a ratio, or a percentile is read live or exactly, or in a release under `exact-public-values`. Its `value` is a decimal string such as `"1234.50"`, not a JSON number, with exactly the measure's `scale` digits after the point; a count stays an integer. A mean or a percentile over no values, and a ratio with a zero denominator, has a null `value` and the status `not-applicable`. A release under `minimum-count-and-rounding` uses `exact`, `suppressed`, and `rounded`; one under `exact-public-values` uses `exact` and `not-applicable` only. The status vocabulary can grow, so treat an unknown status as no usable value.
+A mean, a ratio, or a percentile is read live or exactly, or in a release under `exact-public-values`; a sum is too, or in a release under `minimum-count-and-rounding` once its rules are reviewed. A sum's, a mean's, a ratio's, and a percentile's `value` is a decimal string such as `"1234.50"`, not a JSON number, with exactly the measure's `scale` digits after the point; a count stays an integer. A mean or a percentile over no values, and a ratio with a zero denominator, has a null `value` and the status `not-applicable`. A release under `minimum-count-and-rounding` uses `exact`, `suppressed`, and `rounded`, and a suppressed sum has no value; one under `exact-public-values` uses `exact` and `not-applicable` only. The status vocabulary can grow, so treat an unknown status as no usable value.
 
 {/* Evidence: crates/registry-breg/src/api/statistics.rs, routes;
     crates/registry-breg/src/statistics.rs. */}

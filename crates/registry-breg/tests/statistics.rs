@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
 use registry_breg::contract::FieldTypeSource;
 use registry_breg::statistics::{
-    apply_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
-    document_csv, maximum_decimal_characters, maximum_measure_characters, period_for_code,
-    period_range, Cell, CellStatus, CellValue, DatasetDocument, DimensionDomain,
+    apply_disclosure, apply_protected_disclosure, build_exact_cells, canonical_document_and_digest,
+    current_period, document_csv, dominance_predicate_sql, maximum_decimal_characters,
+    maximum_measure_characters, period_for_code, period_range, Cell, CellDisclosureInput,
+    CellStatus, CellSuppression, CellValue, Contributor, DatasetDocument, DimensionDomain,
     DisclosureDocument, DisclosureMethod, ExactDocument, GroupedCell, LiveDocument, Measure,
     PeriodDocument, PeriodGranularity, PeriodKind, ReleaseDocument, ReleaseStatus,
-    StatisticsDocument, StatisticsError, TOTAL_CODE, UNKNOWN_CODE,
+    StatisticsDocument, StatisticsError, SumDisclosure, SuppressionReason, TOTAL_CODE,
+    UNKNOWN_CODE,
 };
 
 fn date(year: i32, month: u32, day: u32) -> NaiveDate {
@@ -1531,7 +1533,7 @@ fn a_release_document_whose_cells_disagree_with_its_method_is_refused() {
     summed.dimensions.clear();
     assert_eq!(
         canonical(&summed),
-        invalid("a minimum-count-and-rounding release carries counts and distinct counts only")
+        invalid("a minimum-count-and-rounding release states its contributor and sum rules exactly when it carries a sum")
     );
 
     let mut not_applicable = release_document();
@@ -1688,9 +1690,10 @@ fn a_release_document_with_a_distinct_count_validates() {
         field: "amount".to_owned(),
         scale: 2,
     });
-    let error = canonical_document_and_digest(&document).expect_err("a sum is not released");
+    let error = canonical_document_and_digest(&document)
+        .expect_err("a sum is released only with the contributor and sum rules");
     assert!(
-        error.to_string().contains("counts and distinct counts"),
+        error.to_string().contains("contributor and sum rules"),
         "{error}"
     );
 }
@@ -1888,7 +1891,7 @@ fn a_ratio_and_a_percentile_are_refused_in_a_rounded_release_and_admitted_elsewh
         assert_eq!(
             canonical_document_and_digest(&rounded).map(|_| ()),
             Err(StatisticsError::InvalidDocument(
-                "a minimum-count-and-rounding release carries counts and distinct counts only"
+                "a minimum-count-and-rounding release carries counts, distinct counts and sums only"
             ))
         );
 
@@ -1961,5 +1964,406 @@ fn the_widest_ratio_and_percentile_follow_their_operands_and_field() {
     assert_eq!(
         maximum_measure_characters(&by_sum[2], &by_sum, &field_type),
         Some(8 + 19 + 2 + 1 + 1)
+    );
+}
+
+// ---- protected release of sums ----
+
+const SUM_MINIMUM: DisclosureMethod = DisclosureMethod::MinimumCountAndRounding {
+    minimum_count: 5,
+    rounding_base: 5,
+};
+
+fn sum_measures() -> Vec<Measure> {
+    vec![
+        Measure::Count {
+            id: "count".to_owned(),
+        },
+        Measure::Sum {
+            id: "total".to_owned(),
+            field: "quantity".to_owned(),
+            scale: 0,
+        },
+        Measure::Sum {
+            id: "amount".to_owned(),
+            field: "amount".to_owned(),
+            scale: 2,
+        },
+    ]
+}
+
+fn integer_sums() -> BTreeSet<String> {
+    BTreeSet::from(["total".to_owned()])
+}
+
+fn cell_at(period: &str, codes: &[(&str, &str)], measure: &str, value: Option<CellValue>) -> Cell {
+    Cell {
+        period: period.to_owned(),
+        dimensions: codes
+            .iter()
+            .map(|(field, code)| ((*field).to_owned(), (*code).to_owned()))
+            .collect(),
+        measure: measure.to_owned(),
+        value,
+        status: CellStatus::Exact,
+    }
+}
+
+fn input(contributors: Option<u64>, dominant: bool) -> CellDisclosureInput {
+    CellDisclosureInput {
+        contributors,
+        dominant,
+    }
+}
+
+fn protect(
+    cells: &mut [Cell],
+    inputs: &[CellDisclosureInput],
+) -> Result<Vec<CellSuppression>, StatisticsError> {
+    apply_protected_disclosure(cells, inputs, SUM_MINIMUM, &sum_measures(), &integer_sums())
+}
+
+fn reasons(suppressions: &[CellSuppression]) -> Vec<(usize, SuppressionReason)> {
+    suppressions.iter().map(|s| (s.cell, s.reason)).collect()
+}
+
+#[test]
+fn the_first_reason_that_applies_wins_in_the_documented_order() {
+    let mut cells = vec![
+        // minimum count beats the contributor minimum
+        cell_at("2025", &[], "count", count(3)),
+        // contributor minimum on a count
+        cell_at("2025", &[], "count", count(9)),
+        // contributor minimum beats dominance on a sum
+        cell_at("2025", &[], "total", decimal("100")),
+        // dominance on a sum with enough contributors
+        cell_at("2025", &[], "total", decimal("100")),
+        // dominance never applies to a count
+        cell_at("2025", &[], "count", count(9)),
+        // a sum nobody trips on is rounded
+        cell_at("2025", &[], "total", decimal("1234")),
+    ];
+    let inputs = [
+        input(Some(1), false),
+        input(Some(2), false),
+        input(Some(2), true),
+        input(Some(9), true),
+        input(Some(9), true),
+        input(Some(9), false),
+    ];
+    let found = protect(&mut cells, &inputs).unwrap();
+    assert_eq!(
+        reasons(&found),
+        vec![
+            (0, SuppressionReason::MinimumCount),
+            (1, SuppressionReason::MinimumContributors),
+            (2, SuppressionReason::MinimumContributors),
+            (3, SuppressionReason::Dominance),
+        ]
+    );
+    for cell in &cells[..4] {
+        assert_eq!(
+            (cell.value.clone(), cell.status),
+            (None, CellStatus::Suppressed)
+        );
+    }
+    assert_eq!(
+        (cells[4].value.clone(), cells[4].status),
+        (count(10), CellStatus::Rounded)
+    );
+    assert_eq!(
+        (cells[5].value.clone(), cells[5].status),
+        (decimal("1235"), CellStatus::Rounded)
+    );
+}
+
+#[test]
+fn a_cell_without_contributors_keeps_the_exact_zero_and_a_missing_input_skips_the_rule() {
+    let mut cells = vec![
+        cell_at("2025", &[], "count", count(0)),
+        cell_at("2025", &[], "total", decimal("0")),
+        cell_at("2025", &[], "count", count(7)),
+    ];
+    let inputs = [
+        input(Some(0), false),
+        input(Some(0), false),
+        input(None, false),
+    ];
+    let found = protect(&mut cells, &inputs).unwrap();
+    assert!(found.is_empty());
+    assert_eq!(
+        (cells[0].value.clone(), cells[0].status),
+        (count(0), CellStatus::Exact)
+    );
+    assert_eq!(
+        (cells[1].value.clone(), cells[1].status),
+        (decimal("0"), CellStatus::Exact)
+    );
+    assert_eq!(
+        (cells[2].value.clone(), cells[2].status),
+        (count(5), CellStatus::Rounded)
+    );
+}
+
+#[test]
+fn a_count_only_release_gives_minimum_count_reasons_only() {
+    let mut cells = cells_with_values(&[0, 1, 4, 5, 7]);
+    let inputs = vec![CellDisclosureInput::default(); cells.len()];
+    let found = protect(&mut cells, &inputs).unwrap();
+    assert_eq!(
+        reasons(&found),
+        vec![
+            (1, SuppressionReason::MinimumCount),
+            (2, SuppressionReason::MinimumCount)
+        ]
+    );
+}
+
+#[test]
+fn a_suppressed_sum_suppresses_every_total_that_contains_it_over_two_levels() {
+    let dims = |region: &'static str, sex: &'static str| [("region", region), ("sex", sex)];
+    let total = |region: &'static str, sex: &'static str, period: &'static str| {
+        cell_at(period, &dims(region, sex), "total", decimal("100"))
+    };
+    let mut cells = vec![
+        total("a", "f", "2025"),   // 0: primary (dominance)
+        total("a", "_T", "2025"),  // 1: contains 0, one level
+        total("_T", "f", "2025"),  // 2: contains 0, other dimension
+        total("_T", "_T", "2025"), // 3: contains 0, two levels
+        total("a", "m", "2025"),   // 4: sibling stays
+        total("b", "f", "2025"),   // 5: sibling stays
+        total("b", "_T", "2025"),  // 6: does not contain 0
+        total("a", "f", "2024"),   // 7: other period stays
+        total("_T", "_T", "2024"), // 8: other period stays
+        cell_at("2025", &dims("a", "_T"), "amount", decimal("1.00")), // 9: other measure stays
+        cell_at("2025", &dims("a", "_T"), "count", count(50)), // 10: count stays
+    ];
+    let mut inputs = vec![input(Some(9), false); cells.len()];
+    inputs[0] = input(Some(9), true);
+    let found = protect(&mut cells, &inputs).unwrap();
+    assert_eq!(
+        reasons(&found),
+        vec![
+            (0, SuppressionReason::Dominance),
+            (1, SuppressionReason::ContainsSuppressedSum),
+            (2, SuppressionReason::ContainsSuppressedSum),
+            (3, SuppressionReason::ContainsSuppressedSum),
+        ]
+    );
+    for (index, cell) in cells.iter().enumerate().skip(4) {
+        assert_ne!(cell.status, CellStatus::Suppressed, "cell {index}");
+    }
+}
+
+#[test]
+fn a_cell_with_its_own_reason_keeps_it_when_it_also_contains_a_suppressed_sum() {
+    let mut cells = vec![
+        cell_at("2025", &[("region", "a")], "total", decimal("100")),
+        cell_at("2025", &[("region", "_T")], "total", decimal("100")),
+    ];
+    let inputs = [input(Some(1), false), input(Some(9), true)];
+    let found = protect(&mut cells, &inputs).unwrap();
+    assert_eq!(
+        reasons(&found),
+        vec![
+            (0, SuppressionReason::MinimumContributors),
+            (1, SuppressionReason::Dominance)
+        ]
+    );
+}
+
+#[test]
+fn count_suppressions_do_not_propagate_to_totals() {
+    let mut cells = vec![
+        cell_at("2025", &[("region", "a")], "count", count(2)),
+        cell_at("2025", &[("region", "_T")], "count", count(40)),
+        cell_at("2025", &[("region", "a")], "total", decimal("100")),
+        cell_at("2025", &[("region", "_T")], "total", decimal("900")),
+    ];
+    let inputs = vec![input(Some(9), false); cells.len()];
+    let found = protect(&mut cells, &inputs).unwrap();
+    assert_eq!(reasons(&found), vec![(0, SuppressionReason::MinimumCount)]);
+    assert_eq!(cells[1].value, count(40));
+}
+
+#[test]
+fn int64_sums_round_exactly_past_the_u64_range_and_decimal_sums_stay_exact() {
+    let mut cells = vec![
+        cell_at("2025", &[], "total", decimal("18446744073709551616")),
+        cell_at("2025", &[], "total", decimal("55340232221128654848")),
+        cell_at("2025", &[], "total", decimal("2")),
+        cell_at("2025", &[], "total", decimal("3")),
+        cell_at("2025", &[], "amount", decimal("12345678901234567890.12")),
+    ];
+    let inputs = vec![input(Some(9), false); cells.len()];
+    protect(&mut cells, &inputs).unwrap();
+    let values: Vec<_> = cells
+        .iter()
+        .map(|cell| (cell.value.clone(), cell.status))
+        .collect();
+    assert_eq!(
+        values,
+        vec![
+            (decimal("18446744073709551615"), CellStatus::Rounded),
+            (decimal("55340232221128654850"), CellStatus::Rounded),
+            (decimal("0"), CellStatus::Rounded),
+            (decimal("5"), CellStatus::Rounded),
+            (decimal("12345678901234567890.12"), CellStatus::Exact),
+        ]
+    );
+}
+
+#[test]
+fn a_negative_or_malformed_int64_sum_and_a_short_input_list_are_errors() {
+    for bad in ["-5", "1.5", "x"] {
+        let mut cells = vec![cell_at("2025", &[], "total", decimal(bad))];
+        assert!(
+            protect(&mut cells, &[input(Some(9), false)]).is_err(),
+            "{bad}"
+        );
+    }
+    let mut cells = vec![cell_at("2025", &[], "count", count(9))];
+    assert!(protect(&mut cells, &[]).is_err());
+}
+
+fn sum_disclosure() -> SumDisclosure {
+    SumDisclosure {
+        contributor: Contributor::Field {
+            field: "owner".to_owned(),
+        },
+        dominance_percent: 15,
+        integer_sums: integer_sums(),
+    }
+}
+
+fn sum_release_document(disclosure: DisclosureDocument, cells: Vec<Cell>) -> StatisticsDocument {
+    let mut document = release_document();
+    document.dataset.measures = sum_measures();
+    document.dimensions = Vec::new();
+    document.cells = cells;
+    document.disclosure = Some(disclosure);
+    document
+}
+
+fn sum_document_cells() -> Vec<Cell> {
+    let mut cells = vec![
+        cell_at("2025-01", &[], "count", count(10)),
+        cell_at("2025-01", &[], "total", decimal("1235")),
+        cell_at("2025-01", &[], "amount", decimal("12.34")),
+    ];
+    cells[0].status = CellStatus::Rounded;
+    cells[1].status = CellStatus::Rounded;
+    cells
+}
+
+#[test]
+fn the_release_document_of_a_sum_names_the_contributor_and_the_rules_but_never_p() {
+    let disclosure = DisclosureDocument::for_release(SUM_MINIMUM, Some(&sum_disclosure()));
+    let text = serde_json::to_string(&disclosure).unwrap();
+    assert_eq!(
+        text,
+        r#"{"method":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5,"roundingRule":"nearest-multiple-halves-up","totals":"rounded-independently","contributor":{"type":"field","field":"owner"},"dominanceRule":"p-percent","sumTotals":"suppressed-when-containing-a-suppressed-sum"}"#
+    );
+    let each = SumDisclosure {
+        contributor: Contributor::EachRecord,
+        ..sum_disclosure()
+    };
+    let text =
+        serde_json::to_string(&DisclosureDocument::for_release(SUM_MINIMUM, Some(&each))).unwrap();
+    assert!(
+        text.contains(r#""contributor":{"type":"each-record"}"#),
+        "{text}"
+    );
+
+    let document = sum_release_document(disclosure, sum_document_cells());
+    let canonical =
+        String::from_utf8(canonical_document_and_digest(&document).unwrap().bytes).unwrap();
+    for forbidden in [
+        "dominancePercent",
+        "\"15\"",
+        ":15",
+        "contributors",
+        "dominant",
+    ] {
+        assert!(!canonical.contains(forbidden), "{forbidden} in {canonical}");
+    }
+    // A count-only release states nothing about sums.
+    let count_only = DisclosureDocument::for_release(SUM_MINIMUM, None);
+    assert_eq!(count_only, DisclosureDocument::from(SUM_MINIMUM));
+}
+
+#[test]
+fn validate_document_admits_sums_only_with_the_sum_members_and_a_fitting_status() {
+    let with_sum = DisclosureDocument::for_release(SUM_MINIMUM, Some(&sum_disclosure()));
+    canonical_document_and_digest(&sum_release_document(
+        with_sum.clone(),
+        sum_document_cells(),
+    ))
+    .unwrap();
+
+    let mut suppressed = sum_document_cells();
+    suppressed[1].value = None;
+    suppressed[1].status = CellStatus::Suppressed;
+    canonical_document_and_digest(&sum_release_document(with_sum.clone(), suppressed)).unwrap();
+
+    // a sum without the three members
+    let bare = DisclosureDocument::from(SUM_MINIMUM);
+    assert!(
+        canonical_document_and_digest(&sum_release_document(bare, sum_document_cells())).is_err()
+    );
+    // the members without a sum
+    let mut counts_only = sum_release_document(with_sum.clone(), sum_document_cells());
+    counts_only.dataset.measures = count_measures();
+    counts_only.cells.truncate(1);
+    assert!(canonical_document_and_digest(&counts_only).is_err());
+    // a mean is never released under this method
+    let mut mean = sum_release_document(with_sum.clone(), sum_document_cells());
+    mean.dataset.measures.push(Measure::Mean {
+        id: "average".to_owned(),
+        field: "amount".to_owned(),
+        scale: 2,
+    });
+    assert!(canonical_document_and_digest(&mean).is_err());
+    // a rounded sum carries no fractional digits
+    let mut rounded_decimal = sum_document_cells();
+    rounded_decimal[2].status = CellStatus::Rounded;
+    assert!(canonical_document_and_digest(&sum_release_document(
+        with_sum.clone(),
+        rounded_decimal
+    ))
+    .is_err());
+    // one wrong member
+    let DisclosureDocument::MinimumCountAndRounding {
+        minimum_count,
+        rounding_base,
+        rounding_rule,
+        totals,
+        contributor,
+        sum_totals,
+        ..
+    } = with_sum
+    else {
+        panic!("a minimum-count-and-rounding document");
+    };
+    let wrong_rule = DisclosureDocument::MinimumCountAndRounding {
+        minimum_count,
+        rounding_base,
+        rounding_rule,
+        totals,
+        contributor,
+        dominance_rule: Some("n-k".to_owned()),
+        sum_totals,
+    };
+    assert!(
+        canonical_document_and_digest(&sum_release_document(wrong_rule, sum_document_cells()))
+            .is_err()
+    );
+}
+
+#[test]
+fn the_dominance_predicate_text_is_one_exact_numeric_comparison() {
+    assert_eq!(
+        dominance_predicate_sql("t.total", "t.x1", "t.x2", "$3"),
+        "(100::numeric * ((t.total) - (t.x1) - (t.x2)) < ($3)::numeric * (t.x1))"
     );
 }

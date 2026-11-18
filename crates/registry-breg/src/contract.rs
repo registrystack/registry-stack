@@ -1036,8 +1036,13 @@ pub struct StatisticalValidityFieldsSource {
 )]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum StatisticalDisclosureSource {
-    /// Count cells below `minimumCount` are suppressed and the others are
-    /// rounded to a multiple of `roundingBase`. A release carries counts only.
+    /// Count, distinct-count and sum cells below `minimumCount` are suppressed
+    /// and counts are rounded to a multiple of `roundingBase`. A release
+    /// carries counts, distinct counts and sums; a mean, ratio or percentile is
+    /// read live or released exactly. A dataset that declares a sum and grants
+    /// `publish` also names who a value belongs to (`contributor`) and the
+    /// share one contributor may hold before a cell is withheld
+    /// (`dominancePercent`); every other dataset omits both.
     MinimumCountAndRounding {
         #[serde(deserialize_with = "bounded_u64::<_, 2, MAX_EXACT_JSON_INTEGER>")]
         #[cfg_attr(
@@ -1051,6 +1056,22 @@ pub enum StatisticalDisclosureSource {
             schemars(with = "BoundedU64<2, MAX_EXACT_JSON_INTEGER>")
         )]
         rounding_base: u64,
+        /// Who a summed value belongs to. A cell is withheld when fewer than
+        /// `minimumCount` contributors stand behind it. Required when the
+        /// dataset declares a sum and grants `publish`, and refused otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contributor: Option<StatisticalContributorSource>,
+        /// The p of the p% rule, 1 to 100: a sum cell is withheld when the
+        /// values outside its two largest contributors total less than p% of
+        /// the largest. Required when the dataset declares a sum and grants
+        /// `publish`, and refused otherwise.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "optional_bounded_u8::<_, 1, 100>"
+        )]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<BoundedU32<1, 100>>"))]
+        dominance_percent: Option<u8>,
     },
     /// A release states every measure exactly. Admitted only when
     /// the unit Record type, every field the dataset reads, and every Record
@@ -1059,6 +1080,31 @@ pub enum StatisticalDisclosureSource {
 }
 registry_platform_yaml::tagged_union!(StatisticalDisclosureSource, tag = "type");
 serialize_tagged_union!(StatisticalDisclosureSource, tag = "type");
+
+/// Who a summed value belongs to, for the contributor minimum and the
+/// dominance rule of a minimum-count-and-rounding release.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    remote = "Self",
+    deny_unknown_fields,
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+pub enum StatisticalContributorSource {
+    /// A value belongs to the Record its `reference` field names, so one
+    /// contributor may own many unit Records.
+    Field {
+        /// The unit Record `reference` field naming the contributor. The
+        /// publisher must be able to read it.
+        field: String,
+    },
+    /// Each unit Record is its own contributor.
+    EachRecord {},
+}
+registry_platform_yaml::tagged_union!(StatisticalContributorSource, tag = "type");
+serialize_tagged_union!(StatisticalContributorSource, tag = "type");
 
 /// The largest integer a JSON number carries exactly, the bound of a
 /// statistical disclosure parameter.

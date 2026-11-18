@@ -683,7 +683,15 @@ fn document_schema() -> Value {
                             "method":{"const":"minimum-count-and-rounding"},
                             "minimumCount":{"type":"integer","minimum":2},"roundingBase":{"type":"integer","minimum":2},
                             "roundingRule":{"const":"nearest-multiple-halves-up"},
-                            "totals":{"const":"rounded-independently"}
+                            "totals":{"const":"rounded-independently"},
+                            "contributor":{"oneOf":[
+                                {"type":"object","additionalProperties":false,"required":["type","field"],
+                                 "properties":{"type":{"const":"field"},"field":{"type":"string"}}},
+                                {"type":"object","additionalProperties":false,"required":["type"],
+                                 "properties":{"type":{"const":"each-record"}}}
+                            ]},
+                            "dominanceRule":{"const":"p-percent"},
+                            "sumTotals":{"const":"suppressed-when-containing-a-suppressed-sum"}
                         }
                     },
                     {

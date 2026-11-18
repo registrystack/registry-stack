@@ -2313,15 +2313,13 @@ fn a_dataset_with_a_sum_or_mean_is_refused_any_release_grant() {
     let refusal = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| {
-            diagnostic.code == "breg.statistical-dataset.measure-release-unsupported"
-        })
+        .find(|diagnostic| diagnostic.code == "breg.statistical-dataset.sum-release-held")
         .unwrap_or_else(|| panic!("missing refusal: {:?}", failure.diagnostics()));
     assert!(refusal
         .message
         .contains("statistical dataset `records-by-category`"));
-    assert!(refusal.message.contains("counts only"));
-    assert!(refusal.message.contains("live"));
+    assert!(refusal.message.contains("held"));
+    assert!(refusal.message.contains("read-live"));
 
     let mean = json!([{"id":"average","type":"mean","field":"amount","scale":2}]);
     let mut read_releases = live_measure_source(mean);
@@ -2987,7 +2985,7 @@ fn a_distinct_count_limits_the_dataset_to_four_dimensions() {
         .path
         .ends_with("statisticalDatasets[id=records-by-category].dimensions"));
     assert!(refusal.message.contains(
-        "a dataset with a distinct count or a percentile declares at most 4 dimensions, because its totals are computed over the records, not the base cells"
+        "a dataset with a distinct count, a percentile or a released sum declares at most 4 dimensions, because its totals are computed over the records, not the base cells"
     ));
     compile(&with_dimensions(
         json!([{"id":"parcels","type":"count"},{"id":"total","type":"sum","field":"amount"}]),
@@ -3062,14 +3060,13 @@ fn a_distinct_count_is_released_with_rounding_but_a_sum_beside_it_is_not() {
         {"id":"total","type":"sum","field":"amount"}
     ]);
     let failure = compile(&value).expect_err("a sum cannot be released with rounding");
-    let refusal = failure
+    assert!(failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| {
-            diagnostic.code == "breg.statistical-dataset.measure-release-unsupported"
-        })
-        .unwrap_or_else(|| panic!("missing refusal: {:?}", failure.diagnostics()));
-    assert!(refusal.message.contains("counts and distinct counts"));
+        .any(|diagnostic| diagnostic.code == "breg.statistical-dataset.sum-release-held"));
+    assert!(!failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "breg.statistical-dataset.measure-release-unsupported"
+    }));
 }
 
 #[test]
@@ -3341,7 +3338,9 @@ fn a_percentile_limits_the_dataset_to_four_dimensions_and_a_ratio_does_not() {
         .find(|diagnostic| diagnostic.code == "breg.statistical-dataset.non-additive-dimensions")
         .unwrap_or_else(|| panic!("missing refusal: {:?}", failure.diagnostics()));
     assert!(
-        refusal.message.contains("a distinct count or a percentile"),
+        refusal
+            .message
+            .contains("a distinct count, a percentile or a released sum"),
         "{}",
         refusal.message
     );
@@ -3456,4 +3455,484 @@ fn the_definition_digest_covers_a_ratio_and_a_percentile_and_their_absence_keeps
         live_measure_digest(json!([{"id":"parcels","type":"count"}])),
         "a dataset without the new measures keeps its digest"
     );
+}
+
+// ---- protected release of sums ----
+
+const HELD: &str = "breg.statistical-dataset.sum-release-held";
+
+fn code(name: &str) -> String {
+    format!("breg.statistical-dataset.{name}")
+}
+
+/// A dataset releasing a count and two sums with rounding, whose every rule is
+/// satisfied: an `owner` contributor the publisher reads, a decimal field that
+/// declares a non-negative minimum, an int64 field, and month periods.
+fn sum_release_source() -> Value {
+    let mut value = distinct_source(json!([
+        {"id":"parcels","type":"count"},
+        {"id":"total-amount","type":"sum","field":"amount"},
+        {"id":"total-units","type":"sum","field":"quantity"}
+    ]));
+    for field in value["recordTypes"][0]["fields"].as_array_mut().unwrap() {
+        if field["id"] == "amount" {
+            field["minimum"] = json!("0.00");
+        }
+    }
+    value["accessProfiles"][PUBLISHER]["permissions"]["records"][0]["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .extend([json!("owner"), json!("amount"), json!("quantity")]);
+    grant(&mut value, ANALYST, &["read-live", "read-releases"]);
+    grant(&mut value, PUBLISHER, &["publish", "read-releases"]);
+    value["statisticalDatasets"][0]["disclosure"] = json!({
+        "type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5,
+        "contributor":{"type":"field","field":"owner"},"dominancePercent":15
+    });
+    value
+}
+
+/// Every diagnostic code of the dataset, in the order reported.
+fn codes_of(value: &Value) -> Vec<String> {
+    compile(value)
+        .expect_err("a sum release is refused")
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        .map(|diagnostic| diagnostic.code.clone())
+        .collect()
+}
+
+fn diagnostic_for(value: &Value, name: &str) -> Diagnostic {
+    compile(value)
+        .expect_err("the dataset is refused")
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == code(name))
+        .cloned()
+        .unwrap_or_else(|| panic!("missing {name}"))
+}
+
+#[test]
+fn a_sum_release_that_meets_every_rule_is_refused_only_by_the_hold() {
+    let value = sum_release_source();
+    let failure = compile(&value).expect_err("sums are held");
+    let all = errors(&failure);
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert_eq!(all[0].code, HELD);
+    assert!(all[0]
+        .path
+        .ends_with("statisticalDatasets[id=records-by-category].disclosure"));
+    assert!(all[0]
+        .message
+        .contains("held until a statistician has reviewed"));
+    assert!(all[0].message.contains("exact-public-values"));
+    // each-record is accepted too
+    let mut each = sum_release_source();
+    each["statisticalDatasets"][0]["disclosure"]["contributor"] = json!({"type":"each-record"});
+    assert_eq!(codes_of(&each), vec![HELD.to_owned()]);
+}
+
+#[test]
+fn every_release_grant_on_a_dataset_with_a_sum_is_held_even_without_a_publisher() {
+    let mut read_releases = sum_release_source();
+    read_releases["statisticalDatasets"][0]["disclosure"] =
+        json!({"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5});
+    grant(&mut read_releases, PUBLISHER, &[]);
+    grant(&mut read_releases, ANALYST, &["read-live", "read-releases"]);
+    let codes = codes_of(&read_releases);
+    assert!(codes.contains(&HELD.to_owned()), "{codes:?}");
+    assert_eq!(codes.last().unwrap(), HELD);
+    // no sum-release rule other than the hold needs a publisher
+    assert!(
+        !codes.contains(&code("disclosure-contributor-missing")),
+        "{codes:?}"
+    );
+
+    // read-live alone keeps compiling
+    let mut live = sum_release_source();
+    live["statisticalDatasets"][0]["disclosure"] =
+        json!({"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5});
+    grant(&mut live, PUBLISHER, &[]);
+    grant(&mut live, ANALYST, &["read-live"]);
+    compile(&live).expect("a live sum compiles");
+}
+
+#[test]
+fn the_hold_is_the_last_diagnostic_of_a_dataset() {
+    let mut value = sum_release_source();
+    value["statisticalDatasets"][0]["disclosure"] =
+        json!({"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5});
+    value["statisticalDatasets"][0]["period"]["granularity"] = json!("day");
+    let codes = codes_of(&value);
+    assert_eq!(codes.last().unwrap(), HELD, "{codes:?}");
+    assert!(codes.contains(&code("sum-release-day-granularity")));
+}
+
+#[test]
+fn a_missing_contributor_or_dominance_is_refused_on_the_disclosure() {
+    for (member, name) in [
+        ("contributor", "disclosure-contributor-missing"),
+        ("dominancePercent", "disclosure-dominance-missing"),
+    ] {
+        let mut value = sum_release_source();
+        value["statisticalDatasets"][0]["disclosure"]
+            .as_object_mut()
+            .unwrap()
+            .remove(member);
+        let refusal = diagnostic_for(&value, name);
+        assert!(refusal
+            .path
+            .ends_with("statisticalDatasets[id=records-by-category].disclosure"));
+        assert!(refusal
+            .message
+            .contains("statistical dataset `records-by-category`"));
+        assert_eq!(codes_of(&value).last().unwrap(), HELD);
+    }
+}
+
+#[test]
+fn a_contributor_or_dominance_without_a_sum_or_a_publisher_is_refused() {
+    let counts = || {
+        let mut value = sum_release_source();
+        value["statisticalDatasets"][0]["measures"] = json!([{"id":"parcels","type":"count"}]);
+        value
+    };
+    let unpublished = || {
+        let mut value = sum_release_source();
+        grant(&mut value, PUBLISHER, &[]);
+        grant(&mut value, ANALYST, &["read-live"]);
+        value
+    };
+    for (member, name) in [
+        ("contributor", "disclosure-contributor-unused"),
+        ("dominancePercent", "disclosure-dominance-unused"),
+    ] {
+        for build in [counts as fn() -> Value, unpublished as fn() -> Value] {
+            let mut value = build();
+            let disclosure = value["statisticalDatasets"][0]["disclosure"]
+                .as_object_mut()
+                .unwrap();
+            for other in ["contributor", "dominancePercent"] {
+                if other != member {
+                    disclosure.remove(other);
+                }
+            }
+            let refusal = diagnostic_for(&value, name);
+            assert!(refusal
+                .path
+                .ends_with("statisticalDatasets[id=records-by-category].disclosure"));
+        }
+    }
+    // a count-only dataset with neither member compiles
+    compile(&{
+        let mut value = counts();
+        value["statisticalDatasets"][0]["disclosure"] =
+            json!({"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5});
+        value
+    })
+    .expect("a count-only release needs neither member");
+}
+
+#[test]
+fn the_contributor_field_must_exist_be_a_reference_and_be_readable_by_the_publisher() {
+    let path = "statisticalDatasets[id=records-by-category].disclosure.contributor.field";
+    type Edit = Box<dyn Fn(&mut Value)>;
+    let cases: Vec<(&str, Edit, &str)> = vec![
+        (
+            "unknown",
+            Box::new(|value| {
+                value["statisticalDatasets"][0]["disclosure"]["contributor"]["field"] =
+                    json!("missing");
+            }),
+            "does not exist",
+        ),
+        (
+            "not a reference",
+            Box::new(|value| {
+                value["statisticalDatasets"][0]["disclosure"]["contributor"]["field"] =
+                    json!("category");
+            }),
+            "reference",
+        ),
+        (
+            "not readable",
+            Box::new(|value| {
+                value["accessProfiles"][PUBLISHER]["permissions"]["records"][0]["readableFields"] =
+                    json!([
+                        "active",
+                        "category",
+                        "event-date",
+                        "valid-from",
+                        "valid-to",
+                        "amount",
+                        "quantity"
+                    ]);
+            }),
+            "readableFields",
+        ),
+    ];
+    let mut messages = BTreeSet::new();
+    for (name, mutate, expected) in cases {
+        let mut value = sum_release_source();
+        mutate(&mut value);
+        let failure = compile(&value).expect_err(name);
+        let found: Vec<_> = failure
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == code("disclosure-contributor-field"))
+            .collect();
+        assert_eq!(found.len(), 1, "{name}: {:?}", failure.diagnostics());
+        assert!(found[0].path.ends_with(path), "{name}: {}", found[0].path);
+        assert!(
+            found[0].message.contains(expected),
+            "{name}: {}",
+            found[0].message
+        );
+        messages.insert(found[0].message.clone());
+    }
+    assert_eq!(messages.len(), 3, "one message per cause");
+}
+
+#[test]
+fn a_summed_decimal_field_must_declare_a_non_negative_minimum() {
+    let amount_minimum = |minimum: Option<&str>| {
+        let mut value = sum_release_source();
+        for field in value["recordTypes"][0]["fields"].as_array_mut().unwrap() {
+            if field["id"] == "amount" {
+                match minimum {
+                    Some(minimum) => field["minimum"] = json!(minimum),
+                    None => {
+                        field.as_object_mut().unwrap().remove("minimum");
+                    }
+                }
+            }
+        }
+        value
+    };
+    for (minimum, refused) in [
+        (None, true),
+        (Some("-1.00"), true),
+        (Some("0.00"), false),
+        (Some("2.50"), false),
+    ] {
+        let codes = codes_of(&amount_minimum(minimum));
+        assert_eq!(
+            codes.contains(&code("sum-release-negative-values")),
+            refused,
+            "{minimum:?}: {codes:?}"
+        );
+    }
+    let refusal = diagnostic_for(&amount_minimum(None), "sum-release-negative-values");
+    assert!(refusal
+        .path
+        .ends_with("statisticalDatasets[id=records-by-category].measures[1]"));
+    // the int64 sum declares no bounds and is not refused
+    let mut int_only = amount_minimum(None);
+    int_only["statisticalDatasets"][0]["measures"] =
+        json!([{"id":"total-units","type":"sum","field":"quantity"}]);
+    assert!(!codes_of(&int_only).contains(&code("sum-release-negative-values")));
+}
+
+#[test]
+fn a_day_period_is_refused_for_a_sum_release() {
+    let mut value = sum_release_source();
+    value["statisticalDatasets"][0]["period"]["granularity"] = json!("day");
+    value["statisticalDatasets"][0]["period"]["firstPeriod"] = json!("2025-01-01");
+    let refusal = diagnostic_for(&value, "sum-release-day-granularity");
+    assert!(refusal
+        .path
+        .ends_with("statisticalDatasets[id=records-by-category].period"));
+    // a count-only release keeps day periods
+    let mut counts = source();
+    counts["statisticalDatasets"][0]["period"]["granularity"] = json!("day");
+    counts["statisticalDatasets"][0]["period"]["firstPeriod"] = json!("2025-01-01");
+    compile(&counts).expect("a count release over days compiles");
+}
+
+#[test]
+fn a_released_sum_limits_the_dataset_to_four_dimensions_and_names_the_three_causes() {
+    let with_dimensions = |count: usize| {
+        let mut value = sum_release_source();
+        let fields = value["recordTypes"][0]["fields"].as_array_mut().unwrap();
+        let mut names = vec![json!("category")];
+        for index in 1..count {
+            let id = format!("flag-{index}");
+            fields.push(
+                json!({"id":id,"type":"boolean","required":true,"classification":"internal"}),
+            );
+            names.push(json!(id));
+        }
+        for profile in [ANALYST, PUBLISHER] {
+            for member in ["readableFields", "filterableFields"] {
+                value["accessProfiles"][profile]["permissions"]["records"][0][member]
+                    .as_array_mut()
+                    .unwrap()
+                    .extend(names.iter().skip(1).cloned());
+            }
+        }
+        value["statisticalDatasets"][0]["dimensions"] = json!(names);
+        value
+    };
+    assert!(!codes_of(&with_dimensions(4)).contains(&code("non-additive-dimensions")));
+    let refusal = diagnostic_for(&with_dimensions(5), "non-additive-dimensions");
+    assert!(refusal
+        .path
+        .ends_with("statisticalDatasets[id=records-by-category].dimensions"));
+    for cause in ["a distinct count", "a percentile", "a released sum"] {
+        assert!(refusal.message.contains(cause), "{}", refusal.message);
+    }
+    assert!(refusal.message.contains("at most 4 dimensions"));
+}
+
+/// The first dataset plus a second one over the same unit, population and sum
+/// field, edited by `mutate`, with the same grants.
+fn two_sum_releases(mutate: impl FnOnce(&mut Value)) -> Value {
+    let mut value = sum_release_source();
+    let mut second = value["statisticalDatasets"][0].clone();
+    second["id"] = json!("records-second");
+    mutate(&mut second);
+    value["statisticalDatasets"]
+        .as_array_mut()
+        .unwrap()
+        .push(second);
+    for profile in [ANALYST, PUBLISHER] {
+        let operations =
+            value["accessProfiles"][profile]["permissions"]["datasets"][0]["operations"].clone();
+        value["accessProfiles"][profile]["permissions"]["datasets"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"dataset":"records-second","operations":operations}));
+    }
+    value
+}
+
+fn nested_refusals(value: &Value) -> Vec<Diagnostic> {
+    compile(value)
+        .expect_err("sums are held")
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == code("sum-release-nested"))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn two_sum_releases_over_nested_dimensions_are_refused_at_the_second_dataset() {
+    let flag = |value: &mut Value| {
+        value["recordTypes"][0]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(
+                json!({"id":"flag","type":"boolean","required":true,"classification":"internal"}),
+            );
+        for profile in [ANALYST, PUBLISHER] {
+            for member in ["readableFields", "filterableFields"] {
+                value["accessProfiles"][profile]["permissions"]["records"][0][member]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!("flag"));
+            }
+        }
+    };
+    // equal dimensions
+    let equal = nested_refusals(&two_sum_releases(|_| {}));
+    assert_eq!(equal.len(), 1);
+    assert!(equal[0]
+        .path
+        .ends_with("statisticalDatasets[id=records-second]"));
+    assert!(equal[0].message.contains("records-by-category"));
+    // one's dimensions among the other's
+    let mut subset = two_sum_releases(|second| second["dimensions"] = json!(["category", "flag"]));
+    flag(&mut subset);
+    assert_eq!(nested_refusals(&subset).len(), 1);
+    // the reverse
+    let mut reverse = two_sum_releases(|_| {});
+    flag(&mut reverse);
+    reverse["statisticalDatasets"][0]["dimensions"] = json!(["category", "flag"]);
+    assert_eq!(nested_refusals(&reverse).len(), 1);
+    // disjoint dimensions
+    let mut disjoint = two_sum_releases(|second| second["dimensions"] = json!(["flag"]));
+    flag(&mut disjoint);
+    assert!(nested_refusals(&disjoint).is_empty());
+    // a different population
+    let different_population =
+        two_sum_releases(|second| second["population"] = json!("active eq false"));
+    assert!(nested_refusals(&different_population).is_empty());
+    // a different summed field
+    let different_field = two_sum_releases(|second| {
+        second["measures"] = json!([{"id":"total-amount","type":"sum","field":"amount"}]);
+        second["id"] = json!("records-second");
+    });
+    let mut only_amount = different_field;
+    only_amount["statisticalDatasets"][0]["measures"] =
+        json!([{"id":"total-units","type":"sum","field":"quantity"}]);
+    assert!(nested_refusals(&only_amount).is_empty());
+}
+
+#[test]
+fn two_sum_releases_over_different_units_are_not_nested() {
+    let mut value = two_sum_releases(|second| second["unit"] = json!("record-two"));
+    let mut second_type = value["recordTypes"][0].clone();
+    second_type["id"] = json!("record-two");
+    second_type["route"] = json!("records-two");
+    value["recordTypes"]
+        .as_array_mut()
+        .unwrap()
+        .push(second_type);
+    for profile in [ANALYST, PUBLISHER] {
+        let mut records = value["accessProfiles"][profile]["permissions"]["records"][0].clone();
+        records["recordType"] = json!("record-two");
+        value["accessProfiles"][profile]["permissions"]["records"]
+            .as_array_mut()
+            .unwrap()
+            .push(records);
+    }
+    assert!(nested_refusals(&value).is_empty());
+}
+
+#[test]
+fn means_ratios_and_percentiles_are_still_refused_for_release_and_name_what_is_carried() {
+    for measure in [
+        json!({"id":"m","type":"mean","field":"amount","scale":2}),
+        json!({"id":"m","type":"ratio","numerator":"parcels","denominator":"owners","scale":2}),
+        json!({"id":"m","type":"percentile","field":"amount","percentile":50,"scale":2}),
+    ] {
+        let mut value = sum_release_source();
+        value["statisticalDatasets"][0]["measures"] = json!([
+            {"id":"parcels","type":"count"},
+            {"id":"owners","type":"distinct-count","field":"owner"},
+            measure
+        ]);
+        value["statisticalDatasets"][0]["disclosure"] =
+            json!({"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5});
+        let refusal = diagnostic_for(&value, "measure-release-unsupported");
+        assert!(
+            refusal.message.contains("counts, distinct counts"),
+            "{}",
+            refusal.message
+        );
+        assert!(refusal.message.contains("exact-public-values"));
+        assert!(!codes_of(&value).contains(&HELD.to_owned()));
+    }
+}
+
+#[test]
+fn a_dominance_percent_outside_one_to_one_hundred_is_refused_when_the_project_is_read() {
+    for percent in [0, 101] {
+        let mut value = sum_release_source();
+        value["statisticalDatasets"][0]["disclosure"]["dominancePercent"] = json!(percent);
+        let refusals = read_refusals(&value);
+        assert!(
+            refusals.iter().any(|(_, path, message)| {
+                path.contains("dominancePercent") || message.contains("dominancePercent")
+            }),
+            "{percent}: {refusals:?}"
+        );
+    }
+    let mut value = sum_release_source();
+    for percent in [1, 100] {
+        value["statisticalDatasets"][0]["disclosure"]["dominancePercent"] = json!(percent);
+        assert_eq!(codes_of(&value), vec![HELD.to_owned()]);
+    }
 }
