@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha7.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha8.schema.json",
   "title": "ModelExplanation",
   "description": "Wire shape of the native compiled model inspector and module closure.",
   "type": "object",
@@ -12,6 +12,7 @@
     "version",
     "moduleOrder",
     "moduleClosure",
+    "requiresPostgis",
     "revision",
     "recordTypes",
     "actions",
@@ -24,7 +25,11 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/model-explanation/v1alpha7"
+      "const": "id.registrystack.org/formats/breg/model-explanation/v1alpha8"
+    },
+    "requiresPostgis": {
+      "type": "boolean",
+      "description": "True when the compiled model needs PostGIS: a bounding-box query, a CRS84 polygon field, or a CRS84 polygon Action input."
     },
     "kind": {
       "const": "BRegModelExplanation"

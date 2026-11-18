@@ -1480,7 +1480,7 @@ accessProfiles:
     let explanation = &report["explanation"];
     assert_eq!(
         explanation["apiVersion"],
-        "id.registrystack.org/formats/breg/access-explanation/v1alpha8"
+        "id.registrystack.org/formats/breg/access-explanation/v1alpha9"
     );
     let timer = &explanation["timers"][0];
     assert_eq!(timer["recordType"], "entry");
@@ -4069,6 +4069,82 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
         "\napiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\nkind: BRegModelSelection\n"
     ));
     assert!(selection.contains("concept: GroupMembership"));
+}
+
+/// An initialized project whose canonical base IRI is the reserved
+/// `.invalid` placeholder, with the receipt and build paths a package run names.
+fn reserved_iri_package_arguments(project: &TestProject, local: bool) -> (PathBuf, Vec<String>) {
+    let destination = project.path().join("initialized");
+    let init = bregctl(&["--format", "json", "init", path(&destination)]);
+    assert!(init.status.success(), "{init:?}");
+    let registry_path = destination.join("registry.yaml");
+    let registry = fs::read_to_string(&registry_path).expect("registry reads");
+    let authored = "canonicalBaseIri: https://directory.example.gov";
+    assert_eq!(registry.matches(authored).count(), 1);
+    fs::write(
+        &registry_path,
+        registry.replace(
+            authored,
+            "canonicalBaseIri: https://directory.example.invalid",
+        ),
+    )
+    .expect("registry writes");
+    let mut arguments = vec![
+        "--format".to_owned(),
+        "json".to_owned(),
+        "package".to_owned(),
+        path(&destination).to_owned(),
+        "--schema-fingerprint".to_owned(),
+        "0".repeat(64),
+        "--test-receipt".to_owned(),
+        path(&project.path().join("receipt.json")).to_owned(),
+        "--output".to_owned(),
+        path(&project.path().join("build")).to_owned(),
+    ];
+    if local {
+        arguments.push("--local".to_owned());
+    }
+    (destination, arguments)
+}
+
+#[test]
+fn package_refuses_reserved_canonical_iri_without_local() {
+    let project = TestProject::asset_fixture();
+    let (_destination, arguments) = reserved_iri_package_arguments(&project, false);
+    let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+    let package = bregctl(&arguments);
+    assert_eq!(package.status.code(), Some(1), "{package:?}");
+    assert_reserved_iri_refusal(&json_stdout(&package));
+    assert!(!project.path().join("build").exists());
+}
+
+#[test]
+fn package_local_accepts_reserved_canonical_iri() {
+    let project = TestProject::asset_fixture();
+    let (_destination, arguments) = reserved_iri_package_arguments(&project, true);
+    let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+    let package = bregctl(&arguments);
+    // No schema-test receipt exists, so the run still stops, but at the
+    // receipt and not at the identity gate `--local` skips.
+    assert_eq!(package.status.code(), Some(1), "{package:?}");
+    let report = json_stdout(&package);
+    assert_eq!(report["ok"], false, "{report}");
+    assert!(
+        !report.to_string().contains("canonical-base-iri-reserved"),
+        "{report}"
+    );
+    assert_eq!(
+        report["diagnostics"][0]["code"], "package.build.refused",
+        "{report}"
+    );
+}
+
+#[test]
+fn package_help_does_not_list_the_local_flag() {
+    let help = bregctl(&["package", "--help"]);
+    assert!(help.status.success(), "{help:?}");
+    let stdout = String::from_utf8(help.stdout).expect("help is UTF-8");
+    assert!(!stdout.contains("--local"), "{stdout}");
 }
 
 fn assert_reserved_iri_refusal(report: &Value) {

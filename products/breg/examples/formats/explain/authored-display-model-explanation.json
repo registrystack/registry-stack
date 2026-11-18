@@ -238,7 +238,7 @@
       "revision": "sha256:50148480ed74a0609df9d7a66a542007522705cfb17b1dd41181721f36f31d75"
     }
   ],
-  "apiVersion": "id.registrystack.org/formats/breg/model-explanation/v1alpha7",
+  "apiVersion": "id.registrystack.org/formats/breg/model-explanation/v1alpha8",
   "authoring": {
     "documents": [
       {
@@ -636,6 +636,7 @@
     }
   ],
   "registryId": "labelled-directory",
+  "requiresPostgis": false,
   "reviewAuthorities": [],
   "revision": "sha256:c60c252a8dc343caf48c6826c7111669fe1c15d323c807060eebb61143f6e186",
   "statisticalDatasets": [
