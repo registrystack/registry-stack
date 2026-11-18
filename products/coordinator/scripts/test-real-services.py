@@ -55,8 +55,8 @@ _cargo_spec.loader.exec_module(cargo_runtime)
 
 AUTHORITY = "https://casework.local.example"
 SOURCE = "coordinator-source"
-# The PostgreSQL image caseworkctl's dev sessions pin, for the one database
-# this journey owns directly.
+# The PostgreSQL image the local dev runners pin, for the databases this
+# journey owns directly.
 POSTGRES_IMAGE = ("public.ecr.aws/docker/library/postgres:17.11"
                   "@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675")
 MAILPIT_IMAGE = ("ghcr.io/axllent/mailpit:v1.31.2"
@@ -89,6 +89,56 @@ def private(path, value):
     else:
         path.write_text(value if isinstance(value, str) else json.dumps(value, indent=2) + "\n")
     path.chmod(0o600)
+
+
+def generate_task_authority_key():
+    """Return a fresh P-256 JWK, with its private member, for Casework's task authority."""
+    generated = subprocess.run(["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256"],
+                               check=True, capture_output=True, timeout=30).stdout
+    described = subprocess.run(["openssl", "pkey", "-text", "-noout"], input=generated,
+                               check=True, capture_output=True, timeout=30).stdout.decode()
+    private_hex = described.split("priv:\n", 1)[1].split("pub:\n", 1)[0]
+    public_hex = described.split("pub:\n", 1)[1].split("ASN1 OID:", 1)[0]
+    secret = bytes.fromhex("".join(private_hex.split()).replace(":", ""))
+    public = bytes.fromhex("".join(public_hex.split()).replace(":", ""))
+    assert len(secret) == 32 and len(public) == 65 and public[0] == 4
+    def encoded(value):
+        return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
+    x, y = encoded(public[1:33]), encoded(public[33:])
+    thumbprint = json.dumps({"crv": "P-256", "kty": "EC", "x": x, "y": y}, sort_keys=True, separators=(",", ":")).encode()
+    return {"kty": "EC", "crv": "P-256", "alg": "ES256", "kid": encoded(hashlib.sha256(thumbprint).digest()),
+            "x": x, "y": y, "d": encoded(secret)}
+
+
+class JwksFixture:
+    """Publish the task authority's public key where the issuer fetches it for token exchange."""
+
+    def __init__(self, port, key):
+        body = json.dumps({"keys": [{name: value for name, value in key.items() if name != "d"}]}).encode()
+
+        class Handler(http_server.BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_GET(self):
+                if self.path != "/oauth2/jwks":
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        # The issuer runs in a container and reaches this listener through the host.
+        self.server = http_server.ThreadingHTTPServer(("0.0.0.0", port), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
 
 
 def free_ports(count):
@@ -517,10 +567,62 @@ class Journey:
         lines = Path(report["headerFile"]).read_text().splitlines()
         return next(line.removeprefix("Authorization: Bearer ") for line in lines if line.startswith("Authorization: Bearer "))
 
-    def casework_start(self, project, owner):
-        return self.ctl("caseworkctl", "dev", "start", project, "--issuer-project", owner,
-                        "--casework-port", self.ports["casework"], "--database-port", self.ports["caseworkdb"],
-                        "--casework-bin", self.bin / "casework")
+    def casework_start(self, project, owner, resource):
+        """Serve the paired Casework project against the shared issuer and the BReg source."""
+        package = self.root / "casework-package"
+        self.ctl("caseworkctl", "package", project, "--output", package)
+        database, root_certificate = self.tls_database("casework-database")
+        keys = self.root / "casework-secrets"
+        private(keys / "database", database)
+        private(keys / "database-root.pem", root_certificate)
+        private(keys / "audit-key", secrets.token_hex(32))
+        private(keys / "jwks", http("GET", self.urls["issuer"] + "/oauth2/jwks"))
+        # The source reader is the service client Casework presents to BReg for
+        # the paired review-status provider.
+        reader = self.export(owner, "source-reader", keys)
+        assert reader["resource"] == resource
+        authority_key = generate_task_authority_key()
+        private(keys / "task-authority-signing-key", authority_key)
+        jwks = JwksFixture(self.ports["jwks"], authority_key)
+        self.proxies.append(jwks)
+        runtime = self.root / "casework-runtime.yaml"
+        private(runtime, {
+            "apiVersion": "id.registrystack.org/formats/casework/runtime/v1alpha1", "kind": "CaseworkRuntimeConfig",
+            "identity": {"databaseId": "coordinator-casework"}, "package": {"root": str(package)},
+            "listener": {"bind": f"127.0.0.1:{self.ports['casework']}", "tlsTermination": "development-loopback",
+                         "networkExposure": "private-address"},
+            "secretProviders": {"file": {"root": str(keys)}},
+            "database": {"runtimeUrlRef": "secret:file/database", "migrationUrlRef": "secret:file/database",
+                         "trustedRootCertificateRef": "secret:file/database-root.pem"},
+            "authentication": {"oidc": {"issuer": self.urls["issuer"], "audience": resource,
+                "allowedClients": ["staff", "supervisor", "administrator", "producer", "task-agent",
+                                   "status-client", "scheduling-status"],
+                "scopeClaim": "scope", "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
+                "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}}},
+            "audit": {"path": str(self.root / "audit/casework.ndjson"), "hashKeyRef": "secret:file/audit-key"},
+            "contextProviders": {"applications": {
+                "baseUrl": self.urls["breg"], "statusProfile": "reader",
+                "tokenEndpoint": reader["tokenEndpoint"], "clientAssertionAudience": reader["clientAssertionAudience"],
+                "resource": resource, "scopes": ["records:get"],
+                "clientIdRef": "secret:file/" + Path(reader["clientIdFile"]).name,
+                "clientAssertionKeyRef": "secret:file/" + Path(reader["assertionKeyFile"]).name}},
+            "taskAuthority": {"issuer": AUTHORITY, "exchangeAudience": self.urls["issuer"],
+                "signingKeyRef": "secret:file/task-authority-signing-key",
+                "statusClients": {"status-client": resource, "scheduling-status": SCHEDULING_RESOURCE}},
+        })
+        self.ctl("caseworkctl", "check", project, "--runtime-config", runtime)
+        self.ctl("caseworkctl", "apply", "--runtime-config", runtime)
+        child = self.spawn("casework", runtime, "casework")
+        self.ready(child, self.urls["casework"])
+        administrator = self.token("bregctl", owner, "administrator")
+        headers = {"Registry-Casework-Profile": "administrator"}
+        directory = http("GET", self.urls["casework"] + "/v1/directory", administrator, headers=headers)
+        principal = lambda name: {"issuer": self.urls["issuer"], "subject": CASEWORK_PRINCIPALS[name]}
+        http("POST", self.urls["casework"] + "/v1/directory/bootstrap", administrator,
+             {"teamId": "team", "queueId": "review", "supervisors": [principal("supervisor")],
+              "staff": [principal("staff")]},
+             {**headers, "If-Match": f'"{directory["revision"]}"', "Idempotency-Key": str(uuid.uuid4())})
+        return child
 
     def export(self, owner, client, destination):
         destination.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -669,7 +771,7 @@ class Journey:
                     child.wait(timeout=5)
             stream.close()
         for binary, project in reversed(self.sessions):
-            state = project / (".breg/dev/state.json" if binary == "bregctl" else ".casework/dev/state.json")
+            state = project / ".breg/dev/state.json"
             if not state.is_file():
                 continue
             args = ["dev", "stop", project]
@@ -730,8 +832,7 @@ class Journey:
                  "--bregctl-bin", self.bin / "bregctl", "--apply")
         checked = self.ctl("caseworkctl", "check", casework)
         assert next(item for item in checked["policyBindings"] if item["id"] == "external-review") == binding, "pairing cannot silently change the frozen review policy"
-        self.sessions.append(("caseworkctl", casework))
-        self.casework_start(casework, bootstrap)
+        self.casework_start(casework, bootstrap, resource)
         seed = self.token("bregctl", owner, "seed-client")
         def create(collection, data):
             value = http("POST", self.urls["breg"] + f"/v1/records/{collection}?accessProfile=seeder", seed,
@@ -749,7 +850,7 @@ class Journey:
         assert submitted["state"] == "submitted" and submitted["effectDigest"]
         # BReg owns review submission. Casework only observes the exact source
         # binding through its paired, read-only context provider.
-        human = self.token("caseworkctl", casework, "staff")
+        human = self.token("bregctl", bootstrap, "staff")
         human_headers = {"Registry-Casework-Profile":"staff","Registry-Source-Profile":"reviewer"}
         deadline = time.monotonic() + 90
         while True:
@@ -770,7 +871,7 @@ class Journey:
                         {"templateId":template,"templateVersion":"1"},
                         {**human_headers,"If-Match":f'"{current["revision"]}"',"Idempotency-Key":str(uuid.uuid4())})
         print("Casework source visibility and human task approval ready.", flush=True)
-        messaging_url, messaging_runtime = self.deferred_appointment(bootstrap, resource, application, casework, agent, approve,
+        messaging_url, messaging_runtime = self.deferred_appointment(bootstrap, resource, application, agent, approve,
             lambda: self.proposal_transition(owner, self.read_proposal(owner, submitted), "cancel"))
         self.reviewed_notice(bootstrap, resource, messaging_url, messaging_runtime)
 
@@ -920,7 +1021,7 @@ class Journey:
         self.ready(child, url)
         return runtime, url, child
 
-    def deferred_appointment(self, owner, resource, application, casework, agent, approve, revoke_source):
+    def deferred_appointment(self, owner, resource, application, agent, approve, revoke_source):
         day = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)).date().isoformat()
         messaging_url, messaging_runtime = self.messaging_service(owner)
         scheduling_url, _ = self.scheduling_service(owner, resource, day)
@@ -935,7 +1036,7 @@ class Journey:
         if self.authority_preflight:
             # This real authority preflight diagnoses the fixture without allowing
             # Coordinator to consume an assertion or bearer supplied by its caller.
-            bootstrap = self.token("caseworkctl", casework, "task-agent")
+            bootstrap = self.token("bregctl", owner, "task-agent")
             assertion = http("POST", self.urls["casework"] + f'/v1/task-grants/{grant["id"]}/assertion', bootstrap)
             encoded = assertion["assertion"].split(".")[1]
             claims = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
@@ -994,17 +1095,19 @@ class Journey:
         assert len(messages["messages"]) == 1
         assert messages["messages"][0]["id"] == result["run"]["output"]["messageId"]
         connection = self.root / "scheduling-observation.json"
+        agent_keys = self.root / "scheduling-observation-secrets"
+        exported_agent = self.export(owner, "task-agent", agent_keys)
         private(connection, {"apiVersion": "id.registrystack.org/formats/platform/task-connection/v1alpha1",
             "kind": "PlatformTaskConnection", "caseworkUrl": self.urls["casework"],
             "tokenEndpoint": self.urls["issuer"] + "/oauth2/token", "clientAssertionAudience": self.urls["issuer"],
             "bootstrapResource": resource,
-            "secretProviders": {"file": {"root": str((casework / ".casework/dev/credentials/task-agent").resolve())}},
-            "clients": {"task-agent": {"assertionKeyRef": "secret:file/assertion-key.jwk",
+            "secretProviders": {"file": {"root": str(agent_keys.resolve())}},
+            "clients": {"task-agent": {"assertionKeyRef": "secret:file/" + Path(exported_agent["assertionKeyFile"]).name,
                 "resource": SCHEDULING_RESOURCE, "scopes": ["scheduling:read", "scheduling:commit"]}}})
         # Native grant tooling acquires a fresh exact grant for authoritative
         # caller-owned listing, independently of Coordinator's local outcome.
-        token_report = self.ctl("caseworkctl", "dev", "grant", "task-agent", "--grant", grant["id"],
-            "--connection", connection, casework)
+        token_report = self.ctl("bregctl", "dev", "grant", "task-agent", "--grant", grant["id"],
+            "--connection", connection, owner)
         token_lines = Path(token_report["headerFile"]).read_text().splitlines()
         token = next(line.removeprefix("Authorization: Bearer ") for line in token_lines if line.startswith("Authorization: Bearer "))
         appointments = http("GET", scheduling_url + "/v1/appointments?" + urllib.parse.urlencode({
