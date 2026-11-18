@@ -8,7 +8,6 @@ mod project_types;
 mod provider_add;
 mod provider_pair;
 mod report;
-mod run_source;
 #[cfg(feature = "schema")]
 pub mod schema;
 mod selected_binary;
@@ -141,23 +140,6 @@ struct ServeArgs {
 }
 #[derive(Debug, Subcommand)]
 enum GenerateCommand {
-    /// Capture or bind an exact synthetic-run source closure before normal packaging.
-    RunSource {
-        /// Existing authored Casework project.
-        project: PathBuf,
-        /// Closed run binding request; subjects never appear in command arguments.
-        #[arg(long)]
-        binding: PathBuf,
-        /// Actual allocated loopback run issuer; omit to capture original bytes.
-        #[arg(long)]
-        issuer: Option<String>,
-        /// Exact checked original source closure digest.
-        #[arg(long)]
-        expected_source_digest: Option<String>,
-        /// New owner-only source directory; omit for offline inspection only.
-        #[arg(long)]
-        output: Option<PathBuf>,
-    },
     /// Write the identity facts Casework expects of its token issuer: OIDC settings, task authority and exchange bindings.
     IdentityFacts {
         /// Existing authored Casework project directory.
@@ -476,13 +458,6 @@ fn command_kind(command: &Command) -> CommandKind {
     }
 }
 fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
-    if let Some(failure) = error.downcast_ref::<run_source::Refusal>() {
-        return (
-            DOMAIN_REFUSAL_EXIT,
-            json!({"severity":"error","code":"casework.run-source.refused","path":failure.0,"message":"The exact synthetic run binding or checked source closure does not match.","suggestedAction":"Restore the checked source and exact declared producer identity and issuer pins, then check again."}),
-        );
-    }
-
     if error
         .chain()
         .any(|cause| cause.is::<ChildReportOperationalFailure>())
@@ -609,7 +584,6 @@ impl Command {
             Self::Types { .. } => "types",
             Self::Generate { command } => match command {
                 GenerateCommand::IdentityFacts { .. } => "generate-identity-facts",
-                GenerateCommand::RunSource { .. } => "generate-run-source",
             },
             Self::Provider { command } => match command {
                 ProviderCommand::Add { .. } => "provider-add",
@@ -678,22 +652,6 @@ fn run(command: Command) -> Result<Value> {
                     output,
                 },
         } => identity::generate(&project, &runtime_config, &output),
-        Command::Generate {
-            command:
-                GenerateCommand::RunSource {
-                    project,
-                    binding,
-                    issuer,
-                    expected_source_digest,
-                    output,
-                },
-        } => run_source::generate(
-            &project,
-            &binding,
-            issuer.as_deref(),
-            expected_source_digest.as_deref(),
-            output.as_deref(),
-        ),
         Command::Provider {
             command:
                 ProviderCommand::Add {

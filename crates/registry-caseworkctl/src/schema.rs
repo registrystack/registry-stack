@@ -15,15 +15,6 @@ pub const DEV_CLIENTS_SCHEMA_ID: &str =
 /// `products/casework/generated`.
 pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     Ok([(
-        "run-source/run-source.schema.json",
-        registry_casework_core::schema::render(
-            schemars::schema_for!(crate::run_source::Request),
-            crate::run_source::API_VERSION,
-            crate::run_source::KIND,
-            "https://id.registrystack.org/schemas/casework/run-source/run-source.v1alpha1.schema.json",
-            "Casework synthetic run source binding",
-        )?,
-    ),(
         DEV_CLIENTS_SCHEMA_FILE,
         registry_casework_core::schema::render(
             schemars::schema_for!(Clients),
@@ -315,25 +306,6 @@ mod tests {
             DEV_CLIENTS_API_VERSION
         );
         assert_eq!(document["properties"]["kind"]["const"], DEV_CLIENTS_KIND);
-    }
-
-    #[test]
-    fn run_source_request_example_is_closed_and_valid() {
-        let schema: Value =
-            serde_json::from_str(&documents().unwrap()["run-source/run-source.schema.json"])
-                .unwrap();
-        let validator = jsonschema::JSONSchema::options()
-            .with_draft(jsonschema::Draft::Draft202012)
-            .compile(&schema)
-            .unwrap();
-        let mut example: Value = serde_json::from_str(include_str!(
-            "../../../products/casework/examples/run-source/run-source.json"
-        ))
-        .unwrap();
-        assert!(validator.is_valid(&example));
-        example["binding"]["initiator"]["subjects"] =
-            serde_json::json!(["invented-subject-filter"]);
-        assert!(!validator.is_valid(&example));
     }
 
     #[test]

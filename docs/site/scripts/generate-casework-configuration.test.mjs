@@ -15,7 +15,7 @@ test('Casework covers every committed configuration schema', async () => {
   ))).flat().sort();
   assert.deepEqual(files, CONTRACTS.map((contract) => contract.file.split('/generated/')[1]).sort());
   const document = await buildCaseworkConfiguration();
-  assert.deepEqual(document.contracts.map((contract) => contract.id), ['project', 'fixture', 'dev-clients', 'run-source', 'holiday-set', 'runtime']);
+  assert.deepEqual(document.contracts.map((contract) => contract.id), ['project', 'fixture', 'dev-clients', 'holiday-set', 'runtime']);
   for (const contract of document.contracts) {
     assert.ok(contract.field_count > 0, contract.id);
     assert.equal(contract.field_count, new Set(contract.fields.map((field) => field.key_path)).size);
@@ -45,16 +45,4 @@ test('Casework runtime reference names the page that renders it', async () => {
   assert.equal(runtime.reference, 'docs/site/src/content/docs/reference/casework-configuration.mdx');
   const page = await readFile(new URL(`../../../${runtime.reference}`, import.meta.url), 'utf8');
   assert.match(page, /contract\.id === 'runtime'/u);
-});
-
-test('Casework run-source reference carries explicit producer and identity bindings', async () => {
-  const document = await buildCaseworkConfiguration();
-  const contract = document.contracts.find((contract) => contract.id === 'run-source');
-  assert.equal(contract.title, 'run-source.json');
-  const fields = new Set(contract.fields.map((field) => field.key_path));
-  for (const path of ['producer', 'identityProfile', 'identitySubject', 'identityScopes',
-    'binding.producer.expectedIssuer', 'binding.producer.expectedProfile',
-    'binding.producer.expectedSubject', 'binding.initiator.expectedIssuer', 'binding.initiator.trust']) {
-    assert.ok(fields.has(path), path);
-  }
 });

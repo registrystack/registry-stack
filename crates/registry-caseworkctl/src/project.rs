@@ -867,31 +867,6 @@ pub(crate) fn read_package_input(path: &Path) -> Result<Vec<u8>> {
     }
     Ok(fs::read(path)?)
 }
-/// Checked authored source before native provider pairing. Missing descriptions
-/// remain missing here; normal packaging still requires the complete closure.
-pub(crate) fn checked_source_contents(project: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
-    check(project, false, false)?;
-    let policy = load_and_check_policy(project)?;
-    let bytes = read_package_input(&project.join("casework.yaml"))?;
-    let mut paths =
-        registry_casework_core::CaseworkProject::schema_references("casework.yaml", &bytes)?
-            .into_iter()
-            .collect::<std::collections::BTreeSet<_>>();
-    paths.insert("casework.yaml".to_owned());
-    paths.extend(
-        policy
-            .context_providers
-            .iter()
-            .filter_map(|p| p.description.clone()),
-    );
-    paths
-        .into_iter()
-        .map(|path| {
-            let bytes = read_package_input(&project_input_path(project, &path)?)?;
-            Ok((path, bytes))
-        })
-        .collect()
-}
 pub(crate) fn package_contents(project: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
     check(project, true, true)?;
     let policy = load_and_check_policy(project)?;

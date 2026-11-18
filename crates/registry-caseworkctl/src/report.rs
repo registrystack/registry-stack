@@ -363,22 +363,6 @@ payload!(ExplainData {
 });
 payload!(TestData {fixtures:Vec<PathBuf>,proof_boundary:String,production_closure:bool,network_access:bool,database_access:bool});
 payload!(TypesData {output:PathBuf,files:Vec<String>});
-payload!(RunSourceData {
-    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
-    source_digest:String,
-    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
-    transformed_digest:String,
-    source_files:Vec<crate::run_source::FileDigest>,
-    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
-    binding_digest:String,
-    #[cfg_attr(feature = "schema", schemars(with = "Option<registry_platform_yaml::Url>"))]
-    issuer:Option<String>,
-    files:Vec<crate::run_source::FileDigest>,
-    changed_pointers:Vec<String>,
-    output:Option<PathBuf>,
-    network_access:bool,
-    database_access:bool
-});
 payload!(IdentityFactsData {
     output: PathBuf,
     product: String,
@@ -529,7 +513,7 @@ fn serialized_payload_members<T: schemars::JsonSchema>() -> PayloadMembers {
         .collect();
     PayloadMembers { required, present }
 }
-reports!(Init=>"init":InitData,Check=>"check":CheckData,Explain=>"explain":ExplainData,Test=>"test":TestData,Types=>"types":TypesData,GenerateIdentityFacts=>"generate-identity-facts":IdentityFactsData,GenerateRunSource=>"generate-run-source":RunSourceData,ProviderAdd=>"provider-add":crate::provider_add::ProviderAddData,ProviderPair=>"provider-pair":ProviderPairData,Lifecycle=>"lifecycle":LifecycleData,Package=>"package":PackageData,Doctor=>"doctor":DoctorData,Plan=>"plan":PlanData,Apply=>"apply":ApplyData,Status=>"status":StatusData,Dev=>"dev":DevData,DevEvents=>"dev-events":DevEventsData,DevToken=>"dev-token":DevTokenData,DevGrant=>"dev-grant":DevGrantData,DevIdentity=>"dev-identity":DevIdentityData,Usage=>"usage":UsageData,Internal=>"internal":InternalData);
+reports!(Init=>"init":InitData,Check=>"check":CheckData,Explain=>"explain":ExplainData,Test=>"test":TestData,Types=>"types":TypesData,GenerateIdentityFacts=>"generate-identity-facts":IdentityFactsData,ProviderAdd=>"provider-add":crate::provider_add::ProviderAddData,ProviderPair=>"provider-pair":ProviderPairData,Lifecycle=>"lifecycle":LifecycleData,Package=>"package":PackageData,Doctor=>"doctor":DoctorData,Plan=>"plan":PlanData,Apply=>"apply":ApplyData,Status=>"status":StatusData,Dev=>"dev":DevData,DevEvents=>"dev-events":DevEventsData,DevToken=>"dev-token":DevTokenData,DevGrant=>"dev-grant":DevGrantData,DevIdentity=>"dev-identity":DevIdentityData,Usage=>"usage":UsageData,Internal=>"internal":InternalData);
 
 impl CliReport {
     pub(crate) fn from_value(command: &str, value: Value) -> anyhow::Result<Self> {

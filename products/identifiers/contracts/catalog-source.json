@@ -470,14 +470,6 @@
       "description": "Registry Casework development clients JSON Schema."
     },
     {
-      "glob": "products/casework/generated/run-source/run-source.schema.json",
-      "sourcePath": "crates/registry-caseworkctl/src/schema.rs",
-      "owner": "casework",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "description": "Registry Casework explicit synthetic run-source binding JSON Schema."
-    },
-    {
       "glob": "products/casework/contracts/cli/*.schema.json",
       "sourcePath": "products/casework/scripts/generate_cli_schemas.py",
       "owner": "casework",
