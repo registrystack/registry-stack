@@ -341,12 +341,19 @@ fn bind_offline(
         .record_types
         .get(projection.record_type.as_str())
         .ok_or_else(|| BindingRefusal::plain(ExternalSourceError::Contract, "id"))?;
-    let (pack, artifacts) = load_pack(Path::new(&binding.pack_file), &binding.pack_digest)
-        .map_err(|_| {
-            BindingRefusal::new("packFile",
-                "the pack file or a file it pins could not be read, or its bytes do not match packDigest or the pinned digest",
+    let pack_path = Path::new(&binding.pack_file);
+    let (pack, artifacts) = load_pack(pack_path, &binding.pack_digest).map_err(|_| {
+        if pack_digest_differs(pack_path, &binding.pack_digest) {
+            BindingRefusal::new(
+                "packDigest",
+                "the pack file's bytes do not match packDigest",
             )
-        })?;
+        } else {
+            BindingRefusal::new("packFile",
+                "the pack file or a file it pins could not be read, or one of its pinned files does not match its pinned digest",
+            )
+        }
+    })?;
     let limits = EvidenceLimits::try_new(
         binding.acquisition.maximum_data_operations.get(),
         binding.acquisition.attempt_timeout_milliseconds.get(),
@@ -861,6 +868,17 @@ fn fingerprint(value: &Value) -> Result<String, ExternalSourceError> {
     serde_json::to_vec(value)
         .map(|bytes| sha256_uri(&bytes))
         .map_err(|_| ExternalSourceError::Configuration)
+}
+
+/// Whether the pack file reads and its bytes differ from `expected`, so a
+/// refusal can name `packDigest` rather than `packFile`.
+fn pack_digest_differs(path: &Path, expected: &Digest) -> bool {
+    let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) else {
+        return false;
+    };
+    open_directory(parent)
+        .and_then(|root| read_relative(&root, Path::new(file_name), MAXIMUM_PACK_BYTES))
+        .is_ok_and(|bytes| sha256_uri(&bytes) != expected.as_str())
 }
 
 fn load_pack(
@@ -1726,9 +1744,7 @@ pub(crate) mod tests {
         let unavailable = service.unavailable_projections();
         assert_eq!(
             unavailable.get("person-live").map(String::as_str),
-            Some(
-                "the pack file or a file it pins could not be read, or its bytes do not match packDigest or the pinned digest"
-            )
+            Some("the pack file's bytes do not match packDigest")
         );
         assert_eq!(
             unavailable.get("retired-projection").map(String::as_str),

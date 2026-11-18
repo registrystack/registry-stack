@@ -3161,6 +3161,128 @@ fn check_refuses_a_runtime_configuration_in_the_reader_words() {
     );
 }
 
+fn external_views_example() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/examples/external-views")
+        .canonicalize()
+        .expect("the external views example exists")
+}
+
+/// The minimal example's runtime file with one external source bound to the
+/// `person-indexed` projection of the external views example, pinned to
+/// `pack_digest`.
+fn external_source_runtime(scratch: &TestProject, pack_digest: &str) -> PathBuf {
+    let pack = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/adapter/examples/external-projections/pack.yaml")
+        .canonicalize()
+        .expect("the example pack exists");
+    let ca = scratch.path().join("source-ca.pem");
+    fs::write(&ca, "").expect("the CA fixture writes");
+    let secrets = scratch.path().join("secrets");
+    let package = scratch.path().join("package");
+    fs::create_dir_all(&secrets).expect("the secret root creates");
+    fs::create_dir_all(&package).expect("the package root creates");
+    edited_runtime_config(scratch, |source| {
+        let source = source
+            .replace("/var/lib/breg/secrets", &secrets.display().to_string())
+            .replace("/var/lib/breg/package", &package.display().to_string());
+        format!(
+            "{source}externalSources:\n  person-indexed:\n    packFile: {pack}\n    packDigest: {pack_digest}\n    \
+             connection:\n      id: synthetic-licensing\n      endpoints:\n        - endpoint: synthetic-registry\n          \
+             baseUrl: https://source.example.test\n          tlsTrustProfile: source-ca\n          \
+             credential: {{type: static-api-key, valueRef: \"secret:file/source-key\"}}\n      \
+             outboundTls:\n        trustProfiles:\n          source-ca: {{caBundleFile: {ca}}}\n    \
+             endpointPolicies:\n      - endpoint: synthetic-registry\n        baseUrl: https://source.example.test\n        \
+             tlsTrustProfile: source-ca\n        clientIdentity: forbidden\n        authentication: {{type: static-api-key}}\n    \
+             allowedFields: [given-name, family-name]\n    grantValidUntil: \"2030-01-01T00:00:00Z\"\n    \
+             acquisition: {{maximumDataOperations: 8, attemptTimeoutMilliseconds: 8000, maximumResponseBytes: 262144}}\n",
+            pack = pack.display(),
+            ca = ca.display(),
+        )
+    })
+}
+
+const WRONG_PACK_DIGEST: &str =
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+#[test]
+fn check_names_the_pack_digest_member_of_an_external_source() {
+    let scratch = TestProject::from_registry_source(b"");
+    let runtime = external_source_runtime(&scratch, WRONG_PACK_DIGEST);
+    let example = external_views_example();
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&example),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let report = json_stdout(&json);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics list")
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.runtime.invalid-external-sources")
+        .unwrap_or_else(|| panic!("{report}"));
+    assert_eq!(
+        diagnostic["path"],
+        "/externalSources/person-indexed/packDigest"
+    );
+    assert_eq!(diagnostic["source"]["file"], path(&runtime));
+}
+
+#[test]
+fn external_source_facts_carry_the_reason_a_binding_was_refused() {
+    let scratch = TestProject::from_registry_source(b"");
+    let runtime = external_source_runtime(&scratch, WRONG_PACK_DIGEST);
+    let example = external_views_example();
+    let output = scratch.path().join("facts.json");
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "generate",
+        "external-source-facts",
+        path(&example),
+        "--runtime-config",
+        path(&runtime),
+        "--output",
+        path(&output),
+    ]);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    assert!(!output.exists());
+    let report = json_stdout(&json);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "external-source-facts.binding");
+    let message = diagnostic["message"].as_str().expect("message");
+    assert!(message.contains("person-indexed"), "{message}");
+    assert!(message.contains("packDigest"), "{message}");
+}
+
+#[test]
+fn external_projection_has_inspect_and_purge_and_no_withdraw_or_rotate() {
+    for removed in ["withdraw", "rotate"] {
+        let output = bregctl(&[
+            "external-projection",
+            removed,
+            "--runtime-config",
+            "/runtime.yaml",
+            "--projection",
+            "holdings-indexed",
+        ]);
+        assert_eq!(output.status.code(), Some(2), "{removed}: {output:?}");
+    }
+    let help = bregctl(&["external-projection", "--help"]);
+    let help = String::from_utf8(help.stdout).expect("help is UTF-8");
+    assert!(help.contains("purge"), "{help}");
+    assert!(help.contains("inspect"), "{help}");
+    assert!(!help.contains("withdraw"), "{help}");
+    assert!(!help.contains("rotate"), "{help}");
+}
+
 /// The minimal project with its reader profile limited to the client `portal`.
 fn minimal_project_limited_to_portal(scratch: &TestProject, include_record_permissions: bool) {
     let example = minimal_example();
@@ -9457,7 +9579,7 @@ fn idempotency_retention_names_both_digests_when_the_active_package_misses_its_p
 
 #[test]
 fn external_projection_operations_name_both_digests_when_the_active_package_misses_its_pin() {
-    for command in ["inspect", "withdraw", "rotate"] {
+    for command in ["inspect", "purge"] {
         assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
             &["external-projection", command],
             &["--projection", "holdings-indexed"],
@@ -9472,7 +9594,7 @@ fn external_projection_operations_name_both_digests_when_the_active_package_miss
 #[test]
 fn external_projection_operations_report_database_prerequisites_with_the_shared_codes() {
     let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
-    for command in ["inspect", "withdraw", "rotate"] {
+    for command in ["inspect", "purge"] {
         let arguments = [
             "--format",
             "json",

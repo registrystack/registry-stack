@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Operator-only inspection, withdrawal and rotation of one indexed external
-//! projection's cache scope.
+//! Operator-only inspection and purge of one indexed external projection's
+//! cache scope.
 //!
-//! Deployment configuration is the only cutoff for acquisition: a binding
-//! still configured binds again at the next start. Withdrawal deactivates the
-//! scope and purges its cached rows; rotation starts a fresh epoch under the
-//! currently configured binding, grant and cache lifetime, and purges the old
-//! one. Both run under the configured migration authority, the exclusive
-//! registry lock and a catalog identity check in one transaction, and both are
-//! audited. Inspection reads the scope and fixed counters only.
+//! Deployment configuration is the only cutoff for acquisition. Purge ends the
+//! scope and deletes its cached rows; the projection stays unavailable until
+//! each replica restarts and binds again. Purge runs under the configured
+//! migration authority, the exclusive registry lock and a catalog identity
+//! check in one transaction, and is audited. Inspection reads the scope and
+//! fixed counters only.
 
 use std::collections::BTreeSet;
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{path::Path, time::Duration};
 
 use registry_platform_audit::AuditEntry;
 use serde_json::{json, Value};
@@ -19,7 +18,6 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::audit::RegistryAudit;
-use crate::external_source::ExternalSourceService;
 use crate::external_views::ExternalProjectionMode;
 use crate::history_maintenance::{lock_registry, HistoryMaintenanceError};
 use crate::model::CompiledRegistry;
@@ -29,15 +27,15 @@ use crate::postgres::{
     ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresKernelError, RegistryLockKey,
     SqlIdentifier,
 };
-use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
+use crate::runtime_config::{load_runtime_config, RuntimeConfigError};
 use crate::startup::StartupError;
 
 /// Schema of the request and response entries of one external projection
-/// withdrawal or rotation.
+/// purge.
 pub const EXTERNAL_PROJECTION_AUDIT_SCHEMA: &str = "breg-external-projection-audit/v1";
 
 const MAINTENANCE: &str =
-    "SELECT registry_internal.maintain_external_projection_scope($1,$2,$3,$4,$5,$6,$7,$8)";
+    "SELECT registry_internal.maintain_external_projection_scope($1,$2,$3,$4,$5)";
 
 /// Value-free failures. Projection IDs come from the reviewed package and a
 /// binding reason names the failed check, never a configured value. Each
@@ -63,9 +61,7 @@ pub enum ExternalProjectionMaintenanceError {
     AuditUnavailable,
     #[error("external projection `{0}` is not an indexed projection of the active package")]
     UnknownProjection(String),
-    #[error("external projection `{projection}` has no usable binding: {reason}")]
-    BindingUnavailable { projection: String, reason: String },
-    #[error("external projection `{0}` has no bound scope to withdraw")]
+    #[error("external projection `{0}` has no bound scope to purge")]
     NotBound(String),
     #[error("another session held the exclusive migration lock past the lock timeout")]
     MigrationLockHeld,
@@ -75,55 +71,6 @@ pub enum ExternalProjectionMaintenanceError {
 
 type Result<T> = std::result::Result<T, ExternalProjectionMaintenanceError>;
 use ExternalProjectionMaintenanceError as Error;
-
-/// The cache scope a configured binding asks for, as startup computes it.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ConfiguredScope {
-    pub binding_digest: String,
-    pub grant_digest: String,
-    pub cache_ttl_seconds: i64,
-}
-
-/// The scope the loaded bindings ask for `projection`. A projection whose
-/// binding failed its own checks, or that has none, is refused with the reason.
-pub(crate) fn scope_from_sources(
-    sources: &ExternalSourceService,
-    projection: &str,
-) -> Result<ConfiguredScope> {
-    let refused = || Error::BindingUnavailable {
-        projection: projection.to_owned(),
-        reason: sources
-            .unavailable_projections()
-            .get(projection)
-            .cloned()
-            .unwrap_or_else(|| "no external source is bound to this projection".to_owned()),
-    };
-    let bound = sources.binding(projection).ok_or_else(refused)?;
-    let ttl = bound.effective_cache_ttl_seconds().ok_or_else(refused)?;
-    Ok(ConfiguredScope {
-        binding_digest: bound.binding_fingerprint().to_owned(),
-        grant_digest: bound.grant_fingerprint().to_owned(),
-        cache_ttl_seconds: i64::from(ttl),
-    })
-}
-
-/// The scope the runtime configuration's binding asks for `projection`. Pack
-/// and public TLS material are read; no credential is resolved and no source
-/// is called.
-pub fn configured_scope(
-    registry: &CompiledRegistry,
-    config: &RuntimeConfig,
-    projection: &str,
-) -> Result<ConfiguredScope> {
-    let resolver = config.secret_resolver().map_err(Error::RuntimeConfig)?;
-    let sources =
-        ExternalSourceService::load(registry, config.external_sources(), Arc::new(resolver))
-            .map_err(|error| Error::BindingUnavailable {
-                projection: projection.to_owned(),
-                reason: error.to_string(),
-            })?;
-    scope_from_sources(&sources, projection)
-}
 
 fn indexed_projections(registry: &CompiledRegistry) -> BTreeSet<String> {
     registry
@@ -136,7 +83,7 @@ fn indexed_projections(registry: &CompiledRegistry) -> BTreeSet<String> {
 }
 
 /// The stored scope row, read to tell a committed change from a rolled-back
-/// one. Every withdrawal and rotation moves the generation.
+/// one. Every purge moves the generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ScopeMark {
     epoch: Uuid,
@@ -163,22 +110,19 @@ async fn scope_mark(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Action {
-    Withdraw,
-    Rotate,
+    Purge,
 }
 
 impl Action {
     fn name(self) -> &'static str {
         match self {
-            Self::Withdraw => "withdraw",
-            Self::Rotate => "rotate",
+            Self::Purge => "purge",
         }
     }
 
     fn outcome(self) -> &'static str {
         match self {
-            Self::Withdraw => "withdrawn",
-            Self::Rotate => "rotated",
+            Self::Purge => "purged",
         }
     }
 }
@@ -211,11 +155,6 @@ pub struct ExternalProjectionOperatorService {
 
 impl ExternalProjectionOperatorService {
     pub async fn from_runtime_config(path: &Path) -> Result<Self> {
-        Ok(Self::open(path).await?.0)
-    }
-
-    /// The service, its configuration and the active package's registry.
-    async fn open(path: &Path) -> Result<(Self, RuntimeConfig, CompiledRegistry)> {
         if !path.is_absolute() {
             return Err(Error::RuntimeConfigPath);
         }
@@ -264,7 +203,7 @@ impl ExternalProjectionOperatorService {
                 .await
                 .map_err(|_| Error::AuditUnavailable)?,
         };
-        Ok((service, config, registry))
+        Ok(service)
     }
 
     #[cfg(feature = "postgres-test")]
@@ -319,9 +258,7 @@ impl ExternalProjectionOperatorService {
             .await
             .map_err(lock_failure)?;
         self.verify_catalog(&transaction).await?;
-        let scope = self
-            .call(&transaction, "inspect", projection, None, None)
-            .await?;
+        let scope = self.call(&transaction, "inspect", projection, None).await?;
         transaction
             .rollback()
             .await
@@ -329,32 +266,18 @@ impl ExternalProjectionOperatorService {
         Ok(scope)
     }
 
-    /// Deactivate the projection's scope under its current epoch and purge its
-    /// cached rows. Acquisition stops only when the binding leaves the
-    /// deployment configuration; a binding still configured binds again at
-    /// the next start.
-    pub async fn withdraw(&self, projection: &str) -> Result<Value> {
+    /// End the projection's scope under its current epoch and delete its
+    /// cached rows. The projection stays unavailable until each replica
+    /// restarts and binds again.
+    pub async fn purge(&self, projection: &str) -> Result<Value> {
         self.require_indexed(projection)?;
-        self.audited(Action::Withdraw, projection, None).await
-    }
-
-    /// Start a fresh epoch under `configured` and purge the projection's
-    /// cached rows. Earlier epochs are never readable again.
-    pub async fn rotate(&self, projection: &str, configured: &ConfiguredScope) -> Result<Value> {
-        self.require_indexed(projection)?;
-        self.audited(Action::Rotate, projection, Some(configured))
-            .await
+        self.audited(Action::Purge, projection).await
     }
 
     /// The request entry is accepted before the transaction opens, so an
     /// audit outage changes nothing. Its response records the outcome the
     /// database holds.
-    async fn audited(
-        &self,
-        action: Action,
-        projection: &str,
-        configured: Option<&ConfiguredScope>,
-    ) -> Result<Value> {
+    async fn audited(&self, action: Action, projection: &str) -> Result<Value> {
         let correlation = Uuid::new_v4().to_string();
         let record = |phase: &str, outcome: &str| -> Value {
             json!({
@@ -380,10 +303,7 @@ impl ExternalProjectionOperatorService {
             )
             .await
             .map_err(|_| Error::AuditUnavailable)?;
-        let changed = match self
-            .change_in_transaction(action, projection, configured)
-            .await
-        {
+        let changed = match self.change_in_transaction(action, projection).await {
             Ok(Change::Committed(scope)) => Ok(scope),
             // A commit that returned an error may still have committed, so the
             // outcome recorded is the one the database holds, read on a fresh
@@ -442,12 +362,7 @@ impl ExternalProjectionOperatorService {
         scope_mark(client, projection).await.ok()
     }
 
-    async fn change_in_transaction(
-        &self,
-        action: Action,
-        projection: &str,
-        configured: Option<&ConfiguredScope>,
-    ) -> Result<Change> {
+    async fn change_in_transaction(&self, action: Action, projection: &str) -> Result<Change> {
         let pool = self
             .migration_connection
             .build_pool()
@@ -464,7 +379,7 @@ impl ExternalProjectionOperatorService {
             })?;
         self.verify_catalog(&transaction).await?;
         let before = scope_mark(&transaction, projection).await?;
-        if action == Action::Withdraw && before.is_none() {
+        if before.is_none() {
             return Err(Error::NotBound(projection.to_owned()));
         }
         let scope = self
@@ -473,7 +388,6 @@ impl ExternalProjectionOperatorService {
                 action.name(),
                 projection,
                 before.map(|mark| mark.epoch),
-                configured,
             )
             .await?;
         let after = scope_mark(&transaction, projection).await?;
@@ -536,7 +450,6 @@ impl ExternalProjectionOperatorService {
         action: &str,
         projection: &str,
         epoch: Option<Uuid>,
-        configured: Option<&ConfiguredScope>,
     ) -> Result<Value> {
         let activation =
             Uuid::parse_str(&self.expected.activation_id).map_err(|_| Error::NotReady)?;
@@ -549,9 +462,6 @@ impl ExternalProjectionOperatorService {
                     &epoch,
                     &self.expected.package_digest,
                     &activation,
-                    &configured.map(|scope| scope.binding_digest.as_str()),
-                    &configured.map(|scope| scope.grant_digest.as_str()),
-                    &configured.map(|scope| scope.cache_ttl_seconds),
                 ],
             )
             .await
@@ -592,21 +502,12 @@ pub async fn inspect(path: &Path, projection: &str) -> Result<Value> {
         .await
 }
 
-/// Withdraw one indexed projection's scope and purge its cached rows.
-pub async fn withdraw(path: &Path, projection: &str) -> Result<Value> {
+/// Purge one indexed projection's scope and delete its cached rows.
+pub async fn purge(path: &Path, projection: &str) -> Result<Value> {
     ExternalProjectionOperatorService::from_runtime_config(path)
         .await?
-        .withdraw(projection)
+        .purge(projection)
         .await
-}
-
-/// Rotate one indexed projection to a fresh epoch under the binding, grant and
-/// cache lifetime its runtime configuration now asks for.
-pub async fn rotate(path: &Path, projection: &str) -> Result<Value> {
-    let (service, config, registry) = ExternalProjectionOperatorService::open(path).await?;
-    service.require_indexed(projection)?;
-    let configured = configured_scope(&registry, &config, projection)?;
-    service.rotate(projection, &configured).await
 }
 
 #[cfg(test)]
@@ -638,33 +539,8 @@ mod postgres_tests {
         )
     }
 
-    #[test]
-    fn rotation_takes_the_configured_binding_and_names_a_missing_one() {
-        let sources = crate::external_source::tests::indexed_service(&[(
-            "projection",
-            "binding",
-            "grant",
-            45,
-        )]);
-        assert_eq!(
-            scope_from_sources(&sources, "projection").unwrap(),
-            ConfiguredScope {
-                binding_digest: "binding".to_owned(),
-                grant_digest: "grant".to_owned(),
-                cache_ttl_seconds: 45,
-            }
-        );
-        let Err(Error::BindingUnavailable { projection, reason }) =
-            scope_from_sources(&sources, "other")
-        else {
-            panic!("a projection without a binding is refused");
-        };
-        assert_eq!(projection, "other");
-        assert_eq!(reason, "no external source is bound to this projection");
-    }
-
     #[tokio::test]
-    async fn operators_inspect_withdraw_and_rotate_one_projection_under_audit() {
+    async fn operators_inspect_and_purge_one_projection_under_audit() {
         let registry = compile_project(&two_projection_project());
         let fixture = Activated::new(&registry).await;
         let operator = operator(&registry, &fixture);
@@ -677,7 +553,7 @@ mod postgres_tests {
             Err(Error::UnknownProjection(id)) if id == "missing"
         ));
         assert!(matches!(
-            operator.withdraw("projection").await,
+            operator.purge("projection").await,
             Err(Error::NotBound(id)) if id == "projection"
         ));
 
@@ -698,9 +574,9 @@ mod postgres_tests {
         assert_eq!(inspected["snapshotCounts"]["fresh"], 1);
         assert_eq!(inspected["packageDigest"], fixture.expected.package_digest);
 
-        let withdrawn = operator.withdraw("projection").await.unwrap();
-        assert_eq!(withdrawn["epoch"], first.epoch.to_string());
-        assert_eq!(withdrawn["active"], false);
+        let purged = operator.purge("projection").await.unwrap();
+        assert_eq!(purged["epoch"], first.epoch.to_string());
+        assert_eq!(purged["active"], false);
         assert_eq!(fixture.cached("projection", first.epoch).await, 0);
         assert!(
             !fixture
@@ -713,36 +589,6 @@ mod postgres_tests {
                 .serves(&registry, "other", "other-binding", "other-grant")
                 .await
         );
-
-        let configured = ConfiguredScope {
-            binding_digest: "renewed-binding".to_owned(),
-            grant_digest: "renewed-grant".to_owned(),
-            cache_ttl_seconds: 30,
-        };
-        let rotated = operator.rotate("projection", &configured).await.unwrap();
-        let epoch = Uuid::parse_str(rotated["epoch"].as_str().unwrap()).unwrap();
-        assert_ne!(epoch, first.epoch);
-        assert_eq!(rotated["active"], true);
-        assert_eq!(rotated["bindingDigest"], "renewed-binding");
-        assert_eq!(rotated["grantDigest"], "renewed-grant");
-        assert_eq!(rotated["cacheTtlSeconds"], 30);
-        assert!(
-            fixture
-                .serves(&registry, "projection", "renewed-binding", "renewed-grant")
-                .await
-        );
-        let restarted = fixture
-            .bind(
-                &registry,
-                "projection",
-                "renewed-binding",
-                "renewed-grant",
-                30,
-            )
-            .await
-            .unwrap();
-        assert_eq!(restarted.epoch, epoch, "a restart keeps the rotated epoch");
-        assert_eq!(fixture.cached("other", other.epoch).await, 1);
 
         let responses = fixture
             .database
@@ -761,9 +607,8 @@ mod postgres_tests {
         assert_eq!(
             responses,
             [
-                ("withdraw".to_owned(), "failed".to_owned()),
-                ("withdraw".to_owned(), "withdrawn".to_owned()),
-                ("rotate".to_owned(), "rotated".to_owned()),
+                ("purge".to_owned(), "failed".to_owned()),
+                ("purge".to_owned(), "purged".to_owned()),
             ]
         );
         fixture.database.assert_every_audit_request_answered_once();
@@ -787,7 +632,7 @@ mod postgres_tests {
             audit(&fixture),
         );
         assert!(matches!(
-            runtime.withdraw("projection").await,
+            runtime.purge("projection").await,
             Err(Error::MigrationAuthority)
         ));
         assert!(matches!(
@@ -834,7 +679,7 @@ mod postgres_tests {
             Err(Error::NotReady)
         ));
         assert!(matches!(
-            stale.withdraw("projection").await,
+            stale.purge("projection").await,
             Err(Error::NotReady)
         ));
         assert!(

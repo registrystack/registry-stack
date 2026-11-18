@@ -7935,7 +7935,7 @@
         {
           "name": "external-projection",
           "invocation": "bregctl external-projection",
-          "about": "Inspect, withdraw, or rotate an indexed external projection's cache scope using configured migration authority",
+          "about": "Inspect or purge cached external projection values using configured migration authority",
           "long_about": null,
           "usage": "bregctl external-projection [OPTIONS] <COMMAND>",
           "arguments": [],
@@ -8020,64 +8020,11 @@
               "subcommands": []
             },
             {
-              "name": "withdraw",
-              "invocation": "bregctl external-projection withdraw",
-              "about": "Deactivate the scope and purge its cached rows; a binding still configured binds again at the next start",
+              "name": "purge",
+              "invocation": "bregctl external-projection purge",
+              "about": "End the scope and delete its cached rows; the projection stays unavailable until each replica restarts and binds again",
               "long_about": null,
-              "usage": "bregctl external-projection withdraw [OPTIONS] --runtime-config <ABSOLUTE_FILE> --projection <ID>",
-              "arguments": [],
-              "options": [
-                {
-                  "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--projection <ID>",
-                  "description": "Indexed external projection ID declared by the active package",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "human"
-                  ],
-                  "possible_values": [
-                    "human",
-                    "json"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
-              "subcommands": []
-            },
-            {
-              "name": "rotate",
-              "invocation": "bregctl external-projection rotate",
-              "about": "Start a fresh epoch under the configured binding, grant and cache lifetime, and purge cached rows",
-              "long_about": null,
-              "usage": "bregctl external-projection rotate [OPTIONS] --runtime-config <ABSOLUTE_FILE> --projection <ID>",
+              "usage": "bregctl external-projection purge [OPTIONS] --runtime-config <ABSOLUTE_FILE> --projection <ID>",
               "arguments": [],
               "options": [
                 {

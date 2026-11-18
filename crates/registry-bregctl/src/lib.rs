@@ -277,7 +277,7 @@ enum Command {
     EvidenceRetention(EvidenceRetentionArgs),
     /// Drop held idempotency responses past their receipt horizon using configured migration authority.
     IdempotencyRetention(IdempotencyRetentionArgs),
-    /// Inspect, withdraw, or rotate an indexed external projection's cache scope using configured migration authority.
+    /// Inspect or purge cached external projection values using configured migration authority.
     ExternalProjection(ExternalProjectionArgs),
     /// Open, close, and list the authorities that bound `import` runs.
     ImportAuthority(ImportAuthorityArgs),
@@ -459,10 +459,8 @@ struct ExternalProjectionArgs {
 enum ExternalProjectionCommand {
     /// Report one projection's scope, refresh outcome counts and snapshot counts; reads no source values.
     Inspect(ExternalProjectionTargetArgs),
-    /// Deactivate the scope and purge its cached rows; a binding still configured binds again at the next start.
-    Withdraw(ExternalProjectionTargetArgs),
-    /// Start a fresh epoch under the configured binding, grant and cache lifetime, and purge cached rows.
-    Rotate(ExternalProjectionTargetArgs),
+    /// End the scope and delete its cached rows; the projection stays unavailable until each replica restarts and binds again.
+    Purge(ExternalProjectionTargetArgs),
     /// Run bounded ready work for one managed refresh plan through its authenticated HTTP route.
     Refresh(ExternalProjectionRefreshArgs),
 }
@@ -3351,14 +3349,9 @@ where
                     "External projection scope.",
                     target,
                 ),
-                ExternalProjectionCommand::Withdraw(target) => (
-                    "external-projection withdraw",
-                    "Withdrew the external projection scope and purged its cached rows.",
-                    target,
-                ),
-                ExternalProjectionCommand::Rotate(target) => (
-                    "external-projection rotate",
-                    "Rotated the external projection scope to a fresh epoch.",
+                ExternalProjectionCommand::Purge(target) => (
+                    "external-projection purge",
+                    "Purged the external projection scope and its cached rows.",
                     target,
                 ),
                 ExternalProjectionCommand::Refresh(_) => {
@@ -3392,11 +3385,8 @@ where
                     ExternalProjectionCommand::Inspect(_) => {
                         maintenance::inspect(path, projection).await
                     }
-                    ExternalProjectionCommand::Withdraw(_) => {
-                        maintenance::withdraw(path, projection).await
-                    }
-                    ExternalProjectionCommand::Rotate(_) => {
-                        maintenance::rotate(path, projection).await
+                    ExternalProjectionCommand::Purge(_) => {
+                        maintenance::purge(path, projection).await
                     }
                     ExternalProjectionCommand::Refresh(_) => {
                         unreachable!("refresh returned before database maintenance dispatch")
@@ -4050,7 +4040,7 @@ fn external_projection_failure(
         ),
         Error::DatabaseUnavailable => migration(
             "external-projection.database.unavailable",
-            "the database could not be reached or did not complete a statement or the commit. A withdrawal or rotation whose commit was not acknowledged may have taken effect: run `bregctl external-projection inspect` before rerunning it",
+            "the database could not be reached or did not complete a statement or the commit. A purge whose commit was not acknowledged may have taken effect: run `bregctl external-projection inspect` before rerunning it",
         ),
         Error::MigrationAuthority => migration(
             "external-projection.migration-authority.refused",
@@ -4089,18 +4079,6 @@ fn external_projection_failure(
         Error::UnknownProjection(_) => operation(
             "external-projection.unknown",
             "the projection is not an indexed external projection of the active package; name one the package declares",
-        ),
-        Error::BindingUnavailable { .. } => source_failure(
-            command,
-            diagnostic(
-                "external-projection.binding.unavailable",
-                "externalSources",
-                &format!(
-                    "{error}. Rotation uses the configured binding: correct it, or remove it from the deployment configuration to stop acquisition"
-                ),
-            ),
-            DiagnosticArtifact::RuntimeConfiguration,
-            SuggestedAction::CorrectRuntimeConfiguration,
         ),
         Error::NotBound(_) => operation(
             "external-projection.not-bound",
@@ -8963,10 +8941,10 @@ fn generate_external_source_facts(args: &GenerateArgs) -> Result<SuccessReport, 
             SuggestedAction::CorrectCommandUsage,
         ));
     }
-    let binding_refusal = || {
+    let binding_refusal = |reason: &str| {
         fail(
             "external-source-facts.binding",
-            "review the runtime binding, source grant and pinned Adapter pack",
+            &format!("{reason}; review the runtime binding, source grant and pinned Adapter pack"),
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         )
@@ -8983,21 +8961,39 @@ fn generate_external_source_facts(args: &GenerateArgs) -> Result<SuccessReport, 
         .map_err(|error| runtime_config_failure("generate", error))?;
     let profile = profile(args.production);
     let (compiled, project) = compile_with_source(&args.project, profile, "generate")?;
-    let resolver = std::sync::Arc::new(config.secret_resolver().map_err(|_| binding_refusal())?);
+    let resolver = std::sync::Arc::new(
+        config
+            .secret_resolver()
+            .map_err(|_| binding_refusal("the secret providers could not be opened"))?,
+    );
     let bindings = config.external_sources();
     let service =
         registry_breg::external_source::ExternalSourceService::load(&compiled, bindings, resolver)
-            .map_err(|_| binding_refusal())?;
+            .map_err(|error| binding_refusal(&error.to_string()))?;
     let inventory = compiled.external_views();
     let mut projections = Vec::with_capacity(bindings.len());
     for binding in bindings {
         let id = binding.id.as_str();
-        let compiled_projection = inventory.projections.get(id).ok_or_else(binding_refusal)?;
+        let compiled_projection = inventory.projections.get(id).ok_or_else(|| {
+            binding_refusal(&format!(
+                "`{id}`: the package declares no external projection with this ID"
+            ))
+        })?;
         let record_type = inventory
             .record_types
             .get(compiled_projection.record_type.as_str())
-            .ok_or_else(binding_refusal)?;
-        let bound = service.binding(id).ok_or_else(binding_refusal)?;
+            .ok_or_else(|| {
+                binding_refusal(&format!(
+                    "`{id}`: the package declares no record type for this projection"
+                ))
+            })?;
+        let bound = service.binding(id).ok_or_else(|| {
+            let reason = service.unavailable_projections().get(id).map_or(
+                "no external source is bound to this projection",
+                String::as_str,
+            );
+            binding_refusal(&format!("`{id}`: {reason}"))
+        })?;
         projections.push(json!({
             "id": id,
             "mode": compiled_projection.mode,
@@ -20275,14 +20271,6 @@ fn external_projection_failures_each_carry_one_code() {
             "externalProjection",
         ),
         (
-            Error::BindingUnavailable {
-                projection: "projection".to_owned(),
-                reason: "no external source is bound to this projection".to_owned(),
-            },
-            "external-projection.binding.unavailable",
-            "externalSources",
-        ),
-        (
             Error::NotBound("projection".to_owned()),
             "external-projection.not-bound",
             "externalProjection",
@@ -20303,7 +20291,7 @@ fn external_projection_failures_each_carry_one_code() {
     assert!(!codes.contains("external-projection.unavailable"));
 
     let package = external_projection_failure(
-        "external-projection rotate",
+        "external-projection purge",
         Error::PackageRefused(PackageError::Permissions),
     );
     assert_eq!(
