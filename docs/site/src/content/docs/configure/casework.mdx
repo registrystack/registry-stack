@@ -344,7 +344,7 @@ A producer that must approve every policy change instead submits the exact `{id,
 For strict mode, read `policyBindings[]` from the checked project's flat report:
 
 ```sh
-caseworkctl --format json check ./casework
+caseworkctl --format json check .
 ```
 
 For a deployed service, the authenticated `GET /v1/review-policies/decision` returns a policy closure whose `identity` is the exact binding for strict mode.
@@ -538,7 +538,7 @@ clients:
 
 To generate one of the approval patterns for an existing Proposal-mode Action, use `caseworkctl provider add`:
 
-```sh
+```sh test-skip="needs a BReg project with a Proposal-mode Action and its package"
 caseworkctl provider add ./review --breg-project ./facility \
   --action correct-address --pattern single-reviewer-approval \
   --breg-package ./facility-package
@@ -584,7 +584,7 @@ The command never edits BReg or creates credentials.
 
 Build the matching BReg package, then pair and verify its native export:
 
-```sh
+```sh test-skip="needs a BReg project with a Proposal-mode Action and its package"
 caseworkctl provider pair ./review \
   --provider-id facility-proposal-context \
   --breg-package /absolute/path/to/breg-package \

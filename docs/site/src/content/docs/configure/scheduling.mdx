@@ -699,7 +699,7 @@ Supply the bearer token through `REGISTRY_SCHEDULING_TOKEN` using the deployment
 The command accepts no token argument and never puts a token in a URL or diagnostic.
 A personal export rereads each explicitly named appointment through the owner-authorized detail route:
 
-```sh
+```sh test-skip="needs a running Registry Scheduling deployment and a bearer token"
 cargo run --locked -p registry-scheduling-client --example calendar-export -- \
   personal \
   --base-url https://scheduling.example.gov/ \
@@ -710,7 +710,7 @@ cargo run --locked -p registry-scheduling-client --example calendar-export -- \
 A staff export uses the separately authorized operational query.
 It requires the current configured projection profile and a service, location, and time interval:
 
-```sh
+```sh test-skip="needs a running Registry Scheduling deployment and a bearer token"
 cargo run --locked -p registry-scheduling-client --example calendar-export -- \
   staff \
   --base-url https://scheduling.example.gov/ \

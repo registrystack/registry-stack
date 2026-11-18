@@ -884,7 +884,7 @@ Import a BReg record schema when you want scenarios to reject field names the re
 Import Messaging's template export when you want computed message data checked against the template before deployment.
 Generate both from the owning projects, then copy the selected artifacts into your Coordinator project:
 
-```sh
+```sh test-skip="needs the owning BReg and Messaging projects"
 bregctl generate schemas ./source-registry --output ./record-contracts
 messagingctl generate templates --project ./notices --output ./notice-contracts.json
 ```

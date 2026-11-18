@@ -519,7 +519,7 @@ If it fails, BReg rolls back and re-observes disclosure before returning `guardR
 
 ## Test a Plan function offline
 
-```sh
+```sh test-skip="uses placeholder Action and input names"
 bregctl check ./registry
 bregctl --format json explain actions ./registry
 bregctl project action-test ./registry --action <action-id> --input /path/to/input.json --evaluation-date 2026-01-31
