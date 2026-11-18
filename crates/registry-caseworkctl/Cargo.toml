@@ -36,7 +36,7 @@ registry-platform-config.workspace = true
 registry-platform-yaml.workspace = true
 registry-rstack-dev.workspace = true
 registry-cli-api.workspace = true
-registry-thunderid-tooling = { workspace = true, features = ["session"] }
+registry-thunderid-tooling.workspace = true
 registry-casework-breg.workspace = true
 registry-casework-core.workspace = true
 registry-casework.workspace = true

@@ -43,7 +43,7 @@ registry-platform-crypto.workspace = true
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-yaml.workspace = true
 registry-rstack-dev.workspace = true
-registry-thunderid-tooling = { workspace = true, features = ["session"] }
+registry-thunderid-tooling.workspace = true
 p256.workspace = true
 # `jwk from-pem` reads a PEM SubjectPublicKeyInfo or PKCS #1 public key.
 pkcs1.workspace = true
