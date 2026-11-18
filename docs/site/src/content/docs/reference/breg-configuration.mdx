@@ -124,18 +124,37 @@ and Fan definition 2), rounded to `scale` digits. A ratio's and a percentile's `
 exactly `scale` digits, or null with status `not-applicable` for a zero denominator or a cell with no values.
 Every profile with `read-live` on the dataset must
 be able to read that field (`breg.statistical-dataset.measure-field-not-readable`). Every measure type is
-available on `read-live`, `read-exact`, and a release under `exact-public-values`; a dataset with a sum, a mean,
+available on `read-live`, `read-exact`, and a release under `exact-public-values`; a dataset with a mean,
 a ratio, or a percentile cannot have a `publish` or `read-releases` grant under `minimum-count-and-rounding`
-(`breg.statistical-dataset.measure-release-unsupported`), because that method releases counts and distinct
-counts only. A distinct count in such a release is thresholded and rounded on its own value, independently of
+(`breg.statistical-dataset.measure-release-unsupported`), because that method releases counts, distinct
+counts, and sums only. A dataset with a sum cannot have a `publish` or `read-releases` grant under that method while the sum rules
+are held for review (`breg.statistical-dataset.sum-release-held`). A distinct count in such a release is thresholded and rounded on its own value, independently of
 the record count of the same cell.
 `disclosure` is a union tagged by a required `type`. `type: minimum-count-and-rounding` takes
-`minimumCount` and `roundingBase`, both required, with no value below 2. `type: exact-public-values`
+`minimumCount` and `roundingBase`, both required, with no value below 2, and the two members below
+when the dataset releases a sum. `type: exact-public-values`
 takes no other member and releases exact values for every measure type. It compiles only when the unit
 Record type, every field the dataset reads, and every source Record type of a derived field it reads are
 classified `public`; otherwise `bregctl check` reports `breg.statistical-dataset.exact-release-not-public`,
 one diagnostic per item to reclassify. The definition digest covers the disclosure method and its
-parameters.
+parameters, except `dominancePercent`.
+
+`disclosure.contributor` names whom a summed value belongs to. `{type: field, field}` names a `reference` field
+of the unit that the publisher can read (`breg.statistical-dataset.disclosure-contributor-field`);
+`{type: each-record}` states that every record is its own contributor. Records with no contributor value count
+as one contributor together. `disclosure.dominancePercent` is the p of the p% rule, an integer from 1 to 100.
+Both are required when a dataset that grants `publish` declares a sum, and there are no defaults:
+`breg.statistical-dataset.disclosure-contributor-missing` and `breg.statistical-dataset.disclosure-dominance-missing`
+refuse a missing member, and `breg.statistical-dataset.disclosure-contributor-unused` and
+`breg.statistical-dataset.disclosure-dominance-unused` refuse a member on a dataset that does not need it. A
+summed `decimal` field must declare a `minimum` of zero or more
+(`breg.statistical-dataset.sum-release-negative-values`). Day periods are refused
+(`breg.statistical-dataset.sum-release-day-granularity`), a dataset that releases a sum declares at most 4
+dimensions (`breg.statistical-dataset.non-additive-dimensions`), and two datasets that release a sum of the
+same field over the same unit and population, one's dimensions all among the other's, are refused
+(`breg.statistical-dataset.sum-release-nested`). The contributor joins the definition digest, so changing it
+starts a new release series; `dominancePercent` does not. See [Release sums](../../configure/breg-statistics/#release-sums).
+
 `measure` is a reserved column name, so no dimension may use it. At most one access profile holds `publish`
 on a dataset. Once one does, it and every `read-live` profile must also hold `read-releases`;
 without one, no profile may hold `read-releases`.

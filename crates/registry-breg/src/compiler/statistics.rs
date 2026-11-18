@@ -8,9 +8,9 @@ use serde_json::json;
 
 use crate::contract::{
     AccessProfileSource, ActorKindSource, Classification, DatasetOperation, FieldTypeSource,
-    Operation, RegistryProject, StatisticalDisclosureSource, StatisticalMeasureSource,
-    StatisticalPeriodGranularitySource, StatisticalPeriodSource, StatisticalValiditySource,
-    MAX_EXACT_JSON_INTEGER,
+    Operation, RegistryProject, StatisticalContributorSource, StatisticalDisclosureSource,
+    StatisticalMeasureSource, StatisticalPeriodGranularitySource, StatisticalPeriodSource,
+    StatisticalValiditySource, MAX_EXACT_JSON_INTEGER,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{
@@ -20,15 +20,16 @@ use crate::model::{
 };
 use crate::query::{ComparisonOp, FilterExpr, FilterPredicate, Literal};
 use crate::statistics::{
-    maximum_measure_characters, period_for_code, DisclosureDocument, DisclosureMethod, Measure,
-    PeriodGranularity,
+    maximum_measure_characters, period_for_code, uses_row_cube, Contributor, DisclosureDocument,
+    DisclosureMethod, Measure, PeriodGranularity, SumDisclosure,
 };
 
 pub const MAX_STATISTICAL_CELLS_PER_PERIOD: usize = 10_000;
 /// PostgreSQL accepts at most twelve elements in one `CUBE`, which computes the totals.
 pub const MAX_STATISTICAL_DIMENSIONS: usize = 12;
-/// A dataset with a non-additive measure (a distinct count) computes its totals
-/// over the records, not the base cells, which is dearer per dimension.
+/// A dataset with a non-additive measure (a distinct count, a percentile) or a
+/// released sum computes its totals over the records, not the base cells, which
+/// is dearer per dimension.
 pub const MAX_NON_ADDITIVE_DIMENSIONS: usize = 4;
 
 pub(super) fn compile(
@@ -38,6 +39,7 @@ pub(super) fn compile(
     let mut errors = Vec::new();
     let mut compiled = BTreeMap::new();
     let mut seen = BTreeSet::new();
+    let mut sum_releases: Vec<SumRelease> = Vec::new();
     validate_permission_datasets(project, &mut errors);
     for source in &project.statistical_datasets {
         let root = format!("statisticalDatasets[id={}]", source.id);
@@ -144,30 +146,33 @@ pub(super) fn compile(
                 ));
             }
         }
-        // A minimum-count-and-rounding release carries counts and distinct
-        // counts; every other measure is read live or released exactly.
-        if measures.iter().any(|measure| !measure.is_count_like()) {
-            let releasing = grants
-                .publish
-                .iter()
-                .chain(&grants.read_releases)
-                .cloned()
-                .collect::<BTreeSet<_>>();
-            let exact = matches!(
-                source.disclosure,
-                Some(StatisticalDisclosureSource::ExactPublicValues {})
-            );
-            if !releasing.is_empty() && !exact {
-                errors.push(error(
-                    "breg.statistical-dataset.measure-release-unsupported",
-                    &root,
-                    &source.id,
-                    &format!(
-                        "a minimum-count-and-rounding release carries counts and distinct counts only; a sum, mean, ratio or percentile is read live: remove publish and read-releases from {}, declare count and distinct-count measures only, or release exact values with disclosure type exact-public-values over a register classified public",
-                        quoted(&releasing)
-                    ),
-                ));
-            }
+        // A minimum-count-and-rounding release carries counts, distinct counts
+        // and sums; every other measure is read live or released exactly.
+        let releasing = grants
+            .publish
+            .iter()
+            .chain(&grants.read_releases)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let exact = matches!(
+            source.disclosure,
+            Some(StatisticalDisclosureSource::ExactPublicValues {})
+        );
+        if measures
+            .iter()
+            .any(|measure| !measure.is_count_like() && !measure.is_sum())
+            && !releasing.is_empty()
+            && !exact
+        {
+            errors.push(error(
+                "breg.statistical-dataset.measure-release-unsupported",
+                &root,
+                &source.id,
+                &format!(
+                    "a minimum-count-and-rounding release carries counts, distinct counts and sums; a mean, ratio or percentile is read live: remove publish and read-releases from {}, declare count, distinct-count and sum measures only, or release exact values with disclosure type exact-public-values over a register classified public",
+                    quoted(&releasing)
+                ),
+            ));
         }
         let live_profiles = grants.read_live.clone();
         let mut publishers = grants.publish.iter();
@@ -306,9 +311,55 @@ pub(super) fn compile(
             Some(StatisticalDisclosureSource::MinimumCountAndRounding {
                 minimum_count,
                 rounding_base,
+                ..
             }) => Some((*minimum_count, *rounding_base)),
             _ => None,
         };
+        let declares_sum = measures.iter().any(Measure::is_sum);
+        let sum_release = rounding.is_some() && declares_sum && !grants.publish.is_empty();
+        let sum_contributor =
+            compile_sum_disclosure_rules(source, unit, &grants, sum_release, &root, &mut errors);
+        if sum_release {
+            if let Some(Contributor::Field { field: contributor }) = &sum_contributor {
+                referenced_fields.insert(contributor.clone());
+            }
+            let sum_fields: BTreeSet<String> = source
+                .measures
+                .iter()
+                .filter_map(|measure| match measure {
+                    StatisticalMeasureSource::Sum { field, .. } => Some(field.clone()),
+                    _ => None,
+                })
+                .collect();
+            // Two released sums over the same records whose dimensions nest
+            // let a reader subtract one release from the other and isolate a
+            // finer cell than either protects.
+            for earlier in &sum_releases {
+                let nested = earlier.unit == source.unit
+                    && earlier.population == source.population
+                    && !earlier.sum_fields.is_disjoint(&sum_fields)
+                    && (earlier.dimensions.iter().all(|d| dimensions.contains(d))
+                        || dimensions.iter().all(|d| earlier.dimensions.contains(d)));
+                if nested {
+                    errors.push(error(
+                        "breg.statistical-dataset.sum-release-nested",
+                        &root,
+                        &source.id,
+                        &format!(
+                            "its dimensions nest with those of `{}`, which releases a sum of the same field over the same records; release the sums in one dataset, give them disjoint dimensions, or change a population",
+                            earlier.id
+                        ),
+                    ));
+                }
+            }
+            sum_releases.push(SumRelease {
+                id: source.id.to_string(),
+                unit: source.unit.clone(),
+                population: source.population.clone(),
+                sum_fields,
+                dimensions: dimensions.clone(),
+            });
+        }
         if let Some((minimum_count, rounding_base)) = rounding {
             if minimum_count < 2 {
                 errors.push(error(
@@ -352,14 +403,14 @@ pub(super) fn compile(
             ));
         }
         if source.dimensions.len() > MAX_NON_ADDITIVE_DIMENSIONS
-            && measures.iter().any(|measure| !measure.is_additive())
+            && uses_row_cube(&measures, sum_release)
         {
             errors.push(error(
                 "breg.statistical-dataset.non-additive-dimensions",
                 &format!("{root}.dimensions"),
                 &source.id,
                 &format!(
-                    "a dataset with a distinct count or a percentile declares at most {MAX_NON_ADDITIVE_DIMENSIONS} dimensions, because its totals are computed over the records, not the base cells"
+                    "a dataset with a distinct count, a percentile or a released sum declares at most {MAX_NON_ADDITIVE_DIMENSIONS} dimensions, because its totals are computed over the records, not the base cells"
                 ),
             ));
         }
@@ -430,60 +481,95 @@ pub(super) fn compile(
                 );
             }
         }
-        let Some(period) = period else {
-            continue;
-        };
-        let disclosure = match disclosure_source {
-            Some(StatisticalDisclosureSource::ExactPublicValues {}) => {
-                DisclosureMethod::ExactPublicValues
-            }
-            _ => match rounding.filter(|(minimum_count, rounding_base)| {
-                (2..=MAX_EXACT_JSON_INTEGER).contains(minimum_count)
-                    && (2..=MAX_EXACT_JSON_INTEGER).contains(rounding_base)
-            }) {
-                Some((minimum_count, rounding_base)) => DisclosureMethod::MinimumCountAndRounding {
-                    minimum_count,
-                    rounding_base,
+        'compile: {
+            let Some(period) = period else {
+                break 'compile;
+            };
+            let disclosure = match disclosure_source {
+                Some(StatisticalDisclosureSource::ExactPublicValues {}) => {
+                    DisclosureMethod::ExactPublicValues
+                }
+                _ => match rounding.filter(|(minimum_count, rounding_base)| {
+                    (2..=MAX_EXACT_JSON_INTEGER).contains(minimum_count)
+                        && (2..=MAX_EXACT_JSON_INTEGER).contains(rounding_base)
+                }) {
+                    Some((minimum_count, rounding_base)) => {
+                        DisclosureMethod::MinimumCountAndRounding {
+                            minimum_count,
+                            rounding_base,
+                        }
+                    }
+                    None => break 'compile,
                 },
-                None => continue,
-            },
-        };
-        let field_type =
-            |field_id: &str| field(unit, field_id).map(|(field_type, _)| field_type.clone());
-        let longest_decimal = measures
-            .iter()
-            .filter_map(|measure| maximum_measure_characters(measure, &measures, &field_type))
-            .max();
-        let definition_digest = definition_digest(
-            source,
-            &period,
-            &dimensions,
-            &measures,
-            &disclosure,
-            DefinitionDependencies {
-                entities,
-                entity_ids: &dependency_entities,
-                relation_ids: &used_relations,
-                referenced_fields: &referenced_fields,
-                population_field_bindings: &population_field_bindings,
-            },
-            releases.as_ref().map(|release| release.publisher.as_str()),
-        );
-        if cell_count.is_some_and(|cells| {
-            cells <= MAX_STATISTICAL_CELLS_PER_PERIOD
-                && maximum_release_document_bytes(
-                    source,
-                    &period,
-                    &dimensions,
-                    &measures,
-                    disclosure,
-                    &definition_digest,
-                    cells,
-                    longest_decimal,
-                )
-                .is_none_or(|bytes| bytes > super::MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES)
-        }) {
-            errors.push(error(
+            };
+            let sum_disclosure = sum_release
+                .then(|| {
+                    let dominance_percent = match disclosure_source {
+                        Some(StatisticalDisclosureSource::MinimumCountAndRounding {
+                            dominance_percent,
+                            ..
+                        }) => *dominance_percent,
+                        _ => None,
+                    };
+                    sum_contributor.clone().zip(dominance_percent).map(
+                        |(contributor, dominance_percent)| SumDisclosure {
+                            contributor,
+                            dominance_percent,
+                            integer_sums: measures
+                                .iter()
+                                .filter(|measure| match measure {
+                                    Measure::Sum {
+                                        field: field_id, ..
+                                    } => matches!(
+                                        field(unit, field_id),
+                                        Some((FieldTypeSource::Int64, _))
+                                    ),
+                                    _ => false,
+                                })
+                                .map(|measure| measure.id().to_owned())
+                                .collect(),
+                        },
+                    )
+                })
+                .flatten();
+            let field_type =
+                |field_id: &str| field(unit, field_id).map(|(field_type, _)| field_type.clone());
+            let longest_decimal = measures
+                .iter()
+                .filter_map(|measure| maximum_measure_characters(measure, &measures, &field_type))
+                .max();
+            let definition_digest = definition_digest(
+                source,
+                &period,
+                &dimensions,
+                &measures,
+                &disclosure,
+                DefinitionDependencies {
+                    sums: sum_disclosure.as_ref(),
+                    entities,
+                    entity_ids: &dependency_entities,
+                    relation_ids: &used_relations,
+                    referenced_fields: &referenced_fields,
+                    population_field_bindings: &population_field_bindings,
+                },
+                releases.as_ref().map(|release| release.publisher.as_str()),
+            );
+            if cell_count.is_some_and(|cells| {
+                cells <= MAX_STATISTICAL_CELLS_PER_PERIOD
+                    && maximum_release_document_bytes(
+                        source,
+                        &period,
+                        &dimensions,
+                        &measures,
+                        disclosure,
+                        sum_disclosure.as_ref(),
+                        &definition_digest,
+                        cells,
+                        longest_decimal,
+                    )
+                    .is_none_or(|bytes| bytes > super::MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES)
+            }) {
+                errors.push(error(
                 "breg.statistical-dataset.document-exceeded",
                 &format!("{root}.dimensions"),
                 &source.id,
@@ -492,29 +578,41 @@ pub(super) fn compile(
                     super::MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES
                 ),
             ));
-            continue;
+                break 'compile;
+            }
+            compiled.insert(
+                source.id.to_string(),
+                CompiledStatisticalDataset {
+                    id: source.id.to_string(),
+                    display: source.display.clone(),
+                    unit_entity_id: source.unit.clone(),
+                    population: source.population.clone(),
+                    period,
+                    dimensions,
+                    measures,
+                    disclosure,
+                    sum_disclosure,
+                    access_profiles,
+                    live_profiles,
+                    releases,
+                    exact_reads,
+                    dependency_entities,
+                    referenced_fields,
+                    evaluation_date_dependent,
+                    definition_digest,
+                },
+            );
         }
-        compiled.insert(
-            source.id.to_string(),
-            CompiledStatisticalDataset {
-                id: source.id.to_string(),
-                display: source.display.clone(),
-                unit_entity_id: source.unit.clone(),
-                population: source.population.clone(),
-                period,
-                dimensions,
-                measures,
-                disclosure,
-                access_profiles,
-                live_profiles,
-                releases,
-                exact_reads,
-                dependency_entities,
-                referenced_fields,
-                evaluation_date_dependent,
-                definition_digest,
-            },
-        );
+        // Rules of the hold run after every other check, so it is the last
+        // diagnostic of the dataset.
+        if declares_sum && rounding.is_some() && !releasing.is_empty() {
+            errors.push(error(
+                "breg.statistical-dataset.sum-release-held",
+                &format!("{root}.disclosure"),
+                &source.id,
+                "a minimum-count-and-rounding release of a sum is held until a statistician has reviewed its disclosure rules; serve sums through read-live, read-exact, or an exact-public-values release",
+            ));
+        }
     }
     if errors.is_empty() {
         Ok(compiled)
@@ -530,6 +628,7 @@ fn maximum_release_document_bytes(
     dimensions: &[CompiledStatisticalDimension],
     measures: &[Measure],
     disclosure: DisclosureMethod,
+    sums: Option<&SumDisclosure>,
     definition_digest: &str,
     cell_count: usize,
     longest_decimal: Option<usize>,
@@ -600,7 +699,7 @@ fn maximum_release_document_bytes(
             "evaluatedAt": timestamp,
             "accessProfile": "x".repeat(64),
         },
-        "disclosure": DisclosureDocument::from(disclosure),
+        "disclosure": DisclosureDocument::for_release(disclosure, sums),
     }))
     .expect("statistical release size envelope canonicalizes")
     .len();
@@ -1513,6 +1612,7 @@ fn dependencies(
 }
 
 struct DefinitionDependencies<'a> {
+    sums: Option<&'a SumDisclosure>,
     entities: &'a BTreeMap<String, CompiledEntity>,
     entity_ids: &'a BTreeSet<String>,
     relation_ids: &'a BTreeSet<String>,
@@ -1641,7 +1741,7 @@ fn definition_digest(
             ..
         } => json!({"kind": "stock", "granularity": granularity, "validity": validity}),
     };
-    let value = json!({
+    let mut value = json!({
         "unit": source.unit,
         "population": source.population,
         "populationFieldBindings": dependencies.population_field_bindings,
@@ -1653,6 +1753,9 @@ fn definition_digest(
         "derived": derived,
         "publisherVisibility": visibility,
     });
+    if let Some(contributor) = sum_definition(dependencies.sums) {
+        value["contributor"] = contributor;
+    }
     let bytes = canonicalize_json(&value).expect("statistical dataset definition canonicalizes");
     super::sha256_hex(&bytes)
 }
@@ -2051,4 +2154,182 @@ fn error(code: &str, path: &str, dataset: &str, fix: &str) -> Diagnostic {
         path,
         &format!("statistical dataset `{dataset}` is invalid; {fix}"),
     )
+}
+
+/// What a released sum adds to the definition digest: who a value belongs to.
+/// The dominance percentage is the publisher's secret and stays out, so
+/// changing it never re-keys a release.
+fn sum_definition(sums: Option<&SumDisclosure>) -> Option<serde_json::Value> {
+    sums.map(|sums| json!(sums.contributor))
+}
+
+/// A dataset that releases sums, as the nesting rule compares it.
+struct SumRelease {
+    id: String,
+    unit: String,
+    population: String,
+    sum_fields: BTreeSet<String>,
+    dimensions: Vec<CompiledStatisticalDimension>,
+}
+
+/// The contributor and dominance rules of a dataset that releases sums under
+/// minimum-count-and-rounding: members present exactly when it does, a
+/// contributor field the publisher reads, sums that cannot go negative, and no
+/// day periods. Returns the compiled contributor when one is declared.
+fn compile_sum_disclosure_rules(
+    source: &crate::contract::StatisticalDatasetSource,
+    unit: &CompiledEntity,
+    grants: &DatasetGrants,
+    sum_release: bool,
+    root: &str,
+    errors: &mut Vec<Diagnostic>,
+) -> Option<Contributor> {
+    let Some(StatisticalDisclosureSource::MinimumCountAndRounding {
+        contributor,
+        dominance_percent,
+        ..
+    }) = source.disclosure.as_ref()
+    else {
+        return None;
+    };
+    let path = format!("{root}.disclosure");
+    for (present, member, name) in [
+        (contributor.is_some(), "contributor", "contributor"),
+        (dominance_percent.is_some(), "dominancePercent", "dominance"),
+    ] {
+        if sum_release && !present {
+            errors.push(error(
+                &format!("breg.statistical-dataset.disclosure-{name}-missing"),
+                &path,
+                &source.id,
+                &format!("declare {member}: a release of sums needs it, and it has no default"),
+            ));
+        } else if !sum_release && present {
+            errors.push(error(
+                &format!("breg.statistical-dataset.disclosure-{name}-unused"),
+                &path,
+                &source.id,
+                &format!(
+                    "remove {member}: it applies to a dataset that declares a sum and has a publisher"
+                ),
+            ));
+        }
+    }
+    if !sum_release {
+        return None;
+    }
+    let compiled = contributor.as_ref().map(|contributor| match contributor {
+        StatisticalContributorSource::Field { field } => Contributor::Field {
+            field: field.clone(),
+        },
+        StatisticalContributorSource::EachRecord {} => Contributor::EachRecord,
+    });
+    if let Some(Contributor::Field { field: field_id }) = &compiled {
+        let field_path = format!("{path}.contributor.field");
+        match field(unit, field_id) {
+            None => errors.push(error(
+                "breg.statistical-dataset.disclosure-contributor-field",
+                &field_path,
+                &source.id,
+                &format!(
+                    "contributor field `{field_id}` does not exist on unit record `{}`; name a reference field of it",
+                    unit.id
+                ),
+            )),
+            Some((FieldTypeSource::Reference { .. }, _)) => {
+                for publisher in &grants.publish {
+                    let readable = unit
+                        .access_profiles
+                        .get(publisher)
+                        .is_none_or(|grant| grant.readable_fields.contains(field_id));
+                    if !readable {
+                        errors.push(error(
+                            "breg.statistical-dataset.disclosure-contributor-field",
+                            &field_path,
+                            &source.id,
+                            &format!(
+                                "add contributor field `{field_id}` to readableFields for publisher `{publisher}` on `{}`, which counts contributors without exposing them",
+                                unit.id
+                            ),
+                        ));
+                    }
+                }
+            }
+            Some(_) => errors.push(error(
+                "breg.statistical-dataset.disclosure-contributor-field",
+                &field_path,
+                &source.id,
+                &format!(
+                    "contributor field `{field_id}` must be a reference field; name the field that says whose value each record is"
+                ),
+            )),
+        }
+    }
+    for (index, measure) in source.measures.iter().enumerate() {
+        let StatisticalMeasureSource::Sum {
+            field: field_id, ..
+        } = measure
+        else {
+            continue;
+        };
+        if let Some((FieldTypeSource::Decimal { minimum, .. }, _)) = field(unit, field_id) {
+            let non_negative = minimum
+                .as_deref()
+                .is_some_and(|minimum| !minimum.trim_start().starts_with('-'));
+            if !non_negative {
+                errors.push(error(
+                    "breg.statistical-dataset.sum-release-negative-values",
+                    &format!("{root}.measures[{index}]"),
+                    &source.id,
+                    &format!(
+                        "declare a minimum of 0 or more on decimal field `{field_id}`: a released sum of values that may be negative can hide a contributor behind an offsetting one"
+                    ),
+                ));
+            }
+        }
+    }
+    let granularity = match &source.period {
+        StatisticalPeriodSource::Flow { granularity, .. }
+        | StatisticalPeriodSource::Stock { granularity, .. } => *granularity,
+    };
+    if granularity == StatisticalPeriodGranularitySource::Day {
+        errors.push(error(
+            "breg.statistical-dataset.sum-release-day-granularity",
+            &format!("{root}.period"),
+            &source.id,
+            "release sums by month, quarter or year: a day holds too few contributors to protect",
+        ));
+    }
+    compiled
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sums(contributor: Contributor, dominance_percent: u8) -> SumDisclosure {
+        SumDisclosure {
+            contributor,
+            dominance_percent,
+            integer_sums: BTreeSet::new(),
+        }
+    }
+
+    fn field(name: &str) -> Contributor {
+        Contributor::Field {
+            field: name.to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_contributor_joins_the_definition_and_the_dominance_percent_does_not() {
+        assert_eq!(sum_definition(None), None);
+        let owner = sum_definition(Some(&sums(field("owner"), 15)));
+        assert_eq!(owner, sum_definition(Some(&sums(field("owner"), 90))));
+        assert_ne!(owner, sum_definition(Some(&sums(field("agent"), 15))));
+        assert_ne!(
+            owner,
+            sum_definition(Some(&sums(Contributor::EachRecord, 15)))
+        );
+    }
 }

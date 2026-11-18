@@ -14,7 +14,7 @@ standards_referenced: []
 This page states what the Base Registry Engine (BReg) security invariants assume, what you must do
 for them to hold, and which limits a deployment accepts.
 The operator obligations are numbered 1 to 20, and each accepted residual risk carries a stable
-identifier from `BREG-RES-01` to `BREG-RES-25`.
+identifier from `BREG-RES-01` to `BREG-RES-26`.
 The invariants themselves, each with its threat, enforcement point, refusal, and negative test, are
 the rows of the machine-checked BReg security invariant matrix in the registry-stack repository.
 This page does not repeat those rows; it names them by identifier (`BREG-SEC-NN`).
@@ -248,6 +248,7 @@ The residuals refer to these obligations by number.
     (`BREG-RES-24`).
     Grant `read-exact` only to a named service under a data-sharing agreement.
     Review a change to the dataset's `exactReads` profile the same way (`BREG-RES-25`).
+    Review the sum rules and their residuals before a dataset releases a sum (`BREG-RES-26`).
     [Publish a statistical series](../../configure/breg-statistics/#review-what-a-release-discloses)
     lists what a release discloses.
     {/* Evidence: crates/registry-breg/tests/compiler_statistics.rs,
@@ -748,6 +749,8 @@ Each lists the condition, the consequence, the mitigation, and the related matri
   `actorKind: agent` and no `taskGrant`.
   A profile without an `actorKind` accepts every actor kind by its own declaration, as it does for
   every other operation, so an agent token can publish through it.
+  The publisher's dry run (`versions:dry-run`) belongs to the publisher alone and stores nothing.
+  It reserves no version and writes one audit entry.
 - Mitigation: declare `actorKind: human` or `actorKind: service` on every profile that holds
   `publish`.
 - Related: `BREG-SEC-168`.
@@ -804,6 +807,37 @@ Each lists the condition, the consequence, the mitigation, and the related matri
 
 {/* Evidence: crates/registry-breg/tests/postgres_statistics_exact.rs,
     an_exact_read_refuses_what_it_does_not_serve. */}
+
+### `BREG-RES-26`: released sums keep inference paths the rules do not close
+
+- Condition: a dataset releases a sum under `minimum-count-and-rounding`, with a declared
+  `contributor` and `dominancePercent`.
+- Consequence: the contributor count and the p% rule protect contributors from each other inside one
+  dataset and one version.
+  A suppressed sum also suppresses the same measure in every total that contains it.
+  These paths stay open:
+  - Two datasets over the same population at different granularities, such as monthly and yearly,
+    can be differenced against each other.
+    So can two datasets whose dimensions overlap but are not nested.
+    The totals rule works inside one dataset, and the nested-dimensions check catches only nested
+    dimensions.
+  - Revised versions of the same period can be differenced against each other.
+    Changing `dominancePercent` between versions does not start a new series.
+  - The p% rule does not protect against a reader who already knows several contributors' values.
+  - A decimal sum is exact, so it sits beside a rounded count of the same cell.
+    A reader learns the exact amount, though not the exact number of contributors.
+  - A cell whose contributors all have zero publishes a sum of zero.
+    That tells every reader that each contributor's value is zero, as an exact zero count already does.
+- Mitigation: release a sum only after a statistician has reviewed the rules and their
+  implementation.
+  Until then, the compiler refuses a `publish` or `read-releases` grant on such a dataset.
+  Declare one dataset per population and granularity, and keep the revisions of a period few.
+  Use the publisher's dry run to see which cells and totals will be blank before you publish.
+  Serve values that must stay exact, or that can be negative, through `read-exact`.
+- Related: `BREG-RES-07`.
+
+{/* Evidence: crates/registry-breg/tests/compiler_statistics.rs,
+    every_release_grant_on_a_dataset_with_a_sum_is_held_even_without_a_publisher. */}
 
 ## Report a vulnerability
 

@@ -152,5 +152,6 @@
     - ['`GET /v1/statistics/{dataset}/releases:series`', 'Released-data access', 'Latest eligible document per period; required `from` and `to`, optional `status=final`.']
     - ['`GET /v1/statistics/{dataset}/releases/{period}`', 'Released-data access', 'Latest eligible JSON or CSV; optional `status=final`.']
     - ['`GET /v1/statistics/{dataset}/releases/{period}/versions/{version}`', 'Released-data access', 'Immutable JSON or CSV; 410 after withdrawal.']
+    - ['`POST /v1/statistics/{dataset}/releases/{period}/versions:dry-run`', 'Publisher', '200 `{"document", "suppressions"}`; `{"status":"provisional"}` or `{"status":"final"}`; no `Idempotency-Key`; stores nothing.']
     - ['`POST /v1/statistics/{dataset}/releases/{period}/versions`', 'Publisher', '201 version header; `{"status":"provisional"}` or `{"status":"final"}`; `Idempotency-Key` required.']
     - ['`POST /v1/statistics/{dataset}/releases/{period}/versions/{version}/withdrawal`', 'Publisher', '200 header with withdrawal; closed `reason`; `Idempotency-Key` required.']
