@@ -849,7 +849,7 @@ pub enum StatisticalMeasureSource {
     },
     /// The sum of an `int64` or `decimal` unit Record field over the
     /// population, at the field's scale. Records with no value for the field
-    /// are left out. Served on live reads only.
+    /// are left out. Not carried by a minimum-count-and-rounding release.
     Sum {
         /// Names the measure on every cell that reports it.
         id: LocalId,
@@ -858,7 +858,7 @@ pub enum StatisticalMeasureSource {
     },
     /// The mean of an `int64` or `decimal` unit Record field over the records
     /// that have a value for it, rounded half away from zero to `scale`
-    /// fractional digits. Served on live and exact reads only.
+    /// fractional digits. Not carried by a minimum-count-and-rounding release.
     Mean {
         /// Names the measure on every cell that reports it.
         id: LocalId,
@@ -880,6 +880,48 @@ pub enum StatisticalMeasureSource {
         /// The unit Record `reference` field whose distinct values are counted.
         field: String,
     },
+    /// One measure of the dataset over another, such as a sum over a count,
+    /// rounded half away from zero to `scale` fractional digits. A cell whose
+    /// denominator is zero has no value. Not carried by a minimum-count-and-rounding release.
+    Ratio {
+        /// Names the measure on every cell that reports it.
+        id: LocalId,
+        /// The `count`, `distinct-count` or `sum` measure to divide.
+        numerator: LocalId,
+        /// The `count`, `distinct-count` or `sum` measure to divide by, other
+        /// than the numerator.
+        denominator: LocalId,
+        /// Fractional digits of the reported ratio, 0 to 38.
+        #[serde(deserialize_with = "bounded_u8::<_, 0, MAX_DECIMAL_PRECISION>")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU32<0, MAX_DECIMAL_PRECISION>")
+        )]
+        scale: u8,
+    },
+    /// The percentile of an `int64` or `decimal` unit Record field over the
+    /// records that have a value for it: the inverse of the empirical
+    /// distribution function, averaging the two values either side of a
+    /// boundary (Hyndman and Fan definition 2), so the median of an even number
+    /// of values is the mean of the middle two. Rounded half away from zero to
+    /// `scale` fractional digits. Not carried by a minimum-count-and-rounding release.
+    Percentile {
+        /// Names the measure on every cell that reports it.
+        id: LocalId,
+        /// The unit Record field to take the percentile of.
+        field: String,
+        /// Which percentile, 1 to 99; the median is 50.
+        #[serde(deserialize_with = "bounded_u8::<_, 1, 99>")]
+        #[cfg_attr(feature = "schema", schemars(with = "BoundedU32<1, 99>"))]
+        percentile: u8,
+        /// Fractional digits of the reported percentile, 0 to 38.
+        #[serde(deserialize_with = "bounded_u8::<_, 0, MAX_DECIMAL_PRECISION>")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU32<0, MAX_DECIMAL_PRECISION>")
+        )]
+        scale: u8,
+    },
 }
 registry_platform_yaml::tagged_union!(StatisticalMeasureSource, tag = "type");
 serialize_tagged_union!(StatisticalMeasureSource, tag = "type");
@@ -890,7 +932,9 @@ impl StatisticalMeasureSource {
             Self::Count { id }
             | Self::Sum { id, .. }
             | Self::Mean { id, .. }
-            | Self::DistinctCount { id, .. } => id,
+            | Self::DistinctCount { id, .. }
+            | Self::Ratio { id, .. }
+            | Self::Percentile { id, .. } => id,
         }
     }
 }
@@ -1008,7 +1052,7 @@ pub enum StatisticalDisclosureSource {
         )]
         rounding_base: u64,
     },
-    /// A release states every count, sum, and mean exactly. Admitted only when
+    /// A release states every measure exactly. Admitted only when
     /// the unit Record type, every field the dataset reads, and every Record
     /// type a derived field reads from are classified `public`.
     ExactPublicValues {},

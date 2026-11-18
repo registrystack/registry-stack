@@ -602,6 +602,28 @@ fn document_schema() -> Value {
                                     "type":{"const":"distinct-count"},
                                     "field":{"type":"string"}
                                 }
+                            },
+                            {
+                                "type":"object","additionalProperties":false,
+                                "required":["id","type","numerator","denominator","scale"],
+                                "properties":{
+                                    "id":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},
+                                    "type":{"const":"ratio"},
+                                    "numerator":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},
+                                    "denominator":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},
+                                    "scale":{"type":"integer","minimum":0,"maximum":38}
+                                }
+                            },
+                            {
+                                "type":"object","additionalProperties":false,
+                                "required":["id","type","field","percentile","scale"],
+                                "properties":{
+                                    "id":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},
+                                    "type":{"const":"percentile"},
+                                    "field":{"type":"string"},
+                                    "percentile":{"type":"integer","minimum":1,"maximum":99},
+                                    "scale":{"type":"integer","minimum":0,"maximum":38}
+                                }
                             }
                         ]}
                     },

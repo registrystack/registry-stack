@@ -29,7 +29,7 @@ use crate::model::{
 use crate::mutation::BoundValue;
 use crate::statistics::{
     apply_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
-    maximum_decimal_characters, period_for_code, period_range, Cell, CellValue, DatasetDocument,
+    maximum_measure_characters, period_for_code, period_range, Cell, CellValue, DatasetDocument,
     DimensionDomain, DisclosureDocument, ExactDocument, GroupedCell, LiveDocument, Measure, Period,
     PeriodDocument, PeriodGranularity, PeriodKind, PeriodVersionHeader, ReleaseDocument,
     ReleaseStatus, ReleaseVersionHeader, StatisticsDocument, StatisticsError, WithdrawalDocument,
@@ -648,21 +648,22 @@ impl PostgresStatisticsService {
             .query(&sql, &parameters)
             .await
             .map_err(map_statement_error)?;
-        // The longest text each sum or mean can take; a longer value is a fault.
+        // The longest text each decimal measure can take; a longer value is a
+        // fault.
+        let field_type = |field: &str| {
+            relations
+                .field_expression(entity, field)
+                .ok()
+                .map(|expression| expression.field_type.clone())
+        };
         let mut decimal_bounds = Vec::with_capacity(dataset.measures.len());
         for measure in &dataset.measures {
-            let field = match measure {
-                Measure::Sum { field, .. } | Measure::Mean { field, .. } => field,
-                Measure::Count { .. } | Measure::DistinctCount { .. } => {
-                    decimal_bounds.push(None);
-                    continue;
-                }
-            };
-            let expression = relations
-                .field_expression(entity, field)
-                .map_err(map_read_error)?;
+            if measure.is_count_like() {
+                decimal_bounds.push(None);
+                continue;
+            }
             decimal_bounds.push(Some(
-                maximum_decimal_characters(measure, &expression.field_type)
+                maximum_measure_characters(measure, &dataset.measures, &field_type)
                     .ok_or(StatisticsServiceError::Unavailable)?,
             ));
         }
@@ -2273,6 +2274,7 @@ fn grouped_sql(
     for measure in &dataset.measures {
         let (Measure::Sum { field, .. }
         | Measure::Mean { field, .. }
+        | Measure::Percentile { field, .. }
         | Measure::DistinctCount { field, .. }) = measure
         else {
             continue;
@@ -2301,6 +2303,7 @@ fn grouped_sql(
         for (index, measure) in dataset.measures.iter().enumerate() {
             let measure_sql = measure_sql(
                 measure,
+                &dataset.measures,
                 "count(*)::bigint",
                 |field| {
                     let expression = &measure_fields[field_index(field)].1;
@@ -2312,6 +2315,10 @@ fn grouped_sql(
                 |field| {
                     let expression = &measure_fields[field_index(field)].1;
                     format!("count(DISTINCT {expression})::bigint")
+                },
+                |field| {
+                    let expression = &measure_fields[field_index(field)].1;
+                    format!("({expression})::numeric")
                 },
             );
             base_select.push(format!("{measure_sql} AS measure_{index}"));
@@ -2440,6 +2447,7 @@ fn grouped_sql(
                 let measure_sql = if non_additive {
                     measure_sql(
                         measure,
+                        &dataset.measures,
                         "count(*)::bigint",
                         |field| {
                             let index = field_index(field);
@@ -2451,10 +2459,12 @@ fn grouped_sql(
                         |field| {
                             format!("count(DISTINCT base.field_{})::bigint", field_index(field))
                         },
+                        |field| format!("(base.field_{})::numeric", field_index(field)),
                     )
                 } else {
                     measure_sql(
                         measure,
+                        &dataset.measures,
                         "sum(base.cell_count)::bigint",
                         |field| {
                             let index = field_index(field);
@@ -2464,6 +2474,7 @@ fn grouped_sql(
                             )
                         },
                         |_| unreachable!("a distinct count makes the dataset non-additive"),
+                        |_| unreachable!("a percentile makes the dataset non-additive"),
                     )
                 };
                 format!("{measure_sql} AS measure_{index}")
@@ -2533,20 +2544,19 @@ fn grouped_sql(
     }
 }
 
-/// The SQL of one measure's value over a group of cells, as text for a sum or
-/// mean. `count` is the group's record count; `sum_and_count` gives the group's
-/// sum of a field and the number of records that have a value for it;
-/// `distinct_count` gives the number of distinct values of a field.
-///
-/// A mean is rounded half away from zero by integer arithmetic on exact
-/// `numeric` values: `div` truncates, so `div(2 * abs(S) * 10^s + N, 2 * N)` is
-/// `floor(abs(S) * 10^s / N + 1/2)`. `round(S / N, s)` would divide at a
-/// precision PostgreSQL picks, and `avg` would round the quotient early.
+/// The SQL of one measure's value over a group of cells, as text for any
+/// measure but a count. `measures` are the dataset's, which a ratio reads its
+/// operands from. `count` is the group's record count; `sum_and_count` gives the
+/// group's sum of a field and the number of records that have a value for it;
+/// `distinct_count` gives the number of distinct values of a field;
+/// `field_value` gives a field's value in one record, as `numeric`.
 fn measure_sql(
     measure: &Measure,
+    measures: &[Measure],
     count: &str,
     sum_and_count: impl Fn(&str) -> (String, String),
     distinct_count: impl Fn(&str) -> String,
+    field_value: impl Fn(&str) -> String,
 ) -> String {
     match measure {
         Measure::Count { .. } => count.to_owned(),
@@ -2557,20 +2567,97 @@ fn measure_sql(
         }
         Measure::Mean { field, scale, .. } => {
             let (sum, values) = sum_and_count(field);
-            let scale = usize::from(*scale);
-            let power = format!("1{}", "0".repeat(scale));
-            let unscale = if scale == 0 {
-                String::new()
-            } else {
-                format!(" * 0.{}1", "0".repeat(scale - 1))
+            rounded_quotient(&sum, &values, *scale)
+        }
+        Measure::Ratio {
+            numerator,
+            denominator,
+            scale,
+            ..
+        } => {
+            // The operands' unrounded values, never their rounded text.
+            let operand = |id: &str| {
+                let operand = measures
+                    .iter()
+                    .find(|candidate| candidate.id() == id)
+                    .expect("the compiler resolved every ratio operand");
+                match operand {
+                    Measure::Count { .. } => format!("({count})::numeric"),
+                    Measure::DistinctCount { field, .. } => {
+                        format!("({})::numeric", distinct_count(field))
+                    }
+                    Measure::Sum { field, .. } => {
+                        let (sum, _) = sum_and_count(field);
+                        format!("COALESCE({sum}, 0)")
+                    }
+                    Measure::Mean { .. } | Measure::Ratio { .. } | Measure::Percentile { .. } => {
+                        unreachable!("the compiler admits a count, distinct count or sum operand")
+                    }
+                }
             };
-            format!(
-                "CASE WHEN {values} = 0 THEN NULL
-                      ELSE ((sign({sum}) * div(abs({sum}) * 2 * {power} + {values}, 2 * {values})){unscale})::text
-                 END"
-            )
+            rounded_quotient(&operand(numerator), &operand(denominator), *scale)
+        }
+        Measure::Percentile {
+            field,
+            percentile,
+            scale,
+            ..
+        } => {
+            // Hyndman and Fan definition 2, exact in `numeric`: with n values
+            // sorted ascending, `percentile_disc(q)` is x[ceil(n q)] and, over the
+            // descending order, `percentile_disc(1 - q)` is x[floor(n q) + 1].
+            // They are the same value unless n q is an integer j, when they are
+            // x[j] and x[j + 1], whose mean is the definition.
+            //
+            // PostgreSQL finds the row as ceil(fraction * n) in double precision,
+            // and k / 100 is not exact in binary, so for an integer n q the
+            // product can land just above it and pick the next row. Each fraction
+            // is therefore lowered by 10^-12, written as an exact decimal literal.
+            // The lowering is below 1 / (100 n) for every n under 10^10 rows, so
+            // it never crosses a true boundary (the fractional part of n q is a
+            // multiple of 1 / 100), and it far exceeds the double-precision error
+            // of the product, so it always undoes the overshoot.
+            let value = field_value(field);
+            let ascending = lowered_fraction(u32::from(*percentile));
+            let descending = lowered_fraction(100 - u32::from(*percentile));
+            let low = format!("percentile_disc({ascending}) WITHIN GROUP (ORDER BY {value})");
+            let high =
+                format!("percentile_disc({descending}) WITHIN GROUP (ORDER BY {value} DESC)");
+            rounded_quotient(&format!("({low} + {high})"), "2", *scale)
         }
     }
+}
+
+/// `hundredths` / 100 less 10^-12, as an exact decimal literal.
+fn lowered_fraction(hundredths: u32) -> String {
+    format!("0.{:012}", u64::from(hundredths) * 10_u64.pow(10) - 1)
+}
+
+/// The SQL text of `numerator` / `denominator` rounded half away from zero to
+/// `scale` fractional digits, or NULL when the denominator is zero.
+///
+/// Both are exact `numeric` expressions, and the rounding is integer
+/// arithmetic: `div` truncates, so `div(2 * abs(N) * 10^s + abs(D), 2 * abs(D))`
+/// is `floor(abs(N) * 10^s / abs(D) + 1/2)`, and the signs of both restore the
+/// sign. `round(N / D, s)` would divide at a precision PostgreSQL picks, and
+/// `avg` would round the quotient early.
+fn rounded_quotient(numerator: &str, denominator: &str, scale: u8) -> String {
+    // A literal operand is cast so that `sign` and `abs` stay exact `numeric`
+    // rather than becoming double precision.
+    let numerator = format!("({numerator})::numeric");
+    let denominator = format!("({denominator})::numeric");
+    let scale = usize::from(scale);
+    let power = format!("1{}", "0".repeat(scale));
+    let unscale = if scale == 0 {
+        String::new()
+    } else {
+        format!(" * 0.{}1", "0".repeat(scale - 1))
+    };
+    format!(
+        "CASE WHEN ({denominator}) = 0 THEN NULL
+              ELSE ((sign({numerator}) * sign({denominator}) * div(abs({numerator}) * 2 * {power} + abs({denominator}), 2 * abs({denominator}))){unscale})::text
+         END"
+    )
 }
 
 fn sql_literal(value: &str) -> String {

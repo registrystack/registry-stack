@@ -55,6 +55,31 @@
   `requiresPostgis`. A consumer that pins the earlier versions must accept the
   new `apiVersion` values. See the [explain contract
   policy](https://docs.registrystack.org/reference/bregctl-explain/#schemas-and-compatibility).
+- A statistical dataset can declare a `ratio` measure,
+  `{type: ratio, id, numerator, denominator, scale}`, and a `percentile`
+  measure, `{type: percentile, id, field, percentile, scale}`. A ratio divides
+  one `count`, `distinct-count`, or `sum` measure of the dataset by another,
+  such as hectares per owner; any other operand, an unknown id, the ratio's own
+  id, or one measure on both sides is refused
+  (`breg.statistical-dataset.ratio-operand`). It is computed from the operands'
+  exact values and rounded half away from zero to `scale` digits, and a total's
+  ratio is the ratio of the totals. A percentile takes `percentile`, an integer
+  from 1 to 99 (the median is 50), over an `int64` or `decimal` field, which
+  every `read-live` profile, the publisher, and the `exactReads` profile must be
+  able to read, and which must be classified `public` under
+  `exact-public-values`. It averages the two middle values where the rank is
+  whole (Hyndman and Fan definition 2), so the median of 1, 2, 3, 4 is 2.5. Both
+  values are decimal strings with exactly `scale` digits, or a null `value` with
+  status `not-applicable` for a zero denominator or a cell with no values.
+  Every measure type is available on `read-live`, `read-exact`, and a release
+  under `exact-public-values`; a release under `minimum-count-and-rounding`
+  carries counts and distinct counts only, and a dataset that declares a sum, a
+  mean, a ratio, or a percentile with a `publish` or `read-releases` grant under
+  it is refused with `breg.statistical-dataset.measure-release-unsupported`. A
+  percentile is not additive, so a dataset that declares one declares at most 4
+  dimensions (`breg.statistical-dataset.non-additive-dimensions`), as for a
+  distinct count. Adding either measure changes the definition digest and starts
+  a new release series.
 - A statistical dataset can declare a `distinct-count` measure,
   `{type: distinct-count, id, field}`, that reports how many different values
   a `reference` field takes among a cell's records, such as the number of

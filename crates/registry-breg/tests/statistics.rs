@@ -6,11 +6,11 @@ use chrono::NaiveDate;
 use registry_breg::contract::FieldTypeSource;
 use registry_breg::statistics::{
     apply_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
-    document_csv, maximum_decimal_characters, period_for_code, period_range, Cell, CellStatus,
-    CellValue, DatasetDocument, DimensionDomain, DisclosureDocument, DisclosureMethod,
-    ExactDocument, GroupedCell, LiveDocument, Measure, PeriodDocument, PeriodGranularity,
-    PeriodKind, ReleaseDocument, ReleaseStatus, StatisticsDocument, StatisticsError, TOTAL_CODE,
-    UNKNOWN_CODE,
+    document_csv, maximum_decimal_characters, maximum_measure_characters, period_for_code,
+    period_range, Cell, CellStatus, CellValue, DatasetDocument, DimensionDomain,
+    DisclosureDocument, DisclosureMethod, ExactDocument, GroupedCell, LiveDocument, Measure,
+    PeriodDocument, PeriodGranularity, PeriodKind, ReleaseDocument, ReleaseStatus,
+    StatisticsDocument, StatisticsError, TOTAL_CODE, UNKNOWN_CODE,
 };
 
 fn date(year: i32, month: u32, day: u32) -> NaiveDate {
@@ -1725,5 +1725,241 @@ fn disclosure_suppresses_and_rounds_a_distinct_count_on_its_own_value() {
             (None, CellStatus::Suppressed),
             (count(5), CellStatus::Rounded),
         ]
+    );
+}
+
+fn ratio_measure(scale: u8) -> Measure {
+    Measure::Ratio {
+        id: "per-parcel".to_owned(),
+        numerator: "total".to_owned(),
+        denominator: "count".to_owned(),
+        scale,
+    }
+}
+
+fn percentile_measure(percentile: u8, scale: u8) -> Measure {
+    Measure::Percentile {
+        id: "median".to_owned(),
+        field: "amount".to_owned(),
+        percentile,
+        scale,
+    }
+}
+
+fn ratio_and_percentile_measures() -> Vec<Measure> {
+    let mut measures = count_measures();
+    measures.extend([sum_measure(), ratio_measure(3), percentile_measure(50, 2)]);
+    measures
+}
+
+#[test]
+fn a_ratio_is_additive_and_a_percentile_is_not() {
+    assert!(ratio_measure(2).is_additive());
+    assert!(!percentile_measure(50, 2).is_additive());
+    assert!(!ratio_measure(2).is_count_like());
+    assert!(!percentile_measure(50, 2).is_count_like());
+}
+
+#[test]
+fn ratio_and_percentile_serialize_with_their_declaration_members() {
+    assert_eq!(
+        serde_json::to_value(ratio_and_percentile_measures()).unwrap(),
+        serde_json::json!([
+            {"id":"count","type":"count"},
+            {"id":"total","type":"sum","field":"amount","scale":2},
+            {"id":"per-parcel","type":"ratio","numerator":"total","denominator":"count","scale":3},
+            {"id":"median","type":"percentile","field":"amount","percentile":50,"scale":2}
+        ])
+    );
+}
+
+#[test]
+fn a_cell_without_records_has_no_ratio_and_no_percentile() {
+    let (periods, dimensions) = one_year_one_region();
+    let cells = build_exact_cells(
+        "enrolments",
+        &periods,
+        &dimensions,
+        &ratio_and_percentile_measures(),
+        &[],
+    )
+    .unwrap();
+    for cell in &cells {
+        let expected = match cell.measure.as_str() {
+            "count" => (count(0), CellStatus::Exact),
+            "total" => (decimal("0.00"), CellStatus::Exact),
+            _ => (None, CellStatus::NotApplicable),
+        };
+        assert_eq!((cell.value.clone(), cell.status), expected, "{cell:?}");
+    }
+}
+
+#[test]
+fn a_ratio_and_a_percentile_read_their_decimal_from_the_grouped_row() {
+    let (periods, dimensions) = one_year_one_region();
+    let row = |codes: &[&str]| GroupedCell {
+        period: "2025".to_owned(),
+        codes: codes.iter().map(|code| (*code).to_owned()).collect(),
+        values: vec![
+            count(4),
+            decimal("10.00"),
+            decimal("2.500"),
+            decimal("2.50"),
+        ],
+    };
+    let cells = build_exact_cells(
+        "enrolments",
+        &periods,
+        &dimensions,
+        &ratio_and_percentile_measures(),
+        &[
+            row(&["A"]),
+            GroupedCell {
+                period: "2025".to_owned(),
+                codes: vec!["B".to_owned()],
+                values: vec![count(0), decimal("0.00"), None, None],
+            },
+            GroupedCell {
+                period: "2025".to_owned(),
+                codes: vec![TOTAL_CODE.to_owned()],
+                values: vec![
+                    count(4),
+                    decimal("10.00"),
+                    decimal("2.500"),
+                    decimal("2.50"),
+                ],
+            },
+        ],
+    )
+    .unwrap();
+    let a: Vec<_> = cells
+        .iter()
+        .filter(|cell| cell.dimensions["region"] == "A")
+        .map(|cell| (cell.measure.as_str(), cell.value.clone(), cell.status))
+        .collect();
+    assert_eq!(
+        a,
+        [
+            ("count", count(4), CellStatus::Exact),
+            ("total", decimal("10.00"), CellStatus::Exact),
+            ("per-parcel", decimal("2.500"), CellStatus::Exact),
+            ("median", decimal("2.50"), CellStatus::Exact),
+        ]
+    );
+}
+
+#[test]
+fn a_ratio_or_percentile_value_off_its_scale_is_refused() {
+    let (periods, dimensions) = one_year_one_region();
+    for values in [
+        vec![count(1), decimal("1.00"), decimal("1.50"), decimal("1.00")],
+        vec![count(1), decimal("1.00"), decimal("1.500"), decimal("1")],
+        vec![count(1), decimal("1.00"), count(1), decimal("1.00")],
+    ] {
+        let rows = [GroupedCell {
+            period: "2025".to_owned(),
+            codes: vec!["A".to_owned()],
+            values,
+        }];
+        assert!(
+            matches!(
+                build_exact_cells(
+                    "enrolments",
+                    &periods,
+                    &dimensions,
+                    &ratio_and_percentile_measures(),
+                    &rows
+                ),
+                Err(StatisticsError::InvalidMeasureValue { .. })
+            ),
+            "{rows:?}"
+        );
+    }
+}
+
+#[test]
+fn a_ratio_and_a_percentile_are_refused_in_a_rounded_release_and_admitted_elsewhere() {
+    for measure in [ratio_measure(2), percentile_measure(50, 2)] {
+        let id = measure.id().to_owned();
+        let mut rounded = release_document();
+        rounded.dataset.measures = vec![measure.clone()];
+        rounded.cells = vec![measure_cell(&id, decimal("1.00"), CellStatus::Rounded)];
+        rounded.dimensions.clear();
+        assert_eq!(
+            canonical_document_and_digest(&rounded).map(|_| ()),
+            Err(StatisticsError::InvalidDocument(
+                "a minimum-count-and-rounding release carries counts and distinct counts only"
+            ))
+        );
+
+        let mut exact = exact_release_with_measure(
+            measure.clone(),
+            measure_cell(&id, decimal("1.00"), CellStatus::Exact),
+        );
+        exact.dimensions.clear();
+        canonical_document_and_digest(&exact).expect("an exact release carries it");
+        exact.cells = vec![measure_cell(&id, None, CellStatus::NotApplicable)];
+        canonical_document_and_digest(&exact).expect("a cell with no value is not-applicable");
+
+        let live = live_document(
+            vec![measure],
+            vec![measure_cell(&id, decimal("1.00"), CellStatus::Exact)],
+        );
+        canonical_document_and_digest(&live).expect("a live document carries it");
+    }
+}
+
+#[test]
+fn the_widest_ratio_and_percentile_follow_their_operands_and_field() {
+    let decimal_field = FieldTypeSource::Decimal {
+        precision: 10,
+        scale: 2,
+        minimum: None,
+        maximum: None,
+    };
+    // A percentile never exceeds the field's largest value, like a mean.
+    assert_eq!(
+        maximum_decimal_characters(&percentile_measure(50, 2), &decimal_field),
+        Some(12)
+    );
+    assert_eq!(
+        maximum_decimal_characters(&percentile_measure(50, 0), &decimal_field),
+        Some(10)
+    );
+    let measures = ratio_and_percentile_measures();
+    let field_type = |field: &str| (field == "amount").then(|| decimal_field.clone());
+    // total / count: the sum's 8 + 19 integer digits, plus one to round up, 3
+    // fractional digits, a point and a sign.
+    assert_eq!(
+        maximum_measure_characters(&measures[2], &measures, &field_type),
+        Some(8 + 19 + 1 + 3 + 1 + 1)
+    );
+    assert_eq!(
+        maximum_measure_characters(&measures[3], &measures, &field_type),
+        Some(12)
+    );
+    assert_eq!(
+        maximum_measure_characters(&measures[0], &measures, &field_type),
+        None
+    );
+    // A sum denominator can be as small as one unit of its scale, which
+    // widens the quotient by that many digits.
+    let by_sum = vec![
+        sum_measure(),
+        Measure::Sum {
+            id: "other".to_owned(),
+            field: "amount".to_owned(),
+            scale: 2,
+        },
+        Measure::Ratio {
+            id: "r".to_owned(),
+            numerator: "total".to_owned(),
+            denominator: "other".to_owned(),
+            scale: 0,
+        },
+    ];
+    assert_eq!(
+        maximum_measure_characters(&by_sum[2], &by_sum, &field_type),
+        Some(8 + 19 + 2 + 1 + 1)
     );
 }
