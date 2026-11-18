@@ -48,7 +48,7 @@ class NativeFixtureContracts(unittest.TestCase):
                 SimpleNamespace(returncode=0, stdout=json.dumps(casework).encode(), stderr=b""),
                 SimpleNamespace(returncode=0, stdout=json.dumps(coordinator).encode(), stderr=b""),
             ]):
-                self.assertEqual(journey.ctl("caseworkctl", "dev", "token"), casework)
+                self.assertEqual(journey.ctl("caseworkctl", "check", "project"), casework)
                 self.assertEqual(journey.ctl("coordinatorctl", "check"), coordinator)
 
     def test_start_discovers_exact_revision_and_replays_same_command(self):
