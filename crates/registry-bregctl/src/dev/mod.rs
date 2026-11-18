@@ -159,7 +159,7 @@ enum DevAction {
     Grant(GrantArgs),
     /// Review or prepare a bounded lookup successor for a stopped retained registry.
     ///
-    /// An advanced step DEV.md documents ("Prepare a source after using a
+    /// An advanced step the bregctl dev reference page documents ("Prepare a source after using a
     /// registry"), so the lifecycle help lists only the everyday commands.
     #[command(hide = true)]
     PrepareSource(Box<prepare_source::PrepareSourceArgs>),

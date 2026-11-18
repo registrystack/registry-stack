@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-18"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -274,30 +274,10 @@ Register `scheduling-task-status` with the identity provider for private-key JWT
 Add `caBundleRef` when the token endpoint or Casework uses a private CA.
 Each configured source issuer is pinned to its own endpoint and service credential, and duplicate sources are a startup refusal.
 
-After a current holder previews and approves the template, put the approved grant UUID into the Casework development exchange path.
-Its connection entry selects the Scheduling destination, not policy fields:
-
-```yaml
-secretProviders:
-  file:
-    root: /absolute/casework/.casework/dev/credentials/scheduling-agent
-clients:
-  scheduling-agent:
-    assertionKeyRef: secret:file/assertion-key.jwk
-    resource: urn:example:scheduling
-    scopes:
-      - scheduling:read
-      - scheduling:commit
-```
-
-```sh
-caseworkctl dev grant scheduling-agent \
-  --grant APPROVED_UUID \
-  --connection /absolute/scheduling-connection.yaml \
-  /absolute/casework
-```
-
-The command reports an owner-only header file and the immutable grant deadline.
+After a current holder previews and approves the template, the agent exchanges the approved grant UUID against the shared issuer.
+It follows the sequence in [Casework task grants](../casework-task-grants/#configure-the-authority): a client-credentials bootstrap for Casework's signed assertion, then a token exchange at the issuer for `urn:example:scheduling` and the grant's scopes, both with the agent's `private_key_jwt` credential.
+The result is a Scheduling access token that carries the grant's bounds and expires no later than the immutable grant deadline.
+Write the token to an owner-only header file and name it `HEADER_FILE`.
 Use the `rstack` installation whose Scheduling component matches the runtime to read the active policy revision, select a free start, then book it.
 Set `POLICY_REVISION` from the service document and `START` from the availability response.
 `--header @FILE` reads the grant header without putting its value on the command line:
@@ -330,7 +310,7 @@ Guest booking, where a holder books for someone else, is an explicit exclusion f
     a_task_status_casework_resource_is_refused_naming_status_resource;
     crates/registry-platform-oidc/src/task_grant/config.rs
     configured_status_clients_pin_source_issuer_and_refuse_unsafe_or_duplicate_bindings. */}
-{/* TODO[evidence]: no test runs the caseworkctl and rstack commands as written; the native boundary fixture exercises the authenticator with a stock-issued bearer. */}
+{/* TODO[evidence]: no test runs the token exchange and rstack commands as written; the native boundary fixture exercises the authenticator with a stock-issued bearer. */}
 
 ## Next
 

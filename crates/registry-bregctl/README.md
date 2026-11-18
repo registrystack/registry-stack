@@ -10,7 +10,7 @@ sign or apply production changes.
 
 Use `rstack dev` to run a project locally. Its `dev.yaml` plan names the callers and a scenario
 file, and `rstack dev start` sends the scenarios once the registry is running (see
-`products/platform/PROJECT-DEV.md`). The `bregctl dev` and `bregctl examples` commands below are
+[Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/)). The `bregctl dev` and `bregctl examples` commands below are
 the older local loop that `rstack dev` replaces.
 
 `bregctl examples list PROJECT` describes the project's declared teaching

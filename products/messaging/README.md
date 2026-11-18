@@ -72,8 +72,8 @@ outside the project, which the project never writes to. `rstack dev token RUN --
 short-lived bearer token for a person the plan names, carrying the access profile's scopes and
 actor kind, with the key the run's runtime trusts. The tokens and the key are for this run only;
 nothing about a run is a production posture. A plan that lists BReg and Messaging runs both against
-one issuer. [Run a project with rstack dev](../../docs/site/src/content/docs/configure/run-a-project-with-rstack-dev.mdx)
-and `products/platform/PROJECT-DEV.md` describe the plan, the sinks and the run report.
+one issuer. [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/)
+describes the plan, the sinks and the run report.
 
 To run the runtime yourself, `messagingctl init DIRECTORY` creates an editable
 project with `messaging.yaml`, `providers/`, and `templates/`. Check that

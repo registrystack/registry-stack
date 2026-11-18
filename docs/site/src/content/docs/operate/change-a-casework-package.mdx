@@ -49,7 +49,7 @@ authored the policy:
 ```
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, standalone-decision template;
-    products/platform/PROJECT-DEV.md, status. */}
+    crates/registry-rstack-dev/src/lib.rs, status. */}
 
 ## Package the successor
 
@@ -90,7 +90,7 @@ Only `package.root` changes. The file names the run's database, credentials and 
 path, so the commands below act on the run's own database. It holds credential references, so keep
 the copy private and delete it with the run.
 
-{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack/tests/dev_run.rs, casework_alone_runs_end_to_end;
+{/* Evidence: crates/registry-rstack-dev/src/lib.rs; crates/registry-rstack/tests/dev_run.rs, casework_alone_runs_end_to_end;
     crates/registry-platform-config/src/loader.rs, validate_absolute_lexical_path(). */}
 
 ## Plan the change
@@ -172,7 +172,7 @@ audit journal; keep anything you need first:
 rstack dev stop "$run_id"
 ```
 
-{/* Evidence: products/platform/PROJECT-DEV.md, stop. */}
+{/* Evidence: crates/registry-rstack-dev/src/lib.rs, stop. */}
 
 ## Next
 

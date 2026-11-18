@@ -4259,7 +4259,7 @@ fn package_rebuild_refuses_linked_receipts_and_public_runtime_bindings() {
     assert!(runtime.exists());
 }
 
-/// `dev prepare-source` is an advanced step DEV.md documents, so
+/// `dev prepare-source` is an advanced step the bregctl dev reference page documents, so
 /// `bregctl dev --help` lists the everyday lifecycle commands only. It stays a
 /// working command behind that help.
 #[test]

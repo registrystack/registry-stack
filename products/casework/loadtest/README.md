@@ -3,7 +3,7 @@
 A local environment for measuring Registry Casework's unified review surfaces
 with the `standalone-decision` example. The launcher delegates the whole
 service lifecycle to `rstack dev` (see
-[Run a project with rstack dev](../../platform/PROJECT-DEV.md)): its managed
+[Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/)): its managed
 PostgreSQL container, the throwaway local token signing key, credentials, the
 directory seed, run state, and the supervised Casework process. Load evidence
 and synthetic seed data live under `loadtest/.run` and are never committed.

@@ -42,7 +42,7 @@ issuer, from a plan file. The
 [standalone decision example](examples/standalone-decision/dev.yaml) has the plan and a scenario
 for this starter. `rstack dev token RUN --as staff` writes an owner-only header file for a person the
 plan names, and `rstack dev stop RUN` removes the run with its database. See
-[Run a project for development](../platform/PROJECT-DEV.md) for the database image and recovery.
+[Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/#the-managed-postgresql-server) for the database image and recovery.
 
 Policy, stage, routing-rule, queue, team, and outcome labels are presentation
 text for people. They are single-line values: tabs, line feeds, carriage

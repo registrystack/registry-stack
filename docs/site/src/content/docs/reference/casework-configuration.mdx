@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-18"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -90,7 +90,7 @@ The runtime always loads `package.root/casework.yaml`; no second project selecto
 In every listener mode, with or without `package.expectedDigest`, the directory must be a package that `caseworkctl package` wrote.
 Its `SHA256SUMS` file lists exactly `casework.yaml`, its referenced display schemas and the context provider exports it names, each matching its digest.
 A directory without `SHA256SUMS`, such as an authored project, is refused and the refusal names `caseworkctl package`.
-`caseworkctl dev` packages the authored project on every start and serves that package.
+`rstack dev` packages the authored project on every start and serves that package.
 
 `package.expectedDigest` is optional.
 When set, it is `sha256:` followed by 64 lowercase hexadecimal digits.
@@ -408,7 +408,10 @@ The pinned task and request policy selects the provider.
 A collection invocation requires one unique current-source provider across the active project; zero or multiple providers are refused rather than filtering a bad credential into a partial page.
 Verification precedes source I/O and any output, including empty and submitted-only pages.
 
-Submitted-context single targets and source-free operations reject the header.
+A submitted-context task or request ignores the source pair.
+Casework neither verifies nor forwards it, and the call behaves as without it, provided the pair is well formed and the caller is staff; header shape checks and the Requester refusal still apply.
+`Registry-Source-Profile` sent alone is still refused on the single task read and on request history and clocks (400 `source-profile.not-applicable`), because it is the single-bearer forwarding form and a submitted-context target has no source to forward it to.
+Source-free operations reject the header.
 Those operations are release, task-grant revocation, accountability, producer, directory and delegated-reader routes.
 An absent header preserves ordinary single-bearer and CLI forwarding behavior.
 Once the header is supplied, no fallback to the Casework token or machine status token is permitted.
