@@ -1,10 +1,7 @@
 use std::{
     fs,
     net::TcpListener,
-    os::unix::{
-        fs::{symlink, PermissionsExt as _},
-        net::UnixListener,
-    },
+    os::unix::fs::{symlink, PermissionsExt as _},
     path::{Path, PathBuf},
     process::{Command, Output},
     sync::{
@@ -14,7 +11,13 @@ use std::{
     thread,
 };
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    routing::get,
+    Json, Router,
+};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{Duration, SecondsFormat, Utc};
 use p256::ecdsa::{signature::Signer as _, Signature, SigningKey};
@@ -25,8 +28,8 @@ use serde_json::{json, Value};
 mod executable;
 
 const TOKEN: &str = "secret.token.canary";
+const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 const BINDING: &str = "urn:evidence:subject:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-const AGE_CHECKS_TAG: &str = "age-checks";
 
 #[test]
 fn public_help_exposes_only_the_adopter_request_and_verify_inputs() {
@@ -44,7 +47,9 @@ fn public_help_exposes_only_the_adopter_request_and_verify_inputs() {
         "--subject",
         "--subjects-file",
         "--name",
-        "--client",
+        "--evidence-url",
+        "--header",
+        "--runtime-config",
         "--format",
     ] {
         assert!(request.contains(visible), "missing {visible}: {request}");
@@ -104,8 +109,14 @@ fn owner_only_subjects_file_keeps_selector_values_out_of_command_arguments() {
             "subjects-file",
             "--project",
             ".",
-            "--evidence-bin",
+            "--evidence-url",
         ])
+        .arg(&fixture.server.origin)
+        .arg("--header")
+        .arg(format!("@{}", fixture.header.display()))
+        .arg("--runtime-config")
+        .arg(&fixture.runtime)
+        .arg("--evidence-bin")
         .arg(&fixture.evidence)
         .output()
         .expect("prepare from subjects file");
@@ -153,8 +164,14 @@ fn owner_only_subjects_file_keeps_selector_values_out_of_command_arguments() {
             "unsafe-subjects-file",
             "--project",
             ".",
-            "--evidence-bin",
+            "--evidence-url",
         ])
+        .arg(&fixture.server.origin)
+        .arg("--header")
+        .arg(format!("@{}", fixture.header.display()))
+        .arg("--runtime-config")
+        .arg(&fixture.runtime)
+        .arg("--evidence-bin")
         .arg(&fixture.evidence)
         .output()
         .expect("refuse unsafe subjects file");
@@ -232,7 +249,7 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
         format!("header = \"Authorization: Bearer {TOKEN}\"\n")
     );
 
-    assert!(fixture.token_server.request_count() >= 1);
+    assert!(fixture.server.request_count() >= 1);
     let evidence_args = fs::read_to_string(fixture.evidence.with_extension("prepare.args"))
         .expect("Evidence prepare argv");
     let evidence_args = evidence_args.lines().collect::<Vec<_>>();
@@ -357,145 +374,179 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
 }
 
 #[test]
-fn named_client_prepare_uses_the_registered_identity() {
+fn request_prepare_uses_the_given_header_file() {
     let fixture = Fixture::new();
-    fixture.add_named_client("age-checker", "active", 0o600);
-    fixture.use_explicit_access();
-
-    let prepared = fixture.prepare_as("age-checker", "named-client");
-    assert_success(&prepared);
-    assert!(fixture.token_server.request_count() >= 1);
-    assert!(fixture
-        .root
-        .join(".evidence/requests/named-client/request.json")
-        .is_file());
-
-    let unentitled = fixture.prepare_with(
-        &[
-            "age-bracket",
+    fixture.write_procedure(&[
+        "adult-status",
+        "--purpose",
+        "age-check",
+        "--subject",
+        "person_id=person-123",
+    ]);
+    let other = fixture.root.join("other-headers");
+    private_file(
+        &other,
+        format!("Authorization: Bearer {TOKEN}\n").as_bytes(),
+        0o600,
+    );
+    let prepared = command()
+        .current_dir(&fixture.root)
+        .args([
+            "request",
+            "prepare",
+            "adult-status",
             "--purpose",
-            "service-path-selection",
+            "age-check",
             "--subject",
-            "person_id=person-456",
-            "--client",
-            "age-checker",
-        ],
-        "unentitled-question",
-    );
-    assert_success(&unentitled);
-    let input: Value =
-        serde_json::from_slice(&fs::read(fixture.evidence.with_extension("input")).unwrap())
-            .unwrap();
+            "person_id=person-123",
+            "--name",
+            "header-file",
+            "--project",
+            ".",
+            "--evidence-url",
+        ])
+        .arg(&fixture.server.origin)
+        .arg("--header")
+        .arg(format!("@{}", other.display()))
+        .arg("--runtime-config")
+        .arg(&fixture.runtime)
+        .arg("--evidence-bin")
+        .arg(&fixture.evidence)
+        .output()
+        .expect("prepare with a header file");
+    assert_success(&prepared);
+    assert!(fixture.server.request_count() >= 1);
     assert_eq!(
-        input["audience"],
-        "urn:registrystack:evidence:local:client:age-checker"
+        fs::read_to_string(
+            fixture
+                .root
+                .join(".evidence/requests/header-file/authorization.curl")
+        )
+        .unwrap(),
+        format!("header = \"Authorization: Bearer {TOKEN}\"\n")
     );
-    assert!(fixture
+
+    let wrong = fixture.root.join("wrong-headers");
+    private_file(&wrong, b"Authorization: Bearer some.other.token\n", 0o600);
+    let refused = command()
+        .current_dir(&fixture.root)
+        .args([
+            "request",
+            "prepare",
+            "adult-status",
+            "--purpose",
+            "age-check",
+            "--subject",
+            "person_id=person-123",
+            "--name",
+            "wrong-header",
+            "--project",
+            ".",
+            "--evidence-url",
+        ])
+        .arg(&fixture.server.origin)
+        .arg("--header")
+        .arg(format!("@{}", wrong.display()))
+        .arg("--runtime-config")
+        .arg(&fixture.runtime)
+        .arg("--evidence-bin")
+        .arg(&fixture.evidence)
+        .output()
+        .expect("prepare with a refused header");
+    assert!(!refused.status.success());
+    assert!(!String::from_utf8_lossy(&refused.stderr).contains("some.other.token"));
+    assert!(!fixture
         .root
-        .join(".evidence/requests/unentitled-question/verification.json")
-        .is_file());
+        .join(".evidence/requests/wrong-header")
+        .exists());
 }
 
 #[test]
-fn unusable_named_clients_and_issuer_refusal_publish_no_request_artifacts() {
-    let unknown = Fixture::new();
-    unknown.add_named_client("other-client", "active", 0o600);
-    unknown.use_explicit_access();
-    let output = unknown.prepare_as("unknown-client", "unknown-client");
-    assert!(!output.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "evidencectl: unknown or revoked active client unknown-client\n"
-    );
-    assert_no_request_artifacts(&unknown.root, "unknown-client");
+fn failed_preparations_publish_nothing() {
+    let fixture = Fixture::new();
 
-    let revoked = Fixture::new();
-    revoked.add_named_client("other-client", "active", 0o600);
-    revoked.add_named_client("revoked-client", "revoked", 0o600);
-    revoked.use_explicit_access();
-    let output = revoked.prepare_as("revoked-client", "revoked-client");
-    assert!(!output.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "evidencectl: unknown or revoked active client revoked-client\n"
-    );
-    assert_no_request_artifacts(&revoked.root, "revoked-client");
-
-    let unsafe_key = Fixture::new();
-    unsafe_key.add_named_client("unsafe-client", "active", 0o644);
-    unsafe_key.use_explicit_access();
-    let output = unsafe_key.prepare_as("unsafe-client", "unsafe-client");
-    assert!(!output.status.success());
-    assert_no_request_artifacts(&unsafe_key.root, "unsafe-client");
-
-    let missing_key = Fixture::new();
-    missing_key.add_named_client("missing-key-client", "active", 0o600);
-    missing_key.use_explicit_access();
-    fs::remove_dir_all(
-        missing_key
-            .root
-            .join(".evidence/clients/missing-key-client"),
-    )
-    .unwrap();
-    let output = missing_key.prepare_as("missing-key-client", "missing-key-client");
-    assert!(!output.status.success());
-    assert_no_request_artifacts(&missing_key.root, "missing-key-client");
-
-    let mismatched_key = Fixture::new();
-    mismatched_key.add_named_client("mismatched-key-client", "active", 0o600);
-    mismatched_key.use_explicit_access();
-    let registration = mismatched_key
-        .root
-        .join("access/clients/mismatched-key-client.yaml");
-    let text = fs::read_to_string(&registration).unwrap().replace(
-        "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
-        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-    );
-    fs::write(&registration, text).unwrap();
-    let output = mismatched_key.prepare_as("mismatched-key-client", "mismatched-key-client");
-    assert!(!output.status.success());
-    assert_no_request_artifacts(&mismatched_key.root, "mismatched-key-client");
-
-    let refused = Fixture::new();
-    refused.add_named_client("refused-client", "active", 0o600);
-    refused.use_explicit_access();
-    refused.token_server.refuse();
-    let output = refused.prepare_as("refused-client", "refused-client");
-    assert!(!output.status.success());
-    assert!(!String::from_utf8_lossy(&output.stderr).contains(TOKEN));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("local issuer declined"));
-    assert_no_request_artifacts(&refused.root, "refused-client");
+    fixture.server.refuse();
+    let refused = fixture.prepare("refused-discovery");
+    assert!(!refused.status.success());
+    assert!(!String::from_utf8_lossy(&refused.stderr).contains(TOKEN));
+    assert_no_request_artifacts(&fixture.root, "refused-discovery");
 }
 
 #[test]
-fn selected_clients_require_an_explicit_current_authority_generation() {
-    let implicit = Fixture::new();
-    implicit.add_named_client("age-checker", "active", 0o600);
-    let output = implicit.prepare_as("age-checker", "implicit-client");
-    assert!(!output.status.success());
-    assert_no_request_artifacts(&implicit.root, "implicit-client");
+fn a_failed_relying_procedure_cleans_staging() {
+    let fixture = Fixture::new();
+    fs::write(fixture.evidence.with_extension("fail-prepare"), b"").unwrap();
+    let failed = fixture.prepare("failed-procedure");
+    assert!(!failed.status.success());
+    assert_no_request_artifacts(&fixture.root, "failed-procedure");
+}
 
-    let explicit = Fixture::new();
-    explicit.add_named_client("age-checker", "active", 0o600);
-    explicit.use_explicit_access();
-    let output = explicit.prepare("missing-client");
-    assert!(!output.status.success());
-    assert_no_request_artifacts(&explicit.root, "missing-client");
+#[test]
+fn the_header_must_be_an_owner_only_bearer_file() {
+    let fixture = Fixture::new();
+    for (name, contents, mode) in [
+        ("open", format!("Authorization: Bearer {TOKEN}\n"), 0o644),
+        ("other", format!("X-Token: {TOKEN}\n"), 0o600),
+        (
+            "two",
+            format!("Authorization: Bearer {TOKEN}\nX-Extra: 1\n"),
+            0o600,
+        ),
+        ("empty", String::new(), 0o600),
+    ] {
+        let path = fixture.root.join(name);
+        private_file(&path, contents.as_bytes(), mode);
+        let refused = command()
+            .current_dir(&fixture.root)
+            .args([
+                "request",
+                "prepare",
+                "adult-status",
+                "--purpose",
+                "age-check",
+                "--subject",
+                "person_id=person-123",
+                "--name",
+                "refused-header",
+                "--project",
+                ".",
+                "--evidence-url",
+            ])
+            .arg(&fixture.server.origin)
+            .arg("--header")
+            .arg(format!("@{}", path.display()))
+            .arg("--runtime-config")
+            .arg(&fixture.runtime)
+            .output()
+            .expect("prepare with an unusable header file");
+        assert!(!refused.status.success(), "{name}");
+        assert!(!String::from_utf8_lossy(&refused.stderr).contains(TOKEN));
+        assert_no_request_artifacts(&fixture.root, "refused-header");
+    }
+    assert_eq!(fixture.server.request_count(), 0);
 
-    let authority_path = explicit.root.join("dev-authority.yaml");
-    let mut authority: Value = serde_json::from_slice(&fs::read(&authority_path).unwrap()).unwrap();
-    let state: Value =
-        serde_json::from_slice(&fs::read(explicit.root.join(".evidence/dev/state.json")).unwrap())
-            .unwrap();
-    authority["accessProfiles"]["age-checks"] = authored_profile(
-        state["definitions"].as_array().unwrap(),
-        &["adult-status".to_owned(), "age-bracket".to_owned()],
-        AGE_CHECKS_TAG,
-    );
-    fs::write(&authority_path, serde_json::to_vec(&authority).unwrap()).unwrap();
-    let output = explicit.prepare_as("age-checker", "drifted-authority");
-    assert!(!output.status.success());
-    assert_no_request_artifacts(&explicit.root, "drifted-authority");
+    let inline = command()
+        .current_dir(&fixture.root)
+        .args([
+            "request",
+            "prepare",
+            "adult-status",
+            "--purpose",
+            "age-check",
+            "--subject",
+            "person_id=person-123",
+            "--name",
+            "inline-header",
+            "--evidence-url",
+        ])
+        .arg(&fixture.server.origin)
+        .args(["--header", &format!("Authorization: Bearer {TOKEN}")])
+        .arg("--runtime-config")
+        .arg(&fixture.runtime)
+        .output()
+        .expect("prepare with an inline header");
+    assert!(!inline.status.success());
+    assert!(!String::from_utf8_lossy(&inline.stderr).contains(TOKEN));
 }
 
 #[test]
@@ -699,8 +750,10 @@ fn failed_client_verification_removes_the_unpublished_output() {
         .all(|name| !name.starts_with(".verify-")));
 }
 
-struct TokenServer {
-    address: std::net::SocketAddr,
+/// A stand-in for a running Registry Evidence: it answers the discovery route
+/// for the one bearer in the header file and refuses everything else.
+struct EvidenceServer {
+    origin: String,
     refuse: Arc<AtomicBool>,
     requests: Arc<AtomicUsize>,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
@@ -708,21 +761,24 @@ struct TokenServer {
 }
 
 #[derive(Clone)]
-struct TokenServerState {
+struct EvidenceServerState {
     refuse: Arc<AtomicBool>,
     requests: Arc<AtomicUsize>,
 }
 
-impl TokenServer {
+impl EvidenceServer {
     fn start() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("token endpoint");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("Evidence listener");
         listener
             .set_nonblocking(true)
-            .expect("nonblocking token endpoint");
-        let address = listener.local_addr().expect("token endpoint address");
+            .expect("nonblocking Evidence listener");
+        let origin = format!(
+            "http://{}",
+            listener.local_addr().expect("Evidence address")
+        );
         let refuse = Arc::new(AtomicBool::new(false));
         let requests = Arc::new(AtomicUsize::new(0));
-        let state = TokenServerState {
+        let state = EvidenceServerState {
             refuse: Arc::clone(&refuse),
             requests: Arc::clone(&requests),
         };
@@ -731,32 +787,28 @@ impl TokenServer {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .expect("token runtime")
+                .expect("Evidence runtime")
                 .block_on(async move {
-                    let listener =
-                        tokio::net::TcpListener::from_std(listener).expect("async token listener");
+                    let listener = tokio::net::TcpListener::from_std(listener)
+                        .expect("async Evidence listener");
                     let app = Router::new()
-                        .route("/oauth2/token", post(test_token_endpoint))
+                        .route("/v1/evidence-definitions", get(test_definitions))
                         .with_state(state);
                     axum::serve(listener, app)
                         .with_graceful_shutdown(async {
                             let _ = stopped.await;
                         })
                         .await
-                        .expect("test token endpoint");
+                        .expect("test Evidence server");
                 });
         });
         Self {
-            address,
+            origin,
             refuse,
             requests,
             shutdown: Some(shutdown),
             thread: Some(thread),
         }
-    }
-
-    fn address(&self) -> std::net::SocketAddr {
-        self.address
     }
 
     fn refuse(&self) {
@@ -768,39 +820,105 @@ impl TokenServer {
     }
 }
 
-async fn test_token_endpoint(State(state): State<TokenServerState>) -> impl IntoResponse {
+async fn test_definitions(
+    State(state): State<EvidenceServerState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
     state.requests.fetch_add(1, Ordering::Relaxed);
     if state.refuse.load(Ordering::Relaxed) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":"invalid_client"})),
-        )
-            .into_response();
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    Json(json!({
-        "access_token": TOKEN,
-        "token_type": "Bearer",
-        "expires_in": 300
-    }))
-    .into_response()
+    let expected = format!("Bearer {TOKEN}");
+    if headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        != Some(expected.as_str())
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    ([("traceparent", TRACEPARENT)], Json(definitions_document())).into_response()
 }
 
-impl Drop for TokenServer {
+impl Drop for EvidenceServer {
     fn drop(&mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
         if let Some(thread) = self.thread.take() {
-            thread.join().expect("token endpoint thread");
+            thread.join().expect("Evidence server thread");
         }
     }
 }
 
+fn definitions_document() -> Value {
+    let definition = |handle: &str,
+                      purpose: &str,
+                      subjects: Vec<(&str, &str, &str)>,
+                      concept: (&str, Value)| {
+        json!({
+            "handle": handle,
+            "requirement": format!("urn:registrystack:evidence:local:requirement:{handle}"),
+            "configurationRevision": format!("sha256:{}", "0".repeat(64)),
+            "kind": "criterion",
+            "evidenceType": format!("urn:registrystack:evidence:local:evidence-type:{handle}"),
+            "purpose": purpose,
+            "responseFormats": ["signed-jws", "sd-jwt-vc"],
+            "referenceFrameworks": ["urn:registrystack:evidence:local:framework:test"],
+            "subjects": subjects.into_iter().map(|(role, profile, field)| json!({
+                "role": role,
+                "cardinality": "one",
+                "selector": {
+                    "profile": profile,
+                    "valueOrigin": "request",
+                    "fields": [{"type": "string", "name": field, "minimumBytes": 1, "maximumBytes": 200}]
+                }
+            })).collect::<Vec<_>>(),
+            "concepts": [{
+                "handle": concept.0,
+                "concept": format!("urn:registrystack:evidence:local:concept:{handle}:{}", concept.0),
+                "required": true,
+                "form": concept.1
+            }]
+        })
+    };
+    json!({
+        "schema": "registry.evidence-definitions/v1",
+        "assuranceProfile": "local",
+        "audience": "urn:registrystack:evidence:local:caller",
+        "issuedBy": "urn:registrystack:evidence:local:issuer",
+        "providedBy": "urn:registrystack:evidence:local:provider",
+        "definitions": [
+            definition(
+                "adult-status",
+                "age-check",
+                vec![("person", "local-subject-adult-status-v1", "person_id")],
+                ("is_adult", json!({"type": "boolean"})),
+            ),
+            definition(
+                "age-bracket",
+                "service-path-selection",
+                vec![("person", "local-subject-age-bracket-v1", "person_id")],
+                ("age_bracket", json!({"type": "boolean"})),
+            ),
+            definition(
+                "relationship-check",
+                "relationship-review",
+                vec![
+                    ("child", "child-reference-v1", "child_reference"),
+                    ("candidate", "person-reference-v1", "person_reference"),
+                ],
+                ("relationship_confirmed", json!({"type": "boolean"})),
+            ),
+        ]
+    })
+}
+
 struct Fixture {
     _temporary: tempfile::TempDir,
-    _listener: UnixListener,
-    token_server: TokenServer,
+    server: EvidenceServer,
     root: PathBuf,
+    header: PathBuf,
+    runtime: PathBuf,
     evidence: PathBuf,
     signing_key: SigningKey,
     signing_jwk: Value,
@@ -812,99 +930,15 @@ impl Fixture {
         let root = temporary.path().join("project");
         private_directory(&root);
         private_directory(&root.join(".evidence"));
-        private_directory(&root.join(".evidence/dev"));
-        private_directory(&root.join(".evidence/dev/generated"));
-        private_directory(&root.join(".evidence/dev/generated/keys"));
-        private_file(&root.join(".evidence/dev/runtime.yaml"), b"runtime", 0o400);
-        let caller_key = root.join(".evidence/dev/generated/keys/caller-private.jwk");
+        let header = temporary.path().join("headers");
         private_file(
-            &caller_key,
-            br#"{"kty":"OKP","crv":"Ed25519","kid":"local-tutorial-caller-key-1","alg":"EdDSA","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","d":"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"}"#,
+            &header,
+            format!("Authorization: Bearer {TOKEN}\n").as_bytes(),
             0o600,
         );
-        let socket = root.join(".evidence/dev/control.sock");
-        let listener = UnixListener::bind(&socket).expect("control socket");
-        fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
-        let canonical = fs::canonicalize(&root).unwrap();
-        let token_server = TokenServer::start();
-        let issuer_origin = format!("http://{}", token_server.address());
-        let state = json!({
-            "apiVersion": "id.registrystack.org/formats/evidence/dev-state/v6",
-            "kind": "EvidenceDevState",
-            "status": "ready",
-            "project": canonical,
-            "runtimePath": canonical.join(".evidence/dev/runtime.yaml"),
-            "evidenceOrigin": "http://127.0.0.1:8080",
-            "issuerOrigin": issuer_origin,
-            "issuerSessionId": "0123456789abcdef0123456789abcdef0123456789abcdef",
-            "namePrefix": "evidence-dev",
-            "tokenUrl": format!("{issuer_origin}/oauth2/token"),
-            "accessTokenAudience": "urn:registrystack:evidence:local:gateway",
-            "caller": {
-                "clientId": "local-tutorial-caller",
-                "privateKeyPath": canonical.join(".evidence/dev/generated/keys/caller-private.jwk"),
-                "assertionAudience": issuer_origin,
-                "evidenceAudience": "urn:registrystack:evidence:local:caller",
-                "requesterTag": "local-caller"
-            },
-            "accessProfiles": [],
-            "definitions": [
-                {
-                    "alias": "adult-status",
-                    "requirementUri": "urn:registrystack:evidence:local:requirement:adult-status",
-                    "purpose": "age-check",
-                    "subjects": [{
-                        "role": "person",
-                        "selectors": [{"profile": "local-subject-adult-status-v1", "fields": ["person_id"]}]
-                    }],
-                    "concepts": [{
-                        "alias": "is_adult",
-                        "uri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-                        "form": "boolean"
-                    }]
-                },
-                {
-                    "alias": "age-bracket",
-                    "requirementUri": "urn:registrystack:evidence:local:requirement:age-bracket",
-                    "purpose": "service-path-selection",
-                    "subjects": [{
-                        "role": "person",
-                        "selectors": [{"profile": "local-subject-age-bracket-v1", "fields": ["person_id"]}]
-                    }],
-                    "concepts": [{
-                        "alias": "age_bracket",
-                        "uri": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
-                        "form": "controlled-category"
-                    }]
-                },
-                {
-                    "alias": "relationship-check",
-                    "requirementUri": "urn:registrystack:evidence:local:requirement:relationship-check",
-                    "purpose": "relationship-review",
-                    "subjects": [
-                        {
-                            "role": "child",
-                            "selectors": [{"profile": "child-reference-v1", "fields": ["child_reference"]}]
-                        },
-                        {
-                            "role": "candidate",
-                            "selectors": [{"profile": "person-reference-v1", "fields": ["person_reference"]}]
-                        }
-                    ],
-                    "concepts": [{
-                        "alias": "relationship_confirmed",
-                        "uri": "urn:registrystack:evidence:local:concept:relationship-check:relationship_confirmed",
-                        "form": "boolean"
-                    }]
-                }
-            ]
-        });
-        private_file(
-            &root.join(".evidence/dev/state.json"),
-            &serde_json::to_vec(&state).unwrap(),
-            0o600,
-        );
-        write_sealed_bundle(&root, &state);
+        let runtime = temporary.path().join("evidence.yaml");
+        private_file(&runtime, b"runtime", 0o400);
+        let server = EvidenceServer::start();
 
         let signing_key = SigningKey::from_slice(&[7_u8; 32]).expect("test signing key");
         let point = signing_key.verifying_key().to_sec1_point(false);
@@ -926,9 +960,10 @@ impl Fixture {
         executable::wait_until_executable_with(&evidence, "probe");
         Self {
             _temporary: temporary,
-            _listener: listener,
-            token_server,
+            server,
             root,
+            header,
+            runtime,
             evidence,
             signing_key,
             signing_jwk,
@@ -982,14 +1017,7 @@ impl Fixture {
                 vec!["person"],
             ),
         };
-        let client = inputs
-            .windows(2)
-            .find(|pair| pair[0] == "--client")
-            .map(|pair| pair[1]);
-        let audience = client.map_or_else(
-            || "urn:registrystack:evidence:local:caller".to_owned(),
-            |client| format!("urn:registrystack:evidence:local:client:{client}"),
-        );
+        let audience = "urn:registrystack:evidence:local:caller".to_owned();
         let response_format = inputs
             .windows(2)
             .find(|pair| pair[0] == "--format")
@@ -1042,7 +1070,13 @@ impl Fixture {
             .current_dir(&self.root)
             .args(["request", "prepare"])
             .args(inputs)
-            .args(["--name", name, "--project", ".", "--evidence-bin"])
+            .args(["--name", name, "--project", ".", "--evidence-url"])
+            .arg(&self.server.origin)
+            .arg("--header")
+            .arg(format!("@{}", self.header.display()))
+            .arg("--runtime-config")
+            .arg(&self.runtime)
+            .arg("--evidence-bin")
             .arg(&self.evidence)
             .output()
             .expect("prepare command")
@@ -1113,84 +1147,6 @@ impl Fixture {
         .unwrap();
     }
 
-    fn prepare_as(&self, client_id: &str, name: &str) -> Output {
-        self.prepare_with(
-            &[
-                "adult-status",
-                "--purpose",
-                "age-check",
-                "--subject",
-                "person_id=person-123",
-                "--client",
-                client_id,
-            ],
-            name,
-        )
-    }
-
-    fn add_named_client(&self, client_id: &str, status: &str, key_mode: u32) {
-        let authority_path = self.root.join("dev-authority.yaml");
-        let mut authority: Value =
-            serde_json::from_slice(&fs::read(&authority_path).unwrap()).unwrap();
-        let state: Value =
-            serde_json::from_slice(&fs::read(self.root.join(".evidence/dev/state.json")).unwrap())
-                .unwrap();
-        authority["accessProfiles"]["age-checks"] = authored_profile(
-            state["definitions"].as_array().unwrap(),
-            &["adult-status".to_owned()],
-            AGE_CHECKS_TAG,
-        );
-        fs::write(&authority_path, serde_json::to_vec(&authority).unwrap()).unwrap();
-        let clients = self.root.join("access/clients");
-        fs::create_dir_all(&clients).expect("editable client directory");
-        private_file(
-            &clients.join(format!("{client_id}.yaml")),
-            format!(
-                "apiVersion: id.registrystack.org/formats/evidence/access-client/v1alpha1\n\
-                 kind: EvidenceAccessClient\n\
-                 clientId: {client_id}\n\
-                 status: {status}\n\
-                 principal: urn:registrystack:evidence:local:client:{client_id}\n\
-                 evidenceAudience: urn:registrystack:evidence:local:client:{client_id}\n\
-                 accessProfiles: [age-checks]\n\
-                 keys:\n\
-                   - {{kty: OKP, crv: Ed25519, kid: {client_id}-key-1, alg: EdDSA, use: sig, x: 11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo}}\n"
-            )
-            .as_bytes(),
-            0o644,
-        );
-
-        let private_clients = self.root.join(".evidence/clients");
-        if !private_clients.exists() {
-            private_directory(&private_clients);
-        }
-        let private_client = private_clients.join(client_id);
-        private_directory(&private_client);
-        private_file(
-            &private_client.join("private.jwk"),
-            format!(
-                "{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"{client_id}-key-1\",\"alg\":\"EdDSA\",\"x\":\"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo\",\"d\":\"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A\"}}"
-            )
-            .as_bytes(),
-            key_mode,
-        );
-    }
-
-    fn use_explicit_access(&self) {
-        let path = self.root.join(".evidence/dev/state.json");
-        let mut state: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        state.as_object_mut().unwrap().remove("caller");
-        state["accessProfiles"] = json!([{
-            "id": "age-checks",
-            "requesterTags": [AGE_CHECKS_TAG],
-            "definitions": ["adult-status"],
-            "actorKind": "service"
-        }]);
-        fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-        write_sealed_bundle(&self.root, &state);
-    }
-
     fn verify(&self, output: &str) -> Output {
         command()
             .current_dir(&self.root)
@@ -1219,426 +1175,6 @@ fn private_directory(path: &Path) {
 fn private_file(path: &Path, contents: &[u8], mode: u32) {
     fs::write(path, contents).expect("private file");
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
-}
-
-fn authored_profile(definitions: &[Value], selected: &[String], tag: &str) -> Value {
-    let grants = selected.iter().map(|id| {
-        let definition = definitions.iter().find(|d| d["alias"] == id.as_str())
-            .expect("profile definition exists");
-        json!({
-            "definition":id,"purpose":definition["purpose"],
-            "audienceFrom":"authenticated-requester","representations":["signed-jws"],
-            "subjectBinding":"audience-scoped",
-            "subjects":definition["subjects"].as_array().unwrap().iter().map(|subject|
-                json!({"role":subject["role"],"selectorProfile":subject["selectors"][0]["profile"],"valueOrigin":"request"})
-            ).collect::<Vec<_>>()
-        })
-    }).collect::<Vec<_>>();
-    json!({"authority":"organizational","actorKind":"service","requesterTags":[tag],"grants":grants})
-}
-
-/// Exercise retained frontend state against the actual pure project and
-/// authority compilers. Only the child that closes relying-party trust is
-/// substituted; these tests never claim to execute a source or signer.
-fn write_sealed_bundle(root: &Path, state: &Value) {
-    let mut state = state.clone();
-    let definitions = state["definitions"]
-        .as_array()
-        .expect("state definitions")
-        .clone();
-    let mut selector_profiles = serde_json::Map::new();
-    let mut sources = serde_json::Map::new();
-    let mut authored_definitions = serde_json::Map::new();
-    let mut functions = Vec::new();
-    let mut scripts = std::collections::BTreeMap::new();
-    let mut audiences = vec!["urn:registrystack:evidence:local:caller".to_owned()];
-    for client in [
-        "age-checker",
-        "other-client",
-        "revoked-client",
-        "unsafe-client",
-        "missing-key-client",
-        "mismatched-key-client",
-        "refused-client",
-    ] {
-        audiences.push(format!("urn:registrystack:evidence:local:client:{client}"));
-    }
-    for definition in &definitions {
-        let id = definition["alias"].as_str().unwrap();
-        let subjects = definition["subjects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|subject| {
-                let role = subject["role"].as_str().unwrap();
-                let selector = &subject["selectors"][0];
-                let profile = selector["profile"].as_str().unwrap();
-                let fields = selector["fields"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|field| {
-                        (
-                            field.as_str().unwrap().to_owned(),
-                            json!({"type":"string","minimumBytes":1,"maximumBytes":128}),
-                        )
-                    })
-                    .collect::<serde_json::Map<_, _>>();
-                selector_profiles.insert(
-                    profile.to_owned(),
-                    json!({"maximumAggregateBytes":512,"fields":fields}),
-                );
-                json!({"role":role,"selectors":[profile]})
-            })
-            .collect::<Vec<_>>();
-        let source_id = format!("{id}-record");
-        let (route, inputs) = match id {
-            "adult-status" => (
-                "person",
-                json!({"personId":{"selector":{"role":"person","profile":"local-subject-adult-status-v1","field":"person_id"}}}),
-            ),
-            "age-bracket" => (
-                "person",
-                json!({"personId":{"selector":{"role":"person","profile":"local-subject-age-bracket-v1","field":"person_id"}}}),
-            ),
-            "relationship-check" => (
-                "relationship",
-                json!({
-                    "childId":{"selector":{"role":"child","profile":"child-reference-v1","field":"child_reference"}},
-                    "candidateId":{"selector":{"role":"candidate","profile":"person-reference-v1","field":"person_reference"}}
-                }),
-            ),
-            _ => panic!("unexpected retained definition {id}"),
-        };
-        sources.insert(
-            source_id.clone(),
-            json!({
-                "pack":{"id":"synthetic-register","version":"1"},
-                "route":route,
-                "connection":"synthetic-register",
-                "inputs":inputs,
-                "acquisitionPosture":"record-transformed"
-            }),
-        );
-        let outputs = definition["concepts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|concept| {
-                let mut output = json!({"concept":concept["uri"],"type":concept["form"]});
-                if concept["form"] == "controlled-category" {
-                    output["values"] = json!(["adult", "minor"]);
-                }
-                (concept["alias"].as_str().unwrap().to_owned(), output)
-            })
-            .collect::<serde_json::Map<_, _>>();
-        let function_id = format!("derive-{id}");
-        let path = format!("functions/{function_id}.rhai");
-        let values = definition["concepts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|concept| {
-                let value = if concept["form"] == "controlled-category" {
-                    json!("adult")
-                } else {
-                    json!(true)
-                };
-                format!("#{{output: {}, value: {value}}}", concept["alias"])
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        scripts.insert(
-            path.clone(),
-            format!("fn derive(facts, selectors, context) {{ [{values}] }}"),
-        );
-        functions.push(json!({"id":function_id,"interface":"assertion-derive/v1","source":path}));
-        authored_definitions.insert(id.to_owned(),json!({
-            "question":format!("Synthetic {id} assertion"),
-            "semantics":{"requirement":definition["requirementUri"],"kind":"criterion","evidenceType":format!("urn:registrystack:evidence:local:evidence-type:{id}"),"referenceFrameworks":["urn:example:framework:request-verification"]},
-            "purpose":definition["purpose"],
-            "grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":audiences},
-            "subjects":subjects,"acquisition":{"source":source_id},
-            "derive":{"function":function_id},"outputs":outputs,"validitySeconds":300,
-            "subjectBinding":"audience-scoped","representations":["signed-jws"]
-        }));
-    }
-    let person_inputs = serde_json::to_vec(&json!({
-        "type":"object","additionalProperties":false,"required":["personId"],
-        "properties":{"personId":{"type":"string","minLength":1,"maxLength":128}}
-    }))
-    .unwrap();
-    let relationship_inputs = serde_json::to_vec(&json!({
-        "type":"object","additionalProperties":false,"required":["childId","candidateId"],
-        "properties":{
-            "childId":{"type":"string","minLength":1,"maxLength":128},
-            "candidateId":{"type":"string","minLength":1,"maxLength":128}
-        }
-    }))
-    .unwrap();
-    let facts = serde_json::to_vec(&json!({
-        "type":"object","additionalProperties":false,"required":["active"],
-        "properties":{"active":{"type":"boolean"}}
-    }))
-    .unwrap();
-    let lookup = br#"fn lookup(exchange) {
-    let response = exchange.body;
-    if response.type_of() != "map" || !response.contains("active") {
-        throw "source_protocol_error";
-    }
-    #{lookup: "matched", facts: #{active: response["active"]}}
-}
-"#;
-    let pinned = |path: &str, bytes: &[u8]| json!({"path":path,"digest":registry_platform_config::sha256_uri(bytes)});
-    let pack_document = json!({
-        "apiVersion":registry_adapter_core::ADAPTER_PACK_API_VERSION,
-        "kind":registry_adapter_core::ADAPTER_PACK_KIND,
-        "id":"synthetic-register","version":"1","testedVersions":[],
-        "endpoints":[{
-            "id":"register","component":"http",
-            "authentication":{"type":"static-authorization"},
-            "attemptTimeoutMilliseconds":2000,"maximumResponseBytes":4096,
-            "requestHeaders":["accept"],"responseHeaders":[],
-            "operations":[{"id":"lookup","safeUpstream":true}]
-        }],
-        "scripts":[pinned("scripts/lookup.rhai",lookup)],
-        "sourceRoutes":[
-            {
-                "id":"person",
-                "evidence":{
-                    "inputsSchema":pinned("schemas/person-inputs.json",&person_inputs),
-                    "factsSchema":pinned("schemas/facts.json",&facts),
-                    "acquisitionPosture":"record-transformed"
-                },
-                "steps":[
-                    {"setHeader":{"name":"Accept","value":{"constant":"application/json"}}},
-                    {"to":{"uri":"http:register","parameters":{
-                        "httpMethod":"GET","path":"/record","operation":"lookup",
-                        "query":{"person_id":{"jsonpath":"$.personId"}}
-                    }}},
-                    {"setBody":{"rhai":{"file":"scripts/lookup.rhai","entrypoint":"lookup"}}}
-                ]
-            },
-            {
-                "id":"relationship",
-                "evidence":{
-                    "inputsSchema":pinned("schemas/relationship-inputs.json",&relationship_inputs),
-                    "factsSchema":pinned("schemas/facts.json",&facts),
-                    "acquisitionPosture":"record-transformed"
-                },
-                "steps":[
-                    {"setHeader":{"name":"Accept","value":{"constant":"application/json"}}},
-                    {"to":{"uri":"http:register","parameters":{
-                        "httpMethod":"POST","path":"/relationship","operation":"lookup",
-                        "body":{"jsonpath":"$"}
-                    }}},
-                    {"setBody":{"rhai":{"file":"scripts/lookup.rhai","entrypoint":"lookup"}}}
-                ]
-            }
-        ],
-        "capabilities":{
-            "components":["http"],"languages":["constant","jsonpath","rhai"],
-            "eips":["setBody","setHeader","to"]
-        }
-    });
-    let pack_bytes = serde_json::to_vec(&pack_document).unwrap();
-    let pack_artifacts = std::collections::BTreeMap::from([
-        (
-            "schemas/person-inputs.json".to_owned(),
-            person_inputs.clone(),
-        ),
-        (
-            "schemas/relationship-inputs.json".to_owned(),
-            relationship_inputs.clone(),
-        ),
-        ("schemas/facts.json".to_owned(), facts.clone()),
-        ("scripts/lookup.rhai".to_owned(), lookup.to_vec()),
-    ]);
-    let project_document = json!({
-        "apiVersion":registry_evidence_authoring::project::PROJECT_API_VERSION,
-        "kind":"EvidenceProject","id":"request-verify-fixture","selectorProfiles":selector_profiles,
-        "functions":functions,
-        "sources":sources,"assertionDefinitions":authored_definitions
-    });
-    let project_bytes = serde_json::to_vec(&project_document).unwrap();
-    let project =
-        registry_evidence_authoring::project::read_project("evidence.yaml", &project_bytes)
-            .unwrap()
-            .value;
-    let checked_route = |route: &str, inputs_schema: &Value| {
-        let source = project
-            .sources
-            .values()
-            .find(|source| source.route.as_str() == route)
-            .expect("checked route has one retained Source binding");
-        registry_evidence_authoring::compile::CheckedPackRoute {
-            pack: source.pack.clone(),
-            route: source.route.clone(),
-            digest: registry_platform_config::sha256_uri(&pack_bytes),
-            inputs_schema: inputs_schema.clone(),
-            facts_schema: serde_json::from_slice(&facts).unwrap(),
-            acquisition_posture: source.acquisition_posture,
-            pack_bytes: pack_bytes.clone(),
-            artifacts: pack_artifacts.clone(),
-        }
-    };
-    let checked_routes = [
-        checked_route("person", &serde_json::from_slice(&person_inputs).unwrap()),
-        checked_route(
-            "relationship",
-            &serde_json::from_slice(&relationship_inputs).unwrap(),
-        ),
-    ];
-    let compiled = registry_evidence_authoring::compile::compile_with_pack_routes(
-        &project,
-        &scripts,
-        &checked_routes,
-    )
-    .unwrap();
-    private_file(&root.join("evidence.yaml"), &project_bytes, 0o644);
-    fs::create_dir_all(root.join("functions")).unwrap();
-    for (path, text) in &scripts {
-        private_file(&root.join(path), text.as_bytes(), 0o644);
-    }
-    let pack_root = root.join("adapter-packs/synthetic-register");
-    for (path, bytes) in &pack_artifacts {
-        let path = pack_root.join(path);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        private_file(&path, bytes, 0o644);
-    }
-    private_file(&pack_root.join("pack.yaml"), &pack_bytes, 0o644);
-    let mut target = registry_platform_yaml::Reader::new("local-target.yaml")
-        .scan(include_bytes!(
-            "../../../products/evidence/examples/standalone/local-target.yaml"
-        ))
-        .unwrap()
-        .expect("target document")
-        .to_json_value();
-    target["project"] = json!("request-verify-fixture");
-    private_file(
-        &root.join("local-target.yaml"),
-        &serde_json::to_vec(&target).unwrap(),
-        0o644,
-    );
-    if state["accessProfiles"].as_array().unwrap().is_empty() {
-        let selected = definitions
-            .iter()
-            .map(|d| d["alias"].as_str().unwrap().to_owned())
-            .collect::<std::collections::BTreeSet<_>>();
-        state["accessProfiles"] = json!([{"id":"local-caller","requesterTags":["local-caller"],"definitions":selected,"actorKind":"service"}]);
-    }
-    let profiles = state["accessProfiles"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|profile| {
-            let selected = profile["definitions"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|d| d.as_str().unwrap().to_owned())
-                .collect::<Vec<_>>();
-            (
-                profile["id"].as_str().unwrap().to_owned(),
-                authored_profile(
-                    &definitions,
-                    &selected,
-                    profile["requesterTags"][0].as_str().unwrap(),
-                ),
-            )
-        })
-        .collect::<serde_json::Map<_, _>>();
-    let authority_document = json!({"apiVersion":registry_evidence_authoring::target::AUTHORITY_API_VERSION,"kind":"EvidenceTargetAuthority","target":"local","project":"request-verify-fixture","accessProfiles":profiles});
-    let authority_bytes = serde_json::to_vec(&authority_document).unwrap();
-    private_file(&root.join("dev-authority.yaml"), &authority_bytes, 0o644);
-    let authority = registry_evidence_authoring::target::read_authority(
-        "dev-authority.yaml",
-        &authority_bytes,
-        &project,
-    )
-    .unwrap()
-    .value;
-    let mut document =
-        registry_evidence_authoring::target::compile_authority(&authority, &project).unwrap();
-    document.as_object_mut().unwrap().remove("apiVersion");
-    document.as_object_mut().unwrap().remove("kind");
-    for profile in state["accessProfiles"].as_array_mut().unwrap() {
-        let body = &document["accessProfiles"][profile["id"].as_str().unwrap()];
-        profile["digest"] = json!(registry_platform_config::sha256_uri(
-            &registry_platform_crypto::canonicalize_json(body).unwrap()
-        ));
-    }
-    private_file(
-        &root.join(".evidence/dev/state.json"),
-        &serde_json::to_vec(&state).unwrap(),
-        0o600,
-    );
-    let bundle_directory = root.join(".evidence/dev/bundle");
-    if bundle_directory.exists() {
-        make_fixture_writable(&bundle_directory);
-    } else {
-        private_directory(&bundle_directory);
-    }
-    for (path, bytes) in &compiled.artifacts {
-        let path = bundle_directory.join(path);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        private_file(&path, bytes, 0o400);
-    }
-    let mut bundle = compiled.model;
-    bundle["authentication"] = target["authentication"].clone();
-    bundle["authentication"]["oidc"]["issuer"] = state["issuerOrigin"].clone();
-    bundle["authentication"]["oidc"]["audience"] = state["accessTokenAudience"].clone();
-    private_file(
-        &bundle_directory.join("evidence.yaml"),
-        &serde_json::to_vec(&bundle).unwrap(),
-        0o400,
-    );
-    let sum_file = bundle_directory.join(registry_platform_config::SUM_FILE);
-    if sum_file.exists() {
-        fs::remove_file(&sum_file).unwrap();
-    }
-    let package = registry_platform_config::write_sum_file(
-        &bundle_directory,
-        None,
-        &registry_platform_config::PackageLimits {
-            max_files: 1024,
-            max_file_bytes: 1024 * 1024,
-            max_total_bytes: 16 * 1024 * 1024,
-            max_depth: 16,
-            max_path_bytes: 512,
-        },
-        "evidencectl package",
-    )
-    .unwrap();
-    fs::set_permissions(sum_file, fs::Permissions::from_mode(0o400)).unwrap();
-    fs::set_permissions(&bundle_directory, fs::Permissions::from_mode(0o500)).unwrap();
-    let authority_directory = root.join(".evidence/dev/authority");
-    if !authority_directory.exists() {
-        private_directory(&authority_directory);
-    }
-    let bytes = registry_platform_crypto::canonicalize_json(&document).unwrap();
-    let activation = json!({"apiVersion":"id.registrystack.org/formats/evidence/authority-state/v1alpha1","kind":"EvidenceAuthorityState","activations":[{
-        "sequence":1,"activatedAt":"2026-08-04T00:00:00Z","packageDigest":package.digest(),
-        "authorityDigest":registry_platform_config::sha256_uri(&bytes),
-        "authorityRevision":format!("sha256:{}",hex::encode(registry_platform_crypto::domain_separated_sha256(b"registry.evidence.target-authority/v1\0",&bytes))),"document":document
-    }]});
-    private_file(
-        &authority_directory.join("authority-state.json"),
-        &serde_json::to_vec(&activation).unwrap(),
-        0o600,
-    );
-}
-
-fn make_fixture_writable(root: &Path) {
-    fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
-    for entry in fs::read_dir(root).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_dir() {
-            make_fixture_writable(&path);
-        } else {
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
-        }
-    }
 }
 
 fn executable(path: &Path, contents: &[u8]) {

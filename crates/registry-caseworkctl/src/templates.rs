@@ -92,29 +92,6 @@ pub(crate) fn approval_project(pattern: &str) -> Result<Value> {
     Ok(project)
 }
 
-pub(crate) fn approval_dev_clients(pattern: &str) -> Result<Value> {
-    let project = approval_project(pattern)?;
-    let mut clients = Vec::new();
-    for (id, profile) in project["accessProfiles"].as_object().unwrap() {
-        let mut client = json!({"id":id, "accessProfile":id, "scopes":profile["requiredScopes"]});
-        if profile["actsAs"] != "requester" {
-            client["claims"] = json!({"registry_actor_kind":"human"});
-        }
-        clients.push(client);
-    }
-    if pattern == "two-peer-approval" {
-        clients.push(json!({"id":"staff-two", "accessProfile":"staff", "scopes":["casework:staff"], "claims":{"registry_actor_kind":"human"}}));
-    }
-    let directory = project["reviewPolicies"][pattern]["stages"].as_array().unwrap().iter().map(|stage| {
-        let staff = if pattern == "two-peer-approval" {json!(["staff", "staff-two"])} else {stage["decidingProfiles"].clone()};
-        json!({"team":format!("{}-team",stage["queue"].as_str().unwrap()),"queue":stage["queue"],"staff":staff,"supervisors":["supervisor"]})
-    }).collect::<Vec<_>>();
-    Ok(json!({
-        "apiVersion":"id.registrystack.org/formats/casework/dev-clients/v1alpha1",
-        "kind":"CaseworkDevClients", "clients":clients, "directory":directory
-    }))
-}
-
 pub(crate) fn approval_fixture(pattern: &str) -> Result<Value> {
     let project = approval_project(pattern)?;
     Ok(json!({

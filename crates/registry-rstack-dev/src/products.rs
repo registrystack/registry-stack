@@ -36,6 +36,8 @@ use super::{
 
 #[path = "evidence.rs"]
 mod evidence;
+#[path = "messaging.rs"]
+mod messaging;
 
 /// Makes the run's Evidence package and packaging output writable again so the run directory can be removed.
 pub(super) fn unlock_package(root: &Path) -> Result<()> {
@@ -372,6 +374,14 @@ impl<'a> ProductRunner<'a> {
                 )?;
                 continue;
             }
+            if entry.product == Product::Messaging {
+                self.tool(
+                    entry.product,
+                    "check",
+                    &["--project".as_ref(), project.as_os_str()],
+                )?;
+                continue;
+            }
             self.tool(entry.product, "check", &[project.as_os_str()])?;
         }
         Ok(())
@@ -435,6 +445,11 @@ impl<'a> ProductRunner<'a> {
                     breg_package.as_deref(),
                 )?,
                 Product::Evidence => self.activate_evidence(&project, bind)?,
+                Product::Messaging => self.activate_messaging(
+                    database.as_deref_mut().context(NEEDS_DATABASE)?,
+                    &project,
+                    bind,
+                )?,
             };
             let binaries = &self.input.binaries[&product];
             let mut command = guard::Command::new(
@@ -447,7 +462,7 @@ impl<'a> ProductRunner<'a> {
                 command.arg("serve");
             }
             command.arg("--runtime-config").arg(config);
-            if product == Product::Casework {
+            if matches!(product, Product::Casework | Product::Messaging) {
                 command.arg("serve");
             }
             let log = open_log(self.root, &format!("{}-runtime", product.name()))?;
@@ -926,6 +941,9 @@ impl<'a> ProductRunner<'a> {
                 config
             }
             Product::Casework => casework_config(plan, name, self.root, package, &identity, bind),
+            Product::Messaging => {
+                messaging::messaging_config(plan, name, self.root, package, &identity, bind)
+            }
             Product::Evidence => {
                 unreachable!("Evidence writes its runtime configuration by packaging")
             }
@@ -1457,6 +1475,7 @@ fn inspection_failed(
         Product::Breg => ("bregctl", "RSTACK_BREGCTL_BIN"),
         Product::Casework => ("caseworkctl", "RSTACK_CASEWORKCTL_BIN"),
         Product::Evidence => ("evidencectl", "RSTACK_EVIDENCECTL_BIN"),
+        Product::Messaging => ("messagingctl", "RSTACK_MESSAGINGCTL_BIN"),
     };
     InspectionUnavailable::new(
         field,
@@ -1479,6 +1498,7 @@ pub(super) fn inspect(
     plan: &Plan,
     terminate: &AtomicBool,
 ) -> Result<ProductInspection> {
+    messaging::refuse_providers_without_a_sink(root, plan)?;
     let breg_authority = breg_authority(root, plan, terminate)?;
     let casework_principals = casework_principals(root, plan, breg_authority.as_ref(), terminate)?;
     Ok(ProductInspection {
@@ -1518,6 +1538,7 @@ fn product_root(
         Product::Breg => "registry.yaml",
         Product::Casework => "casework.yaml",
         Product::Evidence => "evidence.yaml",
+        Product::Messaging => "messaging.yaml",
     };
     let manifest = project.join(manifest_name).canonicalize().map_err(|_| {
         plan::SemanticRefusal::new(

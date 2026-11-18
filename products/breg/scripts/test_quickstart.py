@@ -78,17 +78,17 @@ class BRegQuickstartTests(unittest.TestCase):
             helper.prepare_spatial(SPATIAL_FIXTURE, project)
             registry = yaml.safe_load((project / "registry.yaml").read_text())
             journeys = yaml.safe_load((project / "tests/journeys.yaml").read_text())
-            clients = yaml.safe_load((project / "dev-clients.yaml").read_text())["clients"]
+            people = yaml.safe_load((project / "dev.yaml").read_text())["people"]
         self.assertTrue(registry["package"]["sourceRevision"])
         self.assertNotIn("instanceId", registry["package"])
         profiles = {step["accessProfile"] for journey in journeys["journeys"] for step in journey["steps"]}
         self.assertIn("map-reader", profiles)
         self.assertIn("directory-reader", profiles)
         for profile in profiles:
-            self.assertEqual(sum(profile in client["accessProfiles"] for client in clients), 1, profile)
-        map_client = next(client for client in clients if client["id"] == "installation-map-reader")
-        self.assertEqual(map_client["claims"]["service_zones"], "central")
-        self.assertEqual(map_client["scopes"], ["service-sites:map:read"])
+            self.assertEqual(sum(person["grants"]["breg"]["profile"] == profile for person in people.values()), 1, profile)
+        map_grant = people["installation-map-reader"]["grants"]["breg"]
+        self.assertEqual(map_grant["claims"]["service_zones"], "central")
+        self.assertEqual(map_grant["scopes"], ["service-sites:map:read"])
 
     def test_create_record_reads_record_identifier_from_registry_record_envelope(self) -> None:
         helper = load_helper()
@@ -167,7 +167,7 @@ class BRegQuickstartTests(unittest.TestCase):
         self.assertIn("spatial=false", run_source)
         self.assertIn("--spatial", run_source)
         self.assertIn("prepare-spatial-project", run_source)
-        self.assertIn("dev token installation-map-reader", run_source)
+        self.assertIn("person=installation-map-reader", run_source)
         self.assertIn("spatial-smoke", run_source)
         self.assertIn("Base Registry Engine quickstart is ready", run_source)
 
@@ -179,6 +179,52 @@ class BRegQuickstartTests(unittest.TestCase):
             expected = {p.relative_to(SPATIAL_FIXTURE): p.read_bytes() for p in SPATIAL_FIXTURE.rglob("*") if p.is_file()}
             actual = {p.relative_to(project): p.read_bytes() for p in project.rglob("*") if p.is_file()}
             self.assertEqual(actual, expected)
+
+    def test_ready_reads_the_origin_and_names_a_failed_scenario_or_start_error(self) -> None:
+        helper = load_helper()
+        with tempfile.TemporaryDirectory() as root_dir:
+            report = Path(root_dir) / "dev-report.json"
+
+            def write(document: dict) -> None:
+                report.write_text(json.dumps(document), encoding="utf-8")
+
+            ready = {"status": "ready", "run_id": "run1", "products": {"breg": "http://127.0.0.1:9"},
+                     "scenarios": [{"id": "directory-contact", "result": "passed"}]}
+            write(ready)
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured):
+                helper.ready(report)
+                helper.run_id(report)
+            self.assertEqual(captured.getvalue().split(), ["http://127.0.0.1:9", "run1"])
+            write({**ready, "scenarios": [{"id": "directory-contact", "result": "failed"}]})
+            with self.assertRaisesRegex(helper.QuickstartError, "scenario failed"):
+                helper.ready(report)
+            write({"schema_version": "registry.rstack.error.v1", "error": {"message": "Docker is missing"}})
+            with self.assertRaisesRegex(helper.QuickstartError, "Docker is missing"):
+                helper.ready(report)
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured):
+                helper.run_id(report)
+            self.assertEqual(captured.getvalue(), "")
+
+    def test_copy_header_keeps_the_header_owner_only(self) -> None:
+        helper = load_helper()
+        with tempfile.TemporaryDirectory() as root_dir:
+            root = Path(root_dir)
+            source = root / "source.header"
+            source.write_text("Authorization: Bearer a.b.c\n", encoding="ascii")
+            report = root / "token.json"
+            report.write_text(json.dumps({"credentials": [{"product": "breg", "header_file": str(source)}]}))
+            destination = root / "editor.header"
+            helper.copy_header(report, destination)
+            self.assertEqual(destination.read_text(encoding="ascii"), source.read_text(encoding="ascii"))
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+
+    def test_minimal_plan_runs_the_quickstart_clients(self) -> None:
+        plan = yaml.safe_load((PRODUCT_ROOT / "examples/minimal/dev.yaml").read_text())
+        self.assertLessEqual({"editor", "foreign-editor"}, set(plan["people"]))
+        run_source = (QUICKSTART / "run.sh").read_text(encoding="utf-8")
+        self.assertIn("add-dev-plan", run_source)
 
     def test_directory_refusal_uses_the_foreign_client_and_requires_concealment(self) -> None:
         helper = load_helper()

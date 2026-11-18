@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-mod dev;
 #[cfg(test)]
 mod fixture_tests;
 mod identity;
@@ -111,8 +110,6 @@ enum Command {
         #[arg(long)]
         backup_reference: Vec<String>,
     },
-    /// Start, stop and inspect a retained standalone local session.
-    Dev(Box<dev::DevArgs>),
     /// Call the Casework HTTP API with a saved connection or retained local client.
     Api(Box<registry_cli_api::ApiArgs>),
     /// Manage saved Casework API connections.
@@ -120,10 +117,6 @@ enum Command {
         #[command(subcommand)]
         command: registry_cli_api::ConnectionCommand,
     },
-    #[command(name = "__dev-supervisor", hide = true)]
-    DevSupervisor(dev::SupervisorArgs),
-    #[command(name = "__dev-service-guard", hide = true)]
-    DevServiceGuard(dev::ServiceGuardArgs),
     #[command(name = "rstack-dev", hide = true)]
     RstackDev(registry_rstack_dev::Args),
 }
@@ -448,7 +441,6 @@ fn command_kind(command: &Command) -> CommandKind {
             | Command::Plan(_)
             | Command::Apply { .. }
             | Command::Status(_)
-            | Command::Dev(_)
             | Command::Api(_)
             | Command::Connection { .. }
     ) {
@@ -485,20 +477,6 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
         return (
             DOMAIN_REFUSAL_EXIT,
             json!({"severity":"error","code":code,"artifact":"provider-pair","path":path,"message":message,"suggestedAction":action}),
-        );
-    }
-    if let Some(failure) = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<dev::DevFailure>())
-    {
-        let (code, path, message, action) = failure.diagnostic();
-        return (
-            if failure.is_configuration_refusal() {
-                DOMAIN_REFUSAL_EXIT
-            } else {
-                OPERATIONAL_FAILURE_EXIT
-            },
-            json!({"severity":"error","code":code,"artifact":"dev-session","path":path,"message":message,"suggestedAction":action}),
         );
     }
     if let Some(runtime) = error
@@ -595,16 +573,8 @@ impl Command {
             Self::Plan(_) => "plan",
             Self::Status(_) => "status",
             Self::Apply { .. } => "apply",
-            Self::Dev(args) => match args.report_kind() {
-                "CaseworkDevEventsReport" => "dev-events",
-                "CaseworkDevGrantReport" => "dev-grant",
-                "CaseworkDevIdentityReport" => "dev-identity",
-                "CaseworkDevTokenReport" => "dev-token",
-                _ => "dev",
-            },
             Self::Api(_) => "api",
             Self::Connection { .. } => "connection",
-            Self::DevSupervisor(_) | Self::DevServiceGuard(_) => "internal",
             Self::RstackDev(_) => "rstack-dev",
         }
     }
@@ -723,16 +693,10 @@ fn run(command: Command) -> Result<Value> {
             operator_reference,
             backup_reference,
         } => project::apply(&runtime_config, operator_reference, backup_reference),
-        Command::Dev(args) => dev::run(*args),
         Command::Api(_) | Command::Connection { .. } => {
             unreachable!("raw API commands bypass report dispatch")
         }
         Command::RstackDev(_) => unreachable!("the rstack dev runner bypasses report dispatch"),
-        Command::DevSupervisor(args) => {
-            dev::run_supervisor(args)?;
-            Ok(json!({"ok":true}))
-        }
-        Command::DevServiceGuard(args) => Ok(json!({"ok":dev::run_service_guard(args)?})),
     }
 }
 
@@ -747,7 +711,9 @@ fn api(args: registry_cli_api::ApiArgs, format_supplied: bool, stderr: &mut dyn 
     match registry_cli_api::run_api_with_profile_headers(
         "casework",
         args,
-        dev::api_connection,
+        |_, _| {
+            Err("Casework keeps no retained local caller session. Run rstack dev token RUN --as PERSON to write a header file, then pass --url URL and --header @FILE".to_owned())
+        },
         &["Registry-Casework-Profile", "Registry-Review-Profile"],
     ) {
         Ok(()) => ExitCode::SUCCESS,
@@ -1038,6 +1004,45 @@ mod tests {
 
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
+        }
+    }
+
+    #[test]
+    fn dev_is_not_a_command() {
+        for args in [
+            vec!["caseworkctl", "dev", "start", "/tmp/casework-project"],
+            vec!["caseworkctl", "dev", "/tmp/casework-project"],
+            vec!["caseworkctl", "__dev-supervisor"],
+            vec!["caseworkctl", "__dev-service-guard"],
+        ] {
+            let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+            let exit = main_entry_from(args.iter().map(OsString::from), &mut stdout, &mut stderr);
+            assert_eq!(exit, ExitCode::from(report::USAGE_EXIT), "{args:?}");
+        }
+        let help = Cli::command().render_help().to_string();
+        assert!(
+            !help.contains("retained standalone local session"),
+            "{help}"
+        );
+    }
+
+    #[test]
+    fn init_next_step_points_at_rstack_dev_start() {
+        let temp = tempfile::tempdir().unwrap();
+        for template in ["standalone-decision", "canonical-review"] {
+            let project = temp.path().join(template);
+            let report = project::init(&project, template).unwrap();
+            let next = report["next"].as_str().unwrap();
+            assert!(next.contains("rstack dev start"), "{template}: {next}");
+            assert!(!next.contains("caseworkctl dev"), "{template}: {next}");
+            assert!(next.contains("dev.yaml"), "{template}: {next}");
+            assert!(!project.join("dev-clients.yaml").exists(), "{template}");
+            assert!(
+                !project
+                    .join(".casework/schemas/dev-clients.schema.json")
+                    .exists(),
+                "{template}"
+            );
         }
     }
 
@@ -1386,13 +1391,12 @@ mod tests {
         for (name, bytes) in [
             ("casework.yaml", include_bytes!("../../../products/casework/examples/canonical-review/casework.yaml").as_slice()),
             ("schemas/correct-address.schema.json", include_bytes!("../../../products/casework/examples/canonical-review/schemas/correct-address.schema.json").as_slice()),
-            ("dev-clients.yaml", include_bytes!("../../../products/casework/examples/canonical-review/dev-clients.yaml").as_slice()),
             ("approve-task.sh", include_bytes!("../../../products/casework/examples/canonical-review/approve-task.sh").as_slice()),
         ] {
             assert_eq!(std::fs::read(project.join(name)).unwrap(), bytes, "{name}");
         }
         project::load_and_check_policy(&project).unwrap();
-        for name in ["casework.yaml", "runtime.example.yaml", "dev-clients.yaml"] {
+        for name in ["casework.yaml", "runtime.example.yaml"] {
             let text = std::fs::read_to_string(project.join(name)).unwrap();
             let schema = text
                 .lines()
@@ -1449,9 +1453,6 @@ taskTemplates:
 ",
         );
         std::fs::write(&path, yaml).unwrap();
-        // Local callers are optional; without them the policy refusal is
-        // the only one left to report.
-        std::fs::remove_file(project.join("dev-clients.yaml")).unwrap();
         (temp, project)
     }
 
@@ -1503,7 +1504,7 @@ taskTemplates:
         let temp = canonical_tempdir();
         let project = temp.path().join("editor");
         project::init(&project, "standalone-decision").unwrap();
-        for name in ["casework.yaml", "runtime.example.yaml", "dev-clients.yaml"] {
+        for name in ["casework.yaml", "runtime.example.yaml"] {
             let text = std::fs::read_to_string(project.join(name)).unwrap();
             let schema = text
                 .lines()

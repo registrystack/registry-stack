@@ -10,7 +10,7 @@ use std::process::Command;
 
 /// The complete top-level subcommand set. Adding a command means adding it
 /// here; the point of the list is that an omission fails rather than passes.
-const TOP_LEVEL_COMMANDS: [&str; 23] = [
+const TOP_LEVEL_COMMANDS: [&str; 22] = [
     "client",
     "access",
     "keygen",
@@ -29,7 +29,6 @@ const TOP_LEVEL_COMMANDS: [&str; 23] = [
     "dev",
     "request",
     "verify",
-    "audit",
     "runtime",
     "tooling",
     "api",
@@ -96,6 +95,41 @@ fn retired_language_server_is_refused() {
     assert!(
         String::from_utf8_lossy(&output.stderr).starts_with("error[evidencectl.usage]"),
         "retired tooling command did not use the standard usage refusal: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn access_client_add_is_not_a_command() {
+    let access = evidencectl(&["access", "--help"]);
+    assert!(access.contains("profile"), "{access}");
+    assert!(!access.contains("client"), "{access}");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["access", "client", "add", "--help"])
+        .output()
+        .expect("run evidencectl");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).starts_with("error[evidencectl.usage]"),
+        "removed access verb did not use the standard usage refusal: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn audit_show_is_not_a_command() {
+    let help = evidencectl(&["--help"]);
+    assert!(!help.contains("audit"), "{help}");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["audit", "show", "--help"])
+        .output()
+        .expect("run evidencectl");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).starts_with("error[evidencectl.usage]"),
+        "removed audit verb did not use the standard usage refusal: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }

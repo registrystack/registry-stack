@@ -1,0 +1,126 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+# Synthetic local callers. A run signs their test tokens with a throwaway local
+# key under this logical issuer. The scenario file sits under dev/, not tests/,
+# because bregctl check reads every YAML file directly under tests/ as a BReg test.
+issuer: https://identity.facility.example.test
+products:
+  - {product: breg, project: ., audience: "urn:example:facility-registry"}
+people:
+  operator-editor:
+    subject: synthetic-operator-editor
+    client: operator-editor
+    grants:
+      breg:
+        profile: operator-editor
+        scopes: ["registry:operator:write"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: facility-administration
+          jurisdiction: zone-a
+  registrar:
+    subject: synthetic-registrar
+    client: registrar
+    grants:
+      breg:
+        profile: facility-registrar
+        scopes: ["registry:facility:register"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: facility-administration
+          jurisdiction: zone-a
+  reader:
+    subject: synthetic-reader
+    client: reader
+    grants:
+      breg:
+        profile: facility-reader
+        scopes: ["registry:facility:read"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: facility-administration
+          jurisdiction: zone-a
+  foreign-reader:
+    subject: synthetic-foreign-reader
+    client: foreign-reader
+    grants:
+      breg:
+        profile: facility-reader
+        scopes: ["registry:facility:read"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: facility-administration
+          jurisdiction: zone-b
+  author:
+    subject: synthetic-author
+    client: author
+    grants:
+      breg:
+        profile: facility-correction-author
+        scopes: ["registry:facility:correction:submit"]
+        claims:
+          registry_actor_kind: human
+          registry_purpose: facility-administration
+          jurisdiction: zone-a
+  applier:
+    subject: synthetic-applier
+    client: applier
+    grants:
+      breg:
+        profile: facility-correction-applier
+        scopes: ["registry:facility:correction:apply"]
+        claims:
+          registry_actor_kind: human
+          registry_purpose: facility-administration
+          jurisdiction: zone-a
+  reviewer:
+    subject: synthetic-reviewer
+    client: reviewer
+    grants:
+      breg:
+        profile: proposal-reviewer
+        scopes: ["registry:proposal:review"]
+        claims:
+          registry_actor_kind: human
+          registry_purpose: facility-review
+          jurisdiction: zone-a
+  directory-editor:
+    subject: synthetic-directory-editor
+    client: directory-editor
+    grants:
+      breg:
+        profile: directory-editor
+        scopes: ["registry:directory:write"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: directory-administration
+          jurisdiction: zone-a
+  other-author:
+    subject: synthetic-other-author
+    client: other-author
+    grants:
+      breg:
+        profile: facility-correction-author
+        scopes: ["registry:facility:correction:submit"]
+        claims:
+          registry_actor_kind: human
+          registry_purpose: facility-administration
+          jurisdiction: zone-a
+# Two people share the facility-reader profile and two share the correction
+# author profile, so each of those schema-test steps names its person.
+schemaTestPeople:
+  register-facility:
+    read-facility: reader
+    read-assignment: reader
+    conceal-foreign-facility: foreign-reader
+    read-inactive-facility: reader
+    start-deactivation: author
+    conceal-other-author-proposal: other-author
+    edit-deactivation: author
+    stale-deactivation-submit: author
+    submit-deactivation: author
+    recover-deactivation-submit: author
+    start-cancelled-deactivation: author
+    cancel-deactivation: author
+scenarioFile: dev/scenarios.yaml

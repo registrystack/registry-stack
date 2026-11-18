@@ -4,7 +4,7 @@
 //! so each product CLI that `rstack dev` supports links this crate behind the
 //! hidden [`COMMAND`] subcommand and the launcher execs that host. `check`
 //! and `start` run in the CLI of the plan's first product in the order breg,
-//! casework, evidence, because the plan needs that CLI anyway. `status`, `token`, and
+//! casework, evidence, messaging, because the plan needs that CLI anyway. `status`, `token`, and
 //! `stop` run in the first host available: a run keeps its state in its run
 //! directory, so any host of the same release serves a run another host
 //! started. This crate links no product crate; it drives each product through
@@ -370,6 +370,7 @@ fn provisioned_labels(root: &Path) -> Result<Vec<(&'static str, bool)>> {
                 labels.push(("breg", spatial));
             }
             Product::Casework => labels.push(("casework", false)),
+            Product::Messaging => labels.push(("messaging", false)),
             Product::Evidence => {}
         }
     }
@@ -1369,7 +1370,9 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
         ));
         let headers = match product {
             Product::Breg => format!("Authorization: Bearer {}\n", &*token),
-            Product::Evidence => format!("Authorization: Bearer {}\n", &*token),
+            Product::Evidence | Product::Messaging => {
+                format!("Authorization: Bearer {}\n", &*token)
+            }
             Product::Casework => format!("Authorization: Bearer {}\nRegistry-Casework-Profile: {}\nRegistry-Review-Profile: {}\n",
                 &*token, grant.profile, grant.profile),
         };
@@ -1586,6 +1589,7 @@ fn product_tool(product: Product) -> Result<PathBuf> {
             Product::Breg => "RSTACK_BREGCTL_BIN",
             Product::Casework => "RSTACK_CASEWORKCTL_BIN",
             Product::Evidence => "RSTACK_EVIDENCECTL_BIN",
+            Product::Messaging => "RSTACK_MESSAGINGCTL_BIN",
         },
     )
 }
@@ -1603,6 +1607,10 @@ fn binaries(product: Product) -> Result<Binaries> {
         Product::Evidence => Binaries {
             tool: product_tool(product)?,
             runtime: binary(product, "RSTACK_EVIDENCE_BIN")?,
+        },
+        Product::Messaging => Binaries {
+            tool: product_tool(product)?,
+            runtime: binary(product, "RSTACK_MESSAGING_BIN")?,
         },
     })
 }

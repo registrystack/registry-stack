@@ -1680,42 +1680,6 @@ formats:
       set: /dates
     securityMembers: []
     restrictingMembers: []
-  - id: casework/dev-clients
-    product: casework
-    title: Casework development clients
-    files: [dev-clients.yaml]
-    syntax: yaml
-    audience: operator
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
-      kind: CaseworkDevClients
-      checkedBy:
-        file: crates/registry-caseworkctl/src/dev/config.rs
-        symbol: DEV_CLIENTS_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
-      kind: CaseworkDevClients
-    schema:
-      path: products/casework/generated/dev-clients/dev-clients.schema.json
-      id: https://id.registrystack.org/schemas/casework/dev-clients/dev-clients.v1alpha1.schema.json
-      origin: generated
-      generator: cargo run -p registry-caseworkctl --features schema --example dev-clients-schema -- --output products/casework/generated
-      driftCheck: crates/registry-caseworkctl/src/schema.rs
-    reader:
-      crate: registry-caseworkctl
-      file: crates/registry-caseworkctl/src/dev/config.rs
-      function: read
-      type: Clients
-    check: caseworkctl check {project}
-    example: products/casework/examples/standalone-decision/dev-clients.yaml
-    conformance:
-      requiredText: /clients/0/id
-      optionalText: none
-      integer: none
-      boolean: none
-    securityMembers: []
-    restrictingMembers: []
   - id: casework/report
     product: casework
     title: caseworkctl --format json output (CaseworkReport)

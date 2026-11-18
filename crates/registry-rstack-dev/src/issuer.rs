@@ -178,6 +178,7 @@ impl Issuer {
                 }
                 Product::Casework => &input.casework_principals[&grant.profile],
                 Product::Evidence => anyhow::bail!("Evidence has no browser application"),
+                Product::Messaging => anyhow::bail!("Messaging has no browser application"),
             };
             ensure!(
                 !matches!(principal.as_str(), "name" | "registry_scopes")

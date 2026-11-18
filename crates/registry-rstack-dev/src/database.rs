@@ -798,10 +798,10 @@ fn validate_run_id(run_id: &str) -> Result<()> {
 }
 
 fn validate_label(label: &str) -> Result<()> {
-    if matches!(label, "breg" | "breg_test" | "casework") {
+    if matches!(label, "breg" | "breg_test" | "casework" | "messaging") {
         Ok(())
     } else {
-        bail!("the database label must be breg, breg_test, or casework")
+        bail!("the database label must be breg, breg_test, casework, or messaging")
     }
 }
 
@@ -1006,7 +1006,7 @@ mod tests {
 
     #[test]
     fn only_owned_database_labels_are_accepted() {
-        for label in ["breg", "breg_test", "casework"] {
+        for label in ["breg", "breg_test", "casework", "messaging"] {
             assert!(validate_label(label).is_ok(), "refused {label}");
         }
         for invalid in ["", "breg-test", "casework_test", "postgres"] {
@@ -1555,7 +1555,12 @@ mod tests {
 
     #[test]
     fn run_object_names_list_every_name_provision_creates() {
-        for (label, spatial) in [("breg", true), ("breg_test", false), ("casework", false)] {
+        for (label, spatial) in [
+            ("breg", true),
+            ("breg_test", false),
+            ("casework", false),
+            ("messaging", false),
+        ] {
             let names = Names::new(RUN_ID, label);
             let mut expected = vec![names.migration_role.clone(), names.runtime_role.clone()];
             if spatial {
@@ -1583,6 +1588,22 @@ mod tests {
             quote_identifier(&names.migration_role)
         )));
         assert!(!sql.contains(&names.runtime_role));
+    }
+
+    #[test]
+    fn messaging_setup_gives_only_migration_role_public_schema_creation() {
+        let names = Names::new(RUN_ID, "messaging");
+        let sql = database_setup_sql(&names, false);
+        assert!(
+            sql.starts_with("REVOKE CREATE ON SCHEMA public FROM PUBLIC;"),
+            "{sql}"
+        );
+        assert!(!sql.contains(&names.runtime_role));
+        assert_eq!(
+            names.database,
+            format!("rstack_{RUN_ID}_messaging"),
+            "the messaging database is run-scoped"
+        );
     }
 
     #[test]

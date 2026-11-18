@@ -15,7 +15,6 @@ use clap::{
 };
 
 mod access;
-mod audit_view;
 mod authored;
 mod authoring;
 mod build;
@@ -102,7 +101,7 @@ enum Command {
     /// Configure progressive relying-party clients and fetch contract candidates.
     #[command(subcommand)]
     Client(client::ClientCommand),
-    /// Manage target access profiles and local caller clients.
+    /// Inspect target access profiles.
     #[command(subcommand)]
     Access(access::AccessCommand),
     /// Generate Registry Evidence deployment key material as owner-only files.
@@ -136,9 +135,6 @@ enum Command {
     Request(request::RequestCommand),
     /// Verify one retained Registry Evidence response offline.
     Verify(verify::VerifyArgs),
-    /// Inspect stopped local audit history.
-    #[command(subcommand)]
-    Audit(audit_view::AuditCommand),
     /// Run the matching Evidence runtime with unchanged arguments and streams; use `runtime -- --help` for its native command tree.
     Runtime(RuntimeArgs),
     /// Advanced: editor and tooling integration surfaces.
@@ -745,7 +741,6 @@ fn run_entry() -> ExitCode {
         ),
         Command::Request(command) => request::run(command),
         Command::Verify(args) => verify::run(args),
-        Command::Audit(command) => audit_view::run(command, format),
         Command::Tooling(command) => tooling::run(command, format),
         Command::DevSupervisor(args) => dev::run_supervisor(args),
         Command::Runtime(_) => unreachable!("runtime bypasses report dispatch"),
@@ -851,7 +846,7 @@ fn write_junit_setup_failure(command: &str, message: &str) {
 /// reached by skipping past the global `--format` flag when it comes first,
 /// so `help --format json` and `--format json help` render the catalog while
 /// a value spelled "help" carried by a later argument, such as the client id
-/// in `access client revoke help`, is never mistaken for a help request.
+/// in `source add help`, is never mistaken for a help request.
 fn help_requested(arguments: &[OsString]) -> bool {
     let passthrough_start = runtime_passthrough_start(arguments);
     let outer_end = passthrough_start.unwrap_or(arguments.len());
@@ -1678,9 +1673,6 @@ mod tests {
         "access profile list",
         "test",
         "package",
-        "access client add",
-        "access client list",
-        "access client revoke",
         "generate identity-facts",
         "keygen signing",
         "keygen secret",
@@ -1700,7 +1692,6 @@ mod tests {
         "dev token",
         "dev grant",
         "dev check",
-        "audit show",
         "source add",
         "source suggest",
         "source diff",
@@ -1920,6 +1911,12 @@ mod tests {
             "eligibility",
             "--name",
             "retained-request",
+            "--evidence-url",
+            "http://127.0.0.1:1",
+            "--header",
+            "@headers",
+            "--runtime-config",
+            "evidence.yaml",
         ];
 
         assert!(Cli::try_parse_from(base).is_ok());
@@ -1953,6 +1950,12 @@ mod tests {
             "eligibility",
             "--name",
             "retained-request",
+            "--evidence-url",
+            "http://127.0.0.1:1",
+            "--header",
+            "@headers",
+            "--runtime-config",
+            "evidence.yaml",
         ];
         for arguments in [
             base.into_iter()
@@ -2717,9 +2720,8 @@ mod tests {
         }
 
         for tokens in [
-            &["--format", "json", "access", "client", "revoke", "help"][..],
             &["--format", "json", "source", "add", "help"][..],
-            &["access", "client", "revoke", "help"][..],
+            &["source", "add", "help"][..],
         ] {
             assert!(
                 !help_requested(&args(tokens)),

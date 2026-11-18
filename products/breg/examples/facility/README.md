@@ -19,11 +19,12 @@ PERSON` and send further requests with `rstack breg api PATH --url BREG_URL --he
 [Run a project with rstack dev](https://docs.registrystack.org/dev/configure/run-a-project-with-rstack-dev/)
 describes the report and token expiry.
 
-The registration scenario retains both Action results in one atomic step as
-`facility` and `assignment`, then reads both records. `captureResults` maps each
-caller-visible Action result alias to the local capture alias later steps use.
-The older `recordType`, `result`, and `capture` form remains available when a
-scenario needs one Action result.
+The `register-facility` scenario in `dev/scenarios.yaml` creates an operator, registers a facility
+and assignment in one atomic Action, captures both result record IDs, reads both records, and
+checks that a caller from another jurisdiction cannot see the facility. Proposal flows are
+exercised by `tests/journeys.yaml`, which `rstack dev start` runs first. In the journeys,
+`captureResults` maps each caller-visible Action result alias to the local capture alias later
+steps use.
 
 The deactivation scenario starts and inspects a draft, edits it, submits the frozen effects,
 and manually applies them as the separately authorized `applier`. No independent
@@ -40,7 +41,7 @@ applies the facility boundary; the direct operator grant does not restrict it.
 checks jurisdiction concealment, edits a no-review Proposal, refuses stale
 submission conditions, and recovers the exact Submit and Apply commands. It
 reads the submitted Proposal as the applier before applying, since lifecycle
-ETags bind the caller and profile. It also checks cancellation. `dev start` runs
+ETags bind the caller and profile. It also checks cancellation. `rstack dev start` runs
 these authored schema tests against its disposable PostgreSQL before serving
 requests.
 

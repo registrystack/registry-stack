@@ -24,7 +24,6 @@ pub(crate) enum ProjectRefusal {
     OutputExists,
     ScopeClaimUnsupported,
     HumanIdentityUnsupported,
-    AuxiliaryInputInvalid(PathBuf),
     FixtureInputInvalid,
     ProjectInputPathInvalid,
     ProjectInputOutside,
@@ -47,13 +46,6 @@ impl std::fmt::Display for ProjectRefusal {
             }
             Self::HumanIdentityUnsupported => {
                 "authentication.oidc.humanIdentity is not claim `registry_actor_kind` with value `human`, which hosted generation does not support yet; set it to those"
-            }
-            Self::AuxiliaryInputInvalid(path) => {
-                return write!(
-                    formatter,
-                    "{} must be a regular file of at most four MiB",
-                    path.display()
-                );
             }
             Self::FixtureInputInvalid => "fixture input must be a regular file",
             Self::ProjectInputPathInvalid => "input must be a normalized relative project path",
@@ -155,49 +147,6 @@ expect:
   outcomes: [confirmed, rejected]
 "#;
 
-pub(super) const STANDALONE_DEV_CLIENTS: &str = r#"# yaml-language-server: $schema=.casework/schemas/dev-clients.schema.json
-# Local callers for `caseworkctl dev`. The pinned local token issuer
-# that `dev` starts beside Casework, registers each client below and issues it
-# short-lived tokens carrying these claims. Each client binds an access
-# profile `casework.yaml` declares, so a first start serves every role in the
-# tutorial without another file. `registry_actor_kind: human` is the claim
-# Casework requires of a person; a Requester is a calling system, so it carries
-# no such claim.
-#
-# `dev` generates a fresh private key per client under
-# `.casework/dev/credentials/`; nothing here is a credential, and none of it
-# belongs in a deployment.
-apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
-kind: CaseworkDevClients
-clients:
-  - id: administrator
-    accessProfile: administrator
-    scopes: [casework:admin]
-    claims:
-      registry_actor_kind: human
-  - id: supervisor
-    accessProfile: supervisor
-    scopes: [casework:supervisor]
-    claims:
-      registry_actor_kind: human
-  - id: staff
-    accessProfile: staff
-    scopes: [casework:staff]
-    claims:
-      registry_actor_kind: human
-  - id: requester
-    accessProfile: requester
-    scopes: [casework:request]
-# The directory `dev` seeds as an Administrator on the first start, so
-# `caseworkctl doctor` reports ready and the inbox opens. Every queue
-# `casework.yaml` declares needs a team serving it.
-directory:
-  - team: decisions-team
-    queue: decisions
-    staff: [staff]
-    supervisors: [supervisor]
-"#;
-
 pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     if !crate::templates::TEMPLATE_NAMES.contains(&template) {
         bail!("unknown template; use caseworkctl init --help to list available templates");
@@ -211,8 +160,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     fs::create_dir_all(parent)?;
     let stage = tempfile::tempdir_in(parent)?;
     fs::create_dir_all(stage.path().join("fixtures"))?;
-    // Init owns this fresh staging directory. Dev later stores credentials
-    // under .casework and requires its parent to be owner-only from creation.
+    // Init owns this fresh staging directory and creates .casework owner-only.
     {
         use std::os::unix::fs::DirBuilderExt;
         fs::DirBuilder::new()
@@ -272,24 +220,6 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
             STANDALONE_FIXTURE,
         )?;
     }
-    let approval_clients = if approval_pattern {
-        Some(format!(
-            "# yaml-language-server: $schema=.casework/schemas/dev-clients.schema.json\n{}",
-            serde_norway::to_string(&crate::templates::approval_dev_clients(template)?)?
-        ))
-    } else {
-        None
-    };
-    fs::write(
-        stage.path().join("dev-clients.yaml"),
-        if let Some(clients) = approval_clients.as_deref() {
-            clients
-        } else if canonical_review {
-            include_str!("../../../products/casework/examples/canonical-review/dev-clients.yaml")
-        } else {
-            STANDALONE_DEV_CLIENTS
-        },
-    )?;
     let absolute = std::path::absolute(project)?;
     let runtime = json!({"apiVersion":"id.registrystack.org/formats/casework/runtime/v1alpha1","kind":"CaseworkRuntimeConfig",
         "identity":{"databaseId":"casework-example"},"package":{"root":absolute.join(LOCAL_PACKAGE_DIRECTORY)},
@@ -326,12 +256,6 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
             include_str!("../../../products/casework/generated/runtime/runtime.schema.json"),
         ),
         (
-            "dev-clients.schema.json",
-            include_str!(
-                "../../../products/casework/generated/dev-clients/dev-clients.schema.json"
-            ),
-        ),
-        (
             "fixture.schema.json",
             include_str!("../../../products/casework/generated/fixture/fixture.schema.json"),
         ),
@@ -341,13 +265,13 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     fs::write(
         stage.path().join(".vscode/settings.json"),
         serde_json::to_vec_pretty(
-            &json!({"yaml.schemas":{"./.casework/schemas/project.schema.json":"casework.yaml","./.casework/schemas/runtime.schema.json":"runtime.example.yaml","./.casework/schemas/dev-clients.schema.json":"dev-clients.yaml","./.casework/schemas/fixture.schema.json":"fixtures/*.yaml"}}),
+            &json!({"yaml.schemas":{"./.casework/schemas/project.schema.json":"casework.yaml","./.casework/schemas/runtime.schema.json":"runtime.example.yaml","./.casework/schemas/fixture.schema.json":"fixtures/*.yaml"}}),
         )?,
     )?;
     load_and_check_policy(stage.path())?;
     fs::rename(stage.path(), project)?;
     Ok(
-        json!({"ok":true,"command":"init","created":project,"template":template,"next":if canonical_review { "Run caseworkctl check, then pair the BReg provider and configure source transport before caseworkctl dev start." } else { "Run caseworkctl check, test and types, then caseworkctl dev start." }}),
+        json!({"ok":true,"command":"init","created":project,"template":template,"next":if canonical_review { "Run caseworkctl check, then pair the BReg provider and configure source transport. Write a dev.yaml plan beside casework.yaml and run rstack dev start." } else { "Run caseworkctl check, test and types. Write a dev.yaml plan beside casework.yaml and run rstack dev start." }}),
     )
 }
 
@@ -417,31 +341,6 @@ fn check_impl(project: &Path, production: bool, deny_warnings: bool) -> Result<V
         registry_casework_core::CaseworkProject::schema_references("casework.yaml", &policy_bytes)?
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>();
-    for (relative, is_state) in [
-        ("dev-clients.yaml", false),
-        (".casework/dev/state.json", true),
-    ] {
-        let path = project.join(relative);
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error.into()),
-        };
-        if !metadata.file_type().is_file() || metadata.len() > 4 * 1024 * 1024 {
-            return Err(ProjectRefusal::AuxiliaryInputInvalid(path).into());
-        }
-        let bytes = fs::read(&path)?;
-        let shown = path.display().to_string();
-        if is_state {
-            diagnostics.extend(crate::dev::check_state(&shown, &bytes));
-        } else {
-            match crate::dev::config::read_against(&shown, &bytes, &policy) {
-                Ok(decoded) => diagnostics.extend(decoded.document.warnings()),
-                Err(refused) => diagnostics.extend(refused),
-            }
-        }
-        files_checked.insert(relative.to_owned());
-    }
     check_holiday_sets(project, &mut files_checked, &mut diagnostics)?;
     if production {
         for provider in &policy.context_providers {
@@ -1196,15 +1095,6 @@ mod display_integrity_tests {
         std::os::unix::fs::symlink(project.join("casework.yaml"), &fixture).unwrap();
         assert_typed_authoring_refusal(
             test(&project, false).expect_err("a fixture symlink is not an authored file"),
-        );
-
-        let project = root.path().join("auxiliary");
-        init(&project, "standalone-decision").unwrap();
-        fs::remove_file(project.join("dev-clients.yaml")).unwrap();
-        fs::create_dir(project.join("dev-clients.yaml")).unwrap();
-        assert_typed_authoring_refusal(
-            check(&project, false, false)
-                .expect_err("an auxiliary authored input must be a bounded file"),
         );
     }
 

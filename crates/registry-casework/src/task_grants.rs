@@ -1311,11 +1311,7 @@ mod wire_tests {
 }
 
 #[cfg(all(test, feature = "postgres-test"))]
-mod dev_session_logs;
-#[cfg(all(test, feature = "postgres-test"))]
 mod http_tests;
-#[cfg(all(test, feature = "postgres-test"))]
-mod local_session_tests;
 #[cfg(all(test, feature = "postgres-test"))]
 mod lock_order_tests;
 #[cfg(all(test, feature = "postgres-test"))]

@@ -3,8 +3,10 @@
 //! The Evidence runtime supplies trusted local relying-procedure metadata and
 //! exact pinned subject bindings without making an authorization decision. The
 //! relying-party client owns the request, nonce, and retained verification
-//! context. The retained local issuer separately supplies the bearer used by
-//! the tutorial's curl.
+//! context. The caller supplies the Evidence URL and an owner-only header file
+//! holding the bearer, such as the one `rstack dev token` writes. The same
+//! bearer is read once to discover the requester's definitions and is retained
+//! for the tutorial's curl.
 
 use std::{
     collections::BTreeMap,
@@ -21,8 +23,9 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::{ArgGroup, Args, Subcommand, ValueEnum};
 use registry_evidence_client::{
     AssuranceProfile, AudienceScopedRequest, EvidenceClient, EvidenceClientConfig,
-    EvidenceRequestSpec, EvidenceResponseFormat, ExpectedOutputDocument, ExpectedSubjectDocument,
-    JwksDocument, SelectorValue, StaticToken, SubjectExpectations, SubjectRequest,
+    EvidenceDefinition, EvidenceRequestSpec, EvidenceResponseFormat, ExpectedOutputDocument,
+    ExpectedSubjectDocument, JwksDocument, NonVerifyingEvidenceClient, SelectorValue,
+    SelectorValueOrigin, StaticToken, SubjectExpectations, SubjectRequest,
 };
 use registry_platform_crypto::canonicalize_json;
 use serde::{Deserialize, Serialize};
@@ -31,6 +34,7 @@ use zeroize::{Zeroize as _, Zeroizing};
 use crate::{
     access,
     dev::{self, ReadyDevState},
+    evidence_binary,
 };
 
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
@@ -40,6 +44,7 @@ const PRIVATE_FILE_MODE: u32 = 0o600;
 // that the profile legitimately permits.
 const MAX_SELECTOR_VALUE_BYTES: usize = 8 * 1024;
 const MAX_SUBJECTS_FILE_BYTES: u64 = 16 * 1024;
+const MAX_HEADER_FILE_BYTES: u64 = 8 * 1024;
 const MAX_CONTEXT_BYTES: u64 = 256 * 1024;
 const LOCAL_PROCEDURE_INPUT_SCHEMA_V1: &str = "registry.evidence.local-relying-procedure-input/v1";
 const LOCAL_PROCEDURE_SCHEMA_V1: &str = "registry.evidence.local-relying-procedure/v1";
@@ -87,9 +92,32 @@ pub struct PrepareArgs {
     #[arg(long)]
     name: String,
 
-    /// Registered local application used to request authorization.
-    #[arg(long)]
-    client: Option<String>,
+    /// Registry Evidence origin that receives the request.
+    #[arg(
+        long,
+        value_name = "URL",
+        required_unless_present = "profile",
+        conflicts_with = "profile"
+    )]
+    evidence_url: Option<String>,
+
+    /// Owner-only file holding the `Authorization: Bearer` header, such as the one `rstack dev token` writes.
+    #[arg(
+        long,
+        value_name = "@FILE",
+        required_unless_present = "profile",
+        conflicts_with = "profile"
+    )]
+    header: Option<String>,
+
+    /// Evidence runtime configuration that pins the signer's public key and the subject bindings.
+    #[arg(
+        long,
+        value_name = "PATH",
+        required_unless_present = "profile",
+        conflicts_with = "profile"
+    )]
+    runtime_config: Option<PathBuf>,
 
     /// Response format to request and verify.
     #[arg(
@@ -226,9 +254,62 @@ struct SubjectInput {
     value: ProgressiveSelectorValue,
 }
 
+/// One definition the requester may use, read from Evidence discovery.
+struct DefinitionShape {
+    handle: String,
+    requirement_uri: String,
+    purpose: String,
+    subjects: Vec<SubjectShape>,
+}
+
+struct SubjectShape {
+    role: String,
+    selectors: Vec<SelectorShape>,
+}
+
+struct SelectorShape {
+    profile: String,
+    fields: Vec<String>,
+}
+
+impl DefinitionShape {
+    fn from_discovery(definition: &EvidenceDefinition) -> Result<Self> {
+        let subjects = definition
+            .subjects
+            .iter()
+            .map(|subject| {
+                if subject.selector.value_origin != SelectorValueOrigin::Request {
+                    bail!(
+                        "definition `{}` takes subject values from the authenticated caller; prepare it with an application profile",
+                        definition.handle
+                    );
+                }
+                Ok(SubjectShape {
+                    role: subject.role.clone(),
+                    selectors: vec![SelectorShape {
+                        profile: subject.selector.profile.clone(),
+                        fields: subject
+                            .selector
+                            .fields
+                            .iter()
+                            .map(|field| field.name().to_owned())
+                            .collect(),
+                    }],
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            handle: definition.handle.clone(),
+            requirement_uri: definition.requirement.clone(),
+            purpose: definition.purpose.clone(),
+            subjects,
+        })
+    }
+}
+
 struct ValidatedSubject<'a> {
-    definition: &'a dev::ReadySubjectState,
-    selector: &'a crate::authoring::CompiledSelector,
+    definition: &'a SubjectShape,
+    selector: &'a SelectorShape,
     values: BTreeMap<String, SelectorValue>,
 }
 
@@ -278,7 +359,7 @@ fn prepare(args: PrepareArgs) -> Result<ExitCode> {
 
 fn prepare_progressive(args: PrepareArgs) -> Result<ExitCode> {
     validate_request_name(&args.name)?;
-    if args.client.is_some() || args.purpose.is_some() {
+    if args.purpose.is_some() {
         bail!("progressive preparation accepts profile, requirement, and subject fields");
     }
     let profile = args
@@ -512,48 +593,64 @@ fn progressive_curl_config(
 
 fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
     validate_request_name(&args.name)?;
-    let ready = dev::load_ready_state(&args.project)?;
-    let (definition, subjects) = validate_closed_inputs(&ready, &args)?;
-    let client = resolve_request_client(&ready, args.client.as_deref())?;
-    let evidence = dev::resolve_tool_binary(
-        "evidence",
-        args.evidence_bin.as_deref(),
-        "EVIDENCECTL_TEST_EVIDENCE_BIN",
-    )?;
+    let (evidence_url, header, runtime) = match (
+        args.evidence_url.as_deref(),
+        args.header.as_deref(),
+        args.runtime_config.as_deref(),
+    ) {
+        (Some(evidence_url), Some(header), Some(runtime)) => (evidence_url, header, runtime),
+        _ => bail!("--evidence-url, --header, and --runtime-config are required"),
+    };
+    let project = fs::canonicalize(&args.project).context("the request project is unavailable")?;
+    let evidence_origin =
+        url::Url::parse(evidence_url).context("--evidence-url is not a valid URL")?;
+    let token = read_bearer_header(header)?;
+    let token_provider = Arc::new(
+        StaticToken::new(token.as_str().to_owned())
+            .context("the header file holds an unusable token")?,
+    );
+    let runtime_threads = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to start the Evidence discovery runtime")?;
+    let catalog = {
+        let discovery =
+            NonVerifyingEvidenceClient::new(EvidenceClientConfig::without_verification(
+                evidence_origin.clone(),
+                token_provider.clone(),
+            ))
+            .context("the Evidence discovery client is invalid")?;
+        runtime_threads
+            .block_on(discovery.discover())
+            .context("Evidence definition discovery failed")?
+    };
+    catalog
+        .validate_for_request()
+        .context("Evidence published an invalid definitions document")?;
+    let definitions = catalog
+        .definitions
+        .iter()
+        .map(DefinitionShape::from_discovery)
+        .collect::<Result<Vec<_>>>()?;
+    let audience = catalog.audience.as_str();
+    let (definition, subjects) = validate_closed_inputs(&definitions, &args)?;
+    let evidence = evidence_binary::resolve(args.evidence_bin.as_deref())?;
 
-    let requests_root = ensure_requests_root(&ready.project)?;
+    let requests_root = ensure_requests_root(&project)?;
     let destination = requests_root.join(&args.name);
     require_absent(&destination)?;
     let mut staging = StagingDirectory::create(&requests_root)?;
 
-    let procedure_input = local_procedure_input(
-        definition,
-        &subjects,
-        &client.evidence_audience,
-        args.format,
-    );
+    let procedure_input = local_procedure_input(definition, &subjects, audience, args.format);
     let procedure_input_path = staging.path().join("procedure-input.json");
     let procedure_input = canonicalize_json(&serde_json::to_value(procedure_input)?)
         .context("failed to serialize the local relying procedure input")?;
     write_private_bytes(&procedure_input_path, &procedure_input)?;
-    let procedure =
-        prepare_local_relying_procedure(&evidence, &ready.runtime_path, &procedure_input_path)?;
+    let procedure = prepare_local_relying_procedure(&evidence, runtime, &procedure_input_path)?;
     fs::remove_file(&procedure_input_path)
         .context("failed to remove the private relying procedure input")?;
-    validate_local_relying_procedure(
-        &procedure,
-        definition,
-        &client.evidence_audience,
-        args.format,
-    )?;
+    validate_local_relying_procedure(&procedure, definition, audience, args.format)?;
 
-    let token = dev::obtain_issuer_token(&ready, &client.client_id, &client.private_key_path)?;
-    let token_provider = Arc::new(
-        StaticToken::new(token.as_str().to_owned())
-            .context("the local issuer returned an unusable token")?,
-    );
-    let evidence_origin =
-        url::Url::parse(&ready.evidence_origin).context("the active Evidence origin is invalid")?;
     let client_config = EvidenceClientConfig::new(
         evidence_origin,
         token_provider,
@@ -601,41 +698,75 @@ fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Read the bearer token from an `--header @FILE` argument. The file must be an
+/// owner-only regular file with exactly one `Authorization: Bearer` line, so the
+/// token never appears in the process list and no other header is forwarded.
+fn read_bearer_header(argument: &str) -> Result<Zeroizing<String>> {
+    let path = argument
+        .strip_prefix('@')
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| {
+            anyhow!("--header takes @FILE so the token stays out of the process list")
+        })?;
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(std::io::Error::from)
+    .context("failed to open the header file")?;
+    let mut file = File::from(descriptor);
+    validate_private_file(Path::new(path), &file, 1, MAX_HEADER_FILE_BYTES)
+        .context("the header file must be an owner-only regular file")?;
+    let mut bytes = Zeroizing::new(Vec::new());
+    std::io::Read::by_ref(&mut file)
+        .take(MAX_HEADER_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .context("failed to read the header file")?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| anyhow!("the header file is not text"))?;
+    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+    let line = lines
+        .next()
+        .ok_or_else(|| anyhow!("the header file is empty"))?;
+    if lines.next().is_some() {
+        bail!("the header file must hold exactly one Authorization header");
+    }
+    let (name, value) = line.split_once(':').ok_or_else(|| {
+        anyhow!("the header file must hold an `Authorization: Bearer TOKEN` line")
+    })?;
+    let token = value
+        .trim()
+        .strip_prefix("Bearer ")
+        .map(str::trim)
+        .filter(|token| name.trim().eq_ignore_ascii_case("authorization") && !token.is_empty())
+        .ok_or_else(|| {
+            anyhow!("the header file must hold an `Authorization: Bearer TOKEN` line")
+        })?;
+    Ok(Zeroizing::new(token.to_owned()))
+}
+
 struct RequestClient {
     client_id: String,
     private_key_path: PathBuf,
-    evidence_audience: String,
 }
 
-fn resolve_request_client(ready: &ReadyDevState, client_id: Option<&str>) -> Result<RequestClient> {
-    match client_id {
-        Some(client_id) => {
-            if ready.access_profiles.is_empty() {
-                bail!("--client requires an active generation with explicit access profiles");
-            }
-            let profile_digests = ready
-                .access_profiles
-                .iter()
-                .map(|policy| (policy.id.clone(), policy.digest.clone()))
-                .collect::<BTreeMap<_, _>>();
-            let client = access::resolve_ready_client(&ready.project, client_id, &profile_digests)?;
-            Ok(RequestClient {
-                client_id: client.client_id,
-                private_key_path: client.private_key_path,
-                evidence_audience: client.evidence_audience,
-            })
-        }
-        None => {
-            let caller = ready.caller.as_ref().ok_or_else(|| {
-                anyhow!("the active project requires a registered client selected with --client")
-            })?;
-            Ok(RequestClient {
-                client_id: caller.client_id.clone(),
-                private_key_path: caller.private_key_path.clone(),
-                evidence_audience: caller.evidence_audience.clone(),
-            })
-        }
+fn resolve_request_client(ready: &ReadyDevState, client_id: &str) -> Result<RequestClient> {
+    if ready.access_profiles.is_empty() {
+        bail!("--client requires an active generation with explicit access profiles");
     }
+    let profile_digests = ready
+        .access_profiles
+        .iter()
+        .map(|policy| (policy.id.clone(), policy.digest.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let client = access::resolve_ready_client(&ready.project, client_id, &profile_digests)?;
+    Ok(RequestClient {
+        client_id: client.client_id,
+        private_key_path: client.private_key_path,
+    })
 }
 
 /// Resolve one active local Evidence client for the raw API command. The
@@ -653,23 +784,22 @@ fn local_api_connection_inner(
     client_id: &str,
 ) -> Result<registry_cli_api::LocalConnection> {
     let ready = dev::load_ready_state(project)?;
-    let client = resolve_request_client(&ready, Some(client_id))?;
+    let client = resolve_request_client(&ready, client_id)?;
     let token = dev::obtain_issuer_token(&ready, &client.client_id, &client.private_key_path)?;
     registry_cli_api::LocalConnection::bearer(ready.evidence_origin, token)
         .map_err(|error| anyhow!(error.to_string()))
 }
 
 fn validate_closed_inputs<'a>(
-    ready: &'a ReadyDevState,
+    definitions: &'a [DefinitionShape],
     args: &PrepareArgs,
-) -> Result<(&'a dev::ReadyDefinitionState, Vec<ValidatedSubject<'a>>)> {
-    let definition = ready
-        .definitions
+) -> Result<(&'a DefinitionShape, Vec<ValidatedSubject<'a>>)> {
+    let definition = definitions
         .iter()
-        .find(|definition| args.definition.as_deref() == Some(definition.alias.as_str()))
-        .ok_or_else(|| anyhow!("definition does not match the active local project"))?;
+        .find(|definition| args.definition.as_deref() == Some(definition.handle.as_str()))
+        .ok_or_else(|| anyhow!("definition does not match the definitions Evidence published"))?;
     if args.purpose.as_deref() != Some(definition.purpose.as_str()) {
-        bail!("purpose does not match the active local tutorial definition");
+        bail!("purpose does not match the published definition");
     }
     let inputs = load_subject_inputs(args, definition)?;
     let mut grouped: BTreeMap<String, Vec<SubjectInput>> = BTreeMap::new();
@@ -693,7 +823,7 @@ fn validate_closed_inputs<'a>(
         }
         let selector = match profile {
             Some(profile) => definition.selectors.iter().find(|selector| selector.profile == profile)
-                .ok_or_else(|| anyhow!("subject profile does not match the active local definition"))?,
+                .ok_or_else(|| anyhow!("subject profile does not match the published definition"))?,
             None if definition.selectors.len() == 1 => &definition.selectors[0],
             None => bail!("subject alternatives require an explicit profile in --subjects-file or role@profile:field=value"),
         };
@@ -722,7 +852,7 @@ fn validate_closed_inputs<'a>(
 
 fn load_subject_inputs(
     args: &PrepareArgs,
-    definition: &dev::ReadyDefinitionState,
+    definition: &DefinitionShape,
 ) -> Result<Vec<SubjectInput>> {
     match (&args.subjects_file, args.subject.is_empty()) {
         (Some(path), true) => read_subject_inputs(path),
@@ -735,10 +865,7 @@ fn load_subject_inputs(
     }
 }
 
-fn parse_subject_argument(
-    input: &str,
-    definition: &dev::ReadyDefinitionState,
-) -> Result<SubjectInput> {
+fn parse_subject_argument(input: &str, definition: &DefinitionShape) -> Result<SubjectInput> {
     let (binding, value) = input
         .split_once('=')
         .filter(|(_, value)| !value.contains('='))
@@ -828,7 +955,7 @@ fn validate_request_name(name: &str) -> Result<()> {
 }
 
 fn local_procedure_input<'a>(
-    definition: &'a dev::ReadyDefinitionState,
+    definition: &'a DefinitionShape,
     subjects: &'a [ValidatedSubject<'a>],
     audience: &'a str,
     response_format: PreparedResponseFormat,
@@ -903,7 +1030,7 @@ fn prepare_local_relying_procedure(
 
 fn validate_local_relying_procedure(
     procedure: &LocalRelyingProcedure,
-    definition: &dev::ReadyDefinitionState,
+    definition: &DefinitionShape,
     audience: &str,
     response_format: PreparedResponseFormat,
 ) -> Result<()> {
@@ -1196,47 +1323,38 @@ mod tests {
             subject: subject.into_iter().map(str::to_owned).collect(),
             subjects_file,
             name: "request".to_owned(),
-            client: None,
+            evidence_url: None,
+            header: None,
+            runtime_config: None,
             format: PreparedResponseFormat::SignedJws,
             project: PathBuf::from("."),
             evidence_bin: None,
         }
     }
 
-    fn selector_ready_state() -> ReadyDevState {
-        ReadyDevState {
-            project: PathBuf::from("/tmp/project"),
-            runtime_path: PathBuf::from("/tmp/runtime.yaml"),
-            evidence_origin: "http://127.0.0.1:8080".to_owned(),
-            issuer_origin: "http://127.0.0.1:8081".to_owned(),
-            token_url: "http://127.0.0.1:8081/oauth2/token".to_owned(),
-            access_token_audience: "local".to_owned(),
-            caller: None,
-            access_profiles: vec![],
-            definitions: vec![dev::ReadyDefinitionState {
-                alias: "marker".to_owned(),
-                requirement_uri: "urn:example:marker".to_owned(),
-                purpose: "check".to_owned(),
-                concepts: vec![],
-                subjects: vec![dev::ReadySubjectState {
-                    role: "record".to_owned(),
-                    selectors: vec![
-                        crate::authoring::CompiledSelector {
-                            profile: "by-code".to_owned(),
-                            fields: vec!["code".to_owned()],
-                        },
-                        crate::authoring::CompiledSelector {
-                            profile: "by-code-and-region".to_owned(),
-                            fields: vec!["code".to_owned(), "region".to_owned()],
-                        },
-                        crate::authoring::CompiledSelector {
-                            profile: "by-secondary-code".to_owned(),
-                            fields: vec!["code".to_owned()],
-                        },
-                    ],
-                }],
+    fn selector_definitions() -> Vec<DefinitionShape> {
+        vec![DefinitionShape {
+            handle: "marker".to_owned(),
+            requirement_uri: "urn:example:marker".to_owned(),
+            purpose: "check".to_owned(),
+            subjects: vec![SubjectShape {
+                role: "record".to_owned(),
+                selectors: vec![
+                    SelectorShape {
+                        profile: "by-code".to_owned(),
+                        fields: vec!["code".to_owned()],
+                    },
+                    SelectorShape {
+                        profile: "by-code-and-region".to_owned(),
+                        fields: vec!["code".to_owned(), "region".to_owned()],
+                    },
+                    SelectorShape {
+                        profile: "by-secondary-code".to_owned(),
+                        fields: vec!["code".to_owned()],
+                    },
+                ],
             }],
-        }
+        }]
     }
 
     fn local_selector_args(subjects: Vec<&str>) -> PrepareArgs {
@@ -1250,7 +1368,7 @@ mod tests {
 
     #[test]
     fn local_request_selects_one_explicit_composite_profile_and_preserves_types() {
-        let ready = selector_ready_state();
+        let ready = selector_definitions();
         let args = local_selector_args(vec![
             "record@by-code-and-region:code=A",
             "record@by-code-and-region:region=7",
@@ -1290,8 +1408,8 @@ mod tests {
 
     #[test]
     fn local_request_shorthand_keeps_numeric_identifiers_as_strings() {
-        let mut ready = selector_ready_state();
-        ready.definitions[0].subjects[0].selectors.truncate(1);
+        let mut ready = selector_definitions();
+        ready[0].subjects[0].selectors.truncate(1);
         let args = local_selector_args(vec!["code=00123"]);
         let (definition, subjects) = validate_closed_inputs(&ready, &args).unwrap();
         let input = serde_json::to_value(local_procedure_input(
@@ -1306,7 +1424,7 @@ mod tests {
 
     #[test]
     fn local_request_uses_the_explicit_profile_when_shapes_overlap() {
-        let ready = selector_ready_state();
+        let ready = selector_definitions();
         let args = local_selector_args(vec!["record@by-secondary-code:code=A"]);
         let (definition, subjects) = validate_closed_inputs(&ready, &args).unwrap();
         let input = serde_json::to_value(local_procedure_input(

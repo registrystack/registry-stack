@@ -951,7 +951,6 @@ mod tests {
             loaded(&directory, ProductKind::Casework),
             BTreeSet::from([
                 "casework.yaml".to_owned(),
-                "dev-clients.yaml".to_owned(),
                 "fixtures/review.yml".to_owned(),
                 "holiday-sets/office.yaml".to_owned(),
                 "runtime.yaml".to_owned(),

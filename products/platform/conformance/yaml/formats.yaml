@@ -50,10 +50,6 @@ formats:
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: fixtures/standalone-decision.yaml}
   casework/holiday-set:
     project: products/casework/examples/multi-stage-routing-clocks
-  casework/dev-clients:
-    removedKeys:
-      - /version
-    init: {command: "caseworkctl init --template standalone-decision {directory}", file: dev-clients.yaml}
   casework/runtime:
     retiredApiVersions:
       - registry.registrystack.org/casework-runtime/v1alpha1

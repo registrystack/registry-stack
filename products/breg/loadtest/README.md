@@ -2,9 +2,9 @@
 
 A local environment for measuring Base Registry Engine with the
 `business-establishments` acceptance fixture. The launcher delegates the whole
-service lifecycle to `bregctl dev`: its pinned PostgreSQL 17 container, stock
-ThunderID 1.0.1 issuer, package rehearsal and activation, credentials, retained
-state, and supervised BReg process. Load evidence and deterministic synthetic
+service lifecycle to `rstack dev`: its managed PostgreSQL container, local
+issuer, package activation, credentials, retained run state, and supervised BReg
+process. The generated `dev.yaml` has one person and no scenarios. Load evidence and deterministic synthetic
 seed data live under `loadtest/.run` and are never committed.
 
 The acceptance fixture's alternate no-purpose schema-test step is omitted from
@@ -14,7 +14,7 @@ proof. The load client carries the ordinary `business-operator` claims used by
 the remaining journey and workload.
 
 The external projection scale fixture is separate. It runs paired candidate
-binaries against its own PostgreSQL databases rather than this `bregctl dev`
+binaries against its own PostgreSQL databases rather than this `rstack dev`
 environment; see [external-views/SCALE.md](external-views/SCALE.md).
 
 ## Prerequisites
@@ -22,7 +22,7 @@ environment; see [external-views/SCALE.md](external-views/SCALE.md).
 - `cargo`, `docker`, `python3`
 - `k6` (`brew install k6`)
 
-`up.sh` builds `breg` and `bregctl` with the release profile, because latency
+`up.sh` builds `breg`, `bregctl` and `rstack` with the release profile, because latency
 and capacity from an unoptimized build are not representative. `up.sh --debug`
 builds the development profile instead, for iterating on the harness itself;
 every run manifest records which profile was measured. On macOS the build goes
@@ -55,8 +55,8 @@ so a seed that stops early resumes when rerun with the same `--count` and
 records unaccounted for; run `down.sh` and start a fresh environment instead.
 
 `up.sh` refuses any existing `.run` path and does not clear it. `down.sh` first
-validates the launcher's ownership marker, then calls `bregctl dev stop
---remove` for that exact project. It retains the load evidence and synthetic
+validates the launcher's ownership marker, then calls `rstack dev stop` for
+the run recorded in `.run/env.json`. It retains the load evidence and synthetic
 seed files. Move the stopped `.run` directory aside before starting another
 environment.
 
@@ -86,8 +86,8 @@ selection uses a deterministic per-VU PRNG (`RANDOM_SEED=20260902` by default).
 
 The harness deliberately does not benchmark ThunderID. Token-soak and
 coordinated issuer-herd profiles measure the external issuer rather than BReg
-capacity, so they are outside this harness. Before every k6 process, `run.sh` calls `bregctl dev token
-loadtest-driver PROJECT`, validates its reported owner-only header file, and
+capacity, so they are outside this harness. Before every k6 process, `run.sh` calls `rstack dev token RUN
+--as loadtest-driver`, validates its reported owner-only header file, and
 gives k6 only that path. Each k6 invocation must fit within four minutes so the
 single short-lived development token remains usable. Sweep obtains a fresh
 token for its warmup and for every independent hold.
@@ -152,7 +152,7 @@ per-statement timings.
 The harness never saves bearer tokens, assertion keys, cursors, source records,
 raw principals, request/response bodies, audit payloads, SQL text, or bound SQL
 values. The only authorization file is the owner-only header managed by
-`bregctl dev` inside the project's ignored private state.
+`rstack dev` inside the run's state directory, `.run/state`.
 
 ## Database diagnostics
 

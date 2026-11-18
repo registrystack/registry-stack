@@ -155,6 +155,9 @@ DOCUMENTS_POSTGRES_PACKAGES = DOCUMENTS_PACKAGES | {"registry-render"}
 # through the affected closure.
 EVIDENCE_POSTGRES_PACKAGES = frozenset({"registry-evidence", "registry-evidence-oid4vci"})
 STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
+# The BReg harnesses and the Adapter GovStack journey start their services with
+# `rstack dev`, so a change to it runs them.
+RSTACK_DEV_HARNESS_PACKAGES = frozenset({"registry-rstack", "registry-rstack-dev"})
 # The product CLIs that link registry-rstack-dev and host `rstack dev`. The
 # registry-rstack dev_run tests drive the hosts built beside rstack, so a
 # change to either host runs them; the shard builds both before it tests.
@@ -565,15 +568,16 @@ ASSEMBLED_PYTHON_CLIENT_PACKAGES = frozenset(
     package for package in NATIVE_BINDING_PACKAGES if package.endswith("-client-py")
 )
 
-# The gate builds and runs the registry, the tool that applies its package, and
-# issuer tooling, because the `bregctl dev` session the tutorial starts issues
-# the operator token the reader's first authenticated call carries. The client
+# The gate builds and runs the registry, the tool that applies its package,
+# `rstack dev` and issuer tooling, because the `rstack dev` run the tutorial
+# starts issues the operator token the reader's first authenticated call
+# carries. The client
 # tutorial installs the unified Node.js and Python packages, which the runner
 # assembles from every product's native binding, so a change to any binding
 # changes what the replay imports, whichever product it belongs to.
 BREG_TUTORIAL_PACKAGES = frozenset(
     {"registry-breg", "registry-bregctl", "registry-thunderid-tooling"}
-) | NATIVE_BINDING_PACKAGES
+) | RSTACK_DEV_HARNESS_PACKAGES | NATIVE_BINDING_PACKAGES
 
 # The gate builds and runs exactly these: the Casework runtime, the tool that
 # starts and seeds the local session, and issuer tooling, because every call the
@@ -1404,7 +1408,6 @@ def classify(
             # from these schemas.
             "products/casework/generated/project/*",
             "products/casework/generated/fixture/*",
-            "products/casework/generated/dev-clients/*",
             "products/casework/generated/holiday-set/*",
             "products/casework/generated/runtime/*",
             # The configuration files reference page is generated from the
@@ -1560,6 +1563,7 @@ def classify(
     breg_contracts = (
         registry_record_cross_product
         or bool(affected & BREG_PACKAGES)
+        or bool(affected & RSTACK_DEV_HARNESS_PACKAGES)
         or bool(affected & (CASEWORK_PACKAGES | {"registry-mcp", "registry-mcp-edge"}))
         or "registry-evidence" in affected
         or any(
@@ -1612,7 +1616,9 @@ def classify(
         "messaging_postgres": bool(affected & MESSAGING_PACKAGES),
         "documents_contracts": bool(affected & DOCUMENTS_PACKAGES),
         "documents_postgres": bool(affected & DOCUMENTS_POSTGRES_PACKAGES),
-        "adapter_contracts": bool(affected & ADAPTER_PACKAGES),
+        "adapter_contracts": bool(
+            affected & (ADAPTER_PACKAGES | RSTACK_DEV_HARNESS_PACKAGES)
+        ),
         "coordinator": "registry-coordinator" in affected,
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,

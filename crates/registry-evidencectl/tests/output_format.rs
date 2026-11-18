@@ -36,7 +36,19 @@ const HUMAN_ONLY_COMMANDS: &[(&str, &[&str])] = &[
     ("source detach", &["source", "detach", "records"]),
     (
         "request prepare",
-        &["request", "prepare", "question", "--name", "request"],
+        &[
+            "request",
+            "prepare",
+            "question",
+            "--name",
+            "request",
+            "--evidence-url",
+            "http://127.0.0.1:1",
+            "--header",
+            "@headers",
+            "--runtime-config",
+            "evidence.yaml",
+        ],
     ),
     (
         "verify",
@@ -149,17 +161,6 @@ fn help_text(arguments: &[&str]) -> String {
 fn migrated_json_commands_answer_one_json_document() {
     let cases: &[&[&str]] = &[
         &["access", "profile", "list"],
-        &[
-            "access",
-            "client",
-            "add",
-            "client",
-            "--access-profile",
-            "consumer",
-            "--generate-local-key",
-        ],
-        &["access", "client", "list"],
-        &["access", "client", "revoke", "client"],
         &["keygen", "secret", "--output", "secret"],
         &["jwks", "--output", "jwks.json", "public.jwk"],
         &["source", "suggest", "--openapi", "source.openapi.yaml"],
@@ -203,23 +204,15 @@ fn migrated_json_commands_answer_one_json_document() {
 fn a_help_spelled_value_is_not_mistaken_for_the_help_catalog() {
     let directory = tempfile::tempdir().expect("temporary working directory");
     let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
-        .args([
-            "--format",
-            "json",
-            "access",
-            "client",
-            "revoke",
-            "help",
-            "--project",
-        ])
-        .arg(directory.path())
+        .args(["--format", "json", "source", "detach", "help"])
+        .current_dir(directory.path())
         .output()
         .expect("run evidencectl");
 
     assert_ne!(
         output.status.code(),
         Some(0),
-        "a client named `help` cannot be revoked in an empty project, so this must not succeed"
+        "a source named `help` cannot be detached in an empty project, so this must not succeed"
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(

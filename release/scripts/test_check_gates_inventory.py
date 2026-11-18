@@ -283,7 +283,7 @@ class GateInventoryTest(unittest.TestCase):
         mutations = {
             "added production path": config + '  - "crates/registry-breg/src/**"\n',
             "removed entry": config.replace(
-                "  - crates/registry-caseworkctl/src/dev/tests.rs\n", "", 1
+                "  - crates/registry-casework/src/task_grants/native_resource.rs\n", "", 1
             ),
             "query filter": config + "query-filters:\n  - exclude:\n      id: rust/x\n",
             "path allowlist": config + "paths:\n  - docs\n",
@@ -913,12 +913,7 @@ class GateInventoryTest(unittest.TestCase):
                 "Casework operator schema-newer refusal",
             ),
             (
-                "dev::tests::a_retained_split_session_start_leaves_the_ledgers_read_only_to_the_runtime",
-                "dev::tests::split_session_boundary_disabled",
-                "Casework retained split-session runtime boundary",
-            ),
-            (
-                "grep -q 'test result: ok\\. 2 passed' \"${RUNNER_TEMP}/caseworkctl-apply.log\"",
+                "grep -q 'test result: ok\\. 1 passed' \"${RUNNER_TEMP}/caseworkctl-apply.log\"",
                 "true # Casework operator assertion disabled",
                 "Casework operator refusal result assertion",
             ),
@@ -936,16 +931,6 @@ class GateInventoryTest(unittest.TestCase):
                 "grep -q 'test result: ok\\. 1 passed' \"${RUNNER_TEMP}/casework-task-approval.log\"",
                 "true # Casework task approval assertion disabled",
                 "Casework task approval result assertion",
-            ),
-            (
-                "submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer",
-                "submitted_review_dev",
-                "Casework task approval on the submitted-review local issuer",
-            ),
-            (
-                "grep -q 'test result: ok\\. 1 passed' \"${RUNNER_TEMP}/casework-local-session.log\"",
-                "true # Casework submitted-review assertion disabled",
-                "Casework submitted-review result assertion",
             ),
         ):
             with self.subTest(gate=gate):

@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+# BReg alone on a spatial project: the run starts PostGIS. The scenario file
+# sits under dev/, not tests/, because bregctl check reads every YAML file
+# directly under tests/ as a BReg test.
+issuer: https://identity.service-sites.example.test
+products:
+  - {product: breg, project: ., audience: "urn:example:service-sites"}
+people:
+  operator:
+    subject: synthetic-service-site-admin
+    client: operator
+    grants:
+      breg:
+        profile: service-site-admin
+        scopes: ["service-sites:seed"]
+        claims: {registry_actor_kind: human, registry_purpose: service-site-administration}
+  installation-map-reader:
+    subject: synthetic-qgis-installation
+    client: installation-map-reader
+    grants:
+      breg:
+        profile: installation-map-reader
+        scopes: ["service-sites:map:read"]
+        claims: {registry_actor_kind: human, registry_purpose: service-site-map, service_zones: central}
+  hidden-geometry-reader:
+    subject: synthetic-directory-reader
+    client: hidden-geometry-reader
+    grants:
+      breg:
+        profile: hidden-geometry-reader
+        scopes: ["service-sites:directory:read"]
+        claims: {registry_actor_kind: human, registry_purpose: service-site-directory}
+  get-only-map-reader:
+    subject: synthetic-site-reader
+    client: get-only-map-reader
+    grants:
+      breg:
+        profile: get-only-map-reader
+        scopes: ["service-sites:site:read"]
+        claims: {registry_actor_kind: human, registry_purpose: service-site-map}
+  public-map-reader:
+    subject: synthetic-public-map
+    client: public-map-reader
+    grants:
+      breg:
+        profile: map-reader
+        scopes: ["service-sites:public:read"]
+        claims: {registry_actor_kind: human, registry_purpose: service-site-public-map}
+  public-area-map-reader:
+    subject: synthetic-public-area-map
+    client: public-area-map-reader
+    grants:
+      breg:
+        profile: area-map-reader
+        scopes: ["service-areas:public:read"]
+        claims: {registry_actor_kind: human, registry_purpose: service-area-public-map}
+  public-directory-reader:
+    subject: synthetic-public-directory
+    client: public-directory-reader
+    grants:
+      breg:
+        profile: directory-reader
+        scopes: ["service-sites:public:read"]
+        claims: {registry_actor_kind: human, registry_purpose: service-site-public-directory}
+scenarioFile: dev/scenarios.yaml

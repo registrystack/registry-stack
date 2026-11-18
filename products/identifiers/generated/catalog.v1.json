@@ -5109,24 +5109,6 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/casework/dev-clients/dev-clients.v1alpha1.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "casework",
-      "title": "Registry Casework development clients",
-      "description": "Registry Casework development clients JSON Schema.",
-      "source": {
-        "path": "crates/registry-caseworkctl/src/schema.rs",
-        "sha256": "4f5378799ebb3a0f65b82eff6f654d8323679bf147214eb68c821bbd6c94733a"
-      },
-      "artifact": {
-        "path": "products/casework/generated/dev-clients/dev-clients.schema.json",
-        "sha256": "8538f2755d25a7fd72c21028bbbc73621849a67c2564e855cf0cbd83b4c38b2b",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
       "uri": "https://id.registrystack.org/schemas/casework/fixture/fixture.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -5194,7 +5176,7 @@
       },
       "artifact": {
         "path": "products/casework/contracts/cli/report.schema.json",
-        "sha256": "9d701cf095137be5e1ce0203943626bcf7005597f3e5748527b510fabe180cb4",
+        "sha256": "24077d593743db4a10297e59a5186d8fd5739759c645ca55a8f48185fa9d803e",
         "mediaType": "application/schema+json"
       }
     },
@@ -5964,7 +5946,7 @@
       "description": "rstack error report JSON Schema.",
       "source": {
         "path": "crates/registry-rstack/src/cli.rs",
-        "sha256": "4c84919f396c0a9975814cf80063dec986faa227d663cb11bd111f3c344bf396"
+        "sha256": "182b516039961207301c3e135ff1de2ae8ab4d6f0a0b6f098953d302b97ec125"
       },
       "artifact": {
         "path": "products/platform/schemas/rstack-dev-error.v1.schema.json",
@@ -6076,7 +6058,7 @@
       },
       "artifact": {
         "path": "products/platform/generated/dev/dev.v1alpha1.schema.json",
-        "sha256": "463465176de352e85e82331e894a6172f1e99ad8dd1adbebe4f34ae0a156d6c2",
+        "sha256": "e5373e18ffe80060cd166260261279bdd9f06fcb95f6912d8451f18248adb78d",
         "mediaType": "application/schema+json"
       }
     },
@@ -6094,7 +6076,7 @@
       },
       "artifact": {
         "path": "products/platform/generated/dev/scenarios.v1alpha1.schema.json",
-        "sha256": "fff83d0a9395e70a9aeb1c22493945c64585d2aa114ca7cf9b579cb9285a2766",
+        "sha256": "bb4dbf1bd7aeb6ab6f87512a8919aa6138b3715666e2736541f2bbd4e0ca5a95",
         "mediaType": "application/schema+json"
       }
     },

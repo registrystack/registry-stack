@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+# The authored journeys in tests/journeys.yaml carry the fixture's checks. This
+# scenario only proves the served registry answers a loader.
+scenarios:
+  - id: loader-lists-authorities
+    steps:
+      - id: list-authorities
+        product: breg
+        as: reference-loader
+        method: GET
+        path: /v1/records/public-authorities
+        expect: {status: 200}

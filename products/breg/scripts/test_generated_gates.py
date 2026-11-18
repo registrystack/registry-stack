@@ -451,25 +451,22 @@ class GeneratedGateTests(unittest.TestCase):
 
         dev_marker = 'python3 - "$temporary_root/dev.json" <<\'PY\'\n'
         dev = {
-            "ok": True,
-            "command": "dev",
-            "status": "complete",
-            "outcome": "ready",
-            "bregUrl": "http://127.0.0.1:8091",
-            "tokenEndpoint": "http://127.0.0.1:8090/oauth2/token",
-            "clientAssertionAudience": "http://127.0.0.1:8090",
-            "resource": "urn:breg:dev:fixture",
+            "schema_version": "registry.rstack.dev.v1",
+            "run_id": "run-fixture",
+            "products": {"breg": "http://127.0.0.1:8091"},
+            "scenarios": [{"id": "facility-bounded-read", "result": "passed"}],
         }
         accepted = validate(dev_marker, dev)
         self.assertEqual(0, accepted.returncode, accepted.stderr)
-        self.assertEqual(f'{dev["bregUrl"]}\n', accepted.stdout)
+        self.assertEqual(f'{dev["products"]["breg"]}\n', accepted.stdout)
         for refused_report in (
-            {**dev, "status": "ready", "recordData": "value-canary"},
-            {**dev, "outcome": "starting", "recordData": "value-canary"},
+            {**dev, "scenarios": [{"id": "facility-bounded-read", "result": "failed"}], "recordData": "value-canary"},
+            {**dev, "products": {}, "recordData": "value-canary"},
+            {**dev, "schema_version": "registry.rstack.error.v1", "recordData": "value-canary"},
         ):
             refused = validate(dev_marker, refused_report)
             self.assertNotEqual(0, refused.returncode)
-            self.assertIn("bregctl dev did not reach ready", refused.stderr)
+            self.assertIn("rstack dev did not reach ready", refused.stderr)
             self.assertNotIn("value-canary", refused.stderr)
 
         publish_marker = 'python3 - "$temporary_root/publish.json" <<\'PY\'\n'

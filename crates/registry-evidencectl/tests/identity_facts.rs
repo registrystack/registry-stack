@@ -213,8 +213,11 @@ fn an_existing_output_is_refused_and_left_alone() {
 /// assertion, with one client registered for the exchange.
 fn task_grant_project(project: &Path, bootstrap_resource: Option<&str>) {
     copy_project(project);
-    // The example's own caller registers the profile this replaces.
-    fs::remove_file(project.join("access/clients/example-caller.yaml")).unwrap();
+    // The example's own caller registers the profile this replaces. Its
+    // document is the template for the exchange client.
+    let caller_path = project.join("access/clients/example-caller.yaml");
+    let caller = fs::read(&caller_path).unwrap();
+    fs::remove_file(&caller_path).unwrap();
     let config_path = project.join("evidence.yaml");
     let mut config: Value = serde_norway::from_slice(&fs::read(&config_path).unwrap()).unwrap();
     config["assertionDefinitions"]["adult-status"]["grantCeiling"]["actorKinds"] =
@@ -238,28 +241,22 @@ fn task_grant_project(project: &Path, bootstrap_resource: Option<&str>) {
     authority["accessProfiles"] = serde_json::json!({"age-checks": profile});
     fs::write(authority_path, serde_norway::to_string(&authority).unwrap()).unwrap();
 
-    let mut arguments = vec![
-        "access",
-        "client",
-        "add",
-        "task-checker",
-        "--access-profile",
-        "age-checks",
-        "--generate-local-key",
-        "--grant-bootstrap-scope",
-        "casework:grants:assert",
-    ];
+    let mut client: Value = serde_norway::from_slice(&caller).unwrap();
+    client["clientId"] = serde_json::json!("task-checker");
+    client["principal"] = serde_json::json!("urn:registrystack:evidence:local:client:task-checker");
+    client["accessProfiles"] = serde_json::json!(["age-checks"]);
+    client["exchange"] = serde_json::json!({
+        "kind": "institutional-grant",
+        "bootstrapScope": "casework:grants:assert",
+    });
     if let Some(resource) = &bootstrap_resource {
-        arguments.extend(["--grant-bootstrap-resource", resource]);
+        client["exchange"]["bootstrapResource"] = serde_json::json!(resource);
     }
-    let project_argument = project.to_string_lossy();
-    arguments.extend(["--project", &project_argument]);
-    let added = evidencectl(&arguments);
-    assert!(
-        added.status.success(),
-        "{}",
-        String::from_utf8_lossy(&added.stderr)
-    );
+    fs::write(
+        project.join("access/clients/task-checker.yaml"),
+        serde_norway::to_string(&client).unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]

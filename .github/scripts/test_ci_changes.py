@@ -1719,11 +1719,6 @@ class CiChangesTest(unittest.TestCase):
                 "approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid",
                 "casework-task-approval.log",
             ),
-            (
-                "task_grants::local_session_tests::"
-                "submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer",
-                "casework-local-session.log",
-            ),
         )
         source_dir = Path("crates/registry-casework/src/task_grants")
         for test, log in cases:
@@ -1774,7 +1769,6 @@ class CiChangesTest(unittest.TestCase):
             ("crates/registry-breg/src/instance_claim.rs", ("breg_contracts", "casework_postgres")),
             ("crates/registry-bregctl/src/dev/mod.rs", ("breg_contracts", "casework_postgres")),
             ("products/casework/scripts/test-backup-restore.sh", ("casework_postgres",)),
-            ("crates/registry-caseworkctl/src/dev/mod.rs", ("casework_postgres",)),
             ("crates/registry-casework/src/activation.rs", ("casework_postgres",)),
         ):
             outputs = classify(self.workspace, (path,))
@@ -1974,7 +1968,6 @@ class CiChangesTest(unittest.TestCase):
         # which issues every token the reader's calls carry.
         for path in (
             "crates/registry-casework/src/http.rs",
-            "crates/registry-caseworkctl/src/dev/mod.rs",
             "crates/registry-thunderid-tooling/src/lib.rs",
             "crates/registry-breg/src/lib.rs",
             "crates/registry-bregctl/src/dev/mod.rs",
@@ -3314,6 +3307,19 @@ on:
                 self.assertIn("messaging", selected)
                 self.assertIn("developer-tools", selected)
 
+    def test_rstack_dev_changes_run_the_harnesses_that_drive_it(self) -> None:
+        """The BReg quickstart, statistics workflow, tutorials and the Adapter
+        GovStack journey start their services with `rstack dev`, so a change to
+        the tool or its library selects the jobs that run them."""
+        for path in (
+            "crates/registry-rstack/src/main.rs",
+            "crates/registry-rstack-dev/src/lib.rs",
+        ):
+            outputs = classify(self.workspace, (path,))
+            for output in ("breg_contracts", "breg_tutorial", "adapter_contracts"):
+                with self.subTest(path=path, output=output):
+                    self.assertTrue(outputs[output])
+
     def test_development_host_changes_run_the_rstack_dev_tests_with_built_hosts(
         self,
     ) -> None:
@@ -3346,7 +3352,7 @@ on:
             step
             for step in steps
             if step.get("run")
-            == "cargo build --locked -p registry-bregctl -p registry-caseworkctl --bins"
+            == "cargo build --locked -p registry-bregctl -p registry-caseworkctl -p registry-evidencectl -p registry-evidence --bins"
         )
         self.assertEqual(
             build.get("if"),
@@ -3446,7 +3452,6 @@ on:
         for path in (
             "products/casework/generated/project/project.schema.json",
             "products/casework/generated/fixture/fixture.schema.json",
-            "products/casework/generated/dev-clients/dev-clients.schema.json",
             "products/casework/generated/holiday-set/holiday-set.schema.json",
             "products/casework/generated/runtime/runtime.schema.json",
         ):

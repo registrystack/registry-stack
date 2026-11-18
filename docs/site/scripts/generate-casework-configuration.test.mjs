@@ -15,7 +15,7 @@ test('Casework covers every committed configuration schema', async () => {
   ))).flat().sort();
   assert.deepEqual(files, CONTRACTS.map((contract) => contract.file.split('/generated/')[1]).sort());
   const document = await buildCaseworkConfiguration();
-  assert.deepEqual(document.contracts.map((contract) => contract.id), ['project', 'fixture', 'dev-clients', 'holiday-set', 'runtime']);
+  assert.deepEqual(document.contracts.map((contract) => contract.id), ['project', 'fixture', 'holiday-set', 'runtime']);
   for (const contract of document.contracts) {
     assert.ok(contract.field_count > 0, contract.id);
     assert.equal(contract.field_count, new Set(contract.fields.map((field) => field.key_path)).size);

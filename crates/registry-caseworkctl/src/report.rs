@@ -419,47 +419,6 @@ payload!(PlanData {
 payload!(ApplyData {runtime_config:PathBuf,#[cfg_attr(feature="schema",schemars(with="registry_casework::Activation"))]activation:Value,
     schema_versions_applied:Vec<i64>,#[cfg_attr(feature="schema",schemars(with="registry_casework::ActivationEffects"))]effects:Value,single_role_statement:Option<String>});
 payload!(StatusData {runtime_config:PathBuf,#[cfg_attr(feature="schema",schemars(with="registry_casework::ActivationStatus"))]activation:Value,single_role_statement:Option<String>});
-#[derive(Deserialize, DeriveSerialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum DevState {
-    Starting,
-    Ready,
-    Stopping,
-    Stopped,
-    Failed,
-}
-payload!(DevClient {
-    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
-    id: String,
-    profile: String,
-    acts_as: CaseworkActsAs,
-    subject: String,
-    client_id_file: PathBuf,
-    assertion_key_file: PathBuf
-});
-payload!(DevDirectory {
-    revision: i64,
-    teams: usize
-});
-payload!(DevData {outcome:DevState,project:PathBuf,state_file:PathBuf,operator_config:PathBuf,
-    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
-    casework_url:String,token_endpoint:String,
-    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
-    issuer:String,client_assertion_audience:String,resource:String,audience:String,journal:PathBuf,context_providers:Vec<String>,clients:Vec<DevClient>,directory:DevDirectory,
-    #[serde(default,skip_serializing_if="Option::is_none")]issuer_project:Option<PathBuf>});
-payload!(DevEventsData {project:PathBuf,journal:PathBuf,events:Vec<String>,truncated:bool});
-payload!(DevTokenData {
-    header_file: PathBuf
-});
-payload!(DevGrantData {
-    header_file: PathBuf,
-    grant_expires_at: u64
-});
-payload!(DevIdentityData {
-    client_id: String,
-    subject: String
-});
 payload!(UsageData {});
 payload!(InternalData {});
 
@@ -513,7 +472,7 @@ fn serialized_payload_members<T: schemars::JsonSchema>() -> PayloadMembers {
         .collect();
     PayloadMembers { required, present }
 }
-reports!(Init=>"init":InitData,Check=>"check":CheckData,Explain=>"explain":ExplainData,Test=>"test":TestData,Types=>"types":TypesData,GenerateIdentityFacts=>"generate-identity-facts":IdentityFactsData,ProviderAdd=>"provider-add":crate::provider_add::ProviderAddData,ProviderPair=>"provider-pair":ProviderPairData,Lifecycle=>"lifecycle":LifecycleData,Package=>"package":PackageData,Doctor=>"doctor":DoctorData,Plan=>"plan":PlanData,Apply=>"apply":ApplyData,Status=>"status":StatusData,Dev=>"dev":DevData,DevEvents=>"dev-events":DevEventsData,DevToken=>"dev-token":DevTokenData,DevGrant=>"dev-grant":DevGrantData,DevIdentity=>"dev-identity":DevIdentityData,Usage=>"usage":UsageData,Internal=>"internal":InternalData);
+reports!(Init=>"init":InitData,Check=>"check":CheckData,Explain=>"explain":ExplainData,Test=>"test":TestData,Types=>"types":TypesData,GenerateIdentityFacts=>"generate-identity-facts":IdentityFactsData,ProviderAdd=>"provider-add":crate::provider_add::ProviderAddData,ProviderPair=>"provider-pair":ProviderPairData,Lifecycle=>"lifecycle":LifecycleData,Package=>"package":PackageData,Doctor=>"doctor":DoctorData,Plan=>"plan":PlanData,Apply=>"apply":ApplyData,Status=>"status":StatusData,Usage=>"usage":UsageData,Internal=>"internal":InternalData);
 
 impl CliReport {
     pub(crate) fn from_value(command: &str, value: Value) -> anyhow::Result<Self> {
@@ -526,7 +485,7 @@ impl CliReport {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
         fields.remove("command");
-        let raw_status = fields.remove("status");
+        fields.remove("status");
         let diagnostics = fields
             .remove("diagnostics")
             .and_then(|v| v.as_array().cloned())
@@ -579,13 +538,6 @@ impl CliReport {
                     .ok_or_else(|| anyhow::anyhow!("apply report has no effects"))?;
                 let statement = fields.remove("singleRoleStatement").unwrap_or(Value::Null);
                 serde_json::json!({"runtimeConfig":runtime,"schemaVersionsApplied":versions,"effects":effects,"singleRoleStatement":statement,"activation":fields})
-            }
-            "dev" => {
-                fields.insert(
-                    "outcome".into(),
-                    raw_status.ok_or_else(|| anyhow::anyhow!("dev report has no outcome"))?,
-                );
-                Value::Object(fields)
             }
             _ => Value::Object(fields),
         };
@@ -747,36 +699,6 @@ mod typed_report_tests {
             serde_json::json!({"ok":true,"output":"types","files":[],"unexpected":true})
         )
         .is_err());
-    }
-
-    #[test]
-    fn dev_command_words_are_flat_outcomes_not_report_statuses() {
-        let report = CliReport::from_value(
-            "dev",
-            serde_json::json!({
-                "ok": true,
-                "status": "ready",
-                "project": "review",
-                "stateFile": "state.json",
-                "operatorConfig": "operator.yaml",
-                "caseworkUrl": "http://127.0.0.1:8092",
-                "tokenEndpoint": "http://127.0.0.1:8093/oauth2/token",
-                "issuer": "http://127.0.0.1:8093",
-                "clientAssertionAudience": "http://127.0.0.1:8093",
-                "resource": "urn:casework:dev:review",
-                "audience": "urn:casework:dev:review",
-                "journal": "casework.ndjson",
-                "contextProviders": [],
-                "clients": [],
-                "directory": {"revision": 1, "teams": 1}
-            }),
-        )
-        .unwrap();
-        let value = serde_json::to_value(report).unwrap();
-        assert_eq!(value["status"], "complete");
-        assert_eq!(value["outcome"], "ready");
-        assert!(value.get("state").is_none());
-        assert!(value.get("data").is_none());
     }
 
     #[test]

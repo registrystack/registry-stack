@@ -176,7 +176,8 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "rstack dev hosts built before the rstack tests",
         "if: matrix.name == 'developer-tools' && contains(matrix.packages, 'registry-rstack')\n"
-        "        run: cargo build --locked -p registry-bregctl -p registry-caseworkctl --bins",
+        "        run: cargo build --locked -p registry-bregctl -p registry-caseworkctl"
+        " -p registry-evidencectl -p registry-evidence --bins",
     ),
     (
         "rstack dev plan and scenario schema drift check",
@@ -386,12 +387,8 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "operator_tests::apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal",
     ),
     (
-        "Casework retained split-session runtime boundary",
-        "dev::tests::a_retained_split_session_start_leaves_the_ledgers_read_only_to_the_runtime",
-    ),
-    (
         "Casework operator refusal result assertion",
-        r"grep -q 'test result: ok\. 2 passed' "
+        r"grep -q 'test result: ok\. 1 passed' "
         '"${RUNNER_TEMP}/caseworkctl-apply.log"',
     ),
     (
@@ -406,15 +403,6 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Casework task approval result assertion",
         r"grep -q 'test result: ok\. 1 passed' "
         '"${RUNNER_TEMP}/casework-task-approval.log"',
-    ),
-    (
-        "Casework task approval on the submitted-review local issuer",
-        "submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer",
-    ),
-    (
-        "Casework submitted-review result assertion",
-        r"grep -q 'test result: ok\. 1 passed' "
-        '"${RUNNER_TEMP}/casework-local-session.log"',
     ),
     (
         "Messaging Python client binding coverage",
@@ -1707,9 +1695,7 @@ CODEQL_CONFIG_CONTENT = (
     "paths-ignore:",
     '  - "crates/*/tests/**"',
     '  - "crates/registry-breg/src/tests/**"',
-    "  - crates/registry-casework/src/task_grants/dev_session_logs.rs",
     "  - crates/registry-casework/src/task_grants/native_resource.rs",
-    "  - crates/registry-caseworkctl/src/dev/tests.rs",
     "  - crates/registry-platform-config/src/blocks_tests.rs",
 )
 
