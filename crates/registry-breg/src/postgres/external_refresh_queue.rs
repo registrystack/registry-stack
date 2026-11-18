@@ -13,6 +13,23 @@ use super::{GuardedTransaction, RuntimeRevoke, SqlIdentifier};
 
 const MAX_KEY_BYTES: usize = 1024;
 
+/// Seconds a failed target waits before its next attempt, indexed by the
+/// attempts already made. A target whose attempts run past the schedule is
+/// settled as exhausted.
+pub(crate) const RETRY_DELAYS: [u64; 3] = [15, 30, 60];
+
+/// The wait before the next attempt of a target that has made `attempts`
+/// attempts, or `None` once the retry schedule is exhausted.
+pub(crate) fn retry_delay(attempts: i16) -> Option<Duration> {
+    let index = usize::try_from(attempts).ok()?.checked_sub(1)?;
+    RETRY_DELAYS.get(index).copied().map(Duration::from_secs)
+}
+
+/// Claims stop counting attempts here. A claim lost to a crash still counts,
+/// so a target reclaimed past the retry schedule reaches this ceiling and is
+/// settled as exhausted before any source I/O.
+pub(crate) const ATTEMPTS_CEILING: i16 = RETRY_DELAYS.len() as i16 + 2;
+
 #[cfg(test)]
 pub(crate) const TABLES: &[&str] = &[
     "registry_internal.registry_external_refresh_plans",
@@ -129,7 +146,7 @@ pub(crate) enum WorkTarget {
         record_id: Uuid,
         after: Option<String>,
     },
-    SourceHint {
+    SourceChange {
         projection_epoch: Uuid,
         selector_scheme: String,
         selector: String,
@@ -150,7 +167,7 @@ impl fmt::Display for WorkTarget {
         match self {
             Self::LocalRecord { .. } => formatter.write_str("local-record"),
             Self::ParentLabels { .. } => formatter.write_str("parent-labels"),
-            Self::SourceHint { .. } => formatter.write_str("source-hint"),
+            Self::SourceChange { .. } => formatter.write_str("source-change"),
         }
     }
 }
@@ -421,7 +438,7 @@ ON CONFLICT (plan_id) DO UPDATE SET
      sweep_started_at,sweep_reconciliation_generation,sweep_acquisition_failures,
      next_turn,last_attempt_at,last_attempt_outcome,last_completed_at) = (
         SELECT current.plan_generation+CASE WHEN reset THEN 1 ELSE 0 END,
-            CASE WHEN reset THEN clock_timestamp()
+            CASE WHEN reset OR empty THEN clock_timestamp()
                  WHEN current.sweep_phase='complete' AND NOT current.reconciliation_due
                       AND current.interval_seconds<>EXCLUDED.interval_seconds
                       AND current.sweep_started_at IS NOT NULL
@@ -432,14 +449,14 @@ ON CONFLICT (plan_id) DO UPDATE SET
                  ELSE current.next_due_at END,
             current.reconciliation_due OR reset,
             current.reconciliation_generation+CASE WHEN reset THEN 1 ELSE 0 END,
-            CASE WHEN reset THEN NULL ELSE current.lease_token END,
-            CASE WHEN reset THEN NULL ELSE current.lease_expires_at END,
-            CASE WHEN reset THEN 'roots' ELSE current.sweep_phase END,
-            CASE WHEN reset THEN 0 ELSE current.sweep_baseline END,
-            CASE WHEN reset THEN NULL ELSE current.sweep_continuation END,
-            CASE WHEN reset THEN NULL ELSE current.sweep_started_at END,
+            CASE WHEN reset OR empty THEN NULL ELSE current.lease_token END,
+            CASE WHEN reset OR empty THEN NULL ELSE current.lease_expires_at END,
+            CASE WHEN reset OR empty THEN 'roots' ELSE current.sweep_phase END,
+            CASE WHEN reset OR empty THEN 0 ELSE current.sweep_baseline END,
+            CASE WHEN reset OR empty THEN NULL ELSE current.sweep_continuation END,
+            CASE WHEN reset OR empty THEN NULL ELSE current.sweep_started_at END,
             CASE WHEN reset THEN 0 ELSE current.sweep_reconciliation_generation END,
-            CASE WHEN reset THEN 0 ELSE current.sweep_acquisition_failures END,
+            CASE WHEN reset OR empty THEN 0 ELSE current.sweep_acquisition_failures END,
             CASE WHEN reset THEN 'targets' ELSE current.next_turn END,
             CASE WHEN reset THEN NULL ELSE current.last_attempt_at END,
             CASE WHEN reset THEN NULL ELSE current.last_attempt_outcome END,
@@ -449,7 +466,15 @@ ON CONFLICT (plan_id) DO UPDATE SET
              current.projection_epochs,current.root_entity_id,current.watched_fields)
             IS DISTINCT FROM
             (EXCLUDED.package_digest,EXCLUDED.activation_id,EXCLUDED.authority_digest,
-             EXCLUDED.projection_epochs,EXCLUDED.root_entity_id,EXCLUDED.watched_fields) AS reset) AS authority
+             EXCLUDED.projection_epochs,EXCLUDED.root_entity_id,EXCLUDED.watched_fields) AS reset,
+            -- A primary epoch with no snapshot rows lost its cache, for
+            -- example in a restore that left the tables out. The sweep
+            -- restarts now instead of waiting for the stored due time.
+            NOT EXISTS (
+                SELECT 1 FROM registry_internal.registry_external_projection_scopes scope
+                JOIN registry_internal.registry_external_projection_snapshots snapshot
+                  ON snapshot.projection_id=scope.projection_id AND snapshot.epoch=scope.epoch
+                WHERE scope.epoch=EXCLUDED.projection_epochs[1]) AS empty) AS authority
     ),
     updated_at=clock_timestamp()
 "#;
@@ -692,16 +717,13 @@ pub(crate) async fn guard_plan_lease(
             .query_opt(
                 "SELECT 1 FROM registry_internal.registry_external_refresh_work
                  WHERE plan_id=$1 AND plan_generation=$2 AND work_id=$3 AND enqueue_generation=$4
-                   AND lease_generation=$5 AND lease_token=$6
-                   AND lease_expires_at>clock_timestamp() AND expires_at>clock_timestamp()
+                   AND expires_at>clock_timestamp()
                  FOR UPDATE",
                 &[
                     &plan_id,
                     &lease.plan_generation,
                     &work_id,
                     &enqueue_generation,
-                    &lease.lease_generation,
-                    &lease.token,
                 ],
             )
             .await
@@ -728,8 +750,7 @@ pub(crate) async fn has_ready_work(
                   AND (plan.next_due_at<=clock_timestamp() OR EXISTS (
                     SELECT 1 FROM registry_internal.registry_external_refresh_work work
                     WHERE work.plan_id=plan.plan_id AND work.plan_generation=plan.plan_generation
-                      AND work.ready_at<=clock_timestamp() AND work.expires_at>clock_timestamp()
-                      AND (work.lease_token IS NULL OR work.lease_expires_at<=clock_timestamp()))))",
+                      AND work.ready_at<=clock_timestamp() AND work.expires_at>clock_timestamp())))",
             &[&plan_id, &authority_digest],
         )
         .await
@@ -750,8 +771,7 @@ pub(crate) async fn load_step_state(
                     next_due_at<=clock_timestamp() AS sweep_due,
                     EXISTS (SELECT 1 FROM registry_internal.registry_external_refresh_work work
                         WHERE work.plan_id=plan.plan_id AND work.plan_generation=plan.plan_generation
-                          AND work.ready_at<=clock_timestamp() AND work.expires_at>clock_timestamp()
-                          AND (work.lease_token IS NULL OR work.lease_expires_at<=clock_timestamp())) AS has_targets,
+                          AND work.ready_at<=clock_timestamp() AND work.expires_at>clock_timestamp()) AS has_targets,
                     next_turn
              FROM registry_internal.registry_external_refresh_plans plan
              WHERE plan_id=$1 AND authority_digest=$2 AND plan_generation=$3
@@ -859,6 +879,7 @@ pub(crate) async fn claim_targets(
                 &lease.plan_generation,
                 &lease.lease_generation,
                 &lease.token,
+                &ATTEMPTS_CEILING,
             ],
         )
         .await
@@ -878,7 +899,7 @@ pub(crate) async fn claim_targets(
                         .ok_or(QueueError::Unavailable)?,
                     after: row.get(9),
                 },
-                "source" => WorkTarget::SourceHint {
+                "source" => WorkTarget::SourceChange {
                     projection_epoch: row
                         .get::<_, Option<Uuid>>(6)
                         .ok_or(QueueError::Unavailable)?,
@@ -912,14 +933,11 @@ WITH plan AS MATERIALIZED (
     SELECT work.work_id FROM registry_internal.registry_external_refresh_work AS work
     JOIN plan USING (plan_id,plan_generation)
     WHERE work.ready_at<=clock_timestamp() AND work.expires_at>clock_timestamp()
-      AND (work.lease_token IS NULL OR work.lease_expires_at<=clock_timestamp())
     ORDER BY work.ready_at,work.work_id LIMIT (SELECT page_size FROM plan)
     FOR UPDATE OF work SKIP LOCKED
 ), claimed AS (
     UPDATE registry_internal.registry_external_refresh_work AS work
-    SET lease_generation=$3,lease_token=$4,
-        lease_expires_at=(SELECT p.lease_expires_at FROM registry_internal.registry_external_refresh_plans p WHERE p.plan_id=$1),
-        attempts=least(attempts+1,5)
+    SET attempts=least(attempts+1,$5::smallint)
     FROM ready WHERE work.work_id=ready.work_id
     RETURNING work.*
 )
@@ -962,7 +980,7 @@ pub(crate) async fn enqueue_internal_target(
             None,
             format!("local:{record_id}"),
         ),
-        WorkTarget::SourceHint { .. } => return Err(QueueError::Invalid),
+        WorkTarget::SourceChange { .. } => return Err(QueueError::Invalid),
     };
     let changed = transaction
         .transaction()
@@ -983,8 +1001,7 @@ pub(crate) async fn enqueue_internal_target(
                 plan_generation=EXCLUDED.plan_generation,
                 enqueue_generation=registry_external_refresh_work.enqueue_generation+1,
                 attempts=0,ready_at=clock_timestamp(),expires_at=EXCLUDED.expires_at,
-                continuation=EXCLUDED.continuation,
-                lease_generation=NULL,lease_token=NULL,lease_expires_at=NULL",
+                continuation=EXCLUDED.continuation",
             &[
                 &plan_id,
                 &authority_digest,
@@ -1028,9 +1045,14 @@ pub(crate) async fn enqueue_internal_target(
     Ok(())
 }
 
-/// Queue a per-key failure discovered by a sweep page. Collisions preserve
-/// the higher attempt count and the earlier ready/expiry bounds, so another
+/// Queue a per-key failure discovered by a sweep page as a target that has
+/// made one attempt and waits the first retry delay. Collisions preserve the
+/// higher attempt count and the earlier ready/expiry bounds, so another
 /// observation cannot renew retention or restart an exhausted retry budget.
+///
+/// Returns `false` when the plan's queue is full. The sweep itself is the
+/// reconciliation for the key, so a refusal leaves the plan schedule alone and
+/// the key waits for the next sweep.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn enqueue_sweep_retry(
     transaction: &GuardedTransaction<'_>,
@@ -1041,19 +1063,16 @@ pub(crate) async fn enqueue_sweep_retry(
     projection_epoch: Uuid,
     selector_scheme: &str,
     selector: &str,
-    attempts: i16,
-    ready_at: i64,
     expires_at: i64,
-) -> Result<(), QueueError> {
+) -> Result<bool, QueueError> {
     if !valid_key(target_digest)
         || !valid_key(selector_scheme)
         || !valid_key(selector)
-        || !(1..=3).contains(&attempts)
-        || ready_at <= 0
-        || expires_at <= ready_at
+        || expires_at <= 0
     {
         return Err(QueueError::Invalid);
     }
+    let first_delay = i64::try_from(RETRY_DELAYS[0]).map_err(|_| QueueError::Invalid)?;
     guard_plan_lease(
         transaction,
         plan_id,
@@ -1069,8 +1088,9 @@ pub(crate) async fn enqueue_sweep_retry(
             "INSERT INTO registry_internal.registry_external_refresh_work
                 (plan_id,plan_generation,kind,projection_epoch,selector_scheme,selector,
                  target_digest,attempts,ready_at,expires_at)
-             SELECT plan_id,plan_generation,'source',$6,$7,$8,$9,$10,
-                    to_timestamp($11::bigint),to_timestamp($12::bigint)
+             SELECT plan_id,plan_generation,'source',$6,$7,$8,$9,1,
+                    clock_timestamp()+make_interval(secs => $10::bigint::double precision),
+                    to_timestamp($11::bigint)
              FROM registry_internal.registry_external_refresh_plans plan
              WHERE plan_id=$1 AND authority_digest=$2 AND plan_generation=$3
                AND lease_generation=$4 AND lease_token=$5 AND active
@@ -1085,8 +1105,7 @@ pub(crate) async fn enqueue_sweep_retry(
                 attempts=CASE WHEN registry_external_refresh_work.attempts=0 THEN 0
                               ELSE greatest(registry_external_refresh_work.attempts,EXCLUDED.attempts) END,
                 ready_at=least(registry_external_refresh_work.ready_at,EXCLUDED.ready_at),
-                expires_at=least(registry_external_refresh_work.expires_at,EXCLUDED.expires_at),
-                lease_generation=NULL,lease_token=NULL,lease_expires_at=NULL",
+                expires_at=least(registry_external_refresh_work.expires_at,EXCLUDED.expires_at)",
             &[
                 &plan_id,
                 &authority_digest,
@@ -1097,39 +1116,13 @@ pub(crate) async fn enqueue_sweep_retry(
                 &selector_scheme,
                 &selector,
                 &target_digest,
-                &attempts,
-                &ready_at,
+                &first_delay,
                 &expires_at,
             ],
         )
         .await
         .map_err(|_| QueueError::Unavailable)?;
-    if changed == 0 {
-        let fallback = transaction
-            .transaction()
-            .execute(
-                "UPDATE registry_internal.registry_external_refresh_plans
-                 SET reconciliation_due=true,reconciliation_generation=reconciliation_generation+1,
-                     next_due_at=least(next_due_at,clock_timestamp()+interval '60 seconds'),
-                     updated_at=clock_timestamp()
-                 WHERE plan_id=$1 AND authority_digest=$2 AND plan_generation=$3
-                   AND lease_generation=$4 AND lease_token=$5 AND active
-                   AND lease_expires_at>clock_timestamp()",
-                &[
-                    &plan_id,
-                    &authority_digest,
-                    &lease.plan_generation,
-                    &lease.lease_generation,
-                    &lease.token,
-                ],
-            )
-            .await
-            .map_err(|_| QueueError::Unavailable)?;
-        if fallback == 0 {
-            return Err(QueueError::StaleLease);
-        }
-    }
-    Ok(())
+    Ok(changed > 0)
 }
 
 pub(crate) async fn settle_target(
@@ -1170,14 +1163,19 @@ WITH valid AS (
     DELETE FROM registry_internal.registry_external_refresh_work AS work
     USING valid
     WHERE work.work_id=$5 AND work.plan_id=$1 AND work.plan_generation=$2
-      AND work.lease_generation=$3 AND work.lease_token=$4
       AND work.enqueue_generation=$6
     RETURNING work.work_id
 ), due AS (
+    -- A target given up on makes the plan due for reconciliation, but no
+    -- sooner than the floor after the current sweep started, so one bad key
+    -- cannot keep restarting sweeps.
     UPDATE registry_internal.registry_external_refresh_plans plan
     SET reconciliation_due=true,
         reconciliation_generation=reconciliation_generation+1,
-        next_due_at=least(next_due_at,clock_timestamp()+interval '60 seconds'),
+        next_due_at=least(next_due_at,greatest(
+            clock_timestamp()+interval '60 seconds',
+            coalesce(sweep_started_at,clock_timestamp())
+                +make_interval(secs => least(interval_seconds,900)::double precision))),
         updated_at=clock_timestamp()
     FROM settled
     WHERE plan.plan_id=$1 AND $7 IN ('expired','attempts-exhausted','authority-changed')
@@ -1186,17 +1184,17 @@ WITH valid AS (
 SELECT count(*) FROM settled
 "#;
 
-/// Retry only this claimed target. A concurrent enqueue increments the row's
-/// generation and clears the lease; this stale owner therefore changes zero
-/// rows and cannot postpone or clear the newer work.
+/// Retry only this claimed target after the delay its attempts select, or
+/// settle it as exhausted once the schedule runs out. A concurrent enqueue
+/// increments the row's generation, so this stale owner changes zero rows and
+/// cannot postpone or clear the newer work.
 pub(crate) async fn retry_target(
     transaction: &GuardedTransaction<'_>,
     plan_id: &str,
     lease: PlanLease,
     target: &ClaimedTarget,
-    delay: Duration,
 ) -> Result<(), QueueError> {
-    if target.attempts >= 4 {
+    let Some(delay) = retry_delay(target.attempts) else {
         return settle_target(
             transaction,
             plan_id,
@@ -1205,16 +1203,14 @@ pub(crate) async fn retry_target(
             Settlement::AttemptsExhausted,
         )
         .await;
-    }
+    };
     let delay = i64::try_from(delay.as_secs()).map_err(|_| QueueError::Invalid)?;
     let changed = transaction
         .transaction()
         .execute(
             "UPDATE registry_internal.registry_external_refresh_work AS work
-             SET ready_at=clock_timestamp()+make_interval(secs => $7::bigint::double precision),
-                 lease_token=NULL,lease_expires_at=NULL
+             SET ready_at=clock_timestamp()+make_interval(secs => $7::bigint::double precision)
              WHERE work.work_id=$5 AND work.plan_id=$1 AND work.plan_generation=$2
-               AND work.lease_generation=$3 AND work.lease_token=$4
                AND work.enqueue_generation=$6 AND EXISTS (
                  SELECT 1 FROM registry_internal.registry_external_refresh_plans plan
                  WHERE plan.plan_id=$1 AND plan.plan_generation=$2 AND plan.lease_generation=$3
@@ -1268,28 +1264,6 @@ pub(crate) async fn finish_step(
         StepKind::Targets => "sweep",
         StepKind::Sweep => "targets",
     };
-    transaction
-        .transaction()
-        .execute(
-            "UPDATE registry_internal.registry_external_refresh_work work
-             SET lease_generation=NULL,lease_token=NULL,lease_expires_at=NULL
-             WHERE work.plan_id=$1 AND work.plan_generation=$3
-               AND work.lease_generation=$4 AND work.lease_token=$5
-               AND EXISTS (SELECT 1 FROM registry_internal.registry_external_refresh_plans plan
-                   WHERE plan.plan_id=$1 AND plan.authority_digest=$2
-                     AND plan.plan_generation=$3 AND plan.lease_generation=$4
-                     AND plan.lease_token=$5 AND plan.active
-                     AND plan.lease_expires_at>clock_timestamp())",
-            &[
-                &plan_id,
-                &authority_digest,
-                &lease.plan_generation,
-                &lease.lease_generation,
-                &lease.token,
-            ],
-        )
-        .await
-        .map_err(|_| QueueError::Unavailable)?;
     let changed = transaction
         .transaction()
         .execute(
@@ -1299,7 +1273,10 @@ pub(crate) async fn finish_step(
                  last_completed_at=CASE WHEN $10 THEN clock_timestamp() ELSE last_completed_at END,
                  next_due_at=CASE WHEN $10 THEN
                      CASE WHEN reconciliation_generation>sweep_reconciliation_generation
-                         THEN clock_timestamp()+interval '60 seconds'
+                         THEN greatest(
+                             clock_timestamp()+interval '60 seconds',
+                             coalesce(sweep_started_at,clock_timestamp())
+                                 +make_interval(secs => least(interval_seconds,900)::double precision))
                          ELSE greatest(
                              clock_timestamp()+CASE WHEN $9::bigint>0 THEN interval '60 seconds' ELSE interval '0 seconds' END,
                              coalesce(sweep_started_at,clock_timestamp())
@@ -1381,8 +1358,7 @@ pub(crate) async fn plan_status(
                     COALESCE(plan.lease_expires_at>clock_timestamp(),false),
                     count(work.work_id),
                     count(work.work_id) FILTER (WHERE work.ready_at<=clock_timestamp()
-                        AND work.expires_at>clock_timestamp()
-                        AND (work.lease_token IS NULL OR work.lease_expires_at<=clock_timestamp())),
+                        AND work.expires_at>clock_timestamp()),
                     floor(extract(epoch FROM clock_timestamp()-min(work.ready_at)
                         FILTER (WHERE work.ready_at<=clock_timestamp() AND work.expires_at>clock_timestamp())))::bigint,
                     floor(extract(epoch FROM plan.last_attempt_at))::bigint,
@@ -1474,22 +1450,17 @@ CREATE TABLE IF NOT EXISTS registry_internal.registry_external_refresh_work (
     continuation text CHECK (continuation IS NULL OR octet_length(continuation) BETWEEN 1 AND 16384),
     target_digest text NOT NULL CHECK (octet_length(target_digest) BETWEEN 1 AND 1024),
     enqueue_generation bigint NOT NULL DEFAULT 1 CHECK (enqueue_generation>0),
-    attempts smallint NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
+    attempts smallint NOT NULL DEFAULT 0 CHECK (attempts>=0),
     ready_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     expires_at timestamptz NOT NULL,
-    lease_generation bigint,
-    lease_token uuid,
-    lease_expires_at timestamptz,
     CONSTRAINT registry_external_refresh_work_shape CHECK (
         (kind='local' AND record_id IS NOT NULL AND projection_epoch IS NULL AND selector_scheme IS NULL AND selector IS NULL AND continuation IS NULL)
         OR (kind='labels' AND record_id IS NOT NULL AND projection_epoch IS NULL AND selector_scheme IS NULL AND selector IS NULL)
         OR (kind='source' AND record_id IS NULL AND projection_epoch IS NOT NULL AND selector_scheme IS NOT NULL AND selector IS NOT NULL AND continuation IS NULL)),
-    CONSTRAINT registry_external_refresh_work_lease_pair CHECK ((lease_token IS NULL)=(lease_expires_at IS NULL)),
     UNIQUE (plan_id,target_digest)
 );
 CREATE INDEX IF NOT EXISTS registry_external_refresh_work_due_idx
-    ON registry_internal.registry_external_refresh_work(plan_id,ready_at,work_id)
-    WHERE lease_token IS NULL;
+    ON registry_internal.registry_external_refresh_work(plan_id,ready_at,work_id);
 CREATE INDEX IF NOT EXISTS registry_external_refresh_plan_capture_idx
     ON registry_internal.registry_external_refresh_plans(root_entity_id,active,plan_id);
 
@@ -1497,7 +1468,7 @@ CREATE OR REPLACE FUNCTION registry_internal.capture_external_refresh_records(
     p_records jsonb
 ) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, registry_internal AS $body$
-DECLARE plan record; change record; captured bigint := 0; pending bigint; target text;
+DECLARE captured bigint;
 BEGIN
     IF jsonb_typeof(p_records) IS DISTINCT FROM 'array' THEN RETURN NULL; END IF;
     IF EXISTS (
@@ -1508,10 +1479,14 @@ BEGIN
                        WHERE field IS NULL OR octet_length(field) NOT BETWEEN 1 AND 1024)
     ) THEN RETURN NULL; END IF;
 
-    -- Use one ordered plan scan for the entire mutation, even when the
-    -- input spans Record types or has different watched fields per Record.
-    FOR plan IN
-        SELECT inventory.*, ttl.seconds
+    -- One statement queues every matching Record for every active plan. Plan
+    -- rows are read without a lock, so concurrent writers on any plans do not
+    -- wait on each other; capacity is counted once per plan, which lets
+    -- concurrent writers overshoot max_pending by their own batch at most.
+    -- A target already queued takes no new capacity.
+    WITH matched AS MATERIALIZED (
+        SELECT DISTINCT inventory.plan_id,inventory.plan_generation,inventory.max_pending,
+               ttl.seconds,input.record_id,'local:'||input.record_id::text AS target
         FROM registry_internal.registry_external_refresh_plans inventory
         CROSS JOIN LATERAL (
             SELECT min(scope.cache_ttl_seconds)::double precision AS seconds
@@ -1520,42 +1495,43 @@ BEGIN
               ON scope.epoch=requested.epoch AND scope.active
             HAVING count(DISTINCT scope.epoch)=cardinality(inventory.projection_epochs)
         ) ttl
-        WHERE inventory.active AND EXISTS (
-            SELECT 1 FROM jsonb_to_recordset(p_records) AS input(entity_id text,changed_fields text[])
-            WHERE input.entity_id=inventory.root_entity_id
-              AND (cardinality(input.changed_fields)=0 OR inventory.watched_fields && input.changed_fields))
-        ORDER BY inventory.plan_id FOR UPDATE OF inventory
-    LOOP
-        FOR change IN
-            SELECT input.record_id
-            FROM jsonb_to_recordset(p_records) AS input(entity_id text,record_id uuid,changed_fields text[])
-            WHERE input.entity_id=plan.root_entity_id
-              AND (cardinality(input.changed_fields)=0 OR plan.watched_fields && input.changed_fields)
-        LOOP
-            target := 'local:'||change.record_id::text;
-            SELECT count(*) INTO pending FROM registry_internal.registry_external_refresh_work
-                WHERE plan_id=plan.plan_id AND plan_generation=plan.plan_generation;
-            IF pending>=plan.max_pending AND NOT EXISTS (
-                SELECT 1 FROM registry_internal.registry_external_refresh_work
-                WHERE plan_id=plan.plan_id AND target_digest=target) THEN
-                UPDATE registry_internal.registry_external_refresh_plans
-                    SET reconciliation_due=true,reconciliation_generation=reconciliation_generation+1,
-                        next_due_at=least(next_due_at,clock_timestamp()),updated_at=clock_timestamp()
-                    WHERE plan_id=plan.plan_id;
-                CONTINUE;
-            END IF;
-            INSERT INTO registry_internal.registry_external_refresh_work
-                (plan_id,plan_generation,kind,record_id,target_digest,expires_at)
-            VALUES (plan.plan_id,plan.plan_generation,'local',change.record_id,target,
-                    clock_timestamp()+make_interval(secs => plan.seconds))
-            ON CONFLICT (plan_id,target_digest) DO UPDATE SET
-                plan_generation=EXCLUDED.plan_generation,
-                enqueue_generation=registry_external_refresh_work.enqueue_generation+1,
-                attempts=0,ready_at=clock_timestamp(),expires_at=EXCLUDED.expires_at,
-                lease_generation=NULL,lease_token=NULL,lease_expires_at=NULL;
-            captured := captured+1;
-        END LOOP;
-    END LOOP;
+        JOIN jsonb_to_recordset(p_records) AS input(entity_id text,record_id uuid,changed_fields text[])
+          ON input.entity_id=inventory.root_entity_id
+         AND (cardinality(input.changed_fields)=0 OR inventory.watched_fields && input.changed_fields)
+        WHERE inventory.active
+    ), ranked AS MATERIALIZED (
+        SELECT matched.*,
+               EXISTS (SELECT 1 FROM registry_internal.registry_external_refresh_work work
+                       WHERE work.plan_id=matched.plan_id AND work.target_digest=matched.target) AS present,
+               (SELECT count(*) FROM registry_internal.registry_external_refresh_work work
+                WHERE work.plan_id=matched.plan_id
+                  AND work.plan_generation=matched.plan_generation) AS pending
+        FROM matched
+    ), admitted AS MATERIALIZED (
+        SELECT ranked.*,
+               present OR row_number() OVER (PARTITION BY plan_id,present ORDER BY record_id)
+                   <=max_pending-pending AS admit
+        FROM ranked
+    ), queued AS (
+        INSERT INTO registry_internal.registry_external_refresh_work
+            (plan_id,plan_generation,kind,record_id,target_digest,expires_at)
+        SELECT plan_id,plan_generation,'local',record_id,target,
+               clock_timestamp()+make_interval(secs => seconds)
+        FROM admitted WHERE admit
+        ON CONFLICT (plan_id,target_digest) DO UPDATE SET
+            plan_generation=EXCLUDED.plan_generation,
+            enqueue_generation=registry_external_refresh_work.enqueue_generation+1,
+            attempts=0,ready_at=clock_timestamp(),expires_at=EXCLUDED.expires_at
+        RETURNING 1
+    ), refused AS (
+        -- A Record the full queue refused is reconciled by the next sweep.
+        UPDATE registry_internal.registry_external_refresh_plans plan
+        SET reconciliation_due=true,reconciliation_generation=reconciliation_generation+1,
+            next_due_at=least(next_due_at,clock_timestamp()),updated_at=clock_timestamp()
+        WHERE plan.plan_id IN (SELECT plan_id FROM admitted WHERE NOT admit)
+        RETURNING 1
+    )
+    SELECT count(*) INTO captured FROM queued;
     RETURN captured;
 END $body$;
 
@@ -1598,7 +1574,10 @@ BEGIN
         UPDATE registry_internal.registry_external_refresh_plans plan
         SET reconciliation_due=true,
             reconciliation_generation=reconciliation_generation+1,
-            next_due_at=least(next_due_at,clock_timestamp()+interval '60 seconds'),
+            next_due_at=least(next_due_at,greatest(
+                clock_timestamp()+interval '60 seconds',
+                coalesce(sweep_started_at,clock_timestamp())
+                    +make_interval(secs => least(interval_seconds,900)::double precision))),
             updated_at=clock_timestamp()
         WHERE plan.plan_id IN (SELECT plan_id FROM removed WHERE reconcile)
         RETURNING plan.plan_id
@@ -1645,8 +1624,7 @@ WITH plan AS MATERIALIZED (
     ON CONFLICT (plan_id,target_digest) DO UPDATE SET
         plan_generation=EXCLUDED.plan_generation,
         enqueue_generation=registry_external_refresh_work.enqueue_generation+1,
-        attempts=0,ready_at=clock_timestamp(),expires_at=least(registry_external_refresh_work.expires_at,EXCLUDED.expires_at),
-        lease_generation=NULL,lease_token=NULL,lease_expires_at=NULL
+        attempts=0,ready_at=clock_timestamp(),expires_at=least(registry_external_refresh_work.expires_at,EXCLUDED.expires_at)
     RETURNING 1
 ), fallback AS (
     UPDATE registry_internal.registry_external_refresh_plans current
@@ -1703,12 +1681,6 @@ mod tests {
         assert!(SETTLE_TARGET_SQL.contains("work.enqueue_generation=$6"));
         assert!(SETTLE_TARGET_SQL.contains("plan_generation=$2"));
         assert!(CLAIM_TARGETS_SQL.contains("FOR UPDATE OF work SKIP LOCKED"));
-    }
-
-    #[test]
-    fn queue_sql_clamps_crash_reclaims() {
-        assert!(CLAIM_TARGETS_SQL.contains("attempts=least(attempts+1,5)"));
-        assert!(INSTALL_SQL.contains("attempts BETWEEN 0 AND 5"));
     }
 
     #[test]
@@ -2196,8 +2168,7 @@ mod postgres_tests {
             .migration
             .execute(
                 "UPDATE registry_internal.registry_external_refresh_work
-                 SET attempts=4,lease_generation=NULL,lease_token=NULL,lease_expires_at=NULL
-                 WHERE plan_id='plan'",
+                 SET attempts=4 WHERE plan_id='plan'",
                 &[],
             )
             .await
@@ -2214,9 +2185,7 @@ mod postgres_tests {
         let claimed = claim_targets(&tx, "plan", lease).await.unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].attempts, 5);
-        retry_target(&tx, "plan", lease, &claimed[0], Duration::from_secs(15))
-            .await
-            .unwrap();
+        retry_target(&tx, "plan", lease, &claimed[0]).await.unwrap();
         finish_step(
             &tx,
             "plan",
@@ -2314,6 +2283,8 @@ mod postgres_tests {
             page_size: 50,
             max_pending: 100,
         };
+        // A cached epoch keeps its schedule across registration.
+        fixture.cache(&scope).await;
         let mut runtime = fixture.pool.get().await.unwrap();
         let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
         register_plans(&tx, std::slice::from_ref(&plan))
@@ -2421,6 +2392,407 @@ mod postgres_tests {
         assert!(state.get::<_, bool>(5));
         tx.commit().await.unwrap();
         drop(runtime);
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn a_bad_key_that_exhausts_its_retries_does_not_make_the_plan_due_within_a_minute() {
+        let registry = super::super::external_view_query::tests::registry();
+        let fixture = Activated::new(&registry).await;
+        let scope = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let mut runtime = fixture.pool.get().await.unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        register_plans(
+            &tx,
+            &[registration(
+                &fixture,
+                "plan",
+                "authority",
+                vec![scope.epoch],
+            )],
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        // A sweep meets one key it cannot acquire and queues it for retry.
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        let lease = claim_plan(&tx, "plan", "authority", Duration::from_secs(120))
+            .await
+            .unwrap()
+            .unwrap();
+        prepare_sweep(&tx, "plan", "authority", lease, 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            enqueue_sweep_retry(
+                &tx,
+                "plan",
+                "authority",
+                lease,
+                "target-bad",
+                scope.epoch,
+                "urn:test:keys",
+                "bad",
+                EXPIRES_AT,
+            )
+            .await,
+            Ok(true)
+        );
+        finish_step(
+            &tx,
+            "plan",
+            "authority",
+            lease,
+            StepKind::Sweep,
+            &SweepCheckpoint {
+                phase: "complete".to_owned(),
+                baseline_sequence: 1,
+                continuation: None,
+                completed: true,
+                acquisition_failures: 1,
+            },
+            "sweep-with-failures",
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        drop(runtime);
+
+        // Its last retry is ready and fails again.
+        fixture
+            .migration
+            .execute(
+                "UPDATE registry_internal.registry_external_refresh_work
+                 SET ready_at=clock_timestamp()-interval '1 second',attempts=3",
+                &[],
+            )
+            .await
+            .unwrap();
+        let mut runtime = fixture.pool.get().await.unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        let lease = claim_plan(&tx, "plan", "authority", Duration::from_secs(120))
+            .await
+            .unwrap()
+            .unwrap();
+        let state = load_step_state(&tx, "plan", "authority", lease)
+            .await
+            .unwrap();
+        assert_eq!(state.next, StepKind::Targets);
+        let claimed = claim_targets(&tx, "plan", lease).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].attempts, 4);
+        retry_target(&tx, "plan", lease, &claimed[0]).await.unwrap();
+        finish_step(
+            &tx,
+            "plan",
+            "authority",
+            lease,
+            StepKind::Targets,
+            &state.checkpoint,
+            "targets",
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        drop(runtime);
+
+        let state = fixture
+            .migration
+            .query_one(
+                "SELECT next_due_at>clock_timestamp()+interval '60 seconds',
+                        next_due_at>=sweep_started_at+interval '900 seconds',
+                        reconciliation_due,
+                        (SELECT count(*) FROM registry_internal.registry_external_refresh_work)
+                 FROM registry_internal.registry_external_refresh_plans WHERE plan_id='plan'",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(
+            state.get::<_, bool>(0),
+            "giving up on one key must not start another sweep within a minute"
+        );
+        assert!(
+            state.get::<_, bool>(1),
+            "the next sweep starts no sooner than the sweep floor"
+        );
+        assert!(
+            state.get::<_, bool>(2),
+            "giving up still asks the next sweep to reconcile"
+        );
+        assert_eq!(state.get::<_, i64>(3), 0, "the exhausted key is settled");
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn a_sweep_retry_refused_at_capacity_does_not_reschedule_the_sweep() {
+        let registry = super::super::external_view_query::tests::registry();
+        let fixture = Activated::new(&registry).await;
+        let scope = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let mut plan = registration(&fixture, "plan", "authority", vec![scope.epoch]);
+        plan.max_pending = 1;
+        let mut runtime = fixture.pool.get().await.unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        register_plans(&tx, &[plan]).await.unwrap();
+        assert_eq!(
+            capture_local_record(
+                tx.transaction(),
+                "local-record",
+                Uuid::new_v4(),
+                &BTreeSet::from(["subject-key".to_owned()]),
+            )
+            .await
+            .unwrap(),
+            1
+        );
+        tx.commit().await.unwrap();
+
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        let lease = claim_plan(&tx, "plan", "authority", Duration::from_secs(120))
+            .await
+            .unwrap()
+            .unwrap();
+        prepare_sweep(&tx, "plan", "authority", lease, 1)
+            .await
+            .unwrap();
+        const STATE: &str = "SELECT reconciliation_generation,next_due_at::text,
+                (SELECT count(*) FROM registry_internal.registry_external_refresh_work)
+             FROM registry_internal.registry_external_refresh_plans WHERE plan_id='plan'";
+        let before = tx.transaction().query_one(STATE, &[]).await.unwrap();
+        assert_eq!(
+            enqueue_sweep_retry(
+                &tx,
+                "plan",
+                "authority",
+                lease,
+                "target-refused",
+                scope.epoch,
+                "urn:test:keys",
+                "refused",
+                EXPIRES_AT,
+            )
+            .await,
+            Ok(false)
+        );
+        let after = tx.transaction().query_one(STATE, &[]).await.unwrap();
+        assert_eq!(
+            after.get::<_, i64>(0),
+            before.get::<_, i64>(0),
+            "the running sweep already reconciles; a refused retry asks for nothing more"
+        );
+        assert_eq!(after.get::<_, &str>(1), before.get::<_, &str>(1));
+        assert_eq!(after.get::<_, i64>(2), 1, "the full queue takes no retry");
+        tx.rollback().await.unwrap();
+        drop(runtime);
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_record_writers_capture_without_waiting_on_plan_rows() {
+        let registry = super::super::external_view_query::tests::registry();
+        let fixture = Activated::new(&registry).await;
+        let scope = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let fields = BTreeSet::from(["subject-key".to_owned()]);
+        let mut runtime = fixture.pool.get().await.unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        register_plans(
+            &tx,
+            &[
+                registration(&fixture, "plan-a", "authority", vec![scope.epoch]),
+                registration(&fixture, "plan-b", "authority", vec![scope.epoch]),
+            ],
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        drop(runtime);
+
+        let mut first_runtime = fixture.pool.get().await.unwrap();
+        let mut second_runtime = fixture.pool.get().await.unwrap();
+        let first = transaction(&mut first_runtime, &registry, &fixture.expected).await;
+        assert_eq!(
+            capture_local_record(first.transaction(), "local-record", Uuid::new_v4(), &fields)
+                .await
+                .unwrap(),
+            2
+        );
+        let second = transaction(&mut second_runtime, &registry, &fixture.expected).await;
+        second
+            .transaction()
+            .batch_execute("SET LOCAL lock_timeout='200ms'")
+            .await
+            .unwrap();
+        assert_eq!(
+            capture_local_record(
+                second.transaction(),
+                "local-record",
+                Uuid::new_v4(),
+                &fields
+            )
+            .await,
+            Ok(2),
+            "a second writer must not wait on plan rows the first writer touched"
+        );
+        second.commit().await.unwrap();
+        first.commit().await.unwrap();
+        drop(first_runtime);
+        drop(second_runtime);
+        let queued: i64 = fixture
+            .migration
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_external_refresh_work",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(queued, 4);
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn registration_of_a_plan_whose_epoch_has_no_snapshots_makes_it_due_now() {
+        let registry = super::super::external_view_query::tests::registry();
+        let fixture = Activated::new(&registry).await;
+        let scope = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let plan = registration(&fixture, "plan", "authority", vec![scope.epoch]);
+        const PARK: &str = "UPDATE registry_internal.registry_external_refresh_plans SET
+            next_due_at=clock_timestamp()+interval '1 hour',sweep_phase='labels',sweep_baseline=42,
+            sweep_continuation='sealed-fixture-position',sweep_acquisition_failures=1,
+            sweep_started_at=clock_timestamp()-interval '5 minutes',lease_token=gen_random_uuid(),
+            lease_expires_at=clock_timestamp()+interval '1 hour',reconciliation_due=false";
+        const STATE: &str = "SELECT next_due_at<=clock_timestamp(),sweep_phase,sweep_baseline,
+                sweep_continuation IS NULL,sweep_acquisition_failures,lease_token IS NULL,
+                plan_generation
+             FROM registry_internal.registry_external_refresh_plans WHERE plan_id='plan'";
+        let mut runtime = fixture.pool.get().await.unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        register_plans(&tx, std::slice::from_ref(&plan))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        fixture.migration.execute(PARK, &[]).await.unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        register_plans(&tx, std::slice::from_ref(&plan))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let state = fixture.migration.query_one(STATE, &[]).await.unwrap();
+        assert!(state.get::<_, bool>(0), "an empty epoch is due now");
+        assert_eq!(state.get::<_, &str>(1), "roots");
+        assert_eq!(state.get::<_, i64>(2), 0);
+        assert!(state.get::<_, bool>(3));
+        assert_eq!(state.get::<_, i64>(4), 0);
+        assert!(
+            state.get::<_, bool>(5),
+            "the sweep restarts under a new lease"
+        );
+        assert_eq!(state.get::<_, i64>(6), 1, "the authority is unchanged");
+
+        // Once the epoch holds a snapshot, registration keeps the schedule.
+        fixture.cache(&scope).await;
+        fixture.migration.execute(PARK, &[]).await.unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        register_plans(&tx, std::slice::from_ref(&plan))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        drop(runtime);
+        let state = fixture.migration.query_one(STATE, &[]).await.unwrap();
+        assert!(!state.get::<_, bool>(0));
+        assert_eq!(state.get::<_, &str>(1), "labels");
+        assert_eq!(state.get::<_, i64>(2), 42);
+        assert!(!state.get::<_, bool>(3));
+        assert_eq!(state.get::<_, i64>(4), 1);
+        assert!(!state.get::<_, bool>(5));
+        assert_eq!(state.get::<_, i64>(6), 1);
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn install_keeps_no_lease_on_work_rows() {
+        let registry = super::super::external_view_query::tests::registry();
+        let fixture = Activated::new(&registry).await;
+        let scope = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let catalog = fixture
+            .migration
+            .query_one(
+                "SELECT
+                    (SELECT count(*) FROM information_schema.columns
+                     WHERE table_schema='registry_internal'
+                       AND table_name='registry_external_refresh_work'
+                       AND column_name LIKE 'lease%'),
+                    EXISTS (SELECT 1 FROM pg_constraint
+                            WHERE conname='registry_external_refresh_work_lease_pair'),
+                    (SELECT indpred IS NULL FROM pg_index
+                     WHERE indexrelid='registry_internal.registry_external_refresh_work_due_idx'::regclass)",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(catalog.get::<_, i64>(0), 0, "work rows carry no lease");
+        assert!(!catalog.get::<_, bool>(1));
+        assert!(
+            catalog.get::<_, bool>(2),
+            "the due index covers every work row"
+        );
+
+        let mut runtime = fixture.pool.get().await.unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        register_plans(
+            &tx,
+            &[registration(
+                &fixture,
+                "plan",
+                "authority",
+                vec![scope.epoch],
+            )],
+        )
+        .await
+        .unwrap();
+        capture_local_record(
+            tx.transaction(),
+            "local-record",
+            Uuid::new_v4(),
+            &BTreeSet::from(["subject-key".to_owned()]),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        drop(runtime);
+        fixture
+            .migration
+            .execute(
+                "UPDATE registry_internal.registry_external_refresh_work SET attempts=6",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(fixture
+            .migration
+            .execute(
+                "UPDATE registry_internal.registry_external_refresh_work SET attempts=-1",
+                &[],
+            )
+            .await
+            .is_err());
         fixture.cleanup().await;
     }
 }
