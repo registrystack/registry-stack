@@ -21,7 +21,6 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::{
     connection,
     file::{read_bounded_regular_file, FileReadError},
-    project::find_project,
     ApiError,
 };
 
@@ -37,14 +36,11 @@ pub struct ApiArgs {
     /// Project directory, or a descendant from which the exact product root is found.
     #[arg(long)]
     pub project: Option<PathBuf>,
-    /// Named local development client resolved by the product adapter.
-    #[arg(long, conflicts_with_all = ["connection", "url"])]
-    pub client: Option<String>,
     /// Named saved remote connection.
-    #[arg(long, conflicts_with_all = ["client", "url"])]
+    #[arg(long, conflicts_with = "url")]
     pub connection: Option<String>,
     /// Explicit service base URL for an advanced one-off request.
-    #[arg(long, conflicts_with_all = ["client", "connection"])]
+    #[arg(long, conflicts_with = "connection")]
     pub url: Option<String>,
     /// Bearer credential file used only with `--url`.
     #[arg(long, requires = "url")]
@@ -84,7 +80,6 @@ impl fmt::Debug for ApiArgs {
             .debug_struct("ApiArgs")
             .field("has_path", &!self.path.is_empty())
             .field("project", &self.project)
-            .field("client", &self.client)
             .field("connection", &self.connection)
             .field("has_url", &self.url.is_some())
             .field("token_file", &self.token_file)
@@ -233,23 +228,17 @@ impl fmt::Debug for LocalConnection {
 }
 
 /// Resolve a connection, execute one bounded request, and write its raw response.
-pub fn run_api(
-    product: &str,
-    args: ApiArgs,
-    resolver: impl FnOnce(&Path, &str) -> Result<LocalConnection, String>,
-) -> Result<(), ApiError> {
-    run_api_with_profile_headers(product, args, resolver, &[])
+pub fn run_api(product: &str, args: ApiArgs) -> Result<(), ApiError> {
+    run_api_with_profile_headers(product, args, &[])
 }
 
 /// Execute one request, applying a saved caller profile to the adapter-owned header names.
 pub fn run_api_with_profile_headers(
     product: &str,
     args: ApiArgs,
-    resolver: impl FnOnce(&Path, &str) -> Result<LocalConnection, String>,
     profile_headers: &[&str],
 ) -> Result<(), ApiError> {
-    let connection =
-        resolve_connection(product, &args, resolver)?.apply_access_profile(profile_headers)?;
+    let connection = resolve_connection(product, &args)?.apply_access_profile(profile_headers)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -257,20 +246,7 @@ pub fn run_api_with_profile_headers(
     runtime.block_on(execute(args, connection))
 }
 
-fn resolve_connection(
-    product: &str,
-    args: &ApiArgs,
-    resolver: impl FnOnce(&Path, &str) -> Result<LocalConnection, String>,
-) -> Result<LocalConnection, ApiError> {
-    if let Some(client) = &args.client {
-        let start = args
-            .project
-            .clone()
-            .map_or_else(std::env::current_dir, Ok)
-            .map_err(|_| ApiError::Io)?;
-        let project = find_project(product, &start)?;
-        return resolver(&project, client).map_err(ApiError::Configuration);
-    }
+fn resolve_connection(product: &str, args: &ApiArgs) -> Result<LocalConnection, ApiError> {
     if let Some(url) = &args.url {
         let connection = match &args.token_file {
             Some(path) => LocalConnection::bearer(url.clone(), read_token_file(path)?),

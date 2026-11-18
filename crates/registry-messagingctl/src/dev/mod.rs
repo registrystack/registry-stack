@@ -283,55 +283,6 @@ fn acquire_client_token(
     }
 }
 
-pub(crate) fn api_connection(
-    project: &Path,
-    client: &str,
-) -> Result<registry_cli_api::LocalConnection, String> {
-    local_api_connection(project, client).map_err(|error| error.message)
-}
-
-fn local_api_connection(
-    project: &Path,
-    client: &str,
-) -> DevResult<registry_cli_api::LocalConnection> {
-    let project = project_directory(project)?;
-    let root = session_directory(&project);
-    private::check(&root, true).map_err(|error| {
-        refused(format!(
-            "no development session exists in this project ({error}); start one with messagingctl dev"
-        ))
-    })?;
-    let loaded = load_package(&root.join("package")).map_err(|error| {
-        refused(format!(
-            "the running session package is unavailable ({error}); start messagingctl dev again"
-        ))
-    })?;
-    let record = read_session(&root)?;
-    let origin = api_origin(&record)?;
-    let (signed, _) = acquire_client_token(&root, &loaded, &record, client)?;
-    registry_cli_api::LocalConnection::bearer(origin, signed)
-        .map_err(|error| refused(error.to_string()))
-}
-
-fn api_origin(record: &SessionRecord) -> DevResult<String> {
-    if record.state != "ready" {
-        return Err(refused(
-            "the local development session is not ready; start messagingctl dev again".to_owned(),
-        ));
-    }
-    let origin = record.detail["api"].as_str().ok_or_else(|| {
-        refused("the ready development session does not name its API endpoint; restart messagingctl dev".to_owned())
-    })?;
-    let port = origin
-        .strip_prefix("http://127.0.0.1:")
-        .and_then(|port| port.parse::<u16>().ok())
-        .filter(|port| *port != 0 && origin == format!("http://127.0.0.1:{port}"))
-        .ok_or_else(|| {
-            refused("the retained development API endpoint is not one exact numeric-loopback HTTP origin; restart messagingctl dev".to_owned())
-        })?;
-    Ok(format!("http://127.0.0.1:{port}"))
-}
-
 /// The containers a session started, recorded as each one is created so a
 /// failed or interrupted start still removes it.
 struct Session {

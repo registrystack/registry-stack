@@ -302,9 +302,7 @@ where
     let command = match command {
         Command::Api(args) => {
             return api_command(format_requested, stderr, || {
-                registry_cli_api::run_api("scheduling", *args, |_, _| {
-                    Err("Scheduling has no retained local caller session; run rstack scheduling connection add NAME and select it with --connection NAME".to_owned())
-                })
+                registry_cli_api::run_api("scheduling", *args)
             });
         }
         Command::Connection { command } => {

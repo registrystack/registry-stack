@@ -44,7 +44,7 @@ fn ready_session_points_the_reader_to_the_public_api_command() {
     render_dev(&report, &mut output).expect("render ready session");
     let output = String::from_utf8(output).expect("UTF-8 report");
     assert!(
-        output.contains("next: rstack messaging api PATH --client CLIENT"),
+        output.contains("next: rstack messaging dev token --client CLIENT, then rstack messaging api PATH --url URL --header @FILE"),
         "{output}"
     );
     assert!(!output.contains("curl -H @HEADER_FILE"), "{output}");
@@ -104,10 +104,15 @@ fn api_and_connection_commands_are_exposed() {
         "/ready",
         "--project",
         "project",
-        "--client",
-        "case-system",
+        "--url",
+        "http://127.0.0.1:9",
+        "--header",
+        "@header.txt",
     ])
     .is_ok());
+    assert!(
+        Cli::try_parse_from(["messagingctl", "api", "/ready", "--client", "case-system",]).is_err()
+    );
     assert!(Cli::try_parse_from(["messagingctl", "connection", "list",]).is_ok());
 }
 

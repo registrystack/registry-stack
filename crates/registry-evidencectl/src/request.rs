@@ -744,15 +744,6 @@ fn read_bearer_header(argument: &str) -> Result<Zeroizing<String>> {
     Ok(Zeroizing::new(token.to_owned()))
 }
 
-/// `api --client` selected a retained local session that no longer exists.
-/// Name the explicit connection flags that replace it.
-pub(crate) fn local_api_connection(
-    _project: &Path,
-    _client_id: &str,
-) -> std::result::Result<registry_cli_api::LocalConnection, String> {
-    Err("--client is not supported. Pass the service base URL with --url and a bearer credential with --header @FILE.".to_owned())
-}
-
 fn validate_closed_inputs<'a>(
     definitions: &'a [DefinitionShape],
     args: &PrepareArgs,
@@ -1276,16 +1267,6 @@ mod tests {
     }
 
     use super::*;
-
-    #[test]
-    fn api_client_selection_is_refused_with_the_explicit_connection_flags() {
-        let message = match local_api_connection(Path::new("."), "reader") {
-            Err(message) => message,
-            Ok(_) => panic!("--client has no local resolver"),
-        };
-        assert!(message.contains("--url"), "{message}");
-        assert!(message.contains("--header @FILE"), "{message}");
-    }
 
     fn progressive_args(subject: Vec<&str>, subjects_file: Option<PathBuf>) -> PrepareArgs {
         PrepareArgs {

@@ -1178,10 +1178,10 @@ pub async fn run() -> std::process::ExitCode {
                 return std::process::ExitCode::from(2);
             }
             return match tokio::task::spawn_blocking(move || {
-                registry_cli_api::run_api("coordinator", *args, |_, _| {
-                    Err("Coordinator has no retained local caller session; run rstack coordinator connection add NAME and select it with --connection NAME".to_owned())
-                })
-            }).await {
+                registry_cli_api::run_api("coordinator", *args)
+            })
+            .await
+            {
                 Ok(result) => api_result(result),
                 Err(_) => {
                     eprintln!("error: the API request worker could not complete");

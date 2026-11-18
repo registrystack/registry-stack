@@ -2806,7 +2806,7 @@ where
                 );
                 return ExitCode::from(USAGE_EXIT);
             }
-            return match registry_cli_api::run_api("breg", *args, dev::local_api_connection) {
+            return match registry_cli_api::run_api("breg", *args) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
                     let _ = writeln!(stderr, "error: {error}");

@@ -1,6 +1,6 @@
 ---
 title: Call an API with rstack
-description: Use a local development client or save a remote connection once, then make short HTTP requests with rstack.
+description: Send a one-off request to an explicit URL or save a remote connection once, then make short HTTP requests with rstack.
 status: current
 owner: registry-docs
 source_repos:
@@ -14,30 +14,17 @@ standards_referenced: []
 ---
 
 If you are exploring a running Registry Stack service, use `rstack <product> api` to send a
-request and read its response. Select a local development client, or save your remote endpoint
-and credential references once and reuse the connection by name.
+request and read its response. Save your remote endpoint and credential references once and
+reuse the connection by name, or pass the address and a header file for a one-off request.
 
-## Use a local client
-
-With a Base Registry Engine (BReg) development session running, run this from your registry
-project or a subdirectory:
-
-```sh
-rstack breg api /v1/records/contacts --client editor
-```
-
-The command finds the project, uses its running endpoint, and acquires a fresh credential for
-`editor`. You do not copy a token or construct an authorization header. Messaging supports the
-same local client selection with its own project and client names.
+## Call a project run with rstack dev
 
 For a project run with `rstack dev`, `rstack dev token RUN_ID --as PERSON` writes a header file
 for each product the person has a grant in. Pass the product's address and that file:
 `rstack casework api /v1/review-tasks --url CASEWORK_URL --header @HEADER_FILE`. See
 [Run a project with rstack dev](../run-a-project-with-rstack-dev/).
 
-{/* Evidence: crates/registry-cli-api/src/project.rs, find_project;
-    crates/registry-bregctl/src/dev/mod.rs, local_api_connection;
-    crates/registry-messagingctl/src/dev/mod.rs, api_connection;
+{/* Evidence: crates/registry-cli-api/src/api.rs, resolve_connection;
     crates/registry-rstack-dev/src/lib.rs, token. */}
 
 ## Save a remote connection
@@ -100,7 +87,7 @@ rstack breg connection use pilot
 rstack breg api /v1/records/contacts
 ```
 
-The selection belongs to that product and project. An explicit `--client`, `--connection`, or
+The selection belongs to that product and project. An explicit `--connection` or
 `--url` selects the connection for one invocation. Scripts can name `--connection pilot`
 explicitly. Settings live in `$XDG_CONFIG_HOME/registrystack/connections.yaml`, or
 `~/.config/registrystack/connections.yaml` when `XDG_CONFIG_HOME` is unset.
@@ -114,11 +101,11 @@ Without a body the method is `GET`. `--input` selects `POST` and supplies a JSON
 `--method` when the endpoint requires another method. For example, from the Messaging starter:
 
 ```sh
-rstack messaging api /v1/messages --client case-system \
+rstack messaging api /v1/messages --connection pilot \
   --input message.json --idempotency-key appointment-reminder-1
 ```
 
-Use the actual client and request file from your project. Keep an idempotency key with its
+Use your own saved connection and request file. Keep an idempotency key with its
 original request for recovery. An endpoint's required revision, task grant, or disclosure
 selection remains part of that request. `--header` accepts additional headers, and
 `--header @FILE` reads existing header files without putting their contents on the command line.
