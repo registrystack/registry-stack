@@ -465,8 +465,7 @@ mod tests {
             "bregctl hook discard",
             "bregctl review-recovery retry-application",
             "bregctl external-projection inspect",
-            "bregctl external-projection withdraw",
-            "bregctl external-projection rotate",
+            "bregctl external-projection purge",
             "bregctl external-projection refresh",
         ] {
             assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());

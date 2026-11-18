@@ -18,7 +18,8 @@ use super::{
 
 pub(crate) const BIND_ONCE_FUNCTION: &str =
     "registry_internal.bind_external_projection_once(text,uuid,text,text,bigint,text,text,uuid)";
-pub(crate) const MAINTENANCE_FUNCTION:&str="registry_internal.maintain_external_projection_scope(text,text,uuid,text,uuid,text,text,bigint)";
+pub(crate) const MAINTENANCE_FUNCTION: &str =
+    "registry_internal.maintain_external_projection_scope(text,text,uuid,text,uuid)";
 /// Exact catalog identities include PostgreSQL argument names and spacing.
 /// ACL/install signatures above remain type-only SQL call signatures.
 /// Entries are (identity, result type, returns set, security definer, runtime execute).
@@ -29,7 +30,7 @@ pub(crate) const MANAGED_FUNCTIONS: &[(&str,&str,bool,bool,bool)] = &[
     ("registry_internal.purge_external_projections(p_limit integer)","record",true,true,true),
     ("registry_internal.lock_external_projection_generation(p_projection text, p_epoch uuid, p_binding text, p_grant text)","bigint",false,true,true),
     ("registry_internal.bind_external_projection_once(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_ttl bigint, p_contract text, p_package text, p_activation uuid)","uuid",false,true,true),
-    ("registry_internal.maintain_external_projection_scope(p_action text, p_projection text, p_epoch uuid, p_package text, p_activation uuid, p_binding text, p_grant text, p_ttl bigint)","jsonb",false,false,false),
+    ("registry_internal.maintain_external_projection_scope(p_action text, p_projection text, p_epoch uuid, p_package text, p_activation uuid)","jsonb",false,false,false),
 ];
 
 pub(crate) const INDEXES: &[&str] = &[
@@ -1396,8 +1397,7 @@ END $body$;
 
 const MAINTENANCE_SQL: &str = r#"
 CREATE OR REPLACE FUNCTION registry_internal.maintain_external_projection_scope(
-    p_action text,p_projection text,p_epoch uuid,p_package text,p_activation uuid,
-    p_binding text,p_grant text,p_ttl bigint
+    p_action text,p_projection text,p_epoch uuid,p_package text,p_activation uuid
 ) RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER
 SET search_path = pg_catalog, registry_internal AS $body$
 DECLARE allowed jsonb := __COMPILED_EXTERNAL_ALLOWLIST__;
@@ -1952,7 +1952,7 @@ pub(crate) mod postgres_tests {
         .await
         .unwrap();
         let maintenance =
-            "SELECT registry_internal.maintain_external_projection_scope($1,$2,$3,$4,$5,$6,$7,$8)";
+            "SELECT registry_internal.maintain_external_projection_scope($1,$2,$3,$4,$5)";
         let activation = Uuid::parse_str(&expected.activation_id).unwrap();
         let package = expected.package_digest.as_str();
         let runtime = pool.get().await.unwrap();
@@ -1965,9 +1965,6 @@ pub(crate) mod postgres_tests {
                     &Some(bound.epoch),
                     &package,
                     &activation,
-                    &"renewed-binding",
-                    &"renewed-grant",
-                    &20_i64,
                 ]
             )
             .await
@@ -1984,9 +1981,6 @@ pub(crate) mod postgres_tests {
                         &Some(bound.epoch),
                         &package,
                         &activation,
-                        &"renewed-binding",
-                        &"renewed-grant",
-                        &20_i64,
                     ]
                 )
                 .await
@@ -2003,9 +1997,6 @@ pub(crate) mod postgres_tests {
                     &Some(bound.epoch),
                     &package,
                     &activation,
-                    &"",
-                    &"",
-                    &20_i64,
                 ],
             )
             .await
@@ -2025,9 +2016,6 @@ pub(crate) mod postgres_tests {
                     &Some(Uuid::new_v4()),
                     &package,
                     &activation,
-                    &"",
-                    &"",
-                    &20_i64,
                 ]
             )
             .await
@@ -2041,9 +2029,6 @@ pub(crate) mod postgres_tests {
                     &Some(bound.epoch),
                     &package,
                     &activation,
-                    &"",
-                    &"",
-                    &20_i64,
                 ],
             )
             .await
@@ -2060,9 +2045,6 @@ pub(crate) mod postgres_tests {
                     &Some(bound.epoch),
                     &package,
                     &activation,
-                    &"",
-                    &"",
-                    &20_i64,
                 ],
             )
             .await

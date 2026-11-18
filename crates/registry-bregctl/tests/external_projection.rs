@@ -32,7 +32,7 @@ fn run_json<'a>(arguments: impl IntoIterator<Item = &'a OsStr>) -> (ExitCode, Va
 fn a_refused_runtime_configuration_is_reported_as_status_reports_it() {
     const PATH_CANARY: &str = "external-projection-path-canary";
     const CONFIG_CANARY: &str = "external-projection-config-canary";
-    for command in ["inspect", "withdraw", "rotate"] {
+    for command in ["inspect", "purge"] {
         let mut config = tempfile::Builder::new()
             .prefix(PATH_CANARY)
             .tempfile()
