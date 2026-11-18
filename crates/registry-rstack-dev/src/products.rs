@@ -4003,6 +4003,7 @@ mod tests {
             }),
             casework_principals: BTreeMap::new(),
             binaries: BTreeMap::new(),
+            managed_database: false,
         }
     }
 

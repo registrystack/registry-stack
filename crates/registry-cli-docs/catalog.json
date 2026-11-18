@@ -26089,7 +26089,7 @@
                 },
                 {
                   "display": "--database-url <URL>",
-                  "description": "TLS PostgreSQL administrator URL. Defaults to RSTACK_DEV_DATABASE_URL",
+                  "description": "TLS PostgreSQL administrator URL. Defaults to RSTACK_DEV_DATABASE_URL; without either, the run starts its own PostgreSQL server in Docker",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -26368,7 +26368,7 @@
                 },
                 {
                   "display": "--database-url <URL>",
-                  "description": "TLS PostgreSQL administrator URL for --recover. Defaults to RSTACK_DEV_DATABASE_URL",
+                  "description": "TLS PostgreSQL administrator URL for --recover. Defaults to RSTACK_DEV_DATABASE_URL; a run that started its own server needs none",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],

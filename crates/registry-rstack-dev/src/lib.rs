@@ -13,6 +13,7 @@
 mod bindings;
 mod browser;
 mod database;
+mod docker;
 mod explain;
 pub(crate) mod guard;
 mod issuer;
@@ -53,6 +54,7 @@ use zeroize::Zeroizing;
 use self::{
     browser::BrowserServer,
     database::{Database, RecoveryIdentity},
+    docker::{Docker, Image},
     issuer::Issuer,
     plan::{Plan, Product},
     products::{ProductRunner, SchemaPerson},
@@ -159,6 +161,19 @@ struct RunInput {
     breg_authority: Option<BregAuthority>,
     casework_principals: BTreeMap<String, String>,
     binaries: BTreeMap<Product, Binaries>,
+    /// No administrator URL was given, so the run starts its own PostgreSQL
+    /// server in a Docker container labelled with the run ID and removes it
+    /// when the run ends.
+    #[serde(default)]
+    managed_database: bool,
+}
+
+impl RunInput {
+    fn requires_postgis(&self) -> bool {
+        self.breg_authority
+            .as_ref()
+            .is_some_and(|authority| authority.requires_postgis)
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -249,6 +264,12 @@ fn recovery_message(run_id: &str, facts: &Value) -> String {
     if let Some(directory) = facts["run_directory"].as_str() {
         line(format!("run directory {directory}"));
     }
+    if let Some(container) = facts["container"].as_str() {
+        line(format!(
+            "PostgreSQL container {container}, label {}={run_id}",
+            docker::LABEL
+        ));
+    }
     for process in facts["processes"].as_array().into_iter().flatten() {
         let name = process["product"]
             .as_str()
@@ -291,7 +312,8 @@ fn recovery_message(run_id: &str, facts: &Value) -> String {
 }
 
 /// Everything a lost supervisor leaves behind: the processes it recorded and
-/// every database and role its plan provisions.
+/// every database and role its plan provisions, or, when the run started its
+/// own server, the container that holds them all.
 fn lost_supervisor_facts(root: &Path, run_id: &str) -> Value {
     let mut facts = json!({
         "kind": "lost-supervisor",
@@ -299,12 +321,21 @@ fn lost_supervisor_facts(root: &Path, run_id: &str) -> Value {
         "processes": recorded_processes(root),
         "objects": [],
     });
-    match provisioned_objects(root, run_id) {
-        Ok(objects) => facts["objects"] = json!(objects),
+    match captured_input(root).map(|input| input.managed_database) {
+        Ok(true) => facts["container"] = json!(docker::container_name(run_id)),
+        Ok(false) => match provisioned_objects(root, run_id) {
+            Ok(objects) => facts["objects"] = json!(objects),
+            Err(error) => facts["unavailable"] = json!(format!("{error:#}")),
+        },
         Err(error) => facts["unavailable"] = json!(format!("{error:#}")),
     }
     name_field_key(root, &mut facts);
     facts
+}
+
+fn captured_input(root: &Path) -> Result<RunInput> {
+    read_json(&root.join("input.json"), MAXIMUM_CAPTURED_INPUT_BYTES)
+        .context("cannot read the captured development plan")
 }
 
 /// Name, never read, the development data key a run left behind.
@@ -324,12 +355,8 @@ fn recorded_processes(root: &Path) -> Value {
 /// The database label and spatial flag of each database the run's plan
 /// provisions.
 fn provisioned_labels(root: &Path) -> Result<Vec<(&'static str, bool)>> {
-    let input: RunInput = read_json(&root.join("input.json"), MAXIMUM_CAPTURED_INPUT_BYTES)
-        .context("cannot read the captured development plan")?;
-    let spatial = input
-        .breg_authority
-        .as_ref()
-        .is_some_and(|authority| authority.requires_postgis);
+    let input = captured_input(root)?;
+    let spatial = input.requires_postgis();
     let mut labels = Vec::new();
     for entry in &input.plan.products {
         match entry.product {
@@ -547,6 +574,13 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
                 name.as_str().unwrap_or("?")
             )?;
         }
+        for container in recovered["containers"].as_array().into_iter().flatten() {
+            writeln!(
+                output,
+                "  removed PostgreSQL container {}",
+                container.as_str().unwrap_or("?")
+            )?;
+        }
     }
     if let Some(products) = report["products"].as_object() {
         for (product, url) in products {
@@ -739,10 +773,21 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
     let inspection = products::inspect(&project, &plan, &signals)?;
     plan::validate_application_authority(&plan, &inspection)?;
     plan.order_products_for_start();
-    ensure!(
-        env::var_os(DATABASE_URL).is_some_and(|value| !value.is_empty()),
-        "supply --database-url or {DATABASE_URL} for a TLS PostgreSQL development server"
-    );
+    let named = |variable| env::var_os(variable).is_some_and(|value| !value.is_empty());
+    let managed_database = !named(DATABASE_URL);
+    if managed_database {
+        ensure!(
+            !named(CA_FILE),
+            "{CA_FILE} names the CA of a PostgreSQL server, but no administrator URL names the server; pass --database-url as well, or unset {CA_FILE} to let the run start its own server"
+        );
+        // Pull before the supervisor starts, so a slow first pull does not
+        // count against the startup deadline.
+        let requires_postgis = inspection
+            .breg_authority
+            .as_ref()
+            .is_some_and(|authority| authority.requires_postgis);
+        Docker::connect()?.ensure_image(Image::for_plan(requires_postgis))?;
+    }
     let binaries = plan
         .products
         .iter()
@@ -766,6 +811,7 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
         breg_authority: inspection.breg_authority,
         casework_principals: inspection.casework_principals,
         binaries,
+        managed_database,
     };
     let preparation = (|| {
         write_private(&root.join("input.json"), &capture_input(&input)?)?;
@@ -946,23 +992,37 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         write_private(&root.join("input.json"), &capture_input(&input)?)?;
     }
     let mut database = None;
+    let mut docker = None;
     let mut expiry = None;
     let mut browser = None;
+    let image = Image::for_plan(input.requires_postgis());
     let prepared = catch_startup(|| {
         products.check()?;
-        let ca = env::var_os(CA_FILE)
-            .map(|path| {
-                let bytes = plan::read(Path::new(&path), 1024 * 1024)
-                    .context("cannot read the PostgreSQL CA file")
-                    .map_err(operational)?;
-                write_private(&root.join("postgres-ca"), &bytes)?;
-                Ok::<_, anyhow::Error>(bytes)
-            })
-            .transpose()?;
-        let admin = Zeroizing::new(
-            env::var(DATABASE_URL)
-                .map_err(|_| anyhow::anyhow!("missing PostgreSQL administrator URL"))?,
-        );
+        let (admin, ca) = if input.managed_database {
+            // The run's own server hands the by-address path its URL and the
+            // CA the run drew, as an operator's server would.
+            let server =
+                docker
+                    .insert(Docker::connect()?)
+                    .start_server(root, &input.run_id, image)?;
+            write_private(&root.join("postgres-ca"), &server.ca_pem)?;
+            (server.admin_url, Some(server.ca_pem))
+        } else {
+            let ca = env::var_os(CA_FILE)
+                .map(|path| {
+                    let bytes = plan::read(Path::new(&path), 1024 * 1024)
+                        .context("cannot read the PostgreSQL CA file")
+                        .map_err(operational)?;
+                    write_private(&root.join("postgres-ca"), &bytes)?;
+                    Ok::<_, anyhow::Error>(bytes)
+                })
+                .transpose()?;
+            let admin = Zeroizing::new(
+                env::var(DATABASE_URL)
+                    .map_err(|_| anyhow::anyhow!("missing PostgreSQL administrator URL"))?,
+            );
+            (admin, ca)
+        };
         let issuer = Arc::new(Issuer::create(root)?);
         let connected = Database::connect(&admin, ca.as_deref(), &input.run_id)?;
         // The cluster identity must be recorded before anything can create a database or role.
@@ -1006,6 +1066,11 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             "products": urls, "people": input.plan.people.keys().collect::<Vec<_>>(),
             "expires_at": expires_at, "logs": root.join("logs"),
         });
+        report["database"] = if input.managed_database {
+            json!({"mode": "managed", "image": image.reference})
+        } else {
+            json!({"mode": "address"})
+        };
         report["scenarios"] = json!(journey_reports);
         report["scenarioDigest"] = json!(input.scenario_digest);
         let application = application_url.map(|url| {
@@ -1058,10 +1123,18 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     let mut delays = cleanup_schedule(CLEANUP_CAP);
     loop {
         // Keep the exact ownership list until both the supervised processes
-        // and their database resources have been released.
-        let cleanup = products
-            .stop()
-            .and_then(|()| database.as_mut().map_or(Ok(()), Database::cleanup));
+        // and their database resources have been released. A run's own
+        // server goes with its container, so nothing in it is dropped first.
+        let cleanup = products.stop().and_then(|()| {
+            if input.managed_database {
+                drop(database.take());
+                docker
+                    .as_ref()
+                    .map_or(Ok(()), |docker| docker.remove(&input.run_id).map(drop))
+            } else {
+                database.as_mut().map_or(Ok(()), Database::cleanup)
+            }
+        });
         if cleanup.is_ok() {
             break;
         }
@@ -1073,7 +1146,10 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             let names = database
                 .as_ref()
                 .map_or_else(Vec::new, Database::pending_names);
-            let pending = pending_report(&input.run_id, names, recorded_processes(root));
+            let mut pending = pending_report(&input.run_id, names, recorded_processes(root));
+            if input.managed_database {
+                pending["container"] = json!(docker::container_name(&input.run_id));
+            }
             write_private(&root.join(PENDING), &serde_json::to_vec(&pending)?)?;
             bail!(
                 "run {} gave up cleanup after {} minutes; run rstack dev status {} for the resources to release",
@@ -1153,6 +1229,9 @@ fn pending_status(root: &Path, run_id: &str, pending: Value) -> Value {
         "databases_and_roles": pending["databases_and_roles"],
         "processes": pending["processes"],
     });
+    if let Some(container) = pending["container"].as_str() {
+        report["recovery"]["container"] = json!(container);
+    }
     name_field_key(root, &mut report["recovery"]);
     report
 }
@@ -1287,13 +1366,23 @@ fn recover_run(run_id: &str) -> Result<Value> {
         }
         .into()
     };
-    let (stopped_groups, dropped) = (|| -> Result<_> {
+    let (stopped_groups, dropped, containers) = (|| -> Result<_> {
         // Status can read the last report while recovery holds the worker lock.
         write_private(
             &root.join(REPORT),
             &serde_json::to_vec(&simple_report(run_id, "stopping"))?,
         )
         .context("cannot mark the run as stopping")?;
+        if captured_input(&root)?.managed_database {
+            // The run's own server holds every database and role it made, so
+            // removing its container releases them without an administrator
+            // URL.
+            let docker = Docker::connect()?;
+            let stopped_groups = recovery::wait_for_guards(&root)?;
+            let containers = docker.remove(run_id)?;
+            remove_run_dir(&root)?;
+            return Ok((stopped_groups, Vec::new(), containers));
+        }
         // A null identity means the worker never began provisioning. Missing
         // or invalid metadata cannot prove that there is nothing to release.
         let identity = read_json::<Option<RecoveryIdentity>>(&root.join(POSTGRES_IDENTITY), 1024)
@@ -1320,13 +1409,14 @@ fn recover_run(run_id: &str) -> Result<Value> {
             database.cleanup()?;
         }
         remove_run_dir(&root)?;
-        Ok((stopped_groups, dropped))
+        Ok((stopped_groups, dropped, Vec::new()))
     })()
     .map_err(|error| unrecovered(format!("{error:#}")))?;
     let mut report = simple_report(run_id, "stopped");
     report["recovered"] = json!({
         "stopped_process_groups": stopped_groups,
         "databases_and_roles": dropped,
+        "containers": containers,
     });
     Ok(report)
 }
@@ -1763,6 +1853,40 @@ mod tests {
             text.contains(&format!("breg database rstack_{RUN_ID}_breg")),
             "{text}"
         );
+    }
+
+    #[test]
+    fn recovery_of_a_managed_run_names_its_container_not_its_databases() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path();
+        fake_run(
+            root,
+            json!([{"product": "breg", "project": ".", "audience": "registry"}]),
+            false,
+        );
+        let mut input: Value =
+            serde_json::from_slice(&fs::read(root.join("input.json")).unwrap()).unwrap();
+        input["managed_database"] = json!(true);
+        fs::write(root.join("input.json"), input.to_string()).unwrap();
+        let container = format!("rstack-dev-{RUN_ID}");
+
+        let facts = lost_supervisor_facts(root, RUN_ID);
+        assert_eq!(facts["container"], container, "{facts}");
+        assert_eq!(facts["objects"], json!([]), "{facts}");
+        assert!(facts.get("unavailable").is_none(), "{facts}");
+        let mut pending = pending_report(RUN_ID, vec![], json!([]));
+        pending["container"] = json!(container);
+        let pending = pending_status(root, RUN_ID, pending)["recovery"].clone();
+        assert_eq!(pending["container"], container, "{pending}");
+        for facts in [facts, pending] {
+            let text = recovery_message(RUN_ID, &facts);
+            assert!(
+                text.contains(&format!(
+                    "PostgreSQL container {container}, label org.registrystack.rstack.dev-run={RUN_ID}"
+                )),
+                "{text}"
+            );
+        }
     }
 
     #[test]

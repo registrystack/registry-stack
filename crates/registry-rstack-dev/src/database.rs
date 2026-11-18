@@ -970,7 +970,7 @@ fn tls_connector(ca_pem: Option<&[u8]>) -> Result<MakeRustlsConnect> {
     }
 }
 
-fn random_password() -> Result<Zeroizing<String>> {
+pub(super) fn random_password() -> Result<Zeroizing<String>> {
     let mut bytes = Zeroizing::new([0_u8; 32]);
     getrandom::fill(bytes.as_mut()).context("cannot generate a PostgreSQL credential")?;
     Ok(Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes.as_ref())))

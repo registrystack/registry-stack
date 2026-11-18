@@ -63,7 +63,11 @@
           "type": "string"
         },
         "unavailable": {"type": "string"},
-        "reason": {"type": "string"}
+        "reason": {"type": "string"},
+        "container": {
+          "description": "Present when the run started its own PostgreSQL server: the name of the Docker container that holds every database and role the run made.",
+          "type": "string"
+        }
       }
     }
   }

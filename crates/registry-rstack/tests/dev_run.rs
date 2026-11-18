@@ -25,11 +25,43 @@ fn host(name: &str) -> std::path::PathBuf {
     path
 }
 
+/// `PATH` with a directory holding the test fake Docker CLI as `docker` first,
+/// so no run these tests start reaches a real Docker daemon. Without
+/// `FAKE_DOCKER_STATE` the fake answers as a Docker CLI whose daemon is not
+/// running.
+fn fake_docker_path() -> std::ffi::OsString {
+    static DIRECTORY: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    let directory = DIRECTORY.get_or_init(|| {
+        let directory =
+            std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("dev-run-fake-docker");
+        fs::create_dir_all(&directory).unwrap();
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../registry-rstack-dev/tests/fake-docker.sh")
+            .canonicalize()
+            .unwrap();
+        let link = directory.join("docker");
+        match fs::read_link(&link) {
+            Ok(target) if target == script => {}
+            Ok(_) => {
+                fs::remove_file(&link).unwrap();
+                symlink(&script, &link).unwrap();
+            }
+            Err(_) => symlink(&script, &link).unwrap(),
+        }
+        directory
+    });
+    let mut paths = vec![directory.clone()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    std::env::join_paths(paths).unwrap()
+}
+
 /// `rstack dev` in source mode, with run state under `state` and the JSON
 /// report format when `json` is set: no managed installation, the `bregctl`
-/// built beside rstack as the BReg host and tool, no Casework tool, and the
+/// built beside rstack as the BReg host and tool, no Casework tool, the
 /// system `false` as every product runtime, since these runs stop before a
-/// service starts.
+/// service starts, and the fake Docker CLI with no daemon.
 fn rstack_dev(state: &std::path::Path, json: bool) -> Command {
     let uninstalled = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("dev-run-uninstalled");
     let mut command = Command::new(env!("CARGO_BIN_EXE_rstack"));
@@ -49,7 +81,9 @@ fn rstack_dev(state: &std::path::Path, json: bool) -> Command {
         .env_remove("RSTACK_CASEWORKCTL_BIN")
         .env("RSTACK_CASEWORK_BIN", system_binary("false"))
         .env_remove("RSTACK_DEV_DATABASE_URL")
-        .env_remove("RSTACK_DEV_DATABASE_CA");
+        .env_remove("RSTACK_DEV_DATABASE_CA")
+        .env("PATH", fake_docker_path())
+        .env_remove("FAKE_DOCKER_STATE");
     command
 }
 
@@ -433,6 +467,105 @@ fn recover_that_cannot_proceed_reports_the_facts_and_changes_nothing() {
     let message = report["error"]["message"].as_str().unwrap();
     assert!(message.contains("could not be recovered"), "{message}");
     assert!(root.exists());
+}
+
+/// A lost run that started its own PostgreSQL container: its captured plan
+/// records the managed database, and it recorded the server's identity, which
+/// a run on a server the operator named could only release with that
+/// server's administrator URL.
+fn lost_managed_run(state: &std::path::Path) -> std::path::PathBuf {
+    let root = lost_run(state);
+    fs::create_dir(root.join("guards")).unwrap();
+    fs::set_permissions(root.join("guards"), fs::Permissions::from_mode(0o700)).unwrap();
+    let input = serde_json::json!({
+        "run_id": RUN_ID, "project": "/project", "ttl_seconds": 60,
+        "plan": {
+            "issuer": "https://issuer.example.invalid",
+            "products": [{"product": "breg", "project": ".", "audience": "registry"}],
+            "people": {"operator": {
+                "subject": "operator", "client": "operator-client",
+                "grants": {"breg": {"profile": "operator", "scopes": []}}
+            }},
+            "scenarioFile": "tests/scenarios.yaml"
+        },
+        "schema_people": [],
+        "breg_authority": {
+            "principal": "p", "purpose": false, "requires_postgis": false,
+            "encrypts_fields": false, "named_clients": []
+        },
+        "casework_principals": {},
+        "binaries": {},
+        "managed_database": true
+    });
+    fs::write(root.join("input.json"), input.to_string()).unwrap();
+    fs::write(
+        root.join("postgres-identity.json"),
+        r#"{"system_identifier":7000000000000000001,"database":"postgres"}"#,
+    )
+    .unwrap();
+    root
+}
+
+#[test]
+fn recover_needs_no_database_url_for_managed_runs() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let root = lost_managed_run(&state);
+    let docker = fake_docker_state(scratch.path(), closed_loopback_port());
+    let containers = docker.join("containers");
+    fs::create_dir(&containers).unwrap();
+    let ours = "a".repeat(64);
+    let theirs = "b".repeat(64);
+    fs::write(
+        containers.join(&ours),
+        format!("{DEV_RUN_LABEL}={RUN_ID}\n"),
+    )
+    .unwrap();
+    fs::write(
+        containers.join(&theirs),
+        format!("{DEV_RUN_LABEL}=fedcba9876543210fedcba9876543210\n"),
+    )
+    .unwrap();
+    let with_docker = |arguments: &[&str]| {
+        rstack_dev(&state, true)
+            .env("FAKE_DOCKER_STATE", &docker)
+            .args(arguments)
+            .output()
+            .unwrap()
+    };
+
+    // The lost run's recovery facts name its container, in the documented
+    // error shape.
+    let status = with_docker(&["status", RUN_ID]);
+    assert_eq!(status.status.code(), Some(3), "{status:?}");
+    let report: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_error_envelope(&report, "operational");
+    let container = format!("rstack-dev-{RUN_ID}");
+    assert_eq!(report["recovery"]["container"], container, "{report}");
+    assert!(
+        report["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(&container),
+        "{report}"
+    );
+
+    let output = with_docker(&["stop", RUN_ID, "--recover"]);
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "stopped", "{report}");
+    assert_eq!(
+        report["recovered"]["containers"],
+        serde_json::json!([ours]),
+        "{report}"
+    );
+    assert!(!root.exists());
+    let left: Vec<_> = fs::read_dir(&containers)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(left, [theirs]);
 }
 
 fn semantic_project(root: &std::path::Path, grant: &str, step_extra: &str) {
@@ -2030,6 +2163,133 @@ fn start_reports_an_unreachable_postgresql_server_as_operational() {
     }
 }
 
+const DEV_RUN_LABEL: &str = "org.registrystack.rstack.dev-run";
+
+/// A state directory for the fake Docker CLI whose `port` answer names `port`
+/// on loopback.
+fn fake_docker_state(directory: &std::path::Path, port: u16) -> std::path::PathBuf {
+    let state = directory.join("docker-state");
+    fs::create_dir(&state).unwrap();
+    fs::write(state.join("port-answer"), format!("127.0.0.1:{port}\n")).unwrap();
+    state
+}
+
+/// Start a BReg run with no PostgreSQL administrator URL, so the run starts
+/// its own server in Docker, with `path` as `PATH` and the fake Docker CLI's
+/// state in `docker`, if any. The launcher would run the stand-in tool as the
+/// host, so the test runs the built host directly.
+fn start_managed(
+    root: &std::path::Path,
+    state: &std::path::Path,
+    path: &std::ffi::OsStr,
+    docker: Option<&std::path::Path>,
+) -> std::process::Output {
+    let mut command = Command::new(host("bregctl"));
+    command
+        .args(["rstack-dev", "start", "--json", "--"])
+        .arg(root)
+        .env("RSTACK_DEV_STATE_DIR", state)
+        .env_remove("RSTACK_DEV_DATABASE_URL")
+        .env_remove("RSTACK_DEV_DATABASE_CA")
+        .env("RSTACK_BREGCTL_BIN", explain_only_tool(root))
+        .env("RSTACK_BREG_BIN", system_binary("false"))
+        .env("PATH", path)
+        .env_remove("FAKE_DOCKER_STATE");
+    if let Some(docker) = docker {
+        command.env("FAKE_DOCKER_STATE", docker);
+    }
+    command.output().unwrap()
+}
+
+#[test]
+fn start_without_database_url_runs_a_labelled_container() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    fixture_project(scratch.path(), "");
+    let outside = tempfile::tempdir().unwrap();
+    let docker = fake_docker_state(outside.path(), closed_loopback_port());
+
+    let result = start_managed(scratch.path(), &state, &fake_docker_path(), Some(&docker));
+
+    // The fake container answers no PostgreSQL connection, so the run fails
+    // at the administrator session the by-address path opens.
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_error_envelope(&report, "operational");
+    assert_eq!(result.status.code(), Some(3), "{report}");
+    assert!(
+        report["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot establish the PostgreSQL administrator session"),
+        "{report}"
+    );
+    let argv = fs::read_to_string(docker.join("argv.log")).unwrap();
+    let runs: Vec<_> = argv
+        .lines()
+        .filter(|line| line.starts_with("run "))
+        .collect();
+    assert_eq!(runs.len(), 1, "{argv}");
+    let run_id = runs[0]
+        .split(' ')
+        .find_map(|word| word.strip_prefix(&format!("{DEV_RUN_LABEL}=")))
+        .unwrap();
+    assert!(
+        run_id.len() == 32 && run_id.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "{argv}"
+    );
+    assert!(runs[0].contains(" --publish 127.0.0.1::5432 "), "{argv}");
+    assert!(runs[0].contains(" --env-file "), "{argv}");
+    assert!(runs[0].contains(" postgres:18.7@sha256:"), "{argv}");
+    assert!(!runs[0].contains("--platform"), "{argv}");
+    // The run removed its container by label before it reported the failure.
+    assert!(
+        argv.contains(&format!(
+            "ps --all --quiet --no-trunc --filter label={DEV_RUN_LABEL}={run_id}"
+        )),
+        "{argv}"
+    );
+    assert_eq!(fs::read_dir(docker.join("containers")).unwrap().count(), 0);
+    assert!(report.get("run_id").is_none(), "{report}");
+    assert_eq!(live_runs(&state), Vec::<String>::new());
+    // The drawn administrator password reached Docker only in a file.
+    let env_file = fs::read_to_string(docker.join("env-file")).unwrap();
+    let password = env_file
+        .strip_prefix("POSTGRES_PASSWORD=")
+        .unwrap()
+        .trim_end();
+    assert!(!password.is_empty());
+    assert!(!argv.contains(password));
+    for output in [&result.stdout, &result.stderr] {
+        assert!(!String::from_utf8_lossy(output).contains(password));
+    }
+}
+
+#[test]
+fn missing_docker_names_both_ways_out() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    fixture_project(scratch.path(), "");
+    // The stand-in product tool needs bash, and nothing else on PATH.
+    let bash_only = tempfile::tempdir().unwrap();
+    symlink(system_binary("bash"), bash_only.path().join("bash")).unwrap();
+
+    // A Docker CLI whose daemon does not answer, then no Docker CLI at all.
+    for path in [fake_docker_path(), bash_only.path().as_os_str().to_owned()] {
+        let result = start_managed(scratch.path(), &state, &path, None);
+
+        let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_error_envelope(&report, "operational");
+        assert_eq!(result.status.code(), Some(3), "{report}");
+        let message = report["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("install Docker, or pass --database-url"),
+            "{message}"
+        );
+        assert!(report.get("run_id").is_none(), "{report}");
+        assert!(!state.exists());
+    }
+}
+
 /// A project whose plan lists only Casework: the standalone decision example
 /// and one scenario that reads its review policies.
 fn casework_only_project(root: &std::path::Path) {
@@ -2240,12 +2500,14 @@ fn normal_check_uses_owning_casework_tool_for_exact_run_producer_chain() {
     assert!(product_only.status.success(), "{product_only:?}");
     let started = start_with_casework_tool(&project, &state, &tool);
     let start_report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
-    assert_eq!(started.status.code(), Some(1));
+    // With no administrator URL the run would start its own server, and the
+    // test Docker has no daemon.
+    assert_eq!(started.status.code(), Some(3));
     assert!(
         start_report["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("RSTACK_DEV_DATABASE_URL"),
+            .contains("--database-url"),
         "{start_report}"
     );
     assert!(!start_report.to_string().contains("--application-root"));
