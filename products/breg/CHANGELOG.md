@@ -34,7 +34,7 @@
   refuse a configuration without it at construction with kind `configuration`.
   Migration: set the audience member to the authorization server's issuer
   identifier, exactly as its metadata publishes it.
-- The `bregctl project-dev` token endpoint accepts a client assertion typed
+- The `rstack dev` run issuer's machine token endpoint accepts a client assertion typed
   `client-authentication+jwt` or `JWT` whose only audience is its issuer
   identifier, as one string. It refuses any other type, its token endpoint URL
   as the audience, and an audience array.
@@ -48,7 +48,7 @@
   requires `claimContract.purposeRequired`; Model adds the required
   `requiresPostgis`. A consumer that pins the earlier versions must accept the
   new `apiVersion` values. See the [explain contract
-  policy](contracts/explain/README.md).
+  policy](https://docs.registrystack.org/reference/bregctl-explain/#schemas-and-compatibility).
 - A `crs84-polygon` field stores a bounded `Polygon` or `MultiPolygon` in
   WGS 84 longitude and latitude. It takes `precision`, `maximumPositions` and
   an optional `bbox`, and the compiler validates it with PostGIS and generates
@@ -89,7 +89,7 @@
   inspect|withdraw|rotate|refresh` operates the cached values, and `bregctl
   generate external-source-facts` writes the source facts. An indexed
   projection keeps its cache in seven derived tables in `registry_internal`
-  (see [external-projection-storage.md](external-projection-storage.md)) and
+  (see [External projections](https://docs.registrystack.org/configure/breg-external-projections/)) and
   needs separate migration and runtime database roles. Exclude those tables'
   data from backups; see the back-up and restore page. The
   [synthetic licensing example](examples/external-views/README.md) shows live
@@ -104,7 +104,7 @@
   requires; the command never reads the workstation clock. A Proposal plan
   evaluates `today()` when the Proposal starts and its guards compare again at
   Apply, so write the offset with that gap in mind. See
-  [immediate-actions.md](immediate-actions.md).
+  [Actions](https://docs.registrystack.org/configure/breg-actions/).
 - Request audit records include a keyed `clientReference` when the bearer
   verifier matches an allowed OAuth client. It uses the same pseudonym as
   `authorization.clientPseudonym` and tells apart two clients acting for the
@@ -117,7 +117,7 @@
   cannot answer. The opt-in response omits the Proposal ETag. The Rust,
   Node.js and Python clients expose `read_proposal_review_status_with_progress`
   and `readProposalReviewStatusWithProgress`. See
-  [proposals.md](proposals.md).
+  [Proposals](https://docs.registrystack.org/configure/breg-proposals/).
 - The Node.js client's record, record-list and continuation reads, and the
   metadata, contract, schema, revision and lookup reads, accept a final
   `{ signal: AbortSignal }` argument. Aborting rejects with

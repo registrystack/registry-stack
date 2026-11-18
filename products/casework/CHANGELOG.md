@@ -60,12 +60,12 @@
   and the caller is staff. A reviewer app can send the pair on every single
   task and request call that accepts it, whatever the policy's context mode.
   A collection call still needs exactly one current-source provider (zero or
-  several answer 400), and source-free routes answer 400; see
-  RUNTIME-CONFIG.md. The Rust, Node.js and Python clients take a
+  several answer 400), and source-free routes answer 400; see the
+  Casework configuration reference. The Rust, Node.js and Python clients take a
   `HumanSourceCredential` per call and report
   `humanSourceCredentialContract()` (Python:
   `human_source_credential_contract`). See
-  [RUNTIME-CONFIG.md](RUNTIME-CONFIG.md).
+  [Casework configuration](https://docs.registrystack.org/reference/casework-configuration/).
 - `caseworkctl check` refuses a review policy in which a stage offers no
   advancing outcome. Every stage must offer an outcome whose settlement is
   `approved` (`answered` for an answer policy), whether it lists `outcomes` or

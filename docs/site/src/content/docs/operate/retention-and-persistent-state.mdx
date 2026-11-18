@@ -328,7 +328,7 @@ every other state you must retain belong in a registry you serve with `breg serv
     crates/registry-breg/src/startup.rs, audit_writer and operational_log_level();
     crates/registry-breg/src/runtime_config.rs, AuditConfig::destination;
     crates/registry-platform-audit/src/writer.rs, for_process;
-    products/platform/PROJECT-DEV.md. */}
+    crates/registry-rstack-dev/src/lib.rs. */}
 
 The webhook outbox also has scheduled payload expiry. The runtime
 clears a retained payload on the first successful delivery, and clears an undelivered payload once

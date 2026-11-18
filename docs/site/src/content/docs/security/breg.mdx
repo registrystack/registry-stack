@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-18"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -121,7 +121,7 @@ The residuals refer to these obligations by number.
    The other refusals (`BYPASSRLS`, `CREATEDB`, `CREATEROLE`, database or schema `CREATE`) answer
    only that the database is not ready for this package, so check those role attributes first when
    startup refuses.
-   Single-role mode (used by `bregctl dev` and the quickstarts) catches mistakes, not a holder of
+   Single-role mode (used by `rstack dev` and the quickstarts) catches mistakes, not a holder of
    the credential (`BREG-RES-02`).
    {/* Evidence: crates/registry-breg/src/startup.rs, verify_configured_runtime_role,
         verify_runtime_grants; crates/registry-breg/src/postgres/roles.rs,

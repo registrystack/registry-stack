@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-18"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -187,6 +187,23 @@ recheck status in the changing transaction, and write an `operator-tool` audit r
 `list` and `show` mask the recipient and never print a part, template data or the submitter's
 subject.
 `messagingctl check` reads no database, network or secret.
+
+`rstack dev` is the supported way to run Messaging on a developer's machine.
+A run listens on loopback only and runs the runtime on a `development-loopback` listener (refused on
+any non-loopback bind).
+It publishes its PostgreSQL and Mailpit containers on 127.0.0.1 and labels them with the run, so
+`stop`, TTL expiry and `stop --recover` remove them.
+Its mock gateway accepts only the run's gateway token and signs its delivery callbacks with a
+per-run key.
+Every generated secret and every test token lives in the run's owner-only directory outside the
+project, so the project is never written to, and no secret is placed on a command line.
+A test token is signed with the run's own throwaway key and expires in minutes, and the runtime
+still authorizes every protected route.
+The run never contacts a real provider.
+
+{/* Evidence: crates/registry-rstack-dev/src/messaging.rs;
+    crates/registry-rstack-dev/src/sinks.rs;
+    crates/registry-rstack-dev/src/docker.rs. */}
 
 `messagingctl dev` is for a developer's machine, and some of what it writes outlives a session
 until the next start in the same project removes it: the last session's audit journal and log in

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-18"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -135,10 +135,26 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
 - Separate credentials for the same human: when a provider declares a `humanSourceAuthentication`
   audience, collection authentication resolves one immutable provider before filtering or output,
   including empty pages; missing or ambiguous providers and invalid pairs fail the invocation.
-  Single submitted targets and source-free routes reject the source header.
-  A target-derived source authentication or policy refusal on a single task or request returns the
-  same not-found response as an absent or concealed row, so a supplied bad source bearer cannot
-  become an existence or stored-context-policy oracle.
+  A single submitted-context task or request reads no source, so Casework ignores a well-formed
+  pair from a staff caller there: it neither verifies nor forwards the source bearer, and the call
+  is decided as without the pair, by the primary bearer, profile and ordinary authorization.
+  Admission still refuses before the policy lookup, on a submitted-context target as on any other:
+  a source bearer that is not a well-formed compact token, a duplicated source authorization,
+  primary authorization, Casework profile or source profile header, a source bearer without a valid
+  `Registry-Source-Profile`, and a Requester caller.
+  Source-free routes still reject the source header.
+  Source authentication refusal on a single current-source task or request, and an unknown task or
+  request id, use the same not-found response body as an absent or concealed row; normal header and
+  primary admission and collection-wide failures retain their own classes.
+  Response timing is not equalized, and an authenticated caller who knows a task or request id can
+  still tell an existing target from a missing one through refusals that run before row access,
+  such as request-shape checks on a target that admission let through.
+  For a submitted-context target this needs no valid source credential: a staff caller who sends a
+  well-formed but worthless source token can tell an existing submitted-context target (the
+  handler's own answer) from a missing or current-source one (not found), so the target's context
+  mode is observable to an authenticated staff caller.
+  This is accepted: the caller is authenticated staff, ids are random UUIDs, and the response
+  reveals the context mode only.
   Only the source bearer is forwarded, never the Casework or unattended status credential.
   Credentials are redacted, zeroized and dropped with the request, with no cross-call cache or
   durable recovery capture.

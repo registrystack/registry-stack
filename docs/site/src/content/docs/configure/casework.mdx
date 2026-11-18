@@ -282,7 +282,7 @@ casework_url="$(jq -r .products.casework run.json)"
 The new run has a new ID, a new port and new tokens, so ask for tokens again with `headers_for`
 before your next call. Leave it running.
 
-{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack/tests/dev_run.rs, casework_alone_runs_end_to_end. */}
+{/* Evidence: crates/registry-rstack-dev/src/lib.rs; crates/registry-rstack/tests/dev_run.rs, casework_alone_runs_end_to_end. */}
 
 ## Enable a delegated staff reader
 
@@ -512,28 +512,32 @@ Casework requires all three even when only Staff decide the review.
 Use a separate `actsAs: requester` profile for the trusted producer that submits the review.
 The canonical project gives each role its own scope.
 
-For native local development, add a client bound to the Administrator profile in `dev-clients.yaml`.
-`caseworkctl dev start` uses that client's authority to seed the directory on first start.
-Use a separate Staff client for claims and decisions, and list that client under `staff` for the review queue's directory team.
-These entries show the Casework scopes from the canonical local client configuration:
+For local development, give the plan one person bound to the Administrator profile, whose authority seeds the directory through a scenario step that calls `POST /v1/directory/bootstrap`.
+Use a separate Staff person for claims and decisions, and list that person under `staff` in the bootstrap body for the review queue's team.
+The plan's `people` entries show the Casework scopes, as in the standalone decision plan:
 
-```yaml title="products/casework/examples/canonical-review/dev-clients.yaml"
-clients:
-  - id: administrator
-    accessProfile: administrator
-    scopes: [casework:admin]
-    claims: {registry_actor_kind: human}
-  - id: supervisor
-    accessProfile: supervisor
-    scopes: [casework:supervisor]
-    claims: {registry_actor_kind: human}
-  - id: staff
-    accessProfile: staff
-    scopes: [casework:staff]
-    claims: {registry_actor_kind: human}
+```yaml title="products/casework/examples/standalone-decision/dev.yaml"
+people:
+  administrator:
+    subject: administrator
+    client: standalone-workbench
+    grants:
+      casework:
+        profile: administrator
+        scopes: [casework:admin]
+        claims: {registry_actor_kind: human}
+  staff:
+    subject: staff
+    client: standalone-workbench
+    grants:
+      casework:
+        profile: staff
+        scopes: [casework:staff]
+        claims: {registry_actor_kind: human}
 ```
 
-{/* Evidence: products/casework/examples/canonical-review/dev-clients.yaml administrator, staff */}
+{/* Evidence: products/casework/examples/standalone-decision/dev.yaml administrator, staff;
+    products/casework/examples/standalone-decision/tests/scenarios.yaml */}
 
 ### Generate the policy from a BReg Action
 
@@ -623,22 +627,14 @@ Configure the exact issuer audience, resource and scopes that BReg accepts, and 
 
 ### Run it locally against BReg
 
-For a local session with the same issuer as BReg, add an explicit `integrations` block to Casework's `dev-clients.yaml`.
-Declare `integrations.resource`, `integrations.contextProviders` keyed by `deploymentRef`, and a `serviceClients` entry for the status reader.
-Each provider binding has the same fields as the runtime example.
-A generated local service client's references are `secret:file/service-CLIENT-id` and `secret:file/service-CLIENT-key`; imported owner-only files go through `integrations.secretFiles`.
-
-Start the already configured BReg dev session separately.
-Use `caseworkctl dev start ./casework --issuer-project ./breg-project` only when that ready BReg owner has pre-registered the Casework clients, their exact scopes, claims and resource.
-The Casework session retains that owner's issuer endpoint and selects free ports only for its own Casework service and database.
+For a local run with BReg, list both products in one `rstack dev` plan.
+The run gives them one issuer and one PostgreSQL server, and `rstack dev` registers the Casework people and their exact scopes and claims.
+The licensing example plan, `products/platform/examples/licensing/dev.yaml`, runs BReg and Casework as a pair.
+Bind an existing producer as [Run a project with rstack dev](../run-a-project-with-rstack-dev/#bind-an-existing-casework-producer-to-a-run) describes.
 Casework does not start BReg or modify its access profiles.
 
-On first start, a development session uses the usual local ports when they are free and selects other free loopback ports when they are occupied.
-It retains the selected ports with the session, so stop and restart keep the same endpoints.
-Use `--casework-port`, `--issuer-port` and `--database-port` when a project needs explicit assignments.
-
-{/* Evidence: crates/registry-caseworkctl/src/dev/integrations.rs;
-    crates/registry-caseworkctl/src/dev/tests.rs */}
+{/* Evidence: products/platform/examples/licensing/dev.yaml;
+    crates/registry-rstack-dev/src/bindings.rs */}
 
 ### How a human read reaches the source
 
@@ -797,26 +793,22 @@ A domain refusal exits 1, invalid usage exits 2, and unavailable local or remote
 
 ### Prepare a synthetic browser run
 
-For an explicitly declared synthetic browser run, `caseworkctl generate run-source PROJECT --binding FILE` checks an existing producer's exact old issuer, profile and subject, and its declared development identity and grant chain.
-The closed request format is `CaseworkRunSource` v1alpha1.
-The `run-source` example project carries one.
+For an explicitly declared synthetic browser run, `rstack dev` binds the run issuer; Casework has no separate source-preparation command.
+A closed `runIssuerBinding` in `dev.yaml` selects one existing producer and asserts its exact old issuer, profile and subject, matched to the plan's person and Casework grant.
+The runner refuses a binding that does not match, at its `dev.yaml` pointer, before any product starts.
 
-- `--output NEW_DIRECTORY` captures the checked source closure.
-- `--expected-source-digest DIGEST` refuses drift.
-- `--issuer ACTUAL_LOOPBACK_URL` changes only the selected producer issuer and, when separately opted in, its existing initiator issuer on the new copy.
-  Without `--issuer`, original bytes are preserved.
-- Inspection without `--output` writes nothing.
+- It never edits the source project: the run works on a private copy taken at start.
+- In the copy it replaces only the selected producer's issuer with the allocated loopback run issuer and, when the binding separately opts in, an existing `trustedInitiatorIssuer`. It never fills an absent pin.
+- It then runs the ordinary `caseworkctl check`, provider pairing, packaging, apply and doctor on the copy, which refuse every other policy error.
 
-This source preparation does not activate a package: run normal provider pairing, check, package, apply and doctor on the prepared source.
-Missing provider descriptions remain missing until normal pairing, and ordinary production packaging still refuses an incomplete closure.
 Subjects and grants never change.
 Initiator opt-in acknowledges issuer trust under the existing producer, not an enforced subject allowlist.
-Original and transformed hashes and the exact permitted pointers are reported without subjects or secrets.
-A failure to write the owner-only output receipt fails the command, and an existing output directory is never overwritten.
-`rstack dev` owns the corresponding run declaration; [Run a project with rstack dev](../run-a-project-with-rstack-dev/) describes it.
+A fresh run uses a new issuer, key and package, never a mutated old package.
+[Run a project with rstack dev](../run-a-project-with-rstack-dev/#bind-an-existing-casework-producer-to-a-run) describes the declaration.
 
-{/* Evidence: crates/registry-caseworkctl/src/run_source.rs CaseworkRunSource;
-    crates/registry-caseworkctl/src/lib.rs expected_source_digest */}
+{/* Evidence: crates/registry-rstack-dev/src/plan.rs runIssuerBinding;
+    crates/registry-rstack/tests/dev_run.rs casework_run_issuer_mismatch_names_the_dev_yaml_pointer,
+    normal_check_uses_owning_casework_tool_for_exact_run_producer_chain */}
 
 ## Configuration reference
 

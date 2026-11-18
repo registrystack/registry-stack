@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-18"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -36,7 +36,6 @@ bregctl generate evidence-source ./registry \
 
 The generated Adapter pack declares the exact authentication kind its endpoint binding must use.
 A direct export defaults to `static-authorization`; select `--authentication oauth2-private-key-jwt` when the reviewed Evidence target uses that flow.
-The guided native `evidencectl source add` path selects `oauth2-private-key-jwt` together with its dedicated BReg development client.
 Under `oauth2-private-key-jwt` the Evidence target states `clientAssertionAudience`: the authorization server's issuer identifier, exactly as its metadata publishes it, which the client assertion carries as its only audience (RFC 10070 section 4).
 It has no default.
 Changing the selection changes the pack version and export provenance, so an import or update cannot treat different authentication-contract bytes as the same immutable pack.
@@ -121,31 +120,13 @@ They do not establish live HTTP authorization, signing, or retained-session oper
 ## Add Evidence after local registry use
 
 You can use an existing authored registry before it has an Evidence lookup or client.
-Start with a complete EvidenceProject, stop the retained BReg session normally, then preview guided setup:
-
-```sh
-bregctl dev stop ./registry
-evidencectl source add ./registry ./evidence
-```
-
-Select the Record type, an existing required unique scalar selector, readable facts, and explicit row scope.
-For scripted Record type selection, Evidence's `source add` takes `--entity`, while its BReg subprocesses use `--record-type`.
-They are separate CLI contracts.
-A matching `bregctl` must be on `PATH`.
-
-Review the proposed authority before repeating the command with `--apply`.
-Setup prepares a dedicated lookup client and policy successor, imports the Source, copies credentials privately, and derives local connection bindings from the stopped retained session.
-It supplies no AssertionDefinition or Evidence caller grant.
-Restart BReg to activate the prepared successor over retained Records.
-Do not use `dev stop --remove` when those Records must survive.
-
-For a fixed row scope, use a nonsecret label.
-The selected value becomes an authored client claim in `dev-clients.yaml`; a private prompt or input file does not make that authored claim private.
-The [development command reference](../../reference/bregctl-dev/) covers retained-session preparation and recovery.
+Generate the export with `bregctl generate evidence-source`, then add it with `evidencectl source import` as shown above.
+The import supplies no AssertionDefinition or Evidence caller grant.
+A lower-level `bregctl dev export-client` copies an explicit retained client pair and grants no authority.
 Maintain an already imported Source through `source diff` and `source update`, rather than attaching it again under conflicting choices.
-A lower-level `dev export-client` copies an explicit retained client pair and grants no authority.
+The [development command reference](../../reference/bregctl-dev/#prepare-a-source-after-using-a-registry) covers preparing a dedicated source client on a retained session.
 
-{/* Evidence: crates/registry-evidencectl/src/source_add.rs "--record-type";
+{/* Evidence: crates/registry-evidencectl/src/source_cli.rs;
     crates/registry-bregctl/src/dev/prepare_source.rs. */}
 
 ## Configure the connection in Evidence
