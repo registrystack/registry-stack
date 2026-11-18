@@ -94,9 +94,13 @@
   identity. A source notifier posts to
   `/v1/external-refresh-plans/{plan}/source-changes`, and a staff
   application's service client can ask for one root to be refreshed with
-  `POST /v1/external-views/{view}/{link}/records/{root}/refresh`. A view that
-  cannot be answered completely returns the problem
-  `registry-breg/external_view/incomplete`. `bregctl external-projection
+  `POST /v1/external-views/{view}/{link}/records/{root}/refresh`. A plain
+  indexed list marks a record whose outside copy is missing `unavailable` and
+  keeps serving the rest; a filtered, sorted or counted list returns the
+  problem `registry-breg/external_view/incomplete` until every record it reads
+  has a current copy. A refresh plan whose worker identity its access profile
+  would refuse does not resolve (`breg.external-refresh.worker-not-admitted`).
+  `bregctl external-projection
   inspect|purge` operates the cached values, and `bregctl generate
   external-source-facts` writes the source facts. An indexed projection keeps
   its cache in four store tables and two refresh queue tables in

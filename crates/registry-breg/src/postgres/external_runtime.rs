@@ -873,13 +873,16 @@ impl PostgresExternalViewService {
         if request.root.is_some() && !page.root_found {
             return Err(ExternalViewError::Concealed);
         }
-        if !page.complete
-            && (request.root.is_none()
-                || query.equality.is_some()
-                || query.order.is_some()
-                || query.include_count
-                || matches!(&request.query, ExternalQueryMode::Continue(_)))
-        {
+        // A plain list over a to-one link marks each uncovered root
+        // `unavailable` and serves the rest. A filter, a sort or a count reads
+        // outside values, and a to-many link has no row to mark, so those
+        // refuse until every root is covered; one root's first to-many page
+        // answers with no rows.
+        let plain = query.equality.is_none() && query.order.is_none() && !query.include_count;
+        let marks_uncovered = plan.projection.cardinality == ExternalCardinality::One
+            || (request.root.is_some()
+                && !matches!(&request.query, ExternalQueryMode::Continue(_)));
+        if !page.complete && !(plain && marks_uncovered) {
             return Err(ExternalViewError::Incomplete);
         }
         if let Some(cutoff) = page.minimum_expires_at {
@@ -3243,6 +3246,63 @@ mod postgres_tests {
         let (status, problem) = served.get("&$count=true", caller).await;
         assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(problem["code"], "external_view.incomplete", "{problem}");
+        served.fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn a_plain_list_marks_an_uncovered_root_unavailable_and_predicates_still_refuse() {
+        let served = Served::new(Duration::from_secs(2)).await;
+        for key in ["first", "third"] {
+            served.fixture.publish_label(&served.scope, key, key).await;
+        }
+        let caller = reader("reader-principal", &["allowed"]);
+        let expected = BTreeMap::from([
+            (
+                ROOTS[0].0.to_owned(),
+                ("available".to_owned(), json!({"label": "first"})),
+            ),
+            (ROOTS[1].0.to_owned(), ("unavailable".to_owned(), json!({}))),
+            (
+                ROOTS[2].0.to_owned(),
+                ("available".to_owned(), json!({"label": "third"})),
+            ),
+        ]);
+
+        // One root without a copy leaves the other roots on the page.
+        let (status, page) = served.get("", caller.clone()).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        assert_eq!(page["status"], "unavailable", "{page}");
+        assert_eq!(availabilities(&page), expected);
+
+        // A continuation of a plain list is as plain as its first page.
+        let mut seen = BTreeMap::new();
+        let (status, first) = served.get("&$top=2", caller.clone()).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{first}");
+        seen.extend(availabilities(&first));
+        let cursor = first["nextCursor"].as_str().unwrap().to_owned();
+        let (status, second) = served
+            .get(&format!("&$skiptoken={cursor}"), caller.clone())
+            .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{second}");
+        assert_eq!(second["status"], "unavailable", "{second}");
+        seen.extend(availabilities(&second));
+        assert_eq!(seen, expected);
+
+        // A filter, a sort or a count reads outside values, so it refuses
+        // until every root is covered.
+        for query in [
+            "&$filter=label%20eq%20'first'",
+            "&$orderby=label%20asc",
+            "&$count=true",
+        ] {
+            let (status, problem) = served.get(query, caller.clone()).await;
+            assert_eq!(
+                status,
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "{query}: {problem}"
+            );
+            assert_eq!(problem["code"], "external_view.incomplete", "{query}");
+        }
         served.fixture.cleanup().await;
     }
 

@@ -233,6 +233,12 @@ class Journey:
         self.control("set-no-store", operation="person-batch", enabled=True)
         person_refresh(lambda: self.licence_filter("'Lee'")[0] == 503,
                        "a no-store refusal to withdraw Person coverage")
+        # A plain list keeps serving and marks the licence without a holder copy.
+        plain = self.view("licence-holder-indexed", "holder")
+        plain_rows = records(plain)
+        expect(plain[1].get("status") == "unavailable"
+               and any(row.get("availability") == "unavailable" and not row.get("fields") for row in plain_rows),
+               "a plain list did not mark the licence without a holder copy unavailable")
         current = self.view("licence-holder-indexed", "holder", self.args.licence_root)
         if current[0] == 200:
             expect(all(row.get("fields", {}).get("family-name") != "Ng" for row in records(current)),
