@@ -1875,6 +1875,26 @@ fn system_binary(name: &str) -> std::path::PathBuf {
         .unwrap()
 }
 
+/// A `bregctl` stand-in that answers `explain access` and `explain model` for
+/// the fixture project and does nothing else.
+fn explain_only_tool(directory: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = directory.join("bregctl-explain-only");
+    fs::write(
+        &path,
+        concat!(
+            "#!/usr/bin/env bash\nset -euo pipefail\n",
+            "case \"$*\" in\n",
+            "  *explain\\ access*) printf '%s' '{\"ok\":true,\"explanation\":{\"claimContract\":{\"principalClaims\":[],\"purposeRequired\":false,\"requesterClients\":[\"operator-client\"]},\"consent\":null}}' ;;\n",
+            "  *explain\\ model*) printf '%s' '{\"ok\":true,\"explanation\":{\"recordTypes\":[],\"requiresPostgis\":false,\"accessProfiles\":[{\"id\":\"operator\"}],\"actions\":[],\"reviewAuthorities\":[]}}' ;;\n",
+            "esac\n"
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
 /// A loopback port nothing listens on: it is reserved and released at once.
 fn closed_loopback_port() -> u16 {
     std::net::TcpListener::bind(("127.0.0.1", 0))
@@ -1970,7 +1990,8 @@ fn worker_restores_a_valid_plan_whose_captured_input_exceeds_512_kib() {
     );
 
     // The supervisor captures the plan for its worker; a refusing product tool
-    // proves the worker restored that capture and reached the product check.
+    // proves the worker restored that capture and reached the product
+    // inspection.
     let state = scratch.path().join("state");
     let false_binary = system_binary("false");
     let result = start_with_breg_binaries(
@@ -1980,10 +2001,13 @@ fn worker_restores_a_valid_plan_whose_captured_input_exceeds_512_kib() {
         &format!("postgresql://127.0.0.1:{}/postgres", closed_loopback_port()),
     );
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
-    assert_error_envelope(&report, "domain");
-    assert_eq!(result.status.code(), Some(1), "{report}");
+    assert_error_envelope(&report, "operational");
+    assert_eq!(result.status.code(), Some(3), "{report}");
     let error = report["error"]["message"].as_str().unwrap();
-    assert!(error.contains("breg check failed"), "{error}");
+    assert!(
+        error.contains("`bregctl` helper could not inspect the BReg project"),
+        "{error}"
+    );
     assert!(!error.contains("cannot restore the captured development plan"));
     assert_eq!(live_runs(&state), Vec::<String>::new());
 }
@@ -1998,7 +2022,7 @@ fn start_reports_an_unreachable_postgresql_server_as_operational() {
     let result = start_with_breg_binaries(
         scratch.path(),
         &state,
-        (&system_binary("true"), &system_binary("false")),
+        (&explain_only_tool(scratch.path()), &system_binary("false")),
         &format!(
             "postgresql://admin:{canary}@127.0.0.1:{}/postgres",
             closed_loopback_port()
@@ -2471,9 +2495,8 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
             let entry = entry.unwrap();
             if entry.file_type().unwrap().is_dir() {
                 retain_failure(&entry.path(), parent);
-            } else if entry.file_name() == "breg-test-failure.json" {
+            } else if entry.file_name() == "breg-test-report.json" {
                 let bytes = fs::read(entry.path()).unwrap();
-                assert!(bytes.len() <= 16 * 1024);
                 let _: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                 use std::io::Write as _;
                 fs::OpenOptions::new()
@@ -2653,4 +2676,215 @@ fn native_schema_test_runtime_path_refusal_has_closed_report_envelope() {
     );
     assert_eq!(report["diagnostics"][0]["path"], "runtimeConfig");
     assert!(!scratch.path().join("receipt.json").exists());
+}
+
+/// The reviewed-evidence acceptance project, copied beside `root` so a test
+/// can edit it, and the built product binaries a full start needs. A full
+/// start needs a TLS PostgreSQL server: `RSTACK_DEV_DATABASE_URL` and
+/// `RSTACK_DEV_DATABASE_CA`.
+struct AcceptanceRun {
+    project: std::path::PathBuf,
+    state: std::path::PathBuf,
+    bin: std::path::PathBuf,
+}
+
+impl AcceptanceRun {
+    const ISSUER_BINDING: &'static str = "bindings:\n  bregReviewAuthority: {id: casework, producer: registry, identity: producer, runIssuerBinding: {producer: {expectedIssuer: \"https://issuer.example.test\", expectedProfile: requester, expectedSubject: SUBJECT}, initiator: {expectedIssuer: \"https://issuer.example.test\", trust: run-test-people}}}\n";
+
+    fn new(root: &std::path::Path, expected_subject: &str) -> Self {
+        fn copy(source: &std::path::Path, target: &std::path::Path) {
+            fs::create_dir_all(target).unwrap();
+            for entry in fs::read_dir(source).unwrap() {
+                let entry = entry.unwrap();
+                let destination = target.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy(&entry.path(), &destination);
+                } else {
+                    fs::copy(entry.path(), destination).unwrap();
+                }
+            }
+        }
+        let project = root.join("project");
+        copy(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../products/breg/acceptance/reviewed-evidence-journey"),
+            &project,
+        );
+        let dev = fs::read_to_string(project.join("dev.yaml")).unwrap();
+        let (_, rest) = dev
+            .split_once(
+                "  bregReviewAuthority: {id: casework, producer: registry, identity: producer}\n",
+            )
+            .expect("the acceptance dev.yaml binds the review authority");
+        let head = dev
+            .split("bindings:\n")
+            .next()
+            .unwrap()
+            .replace("issuer: https://issuer.example.test", "issuer: run");
+        let binding = Self::ISSUER_BINDING.replace("SUBJECT", expected_subject);
+        fs::write(project.join("dev.yaml"), format!("{head}{binding}{rest}")).unwrap();
+        let bin = std::path::Path::new(env!("CARGO_BIN_EXE_bregctl"))
+            .parent()
+            .unwrap()
+            .to_owned();
+        Self {
+            project,
+            state: root.join("state"),
+            bin,
+        }
+    }
+
+    /// A tool that records its arguments, then runs `real` unless `intercept`
+    /// (a bash `case` pattern over all arguments) matches.
+    fn wrapper(&self, name: &str, real: &str, intercept: &str, reply: &str) -> std::path::PathBuf {
+        let path = self.state.with_file_name(format!("{name}-wrapper"));
+        let log = self.state.with_file_name(format!("{name}-calls.log"));
+        // The system shell strips DYLD_* variables, so the script restores the
+        // library path Cargo gave this test.
+        let library_path = std::env::var("DYLD_FALLBACK_LIBRARY_PATH").unwrap_or_default();
+        fs::write(
+            &path,
+            format!(
+                "#!/usr/bin/env bash\nset -uo pipefail\nexport DYLD_FALLBACK_LIBRARY_PATH='{library_path}'\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$*\" in\n  {intercept}) {reply} ;;\n  *) exec '{}' \"$@\" ;;\nesac\n",
+                log.display(),
+                self.bin.join(real).display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+
+    fn calls(&self, name: &str) -> String {
+        fs::read_to_string(self.state.with_file_name(format!("{name}-calls.log")))
+            .unwrap_or_default()
+    }
+
+    fn start(
+        &self,
+        bregctl: &std::path::Path,
+        caseworkctl: &std::path::Path,
+    ) -> std::process::Output {
+        let request = serde_json::json!({
+            "action": "start", "project": self.project, "json": true,
+        });
+        let variable = |name: &str| {
+            std::env::var(name).unwrap_or_else(|_| panic!("set {name} to a TLS PostgreSQL server"))
+        };
+        Command::new(env!("CARGO_BIN_EXE_bregctl"))
+            .arg("project-dev")
+            .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
+            .env("RSTACK_DEV_STATE_DIR", &self.state)
+            // The runner requires a password in the URL; a trust-authenticated
+            // test server ignores it.
+            .env(
+                "RSTACK_DEV_DATABASE_URL",
+                variable("RSTACK_DEV_DATABASE_URL").replacen("postgres@", "postgres:unused@", 1),
+            )
+            .env("RSTACK_DEV_DATABASE_CA", variable("RSTACK_DEV_DATABASE_CA"))
+            .env("RSTACK_BREGCTL_BIN", bregctl)
+            .env("RSTACK_BREG_BIN", self.bin.join("breg"))
+            .env("RSTACK_CASEWORKCTL_BIN", caseworkctl)
+            .env("RSTACK_CASEWORK_BIN", self.bin.join("casework"))
+            .output()
+            .unwrap()
+    }
+
+    /// Stop a run a test left running.
+    fn stop(&self, started: &serde_json::Value) {
+        if let Some(run) = started["run_id"].as_str() {
+            let request = serde_json::json!({"action": "stop", "run_id": run, "json": true});
+            let _ = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+                .arg("project-dev")
+                .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
+                .env("RSTACK_DEV_STATE_DIR", &self.state)
+                .output();
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires RSTACK_DEV_DATABASE_URL, RSTACK_DEV_DATABASE_CA and built breg, casework and caseworkctl binaries"]
+fn casework_run_issuer_binding_needs_no_run_source_command() {
+    let scratch = tempfile::tempdir().unwrap();
+    let run = AcceptanceRun::new(scratch.path(), "producer");
+    let caseworkctl = run.wrapper(
+        "caseworkctl",
+        "caseworkctl",
+        "*\"generate run-source\"*",
+        "exit 97",
+    );
+    let output = run.start(&run.bin.join("bregctl"), &caseworkctl);
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    run.stop(&report);
+    let calls = run.calls("caseworkctl");
+    assert!(
+        !calls.contains("run-source"),
+        "the runner must not call generate run-source: {calls}\n{report}"
+    );
+    assert!(
+        calls
+            .lines()
+            .any(|line| line.starts_with("check ") && line.contains("casework-bound")),
+        "the runner checks the bound copy with the public check: {calls}\n{report}"
+    );
+}
+
+#[test]
+#[ignore = "requires RSTACK_DEV_DATABASE_URL, RSTACK_DEV_DATABASE_CA and built breg, casework and caseworkctl binaries"]
+fn casework_run_issuer_mismatch_names_the_dev_yaml_pointer() {
+    let scratch = tempfile::tempdir().unwrap();
+    let run = AcceptanceRun::new(scratch.path(), "not-the-producer");
+    let output = run.start(&run.bin.join("bregctl"), &run.bin.join("caseworkctl"));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    run.stop(&report);
+    assert!(!output.status.success(), "{report}");
+    assert!(
+        report
+            .to_string()
+            .contains("/bindings/bregReviewAuthority/runIssuerBinding/producer/expectedSubject"),
+        "{report}"
+    );
+}
+
+#[test]
+#[ignore = "requires RSTACK_DEV_DATABASE_URL, RSTACK_DEV_DATABASE_CA and built breg, casework and caseworkctl binaries"]
+fn breg_schema_test_failure_passes_the_tool_report_through() {
+    let scratch = tempfile::tempdir().unwrap();
+    let run = AcceptanceRun::new(scratch.path(), "producer");
+    let tool_report = r#"{"ok":false,"command":"test","status":"domain-refusal","diagnostics":[{"code":"tool-owned-canary-code","message":"tool owned message","path":"/tool/owned","severity":"error","suggestedAction":"Correct it."}]}"#;
+    let bregctl = run.wrapper(
+        "bregctl",
+        "bregctl",
+        "\"test \"*",
+        &format!("printf '%s\\n' '{tool_report}'; exit 1"),
+    );
+    let output = run.start(&bregctl, &run.bin.join("caseworkctl"));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    run.stop(&report);
+    assert!(!output.status.success(), "{report}");
+    fn find(root: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+        for entry in fs::read_dir(root).ok()? {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                if let Some(found) = find(&entry.path(), name) {
+                    return Some(found);
+                }
+            } else if entry.file_name() == name {
+                return Some(entry.path());
+            }
+        }
+        None
+    }
+    let kept = find(&run.state, "breg-test-report.json")
+        .unwrap_or_else(|| panic!("the failed run keeps the tool's own report: {report}"));
+    let kept: serde_json::Value = serde_json::from_slice(&fs::read(kept).unwrap()).unwrap();
+    assert_eq!(
+        kept,
+        serde_json::from_str::<serde_json::Value>(tool_report).unwrap()
+    );
+    assert!(
+        report.to_string().contains("tool-owned-canary-code"),
+        "{report}"
+    );
 }

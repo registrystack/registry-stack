@@ -2,7 +2,6 @@
 //! Activate ordinary packages and serve them on the run's private bindings.
 
 use anyhow::{bail, ensure, Context, Result};
-use registry_breg::fixtures::journey_step_profiles;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
@@ -27,16 +26,52 @@ use super::{
     browser::BrowserClient,
     clock,
     database::{Database, DatabaseUrls},
+    explain::{breg_facts, BregFacts, InvalidBregProject},
     guard,
     issuer::Issuer,
     operational,
     plan::{self, ApplicationPlan, Plan, Product},
-    private_directory, stopping, write_private, BregAuthority, Operational, RunInput, POLL,
+    private_directory, stopping, write_private, BregAuthority, RunInput, POLL,
 };
 
 /// The run's development field-encryption data key, inside the owner-only run
 /// directory and removed with it.
 pub(super) const FIELD_KEY: &str = "field-key";
+
+/// The largest tool report the runner reads or retains.
+const MAX_TOOL_REPORT: u64 = 4 * 1024 * 1024;
+/// The `apiVersion` of every `caseworkctl` JSON report.
+const CASEWORK_REPORT_API_VERSION: &str = "id.registrystack.org/formats/casework/report/v1alpha2";
+
+/// The format of the file `bregctl test --credentials` reads. The published
+/// schema is `products/breg/generated/tools/schema-test-credentials.v1.schema.json`.
+const SCHEMA_CREDENTIALS_API_VERSION: &str =
+    "id.registrystack.org/formats/breg/schema-test-credentials/v1";
+const SCHEMA_CREDENTIALS_KIND: &str = "BRegSchemaTestCredentials";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaCredentials<'a> {
+    api_version: &'static str,
+    kind: &'static str,
+    bindings: Vec<SchemaCredentialBinding<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaCredentialBinding<'a> {
+    journey_id: &'a str,
+    step_id: &'a str,
+    credential: SchemaCredential,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaCredential {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    token_ref: String,
+}
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum RuntimeKind {
@@ -132,39 +167,67 @@ pub(super) fn application_file(root: &Path, relative: &Path) -> Result<PathBuf> 
     Ok(path)
 }
 
+/// The application's Node floor. A newer Node runs with a warning, because the
+/// application is built and tested against this major version.
+const NODE_MAJOR_FLOOR: u32 = 24;
+
+/// What the application preflight observed about the toolchain.
+struct ApplicationPreflight {
+    node: PathBuf,
+    warnings: Vec<String>,
+}
+
 pub(super) fn preflight_application(root: &Path, plan: &ApplicationPlan) -> Result<PathBuf> {
-    preflight_application_with(root, plan, || {
+    let preflight = preflight_application_with(root, plan, || {
         std::env::var_os("PATH")
             .into_iter()
             .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
             .map(|directory| directory.join("node"))
             .find(|path| path.is_file())
-            .context("Node 24 is required to start the declared application")?
+            .context("Node 24 or newer is required to start the declared application")?
             .canonicalize()
             .map_err(Into::into)
-    })
+    })?;
+    for warning in &preflight.warnings {
+        eprintln!("warning: {warning}");
+    }
+    Ok(preflight.node)
 }
 
 fn preflight_application_with(
     root: &Path,
     plan: &ApplicationPlan,
     node: impl FnOnce() -> Result<PathBuf>,
-) -> Result<PathBuf> {
+) -> Result<ApplicationPreflight> {
     for relative in [&plan.entry, &plan.prepare, &plan.checker] {
         application_file(root, relative)?;
     }
     let node = node()?;
     let node_version = bounded_version(&node, None)?;
+    let major = node_version
+        .strip_prefix('v')
+        .and_then(|version| version.split('.').next())
+        .and_then(|major| major.parse::<u32>().ok())
+        .with_context(|| format!("cannot read the Node version from {node_version:?}"))?;
     ensure!(
-        node_version.starts_with("v24."),
-        "declared application requires Node 24"
+        major >= NODE_MAJOR_FLOOR,
+        "declared application requires Node {NODE_MAJOR_FLOOR} or newer; found {node_version}"
     );
+    let mut warnings = Vec::new();
+    if major > NODE_MAJOR_FLOOR {
+        warnings.push(format!(
+            "the declared application is tested with Node {NODE_MAJOR_FLOOR}; found {node_version}"
+        ));
+    }
     let prepare = application_file(root, &plan.prepare)?;
-    ensure!(
-        bounded_version(&node, Some(&prepare))? == plan.prepare_version,
-        "application configuration command version differs from dev.yaml"
-    );
-    Ok(node)
+    let prepare_version = bounded_version(&node, Some(&prepare))?;
+    if prepare_version != plan.prepare_version {
+        warnings.push(format!(
+            "the application configuration command reports {prepare_version:?}; /application/prepareVersion in dev.yaml names {:?}",
+            plan.prepare_version
+        ));
+    }
+    Ok(ApplicationPreflight { node, warnings })
 }
 
 #[cfg(test)]
@@ -172,7 +235,7 @@ fn preflight_application_with_node(
     root: &Path,
     plan: &ApplicationPlan,
     node: &Path,
-) -> Result<PathBuf> {
+) -> Result<ApplicationPreflight> {
     preflight_application_with(root, plan, || Ok(node.canonicalize()?))
 }
 
@@ -576,17 +639,20 @@ impl<'a> ProductRunner<'a> {
             ],
         )?;
         let build = self.root.join("breg-build");
-        self.package_breg(&crate::PackageArgs {
-            candidate: crate::PackageCandidateArgs {
-                project: project.to_owned(),
-                baseline_package: None,
-                reviewed_migrations: None,
-            },
-            schema_fingerprint: None,
-            test_receipt: receipt,
-            output: build.clone(),
-            revision: None,
-        })?;
+        // `--local` skips the refusal for the reserved placeholder identity a
+        // deployable package must not carry; the run is never deployed.
+        self.tool(
+            Product::Breg,
+            "package",
+            &[
+                project.as_os_str(),
+                "--test-receipt".as_ref(),
+                receipt.as_os_str(),
+                "--output".as_ref(),
+                build.as_os_str(),
+                "--local".as_ref(),
+            ],
+        )?;
         let package = build.join("package");
         let urls = database
             .provision("breg", true, requires_postgis)
@@ -611,58 +677,23 @@ impl<'a> ProductRunner<'a> {
         Ok((config, package))
     }
 
-    /// Use the same private local packaging path as `bregctl dev`. The
-    /// selected worker still owns compilation, exact receipt validation and
-    /// publication; no public package command acquires this mode.
-    fn package_breg(&self, args: &crate::PackageArgs) -> Result<()> {
-        self.ensure_active()?;
-        require_selected_bregctl(&self.input.binaries[&Product::Breg].tool)?;
-        let result = crate::package(args, false);
-        self.ensure_active()?;
-        match result {
-            Ok(_) => Ok(()),
-            Err(refusal) => {
-                let mut report = Vec::new();
-                let mut diagnostics = Vec::new();
-                let _exit = crate::write_refusal(
-                    &refusal,
-                    crate::OutputFormat::Json,
-                    &mut report,
-                    &mut diagnostics,
-                );
-                // Preserve the same bounded structured diagnostic codes as
-                // the external tool path, never arbitrary report messages.
-                let codes = report_codes(report.as_slice())?;
-                drop(open_log(self.root, "breg-package")?);
-                write_private(
-                    &self.root.join("logs/breg-package-report.json"),
-                    &serde_json::to_vec(&json!({"phase":"breg-package","diagnosticCodes":codes}))?,
-                )?;
-                bail!(
-                    "breg package failed{codes}{}",
-                    failure_detail(&log_path(self.root, "breg-package"))
-                );
-            }
-        }
-    }
-
-    /// Draw the run's own data key when the project encrypts fields. BReg's
-    /// key generator creates the file owner-only from the platform random
-    /// source; the key is read only by the runtime through its `secret:file`
-    /// reference.
+    /// Draw the run's own data key when the project encrypts fields. `bregctl
+    /// field-encryption keygen` creates the file owner-only from the platform
+    /// random source; the key is read only by the runtime through its
+    /// `secret:file` reference.
     fn write_field_key(&self) -> Result<()> {
         if !self.encrypts_fields() {
             return Ok(());
         }
-        crate::field_encryption::keygen(&self.root.join(FIELD_KEY))
-            .map(drop)
-            .map_err(|error| {
-                Operational(format!(
-                    "cannot write the development run's field-encryption key into its run \
-                     directory: {error}"
-                ))
-                .into()
-            })
+        self.tool(
+            Product::Breg,
+            "field-encryption",
+            &[
+                "keygen".as_ref(),
+                "--output".as_ref(),
+                self.root.join(FIELD_KEY).as_os_str(),
+            ],
+        )
     }
 
     fn encrypts_fields(&self) -> bool {
@@ -683,19 +714,23 @@ impl<'a> ProductRunner<'a> {
             )?;
             let filename = format!("breg-schema-token-{index}");
             write_private(&self.root.join(&filename), token.as_bytes())?;
-            bindings.push(json!({
-                "journeyId": binding.journey, "stepId": binding.step,
-                "credential": {"type": "bearer", "tokenRef": format!("secret:file/{filename}")}
-            }));
+            bindings.push(SchemaCredentialBinding {
+                journey_id: &binding.journey,
+                step_id: &binding.step,
+                credential: SchemaCredential {
+                    kind: "bearer",
+                    token_ref: secret_ref(&filename),
+                },
+            });
         }
         let path = self.root.join("schema-test-credentials.json");
         write_private(
             &path,
-            &serde_json::to_vec(&json!({
-                "apiVersion": crate::test_lifecycle::CREDENTIALS_API_VERSION,
-                "kind": crate::test_lifecycle::CREDENTIALS_KIND,
-                "bindings": bindings
-            }))?,
+            &serde_json::to_vec(&SchemaCredentials {
+                api_version: SCHEMA_CREDENTIALS_API_VERSION,
+                kind: SCHEMA_CREDENTIALS_KIND,
+                bindings,
+            })?,
         )?;
         Ok(path)
     }
@@ -707,39 +742,11 @@ impl<'a> ProductRunner<'a> {
         bind: &str,
         breg_package: Option<&Path>,
     ) -> Result<PathBuf> {
-        let original_project = project;
         let bound;
         let project = if has_run_source(&self.input.plan) {
-            let expected = self
-                .input
-                .casework_source_digest
-                .as_deref()
-                .context("missing checked Casework source digest")?;
-            let tool = &self.input.binaries[&Product::Casework].tool;
-            // Refuse live source drift, but transform only the captured closure.
-            run_source_report(
-                tool,
-                project,
-                &self.input.plan,
-                self.terminate,
-                None,
-                Some(expected),
-                None,
-            )?;
             bound = self.root.join("casework-bound");
-            let report = run_source_report(
-                tool,
-                &self.root.join("casework-source"),
-                &self.input.plan,
-                self.terminate,
-                Some(&self.input.plan.issuer),
-                Some(expected),
-                Some(&bound),
-            )?;
-            write_private(
-                &self.root.join("casework-bound-receipt.json"),
-                &serde_json::to_vec(&report)?,
-            )?;
+            bind_casework_run_issuer(&self.input.plan, project, &bound)?;
+            self.tool(Product::Casework, "check", &[bound.as_os_str()])?;
             bound.as_path()
         } else {
             project
@@ -782,22 +789,6 @@ impl<'a> ProductRunner<'a> {
                 package.as_os_str(),
             ],
         )?;
-        if has_run_source(&self.input.plan) {
-            run_source_report(
-                &self.input.binaries[&Product::Casework].tool,
-                original_project,
-                &self.input.plan,
-                self.terminate,
-                None,
-                Some(
-                    self.input
-                        .casework_source_digest
-                        .as_deref()
-                        .context("missing checked source digest")?,
-                ),
-                None,
-            )?;
-        }
         let urls = database
             .provision("casework", false, false)
             .map_err(operational)?;
@@ -1133,9 +1124,9 @@ fn retain_tool_receipt(
 ) -> Result<()> {
     output.rewind()?;
     let mut bytes = Vec::new();
-    output.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    output.take(MAX_TOOL_REPORT + 1).read_to_end(&mut bytes)?;
     ensure!(
-        bytes.len() <= 4 * 1024 * 1024,
+        bytes.len() as u64 <= MAX_TOOL_REPORT,
         "product receipt exceeds the run limit"
     );
     let report: Value = serde_json::from_slice(&bytes).context("invalid product receipt")?;
@@ -1149,191 +1140,13 @@ fn retain_tool_receipt(
             && report["command"] == command
             && report["status"] == "complete"
             && report["kind"] == "CaseworkReport"
-            && report["apiVersion"] == "id.registrystack.org/formats/casework/report/v1alpha2",
+            && report["apiVersion"] == CASEWORK_REPORT_API_VERSION,
         "product did not return its exact successful receipt"
     );
     write_private(
         &root.join(format!("{product}-{stage}-receipt.json")),
         &bytes,
     )
-}
-
-/// Closed diagnostic metadata from actual tool/shared-reader report envelopes.
-/// No arbitrary diagnostic message, path, source value, SQL or credential is retained.
-fn schema_test_failure_projection(bytes: &[u8]) -> Value {
-    let bounded = bytes.len() <= 256 * 1024;
-    let value = bounded
-        .then(|| serde_json::from_slice::<Value>(bytes).ok())
-        .flatten();
-    let rows = value
-        .as_ref()
-        .filter(|v| {
-            v.is_object()
-                && v["ok"] == false
-                && v["command"] == "test"
-                && (v.get("status").is_none()
-                    || matches!(
-                        v["status"].as_str(),
-                        Some("domain-refusal" | "usage-error" | "operational-failure")
-                    ))
-        })
-        .and_then(|v| v["diagnostics"].as_array())
-        .filter(|rows| {
-            rows.iter().all(|v| {
-                v.is_object()
-                    && v["code"].is_string()
-                    && v["path"].is_string()
-                    && v["message"].is_string()
-                    && v["suggestedAction"].is_string()
-                    && matches!(
-                        v["severity"].as_str(),
-                        Some("error" | "warning" | "finding")
-                    )
-            })
-        });
-    let diagnostics: Vec<_> = rows.into_iter().flatten().take(6).map(|item| {
-        let supplied = item["code"].as_str().unwrap_or_default();
-        let stage = schema_test_failure_stage(supplied);
-        let code = stage.map(|_| supplied);
-        let (indices, category) = schema_test_failure_path(item["path"].as_str().unwrap_or_default());
-        let reason = match (stage.is_some(), item["message"].as_str()) {
-            (true, Some("the fixture credential is missing the configured actor-kind claim")) => Some("credential-actor-kind-missing"),
-            (true, Some("the fixture credential failed token verification; check its signing key, signature, issuer, audience, validity period, and client")) => Some("credential-verification-refused"),
-            _ => None,
-        };
-        json!({"code":code,"stage":stage,"classification":if stage.is_some(){"recognized"}else{"unknown-code"},
-            "pathCategory":category,"journeyIndex":indices.map(|v|v.0),"stepIndex":indices.map(|v|v.1),"reasonClass":reason})
-    }).collect();
-    json!({"phase":"breg-test","reportParsed":value.is_some(),"reportBounded":bounded,
-        "reportShapeValid":rows.is_some(),"reportStatus":rows.and_then(|_| value.as_ref()?.get("status")).and_then(Value::as_str),"diagnosticsTruncated":rows.is_some_and(|v|v.len()>6),"diagnostics":diagnostics})
-}
-
-// Exact registered public codes from the tool test lifecycle, runtime-config
-// diagnostics and shared YAML reader. New/unsupported codes stay explicit unknowns.
-fn schema_test_failure_stage(code: &str) -> Option<&'static str> {
-    match code {
-        "breg.field.pattern-syntax-invalid" | "test.candidate.refused" => Some("candidate"),
-        "breg.runtime.attachment-attempt-budget-exceeded"
-        | "breg.runtime.clients-unlisted"
-        | "breg.runtime.environment-identity-conflict"
-        | "breg.runtime.evidence-provider-id-collision"
-        | "breg.runtime.external-refresh-id-collision"
-        | "breg.runtime.hook-destination-id-collision"
-        | "breg.runtime.invalid-attachment-storage"
-        | "breg.runtime.invalid-attachment-verification"
-        | "breg.runtime.invalid-audit"
-        | "breg.runtime.invalid-authority-claims"
-        | "breg.runtime.invalid-binding"
-        | "breg.runtime.invalid-bounds"
-        | "breg.runtime.invalid-cursor"
-        | "breg.runtime.invalid-database"
-        | "breg.runtime.invalid-external-sources"
-        | "breg.runtime.invalid-field-encryption"
-        | "breg.runtime.invalid-hook-destination"
-        | "breg.runtime.invalid-instance-id"
-        | "breg.runtime.invalid-listener"
-        | "breg.runtime.invalid-metrics-listener"
-        | "breg.runtime.invalid-oidc"
-        | "breg.runtime.invalid-oidc-leeway"
-        | "breg.runtime.invalid-package"
-        | "breg.runtime.invalid-secret-provider"
-        | "breg.runtime.invalid-task-grant-status"
-        | "breg.runtime.invalid-wasm-execution"
-        | "breg.runtime.package-root-unavailable"
-        | "breg.runtime.plaintext-database"
-        | "breg.runtime.pool-budget-exceeded"
-        | "breg.runtime.principal-claim-mismatch"
-        | "breg.runtime.review-authority-id-collision"
-        | "breg.runtime.secret"
-        | "breg.runtime.secret-provider-root-unavailable"
-        | "breg.runtime.unsafe-package-root"
-        | "breg.runtime.unsafe-secret-provider-root"
-        | "config.check-acceptance-duplicate"
-        | "config.check-acceptance-invalid"
-        | "config.deprecated-api-version"
-        | "config.duplicate-id"
-        | "config.duplicate-item"
-        | "config.duplicate-key"
-        | "config.expected-boolean"
-        | "config.expected-integer"
-        | "config.expected-number"
-        | "config.expected-string"
-        | "config.invalid-length"
-        | "config.invalid-type"
-        | "config.invalid-value"
-        | "config.missing-envelope"
-        | "config.missing-key"
-        | "config.null-value"
-        | "config.out-of-range"
-        | "config.removed-key"
-        | "config.retired-api-version"
-        | "config.substitution"
-        | "config.substitution-not-allowed"
-        | "config.too-many-problems"
-        | "config.unknown-key"
-        | "config.unknown-variant"
-        | "config.unsupported-api-version"
-        | "config.wrong-kind" => Some("configuration"),
-        "test.credentials.refused" => Some("credentials"),
-        "test.database.setup-refused" | "test.database.unavailable" => Some("database"),
-        "test.execution.refused" | "test.step.failed" => Some("execution"),
-        "test.journeys.refused" => Some("journeys"),
-        "migration.review.fingerprint-mismatch" => Some("migration"),
-        "test.output.failed" | "test.output.refused" => Some("output"),
-        "test.audit.setup-failed"
-        | "test.authentication.setup-failed"
-        | "test.cursor.setup-failed"
-        | "test.evidence-providers.activation-failed"
-        | "test.hook-destinations.activation-failed"
-        | "test.hook-destinations.inventory-mismatch"
-        | "test.review-authorities.activation-failed"
-        | "test.runtime-config.path-invalid"
-        | "test.runtime.unavailable"
-        | "test.wasm-execution.setup-failed" => Some("runtime"),
-        _ => None,
-    }
-}
-
-fn schema_test_failure_path(path: &str) -> (Option<(u32, u32)>, Option<&'static str>) {
-    fn index(text: &str) -> Option<u32> {
-        (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))
-            .then(|| text.parse().ok())
-            .flatten()
-    }
-    let dot = path
-        .strip_prefix("journeys[")
-        .and_then(|p| p.split_once("].steps["))
-        .and_then(|(j, s)| Some((index(j)?, index(s.strip_suffix(']')?)?)));
-    if let Some(indices) = dot {
-        return (Some(indices), Some("step"));
-    }
-    let parts: Vec<_> = path.split('/').collect();
-    if let ["", "journeys", journey, "steps", step, member] = parts.as_slice() {
-        if let (Some(j), Some(s)) = (index(journey), index(step)) {
-            let category = match *member {
-                "request" => Some("request"),
-                "expect" => Some("expect"),
-                _ => None,
-            };
-            if category.is_some() {
-                return (Some((j, s)), category);
-            }
-        }
-    }
-    let category = match path {
-        "credentials" => Some("credentials"),
-        "database" => Some("database"),
-        "runtime" => Some("runtime"),
-        "runtimeConfig" => Some("runtime-config"),
-        "output" => Some("output"),
-        "candidate" => Some("candidate"),
-        "tests/journeys.yaml" | "/journeys" => Some("journeys"),
-        "reviewedMigrations" => Some("migration"),
-        "authentication" | "audit" | "cursor" | "destinations.hooks" | "evidenceProviders"
-        | "reviewAuthorities" | "wasmExecution" => Some("runtime-config"),
-        _ => None,
-    };
-    (None, category)
 }
 
 fn logged_tool_result(
@@ -1346,16 +1159,17 @@ fn logged_tool_result(
         return Ok(());
     }
     if product == "breg" && stage == "test" {
+        // The tool's own report is the failure record; the runner adds nothing.
         output.rewind()?;
         let mut bytes = Vec::new();
         (&mut *output)
-            .take(256 * 1024 + 1)
+            .take(MAX_TOOL_REPORT + 1)
             .read_to_end(&mut bytes)?;
-        let projection = schema_test_failure_projection(&bytes);
-        write_private(
-            &root.join("logs/breg-test-failure.json"),
-            &serde_json::to_vec(&projection)?,
-        )?;
+        ensure!(
+            bytes.len() as u64 <= MAX_TOOL_REPORT,
+            "the breg test report exceeds the run limit"
+        );
+        write_private(&root.join("logs/breg-test-report.json"), &bytes)?;
     }
     output.rewind()?;
     let codes = report_codes(output)?;
@@ -1386,21 +1200,18 @@ fn run_logged_tool_direct(
     logged_tool_result(status, &mut output, root, (product, stage))
 }
 
-/// Record each runtime process group and the start time of its leader for
-/// diagnostics and an operator's manual cleanup decision. Children start as
-/// group leaders, so the group ID is the PID.
+/// Record each runtime process group for diagnostics and an operator's manual
+/// cleanup decision. Children start as group leaders, so the group ID is the
+/// PID.
 fn write_processes(root: &Path, children: &[(RuntimeKind, u32)]) -> Result<()> {
-    let table = super::recovery::process_table()?;
     let entries: Vec<_> = children
         .iter()
-        .map(|(kind, pid)| {
-            let started = table
-                .iter()
-                .find(|row| row.pid == *pid)
-                .map(|row| &row.started);
-            match kind {
-                RuntimeKind::Product(product) => json!({"product": product.name(), "pid": pid, "pgid": pid, "started": started}),
-                RuntimeKind::Application => json!({"application": "application", "pid": pid, "pgid": pid, "started": started}),
+        .map(|(kind, pid)| match kind {
+            RuntimeKind::Product(product) => {
+                json!({"product": product.name(), "pid": pid, "pgid": pid})
+            }
+            RuntimeKind::Application => {
+                json!({"application": "application", "pid": pid, "pgid": pid})
             }
         })
         .collect();
@@ -1498,22 +1309,6 @@ fn random_secret() -> Result<zeroize::Zeroizing<String>> {
     Ok(encoded)
 }
 
-/// In-process compilation must not silently replace the tool this run
-/// selected. Canonical paths admit the ordinary path and symlink aliases.
-fn require_selected_bregctl(selected: &Path) -> Result<()> {
-    let selected = selected
-        .canonicalize()
-        .context("cannot resolve the selected BReg tool")
-        .map_err(operational)?;
-    let worker = std::env::current_exe()
-        .and_then(|path| path.canonicalize())
-        .context("cannot resolve the running BReg development worker")
-        .map_err(operational)?;
-    ensure!(selected == worker,
-        "the selected BReg tool differs from the running development worker; launch through the selected rstack BReg tool");
-    Ok(())
-}
-
 fn copy_project(source: &Path, target: &Path) -> Result<()> {
     fn copy_dir(
         source: &Path,
@@ -1562,6 +1357,7 @@ fn copy_project(source: &Path, target: &Path) -> Result<()> {
 pub(super) struct ProductInspection {
     pub(super) breg_authority: Option<BregAuthority>,
     pub(super) casework_principals: BTreeMap<String, String>,
+    /// Always `None`: the run binds its issuer in a copy, with no source digest.
     pub(super) casework_source_digest: Option<String>,
 }
 
@@ -1601,6 +1397,7 @@ impl InspectionUnavailable {
 /// tool, its timeout, temporary files and the report parse, and none of those
 /// messages carries a configured value.
 fn inspection_failed(
+    product: Product,
     field: &str,
     action: &str,
     error: anyhow::Error,
@@ -1609,10 +1406,17 @@ fn inspection_failed(
     if terminate.load(Ordering::Relaxed) {
         return error;
     }
+    let (tool, variable) = match product {
+        Product::Breg => ("bregctl", "RSTACK_BREGCTL_BIN"),
+        Product::Casework => ("caseworkctl", "RSTACK_CASEWORKCTL_BIN"),
+    };
     InspectionUnavailable::new(
         field,
-        &format!("The selected `caseworkctl` helper could not {action}: {error:#}."),
-        "Install the matching Casework tools or provide RSTACK_CASEWORKCTL_BIN, then run the check again.",
+        &format!("The selected `{tool}` helper could not {action}: {error:#}."),
+        &format!(
+            "Install the matching {} tools or provide {variable}, then run the check again.",
+            product.name()
+        ),
     )
     .into()
 }
@@ -1628,13 +1432,12 @@ pub(super) fn inspect(
     terminate: &AtomicBool,
 ) -> Result<ProductInspection> {
     super::bindings::check_with_breg_reader(plan)?;
-    let breg_authority = breg_authority(root, plan)?;
+    let breg_authority = breg_authority(root, plan, terminate)?;
     let casework_principals = casework_principals(root, plan, breg_authority.as_ref(), terminate)?;
-    let casework_source_digest = inspect_run_source(root, plan, terminate)?;
     Ok(ProductInspection {
         breg_authority,
         casework_principals,
-        casework_source_digest,
+        casework_source_digest: None,
     })
 }
 
@@ -1688,86 +1491,75 @@ fn product_root(
     }))
 }
 
-fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuthority>> {
+fn breg_authority(
+    root: &Path,
+    plan: &Plan,
+    terminate: &AtomicBool,
+) -> Result<Option<BregAuthority>> {
     let Some(project) = product_root(root, plan, Product::Breg)? else {
         return Ok(None);
     };
-    let registry = crate::compile(&project.root, crate::ProfileArg::Production, "project-dev")
-        .map_err(|report| breg_validation_refusal(&project.field, &report))?;
-    let review_authorities = registry
-        .review_authorities()
-        .iter()
-        .map(|authority| authority.id.as_str())
-        .collect();
-    let actions = registry
-        .actions()
-        .actions
-        .iter()
-        .map(|action| action.id.as_str())
-        .collect();
-    validate_breg_binding_ids(&plan.bindings, &review_authorities, &actions)?;
-    check_breg_grants(&registry, &plan.people)?;
-    let inventory = registry_breg::authority::authority_inventory(&registry)?;
-    let principal = breg_principal(plan, &project.field, &inventory.principal_claims)?;
+    // A check that names no BReg tool asks this binary, which is `bregctl`.
+    let tool = super::product_tool(Product::Breg)
+        .or_else(|_| std::env::current_exe().map_err(anyhow::Error::from))
+        .map_err(|_| {
+            InspectionUnavailable::new(
+                &project.field,
+                "The BReg project cannot be inspected because its owning tool is unavailable.",
+                "Install the matching BReg tools or provide RSTACK_BREGCTL_BIN, then run the check again.",
+            )
+        })?;
+    let facts = match breg_facts(&tool, &project.root, terminate) {
+        Ok(facts) => facts,
+        Err(error) => match error.downcast::<InvalidBregProject>() {
+            Ok(invalid) => return Err(breg_validation_refusal(&project.field, &invalid).into()),
+            Err(error) => {
+                return Err(inspection_failed(
+                    Product::Breg,
+                    &project.field,
+                    "inspect the BReg project",
+                    error,
+                    terminate,
+                ))
+            }
+        },
+    };
+    validate_breg_binding_ids(&plan.bindings, &facts)?;
+    check_breg_grants(&facts, &plan.people)?;
+    let principal = breg_principal(plan, &facts.principal_claims)?;
     Ok(Some(BregAuthority {
         principal,
-        purpose: inventory.purpose_required,
-        named_clients: crate::identity_facts::named_requester_clients(&registry),
-        requires_postgis: breg_requires_postgis(&registry),
-        encrypts_fields: breg_encrypts_fields(&registry),
+        purpose: facts.purpose_required,
+        named_clients: facts.named_clients,
+        requires_postgis: facts.requires_postgis,
+        encrypts_fields: facts.encrypts_fields,
     }))
 }
 
-/// The refusal for a BReg project its owning compiler rejected. It carries the
-/// compiler's own diagnostics (file, line, message, suggested action) so the
-/// adopter does not need a second command to learn what to correct. A
-/// diagnostic without a source location is placed in `registry.yaml`.
-fn breg_validation_refusal(field: &str, report: &crate::FailureReport) -> plan::SemanticRefusal {
-    let findings = report
-        .diagnostics
-        .iter()
-        .map(|diagnostic| {
-            let location = match &diagnostic.source {
-                Some(source) => match (source.line, source.column) {
-                    (Some(line), Some(column)) => format!("{}:{line}:{column}", source.file),
-                    (Some(line), None) => format!("{}:{line}", source.file),
-                    _ => source.file.clone(),
-                },
-                None => format!("registry.yaml {}", diagnostic.path),
-            };
-            format!("{location}: {}", diagnostic.message.trim_end_matches('.'))
-        })
-        .collect::<Vec<_>>()
-        .join("; ");
-    let actions = report
-        .diagnostics
-        .iter()
-        .filter_map(|diagnostic| serde_json::to_value(diagnostic.suggested_action).ok())
-        .filter_map(|action| action.as_str().map(str::to_owned))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>()
-        .join(", ");
+/// The refusal for a BReg project its owning tool rejected. It carries the
+/// tool's own diagnostics (file, line, message, suggested action) so the
+/// adopter does not need a second command to learn what to correct.
+fn breg_validation_refusal(field: &str, invalid: &InvalidBregProject) -> plan::SemanticRefusal {
     plan::SemanticRefusal::new(
         field,
-        format!("The BReg project did not pass its owning validation: {findings}."),
         format!(
-            "Correct the BReg project where the diagnostics point (suggested action: {actions})."
+            "The BReg project did not pass its owning validation: {}.",
+            invalid.findings
+        ),
+        format!(
+            "Correct the BReg project where the diagnostics point (suggested action: {}).",
+            invalid.actions
         ),
     )
 }
 
+/// The principal claim the project's access profiles select. Distinct claims
+/// across profiles are refused by `bregctl` when it loads the runtime
+/// configuration (`PrincipalClaimMismatch`, `crates/registry-breg/src/auth.rs`).
 fn breg_principal(
     plan: &Plan,
-    product_field: &str,
     principal_claims: &BTreeSet<String>,
 ) -> plan::SemanticResult<String> {
-    plan::require(
-        principal_claims.len() <= 1,
-        product_field,
-        "The BReg access profiles select more than one principal claim.",
-        "Use one principal claim across the BReg project's access profiles.",
-    )?;
     let principal = principal_claims
         .iter()
         .next()
@@ -1789,14 +1581,10 @@ fn breg_principal(
     Ok(principal)
 }
 
-fn validate_breg_binding_ids(
-    bindings: &Bindings,
-    review_authorities: &BTreeSet<&str>,
-    actions: &BTreeSet<&str>,
-) -> plan::SemanticResult<()> {
+fn validate_breg_binding_ids(bindings: &Bindings, facts: &BregFacts) -> plan::SemanticResult<()> {
     if let Some(binding) = &bindings.breg_review_authority {
         plan::require(
-            review_authorities.contains(binding.id.as_str()),
+            facts.review_authorities.contains(&binding.id),
             "/bindings/bregReviewAuthority/id",
             "The BReg review authority ID does not name a review authority in the BReg project.",
             "Set id to a review authority defined by the BReg project.",
@@ -1804,7 +1592,7 @@ fn validate_breg_binding_ids(
     }
     if let Some(binding) = &bindings.casework_context_provider {
         plan::require(
-            actions.contains(binding.action.as_str()),
+            facts.actions.contains(&binding.action),
             "/bindings/caseworkContextProvider/action",
             "The Casework context provider action does not name an action in the BReg project.",
             "Set action to an action defined by the BReg project.",
@@ -1813,35 +1601,19 @@ fn validate_breg_binding_ids(
     Ok(())
 }
 
-/// The runtime needs a field-encryption provider exactly when the compiled
-/// project declares an encrypted field.
-fn breg_encrypts_fields(registry: &registry_breg::CompiledRegistry) -> bool {
-    registry.entities().values().any(|entity| {
-        entity
-            .fields
-            .values()
-            .any(|field| field.encryption.is_some())
-    })
-}
-
 /// Every BReg grant must name an access profile the project declares,
 /// including profiles that carry only proposal permissions and so belong to no
 /// entity. Scopes are not checked here: a profile's required scopes are a
 /// per-entity rule the runtime applies, and a mismatch surfaces when the
 /// journey runs.
 fn check_breg_grants(
-    registry: &registry_breg::CompiledRegistry,
+    facts: &BregFacts,
     people: &BTreeMap<String, plan::TestPerson>,
 ) -> plan::SemanticResult<()> {
-    let profiles: BTreeSet<_> = registry
-        .access_profile_displays()
-        .iter()
-        .map(|profile| profile.id.as_str())
-        .collect();
     for (name, person) in people {
         if let Some(grant) = person.grants.get(&Product::Breg) {
             plan::require(
-                profiles.contains(grant.profile.as_str()),
+                facts.access_profiles.contains(&grant.profile),
                 &format!(
                     "/people/{}/grants/breg/profile",
                     registry_platform_yaml::escape_pointer_segment(name)
@@ -1852,10 +1624,6 @@ fn check_breg_grants(
         }
     }
     Ok(())
-}
-
-fn breg_requires_postgis(registry: &registry_breg::CompiledRegistry) -> bool {
-    registry.ddl().requires_postgis
 }
 
 fn casework_principals(
@@ -1892,6 +1660,7 @@ fn casework_principals(
         }
         Err(error) => {
             return Err(inspection_failed(
+                Product::Casework,
                 &project.field,
                 "inspect the Casework project",
                 error,
@@ -1963,7 +1732,13 @@ fn explain_casework_facts(
     project: &Path,
     terminate: &AtomicBool,
 ) -> Result<CaseworkFacts> {
-    let (status, report) = casework_report(tool, "explain", &[project.as_os_str()], terminate)?;
+    let (status, report) = tool_report(
+        tool,
+        "caseworkctl",
+        "explain",
+        &[project.as_os_str()],
+        terminate,
+    )?;
     if status.success() {
         return casework_report_facts(&report);
     }
@@ -1976,26 +1751,25 @@ fn explain_casework_facts(
     anyhow::bail!("caseworkctl explain did not complete successfully")
 }
 
-/// Runs `caseworkctl --format json <command> <arguments>` and returns its
-/// exit status with the JSON report it printed.
-fn casework_report(
+/// Runs `<tool> --format json <command> <arguments>` and returns its exit
+/// status with the JSON report it printed. `name` is the tool's name in errors.
+pub(super) fn tool_report(
     tool: &Path,
+    name: &str,
     command: &str,
     arguments: &[&std::ffi::OsStr],
     terminate: &AtomicBool,
 ) -> Result<(ExitStatus, Value)> {
-    const MAX_REPORT: u64 = 4 * 1024 * 1024;
-
     let mut child = child_command(tool)
         .args(["--format", "json", command])
         .args(arguments)
         .stdout(Stdio::piped())
         .spawn()
-        .with_context(|| format!("cannot start caseworkctl {command}"))?;
+        .with_context(|| format!("cannot start {name} {command}"))?;
     let stdout = child.stdout.take().expect("the report output was piped");
     let reader = thread::spawn(move || {
         let mut bytes = Vec::new();
-        stdout.take(MAX_REPORT + 1).read_to_end(&mut bytes)?;
+        stdout.take(MAX_TOOL_REPORT + 1).read_to_end(&mut bytes)?;
         Ok::<_, std::io::Error>(bytes)
     });
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -2004,23 +1778,23 @@ fn casework_report(
             !terminate.load(Ordering::Relaxed),
             "development product inspection was interrupted"
         );
-        ensure!(Instant::now() < deadline, "caseworkctl {command} timed out");
+        ensure!(Instant::now() < deadline, "{name} {command} timed out");
         Ok(())
     })?;
     let bytes = reader
         .join()
-        .map_err(|_| anyhow::anyhow!("cannot collect the caseworkctl {command} report"))??;
+        .map_err(|_| anyhow::anyhow!("cannot collect the {name} {command} report"))??;
     ensure!(
-        bytes.len() as u64 <= MAX_REPORT,
-        "the caseworkctl {command} report exceeds the size limit"
+        bytes.len() as u64 <= MAX_TOOL_REPORT,
+        "the {name} {command} report exceeds the size limit"
     );
     let report = serde_json::from_slice(&bytes)
-        .map_err(|_| anyhow::anyhow!("caseworkctl {command} did not emit a JSON report"))?;
+        .map_err(|_| anyhow::anyhow!("{name} {command} did not emit a JSON report"))?;
     Ok((status, report))
 }
 
 fn casework_domain_refusal(report: &Value, command: &str) -> bool {
-    report["apiVersion"] == "id.registrystack.org/formats/casework/report/v1alpha2"
+    report["apiVersion"] == CASEWORK_REPORT_API_VERSION
         && report["kind"] == "CaseworkReport"
         && report["command"] == command
         && report["status"] == "domain-refusal"
@@ -2075,8 +1849,9 @@ fn check_casework_binding(
         super::bindings::render_for_check(plan, Product::Casework, &mut config);
         let path = root.join("casework-runtime.yaml");
         write_private(&path, &serde_json::to_vec(&config)?)?;
-        casework_report(
+        tool_report(
             tool,
+            "caseworkctl",
             "check",
             &[
                 project.root.as_os_str(),
@@ -2088,7 +1863,15 @@ fn check_casework_binding(
     })();
     let (status, report) = match checked {
         Ok(checked) => checked,
-        Err(error) => return Err(inspection_failed(&project.field, action, error, terminate)),
+        Err(error) => {
+            return Err(inspection_failed(
+                Product::Casework,
+                &project.field,
+                action,
+                error,
+                terminate,
+            ))
+        }
     };
     match casework_binding_check(status.code(), &report, &binding.id) {
         BindingCheck::Accepted => Ok(()),
@@ -2102,6 +1885,7 @@ fn check_casework_binding(
         )
         .into()),
         BindingCheck::Unchecked => Err(inspection_failed(
+            Product::Casework,
             &project.field,
             action,
             anyhow::anyhow!("caseworkctl check did not report a result for the binding"),
@@ -2130,7 +1914,7 @@ enum BindingCheck {
 /// Casework never read the binding.
 fn casework_binding_check(code: Option<i32>, report: &Value, id: &str) -> BindingCheck {
     if code == Some(0)
-        && report["apiVersion"] == "id.registrystack.org/formats/casework/report/v1alpha2"
+        && report["apiVersion"] == CASEWORK_REPORT_API_VERSION
         && report["kind"] == "CaseworkReport"
         && report["command"] == "check"
         && report["status"] == "complete"
@@ -2209,7 +1993,7 @@ struct CaseworkFacts {
 
 fn casework_report_facts(report: &Value) -> Result<CaseworkFacts> {
     ensure!(
-        report["apiVersion"] == "id.registrystack.org/formats/casework/report/v1alpha2"
+        report["apiVersion"] == CASEWORK_REPORT_API_VERSION
             && report["kind"] == "CaseworkReport"
             && report["command"] == "explain"
             && report["status"] == "complete"
@@ -2443,6 +2227,66 @@ fn fixture_file_refusal<T>(plan: &Plan, field: &str) -> plan::SemanticResult<T> 
     }
 }
 
+/// One step of `tests/journeys.yaml`, with the members the runner uses to bind
+/// the step to a test person. The owning `bregctl test` validates the file.
+struct JourneyStep {
+    journey_id: String,
+    step_id: String,
+    access_profile: String,
+    /// The step's `claims.scopes`, or `None` when it writes no `scopes`.
+    scopes: Option<Vec<String>>,
+    purpose: Option<String>,
+}
+
+fn journey_steps(path: &Path, bytes: &[u8]) -> Result<Vec<JourneyStep>> {
+    let document = registry_platform_yaml::Reader::new(path.display().to_string())
+        .scan(bytes)
+        .map_err(|_| anyhow::anyhow!("the journeys file is not valid YAML"))?
+        .context("the journeys file is empty")?
+        .to_json_value();
+    let text = |value: &Value, member: &str| {
+        value[member]
+            .as_str()
+            .map(str::to_owned)
+            .with_context(|| format!("a journeys entry has no {member}"))
+    };
+    let mut steps = Vec::new();
+    for journey in document["journeys"]
+        .as_array()
+        .context("the journeys file has no journeys")?
+    {
+        for step in journey["steps"]
+            .as_array()
+            .context("a journey has no steps")?
+        {
+            let scopes = match step["claims"].get("scopes") {
+                Some(scopes) => Some(
+                    scopes
+                        .as_array()
+                        .context("a step's claims.scopes is not a list")?
+                        .iter()
+                        .map(|scope| {
+                            scope
+                                .as_str()
+                                .map(str::to_owned)
+                                .context("a step scope is not text")
+                        })
+                        .collect::<Result<_>>()?,
+                ),
+                None => None,
+            };
+            steps.push(JourneyStep {
+                journey_id: text(journey, "id")?,
+                step_id: text(step, "id")?,
+                access_profile: text(step, "accessProfile")?,
+                scopes,
+                purpose: step["claims"]["purpose"].as_str().map(str::to_owned),
+            });
+        }
+    }
+    Ok(steps)
+}
+
 pub(super) fn schema_people(
     root: &Path,
     plan: &Plan,
@@ -2496,7 +2340,7 @@ pub(super) fn schema_people(
             );
         }
     };
-    let steps = match journey_step_profiles(&bytes) {
+    let steps = match journey_steps(&canonical, &bytes) {
         Ok(steps) => steps,
         Err(_) => {
             return plan::refuse(
@@ -2579,113 +2423,124 @@ pub(super) fn schema_people(
     Ok(bindings)
 }
 
-/// The product CLI owns all source decoding and trust edits. The runner only
-/// supplies the explicitly selected person's existing Casework grant chain.
-fn run_source_report(
-    tool: &Path,
-    project: &Path,
-    plan: &Plan,
-    terminate: &AtomicBool,
-    issuer: Option<&str>,
-    expected: Option<&str>,
-    output: Option<&Path>,
-) -> Result<Value> {
+/// The dev.yaml member that carries the run issuer binding.
+const RUN_ISSUER_BINDING: &str = "/bindings/bregReviewAuthority/runIssuerBinding";
+
+/// Writes the run's loopback issuer into a copy of the Casework project at
+/// `bound`. The source project is never edited. The copy changes only the
+/// selected producer's `issuer`, and its `trustedInitiatorIssuer` when the
+/// binding names an initiator. The caller then runs the public `caseworkctl
+/// check` and `package` on the copy, which refuse every other policy error.
+fn bind_casework_run_issuer(plan: &Plan, project: &Path, bound: &Path) -> Result<()> {
     let binding = plan
         .bindings
         .breg_review_authority
         .as_ref()
-        .context("missing review authority")?;
+        .context("the run issuer binding needs a review authority binding")?;
     let guard = binding
         .run_issuer_binding
         .as_ref()
-        .context("missing run issuer binding")?;
+        .context("the review authority binding has no run issuer binding")?;
+    let refuse = |pointer: String, message: &str, action: &str| {
+        anyhow::Error::from(plan::SemanticRefusal::new(&pointer, message, action))
+    };
     let identity = &plan.people[&binding.identity];
     let grant = &identity.grants[&Product::Casework];
-    let request = json!({"apiVersion":"id.registrystack.org/formats/casework/run-source/v1alpha1","kind":"CaseworkRunSource","producer":binding.producer,"identityProfile":grant.profile,"identitySubject":identity.subject,"identityScopes":grant.scopes,"binding":guard});
-    let temp = tempfile::tempdir()?;
-    let path = temp.path().join("run-source.json");
-    write_private(&path, &serde_json::to_vec(&request)?)?;
-    let mut args: Vec<&std::ffi::OsStr> = vec![
-        "run-source".as_ref(),
-        project.as_os_str(),
-        "--binding".as_ref(),
-        path.as_os_str(),
-    ];
-    if let Some(value) = issuer {
-        args.extend([
-            std::ffi::OsStr::new("--issuer"),
-            std::ffi::OsStr::new(value),
-        ]);
+    let person = format!(
+        "/people/{}",
+        registry_platform_yaml::escape_pointer_segment(&binding.identity)
+    );
+
+    let source = project.join("casework.yaml");
+    let bytes = fs::read(&source).with_context(|| format!("cannot read {}", source.display()))?;
+    let mut document = registry_platform_yaml::Reader::new(source.display().to_string())
+        .scan(&bytes)
+        .map_err(|_| anyhow::anyhow!("{} is not valid YAML", source.display()))?
+        .with_context(|| format!("{} is empty", source.display()))?
+        .to_json_value();
+    let producer = document["trustedProducers"][&binding.producer].clone();
+    if !producer.is_object() {
+        return Err(refuse(
+            "/bindings/bregReviewAuthority/producer".to_owned(),
+            "The Casework project has no trusted producer with this ID.",
+            "Set producer to a trustedProducers entry in casework.yaml.",
+        ));
     }
-    if let Some(value) = expected {
-        args.extend([
-            std::ffi::OsStr::new("--expected-source-digest"),
-            std::ffi::OsStr::new(value),
-        ]);
+    let text = |member: &str| producer[member].as_str().unwrap_or_default();
+    let expected = &guard.producer;
+    if text("issuer") != expected.expected_issuer {
+        return Err(refuse(
+            format!("{RUN_ISSUER_BINDING}/producer/expectedIssuer"),
+            "The producer's issuer in casework.yaml is not the issuer the binding expects.",
+            "Set expectedIssuer to the issuer the Casework project pins for this producer.",
+        ));
     }
-    if let Some(value) = output {
-        args.extend([std::ffi::OsStr::new("--output"), value.as_os_str()]);
+    if text("profile") != expected.expected_profile || grant.profile != expected.expected_profile {
+        return Err(refuse(
+            format!("{RUN_ISSUER_BINDING}/producer/expectedProfile"),
+            "The producer's profile in casework.yaml, the binding and the identity's Casework grant must be the same profile.",
+            "Set expectedProfile and the identity's Casework grant profile to the producer's profile.",
+        ));
     }
-    let (status, report) = casework_report(tool, "generate", &args, terminate)?;
-    if casework_domain_refusal(&report, "generate-run-source") {
-        return Err(plan::SemanticRefusal::new("/bindings/bregReviewAuthority/runIssuerBinding","Casework refuses the exact producer identity, issuer pins or checked source closure.","Restore the selected producer and its exact existing identity/grant chain and issuer guards, then check again.").into());
+    if text("subject") != expected.expected_subject || identity.subject != expected.expected_subject
+    {
+        return Err(refuse(
+            format!("{RUN_ISSUER_BINDING}/producer/expectedSubject"),
+            "The producer's subject in casework.yaml, the binding and the identity's subject must be the same subject.",
+            "Set expectedSubject and the identity's subject to the producer's subject.",
+        ));
+    }
+    let required = document["accessProfiles"][&expected.expected_profile]["requiredScopes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if let Some(missing) = required
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|scope| !grant.scopes.iter().any(|granted| granted == scope))
+    {
+        return Err(refuse(
+            format!("{person}/grants/casework/scopes"),
+            &format!("The identity's Casework grant lacks the scope {missing} that the producer's profile requires."),
+            "Add the scope to the grant.",
+        ));
+    }
+    if let Some(initiator) = &guard.initiator {
+        if producer["trustedInitiatorIssuer"].as_str() != Some(initiator.expected_issuer.as_str()) {
+            return Err(refuse(
+                format!("{RUN_ISSUER_BINDING}/initiator/expectedIssuer"),
+                "The producer's trustedInitiatorIssuer in casework.yaml is not the issuer the binding expects.",
+                "Set expectedIssuer to the trustedInitiatorIssuer the Casework project pins for this producer.",
+            ));
+        }
     }
     ensure!(
-        status.success()
-            && report["ok"] == true
-            && report["command"] == "generate-run-source"
-            && report["sourceDigest"]
-                .as_str()
-                .is_some_and(|v| v.starts_with("sha256:") && v.len() == 71),
-        "Casework run source inspection did not complete"
+        is_loopback_run_issuer(&plan.issuer),
+        "the run issuer {} is not a loopback URL of the form http://127.0.0.1:<port>",
+        plan.issuer
     );
-    Ok(report)
-}
-fn inspect_run_source(root: &Path, plan: &Plan, terminate: &AtomicBool) -> Result<Option<String>> {
-    if !has_run_source(plan) {
-        return Ok(None);
+    let entry = &mut document["trustedProducers"][&binding.producer];
+    entry["issuer"] = json!(plan.issuer);
+    if guard.initiator.is_some() {
+        entry["trustedInitiatorIssuer"] = json!(plan.issuer);
     }
-    let project = product_root(root, plan, Product::Casework)?.context("missing Casework")?;
-    let tool = super::product_tool(Product::Casework)?;
-    let report = run_source_report(&tool, &project.root, plan, terminate, None, None, None)?;
-    Ok(Some(
-        report["sourceDigest"]
-            .as_str()
-            .context("missing source digest")?
-            .to_owned(),
-    ))
+    copy_project(project, bound)?;
+    write_private(
+        &bound.join("casework.yaml"),
+        serde_norway::to_string(&document)?.as_bytes(),
+    )
 }
+
+/// Only a reserved loopback run URL is bound, never a remote issuer.
+fn is_loopback_run_issuer(issuer: &str) -> bool {
+    issuer
+        .strip_prefix("http://127.0.0.1:")
+        .map(|rest| rest.strip_suffix('/').unwrap_or(rest))
+        .is_some_and(|port| port.parse::<u16>().is_ok_and(|port| port > 1))
+}
+
 fn has_run_source(plan: &Plan) -> bool {
     plan.bindings.binds_run_issuer()
-}
-pub(super) fn capture_casework_source(
-    input: &RunInput,
-    root: &Path,
-    terminate: &AtomicBool,
-) -> Result<()> {
-    if !has_run_source(&input.plan) {
-        return Ok(());
-    }
-    let project = product_root(&input.project, &input.plan, Product::Casework)?
-        .context("missing Casework")?;
-    let report = run_source_report(
-        &input.binaries[&Product::Casework].tool,
-        &project.root,
-        &input.plan,
-        terminate,
-        None,
-        Some(
-            input
-                .casework_source_digest
-                .as_deref()
-                .context("missing checked source digest")?,
-        ),
-        Some(&root.join("casework-source")),
-    )?;
-    write_private(
-        &root.join("casework-source-receipt.json"),
-        &serde_json::to_vec(&report)?,
-    )
 }
 
 #[cfg(test)]
@@ -2699,16 +2554,12 @@ mod tests {
     };
 
     #[test]
-    fn breg_validation_refusal_carries_the_compiler_diagnostics() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::write(
-            root.path().join("registry.yaml"),
-            "apiVersion: [unterminated\n",
-        )
-        .unwrap();
-        let report = crate::compile(root.path(), crate::ProfileArg::Production, "project-dev")
-            .expect_err("an invalid registry.yaml must not compile");
-        let refusal = breg_validation_refusal("/products/0/project", &report).to_string();
+    fn breg_validation_refusal_carries_the_tool_diagnostics() {
+        let invalid = InvalidBregProject {
+            findings: "registry.yaml project.apiVersion[1]: the document ends".to_owned(),
+            actions: "correct-source".to_owned(),
+        };
+        let refusal = breg_validation_refusal("/products/0/project", &invalid).to_string();
         assert!(
             refusal.contains("registry.yaml project.apiVersion[1]: the document ends"),
             "the refusal must name the file: {refusal}"
@@ -2735,146 +2586,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_failure_projection_actual_tool_and_reader_producers() {
-        let report =
-            crate::test_lifecycle_failure(crate::test_lifecycle::TestLifecycleError::Runtime);
-        let projected = schema_test_failure_projection(&serde_json::to_vec(&report).unwrap());
-        assert_eq!(projected["reportShapeValid"], true);
-        assert_eq!(
-            projected["diagnostics"][0]["code"],
-            "test.runtime.unavailable"
-        );
-        assert_eq!(projected["diagnostics"][0]["stage"], "runtime");
-        assert_eq!(projected["diagnostics"][0]["pathCategory"], "runtime");
-        let source = b"apiVersion: id.registrystack.org/formats/breg/journeys/v1\nkind: BRegJourneys\njourneys: [{id: public, steps: [{id: public, recordType: record, accessProfile: writer, request: {type: create}, expect: {outcome: success, status: 201}}]}]\n";
-        let Err(registry_breg::fixtures::FixtureError::JourneyDocument(report)) =
-            registry_breg::fixtures::journey_step_profiles(source)
-        else {
-            panic!("actual reader must refuse missing data");
-        };
-        let refusal = crate::DocumentRefusal {
-            command: "test",
-            subject: "fixture journeys",
-            report,
-        };
-        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
-        crate::write_document_failure(
-            &refusal,
-            crate::OutputFormat::Json,
-            &mut stdout,
-            &mut stderr,
-        );
-        let projected = schema_test_failure_projection(&stdout);
-        assert_eq!(projected["reportShapeValid"], true);
-        assert_eq!(projected["diagnostics"][0]["code"], "config.missing-key");
-        assert_eq!(projected["diagnostics"][0]["journeyIndex"], 0);
-        assert_eq!(projected["diagnostics"][0]["stepIndex"], 0);
-        assert_eq!(projected["diagnostics"][0]["pathCategory"], "request");
-    }
-
-    #[test]
-    fn schema_failure_projection_actual_failure_classes_and_bounded_truncation() {
-        use crate::test_lifecycle::TestLifecycleError as E;
-        for (error, code, stage) in [
-            (
-                E::RuntimeSetup(
-                    registry_breg::fixtures::SchemaTestRuntimeSetupError::Authentication,
-                ),
-                "test.authentication.setup-failed",
-                "runtime",
-            ),
-            (
-                E::RuntimeConfigPath,
-                "test.runtime-config.path-invalid",
-                "runtime",
-            ),
-            (E::OutputCommit, "test.output.failed", "output"),
-            (
-                E::Journeys {
-                    message: "SQL body token private-canary".into(),
-                },
-                "test.journeys.refused",
-                "journeys",
-            ),
-            (
-                E::Candidate {
-                    stage: "private-canary",
-                    error: registry_breg::package::PackageError::UnsafePath,
-                },
-                "test.candidate.refused",
-                "candidate",
-            ),
-        ] {
-            let report = crate::test_lifecycle_failure(error);
-            let p = schema_test_failure_projection(&serde_json::to_vec(&report).unwrap());
-            assert_eq!(p["diagnostics"][0]["code"], code);
-            assert_eq!(p["diagnostics"][0]["stage"], stage);
-            assert!(!p.to_string().contains("canary"));
-        }
-        let item = json!({"severity":"error","suggestedAction":"correct-source","code":"test.step.failed","path":"journeys[1].steps[2]","message":"private-canary"});
-        let p = schema_test_failure_projection(
-            &serde_json::to_vec(&json!({"ok":false,"command":"test","diagnostics":vec![item;7]}))
-                .unwrap(),
-        );
-        assert_eq!(p["diagnosticsTruncated"], true);
-        assert_eq!(p["diagnostics"].as_array().unwrap().len(), 6);
-        assert!(!p.to_string().contains("canary"));
-    }
-
-    #[test]
-    fn schema_failure_projection_refuses_false_envelopes_and_unknown_metadata() {
-        for report in [
-            json!({}),
-            json!({"ok":true,"command":"test","diagnostics":[]}),
-            json!({"ok":false,"command":"other","diagnostics":[]}),
-            json!({"ok":false,"command":"test","diagnostics":{}}),
-            json!({"ok":false,"command":"test","diagnostics":[null]}),
-        ] {
-            let p = schema_test_failure_projection(&serde_json::to_vec(&report).unwrap());
-            assert_eq!(p["reportShapeValid"], false);
-            assert_eq!(p["diagnostics"], json!([]));
-        }
-        for path in [
-            "journeys[4294967296].steps[0]",
-            "journeys[0].steps[4294967296]",
-            "/journeys/0/steps/1/request/private-canary",
-            "journeys[0].steps[1]/private-canary",
-        ] {
-            let p = schema_test_failure_projection(&serde_json::to_vec(&json!({"ok":false,"command":"test","diagnostics":[{"severity":"error","suggestedAction":"correct-source","code":"private-canary","path":path,"message":"SQL token body private-canary"}]})).unwrap());
-            assert_eq!(p["diagnostics"][0]["classification"], "unknown-code");
-            assert!(p["diagnostics"][0]["journeyIndex"].is_null());
-            assert!(p["diagnostics"][0]["pathCategory"].is_null());
-            assert!(!p.to_string().contains("canary"));
-        }
-    }
-
-    #[test]
-    fn schema_failure_projection_keeps_only_closed_step_metadata() {
-        let report = json!({"ok":false,"command":"test","diagnostics":[{"severity":"error","suggestedAction":"correct-source","code":"test.step.failed","path":"journeys[0].steps[3]",
-            "message":"the fixture credential is missing the configured actor-kind claim",
-            "token":"eyJ-private-canary","source":{"value":"private-source-canary"}},
-            {"severity":"error","suggestedAction":"correct-source","code":"private-code-canary","path":"/private/path-canary","message":"postgresql://private-url-canary"}]});
-        let projected = schema_test_failure_projection(&serde_json::to_vec(&report).unwrap());
-        assert!(projected["diagnostics"][0]["journeyIndex"] == 0);
-        assert!(projected["diagnostics"][0]["stepIndex"] == 3);
-        assert!(projected["diagnostics"][0]["reasonClass"] == "credential-actor-kind-missing");
-        assert!(projected["diagnostics"][1]["code"].is_null());
-        assert!(projected["diagnostics"][1]["stepIndex"].is_null());
-        assert!(!projected.to_string().contains("canary"));
-        assert!(schema_test_failure_projection(b"not json")["reportParsed"] == false);
-        assert!(
-            schema_test_failure_projection(&vec![b'x'; 256 * 1024 + 1])["reportSha256"].is_null()
-        );
-        let malformed = json!({"ok":false,"command":"test","diagnostics":[{"severity":"error","suggestedAction":"correct-source","code":"test.step.failed","path":"journeys[0].steps[3]/private-canary","message":"private-canary"}]});
-        assert!(
-            schema_test_failure_projection(&serde_json::to_vec(&malformed).unwrap())["diagnostics"]
-                [0]["stepIndex"]
-                .is_null()
-        );
-    }
-
-    #[test]
-    fn schema_failure_projection_survives_normal_failed_log_cleanup() {
+    fn a_failed_schema_test_keeps_the_tools_report_and_its_codes() {
         use std::io::Write as _;
         use std::os::unix::process::ExitStatusExt as _;
         let scratch = tempfile::tempdir().unwrap();
@@ -2883,12 +2595,8 @@ mod tests {
         private_directory(&root).unwrap();
         drop(open_log(&root, "breg-test").unwrap());
         let mut output = tempfile::tempfile_in(&root).unwrap();
-        let report = json!({"ok":false,"command":"test","diagnostics":[{"severity":"error","suggestedAction":"correct-source","code":"test.step.failed","path":"journeys[0].steps[0]",
-            "message":"the fixture credential is missing the configured actor-kind claim",
-            "token":"eyJ-private-canary","connection":"postgresql://private-url-canary"}]});
-        output
-            .write_all(&serde_json::to_vec(&report).unwrap())
-            .unwrap();
+        let report = br#"{"ok":false,"command":"test","diagnostics":[{"severity":"error","code":"test.step.failed","path":"journeys[0].steps[0]","message":"the tool's own words"}]}"#;
+        output.write_all(report).unwrap();
         let error = logged_tool_result(
             ExitStatus::from_raw(256),
             &mut output,
@@ -2897,26 +2605,14 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("test.step.failed"));
-        let path = root.join("logs/breg-test-failure.json");
+        let path = root.join("logs/breg-test-report.json");
         assert!(fs::metadata(&path).unwrap().permissions().mode() & 0o777 == 0o600);
         let kept = crate::project_dev::keep_logs(&root, id).unwrap().unwrap();
         fs::remove_dir(&root).unwrap();
-        let bytes = fs::read(kept.join("breg-test-failure.json")).unwrap();
-        assert!(!String::from_utf8_lossy(&bytes).contains("canary"));
-        let evidence: Value = serde_json::from_slice(&bytes).unwrap();
-        assert!(evidence["diagnostics"][0]["reasonClass"] == "credential-actor-kind-missing");
-        assert!(evidence["diagnostics"][0]["stepIndex"] == 0);
-        let root = scratch.path().join("blocked");
-        private_directory(&root).unwrap();
-        drop(open_log(&root, "breg-test").unwrap());
-        fs::create_dir(root.join("logs/breg-test-failure.json")).unwrap();
-        assert!(logged_tool_result(
-            ExitStatus::from_raw(256),
-            &mut output,
-            &root,
-            ("breg", "test")
-        )
-        .is_err());
+        assert_eq!(
+            fs::read(kept.join("breg-test-report.json")).unwrap(),
+            report
+        );
     }
 
     fn read_public_fixture(path: &Path, format: &registry_platform_yaml::FormatSpec<'_>) -> Value {
@@ -3110,211 +2806,6 @@ mod tests {
     }
 
     #[test]
-    fn local_package_accepts_the_worker_and_its_symlink() {
-        let worker = std::env::current_exe().unwrap();
-        assert!(require_selected_bregctl(&worker).is_ok());
-        let root = tempfile::tempdir().unwrap();
-        let alias = root.path().join("selected-bregctl");
-        std::os::unix::fs::symlink(&worker, &alias).unwrap();
-        assert!(require_selected_bregctl(&alias).is_ok());
-    }
-
-    #[test]
-    fn local_package_refuses_a_different_selected_tool() {
-        let root = tempfile::tempdir().unwrap();
-        let other = root.path().join("different-bregctl");
-        fs::write(&other, b"not the running worker").unwrap();
-        let error = require_selected_bregctl(&other).unwrap_err();
-        assert!(error.to_string().contains("selected BReg tool differs"));
-        assert!(!error
-            .to_string()
-            .contains(&root.path().display().to_string()));
-        let (report, exit) = crate::project_dev::error_report(&error);
-        assert!(exit == 1 && report["error"]["class"] == "domain");
-    }
-
-    fn local_package_args(root: &Path) -> crate::PackageArgs {
-        let project = root.join("project");
-        let source =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/minimal");
-        copy_project(&source, &project).unwrap();
-        let registry = project.join("registry.yaml");
-        let text = fs::read_to_string(&registry).unwrap();
-        assert!(text.matches("https://directory.example.gov").count() == 1);
-        fs::write(
-            &registry,
-            text.replace(
-                "https://directory.example.gov",
-                "https://directory.example.invalid",
-            ),
-        )
-        .unwrap();
-        crate::PackageArgs {
-            candidate: crate::PackageCandidateArgs {
-                project,
-                baseline_package: None,
-                reviewed_migrations: None,
-            },
-            schema_fingerprint: Some(format!("sha256:{}", "0".repeat(64))),
-            test_receipt: root.join("receipt.json"),
-            output: root.join("build"),
-            revision: None,
-        }
-    }
-
-    fn local_package_input(tool: PathBuf) -> Arc<RunInput> {
-        let mut input = breg_input(false);
-        input.binaries.insert(
-            Product::Breg,
-            super::super::Binaries {
-                tool,
-                runtime: std::env::current_exe().unwrap(),
-            },
-        );
-        Arc::new(input)
-    }
-
-    #[test]
-    fn local_package_keeps_cancellation_and_deadline_ahead_of_tool_binding() {
-        let root = tempfile::tempdir().unwrap();
-        let args = local_package_args(root.path());
-        let input = local_package_input(root.path().join("unavailable-tool"));
-        let cancel = AtomicBool::new(true);
-        let mut runner = ProductRunner::new(Arc::clone(&input), root.path(), &cancel).unwrap();
-        let stopped = runner.package_breg(&args).unwrap_err();
-        assert!(stopped.to_string() == "development run was stopped");
-        cancel.store(false, Ordering::Relaxed);
-        runner.deadline = Instant::now() - Duration::from_secs(1);
-        let deadline = runner.package_breg(&args).unwrap_err();
-        let (report, exit) = crate::project_dev::error_report(&deadline);
-        assert!(exit == 3 && report["error"]["class"] == "operational");
-        assert!(!args.output.exists() && !root.path().join("logs").exists());
-    }
-
-    #[test]
-    fn local_package_requires_a_receipt_and_keeps_public_deployment_refusal() {
-        let root = tempfile::tempdir().unwrap();
-        let args = local_package_args(root.path());
-        let input = local_package_input(std::env::current_exe().unwrap());
-        let cancel = AtomicBool::new(false);
-        let runner = ProductRunner::new(input, root.path(), &cancel).unwrap();
-        let error = runner.package_breg(&args).unwrap_err();
-        assert!(error.to_string().contains("package.test-receipt.missing"));
-        assert!(!error.to_string().contains("canonical-base-iri-reserved"));
-        assert!(!args.output.exists());
-        let path = root.path().join("logs/breg-package-report.json");
-        let diagnostic: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert!(diagnostic["phase"] == "breg-package");
-        assert!(diagnostic["diagnosticCodes"]
-            .as_str()
-            .unwrap()
-            .contains("package.test-receipt.missing"));
-        assert!(fs::metadata(path).unwrap().permissions().mode() & 0o777 == 0o600);
-        let deployment = crate::package(&args, true).err().unwrap();
-        let mut report = Vec::new();
-        let mut errors = Vec::new();
-        crate::write_refusal(
-            &deployment,
-            crate::OutputFormat::Json,
-            &mut report,
-            &mut errors,
-        );
-        assert!(report_codes(report.as_slice())
-            .unwrap()
-            .contains("breg.registry.canonical-base-iri-reserved"));
-    }
-
-    /// Uses only a genuine retained public rehearsal receipt supplied explicitly
-    /// by the operator. This does not start a native lifecycle or a database.
-    #[test]
-    #[ignore = "requires RSTACK_LOCAL_PACKAGE_PUBLIC_RECEIPT from a genuine minimal public .invalid rehearsal"]
-    fn local_package_accepts_genuine_public_receipt_without_deployment_authority() {
-        use registry_breg::package::{
-            load_package, load_predecessor_package, PackageError, PackageLoadContext,
-        };
-        let retained = PathBuf::from(
-            std::env::var_os("RSTACK_LOCAL_PACKAGE_PUBLIC_RECEIPT")
-                .expect("supply the genuine public receipt"),
-        );
-        let root = tempfile::tempdir().unwrap();
-        let mut args = local_package_args(root.path());
-        fs::copy(retained, &args.test_receipt).unwrap();
-        let receipt: Value =
-            serde_json::from_slice(&fs::read(&args.test_receipt).unwrap()).unwrap();
-        assert!(receipt["successfulJourneyIds"] == json!(["directory-contact"]));
-        let input = local_package_input(std::env::current_exe().unwrap());
-        let cancel = AtomicBool::new(false);
-        let runner = ProductRunner::new(input, root.path(), &cancel).unwrap();
-        // Read the actual fingerprint through the same shared packaging path.
-        args.schema_fingerprint = None;
-        let deployment = crate::package(&args, true).err().unwrap();
-        let mut report = Vec::new();
-        let mut diagnostics = Vec::new();
-        crate::write_refusal(
-            &deployment,
-            crate::OutputFormat::Json,
-            &mut report,
-            &mut diagnostics,
-        );
-        assert!(report_codes(report.as_slice())
-            .unwrap()
-            .contains("breg.registry.canonical-base-iri-reserved"));
-        runner.package_breg(&args).unwrap();
-        let package = args.output.join("package");
-        let local = load_package(
-            &package,
-            &PackageLoadContext {
-                database_initialization_environment: "local",
-            },
-        )
-        .unwrap();
-        assert!(local.manifest().schema_fingerprint == receipt["targetManagedSchemaFingerprint"]);
-        assert!(matches!(
-            load_package(
-                &package,
-                &PackageLoadContext {
-                    database_initialization_environment: "production"
-                }
-            ),
-            Err(PackageError::DeploymentIdentity)
-        ));
-        load_predecessor_package(
-            &package,
-            &PackageLoadContext {
-                database_initialization_environment: "production",
-            },
-        )
-        .unwrap();
-        args.output = root.path().join("wrong-fingerprint");
-        let expected = receipt["targetManagedSchemaFingerprint"].as_str().unwrap();
-        let zero = format!("sha256:{}", "0".repeat(64));
-        let one = format!("sha256:{}", "1".repeat(64));
-        args.schema_fingerprint = Some(if expected == zero { one } else { zero });
-        let error = runner.package_breg(&args).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("package.test-receipt.fingerprint-mismatch"));
-        assert!(!args.output.exists());
-    }
-
-    #[test]
-    fn postgis_requirement_comes_from_the_compiled_breg_inventory() {
-        let products = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg");
-        for (project, expected) in [
-            ("acceptance/spatial-service-sites", true),
-            ("examples/minimal", false),
-        ] {
-            let compiled = crate::compile(
-                &products.join(project),
-                crate::ProfileArg::Production,
-                "project-dev-test",
-            )
-            .unwrap_or_else(|_| panic!("{project} must compile"));
-            assert_eq!(breg_requires_postgis(&compiled), expected, "{project}");
-        }
-    }
-
-    #[test]
     fn the_casework_cli_report_owns_profile_principals() {
         let mut report = json!({
             "apiVersion": "id.registrystack.org/formats/casework/report/v1alpha2",
@@ -3371,36 +2862,14 @@ mod tests {
 
     #[test]
     fn breg_authority_restrictions_are_typed_and_located() {
-        let plan = authority_plan(json!({}), json!({}), false);
-        let error = breg_principal(
-            &plan,
-            "/products/0/project",
-            &BTreeSet::from(["registry_principal".to_owned(), "sub".to_owned()]),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(error.contains("/products/0/project"), "{error}");
-        assert!(
-            error.contains("The BReg access profiles select more than one principal claim."),
-            "{error}"
-        );
-        assert!(
-            error.contains("Use one principal claim across the BReg project's access profiles."),
-            "{error}"
-        );
-
         let plan = authority_plan(
             json!({"registry_principal": "private-claim-marker"}),
             json!({}),
             false,
         );
-        let error = breg_principal(
-            &plan,
-            "/products/0/project",
-            &BTreeSet::from(["registry_principal".to_owned()]),
-        )
-        .unwrap_err()
-        .to_string();
+        let error = breg_principal(&plan, &BTreeSet::from(["registry_principal".to_owned()]))
+            .unwrap_err()
+            .to_string();
         assert!(
             error.contains("/people/operator/grants/breg/claims"),
             "{error}"
@@ -3484,9 +2953,14 @@ mod tests {
     #[test]
     fn breg_binding_ids_are_resolved_with_typed_value_free_refusals() {
         let bindings = product_bindings();
-        let authorities = BTreeSet::from(["review-authority"]);
-        let actions = BTreeSet::from(["review-action"]);
-        validate_breg_binding_ids(&bindings, &authorities, &actions).unwrap();
+        let authorities = BTreeSet::from(["review-authority".to_owned()]);
+        let actions = BTreeSet::from(["review-action".to_owned()]);
+        let facts = |review_authorities: &BTreeSet<String>, actions: &BTreeSet<String>| BregFacts {
+            review_authorities: review_authorities.clone(),
+            actions: actions.clone(),
+            ..BregFacts::default()
+        };
+        validate_breg_binding_ids(&bindings, &facts(&authorities, &actions)).unwrap();
 
         for (authorities, actions, field, reason, action) in [
             (
@@ -3504,7 +2978,7 @@ mod tests {
                 "Set action to an action defined by the BReg project.",
             ),
         ] {
-            let error = validate_breg_binding_ids(&bindings, &authorities, &actions)
+            let error = validate_breg_binding_ids(&bindings, &facts(&authorities, &actions))
                 .unwrap_err()
                 .to_string();
             assert!(error.contains(field), "{error}");
@@ -3955,9 +3429,9 @@ mod tests {
         assert_eq!(
             serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap(),
             json!([
-                {"product": "breg", "pid": 4242, "pgid": 4242, "started": null},
-                {"product": "casework", "pid": 4343, "pgid": 4343, "started": null},
-                {"application": "application", "pid": 4444, "pgid": 4444, "started": null}
+                {"product": "breg", "pid": 4242, "pgid": 4242},
+                {"product": "casework", "pid": 4343, "pgid": 4343},
+                {"application": "application", "pid": 4444, "pgid": 4444}
             ])
         );
         assert_eq!(
@@ -4058,20 +3532,18 @@ mod tests {
         assert!(application_file(root.path(), Path::new("linked.js")).is_err());
     }
 
-    #[test]
-    fn application_preflight_checks_node_and_exact_prepare_version() {
-        let root = tempfile::tempdir().unwrap();
+    fn fixture_node(root: &Path, node_version: &str) -> (PathBuf, ApplicationPlan) {
         for name in ["entry.js", "prepare.js", "check.js"] {
-            fs::write(root.path().join(name), "fixture").unwrap();
+            fs::write(root.join(name), "fixture").unwrap();
         }
-        let node = root.path().join("node");
+        let node = root.join("node");
         fs::write(
             &node,
-            "#!/usr/bin/env bash\nset -euo pipefail\nif [[ $1 == --version ]]; then\n  printf 'v24.11.0\\n'\nelse\n  printf 'fixture-prepare 1.0\\n'\nfi\n",
+            format!("#!/usr/bin/env bash\nset -euo pipefail\nif [[ $1 == --version ]]; then\n  printf '{node_version}\\n'\nelse\n  printf 'fixture-prepare 1.0\\n'\nfi\n"),
         )
         .unwrap();
         fs::set_permissions(&node, fs::Permissions::from_mode(0o700)).unwrap();
-        let mut plan: ApplicationPlan = serde_json::from_value(json!({
+        let plan: ApplicationPlan = serde_json::from_value(json!({
             "client": "browser-client", "callbackPath": "/callback",
             "healthPath": "/health", "entry": "entry.js", "prepare": "prepare.js",
             "checker": "check.js", "deployment": "deployment.json",
@@ -4079,17 +3551,98 @@ mod tests {
             "prepareVersion": "fixture-prepare 1.0"
         }))
         .unwrap();
+        (node, plan)
+    }
 
-        assert_eq!(
-            preflight_application_with_node(root.path(), &plan, &node).unwrap(),
-            node.canonicalize().unwrap()
-        );
+    #[test]
+    fn application_preflight_checks_the_node_floor_and_warns_on_a_prepare_version_change() {
+        let root = tempfile::tempdir().unwrap();
+        let (node, mut plan) = fixture_node(root.path(), "v24.11.0");
+        let preflight = preflight_application_with_node(root.path(), &plan, &node).unwrap();
+        assert_eq!(preflight.node, node.canonicalize().unwrap());
+        assert!(preflight.warnings.is_empty(), "{:?}", preflight.warnings);
         plan.prepare_version = "fixture-prepare 2.0".to_owned();
-        let error = preflight_application_with_node(root.path(), &plan, &node).unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "application configuration command version differs from dev.yaml"
+        let preflight = preflight_application_with_node(root.path(), &plan, &node).unwrap();
+        assert_eq!(preflight.warnings.len(), 1);
+        assert!(
+            preflight.warnings[0].contains("/application/prepareVersion")
+                && preflight.warnings[0].contains("fixture-prepare 1.0"),
+            "{:?}",
+            preflight.warnings
         );
+    }
+
+    #[test]
+    fn node_newer_than_24_is_accepted_with_a_warning() {
+        let root = tempfile::tempdir().unwrap();
+        let (node, plan) = fixture_node(root.path(), "v26.1.0");
+        let preflight = preflight_application_with_node(root.path(), &plan, &node).unwrap();
+        assert_eq!(preflight.warnings.len(), 1);
+        assert!(preflight.warnings[0].contains("v26.1.0"));
+    }
+
+    #[test]
+    fn the_schema_credentials_document_matches_the_published_schema() {
+        let schema: Value = serde_json::from_slice(
+            &fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                "../../products/breg/generated/tools/schema-test-credentials.v1.schema.json",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
+        let document = serde_json::to_value(SchemaCredentials {
+            api_version: SCHEMA_CREDENTIALS_API_VERSION,
+            kind: SCHEMA_CREDENTIALS_KIND,
+            bindings: vec![SchemaCredentialBinding {
+                journey_id: "smoke",
+                step_id: "read",
+                credential: SchemaCredential {
+                    kind: "bearer",
+                    token_ref: secret_ref("schema-token-0"),
+                },
+            }],
+        })
+        .unwrap();
+        let errors: Vec<_> = validator
+            .validate(&document)
+            .err()
+            .into_iter()
+            .flatten()
+            .map(|error| format!("{} at {}", error.instance_path, error.schema_path))
+            .collect();
+        assert!(errors.is_empty(), "{errors:?}");
+        let mut wrong = document;
+        wrong["kind"] = json!("Other");
+        assert!(validator.validate(&wrong).is_err());
+    }
+
+    #[test]
+    fn the_run_issuer_is_bound_only_when_it_is_a_loopback_url() {
+        assert!(is_loopback_run_issuer("http://127.0.0.1:41000/"));
+        assert!(is_loopback_run_issuer("http://127.0.0.1:41000"));
+        for refused in [
+            "http://127.0.0.1:1/",
+            "https://127.0.0.1:41000/",
+            "http://localhost:41000/",
+            "http://127.0.0.1:41000/x/",
+            "http://127.0.0.1:abc/",
+        ] {
+            assert!(!is_loopback_run_issuer(refused), "{refused}");
+        }
+    }
+
+    #[test]
+    fn node_older_than_24_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let (node, plan) = fixture_node(root.path(), "v22.4.0");
+        let error = preflight_application_with_node(root.path(), &plan, &node)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("Node 24 or newer"), "{error}");
     }
 
     const APPLICATION_FIXTURE_PORT: &str = "APPLICATION_FIXTURE_PORT";
@@ -4251,31 +3804,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_live_process_is_recorded_with_its_start_time() {
-        let scratch = tempfile::tempdir().unwrap();
-        let mut child = std::process::Command::new("sleep")
-            .arg("60")
-            .spawn()
-            .unwrap();
-        write_processes(
-            scratch.path(),
-            &[(RuntimeKind::Product(Product::Breg), child.id())],
-        )
-        .unwrap();
-        let recorded: Value =
-            serde_json::from_slice(&fs::read(scratch.path().join("processes.json")).unwrap())
-                .unwrap();
-        let started = recorded[0]["started"].as_str().map(str::to_owned);
-        assert!(started.is_some(), "{recorded}");
-        assert_eq!(
-            started,
-            crate::project_dev::recovery::started_at(child.id())
-        );
-        child.kill().unwrap();
-        child.wait().unwrap();
-    }
-
     fn minimal_registry(edit: impl FnOnce(&str) -> String) -> registry_breg::CompiledRegistry {
         let source =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/minimal");
@@ -4298,14 +3826,15 @@ mod tests {
 
     #[test]
     fn a_breg_grant_naming_an_unknown_profile_is_refused_at_its_pointer() {
-        let registry = minimal_registry(str::to_owned);
+        let facts = BregFacts {
+            access_profiles: BTreeSet::from(["directory-editor".to_owned()]),
+            ..BregFacts::default()
+        };
         let people = BTreeMap::from([
             ("editor".to_owned(), breg_person("directory-editor")),
             ("typo".to_owned(), breg_person("directory-edtor")),
         ]);
-        let error = check_breg_grants(&registry, &people)
-            .unwrap_err()
-            .to_string();
+        let error = check_breg_grants(&facts, &people).unwrap_err().to_string();
         assert!(
             error.contains("/people/typo/grants/breg/profile"),
             "{error}"
@@ -4316,41 +3845,7 @@ mod tests {
         );
         assert!(!error.contains("directory-edtor"), "{error}");
         let valid = BTreeMap::from([("editor".to_owned(), breg_person("directory-editor"))]);
-        check_breg_grants(&registry, &valid).unwrap();
-    }
-
-    #[test]
-    fn a_breg_grant_may_name_a_profile_with_only_proposal_permissions() {
-        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/acceptance/reviewed-evidence-journey/registry");
-        let scratch = tempfile::tempdir().unwrap();
-        let project = scratch.path().join("project");
-        copy_project(&source, &project).unwrap();
-        let registry = crate::compile(&project, crate::ProfileArg::Production, "project-dev-test")
-            .unwrap_or_else(|_| panic!("the reviewed evidence project must compile"));
-        let people = BTreeMap::from([("applier".to_owned(), breg_person("applier"))]);
-        check_breg_grants(&registry, &people).unwrap();
-    }
-
-    fn encrypt_contact_email(source: &str) -> String {
-        let source = source.replacen(
-            "mutationMode: mutable\n    display: {label: Contact",
-            "mutationMode: mutable\n    classification: restricted\n    display: {label: Contact",
-            1,
-        );
-        source.replacen(
-            "{id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: internal}\n      - {id: jurisdiction",
-            "{id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: restricted, encrypted: true}\n      - {id: jurisdiction",
-            1,
-        )
-    }
-
-    #[test]
-    fn the_compiled_project_decides_whether_a_run_encrypts_fields() {
-        assert!(breg_encrypts_fields(&minimal_registry(
-            encrypt_contact_email
-        )));
-        assert!(!breg_encrypts_fields(&minimal_registry(str::to_owned)));
+        check_breg_grants(&facts, &valid).unwrap();
     }
 
     fn breg_input(encrypts_fields: bool) -> RunInput {
@@ -4413,23 +3908,12 @@ mod tests {
         let terminate = AtomicBool::new(false);
         let runner = ProductRunner::new(Arc::new(breg_input(true)), &root, &terminate).unwrap();
 
-        runner.write_field_key().unwrap();
+        // `bregctl field-encryption keygen` writes the key; the config only
+        // names it.
         let key = root.join(FIELD_KEY);
+        write_private(&key, STANDARD.encode([7u8; 32]).as_bytes()).unwrap();
         assert_eq!(field_key_file(&root), Some(key.clone()));
-        let refused = runner.write_field_key().unwrap_err();
-        assert!(refused.is::<Operational>(), "{refused:#}");
-        assert!(
-            refused
-                .to_string()
-                .ends_with("run directory: a key file already exists at that path"),
-            "{refused:#}"
-        );
-        assert_eq!(
-            fs::metadata(&key).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
         let encoded = fs::read_to_string(&key).unwrap();
-        assert_eq!(STANDARD.decode(encoded.trim()).unwrap().len(), 32);
 
         // The rehearsal and the served database read the same run key, by
         // reference only; local-file custody requires local initialization.
@@ -4448,13 +3932,6 @@ mod tests {
             );
             assert!(!text.contains(encoded.trim()), "{name}");
         }
-
-        // Each run draws its own key.
-        let other = scratch.path().join("other");
-        super::super::private_directory(&other).unwrap();
-        let second = ProductRunner::new(Arc::new(breg_input(true)), &other, &terminate).unwrap();
-        second.write_field_key().unwrap();
-        assert_ne!(fs::read_to_string(other.join(FIELD_KEY)).unwrap(), encoded);
     }
 
     #[test]
@@ -4472,6 +3949,7 @@ mod tests {
         let missing = Path::new("/nonexistent/caseworkctl");
         let error = explain_casework_facts(missing, Path::new("."), &terminate).unwrap_err();
         let failed = inspection_failed(
+            Product::Casework,
             "products[0]",
             "inspect the Casework project",
             error,
@@ -4497,6 +3975,7 @@ mod tests {
         let terminate = AtomicBool::new(true);
         let interrupted = anyhow::anyhow!("development product inspection was interrupted");
         let failed = inspection_failed(
+            Product::Casework,
             "products[0]",
             "inspect the Casework project",
             interrupted,

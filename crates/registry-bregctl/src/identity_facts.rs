@@ -220,14 +220,6 @@ fn compiled_grants(compiled: &CompiledRegistry) -> impl Iterator<Item = Grant<'_
     entity_grants.chain(dataset_grants).chain(action_grants)
 }
 
-/// Clients the runtime must list even if no fixture mints tokens for them.
-pub(crate) fn named_requester_clients(compiled: &CompiledRegistry) -> BTreeSet<String> {
-    compiled_grants(compiled)
-        .flat_map(|grant| grant.requester_clients)
-        .chain(compiled.recipients().clients().map(str::to_owned))
-        .collect()
-}
-
 /// The claims BReg refuses a token for a grant without, apart from the
 /// subject every token carries and the reserved consent claims the engine
 /// fills from the verified client.

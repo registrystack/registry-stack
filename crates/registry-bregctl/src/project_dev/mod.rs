@@ -5,6 +5,7 @@
 mod bindings;
 mod browser;
 mod database;
+mod explain;
 pub(crate) mod guard;
 mod issuer;
 mod journey;
@@ -730,7 +731,6 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
         binaries,
     };
     let preparation = (|| {
-        products::capture_casework_source(&input, &root, &signals)?;
         write_private(&root.join("input.json"), &capture_input(&input)?)?;
         private_directory(&root.join(guard::DIRECTORY))?;
         write_private(&root.join(POSTGRES_IDENTITY), b"null")?;
