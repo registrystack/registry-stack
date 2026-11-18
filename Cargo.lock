@@ -7350,6 +7350,7 @@ dependencies = [
  "registry-platform-crypto",
  "registry-platform-httpsec",
  "registry-platform-yaml",
+ "registry-rstack-dev",
  "registry-thunderid-tooling",
  "rhai",
  "rustix 1.1.6",

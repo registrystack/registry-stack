@@ -190,25 +190,19 @@ its logging and retention separately.
     manifest();
     crates/registry-platform-httputil/src/lib.rs, OutboundClientBuilder. */}
 
-## Development clients
+## Development plan and scenarios
 
-`dev-clients.yaml` declares the local clients `bregctl dev start` binds to access profiles
-([Create your first registry](../../tutorials/first-breg/)).
+`dev.yaml` declares the products, the synthetic people and the scenario file that `rstack dev`
+runs for a project. A scenario file holds the named requests that `rstack dev start` sends once the
+registry is running, each step as one person and access profile. A BReg project keeps its scenario
+file outside `tests/`, because the registry reads every YAML file under `tests/` as one of its own
+checks. [Run a project with rstack dev](../../configure/run-a-project-with-rstack-dev/) describes
+both files, and `products/breg/examples/minimal/` shows a plan and scenario file for a BReg
+project. The plan format is `products/platform/generated/dev/dev.v1alpha1.schema.json`.
 
-{/* Evidence: crates/registry-bregctl/src/dev/config.rs, DEV_CLIENTS_FORMAT. */}
-
-<ConfigurationReference contracts={reference.tools.filter((contract) => contract.id === 'dev-clients')} prefix="breg-tool" compact />
-
-## Example scenarios
-
-`examples/scenarios.json` declares the named scenarios `bregctl examples list` describes and
-`bregctl examples run <scenario>` runs against the development instance, each step as one client
-and access profile.
-
-{/* Evidence: crates/registry-bregctl/src/dev/examples.rs, EXAMPLE_SCENARIOS_FORMAT, CATALOGUE_FILE,
-    and ExamplesAction. */}
-
-<ConfigurationReference contracts={reference.tools.filter((contract) => contract.id === 'example-scenarios')} prefix="breg-tool" compact />
+{/* Evidence: products/platform/PROJECT-DEV.md;
+    products/platform/generated/dev/dev.v1alpha1.schema.json;
+    products/breg/examples/minimal/dev.yaml. */}
 
 ## Journeys
 

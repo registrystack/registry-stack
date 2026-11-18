@@ -222,6 +222,7 @@ fn issuer_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema 
 pub(super) enum Product {
     Breg,
     Casework,
+    Evidence,
 }
 
 impl Product {
@@ -229,6 +230,7 @@ impl Product {
         match self {
             Self::Breg => "breg",
             Self::Casework => "casework",
+            Self::Evidence => "evidence",
         }
     }
 }
@@ -310,7 +312,7 @@ pub(super) struct ApplicationPlan {
 pub(super) struct ProductPlan {
     /// Which product to start.
     pub product: Product,
-    /// Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg or casework.yaml for Casework.
+    /// Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg, casework.yaml for Casework or evidence.yaml for Evidence.
     pub project: PathBuf,
     /// Token audience this product accepts: 1 to 256 characters without whitespace or control characters, distinct from the other products' audiences.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
@@ -336,7 +338,7 @@ pub(super) struct TestPerson {
     /// Client identifier of this person's tokens: 1 to 256 characters without whitespace or control characters.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub client: String,
-    /// The authority this person holds in each product, keyed by `breg` or `casework`. Give at least one grant, only for products listed in `products`.
+    /// The authority this person holds in each product, keyed by `breg`, `casework` or `evidence`. An Evidence grant's profile is the requester tag the token carries. Give at least one grant, only for products listed in `products`.
     #[serde(deserialize_with = "deserialize_grants")]
     pub grants: BTreeMap<Product, Grant>,
     /// Forward the same authority to both products. Both grants must declare the same scopes and additional claims.
@@ -367,6 +369,7 @@ pub(super) struct Grant {
 struct GrantsDocument {
     breg: Option<Grant>,
     casework: Option<Grant>,
+    evidence: Option<Grant>,
 }
 
 fn deserialize_grants<'de, D>(
@@ -379,6 +382,7 @@ where
     Ok([
         grants.breg.map(|grant| (Product::Breg, grant)),
         grants.casework.map(|grant| (Product::Casework, grant)),
+        grants.evidence.map(|grant| (Product::Evidence, grant)),
     ]
     .into_iter()
     .flatten()
@@ -966,6 +970,12 @@ impl Plan {
             && self.products.iter().any(|p| p.product == Product::Casework)
     }
 
+    pub(super) fn runs_evidence(&self) -> bool {
+        self.products
+            .iter()
+            .any(|entry| entry.product == Product::Evidence)
+    }
+
     /// Puts the products in the order a run starts them: BReg before Casework,
     /// which pairs with the BReg package. The author may list them either way.
     pub(super) fn order_products_for_start(&mut self) {
@@ -1007,11 +1017,20 @@ impl Plan {
             "Set issuer to `run` for an application or exact paired run issuer binding, or to an HTTPS URL with a host and no credentials, query, or fragment.",
         )?;
         require(
-            (self.issuer != "run" || self.application.is_some() || self.paired_run_binding())
+            (self.issuer != "run"
+                || self.application.is_some()
+                || self.paired_run_binding()
+                || self.runs_evidence())
                 && ((self.application.is_none() && !self.bindings.binds_run_issuer()) || self.issuer == "run"),
             "/issuer",
-            "The run issuer requires an application or an explicitly bound BReg and Casework pair; applications and run issuer bindings require issuer run.",
-            "Use issuer `run` with application or the exact paired runIssuerBinding; otherwise remove both and set an HTTPS issuer.",
+            "The run issuer requires an application, an explicitly bound BReg and Casework pair, or Evidence; applications and run issuer bindings require issuer run.",
+            "Use issuer `run` with application, the exact paired runIssuerBinding, or Evidence; otherwise remove them and set an HTTPS issuer.",
+        )?;
+        require(
+            !self.runs_evidence() || (self.issuer == "run" && self.application.is_none()),
+            "/issuer",
+            "An Evidence target accepts only the run's own loopback issuer, and a browser application already owns that issuer.",
+            "Set issuer to `run` and remove the application when the plan starts Evidence.",
         )?;
         if let Some(application) = &self.application {
             if let Some(roles) = &application.casework_source_credential_roles {
@@ -1094,7 +1113,7 @@ impl Plan {
             !self.products.is_empty(),
             "/products",
             "The plan must name at least one product.",
-            "Add a BReg or Casework product to products.",
+            "Add a BReg, Casework or Evidence product to products.",
         )?;
         let mut products = BTreeSet::new();
         let mut audiences = BTreeSet::new();
@@ -1126,6 +1145,7 @@ impl Plan {
             let manifest = match entry.product {
                 Product::Breg => "registry.yaml",
                 Product::Casework => "casework.yaml",
+                Product::Evidence => "evidence.yaml",
             };
             require_file_inside(
                 root,
@@ -1182,7 +1202,7 @@ impl Plan {
                 !person.grants.is_empty(),
                 &format!("{field}/grants"),
                 "The test person must have at least one product grant.",
-                "Add a BReg or Casework grant for this test person.",
+                "Add a BReg, Casework or Evidence grant for this test person.",
             )?;
             for (product, grant) in &person.grants {
                 let field = format!("{field}/grants/{}", product.name());
@@ -2582,5 +2602,44 @@ mod tests {
         let error = read_plan(root.path()).err().unwrap().to_string();
         assert!(error.contains("journey"), "{error}");
         assert!(error.contains("scenarioFile"), "{error}");
+    }
+
+    #[test]
+    fn evidence_grant_requires_profile() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("evidence.yaml"), "fixture").unwrap();
+        write_scenarios(
+            root.path(),
+            json!({"id": "ask", "steps": [{
+                "id": "assert", "product": "evidence", "as": "caller",
+                "method": "POST", "path": "/v1/evidence", "body": {},
+                "expect": {"status": 200}
+            }]}),
+        );
+        let plan = |grant: &str| {
+            format!(
+                "apiVersion: {API_VERSION}\nkind: {KIND}\nissuer: run\nproducts:\n  - {{product: evidence, project: ., audience: evidence}}\npeople:\n  caller:\n    subject: caller\n    client: caller-client\n    grants:\n      evidence: {grant}\nscenarioFile: tests/scenarios.yaml\n"
+            )
+        };
+
+        fs::write(
+            root.path().join("dev.yaml"),
+            plan("{profile: local-service, scopes: [\"evidence:request\"]}"),
+        )
+        .unwrap();
+        let decoded = read_plan(root.path()).unwrap();
+        validate_plan(root.path(), &decoded).unwrap();
+        assert_eq!(decoded.value.products[0].product, Product::Evidence);
+        assert!(decoded.value.people["caller"]
+            .grants
+            .contains_key(&Product::Evidence));
+
+        fs::write(
+            root.path().join("dev.yaml"),
+            plan("{scopes: [\"evidence:request\"]}"),
+        )
+        .unwrap();
+        let error = read_plan(root.path()).err().unwrap().to_string();
+        assert!(error.contains("profile"), "{error}");
     }
 }

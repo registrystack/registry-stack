@@ -8,6 +8,11 @@ rather than defining parallel semantics.
 AI-assisted tools may invoke this CLI, but receive no separate authority to
 sign or apply production changes.
 
+Use `rstack dev` to run a project locally. Its `dev.yaml` plan names the callers and a scenario
+file, and `rstack dev start` sends the scenarios once the registry is running (see
+`products/platform/PROJECT-DEV.md`). The `bregctl dev` and `bregctl examples` commands below are
+the older local loop that `rstack dev` replaces.
+
 `bregctl examples list PROJECT` describes the project's declared teaching
 scenarios and retained attempts without starting services or creating credentials.
 `bregctl examples run SCENARIO PROJECT` uses only that project's ready owned

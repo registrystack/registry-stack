@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise rstack dev with real BReg, Casework and a disposable TLS PostgreSQL."""
+"""Exercise rstack dev with real BReg, Casework, Evidence and a disposable TLS PostgreSQL."""
 
 from __future__ import annotations
 
@@ -455,6 +455,78 @@ def verify_alone(root, bin_dir, env):
         assert not (Path(env["RSTACK_DEV_STATE_DIR"]) / run).exists()
         assert_nothing_listening(bin_dir, report["products"].values())
         print(f"{product} alone ran its example end to end and stopped cleanly")
+
+
+EVIDENCE = STACK / "products/evidence/examples/standalone"
+
+
+def verify_evidence_alone(root, bin_dir):
+    """Evidence runs from its own example with no database, no Docker and none
+    of the other products' binaries."""
+    checkout = root / "alone-evidence"
+    shutil.copytree(EVIDENCE, checkout)
+    source_port = port()
+    target = checkout / "local-target.yaml"
+    target.write_text(
+        target.read_text().replace(
+            "http://127.0.0.1:8081", f"http://127.0.0.1:{source_port}"
+        )
+    )
+    # A Docker CLI that records any call: an Evidence-only run must not make one.
+    shim = root / "evidence-shim"
+    shim.mkdir()
+    called = root / "docker-called"
+    docker = shim / "docker"
+    docker.write_text(f"#!/usr/bin/env bash\ntouch '{called}'\nexit 1\n")
+    docker.chmod(0o755)
+    state = root / "evidence-runs"
+    missing = str(root / "no-such-binary")
+    env = {
+        **{
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"RSTACK_DEV_DATABASE_URL", "RSTACK_DEV_DATABASE_CA"}
+        },
+        "PATH": f"{shim}{os.pathsep}{os.environ['PATH']}",
+        "RSTACK_DEV_STATE_DIR": str(state),
+        "RSTACK_EVIDENCECTL_BIN": str(bin_dir / "evidencectl"),
+        "RSTACK_EVIDENCE_BIN": str(bin_dir / "evidence"),
+        **{
+            f"RSTACK_{name}_BIN": missing
+            for name in ("BREGCTL", "BREG", "CASEWORKCTL", "CASEWORK")
+        },
+    }
+    source = subprocess.Popen(
+        ["python3", str(checkout / "serve-source.py"), "--port", str(source_port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        eventually(
+            lambda: accepts_connections(f"http://127.0.0.1:{source_port}"),
+            "the synthetic source did not start",
+        )
+        report = dev(bin_dir, env, checkout, "start", ".")
+        run = report["run_id"]
+        try:
+            assert report["scenarios"][0]["result"] == "passed", report
+            assert list(report["products"]) == ["evidence"], report
+            assert report["database"] == {"mode": "none"}, report
+            headers = credential(bin_dir, env, checkout, run, "caller")
+            status, body = get_body(
+                report["products"]["evidence"] + "/v1/evidence-definitions", headers
+            )
+            assert status == 200 and "adult-status" in body, (status, body)
+        finally:
+            stopped = dev(bin_dir, env, checkout, "stop", run)
+        assert stopped["status"] == "stopped", stopped
+        assert_nothing_listening(bin_dir, report["products"].values())
+        nothing_left_behind(state)
+        assert not called.exists(), "an Evidence-only run called Docker"
+        print("evidence alone ran its example end to end with no database and no Docker")
+    finally:
+        source.terminate()
+        source.wait(timeout=10)
 
 
 def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
@@ -1665,7 +1737,18 @@ def main():
     parser.add_argument("--postgres-bin-dir", type=Path)
     parser.add_argument("--scratch-parent", type=Path)
     parser.add_argument("--spatial", action="store_true", help="also verify PostGIS")
+    parser.add_argument(
+        "--evidence",
+        action="store_true",
+        help="only verify Evidence alone, which needs no database and no Docker",
+    )
     args = parser.parse_args()
+    if args.evidence:
+        with tempfile.TemporaryDirectory(
+            prefix="rstack-dev-", dir=args.scratch_parent
+        ) as directory:
+            verify_evidence_alone(Path(directory), args.bin_dir.resolve())
+        return
     if args.database == "address" and args.postgres_bin_dir is None:
         parser.error("--postgres-bin-dir is required with --database address")
     with tempfile.TemporaryDirectory(

@@ -87,16 +87,18 @@ loopback HTTP, disposable PostgreSQL, and an unsigned local package.
 It is the first-hour learning path, not a shortcut around production package
 review, operated database roles, TLS, migration review, or secret custody.
 
-For a retained local loop that needs no checkout, Python launcher, or shell
-script, [Native local BReg lifecycle](https://docs.registrystack.org/reference/bregctl-dev/) documents `bregctl dev` against
-installed binaries and Docker PostgreSQL.
+For a disposable local run that needs no checkout, Python launcher, or shell
+script, `rstack dev` starts a project against installed binaries and Docker
+PostgreSQL from a `dev.yaml` plan. [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/)
+describes it, and [examples/minimal](examples/minimal/README.md) shows a plan
+for a BReg project. [Native local BReg lifecycle](https://docs.registrystack.org/reference/bregctl-dev/) documents the older
+`bregctl dev` loop.
 
 `bregctl init <destination>` writes the complete [minimal directory](examples/minimal/README.md).
 Use `--template facility-registry` for the complete [facility project](examples/facility/README.md).
-Both are ordinary authored projects with fixed scenarios. `bregctl examples list` describes a starter's scenarios without
-starting services or creating credentials, and `bregctl examples run
-<scenario> <project>` runs or resumes one against the project's ready local
-development instance. `bregctl init <destination> --from publicschema` derives
+Both are ordinary authored projects. A project's scenarios are requests in a
+scenario file that its `dev.yaml` names, and `rstack dev start` sends them once
+the registry is running. `bregctl init <destination> --from publicschema` derives
 a new project from the PublicSchema reference model snapshot pinned in
 `crates/registry-linkml`, either from the shipped `household` starter
 selection (`--starter household`) or from an authored selection document

@@ -1,39 +1,46 @@
 # Local directory
 
 One Record type with generated CRUD, two Actions, and an access profile bounded
-to the caller's jurisdiction. The project includes synthetic clients, an allowed and refused
-journey, and resumable examples.
+to the caller's jurisdiction. The project includes a development plan with two synthetic callers,
+an allowed and refused journey, and a scenario that adds a contact.
 
 It declares two Actions. `update-contact-email` is immediate: invoking it
 patches the contact's email at once and returns an ActionReceipt.
 `register-contact` creates a contact through a Proposal with no review: starting
 it saves a draft, and submitting it applies the Plan automatically.
 
-With matching `breg` and `bregctl` binaries on `PATH` and Docker running:
+With matching `breg`, `bregctl` and `rstack` binaries on `PATH` and Docker running:
 
 ```sh
 bregctl check .
 bregctl explain model .
-bregctl dev start .
-bregctl examples list .
-bregctl examples run contact .
-bregctl examples run update-contact-email .
-bregctl examples run register-contact .
-bregctl dev stop .
+rstack dev check .
+rstack dev start . --ttl 4h
 ```
 
-`dev start` checks and packages the project, starts a local issuer and disposable
-PostgreSQL, and verifies the journeys before serving requests. Restarting it
-retains the records. `bregctl dev stop --remove .` removes this project's local
-session and its data. `update-contact-email` creates its own contact and then
-changes that contact's email through the Action. Automatic application
-of a submitted Proposal runs after the response, so `register-contact` waits up
-to 10 seconds for it; if it still reports a differing Proposal state, rerun the
-`next command` it prints.
+`rstack dev start` checks and packages the project, starts a disposable PostgreSQL and a local
+issuer, runs the authored journeys, starts the registry, and sends the scenario in
+`dev/scenarios.yaml`: it creates a contact as `editor` and reads it back. The scenario file sits in
+`dev/` because `bregctl check` reads every YAML file under `tests/` as one of its own checks.
+`dev.yaml` names the products, the two callers and that file. Stopping the run with
+`rstack dev stop RUN` removes its data, and a run that is not stopped ends after its time to live.
+[Run a project with rstack dev](https://docs.registrystack.org/dev/configure/run-a-project-with-rstack-dev/)
+describes tokens and the rest of the report.
 
-The `editor` client operates in `zone-a`; `foreign-editor` operates in `zone-b`.
+To call the registry, write a token header file for a caller and send a request with it:
+
+```sh
+rstack dev token RUN --as editor
+rstack breg api /v1/records/contacts --url BREG_URL --header @HEADER_FILE
+```
+
+The [Change a registry with an Action](https://docs.registrystack.org/dev/tutorials/change-a-registry-with-an-action/)
+tutorial adds scenarios for both Actions to `dev/scenarios.yaml`. Automatic application of a
+submitted Proposal runs after the response, so that scenario reads the Proposal until it is applied.
+
+The `editor` caller operates in `zone-a`, and `foreign-editor` operates in `zone-b`.
 The refusal journey proves that knowing a contact ID does not grant access to
-another jurisdiction. Neither client configuration contains credentials.
+another jurisdiction. Neither caller configuration contains credentials.
 
 The reserved registry identity and local source revision are examples. Set the
 institution's identity and an immutable source revision before preparing a

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-20"
+last_reviewed: "2026-11-18"
 doc_type: tutorial
 persona:
   - operator
@@ -24,7 +24,7 @@ producer. The request carries its own snapshot, so no source registry is needed.
   outcome="One ReviewRequest decided by staff and read by its producer, who is refused the task."
   time="About 20 minutes, plus image downloads"
   level="Local evaluation only"
-  prerequisites={['Running Docker', 'jq', 'Free loopback ports 8092, 8093 and 15433', 'The tools required by the release verification procedure']}
+  prerequisites={['Running Docker', 'jq and curl', 'The tools required by the release verification procedure']}
 />
 
 ## Install Registry Stack
@@ -108,27 +108,109 @@ Casework keeps the snapshot the producer sends and refuses each listed case.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, check(), test(), explain(). */}
 
-## Start the development session
+## Describe the local run
 
-```sh
-rstack casework dev start
+`rstack dev` runs the project on your machine from a plan file. First tell Casework which issuer
+and subject the producer's tokens carry. The template trusts a fixed local address, and a run signs
+its test tokens under an HTTPS issuer name of your choosing:
+
+```diff test-edit title="casework.yaml"
+ trustedProducers:
+   requester:
+     profile: requester
+-    issuer: http://127.0.0.1:8093
+-    subject: b75315b2-5854-70f3-8867-511dd771a6da
++    issuer: https://identity.standalone.example.test
++    subject: requester
 ```
 
-```json test-excerpt
-{
-  "status": "complete",
-  "outcome": "ready",
-  "caseworkUrl": "http://127.0.0.1:8092",
-  "directory": {"revision": 1, "teams": 1}
+The plan lists the product, the test people and what each may do. It names a scenario file, which
+runs when the run starts:
+
+```yaml title="dev.yaml" test-file
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+issuer: https://identity.standalone.example.test
+products:
+  - {product: casework, project: ., audience: "urn:example:standalone-decision"}
+people:
+  administrator:
+    subject: administrator
+    client: standalone-workbench
+    grants:
+      casework:
+        profile: administrator
+        scopes: ["casework:admin"]
+        claims: {registry_actor_kind: human}
+  staff:
+    subject: staff
+    client: standalone-workbench
+    grants:
+      casework:
+        profile: staff
+        scopes: ["casework:staff"]
+        claims: {registry_actor_kind: human}
+  requester:
+    subject: requester
+    client: standalone-requester
+    grants:
+      casework:
+        profile: requester
+        scopes: ["casework:request"]
+scenarioFile: tests/scenarios.yaml
+```
+
+A new Casework directory has no staff. The scenario has the administrator seat one team on the
+`decisions` queue and put the person `staff` in it:
+
+```sh
+mkdir tests
+```
+
+```yaml title="tests/scenarios.yaml" test-file
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: staff-the-queue
+    steps:
+      - id: staff-the-queue
+        product: casework
+        as: administrator
+        method: POST
+        path: /v1/directory/bootstrap
+        headers: {If-Match: '"0"', Idempotency-Key: staff-the-queue}
+        body:
+          teamId: decisions-team
+          staff: [{issuer: https://identity.standalone.example.test, subject: staff}]
+          supervisors: []
+          queueId: decisions
+        expect: {status: 200}
+```
+
+## Start the run
+
+Check the plan, then start the run. [Run a project with rstack dev](../../configure/run-a-project-with-rstack-dev/)
+explains the options and how to recover a failed run:
+
+```sh
+rstack dev check .
+rstack --format json dev start . --ttl 2h > run.json
+run_id="$(jq -r .run_id run.json)"
+casework_url="$(jq -r .products.casework run.json)"
+```
+
+PostgreSQL runs in Docker, and the run has seated one staff team. Its state, keys and logs live in
+the run's own owner-only directory, outside your project. Each call below needs a short-lived token
+for one of the plan's people. This function asks for one and prints the header file to pass to curl:
+
+```sh
+headers_for() {
+  rstack dev token "$run_id" --as "$1" | awk '$1 == "casework" && $2 == "headers" {print $3}'
 }
 ```
 
-PostgreSQL and a token issuer run in Docker, with one staff team seeded. `.casework/dev/` holds
-private credentials; keep it out of version control. The API commands get short-lived tokens for
-the registered local clients in memory.
-
-{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, start, api_connection, acquire_token;
-    crates/registry-cli-api/src/api.rs, run_api. */}
+{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack/tests/dev_run.rs, casework_alone_runs_end_to_end;
+    products/casework/examples/standalone-decision/dev.yaml. */}
 
 ## Submit a ReviewRequest
 
@@ -157,11 +239,11 @@ The subject digest is the producer's own fingerprint of the version it asks abou
 SHA-256 of the snapshot's compact JSON; Casework binds the request and its result to it. Send it:
 
 ```sh
-rstack casework api /v1/review-requests \
-  --client requester \
-  --idempotency-key tutorial-review-1 \
-  --input request.json \
-  --output accepted.json
+curl -sS --fail-with-body --header @"$(headers_for requester)" \
+  --header 'Content-Type: application/json' \
+  --header 'Idempotency-Key: tutorial-review-1' \
+  --data @request.json \
+  --output accepted.json "$casework_url/v1/review-requests"
 jq . accepted.json
 request_id="$(jq -r .requestId accepted.json)"
 ```
@@ -187,9 +269,8 @@ The request named only the policy ID, so Casework bound it to the active version
 The request opened a [ReviewTask](../../reference/glossary/#review-task). List it as staff:
 
 ```sh
-rstack casework api '/v1/review-tasks?limit=25' \
-  --client staff \
-  --output tasks.json
+curl -sS --fail-with-body --header @"$(headers_for staff)" \
+  --output tasks.json "$casework_url/v1/review-tasks?limit=25"
 task_id="$(jq -r '.items[0].taskId' tasks.json)"
 task_revision="$(jq -r '.items[0].revision' tasks.json)"
 ```
@@ -197,9 +278,8 @@ task_revision="$(jq -r '.items[0].revision' tasks.json)"
 Try to read it as the producer:
 
 ```sh
-rstack casework api "/v1/review-tasks/$task_id" \
-  --client requester \
-  --output refused.json || test "$?" -eq 1
+curl -sS --header @"$(headers_for requester)" \
+  --output refused.json --write-out '%{http_code}\n' "$casework_url/v1/review-tasks/$task_id"
 jq . refused.json
 ```
 
@@ -217,12 +297,10 @@ A producer may read its result, never the human task.
 it while you work:
 
 ```sh
-rstack casework api "/v1/review-tasks/$task_id/claim" \
-  --client staff \
-  --method POST \
-  --if-match "\"$task_revision\"" \
-  --idempotency-key tutorial-claim-1 \
-  --output claimed.json
+curl -sS --fail-with-body --header @"$(headers_for staff)" --request POST \
+  --header "If-Match: \"$task_revision\"" \
+  --header 'Idempotency-Key: tutorial-claim-1' \
+  --output claimed.json "$casework_url/v1/review-tasks/$task_id/claim"
 jq . claimed.json
 claimed_revision="$(jq -r .revision claimed.json)"
 ```
@@ -230,7 +308,7 @@ claimed_revision="$(jq -r .revision claimed.json)"
 ```json test-excerpt
 {
   "revision": 2,
-  "state": {"held": {"holder": {"issuer": "http://127.0.0.1:8093", "subject": "<subject>"}}}
+  "state": {"held": {"holder": {"issuer": "https://identity.standalone.example.test", "subject": "staff"}}}
 }
 ```
 
@@ -243,15 +321,15 @@ You hold the task at revision 2. Save one of the policy's outcomes as `decision.
 Send the decision:
 
 ```sh
-rstack casework api "/v1/review-tasks/$task_id/decisions" \
-  --client staff \
-  --if-match "\"$claimed_revision\"" \
-  --idempotency-key tutorial-answer-1 \
-  --input decision.json \
-  --output /dev/null
+curl -sS --fail-with-body --header @"$(headers_for staff)" \
+  --header 'Content-Type: application/json' \
+  --header "If-Match: \"$claimed_revision\"" \
+  --header 'Idempotency-Key: tutorial-answer-1' \
+  --data @decision.json \
+  --output /dev/null --write-out '%{http_code}\n' "$casework_url/v1/review-tasks/$task_id/decisions"
 ```
 
-The command exits successfully when Casework records the decision and answers `204`.
+Casework records the decision and answers `204`.
 
 {/* Evidence: crates/registry-casework/src/http.rs, claim_review_task, decide_review_task;
     crates/registry-casework/src/review.rs, claim_review_task, decide_review_task. */}
@@ -261,9 +339,8 @@ The command exits successfully when Casework records the decision and answers `2
 Back as the producer, fetch the answer:
 
 ```sh
-rstack casework api "/v1/review-requests/$request_id/result" \
-  --client requester \
-  --output result.json
+curl -sS --fail-with-body --header @"$(headers_for requester)" \
+  --output result.json "$casework_url/v1/review-requests/$request_id/result"
 jq . result.json
 ```
 
@@ -280,11 +357,11 @@ and submission digest. It names no reviewer and is kept until `availableUntil`.
 
 ## Leave it running
 
-The next page continues with this session and its policy, so leave it running. When you are
-finished with Casework, run `rstack casework dev stop --remove` in `tutorial-work/casework` to delete
-the session's containers, database and credentials.
+The next page continues with this run and its policy, so leave it running. The run stops by
+itself after two hours. When you are finished with Casework, run `rstack dev stop "$run_id"` to
+remove the run's containers, database and credentials.
 
-{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, stop. */}
+{/* Evidence: products/platform/PROJECT-DEV.md, stop. */}
 
 ## Next
 

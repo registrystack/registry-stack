@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: ask-adult-status
+    steps:
+      - id: request-adult-status
+        product: evidence
+        as: caller
+        method: POST
+        path: /v1/evidence
+        body:
+          requestNonce: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          requirement: urn:example:requirement:adult-status:v1
+          purpose: age-check
+          subjects:
+            - role: subject
+              selector: {profile: record-by-id, values: {record-id: adult}}
+        expect: {status: 200}

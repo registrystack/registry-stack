@@ -59,6 +59,7 @@ async function fakeRstack(dir) {
       '  casework) entrypoint=caseworkctl ;;',
       '  evidence) entrypoint=evidencectl ;;',
       '  discovery) entrypoint=discoveryctl ;;',
+      '  dev) printf "rstack dev %s\\n" "$*" >>"${RSTACK_FAKE_CALLS:?}"; exit 0 ;;',
       '  *) printf "unsupported fixture product: %s\\n" "$product" >&2; exit 2 ;;',
       'esac',
       'exec "$install_root/current/components/$product/$entrypoint/$entrypoint" "$@"',
@@ -271,14 +272,14 @@ test('the harness sets no shell variable a page could use or clobber', async () 
   });
 });
 
-test('the casework toolset serves all four binaries and stops Casework sessions before BReg ones', async () => {
+test('the casework toolset serves all four binaries and stops the rstack dev runs a journey started', async () => {
   const body =
     '## Start\n\n' +
     fence(
       'sh',
-      'casework --version\nbreg --version\ncaseworkctl dev work/casework\nbregctl dev work/registry\n' +
-        'mkdir -p work/casework/.casework/dev work/registry/.breg/dev\n' +
-        'echo {} >work/casework/.casework/dev/state.json\necho {} >work/registry/.breg/dev/state.json',
+      'casework --version\nbreg --version\n' +
+        'mkdir -p -m 700 "$RSTACK_DEV_STATE_DIR/0123abcd" "$RSTACK_DEV_STATE_DIR/4567ef01"\n' +
+        'rstack dev start .',
     ) +
     fence('sh', 'false');
   await withPage(body, async ({ dir, page }) => {
@@ -293,13 +294,38 @@ test('the casework toolset serves all four binaries and stops Casework sessions 
       BREG_BIN: join(dir, 'breg'),
       BREGCTL_BIN: join(dir, 'bregctl'),
       RSTACK_BIN: await fakeRstack(dir),
+      RSTACK_FAKE_CALLS: calls,
     });
     assert.equal(code, 1, output);
     const log = (await readFile(calls, 'utf8')).trim().split('\n');
-    assert.deepEqual(log.slice(0, 4), ['casework --version', 'breg --version', 'caseworkctl dev work/casework', 'bregctl dev work/registry']);
-    assert.match(log[4], /^caseworkctl dev stop \/\S+\/work\/casework --remove$/u);
-    assert.match(log[5], /^bregctl dev stop \/\S+\/work\/registry --remove$/u);
-    assert.equal(log.length, 6);
+    assert.deepEqual(log, ['casework --version', 'breg --version', 'rstack dev start .', 'rstack dev stop 0123abcd', 'rstack dev stop 4567ef01']);
+  });
+});
+
+test('the breg toolset stops the rstack dev runs a journey started', async () => {
+  const body =
+    '## Start\n\n' +
+    fence('sh', 'mkdir -p -m 700 "$RSTACK_DEV_STATE_DIR/0123abcd"\nrstack dev start .');
+  await withPage(body, async ({ dir, page }) => {
+    const calls = join(dir, 'calls.log');
+    const { code, output } = await run(['--toolset', 'breg', page], {
+      ...(await fakeBregBinaries(dir)),
+      RSTACK_FAKE_CALLS: calls,
+    });
+    assert.equal(code, 0, output);
+    assert.deepEqual((await readFile(calls, 'utf8')).trim().split('\n'), ['rstack dev start .', 'rstack dev stop 0123abcd']);
+  });
+});
+
+test('an expectation ignores the notice rstack dev prints when other runs are live', async () => {
+  const body =
+    '## Start\n\n' +
+    fence('sh', "echo 'rstack dev: run 0123abcd is still live; stop it with rstack dev stop 0123abcd' >&2\n" +
+      "echo 'rstack dev: 2 runs are still live (0123abcd, 4567ef01); stop one with rstack dev stop 0123abcd' >&2\necho ready") +
+    fence('text test-expect', 'ready');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
   });
 });
 

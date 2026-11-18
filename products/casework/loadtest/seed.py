@@ -32,8 +32,8 @@ from urllib.parse import urlparse
 
 
 HEADER_REFRESH_SECONDS = 210
-PRODUCER_CLIENT = "loadtest-producer"
-STAFF_CLIENT = "loadtest-staff"
+PRODUCER_PERSON = "requester"
+STAFF_PERSON = "staff"
 MINIMUM_READ_POOL = 100
 LIST_LIMIT = 100
 SEED_IN_PROGRESS = "seed-in-progress.json"
@@ -44,13 +44,14 @@ class SeedError(RuntimeError):
 
 
 class DevTokenSource:
-    """Fresh owner-only headers acquired through the stock dev lifecycle."""
+    """Fresh owner-only headers acquired through the rstack dev run."""
 
-    def __init__(self, helper: Path, caseworkctl: Path, project: Path, client_id: str) -> None:
+    def __init__(self, helper: Path, rstack: Path, run_id: str, state_dir: Path, person: str) -> None:
         self._helper = helper
-        self._caseworkctl = caseworkctl
-        self._project = project
-        self._client_id = client_id
+        self._rstack = rstack
+        self._run_id = run_id
+        self._state_dir = state_dir
+        self._person = person
         self._lock = threading.Lock()
         self._authorization = ""
         self._expires_at = 0.0
@@ -68,12 +69,14 @@ class DevTokenSource:
                     sys.executable,
                     str(self._helper),
                     "header",
-                    "--caseworkctl",
-                    str(self._caseworkctl),
-                    "--project",
-                    str(self._project),
-                    "--client",
-                    self._client_id,
+                    "--rstack",
+                    str(self._rstack),
+                    "--run-id",
+                    self._run_id,
+                    "--state-dir",
+                    str(self._state_dir),
+                    "--person",
+                    self._person,
                 ],
                 check=True,
                 capture_output=True,
@@ -82,19 +85,20 @@ class DevTokenSource:
             )
             path = Path(result.stdout.strip())
             if path.is_symlink() or not path.is_file() or stat.S_IMODE(path.stat().st_mode) & 0o077:
-                raise SeedError("caseworkctl dev token header is not an owner-only regular file")
+                raise SeedError("rstack dev token header is not an owner-only regular file")
             lines = path.read_text(encoding="ascii").strip().split("\n")
         except (OSError, subprocess.SubprocessError, UnicodeError) as error:
-            raise SeedError("could not acquire a fresh caseworkctl dev token") from error
-        # The bearer line comes first; the client's Casework profile follows.
+            raise SeedError("could not acquire a fresh rstack dev token") from error
+        # The bearer line comes first; the Casework and review profiles follow.
         value = lines[0]
         if (
             not value.startswith("Authorization: Bearer ")
             or value.count(".") != 2
-            or len(lines) > 2
-            or len(lines) == 2 and not lines[1].startswith("Registry-Casework-Profile: ")
+            or len(lines) > 3
+            or len(lines) > 1 and not lines[1].startswith("Registry-Casework-Profile: ")
+            or len(lines) > 2 and not lines[2].startswith("Registry-Review-Profile: ")
         ):
-            raise SeedError("caseworkctl dev token header is malformed")
+            raise SeedError("rstack dev token header is malformed")
         self._authorization = value.split(": ", 1)[1]
         self._expires_at = time.monotonic() + HEADER_REFRESH_SECONDS
 
@@ -318,15 +322,16 @@ def main() -> int:
     except subprocess.CalledProcessError as error:
         print(error.stderr.strip() or "load-test environment is not usable", file=sys.stderr)
         return 2
-    casework_url, caseworkctl, project = described[:3]
+    casework_url, rstack, run_id = described[:3]
     runtime_library_path = described[3] if len(described) > 3 else ""
     if runtime_library_path:
         existing = os.environ.get("DYLD_FALLBACK_LIBRARY_PATH")
         os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = (
             f"{runtime_library_path}:{existing}" if existing else runtime_library_path
         )
-    producer = DevTokenSource(helper, Path(caseworkctl), Path(project), PRODUCER_CLIENT)
-    staff = DevTokenSource(helper, Path(caseworkctl), Path(project), STAFF_CLIENT)
+    state_dir = arguments.run_dir / "state"
+    producer = DevTokenSource(helper, Path(rstack), run_id, state_dir, PRODUCER_PERSON)
+    staff = DevTokenSource(helper, Path(rstack), run_id, state_dir, STAFF_PERSON)
     nonce = f"{int(time.time())}-{os.getpid()}"
     os.umask(0o077)
     try:

@@ -166,18 +166,19 @@ The running registry was built from the project as it was, and its test data was
 version. Stop it and discard that data:
 
 ```sh
-rstack breg dev stop --remove
+RUN="$(awk '$1 == "Run" {print $2}' dev-run.txt)"
+rstack dev stop "$RUN"
 ```
 
-```text test-excerpt
-bregctl dev succeeded.
-  status          stopped
+```text test-expect
+Run <run-id> stopped
 ```
 
-Keep the project: the next `rstack breg dev start` in this directory runs it with the note.
+Keep the project: starting a new run with `rstack dev start . --ttl 4h` in this directory runs it
+with the note.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, RegistryModule;
-    crates/registry-bregctl/src/lib.rs, ProjectLockArgs;
+    crates/registry-bregctl/src/lib.rs, ProjectLockArgs; products/platform/PROJECT-DEV.md;
     products/breg/examples/minimal/registry.yaml;
     crates/registry-breg/src/artifacts.rs. */}
 

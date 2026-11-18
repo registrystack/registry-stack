@@ -29,13 +29,13 @@ for command in cargo docker python3; do
   }
 done
 if [[ -L "$run_dir" || -e "$run_dir" ]]; then
-  printf '%s\n' "load-test state path already exists: $run_dir. Preserve it, or move it aside after stopping its owned dev session." >&2
+  printf '%s\n' "load-test state path already exists: $run_dir. Preserve it, or move it aside after stopping its owned dev run." >&2
   exit 2
 fi
 
 umask 077
-mkdir -m 700 "$run_dir"
-printf '%s\n' 'registry-stack-casework-loadtest-v1' >"$run_dir/.launcher-owned"
+mkdir -m 700 "$run_dir" "$run_dir/state"
+printf '%s\n' 'registry-stack-casework-loadtest-v2' >"$run_dir/.launcher-owned"
 
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
@@ -45,54 +45,49 @@ export CARGO_PROFILE_TEST_DEBUG=0
 . "$repository_root/scripts/cargo-runtime-library-path.sh"
 cargo_profile_arguments=()
 if [[ "$build_profile" == release ]]; then cargo_profile_arguments=(--release); fi
-printf '%s\n' "== Building Registry Casework and caseworkctl ($build_profile profile)"
+printf '%s\n' "== Building Registry Casework, caseworkctl, and rstack ($build_profile profile)"
 registry_cargo_build "$repository_root" --manifest-path "$repository_root/Cargo.toml" --locked \
   "${cargo_profile_arguments[@]}" \
   -p registry-casework --bin casework \
-  -p registry-caseworkctl --bin caseworkctl >/dev/null
-casework="$repository_root/target/$build_profile/casework"
-caseworkctl="$repository_root/target/$build_profile/caseworkctl"
+  -p registry-caseworkctl --bin caseworkctl \
+  -p registry-rstack --bin rstack >/dev/null
+export RSTACK_CASEWORK_BIN="$repository_root/target/$build_profile/casework"
+export RSTACK_CASEWORKCTL_BIN="$repository_root/target/$build_profile/caseworkctl"
+rstack="$repository_root/target/$build_profile/rstack"
+# rstack dev keeps each run's private state, including its credentials, here.
+export RSTACK_DEV_STATE_DIR="$run_dir/state"
 
+run_id=""
 cleanup_failed_start() {
   local status=$?
-  if [[ "$status" -ne 0 && -d "$run_dir/project/.casework/dev" ]]; then
-    printf '%s\n' 'Load-test startup failed; stopping only the project-owned dev session.' >&2
-    "$caseworkctl" dev stop --remove --docker-bin "$(command -v docker)" "$run_dir/project" >/dev/null 2>&1 ||
-      printf '%s\n' "Automatic owned-session cleanup failed; inspect $run_dir/project/.casework/dev." >&2
+  if [[ "$status" -ne 0 && -n "$run_id" ]]; then
+    printf '%s\n' 'Load-test startup failed; stopping only the run this launcher started.' >&2
+    "$rstack" dev stop "$run_id" >/dev/null 2>&1 ||
+      printf '%s\n' "Automatic owned-run cleanup failed; run: RSTACK_DEV_STATE_DIR=$run_dir/state $rstack dev stop $run_id" >&2
   fi
   exit "$status"
 }
 trap cleanup_failed_start EXIT
 
-read -r database_port issuer_port casework_port < <(python3 "$support" ports)
 printf '%s\n' '== Preparing the local standalone-decision project'
-producer_subject=$(python3 "$support" producer-subject --caseworkctl "$caseworkctl")
-python3 "$support" local-project \
-  --example "$example" \
-  --project "$run_dir/project" \
-  --issuer-port "$issuer_port" \
-  --producer-subject "$producer_subject"
-"$caseworkctl" --format json check "$run_dir/project" >"$run_dir/check-report.json"
+python3 "$support" local-project --example "$example" --project "$run_dir/project"
+"$rstack" --format json dev check "$run_dir/project" >"$run_dir/check-report.json"
 
-printf '%s\n' '== Starting the stock retained Casework development lifecycle'
-"$caseworkctl" --format json dev start \
-  --casework-bin "$casework" \
-  --docker-bin "$(command -v docker)" \
-  --database-port "$database_port" \
-  --issuer-port "$issuer_port" \
-  --casework-port "$casework_port" \
-  "$run_dir/project" >"$run_dir/dev-report.json"
+printf '%s\n' '== Starting the rstack dev run'
+"$rstack" --format json dev start --ttl 8h "$run_dir/project" >"$run_dir/start-report.json"
+run_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$run_dir/start-report.json")
 python3 "$support" environment \
   --root "$run_dir" \
-  --dev-report "$run_dir/dev-report.json" \
-  --caseworkctl "$caseworkctl" \
+  --start-report "$run_dir/start-report.json" \
+  --rstack "$rstack" \
   --build-profile "$build_profile" \
   --runtime-library-path "${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH-}"
+casework_url=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["casework_url"])' "$run_dir/env.json")
 
 printf '\n%s\n' 'Registry Casework load-test environment is ready.'
-printf '  Registry Casework:     http://127.0.0.1:%s\n' "$casework_port"
-printf '  Token issuer:          stock local issuer through caseworkctl dev on 127.0.0.1:%s\n' "$issuer_port"
-printf '  Database:              owned caseworkctl dev PostgreSQL on 127.0.0.1:%s\n' "$database_port"
+printf '  Registry Casework:     %s\n' "$casework_url"
+printf '  Token signing:         throwaway local key held by rstack dev run %s\n' "$run_id"
+printf '  Database:              managed PostgreSQL container owned by that run\n'
 printf '  Casework build:        %s\n' "$build_profile"
 printf '  Casework pool max:     32 (fixed in the runtime)\n'
 printf '  Environment:           %s\n' "$run_dir/env.json"

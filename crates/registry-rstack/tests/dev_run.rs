@@ -19,7 +19,7 @@ fn host(name: &str) -> std::path::PathBuf {
     let path = std::path::Path::new(env!("CARGO_BIN_EXE_rstack")).with_file_name(name);
     assert!(
         path.is_file(),
-        "{} is missing; build the development hosts first: cargo build --locked -p registry-bregctl -p registry-caseworkctl --bins",
+        "{} is missing; build the development hosts first: cargo build --locked -p registry-bregctl -p registry-caseworkctl -p registry-evidencectl -p registry-evidence --bins",
         path.display()
     );
     path
@@ -2607,6 +2607,131 @@ fn casework_alone_runs_end_to_end() {
         "/v1/review-policies",
         "decision",
     );
+}
+
+/// `rstack dev` with only the Evidence tools: no BReg or Casework binary is
+/// set and none is installed, so the launcher runs the built `evidencectl` as
+/// the host. `docker_state` lets the fake Docker CLI log its calls; without it
+/// the fake answers as a CLI whose daemon is not running, so any call fails.
+fn evidence_only_dev(state: &std::path::Path, docker_state: Option<&std::path::Path>) -> Command {
+    let mut command = rstack_dev(state, true);
+    command
+        .env_remove("RSTACK_BREGCTL_BIN")
+        .env_remove("RSTACK_BREG_BIN")
+        .env_remove("RSTACK_CASEWORK_BIN")
+        .env("RSTACK_EVIDENCECTL_BIN", host("evidencectl"))
+        .env("RSTACK_EVIDENCE_BIN", host("evidence"));
+    if let Some(docker_state) = docker_state {
+        command.env("FAKE_DOCKER_STATE", docker_state);
+    }
+    command
+}
+
+/// The synthetic HTTP source the standalone Evidence example reads, run from a
+/// copy of the example on a free loopback port and stopped when dropped.
+struct SyntheticSource(Child);
+
+impl SyntheticSource {
+    /// Copies the example to `project`, points its source connection at a free
+    /// port and serves the source there.
+    fn start(project: &std::path::Path) -> Self {
+        copy_tree(&example_project("evidence/examples/standalone"), project);
+        let port = closed_loopback_port();
+        let target = project.join("local-target.yaml");
+        let text = fs::read_to_string(&target).unwrap();
+        assert!(text.contains("http://127.0.0.1:8081"), "{text}");
+        fs::write(
+            &target,
+            text.replace("http://127.0.0.1:8081", &format!("http://127.0.0.1:{port}")),
+        )
+        .unwrap();
+        let child = Command::new(system_binary("python3"))
+            .arg("serve-source.py")
+            .args(["--port", &port.to_string()])
+            .current_dir(project)
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        let source = Self(child);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+            assert!(
+                Instant::now() < deadline,
+                "the synthetic source never listened"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+        source
+    }
+}
+
+impl Drop for SyntheticSource {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Starts the standalone Evidence example alone and stops it, returning the
+/// ready report and the state directory's remaining runs.
+fn run_evidence_alone(
+    scratch: &std::path::Path,
+    docker_state: Option<&std::path::Path>,
+) -> serde_json::Value {
+    let state = scratch.join("state");
+    let project = scratch.join("project");
+    let _source = SyntheticSource::start(&project);
+
+    let started = evidence_only_dev(&state, docker_state)
+        .args(["start", utf8(&project)])
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
+    let run_id = report["run_id"].as_str().unwrap_or_default().to_owned();
+    if !started.status.success() {
+        dev_json(&state, &["stop", &run_id]);
+        panic!("{started:?}");
+    }
+    let stopped = evidence_only_dev(&state, docker_state)
+        .args(["stop", &run_id])
+        .output()
+        .unwrap();
+    if !stopped.status.success() {
+        dev_json(&state, &["stop", &run_id]);
+    }
+    assert!(stopped.status.success(), "{stopped:?}");
+    assert_eq!(live_runs(&state), Vec::<String>::new());
+    report
+}
+
+#[test]
+fn evidence_alone_runs_end_to_end() {
+    // No BReg or Casework binary exists and no database or Docker daemon is
+    // reachable, so any call to them fails the run.
+    let scratch = tempfile::tempdir().unwrap();
+    let report = run_evidence_alone(scratch.path(), None);
+
+    assert_eq!(report["status"], "ready", "{report}");
+    assert_eq!(report["scenarios"][0]["result"], "passed", "{report}");
+    let products = report["products"].as_object().unwrap();
+    assert_eq!(products.len(), 1, "{report}");
+    assert!(products["evidence"]
+        .as_str()
+        .unwrap()
+        .starts_with("http://127.0.0.1:"));
+    assert_eq!(report["database"]["mode"], "none", "{report}");
+}
+
+#[test]
+fn evidence_only_plan_never_calls_docker() {
+    let scratch = tempfile::tempdir().unwrap();
+    let docker_state = scratch.path().join("docker");
+    fs::create_dir(&docker_state).unwrap();
+    let report = run_evidence_alone(scratch.path(), Some(&docker_state));
+
+    assert_eq!(report["status"], "ready", "{report}");
+    let calls = fs::read_to_string(docker_state.join("argv.log")).unwrap_or_default();
+    assert_eq!(calls, "", "Evidence alone ran Docker: {calls}");
 }
 
 /// Points `command` at the TLS PostgreSQL test server that

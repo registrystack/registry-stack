@@ -2,7 +2,9 @@
 set -euo pipefail
 
 # Logical backup/restore of a submitted ReviewPolicy using the public Casework
-# CLI and service. At the backup point a task is held. A decision after the dump
+# CLI and service against a PostgreSQL container this script starts and removes.
+# It needs no `rstack dev` run: the script writes the runtime configuration,
+# signs its own test tokens and serves with `casework serve`. At the backup point a task is held. A decision after the dump
 # is absent after restore, while the activation ledger and holding return
 # exactly to the backup point. The audit journal remains append-only outside
 # PostgreSQL. A freshly authenticated reviewer can continue the restored task.
@@ -11,7 +13,8 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repository_root=$(cd -- "$script_dir/../../.." && pwd)
 . "$repository_root/scripts/cargo-runtime-library-path.sh"
 temporary_root=""
-casework_started=0
+container=""
+server_pid=""
 [[ "$#" == 0 ]] || { printf '%s\n' 'usage: test-backup-restore.sh' >&2; exit 2; }
 
 checkpoint() { printf 'casework backup and restore: %s\n' "$1" >&2; }
@@ -21,13 +24,14 @@ require_command() {
 }
 cleanup() {
   local status=$?
+  stop_server
   if [[ "${CASEWORK_RESTORE_KEEP_TEMP:-0}" == 1 ]]; then
-    printf 'preserved synthetic session: %s\n' "$temporary_root" >&2
+    printf 'preserved synthetic session: %s (PostgreSQL container %s)\n' "$temporary_root" "$container" >&2
     return "$status"
   fi
-  if [[ "$casework_started" == 1 ]]; then
-    "$caseworkctl" --format json dev stop --remove "$casework_project" >/dev/null 2>&1 ||
-      printf '%s\n' 'could not remove the owned Casework dev session' >&2
+  if [[ -n "$container" ]]; then
+    docker rm --force --volumes "$container" >/dev/null 2>&1 ||
+      printf '%s\n' 'could not remove the owned PostgreSQL container' >&2
   fi
   case "$temporary_root" in
     "$repository_root"/.casework-restore.*)
@@ -42,34 +46,57 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for command in curl docker jq sha256sum python3; do require_command "$command"; done
+start_server() {
+  "$casework" --runtime-config "$runtime_config" serve >>"$work/casework.log" 2>&1 &
+  server_pid=$!
+  local attempt
+  for ((attempt=0; attempt<60; attempt++)); do
+    [[ "$(curl -sS -o /dev/null -w '%{http_code}' "$casework_origin/ready" 2>/dev/null || true)" == 200 ]] && return 0
+    kill -0 "$server_pid" 2>/dev/null || break
+    sleep 1
+  done
+  tail -n 20 "$work/casework.log" >&2 || true
+  fail 'Casework did not become ready'
+}
+stop_server() {
+  if [[ -n "$server_pid" ]]; then
+    kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
+    server_pid=""
+  fi
+}
+
+for command in curl docker jq sha256sum python3 openssl; do require_command "$command"; done
 docker info >/dev/null 2>&1 || fail 'a running Docker daemon is required'
 umask 077
 export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 target_directory=${CARGO_TARGET_DIR:-"$repository_root/target"}
 caseworkctl=${CASEWORKCTL_BIN:-"$target_directory/debug/caseworkctl"}
 casework=${CASEWORK_BIN:-"$target_directory/debug/casework"}
+# Plaintext PostgreSQL on loopback is available only to builds with the
+# `postgres-test` feature, which this disposable database needs.
 build_arguments=(--manifest-path "$repository_root/Cargo.toml" --locked -j2
-  -p registry-caseworkctl -p registry-casework)
+  -p registry-caseworkctl -p registry-casework
+  --features "registry-caseworkctl/postgres-test,registry-casework/postgres-test")
 checkpoint 'building the candidate Casework binaries'
 registry_cargo_build "$repository_root" "${build_arguments[@]}"
 for binary in "$caseworkctl" "$casework"; do
   [[ -x "$binary" ]] || fail "candidate binary is not executable: $binary"
 done
-[[ "$(basename -- "$casework")" == casework ]] || fail 'CASEWORK_BIN must name casework'
-# The dev supervisor resolves the service executable from PATH.
-PATH="$(dirname -- "$casework"):$PATH"
-export PATH
 
 temporary_root=$(mktemp -d "$repository_root/.casework-restore.XXXXXX")
 casework_project="$temporary_root/casework"
 work="$temporary_root/work"
-mkdir -m 700 "$work"
-casework_port=${CASEWORK_RESTORE_CASEWORK_PORT:-8092}
-issuer_port=${CASEWORK_RESTORE_ISSUER_PORT:-8093}
-database_port=${CASEWORK_RESTORE_DATABASE_PORT:-15433}
+secrets="$temporary_root/secrets"
+mkdir -m 700 "$work" "$secrets" "$temporary_root/audit"
+free_port() {
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+}
+casework_port=$(free_port)
 casework_origin="http://127.0.0.1:$casework_port"
-audit_file="$casework_project/.casework/dev/audit/casework.ndjson"
+audit_file="$temporary_root/audit/audit.ndjson"
+issuer=https://identity.backup-restore.example.test
+runtime_config="$temporary_root/runtime.yaml"
 
 run_json() {
   local output=$1 status=0
@@ -84,9 +111,35 @@ run_json() {
 assert_json() {
   [[ "$(jq -r "$2" "$1")" == true ]] || fail "$3"
 }
+
+# Signs a short-lived access token for one caller and writes the request
+# header file curl reads, so the token never appears on a command line.
 header_for() {
-  run_json "$work/token-$1.json" "$caseworkctl" --format json dev token "$1" "$casework_project"
-  jq -r '.headerFile' "$work/token-$1.json"
+  local person=$1 scope=$2 human=$3 profile=$4 header="$work/header-$1"
+  python3 - "$temporary_root/issuer.pem" "$issuer" "$person" "$scope" "$human" "$profile" "$header" <<'PY'
+import base64, json, subprocess, sys, time, uuid
+key, issuer, person, scope, human, profile, output = sys.argv[1:]
+def b64(value):
+    return base64.urlsafe_b64encode(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).rstrip(b"=").decode()
+now = int(time.time())
+claims = {"iss": issuer, "aud": "urn:example:casework-restore", "sub": person, "client_id": person,
+          "scope": scope, "iat": now, "exp": now + 300, "jti": str(uuid.uuid4())}
+if human == "human":
+    claims["registry_actor_kind"] = "human"
+signing_input = f"{b64({'alg': 'ES256', 'kid': 'restore-issuer', 'typ': 'at+jwt'})}.{b64(claims)}"
+der = subprocess.run(["openssl", "dgst", "-sha256", "-sign", key],
+                     input=signing_input.encode(), check=True, capture_output=True).stdout
+# openssl writes an ASN.1 (r, s) pair. A JWS carries both as fixed-width integers.
+def integer(offset):
+    length = der[offset + 1]
+    return int.from_bytes(der[offset + 2:offset + 2 + length], "big"), offset + 2 + length
+r, next_offset = integer(2 + (der[1] & 0x7F if der[1] & 0x80 else 0))
+s, _ = integer(next_offset)
+signature = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+token = f"{signing_input}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode()}"
+open(output, "w", encoding="ascii").write(f"Authorization: Bearer {token}\nRegistry-Casework-Profile: {profile}\nRegistry-Review-Profile: {profile}\n")
+PY
+  printf '%s' "$header"
 }
 http() {
   local method=$1 url=$2 header_file=$3 output=$4
@@ -112,69 +165,129 @@ expect_status() {
   fi
 }
 call_as() {
-  local client=$1 method=$2 path=$3 output=$4
-  shift 4
-  http "$method" "$casework_origin$path" "$(header_for "$client")" "$output" "$@"
+  local person=$1 scope=$2 human=$3 method=$4 path=$5 output=$6
+  shift 6
+  # Each caller is named for the access profile the starter declares for it.
+  http "$method" "$casework_origin$path" "$(header_for "$person" "$scope" "$human" "$person")" "$output" "$@"
 }
+as_staff() { call_as staff casework:staff human "$@"; }
+as_requester() { call_as requester casework:request service "$@"; }
 casework_status() {
-  run_json "$1" "$caseworkctl" --format json status --runtime-config "$operator_config"
+  run_json "$1" "$caseworkctl" --format json status --runtime-config "$runtime_config"
 }
 psql_admin() { docker exec "$container" psql -U postgres -v ON_ERROR_STOP=1 -qAt "$@"; }
 database_ready() { docker exec "$container" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; }
 
-checkpoint 'starting a standalone submitted review session'
+checkpoint 'starting a disposable PostgreSQL and a standalone submitted review project'
+postgres_password=$(openssl rand -hex 16)
+container=$(docker run --detach --publish 127.0.0.1::5432 \
+  --label org.registrystack.casework-restore=1 \
+  --env POSTGRES_PASSWORD="$postgres_password" \
+  docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675)
+for ((attempt=0; attempt<60; attempt++)); do
+  database_ready && break
+  sleep 1
+done
+database_ready || fail 'the owned PostgreSQL did not start'
+database_port=$(docker port "$container" 5432/tcp | head -n 1 | sed 's/.*://')
+psql_admin -c 'CREATE DATABASE casework_restore'
+# The URL stays in the environment of the Casework processes. No file or
+# command line carries it.
+export CASEWORK_RESTORE_DATABASE_URL="postgresql://postgres:$postgres_password@127.0.0.1:$database_port/casework_restore"
+
 "$caseworkctl" init "$casework_project" --template standalone-decision >/dev/null
-# The starter pins its teaching issuer to the default port. Keep the owned
-# project binding exact when this proof uses alternate collision-free ports.
-if [[ "$issuer_port" != 8093 ]]; then
-  python3 - "$casework_project/casework.yaml" "$issuer_port" <<'PY'
+# The starter trusts a teaching issuer and a placeholder subject. Bind it to
+# this proof's issuer and to the requester caller the proof signs for.
+python3 - "$casework_project/casework.yaml" "$issuer" <<'PY'
 from pathlib import Path
 import sys
 path = Path(sys.argv[1])
-original = path.read_text()
-before = 'issuer: http://127.0.0.1:8093'
-assert original.count(before) == 1
-path.write_text(original.replace(before, f'issuer: http://127.0.0.1:{sys.argv[2]}'))
+text = path.read_text()
+for before, after in (("issuer: http://127.0.0.1:8093", f"issuer: {sys.argv[2]}"),
+                      ("subject: b75315b2-5854-70f3-8867-511dd771a6da", "subject: requester")):
+    assert text.count(before) == 1, before
+    text = text.replace(before, after)
+path.write_text(text)
 PY
-fi
 run_json "$work/check.json" "$caseworkctl" --format json check "$casework_project"
 assert_json "$work/check.json" '.policyBindings | length == 1' 'the starter did not compile one policy'
 run_json "$work/explain.json" "$caseworkctl" --format json explain "$casework_project"
 assert_json "$work/explain.json" \
   '.contextProviders == [] and all(.reviewPolicies[]; .context.mode == "submitted" and .dependencies.taskTemplates == [])' \
   'the backup fixture inherited external context or task-grant authority'
-casework_started=1
-run_json "$work/dev-start.json" "$caseworkctl" --format json dev start "$casework_project" \
-  --casework-port "$casework_port" --issuer-port "$issuer_port" --database-port "$database_port"
-operator_config=$(jq -r '.operatorConfig' "$work/dev-start.json")
-container=$(jq -r '.containerId // empty' "$casework_project/.casework/dev/state.json")
-[[ -n "$container" ]] || fail 'the owned session names no database container'
-[[ -s "$audit_file" ]] || fail 'the Casework audit journal is missing'
+run_json "$work/package.json" "$caseworkctl" --format json package "$casework_project" \
+  --output "$temporary_root/package"
 
-checkpoint 'creating and claiming a submitted review before the backup'
-policy=$(jq -c '.policyBindings[] | select(.id == "decision")' "$work/check.json")
-[[ -n "$policy" ]] || fail 'the exact compiled policy binding is missing'
+openssl rand -hex 32 >"$secrets/casework-audit-key"
+openssl ecparam -name prime256v1 -genkey -noout -out "$temporary_root/issuer.pem" >/dev/null 2>&1
+python3 - "$temporary_root/issuer.pem" "$secrets/jwks" <<'PY'
+import base64, json, subprocess, sys
+der = subprocess.run(["openssl", "pkey", "-in", sys.argv[1], "-pubout", "-outform", "DER"],
+                     check=True, capture_output=True).stdout
+def coordinate(raw):
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+jwk = {"alg": "ES256", "crv": "P-256", "kid": "restore-issuer", "kty": "EC", "use": "sig",
+       "x": coordinate(der[-64:-32]), "y": coordinate(der[-32:])}
+open(sys.argv[2], "w", encoding="utf-8").write(json.dumps({"keys": [jwk]}))
+PY
+cat >"$runtime_config" <<YAML
+apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1
+kind: CaseworkRuntimeConfig
+package:
+  root: $temporary_root/package
+secretProviders:
+  file:
+    root: $secrets
+  environment: {}
+database:
+  runtimeUrlRef: secret:env/CASEWORK_RESTORE_DATABASE_URL
+  migrationUrlRef: secret:env/CASEWORK_RESTORE_DATABASE_URL
+  testOnlyPlaintext: true
+identity:
+  databaseId: casework-backup-restore
+listener:
+  bind: 127.0.0.1:$casework_port
+  tlsTermination: development-loopback
+audit:
+  hashKeyRef: secret:file/casework-audit-key
+  path: $audit_file
+authentication:
+  oidc:
+    issuer: $issuer
+    audience: urn:example:casework-restore
+    allowedClients: unrestricted
+    scopeClaim: scope
+    humanIdentity: {claim: registry_actor_kind, value: human}
+    jwksSource: {type: static, documentRef: secret:file/jwks}
+YAML
+run_json "$work/apply.json" "$caseworkctl" --format json apply --runtime-config "$runtime_config"
+start_server
+casework_status "$work/status-first.json"
+
+checkpoint 'staffing the queue, then creating and claiming a submitted review before the backup'
+status=$(call_as administrator casework:admin human POST /v1/directory/bootstrap "$work/bootstrap.json" \
+  'if-match: "0"' 'idempotency-key: backup-restore-staff' \
+  -- "{\"teamId\":\"decisions-team\",\"queueId\":\"decisions\",\"staff\":[{\"issuer\":\"$issuer\",\"subject\":\"staff\"}],\"supervisors\":[]}")
+expect_status 200 "$status" "$work/bootstrap.json" 'staffing the queue'
+[[ -s "$audit_file" ]] || fail 'the Casework audit journal is missing'
 subject_digest="sha256:$(printf 'backup-restore-batch-v1\n' | sha256sum | cut -d' ' -f1)"
-request=$(jq -cn --argjson policy "$policy" --arg digest "$subject_digest" \
-  '{policy:$policy,subject:{source:"standalone",type:"batch",id:"backup-restore-batch",version:"1",digest:$digest},requesterReference:"backup-restore-batch",context:{mode:"submitted",snapshot:{summary:"Check the synthetic batch",reference:"backup-restore-batch"}}}')
-status=$(call_as requester POST '/v1/review-requests' "$work/accepted.json" \
+request=$(jq -cn --arg digest "$subject_digest" \
+  '{policy:{id:"decision"},subject:{source:"standalone",type:"batch",id:"backup-restore-batch",version:"1",digest:$digest},requesterReference:"backup-restore-batch",context:{mode:"submitted",snapshot:{summary:"Check the synthetic batch",reference:"backup-restore-batch"}}}')
+status=$(as_requester POST '/v1/review-requests' "$work/accepted.json" \
   'idempotency-key: backup-restore-create' -- "$request")
 expect_status 201 "$status" "$work/accepted.json" 'creating the review'
 request_id=$(jq -r '.requestId' "$work/accepted.json")
-status=$(call_as staff GET '/v1/review-tasks?queue=decisions&limit=25' "$work/tasks.json")
+status=$(as_staff GET '/v1/review-tasks?queue=decisions&limit=25' "$work/tasks.json")
 expect_status 200 "$status" "$work/tasks.json" 'reading the review inbox'
 assert_json "$work/tasks.json" \
   "[.items[] | select(.requestId == \"$request_id\")] | length == 1" \
   'the submitted request has no visible review task'
 task_id=$(jq -r --arg id "$request_id" '.items[] | select(.requestId == $id) | .taskId' "$work/tasks.json")
 revision=$(jq -r --arg id "$request_id" '.items[] | select(.requestId == $id) | .revision' "$work/tasks.json")
-status=$(call_as staff POST "/v1/review-tasks/$task_id/claim" "$work/claimed.json" \
+status=$(as_staff POST "/v1/review-tasks/$task_id/claim" "$work/claimed.json" \
   "if-match: \"$revision\"" 'idempotency-key: backup-restore-claim')
 expect_status 200 "$status" "$work/claimed.json" 'claiming the review'
-run_json "$work/staff-identity.json" "$caseworkctl" --format json dev identity staff
-staff_subject=$(jq -r '.subject' "$work/staff-identity.json")
-jq -e --arg subject "$staff_subject" \
-  '.state.held.holder.subject == $subject' "$work/claimed.json" >/dev/null ||
+jq -e '.state.held.holder.subject == "staff"' "$work/claimed.json" >/dev/null ||
   fail 'the review was not held by the staff caller'
 jq -S '{taskId,requestId,revision,state}' "$work/claimed.json" >"$work/backup-task.json"
 
@@ -183,18 +296,18 @@ casework_status "$work/status-backup.json"
 assert_json "$work/status-backup.json" \
   '.activation.active.activationId != null and (.activation.history | length) == 1' \
   'the backup-point activation ledger does not name one active package'
-docker exec "$container" pg_dump -U postgres -Fc casework_dev >"$work/casework.dump"
+docker exec "$container" pg_dump -U postgres -Fc casework_restore >"$work/casework.dump"
 [[ -s "$work/casework.dump" ]] || fail 'pg_dump wrote no archive'
 audit_backup_length=$(wc -c <"$audit_file" | tr -d ' ')
 audit_backup_digest=$(head -c "$audit_backup_length" "$audit_file" | sha256sum | cut -d' ' -f1)
 
 checkpoint 'deciding after the backup point'
 claimed_revision=$(jq -r '.revision' "$work/claimed.json")
-status=$(call_as staff POST "/v1/review-tasks/$task_id/decisions" "$work/decided.json" \
+status=$(as_staff POST "/v1/review-tasks/$task_id/decisions" "$work/decided.json" \
   "if-match: \"$claimed_revision\"" 'idempotency-key: backup-restore-answer' \
   -- '{"decision":{"type":"answer","outcome":"confirmed"}}')
 expect_status 204 "$status" "$work/decided.json" 'deciding after backup'
-status=$(call_as requester GET "/v1/review-requests/$request_id/result" "$work/result-lost-window.json")
+status=$(as_requester GET "/v1/review-requests/$request_id/result" "$work/result-lost-window.json")
 expect_status 200 "$status" "$work/result-lost-window.json" 'reading the post-backup result'
 assert_json "$work/result-lost-window.json" '.status == "answered"' \
   'the post-backup decision did not produce an answer result'
@@ -203,31 +316,15 @@ if [[ $(jq -r 'select(.record.event == "casework.review-decided" and .phase == "
 fi
 
 checkpoint 'stopping Casework and restoring into a newly provisioned database'
-run_json "$work/dev-stop.json" "$caseworkctl" --format json dev stop "$casework_project"
+stop_server
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "$casework_origin/ready" 2>/dev/null || true)" != 200 ]] ||
   fail 'the stopped Casework still answers readiness'
-docker start "$container" >/dev/null
-for ((attempt=0; attempt<60; attempt++)); do
-  database_ready && break
-  sleep 1
-done
-database_ready || fail 'the owned PostgreSQL did not restart'
-psql_admin -c 'DROP DATABASE casework_dev WITH (FORCE)' -c 'CREATE DATABASE casework_dev'
-mapfile -t casework_roles < <(psql_admin -c \
-  "SELECT rolname FROM pg_roles WHERE rolname IN ('casework_dev_migration', 'casework_dev_runtime') ORDER BY rolname")
-[[ "${casework_roles[0]:-}" == casework_dev_migration ]] || fail 'the migration role is missing'
-provision='REVOKE ALL ON DATABASE casework_dev FROM PUBLIC; ALTER SCHEMA public OWNER TO casework_dev_migration; REVOKE ALL ON SCHEMA public FROM PUBLIC;'
-if [[ "${casework_roles[1]:-}" == casework_dev_runtime ]]; then
-  provision+=' GRANT CONNECT ON DATABASE casework_dev TO casework_dev_migration, casework_dev_runtime; GRANT USAGE ON SCHEMA public TO casework_dev_runtime; ALTER DEFAULT PRIVILEGES FOR ROLE casework_dev_migration IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO casework_dev_runtime; ALTER DEFAULT PRIVILEGES FOR ROLE casework_dev_migration IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO casework_dev_runtime;'
-else
-  provision+=' GRANT CONNECT ON DATABASE casework_dev TO casework_dev_migration;'
-fi
-psql_admin -d casework_dev -1 -c "$provision"
+psql_admin -c 'DROP DATABASE casework_restore WITH (FORCE)' -c 'CREATE DATABASE casework_restore'
 casework_status "$work/status-empty.json"
 assert_json "$work/status-empty.json" '.activation.active == null' \
   'the fresh database unexpectedly reported an active package'
 docker exec -i "$container" pg_restore -U postgres --exit-on-error --single-transaction \
-  -d casework_dev <"$work/casework.dump"
+  -d casework_restore <"$work/casework.dump"
 
 checkpoint 'verifying the restored activation and readiness'
 casework_status "$work/status-restored.json"
@@ -235,12 +332,11 @@ diff <(jq -S '.activation' "$work/status-backup.json") \
   <(jq -S '.activation' "$work/status-restored.json") >/dev/null ||
   fail 'the restored activation ledger differs from the backup point'
 run_json "$work/plan-restored.json" "$caseworkctl" --format json plan \
-  --runtime-config "$operator_config"
+  --runtime-config "$runtime_config"
 assert_json "$work/plan-restored.json" \
   '.plan.changesPending == false and .plan.databaseIdCheck == "matches" and ([.plan.refusals[].code] == ["casework.activation.already-active"])' \
   'plan does not recognize the restored active package and database identity'
-run_json "$work/dev-restart.json" "$caseworkctl" --format json dev start "$casework_project" \
-  --casework-port "$casework_port" --issuer-port "$issuer_port" --database-port "$database_port"
+start_server
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "$casework_origin/ready")" == 200 ]] ||
   fail 'the restored service is not ready'
 casework_status "$work/status-serving.json"
@@ -249,24 +345,24 @@ diff <(jq -S '.activation' "$work/status-backup.json") \
   fail 'serving changed the restored activation ledger'
 
 checkpoint 'checking the held task and missing later decision'
-status=$(call_as staff GET "/v1/review-tasks/$task_id" "$work/restored-task.json")
+status=$(as_staff GET "/v1/review-tasks/$task_id" "$work/restored-task.json")
 expect_status 200 "$status" "$work/restored-task.json" 'reading the restored task'
 jq -S '{taskId,requestId,revision,state}' "$work/restored-task.json" >"$work/restored-task-core.json"
 cmp -s "$work/backup-task.json" "$work/restored-task-core.json" ||
   fail 'the restored task lost its backup-point holding or revision'
-status=$(call_as requester GET "/v1/review-requests/$request_id/result" "$work/result-restored.json")
+status=$(as_requester GET "/v1/review-requests/$request_id/result" "$work/result-restored.json")
 expect_status 202 "$status" "$work/result-restored.json" \
   'reading the restored still-pending result'
-status=$(call_as requester GET "/v1/review-tasks/$task_id" "$work/requester-task.json")
+status=$(as_requester GET "/v1/review-tasks/$task_id" "$work/requester-task.json")
 expect_status 403 "$status" "$work/requester-task.json" \
   'refusing producer access to the human task'
 
 checkpoint 'continuing under a fresh reviewer credential'
-status=$(call_as staff POST "/v1/review-tasks/$task_id/decisions" "$work/continued.json" \
+status=$(as_staff POST "/v1/review-tasks/$task_id/decisions" "$work/continued.json" \
   "if-match: \"$claimed_revision\"" 'idempotency-key: backup-restore-continued-answer' \
   -- '{"decision":{"type":"answer","outcome":"confirmed"}}')
 expect_status 204 "$status" "$work/continued.json" 'deciding the restored task'
-status=$(call_as requester GET "/v1/review-requests/$request_id/result" "$work/result-continued.json")
+status=$(as_requester GET "/v1/review-requests/$request_id/result" "$work/result-continued.json")
 expect_status 200 "$status" "$work/result-continued.json" 'reading the recovered result'
 assert_json "$work/result-continued.json" '.status == "answered"' \
   'fresh reviewer operation did not settle the restored request'

@@ -203,7 +203,8 @@
       "description": "A product the development run can start.",
       "enum": [
         "breg",
-        "casework"
+        "casework",
+        "evidence"
       ],
       "type": "string"
     },
@@ -220,7 +221,7 @@
           "description": "Which product to start."
         },
         "project": {
-          "description": "Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg or casework.yaml for Casework.",
+          "description": "Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg, casework.yaml for Casework or evidence.yaml for Evidence.",
           "type": "string"
         }
       },
@@ -314,12 +315,15 @@
         },
         "grants": {
           "additionalProperties": false,
-          "description": "The authority this person holds in each product, keyed by `breg` or `casework`. Give at least one grant, only for products listed in `products`.",
+          "description": "The authority this person holds in each product, keyed by `breg`, `casework` or `evidence`. An Evidence grant's profile is the requester tag the token carries. Give at least one grant, only for products listed in `products`.",
           "properties": {
             "breg": {
               "$ref": "#/$defs/Grant"
             },
             "casework": {
+              "$ref": "#/$defs/Grant"
+            },
+            "evidence": {
               "$ref": "#/$defs/Grant"
             }
           },

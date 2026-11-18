@@ -1360,7 +1360,7 @@ struct DevHost {
 /// anyway. The first one available hosts `status`, `token` and `stop`: a run
 /// keeps its state in its run directory, so any host of the same release
 /// serves a run another host started.
-const DEV_HOSTS: [DevHost; 2] = [
+const DEV_HOSTS: [DevHost; 3] = [
     DevHost {
         component: "breg",
         tool: "bregctl",
@@ -1372,6 +1372,12 @@ const DEV_HOSTS: [DevHost; 2] = [
         tool: "caseworkctl",
         tool_variable: "RSTACK_CASEWORKCTL_BIN",
         runtime_variable: "RSTACK_CASEWORK_BIN",
+    },
+    DevHost {
+        component: "evidence",
+        tool: "evidencectl",
+        tool_variable: "RSTACK_EVIDENCECTL_BIN",
+        runtime_variable: "RSTACK_EVIDENCE_BIN",
     },
 ];
 

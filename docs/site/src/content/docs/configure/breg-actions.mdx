@@ -84,8 +84,8 @@ When two inputs reference the same Record type, BReg checks the target row bound
 referenced Record independently. An `in` boundary therefore succeeds only when the array claim
 covers both Records; authority over one does not authorize the other.
 From a matching source checkout, run
-`bregctl dev start products/breg/fixtures/multi-reference-array-claim`
-to exercise the permitted and refused cases with local clients.
+`rstack dev start products/breg/fixtures/multi-reference-array-claim`
+to exercise the permitted and refused cases with the fixture's test callers.
 
 {/* evidence: crates/registry-breg/src/contract.rs (ActionSource);
     crates/registry-breg/src/immediate_actions.rs; products/breg/examples/facility/registry.yaml;
@@ -177,8 +177,8 @@ reviewAuthorities:
       description: Logical authenticated review authority resolved by deployment configuration.
 ```
 
-The deployment binds that `id` to a running service. For local development, the template's
-README gives the `dev-clients.yaml` binding:
+The deployment binds that `id` to a running service. The template's README shows the binding to
+write in the runtime configuration:
 
 ```yaml title="README.md" test-excerpt="facility/README.md"
 reviewAuthorities:

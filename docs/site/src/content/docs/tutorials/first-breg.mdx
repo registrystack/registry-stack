@@ -19,7 +19,7 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 In about fifteen minutes you will have a registry running on your machine with one test contact
 in it, readable by your own staff and hidden from staff elsewhere. You write no code: you create
-the registry, check it, start it, add the contact, and read it back.
+the registry, describe two test callers, start it, and read back the contact that start adds.
 
 <QuickstartMeta
   outcome="A running local registry holding one test contact that only the callers allowed to read it can see."
@@ -55,15 +55,6 @@ cd tutorial-work/project
 ```
 
 ```text test-excerpt
-Initialized a registry project. 9 artifacts written.
-  revision  sha256:<digest>
-
-  README.md
-  dev-clients.yaml
-  examples/inputs/contact.json
-  examples/inputs/email-update.json
-  examples/inputs/registration.json
-  examples/scenarios.json
   registry.yaml
   runtime.example.yaml
   tests/journeys.yaml
@@ -71,8 +62,8 @@ Initialized a registry project. 9 artifacts written.
 
 A [project](../../reference/glossary/#registry-project) is a directory of YAML files that
 describes one registry. `registry.yaml` holds what the registry stores and who may read and change
-it, `dev-clients.yaml` names two test callers, and `examples/` holds ready-made requests. Run the
-remaining commands from this directory.
+it, and `tests/journeys.yaml` holds the checks the registry must pass before it serves requests. Run
+the remaining commands from this directory.
 
 ## Check the project
 
@@ -124,68 +115,131 @@ accessProfiles:
             - {field: jurisdiction, claim: jurisdiction, operator: equals}
 ```
 
-`dev-clients.yaml` gives the test caller `editor` the claim `zone-a` and `foreign-editor` the
-claim `zone-b`.
+## Describe the test callers
+
+`rstack dev` runs the project on your machine from a development plan. The plan lists the products
+to run and the synthetic people who call them, with the claims each person's test token carries.
+Create `dev.yaml`. It gives the test caller `editor` the claim `zone-a` and `foreign-editor` the
+claim `zone-b`:
+
+```yaml title="dev.yaml" test-file
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+issuer: https://identity.directory.example.test
+products:
+  - {product: breg, project: ., audience: "urn:example:local-directory"}
+people:
+  editor:
+    subject: synthetic-directory-editor
+    client: directory-editor
+    grants:
+      breg:
+        profile: directory-editor
+        scopes: ["registry:directory:write"]
+        claims:
+          registry_actor_kind: human
+          registry_purpose: directory-administration
+          jurisdiction: zone-a
+  foreign-editor:
+    subject: synthetic-foreign-editor
+    client: directory-editor
+    grants:
+      breg:
+        profile: directory-editor
+        scopes: ["registry:directory:write"]
+        claims:
+          registry_actor_kind: human
+          registry_purpose: directory-administration
+          jurisdiction: zone-b
+# Both people match the profile, so each journey step names its person.
+schemaTestPeople:
+  directory-contact:
+    create-contact: editor
+    read-contact: editor
+    conceal-contact-outside-jurisdiction: foreign-editor
+    obtain-email-condition: editor
+    update-contact-email: editor
+    read-updated-contact: editor
+    start-registration: editor
+    submit-registration: editor
+scenarioFile: dev/scenarios.yaml
+```
+
+The plan also names a scenario file: requests that `rstack dev` sends once the registry is running.
+It sits in `dev/` because the registry reads every file under `tests/` as one of its own checks.
+This scenario adds one contact in `zone-a` as `editor` and reads it back:
+
+```sh
+mkdir dev
+```
+
+```yaml title="dev/scenarios.yaml" test-file
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: directory-contact
+    steps:
+      - id: create-contact
+        product: breg
+        as: editor
+        method: POST
+        path: /v1/records/contacts
+        headers: {Idempotency-Key: create-contact}
+        body: {data: {name: Example contact, email: contact@example.test, jurisdiction: zone-a}}
+        expect: {status: 201}
+        capture: {contact: {type: pointer, pointer: /data/recordIdentifier}}
+      - id: read-contact
+        product: breg
+        as: editor
+        method: GET
+        path: "/v1/records/contacts/{{contact}}"
+        expect:
+          status: 200
+          json: {/data/domainData/name: Example contact}
+```
+
+Check the plan:
+
+```sh
+rstack dev check .
+```
+
+```text test-expect
+Development plan is valid
+0 errors, 0 warnings in 1 file
+```
 
 ## Start the registry
 
 ```sh
-rstack breg dev start
+rstack dev start . --ttl 4h | tee dev-run.txt
 ```
 
 ```text test-expect
-bregctl dev succeeded.
-  status          ready
-  project         <project-dir>
-  breg url        http://127.0.0.1:<port>
-  token endpoint  http://127.0.0.1:<port>/oauth2/token
-  audience        urn:breg:dev:<audience>
-  package digest  sha256:<digest>
-  state file      <project-dir>/.breg/dev/state.json
-  runtime config  <project-dir>/.breg/dev/runtime.yaml
-
-  client editor
-    client id file      <project-dir>/.breg/dev/credentials/editor/client-id
-    assertion key file  <project-dir>/.breg/dev/credentials/editor/assertion-key.jwk
-
-  client foreign-editor
-    client id file      <project-dir>/.breg/dev/credentials/foreign-editor/client-id
-    assertion key file  <project-dir>/.breg/dev/credentials/foreign-editor/assertion-key.jwk
+Run <run-id> ready
+  breg http://127.0.0.1:<port>
+  Scenario directory-contact passed
+  Logs <logs-directory>
+  rstack dev token <run-id> --as editor
+  rstack dev token <run-id> --as foreign-editor
 ```
 
-`rstack breg` started PostgreSQL and a local token issuer in Docker, ran the project's tests, and
-started the registry at `breg url`. The first start downloads the images and takes longer. The
-files under `.breg/dev/` are private keys for the two test callers; keep them out of version
-control.
-
-If the start reports that a port is in use, another program holds it. Start again with
-`--breg-port`, `--issuer-port` or `--database-port` set to a free port, and use your `breg url` in
-place of `http://127.0.0.1:8090` below.
-
-## Add a test contact
-
-```sh
-rstack breg examples run contact
-```
-
-```text test-excerpt
-bregctl examples run succeeded.
-  project   <project-dir>
-  scenario  contact
-  attempt   <attempt-id>
-```
-
-The `contact` example in `examples/scenarios.json` creates one test contact in `zone-a` as the
-`editor` caller and reads it back. The rest of the output shows the registry's response to each
-step.
+`rstack dev` started a PostgreSQL server in Docker for this run, ran the project's tests, started
+the registry at the `breg` address, and sent the scenario, which added the test contact. The first
+start downloads the PostgreSQL image and takes longer. Each run gets a free port of its own, so your
+address differs. The run ends after four hours, or when you stop it, and removes its database, test
+keys and files with it.
 
 ## Read the contact as two callers
 
-List the contacts as `editor`. The command finds the running project, gets a fresh short-lived
-token for that registered local client, and sends the request:
+Keep the run ID and the registry address from the report. `token` writes a short-lived header file
+for a test caller, and `rstack breg api` sends one request with it. List the contacts as `editor`:
 
 ```sh
-rstack breg api /v1/records/contacts --client editor
+RUN="$(awk '$1 == "Run" {print $2}' dev-run.txt)"
+BREG_URL="$(awk '$1 == "breg" {print $2}' dev-run.txt)"
+EDITOR_HEADERS="$(rstack dev token "$RUN" --as editor | awk '$2 == "headers" {print $3}')"
+rstack breg api /v1/records/contacts --url "$BREG_URL" --header @"$EDITOR_HEADERS"
 ```
 
 ```json test-expect
@@ -212,11 +266,13 @@ rstack breg api /v1/records/contacts --client editor
 }
 ```
 
-The Record carries a stable identifier and a revision number beside the fields. Now list the same
+The Record carries a stable identifier and a revision number beside the fields. Tokens last five
+minutes: when a request is refused with status 401, run the `token` command again. Now list the same
 contacts as `foreign-editor`, whose token says `zone-b`:
 
 ```sh
-rstack breg api /v1/records/contacts --client foreign-editor
+FOREIGN_HEADERS="$(rstack dev token "$RUN" --as foreign-editor | awk '$2 == "headers" {print $3}')"
+rstack breg api /v1/records/contacts --url "$BREG_URL" --header @"$FOREIGN_HEADERS"
 ```
 
 ```json test-expect
@@ -236,16 +292,14 @@ rstack breg api /v1/records/contacts --client foreign-editor
 The registry applied the access profile: the contact exists, and `foreign-editor` cannot see it.
 
 {/* Evidence: crates/registry-bregctl/src/starters.rs; products/breg/examples/minimal/registry.yaml;
-    products/breg/examples/minimal/dev-clients.yaml;
-    products/breg/examples/minimal/examples/scenarios.json;
-    crates/registry-bregctl/src/dev/examples.rs; crates/registry-bregctl/src/dev/mod.rs;
-    crates/registry-cli-api/src/api.rs; crates/registry-cli-api/src/project.rs. */}
+    products/breg/examples/minimal/dev.yaml; products/breg/examples/minimal/dev/scenarios.yaml;
+    products/platform/PROJECT-DEV.md; crates/registry-cli-api/src/api.rs. */}
 
 ## Leave the registry running
 
-The next tutorial continues with this registry and its contact, so leave it running. When you
-are finished with it, run `rstack breg dev stop --remove` in this directory to stop it and delete its
-data.
+The next tutorial continues with this project, and its first step restarts the run. When you are
+finished with the registry, run `rstack dev stop "$RUN"` to stop it and delete its data. A run you
+forget ends by itself after its time to live.
 
 ## Next
 

@@ -663,7 +663,7 @@ jobs:
       # rstack, and fail with this command when they are missing.
       - name: Build the rstack dev hosts
         if: matrix.name == 'developer-tools' && contains(matrix.packages, 'registry-rstack')
-        run: cargo build --locked -p registry-bregctl -p registry-caseworkctl --bins
+        run: cargo build --locked -p registry-bregctl -p registry-caseworkctl -p registry-evidencectl -p registry-evidence --bins
 
       - name: Test affected packages
         run: python3 .github/scripts/run_cargo_packages.py test
@@ -931,8 +931,9 @@ jobs:
         run: products/casework/scripts/check-checkpoint.sh
       - name: Casework logical backup and restore of a submitted review
         if: matrix.part == 'runtime'
-        # Drives the public dev/operator binaries against owned disposable
-        # PostgreSQL, preserving the backup point and append-only audit journal.
+        # Drives the public operator binaries and `casework serve` against an
+        # owned disposable PostgreSQL container, preserving the backup point and
+        # append-only audit journal.
         run: products/casework/scripts/test-backup-restore.sh
       - name: Verify the rewritten Evidence deployment loads through the Evidence loader
         if: matrix.part == 'runtime'
@@ -2727,6 +2728,16 @@ jobs:
             --scratch-parent "${RUNNER_TEMP}" \
             --spatial
 
+      - name: Verify that Evidence runs alone with no database and no Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked -p registry-evidence -p registry-evidencectl --bins
+          python3 products/platform/scripts/test-rstack-dev.py \
+            --bin-dir "${GITHUB_WORKSPACE}/target/debug" \
+            --scratch-parent "${RUNNER_TEMP}" \
+            --evidence
+
       - name: Verify the combined licensing development run with its own PostgreSQL in Docker
         shell: bash
         run: |
@@ -2747,10 +2758,10 @@ jobs:
           BREGCTL_BIN: ${{ github.workspace }}/target/debug/bregctl
         run: |
           set -euo pipefail
-          # `caseworkctl dev` and `bregctl dev` each run PostgreSQL in a
-          # disposable container of their own, which the runner stops when
-          # the journey ends, so the replay stays on the Docker runner rather
-          # than inside a clean read-only container.
+          # `rstack dev` runs PostgreSQL in a disposable container of its
+          # own, which the runner stops when the journey ends, so the replay
+          # stays on the Docker runner rather than inside a clean read-only
+          # container.
           node docs/site/scripts/run-tutorial.mjs --gate casework
 
   messaging-tutorial:

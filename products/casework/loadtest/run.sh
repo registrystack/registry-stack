@@ -99,7 +99,7 @@ for seed_file in read-tasks.txt flow-tasks.txt flow-offset seed-summary.json; do
 done
 
 environment_fields=$(python3 "$loadtest_dir/support/loadenv.py" describe --root "$run_dir" --repository "$repository_root") || exit 2
-read -r casework_url caseworkctl project runtime_library_path <<<"$environment_fields"
+read -r casework_url rstack run_id runtime_library_path <<<"$environment_fields"
 if [[ -n "$runtime_library_path" ]]; then
   export DYLD_FALLBACK_LIBRARY_PATH="$runtime_library_path${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
 fi
@@ -128,7 +128,7 @@ require_token_window() {
     total=$(python3 -c 'import sys; print(float(sys.argv[1])+float(sys.argv[2]))' "$total" "$seconds")
   done
   python3 -c 'import sys; raise SystemExit(0 if float(sys.argv[1]) <= 240 else 1)' "$total" || {
-    printf '%s\n' "$label must finish within 4 minutes so one fresh caseworkctl dev token remains valid." >&2
+    printf '%s\n' "$label must finish within 4 minutes so one fresh rstack dev token remains valid." >&2
     exit 2
   }
 }
@@ -207,7 +207,7 @@ reserve_flow_pool() {
 
 fresh_header() {
   python3 "$loadtest_dir/support/loadenv.py" header \
-    --caseworkctl "$caseworkctl" --project "$project" --client "$1"
+    --rstack "$rstack" --run-id "$run_id" --state-dir "$run_dir/state" --person "$1"
 }
 
 run_one() {
@@ -234,8 +234,8 @@ run_one() {
   "$dbstats" snapshot >"$result_dir/db-before.json"
   export K6_SUMMARY_PATH="$result_dir/k6-summary.json"
 
-  STAFF_HEADER_FILE=$(fresh_header loadtest-staff)
-  PRODUCER_HEADER_FILE=$(fresh_header loadtest-producer)
+  STAFF_HEADER_FILE=$(fresh_header staff)
+  PRODUCER_HEADER_FILE=$(fresh_header requester)
   export STAFF_HEADER_FILE PRODUCER_HEADER_FILE
 
   "$dbstats" sample 1 >"$result_dir/db-waits.jsonl" &
