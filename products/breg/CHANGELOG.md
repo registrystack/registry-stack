@@ -66,7 +66,8 @@
   `dominance`, or `contains-suppressed-sum`; the list may grow). It stores
   nothing, reserves no version, and writes one audit entry. The clients gain
   `statistics_release_dry_run` (Rust and Python) and `statisticsReleaseDryRun`
-  (Node.js). This change is additive.
+  (Node.js), and the Rust client and `bregctl statistics publish` recognize the
+  `negative-value` refusal code. This change is additive.
 - A release under `minimum-count-and-rounding` is built to carry sums, with
   rules for disclosure control: the `disclosure` block takes `contributor`
   (`{type: field, field}` over a `reference` field of the unit, or
