@@ -2727,6 +2727,16 @@ jobs:
             --scratch-parent "${RUNNER_TEMP}" \
             --spatial
 
+      - name: Verify the combined licensing development run with its own PostgreSQL in Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 products/platform/scripts/test-rstack-dev.py \
+            --bin-dir "${GITHUB_WORKSPACE}/target/debug" \
+            --database managed \
+            --scratch-parent "${RUNNER_TEMP}" \
+            --spatial
+
       - name: Execute the Registry Casework tutorials from a reader directory
         shell: bash
         env:

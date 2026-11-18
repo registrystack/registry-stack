@@ -8232,6 +8232,7 @@ dependencies = [
  "getrandom 0.4.3",
  "jsonschema",
  "postgres-protocol",
+ "rcgen",
  "registry-cli-report",
  "registry-platform-buildinfo",
  "registry-platform-config",

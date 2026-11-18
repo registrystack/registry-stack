@@ -32,6 +32,7 @@ base64.workspace = true
 clap.workspace = true
 getrandom.workspace = true
 postgres-protocol.workspace = true
+rcgen.workspace = true
 registry-cli-report.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true

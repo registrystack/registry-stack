@@ -187,7 +187,8 @@ enum DevCommand {
         /// Root of an already-built local application when dev.yaml declares one.
         #[arg(long, value_name = "DIRECTORY")]
         application_root: Option<PathBuf>,
-        /// TLS PostgreSQL administrator URL. Defaults to RSTACK_DEV_DATABASE_URL.
+        /// TLS PostgreSQL administrator URL. Defaults to RSTACK_DEV_DATABASE_URL;
+        /// without either, the run starts its own PostgreSQL server in Docker.
         #[arg(long, value_name = "URL")]
         database_url: Option<String>,
         /// Lifetime after readiness, from 1s to 24h. Defaults to 30m.
@@ -228,7 +229,7 @@ enum DevCommand {
         #[arg(long)]
         recover: bool,
         /// TLS PostgreSQL administrator URL for --recover. Defaults to
-        /// RSTACK_DEV_DATABASE_URL.
+        /// RSTACK_DEV_DATABASE_URL; a run that started its own server needs none.
         #[arg(long, value_name = "URL", requires = "recover")]
         database_url: Option<String>,
         /// Emit the runner's JSON report.

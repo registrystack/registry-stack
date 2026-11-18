@@ -1483,13 +1483,132 @@ def verify_offline_plan(root, bin_dir, project):
     print("Offline checks resolve product profiles with only the authoring tools")
 
 
+RUN_LABEL = "org.registrystack.rstack.dev-run"
+
+
+def labelled_containers(run=None):
+    """IDs of the containers a managed run labelled: one run's, or every run's."""
+    label = RUN_LABEL if run is None else f"{RUN_LABEL}={run}"
+    listed = checked(
+        "docker", "ps", "--all", "--quiet", "--no-trunc", "--filter", f"label={label}"
+    )
+    return set(listed.decode().split())
+
+
+def verify_managed_run(report, state, image):
+    """The run names its image and owns one loopback-only, TLS-verified server."""
+    run = report["run_id"]
+    assert report["database"]["mode"] == "managed", report
+    assert report["database"]["image"].startswith(image), report
+    [container] = labelled_containers(run)
+    published = checked("docker", "port", container, "5432/tcp").decode().split()
+    assert published and all(
+        address.startswith("127.0.0.1:") for address in published
+    ), published
+    runtime = urlsplit((state / run / "breg-runtime-url").read_text())
+    assert f"{runtime.hostname}:{runtime.port}" in published, published
+    return container
+
+
+def exercise_managed(root, bin_dir, project, spatial):
+    """Without an administrator URL each run starts and removes its own server."""
+    checkout = root / "licensing"
+    shutil.copytree(project, checkout)
+    before = files(checkout)
+    state = root / "runs"
+    env = {
+        **{
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"RSTACK_DEV_DATABASE_URL", "RSTACK_DEV_DATABASE_CA"}
+        },
+        "RSTACK_DEV_STATE_DIR": str(state),
+        "RSTACK_BREGCTL_BIN": str(bin_dir / "bregctl"),
+        "RSTACK_BREG_BIN": str(bin_dir / "breg"),
+        "RSTACK_CASEWORKCTL_BIN": str(bin_dir / "caseworkctl"),
+        "RSTACK_CASEWORK_BIN": str(bin_dir / "casework"),
+    }
+    baseline = labelled_containers()
+    started = []
+    try:
+        report = dev(bin_dir, env, checkout, "start", ".")
+        started.append(report["run_id"])
+        assert report["scenarios"][0]["result"] == "passed", report
+        verify_managed_run(report, state, "postgres:")
+        assert dev(bin_dir, env, checkout, "stop", report["run_id"])["status"] == "stopped"
+        assert labelled_containers(report["run_id"]) == set()
+        assert_nothing_listening(bin_dir, report["products"].values())
+        print("A managed run passed its journey on its own loopback TLS server and removed it")
+
+        short = dev(bin_dir, env, checkout, "start", ".", "--ttl", "1s")
+        started.append(short["run_id"])
+        wait_for_stop(bin_dir, env, checkout, short["run_id"])
+        assert labelled_containers(short["run_id"]) == set()
+
+        failing = root / "failing-casework"
+        failing.write_text("#!/bin/sh\nprintf 'boom\\n' >&2\nexit 1\n")
+        failing.chmod(0o700)
+        failure_env = {**env, "RSTACK_CASEWORK_BIN": str(failing)}
+        failed = dev(bin_dir, failure_env, checkout, "start", ".", expected=1)
+        assert "casework exited before readiness" in failed["error"]["message"], failed
+        assert labelled_containers() == baseline
+        print("TTL expiry and a failed start removed the managed server")
+
+        lost, run = lose_supervisor(bin_dir, checkout, state, env)
+        started.append(run)
+        [container] = labelled_containers(run)
+        status = dev(bin_dir, env, checkout, "status", run, expected=3)
+        assert status["recovery"]["container"] == f"rstack-dev-{run}", status
+        recovered = dev(bin_dir, env, checkout, "stop", run, "--recover")
+        assert recovered["status"] == "stopped", recovered
+        assert recovered["recovered"]["containers"] == [container], recovered
+        assert labelled_containers(run) == set()
+        assert_nothing_listening(bin_dir, lost["products"].values())
+        print("stop --recover removed a lost managed run's server without an administrator URL")
+
+        if spatial:
+            spatial_checkout, _, _ = spatial_project(root, "spatial")
+            began = time.monotonic()
+            report = dev(bin_dir, env, spatial_checkout, "start", ".")
+            started.append(report["run_id"])
+            verify_managed_run(report, state, "postgis/postgis:")
+            assert report["scenarios"][0]["result"] == "passed", report
+            stopped = dev(bin_dir, env, spatial_checkout, "stop", report["run_id"])
+            assert stopped["status"] == "stopped", stopped
+            assert labelled_containers(report["run_id"]) == set()
+            print(
+                f"A spatial managed run passed on the PostGIS image in {time.monotonic() - began:.0f} s"
+            )
+
+        assert files(checkout) == before
+        assert labelled_containers() == baseline
+        nothing_left_behind(state)
+    finally:
+        for run_root in live_runs(state):
+            dev(bin_dir, env, checkout, "stop", run_root.name)
+        for run in started:
+            left = labelled_containers(run)
+            if left:
+                print(f"Removing containers left by run {run}: {sorted(left)}")
+                checked("docker", "rm", "--force", "--volumes", *sorted(left))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, required=True)
-    parser.add_argument("--postgres-bin-dir", type=Path, required=True)
+    parser.add_argument(
+        "--database",
+        choices=("address", "managed"),
+        default="address",
+        help="address: a TLS PostgreSQL this script runs, given by URL; "
+        "managed: no URL, so each run starts its own server in Docker",
+    )
+    parser.add_argument("--postgres-bin-dir", type=Path)
     parser.add_argument("--scratch-parent", type=Path)
     parser.add_argument("--spatial", action="store_true", help="also verify PostGIS")
     args = parser.parse_args()
+    if args.database == "address" and args.postgres_bin_dir is None:
+        parser.error("--postgres-bin-dir is required with --database address")
     with tempfile.TemporaryDirectory(
         prefix="rstack-dev-", dir=args.scratch_parent
     ) as directory:
@@ -1497,6 +1616,9 @@ def main():
         bin_dir = args.bin_dir.resolve()
         project = STACK / "products/platform/examples/licensing"
         verify_offline_plan(root, bin_dir, project)
+        if args.database == "managed":
+            exercise_managed(root, bin_dir, project, args.spatial)
+            return
         pg = args.postgres_bin_dir.resolve()
         cluster, ca, url, pg_env = prepare_postgres(root, pg)
         checked(

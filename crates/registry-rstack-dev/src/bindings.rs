@@ -939,6 +939,7 @@ mod tests {
             }),
             casework_principals: BTreeMap::from([("producer".to_owned(), "sub".to_owned())]),
             binaries: BTreeMap::new(),
+            managed_database: false,
         }
     }
 
