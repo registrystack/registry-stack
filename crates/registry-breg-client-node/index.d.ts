@@ -22,6 +22,7 @@ export declare class BaseRegistryClient {
   statisticsReleaseVersion(dataset: string, period: string, version: number, accessProfile?: string | undefined | null, format?: string | undefined | null): Promise<RawOutcome>
   statisticsReleaseSeries(dataset: string, from: string, to: string, selection: string, accessProfile?: string | undefined | null, format?: string | undefined | null): Promise<RawOutcome>
   statisticsPublish(dataset: string, period: string, status: string, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
+  statisticsReleaseDryRun(dataset: string, period: string, status: string, accessProfile: string): Promise<RawOutcome>
   statisticsWithdraw(dataset: string, period: string, version: number, reason: string, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
   registryContract(accessProfile?: string | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<BRegMetadata>
   recordSchema(recordTypeIdentifier: string, accessProfile?: string | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<RawOutcome>

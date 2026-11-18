@@ -60,6 +60,11 @@ async fn handler(
         idempotency_key,
         body,
     });
+    if uri.contains("/statistics/unavailable/") {
+        let mut response = Response::new(Body::empty());
+        *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+        return response;
+    }
     let problem =
         if uri.contains("/statistics/missing:live") || uri.contains("/statistics/missing:exact") {
             Some((BRegProblemCode::ResourceNotFound, None))
@@ -805,6 +810,154 @@ async fn statistics_mutations_preserve_key_body_and_success_status() {
         )
     );
     assert_eq!(requests[1].body, br#"{"reason":"disclosure-risk"}"#);
+}
+
+#[tokio::test]
+async fn statistics_release_dry_run_posts_the_publish_body_without_a_key() {
+    let (client, captured) = client().await;
+    let dry_run = client
+        .statistics_release_dry_run(
+            "enrolments",
+            "2025-01",
+            BRegReleaseStatus::Provisional,
+            "publisher",
+        )
+        .await
+        .unwrap();
+    assert_eq!(dry_run.value.media_type(), "application/json");
+    assert!(!dry_run.value.as_bytes().is_empty());
+    let requests = captured.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(
+        requests[0].uri,
+        "/tenant/v1/statistics/enrolments/releases/2025-01/versions:dry-run?accessProfile=publisher"
+    );
+    assert_eq!(requests[0].accept, "application/json");
+    assert_eq!(requests[0].idempotency_key, None);
+    assert_eq!(requests[0].body, br#"{"status":"provisional"}"#);
+}
+
+#[tokio::test]
+async fn statistics_release_dry_run_maps_a_release_refusal_like_publish() {
+    let (client, captured) = client().await;
+    let refused = client
+        .statistics_release_dry_run(
+            "release-refused",
+            "2025-01",
+            BRegReleaseStatus::Final,
+            "publisher",
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.problem_code(),
+        Some(BRegProblemCode::StatisticalDatasetReleaseRefused)
+    );
+    assert_eq!(
+        refused.refusal_code().map(|value| value.as_str()),
+        Some("period-not-ended")
+    );
+    // The exchange is sent once: a dry run is never resent.
+    assert_eq!(captured.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn statistics_release_dry_run_refuses_invalid_arguments_before_token_or_io() {
+    let token = Arc::new(CountingToken(AtomicUsize::new(0)));
+    let (client, captured) = client_with_provider(token.clone()).await;
+    for (dataset, period, profile) in [
+        ("Bad Dataset", "2025-01", "publisher"),
+        ("enrolments", "2023-02-29", "publisher"),
+        ("enrolments", "2025-01", "bad profile"),
+    ] {
+        assert!(client
+            .statistics_release_dry_run(dataset, period, BRegReleaseStatus::Final, profile)
+            .await
+            .is_err());
+    }
+    assert_eq!(token.0.load(Ordering::SeqCst), 0);
+    assert!(captured.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn statistics_release_dry_run_requires_a_matching_representation_digest() {
+    let (client, _) = client().await;
+    for dataset in [
+        "missing-digest",
+        "bad-digest",
+        "malformed-digest",
+        "repeated-digest",
+    ] {
+        let error = client
+            .statistics_release_dry_run(dataset, "2025-01", BRegReleaseStatus::Final, "publisher")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                BaseRegistryClientError::Protocol {
+                    failure: BRegProtocolFailure::RepresentationDigest,
+                    ..
+                }
+            ),
+            "{dataset}: {error:?}"
+        );
+    }
+    let accepted = client
+        .statistics_release_dry_run(
+            "enrolments",
+            "2025-01",
+            BRegReleaseStatus::Final,
+            "publisher",
+        )
+        .await
+        .unwrap();
+    assert!(accepted.value.representation_digest().is_some());
+}
+
+#[tokio::test]
+async fn statistics_release_dry_run_is_sent_once_after_a_503() {
+    let (client, captured) = client().await;
+    let error = client
+        .statistics_release_dry_run(
+            "unavailable",
+            "2025-01",
+            BRegReleaseStatus::Final,
+            "publisher",
+        )
+        .await
+        .unwrap_err();
+    drop(error);
+    assert_eq!(captured.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn statistics_release_dry_run_is_sent_once_after_a_connection_reset() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counter = accepted.clone();
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            counter.fetch_add(1, Ordering::SeqCst);
+            drop(stream);
+        }
+    });
+    let config =
+        BaseRegistryClientConfig::new(Url::parse(&format!("http://{address}/tenant")).unwrap());
+    let client = BaseRegistryClient::new(config).unwrap();
+    assert!(client
+        .statistics_release_dry_run(
+            "enrolments",
+            "2025-01",
+            BRegReleaseStatus::Final,
+            "publisher"
+        )
+        .await
+        .is_err());
+    assert_eq!(accepted.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

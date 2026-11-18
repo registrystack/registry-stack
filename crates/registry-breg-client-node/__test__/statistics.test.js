@@ -154,6 +154,12 @@ test('statistics methods preserve route, representation, status and caller key',
     assert.equal(requests[9].body, '{"status":"final"}');
     assert.equal(requests[9].key, 'caller-owned-key');
     assert.equal(requests[10].body, '{"reason":"disclosure-risk"}');
+    const dryRun = await client.statisticsReleaseDryRun('enrolments', '2025-01', 'provisional', 'publisher');
+    assert.equal(dryRun.mediaType, 'application/json');
+    assert.equal(requests[11].method, 'POST');
+    assert.equal(requests[11].url, '/v1/statistics/enrolments/releases/2025-01/versions:dry-run?accessProfile=publisher');
+    assert.equal(requests[11].body, '{"status":"provisional"}');
+    assert.equal(requests[11].key, undefined);
     const count = requests.length;
     await assert.rejects(client.statisticsReleaseVersion('enrolments', '2025-01', 0), error => error.kind === 'invalid-request');
     for (const bad of [
@@ -179,6 +185,14 @@ test('statistics methods preserve route, representation, status and caller key',
       client.statisticsWithdraw('enrolments', '----', 1, 'source-data-error', 'publisher', 'invalid-period-key'),
       error => error.kind === 'invalid-request',
     );
+    for (const bad of [
+      () => client.statisticsReleaseDryRun('Bad Dataset', '2025-01', 'final', 'publisher'),
+      () => client.statisticsReleaseDryRun('enrolments', '2025-99', 'final', 'publisher'),
+      () => client.statisticsReleaseDryRun('enrolments', '2025-01', 'final', 'bad profile'),
+      () => client.statisticsReleaseDryRun('enrolments', '2025-01', 'unknown', 'publisher'),
+    ]) {
+      await assert.rejects(bad(), error => error.kind === 'invalid-request');
+    }
     assert.equal(requests.length, afterCanonicalPeriods);
 
     for (const read of [
@@ -204,6 +218,14 @@ test('statistics methods preserve route, representation, status and caller key',
       error => error.kind === 'protocol' && error.code === 'representation-digest',
     );
     await assert.rejects(
+      client.statisticsReleaseDryRun('digest-missing', '2025-01', 'final', 'publisher'),
+      error => error.kind === 'protocol' && error.code === 'representation-digest',
+    );
+    await assert.rejects(
+      client.statisticsReleaseDryRun('digest-mismatch', '2025-01', 'final', 'publisher'),
+      error => error.kind === 'protocol' && error.code === 'representation-digest',
+    );
+    await assert.rejects(
       client.statisticsWithdraw('digest-mismatch', '2025-01', 7, 'source-data-error', 'publisher', 'digest-mismatch-key'),
       error => error.kind === 'protocol' && error.code === 'representation-digest',
     );
@@ -215,6 +237,10 @@ test('statistics methods preserve route, representation, status and caller key',
     await assert.rejects(client.statisticsLive('missing'), error => error.kind === 'not-found' && error.code === 'resource.not_found');
     await assert.rejects(
       client.statisticsPublish('release-refused', '2025-01', 'final', 'publisher', 'refusal-key'),
+      error => error.code === 'statistical_dataset.release_refused' && error.refusalCode === 'period-not-ended',
+    );
+    await assert.rejects(
+      client.statisticsReleaseDryRun('release-refused', '2025-01', 'final', 'publisher'),
       error => error.code === 'statistical_dataset.release_refused' && error.refusalCode === 'period-not-ended',
     );
     await assert.rejects(

@@ -278,7 +278,7 @@ function wrapAsync(name, jsonIndexes = [], requiredIndexes = []) {
 for (const [method, jsonIndexes, requiredIndexes] of [
   ['health'], ['ready'], ['openapi'], ['registryMetadata'], ['registryContract'], ['recordSchema'],
   ['statisticsLive'], ['statisticsExact'], ['statisticsReleases'], ['statisticsLatestRelease'],
-  ['statisticsReleaseVersion'], ['statisticsReleaseSeries'], ['statisticsPublish'],
+  ['statisticsReleaseVersion'], ['statisticsReleaseSeries'], ['statisticsPublish'], ['statisticsReleaseDryRun'],
   ['statisticsWithdraw'],
   ['recordRevisions'], ['getRecordRevision', [3]], ['eventRecordCreationRevision'],
   ['getRecord', [2]], ['listRecords', [1]], ['continueList', [0], [0]],

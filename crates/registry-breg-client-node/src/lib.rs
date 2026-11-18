@@ -2864,6 +2864,26 @@ impl BaseRegistryClient {
     }
 
     #[napi]
+    pub async fn statistics_release_dry_run(
+        &self,
+        dataset: String,
+        period: String,
+        status: String,
+        access_profile: String,
+    ) -> Result<RawOutcome> {
+        self.inner
+            .statistics_release_dry_run(
+                &dataset,
+                &period,
+                release_status(&status)?,
+                &access_profile,
+            )
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
+    #[napi]
     pub async fn statistics_withdraw(
         &self,
         dataset: String,

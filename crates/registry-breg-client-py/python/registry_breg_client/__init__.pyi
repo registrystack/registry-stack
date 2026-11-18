@@ -449,6 +449,10 @@ class BaseRegistryClient:
         self, dataset: str, period: str, status: StatisticsReleaseStatus,
         access_profile: str, idempotency_key: str,
     ) -> dict[str, Any]: ...
+    def statistics_release_dry_run(
+        self, dataset: str, period: str, status: StatisticsReleaseStatus,
+        access_profile: str,
+    ) -> dict[str, Any]: ...
     def statistics_withdraw(
         self, dataset: str, period: str, version: int,
         reason: StatisticsWithdrawalReason, access_profile: str,

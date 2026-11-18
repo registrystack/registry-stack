@@ -463,6 +463,7 @@
         "statistics_release_version",
         "statistics_release_series",
         "statistics_publish",
+        "statistics_release_dry_run",
         "statistics_withdraw"
       ],
       "node": [
@@ -473,6 +474,7 @@
         "statisticsReleaseVersion",
         "statisticsReleaseSeries",
         "statisticsPublish",
+        "statisticsReleaseDryRun",
         "statisticsWithdraw"
       ],
       "python": [
@@ -483,6 +485,7 @@
         "statistics_release_version",
         "statistics_release_series",
         "statistics_publish",
+        "statistics_release_dry_run",
         "statistics_withdraw"
       ]
     },

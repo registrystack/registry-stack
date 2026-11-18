@@ -248,6 +248,37 @@ impl BaseRegistryClient {
         .await
     }
 
+    /// Compute the release document a publication would store now, with the
+    /// reason for each suppressed cell, without storing anything. It changes
+    /// no state and takes no idempotency key, so it is sent once and never
+    /// resent.
+    pub async fn statistics_release_dry_run(
+        &self,
+        dataset: &str,
+        period: &str,
+        status: BRegReleaseStatus,
+        access_profile: &str,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        validate_dataset(dataset)?;
+        validate_period(period)?;
+        let pairs = access_profile_query(Some(access_profile))?;
+        let body = serde_json::to_vec(&PublishBody { status })
+            .map_err(|_| invalid("the statistics release dry run request is invalid"))?;
+        self.statistics_post_unkeyed_json(
+            &[
+                "v1",
+                "statistics",
+                dataset,
+                "releases",
+                period,
+                "versions:dry-run",
+            ],
+            &pairs,
+            body,
+        )
+        .await
+    }
+
     /// Withdraw one version with a closed reason code. A withdrawal whose
     /// outcome is unknown is resent identically under the same idempotency
     /// key, at most as many times as the configured mutation retry count.
