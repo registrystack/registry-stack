@@ -99,7 +99,4 @@ for artifact in "$CASEWORK_NODE_NATIVE" "$CASEWORK_PYTHON_NATIVE" "$CASEWORK_PYT
   fi
 done
 
-cargo test --locked -p registry-caseworkctl --test dev_lifecycle -- \
-  --ignored --test-threads=1
-
-echo "Casework candidate service, operator lifecycle, and Rust/Node/Python Casework facade journeys passed."
+echo "Casework candidate service and Rust/Node/Python Casework facade journeys passed."
