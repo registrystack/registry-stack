@@ -882,7 +882,7 @@ impl PostgresExternalViewService {
         let marks_uncovered = plan.projection.cardinality == ExternalCardinality::One
             || (request.root.is_some()
                 && !matches!(&request.query, ExternalQueryMode::Continue(_)));
-        if !page.complete && !(plain && marks_uncovered) {
+        if !(page.complete || (plain && marks_uncovered)) {
             return Err(ExternalViewError::Incomplete);
         }
         if let Some(cutoff) = page.minimum_expires_at {
