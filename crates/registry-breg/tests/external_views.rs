@@ -246,3 +246,99 @@ fn refresh_link_row_policy_on_canonical_id_uses_the_physical_record_id() {
         .expect("managed index is emitted in reviewed DDL");
     assert_eq!(statement.sql.matches("record_id").count(), 1);
 }
+
+fn rejects_at(source: &str, code: &str, path: &str) {
+    let refusal = compile(source).expect_err("invalid external authoring is refused");
+    assert!(
+        refusal
+            .diagnostics()
+            .iter()
+            .any(|d| d.code == code && d.path == path),
+        "expected {code} at {path}: {refusal:?}"
+    );
+}
+
+#[test]
+fn selector_scheme_is_refused_on_a_cardinality_one_projection() {
+    rejects_at(
+        &PROJECT.replace(
+            "    cardinality: one\n",
+            "    cardinality: one\n    selectorScheme: urn:example:other-key\n",
+        ),
+        "breg.external-view.selector-scheme",
+        "/externalProjections/0/selectorScheme",
+    );
+}
+
+#[test]
+fn selector_scheme_is_required_on_a_cardinality_many_projection() {
+    rejects_at(
+        &PROJECT.replace("cardinality: one", "cardinality: many"),
+        "breg.external-view.selector-scheme",
+        "/externalProjections/0/selectorScheme",
+    );
+}
+
+#[test]
+fn one_local_field_cannot_link_projections_with_different_selector_schemes() {
+    let second_projection = r#"  - id: other-subjects
+    recordType: external-subject
+    sourceRoute: subjects-by-other-key
+    sourceRouteVersion: "1"
+    purpose: local-consultation
+    scope: other-subjects
+    selectorScheme: urn:example:other-key
+    mode: live
+    cardinality: many
+    fields: [label]
+externalViews:
+"#;
+    let source = PROJECT
+        .replace("\nexternalViews:\n", &format!("\n{second_projection}"))
+        .replace(
+            "        fromField: subject-key\n",
+            "        fromField: subject-key\n      - id: other\n        projection: other-subjects\n        fromField: subject-key\n",
+        );
+    rejects_at(
+        &source,
+        "breg.external-view.selector-scheme-conflict",
+        "/externalViews/0/links/1/fromField",
+    );
+}
+
+#[test]
+fn a_projection_names_its_source_operation_with_source_route_and_version() {
+    let registry =
+        compile(&PROJECT.replace("sourceRouteVersion: \"1\"", "sourceRouteVersion: \"7\""))
+            .expect("the project compiles");
+    let projection = &registry.external_views().projections["approved-subjects"];
+    assert_eq!(projection.operation.as_str(), "subjects-by-key");
+    assert_eq!(projection.operation_version.as_str(), "7");
+}
+
+#[test]
+fn links_and_labels_take_their_scheme_and_fields_from_the_projection() {
+    let project = parse_project_yaml(include_bytes!(
+        "../../../products/breg/examples/external-views/registry.yaml"
+    ))
+    .expect("the example parses");
+    let registry =
+        compile_project(&project, &[], CompileProfile::Authoring).expect("the example compiles");
+    let external = registry.external_views();
+    let link = &external.views["business-holdings-indexed"].links[0];
+    let holdings = &external.projections[link.projection.as_str()];
+    assert_eq!(link.identifier_scheme, holdings.selector_scheme);
+    assert_eq!(
+        link.identifier_scheme.as_str(),
+        "urn:example:business-number"
+    );
+    assert_eq!(link.fields, holdings.fields);
+    let label = link.label.as_ref().expect("the link carries a label");
+    let person = &external.projections[label.projection.as_str()];
+    assert_eq!(label.identifier_scheme, person.selector_scheme);
+    assert_eq!(
+        label.identifier_scheme.as_str(),
+        "urn:example:person-number"
+    );
+    assert_eq!(label.fields, person.fields);
+}
