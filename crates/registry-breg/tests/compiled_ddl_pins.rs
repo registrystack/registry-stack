@@ -34,6 +34,8 @@
 //! events likewise move artifact revisions only.
 //! Declared row-local constraint locations in the Problem schema likewise move
 //! artifact revisions only; the SQL and Action fingerprints remain unchanged.
+//! The statistical release refusal code `negative-value` in the Problem schema
+//! likewise moves artifact revisions only.
 //! The explicit cross-major PostgreSQL text collation, grouped immediate-action
 //! policies, and policy definition markers deliberately move every fixture's
 //! SQL digest and compiled artifact revision. Action contract fingerprints stay
@@ -89,7 +91,7 @@ const FIXTURES: &[Fixture] = &[
         ),
         module: None,
         ddl_sha256: "6d6431e3e4fb3eb254ef8f3b2e895aed2c09ed4ee7ca506627e1d063359f4578",
-        revision: "sha256:f6a1aaf77f88d31c2b12bb8a840750ab9249f93997feb952508c20b884cdd37a",
+        revision: "sha256:b5a3ecb77d298d91b05b3f8391b4e38aee9b169715f2346e41f2cfb1c3294fc0",
     },
     Fixture {
         name: "asset-registration-actions",
@@ -100,7 +102,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
         ddl_sha256: "43acdae956eb2f932fb22a2cccc5cee5ed19cf806f2f28bbc677eff219d00b99",
-        revision: "sha256:bf8ca54a00c9b67bf1b9f4a68883a1b64af6a1f7de68f5737ce95c04868df4f5",
+        revision: "sha256:7e6727d1ba4467b516258fd29703eb7ff9e4088ded812ed63ccb076a66de56cb",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -111,7 +113,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
         ddl_sha256: "6439a877ee6508b999a77242542695d8ccddc6d80518699d90eddc32b305780b",
-        revision: "sha256:e0ecebe4a0c256f1b949d2162d6e64e632953151d01c4485f16716e2ab180967",
+        revision: "sha256:a9da7e8bf14b8f64b0ec768699fa1bad72e4874ae0a0ea1a3db972a830a93efc",
     },
     Fixture {
         name: "household-contact-actions",
@@ -122,7 +124,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
         ddl_sha256: "f82f2f8376df97fb184c04d31c8e42c291f7a03dbd909828e1bf61612106de35",
-        revision: "sha256:bc90437187e3aa464660f7865904e9e568b5d334cde57e4b0e68e15069a27ac9",
+        revision: "sha256:9d64db83b2697548dc61903a0245f5280a9da400bcb7147cb3c54b758e3fd066",
     },
 ];
 

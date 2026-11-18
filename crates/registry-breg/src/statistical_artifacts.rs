@@ -175,6 +175,27 @@ pub(crate) fn append_statistics_openapi(
         }),
     );
     component_schemas.insert(
+        "StatisticalReleaseDryRun".to_owned(),
+        json!({
+            "type":"object","additionalProperties":false,
+            "required":["document","suppressions"],
+            "properties":{
+                "document":{"$ref":"#/components/schemas/StatisticalDatasetDocument"},
+                "suppressions":{
+                    "type":"array",
+                    "items":{
+                        "type":"object","additionalProperties":false,
+                        "required":["cell","reason"],
+                        "properties":{
+                            "cell":{"type":"integer","minimum":0},
+                            "reason":{"type":"string","enum":["minimum-count","minimum-contributors","dominance","contains-suppressed-sum"]}
+                        }
+                    }
+                }
+            }
+        }),
+    );
+    component_schemas.insert(
         "StatisticalWithdrawalRequest".to_owned(),
         json!({
             "type":"object","additionalProperties":false,"required":["reason"],
@@ -318,6 +339,21 @@ pub(crate) fn append_statistics_openapi(
                     &admission_publisher,
                     publish_parameters(false),
                     json!({"201": json_response("StatisticalReleaseHeader", true), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "410":problem_response(), "415":problem_response(), "422":problem_response(), "500":problem_response(), "503":problem_response(), "504":problem_response()}),
+                    Some("StatisticalReleaseRequest"),
+                ),
+            );
+            insert_operation(
+                paths,
+                &format!("{base}/releases/{{period}}/versions:dry-run"),
+                "post",
+                operation(
+                    dataset,
+                    selected,
+                    "dry-run-release",
+                    &publisher,
+                    &admission_publisher,
+                    dry_run_parameters(),
+                    json!({"200": json_response("StatisticalReleaseDryRun", true), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "410":problem_response(), "415":problem_response(), "422":problem_response(), "500":problem_response(), "503":problem_response(), "504":problem_response()}),
                     Some("StatisticalReleaseRequest"),
                 ),
             );
@@ -504,6 +540,15 @@ fn publish_parameters(version: bool) -> Vec<Value> {
         }
     }));
     parameters
+}
+
+/// A dry run stores nothing, so it takes no `Idempotency-Key`.
+fn dry_run_parameters() -> Vec<Value> {
+    vec![
+        access_profile_parameter(),
+        trace_parameter(),
+        period_parameter(),
+    ]
 }
 
 fn success_document_response() -> Value {

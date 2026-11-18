@@ -2871,6 +2871,7 @@ fn valid_statistics_refusal_code(value: &str) -> bool {
             | "before-first-period"
             | "provisional-after-final"
             | "already-withdrawn"
+            | "negative-value"
     )
 }
 

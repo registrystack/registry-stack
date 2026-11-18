@@ -509,10 +509,8 @@ pub(super) fn compile(
                 .flatten();
             let field_type =
                 |field_id: &str| field(unit, field_id).map(|(field_type, _)| field_type.clone());
-            let longest_decimal = measures
-                .iter()
-                .filter_map(|measure| maximum_measure_characters(measure, &measures, &field_type))
-                .max();
+            let longest_decimal =
+                longest_released_decimal(&measures, &field_type, sum_disclosure.as_ref());
             let definition_digest = definition_digest(
                 source,
                 &period,
@@ -594,6 +592,25 @@ pub(super) fn compile(
     } else {
         Err(errors)
     }
+}
+
+/// The longest decimal text a release can state for any of `measures`. An
+/// `int64` sum released under minimum-count-and-rounding is rounded to the
+/// base, which can carry into one more digit (99,999 rounded to a base of 10 is
+/// 100,000), so its bound is one character wider; a decimal sum is exact.
+fn longest_released_decimal(
+    measures: &[Measure],
+    field_type: &dyn Fn(&str) -> Option<FieldTypeSource>,
+    sums: Option<&SumDisclosure>,
+) -> Option<usize> {
+    measures
+        .iter()
+        .filter_map(|measure| {
+            let exact = maximum_measure_characters(measure, measures, field_type)?;
+            let rounded = sums.is_some_and(|sums| sums.integer_sums.contains(measure.id()));
+            Some(exact + usize::from(rounded))
+        })
+        .max()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2333,6 +2350,57 @@ mod tests {
         assert_ne!(
             owner,
             sum_definition(Some(&sums(Contributor::EachRecord, 15)))
+        );
+    }
+
+    #[test]
+    fn a_rounded_integer_sum_is_bounded_one_digit_wider_than_its_exact_text() {
+        // 99,999 rounded to a base of 10 is 100,000: rounding up carries into a
+        // new digit, so the longest rounded sum is one character longer.
+        assert_eq!(format!("{}", (99_999_u64 + 5) / 10 * 10).len(), 6);
+        let measures = vec![
+            Measure::Sum {
+                id: "units-sum".to_owned(),
+                field: "units".to_owned(),
+                scale: 0,
+            },
+            Measure::Sum {
+                id: "area-sum".to_owned(),
+                field: "area".to_owned(),
+                scale: 2,
+            },
+        ];
+        let field_type = |field: &str| match field {
+            "units" => Some(FieldTypeSource::Int64),
+            "area" => Some(FieldTypeSource::Decimal {
+                precision: 10,
+                scale: 2,
+                minimum: None,
+                maximum: None,
+            }),
+            _ => None,
+        };
+        let exact = measures
+            .iter()
+            .filter_map(|measure| maximum_measure_characters(measure, &measures, &field_type))
+            .max();
+        assert_eq!(
+            longest_released_decimal(&measures, &field_type, None),
+            exact
+        );
+        let integer = SumDisclosure {
+            contributor: Contributor::EachRecord,
+            dominance_percent: 50,
+            integer_sums: BTreeSet::from(["units-sum".to_owned()]),
+        };
+        let units = maximum_measure_characters(&measures[0], &measures, &field_type)
+            .expect("an int64 sum is bounded");
+        let area = maximum_measure_characters(&measures[1], &measures, &field_type)
+            .expect("a decimal sum is bounded");
+        assert_eq!(
+            longest_released_decimal(&measures, &field_type, Some(&integer)),
+            Some((units + 1).max(area)),
+            "only the rounded integer sum gains a digit; a decimal sum is exact"
         );
     }
 }

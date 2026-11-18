@@ -1633,7 +1633,11 @@ fn generated_artifacts_cover_the_effective_model_metadata_and_seven_routes() {
             advertised_operations.insert(name);
         }
     }
-    assert_eq!(advertised_operations, expected_operations);
+    // The dry run is an HTTP operation of the publisher, not an access
+    // grant, so metadata does not list it.
+    let mut expected_advertised = expected_operations.clone();
+    expected_advertised.insert("dry-run-release");
+    assert_eq!(advertised_operations, expected_advertised);
     let statistical_paths = openapi["paths"]
         .as_object()
         .unwrap()
@@ -1649,6 +1653,7 @@ fn generated_artifacts_cover_the_effective_model_metadata_and_seven_routes() {
             "/v1/statistics/records-by-category/releases:series".to_owned(),
             "/v1/statistics/records-by-category/releases/{period}".to_owned(),
             "/v1/statistics/records-by-category/releases/{period}/versions".to_owned(),
+            "/v1/statistics/records-by-category/releases/{period}/versions:dry-run".to_owned(),
             "/v1/statistics/records-by-category/releases/{period}/versions/{version}".to_owned(),
             "/v1/statistics/records-by-category/releases/{period}/versions/{version}/withdrawal"
                 .to_owned(),

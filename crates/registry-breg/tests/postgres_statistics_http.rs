@@ -4243,6 +4243,196 @@ journeys:
     database.cleanup().await;
 }
 
+/// A fixture of the default dataset for the dry run: the database, the router and
+/// the prior (ended) period with seven records, six in `a` and one in `b`.
+async fn dry_run_fixture(source: Value, label: &str) -> (TestDatabase, axum::Router, String) {
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(compile_statistics_registry(source));
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("compiled schema installs");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            database_id: DATABASE_ID,
+            label,
+        },
+    )
+    .await
+    .expect("runtime identity initializes");
+    migration_task.abort();
+    let pool = database.runtime_config.build_pool().expect("pool builds");
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
+    let today = Utc::now().date_naive();
+    let prior_date = today
+        .with_day(1)
+        .expect("current month has a first day")
+        .checked_sub_days(Days::new(1))
+        .expect("previous month exists");
+    seed_records(&pool, lock_key, &identity, &compiled, today, prior_date).await;
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x72; 32].into())
+            .expect("audit profile is keyed"),
+    );
+    let app = statistics_router(
+        pool,
+        compiled,
+        identity,
+        lock_key,
+        audit,
+        Arc::new(std::sync::Mutex::new(Vec::new())),
+        None,
+    );
+    (database, app, month_code(prior_date))
+}
+
+async fn dry_run(
+    app: &axum::Router,
+    period: &str,
+    profile: &str,
+    claims: VerifiedRequestClaims,
+) -> Response<Body> {
+    send(
+        app,
+        Method::POST,
+        &format!(
+            "/v1/statistics/records-by-category/releases/{period}/versions:dry-run?accessProfile={profile}"
+        ),
+        Some(claims),
+        &[("content-type", "application/json")],
+        serde_json::to_vec(&json!({"status":"final"})).expect("dry-run body serializes"),
+    )
+    .await
+}
+
+async fn release_versions(app: &axum::Router) -> Value {
+    let listed = send(
+        app,
+        Method::GET,
+        "/v1/statistics/records-by-category/releases?accessProfile=reader",
+        Some(claims("reader", false)),
+        &[],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(listed.status(), StatusCode::OK);
+    body_json(listed).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dry_run_reports_minimum_count_suppressions_and_stores_nothing() {
+    let (database, app, period) =
+        dry_run_fixture(statistics_registry_source(), "package-statistics-dry-run-1").await;
+
+    let dry = dry_run(&app, &period, "publisher", claims("publisher", false)).await;
+    assert_eq!(dry.status(), StatusCode::OK);
+    assert_eq!(dry.headers()["content-type"], "application/json");
+    assert!(dry.headers().contains_key("repr-digest"));
+    for absent in ["etag", "location", "link"] {
+        assert!(!dry.headers().contains_key(absent), "{absent}");
+    }
+    let body = body_json(dry).await;
+    let document = &body["document"];
+    assert_eq!(document["release"]["version"], 1);
+    assert_eq!(document["release"]["period"], period);
+    // `a` has six records and rounds to 5; `b` has one and is withheld.
+    assert_eq!(
+        category_cells(document, &period),
+        json!([
+            ["a", 5, "rounded"],
+            ["b", null, "suppressed"],
+            ["_T", 5, "rounded"]
+        ])
+    );
+    let withheld = document["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|cell| cell["dimensions"]["category"] == "b")
+        .expect("the b cell exists");
+    assert_eq!(
+        body["suppressions"],
+        json!([{"cell": withheld, "reason": "minimum-count"}])
+    );
+
+    // Nothing is stored and no version is reserved.
+    assert_eq!(
+        release_versions(&app).await["items"]
+            .as_array()
+            .expect("release items")
+            .len(),
+        0
+    );
+    let published = publish(
+        &app,
+        &period,
+        "after-dry-run",
+        "final",
+        claims("publisher", false),
+    )
+    .await;
+    assert_eq!(published.status(), StatusCode::CREATED);
+    assert_eq!(body_json(published).await["version"], 1);
+
+    // A dry run reads no Idempotency-Key and replays nothing: the same request
+    // answers again, now with the version a publication would take.
+    let again = dry_run(&app, &period, "publisher", claims("publisher", false)).await;
+    assert_eq!(again.status(), StatusCode::OK);
+    assert_eq!(body_json(again).await["document"]["release"]["version"], 2);
+
+    // The audit holds one terminal entry per dry run, the period in clear.
+    let dry_runs: Vec<Value> = database
+        .audit_records()
+        .into_iter()
+        .filter(|record| {
+            record["operationId"] == "statistics.records-by-category.dry-run-release"
+                && record["phase"] == "terminal"
+        })
+        .collect();
+    assert_eq!(dry_runs.len(), 2, "{dry_runs:?}");
+    assert_eq!(dry_runs[0]["outcome"], "returned");
+    assert_eq!(dry_runs[0]["resultCount"], 3);
+    assert_eq!(dry_runs[0]["periodFrom"], period);
+    assert_eq!(dry_runs[0]["periodTo"], period);
+    assert!(dry_runs[0].get("cells").is_none());
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dry_run_of_an_exact_public_values_dataset_reports_no_suppressions() {
+    let mut source = statistics_registry_source();
+    source["statisticalDatasets"][0]["disclosure"] = json!({"type":"exact-public-values"});
+    for field in source["recordTypes"][0]["fields"].as_array_mut().unwrap() {
+        field["classification"] = json!("public");
+    }
+    source["recordTypes"][0]["classification"] = json!("public");
+    let (database, app, period) = dry_run_fixture(source, "package-statistics-dry-run-2").await;
+    let dry = dry_run(&app, &period, "publisher", claims("publisher", false)).await;
+    assert_eq!(dry.status(), StatusCode::OK);
+    let body = body_json(dry).await;
+    assert_eq!(body["suppressions"], json!([]));
+    assert_eq!(
+        category_cells(&body["document"], &period),
+        json!([["a", 6, "exact"], ["b", 1, "exact"], ["_T", 7, "exact"]])
+    );
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dry_run_is_unavailable_to_a_reader_and_a_live_analyst() {
+    let (database, app, period) =
+        dry_run_fixture(statistics_registry_source(), "package-statistics-dry-run-3").await;
+    for profile in ["reader", "analyst"] {
+        let refused = dry_run(&app, &period, profile, claims(profile, false)).await;
+        assert_eq!(refused.status(), StatusCode::NOT_FOUND, "{profile}");
+    }
+    database.cleanup().await;
+}
+
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     compile_statistics_registry(statistics_registry_source())
 }

@@ -28,10 +28,11 @@ use crate::model::{
 };
 use crate::mutation::BoundValue;
 use crate::statistics::{
-    apply_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
-    maximum_measure_characters, period_for_code, period_range, Cell, CellValue, DatasetDocument,
-    DimensionDomain, DisclosureDocument, ExactDocument, GroupedCell, LiveDocument, Measure, Period,
-    PeriodDocument, PeriodGranularity, PeriodKind, PeriodVersionHeader, ReleaseDocument,
+    apply_protected_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
+    dominance_predicate_sql, maximum_measure_characters, period_for_code, period_range, Cell,
+    CellDisclosureInput, CellSuppression, CellValue, Contributor, DatasetDocument, DimensionDomain,
+    DisclosureDocument, DisclosureMethod, ExactDocument, GroupedCell, LiveDocument, Measure,
+    Period, PeriodDocument, PeriodGranularity, PeriodKind, PeriodVersionHeader, ReleaseDocument,
     ReleaseStatus, ReleaseVersionHeader, StatisticsDocument, StatisticsError, WithdrawalDocument,
     WithdrawalReason, MAX_CELLS_PER_RESPONSE,
 };
@@ -54,6 +55,9 @@ pub enum StatisticsReleaseSelection {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatisticsReleaseRefusal {
+    /// A summed field holds a negative value, which the dominance rule cannot
+    /// protect.
+    NegativeValue,
     PeriodNotEnded,
     BeforeFirstPeriod,
     ProvisionalAfterFinal,
@@ -122,6 +126,25 @@ pub struct StatisticsPublishRequest<'a> {
     pub computed_at: DateTime<Utc>,
     pub today: NaiveDate,
     pub deadline: tokio::time::Instant,
+}
+
+pub struct StatisticsDryRunRequest<'a> {
+    pub context: &'a AuthorizedRequestContext,
+    pub dataset_id: &'a str,
+    pub period_code: &'a str,
+    pub status: ReleaseStatus,
+    pub computed_at: DateTime<Utc>,
+    pub today: NaiveDate,
+    pub deadline: tokio::time::Instant,
+}
+
+/// The document a publication made now would store, and the reason each
+/// withheld cell is withheld, ordered by cell index. The reasons exist only
+/// here: no stored or served release document carries them.
+pub struct StatisticsDryRunOutcome {
+    pub document: StatisticsDocument,
+    pub suppressions: Vec<CellSuppression>,
+    pub result_count: usize,
 }
 
 pub struct StatisticsWithdrawalRequest<'a> {
@@ -346,14 +369,10 @@ impl PostgresStatisticsService {
         &self,
         dataset: &CompiledStatisticalDataset,
         period: Period,
-        mut computation: Computation,
+        computation: Computation,
         request: StatisticsPublishRequest<'_>,
         commit: &CommitReach,
     ) -> Result<StatisticsMutationOutcome, StatisticsServiceError> {
-        let history_head = computation
-            .history_head
-            .ok_or(StatisticsServiceError::Unavailable)?;
-        let mut snapshot = computation.snapshot.take();
         let claims = strict_claim_context(&self.registry, request.context, &dataset.unit_entity_id)
             .map_err(map_read_error)?;
         let response_fields = BTreeSet::new();
@@ -421,70 +440,30 @@ impl PostgresStatisticsService {
             };
         }
         lock_release_key(transaction.transaction(), dataset, &period.code).await?;
-        if request.status == ReleaseStatus::Provisional {
-            let final_exists = transaction
-                .transaction()
-                .query_one(
-                    "SELECT EXISTS (
-                         SELECT 1
-                           FROM registry_internal.registry_statistical_release_versions
-                          WHERE dataset_id = $1 AND period_code = $2
-                            AND definition_digest = $3 AND release_status = 'final'
-                     )",
-                    &[&dataset.id, &period.code, &dataset.definition_digest],
-                )
-                .await
-                .map_err(unavailable)?
-                .get::<_, bool>(0);
-            if final_exists {
-                transaction.rollback().await.map_err(unavailable)?;
-                return Err(StatisticsServiceError::ReleaseRefused(
-                    StatisticsReleaseRefusal::ProvisionalAfterFinal,
-                ));
-            }
-        }
-        let row = transaction
-            .transaction()
-            .query_one(
-                "SELECT COALESCE(max(release_version), 0),
-                        COALESCE(max(history_head_position)
-                            FILTER (WHERE definition_digest = $3), -1)
-                   FROM registry_internal.registry_statistical_release_versions
-                  WHERE dataset_id = $1 AND period_code = $2",
-                &[&dataset.id, &period.code, &dataset.definition_digest],
+        let prepared = match self
+            .prepare_release(
+                transaction.transaction(),
+                dataset,
+                &period,
+                computation,
+                request.status,
+                request.computed_at,
             )
             .await
-            .map_err(unavailable)?;
-        let previous_version = row.get::<_, i64>(0);
-        let previous_head = row.get::<_, i64>(1);
-        if previous_head > history_head {
-            transaction.rollback().await.map_err(unavailable)?;
-            return Err(StatisticsServiceError::VersionConflict);
-        }
-        snapshot =
-            revalidate_snapshot_for_persist(transaction.transaction(), history_head, snapshot)
-                .await?;
-        let version = previous_version
-            .checked_add(1)
-            .ok_or(StatisticsServiceError::Unavailable)?;
-        apply_disclosure(&mut computation.cells, dataset.disclosure)
-            .map_err(map_statistics_error)?;
-        let document = document_for(
-            dataset,
-            vec![period.clone()],
-            computation.cells,
-            Some(ReleaseDocument {
-                period: period.code.clone(),
-                version: u64::try_from(version).map_err(|_| StatisticsServiceError::Unavailable)?,
-                status: request.status,
-                snapshot: snapshot.clone(),
-                computed_at: request.computed_at.to_rfc3339(),
-                package_digest: self.expected.package_digest.clone(),
-            }),
-            None,
-            Some(DisclosureDocument::from(dataset.disclosure)),
-            None,
-        )?;
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                transaction.rollback().await.map_err(unavailable)?;
+                return Err(error);
+            }
+        };
+        let PreparedRelease {
+            document,
+            version,
+            history_head,
+            snapshot,
+            ..
+        } = prepared;
         let canonical = canonical_document_and_digest(&document).map_err(map_statistics_error)?;
         let result_count = document.cells.len();
         self.trace_for_test("publish.canonical");
@@ -572,6 +551,178 @@ impl PostgresStatisticsService {
         })
     }
 
+    /// Everything a publication stores, found in `transaction`: the next
+    /// version, the snapshot as it stands now, and the disclosure-controlled
+    /// release document. Publication and the dry run both build the document
+    /// here, so they cannot diverge. Takes no lock; `persist_release` holds the
+    /// release key's, the dry run holds none and reports the version a
+    /// publication would take if no other lands first.
+    async fn prepare_release(
+        &self,
+        transaction: &tokio_postgres::Transaction<'_>,
+        dataset: &CompiledStatisticalDataset,
+        period: &Period,
+        mut computation: Computation,
+        status: ReleaseStatus,
+        computed_at: DateTime<Utc>,
+    ) -> Result<PreparedRelease, StatisticsServiceError> {
+        let history_head = computation
+            .history_head
+            .ok_or(StatisticsServiceError::Unavailable)?;
+        let snapshot = computation.snapshot.take();
+        if status == ReleaseStatus::Provisional {
+            let final_exists = transaction
+                .query_one(
+                    "SELECT EXISTS (
+                         SELECT 1
+                           FROM registry_internal.registry_statistical_release_versions
+                          WHERE dataset_id = $1 AND period_code = $2
+                            AND definition_digest = $3 AND release_status = 'final'
+                     )",
+                    &[&dataset.id, &period.code, &dataset.definition_digest],
+                )
+                .await
+                .map_err(unavailable)?
+                .get::<_, bool>(0);
+            if final_exists {
+                return Err(StatisticsServiceError::ReleaseRefused(
+                    StatisticsReleaseRefusal::ProvisionalAfterFinal,
+                ));
+            }
+        }
+        let row = transaction
+            .query_one(
+                "SELECT COALESCE(max(release_version), 0),
+                        COALESCE(max(history_head_position)
+                            FILTER (WHERE definition_digest = $3), -1)
+                   FROM registry_internal.registry_statistical_release_versions
+                  WHERE dataset_id = $1 AND period_code = $2",
+                &[&dataset.id, &period.code, &dataset.definition_digest],
+            )
+            .await
+            .map_err(unavailable)?;
+        let previous_version = row.get::<_, i64>(0);
+        let previous_head = row.get::<_, i64>(1);
+        if previous_head > history_head {
+            return Err(StatisticsServiceError::VersionConflict);
+        }
+        let snapshot = revalidate_snapshot_for_persist(transaction, history_head, snapshot).await?;
+        let version = previous_version
+            .checked_add(1)
+            .ok_or(StatisticsServiceError::Unavailable)?;
+        let mut cells = computation.cells;
+        let suppressions = match dataset.disclosure {
+            method @ DisclosureMethod::MinimumCountAndRounding { .. } => {
+                let inputs = computation
+                    .inputs
+                    .unwrap_or_else(|| vec![CellDisclosureInput::default(); cells.len()]);
+                let no_sums = BTreeSet::new();
+                let integer_sums = dataset
+                    .sum_disclosure
+                    .as_ref()
+                    .map_or(&no_sums, |sums| &sums.integer_sums);
+                apply_protected_disclosure(
+                    &mut cells,
+                    &inputs,
+                    method,
+                    &dataset.measures,
+                    integer_sums,
+                )
+                .map_err(map_statistics_error)?
+            }
+            DisclosureMethod::ExactPublicValues => Vec::new(),
+        };
+        let document = document_for(
+            dataset,
+            vec![period.clone()],
+            cells,
+            Some(ReleaseDocument {
+                period: period.code.clone(),
+                version: u64::try_from(version).map_err(|_| StatisticsServiceError::Unavailable)?,
+                status,
+                snapshot: snapshot.clone(),
+                computed_at: computed_at.to_rfc3339(),
+                package_digest: self.expected.package_digest.clone(),
+            }),
+            None,
+            Some(DisclosureDocument::for_release(
+                dataset.disclosure,
+                dataset.sum_disclosure.as_ref(),
+            )),
+            None,
+        )?;
+        Ok(PreparedRelease {
+            document,
+            suppressions,
+            version,
+            history_head,
+            snapshot,
+        })
+    }
+
+    /// What a publication made now would store, and why each withheld cell is
+    /// withheld, without storing or reserving anything. Same eligibility,
+    /// computation and refusals as `publish`.
+    pub async fn dry_run(
+        &self,
+        request: StatisticsDryRunRequest<'_>,
+    ) -> Result<StatisticsDryRunOutcome, StatisticsServiceError> {
+        within_deadline(request.deadline, self.dry_run_inner(request)).await
+    }
+
+    async fn dry_run_inner(
+        &self,
+        request: StatisticsDryRunRequest<'_>,
+    ) -> Result<StatisticsDryRunOutcome, StatisticsServiceError> {
+        let dataset = self.publisher_dataset(request.dataset_id, request.context)?;
+        let period = release_period(dataset, request.period_code, request.today)?;
+        self.ensure_release_eligible(dataset, &period, request.status, request.deadline)
+            .await?;
+        let computation = self
+            .compute(
+                dataset,
+                request.context,
+                std::slice::from_ref(&period),
+                period.reference_date,
+                request.deadline,
+                true,
+                dataset.sum_disclosure.is_some(),
+            )
+            .await?;
+        let mut client = self.pool.get().await.map_err(unavailable)?;
+        let transaction = begin_release_transaction(
+            &mut client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            request.deadline,
+        )
+        .await?;
+        let prepared = self
+            .prepare_release(
+                &transaction,
+                dataset,
+                &period,
+                computation,
+                request.status,
+                request.computed_at,
+            )
+            .await;
+        // Nothing was written; the transaction only gave the reads one snapshot.
+        transaction.rollback().await.map_err(unavailable)?;
+        let PreparedRelease {
+            document,
+            suppressions,
+            ..
+        } = prepared?;
+        Ok(StatisticsDryRunOutcome {
+            result_count: document.cells.len(),
+            document,
+            suppressions,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn compute(
         &self,
         dataset: &CompiledStatisticalDataset,
@@ -580,6 +731,7 @@ impl PostgresStatisticsService {
         evaluation_date: NaiveDate,
         deadline: tokio::time::Instant,
         capture_history: bool,
+        protected: bool,
     ) -> Result<Computation, StatisticsServiceError> {
         let entity = self
             .registry
@@ -637,6 +789,7 @@ impl PostgresStatisticsService {
             &predicates.where_sql,
             periods,
             capture_history,
+            protected,
         )?;
         let parameters = predicates
             .values
@@ -668,6 +821,7 @@ impl PostgresStatisticsService {
             ));
         }
         let mut grouped = Vec::new();
+        let mut inputs = BTreeMap::new();
         let mut history_head = None;
         let mut snapshot = None;
         for row in rows {
@@ -723,6 +877,16 @@ impl PostgresStatisticsService {
                     }
                 });
             }
+            if protected {
+                let (input, negative) =
+                    protected_row_inputs(&row, first_value + dataset.measures.len(), dataset)?;
+                if negative {
+                    return Err(StatisticsServiceError::ReleaseRefused(
+                        StatisticsReleaseRefusal::NegativeValue,
+                    ));
+                }
+                inputs.insert((period.clone(), codes.clone()), input);
+            }
             grouped.push(GroupedCell {
                 period,
                 codes,
@@ -741,8 +905,10 @@ impl PostgresStatisticsService {
             &grouped,
         )
         .map_err(map_statistics_error)?;
+        let inputs = protected.then(|| cell_inputs(dataset, &cells, &inputs));
         Ok(Computation {
             cells,
+            inputs,
             history_head,
             snapshot: snapshot.flatten(),
         })
@@ -897,6 +1063,7 @@ impl PostgresStatisticsService {
                 request.today,
                 request.deadline,
                 false,
+                false,
             )
             .await?;
         document_for(
@@ -960,6 +1127,7 @@ impl PostgresStatisticsService {
                 evaluation_date,
                 request.deadline,
                 false,
+                false,
             )
             .await?;
         document_for(
@@ -1009,6 +1177,7 @@ impl PostgresStatisticsService {
                 period.reference_date,
                 request.deadline,
                 true,
+                dataset.sum_disclosure.is_some(),
             )
             .await?;
         self.trace_for_test("publish.computed");
@@ -1615,8 +1784,20 @@ async fn revalidate_snapshot_for_persist(
     }
 }
 
+/// What `prepare_release` found; see there.
+struct PreparedRelease {
+    document: StatisticsDocument,
+    suppressions: Vec<CellSuppression>,
+    version: i64,
+    history_head: i64,
+    snapshot: Option<String>,
+}
+
 struct Computation {
     cells: Vec<Cell>,
+    /// The disclosure inputs of each cell, in cell order, for a protected
+    /// release. Never part of a document.
+    inputs: Option<Vec<CellDisclosureInput>>,
     history_head: Option<i64>,
     snapshot: Option<String>,
 }
@@ -2168,6 +2349,87 @@ fn document_for(
     })
 }
 
+/// What one result row says about its cell: the inputs of the disclosure rules
+/// (`columns` is where `released` begins, see `ProtectedSums`) and whether any
+/// summed value is negative.
+fn protected_row_inputs(
+    row: &tokio_postgres::Row,
+    first: usize,
+    dataset: &CompiledStatisticalDataset,
+) -> Result<(RowDisclosure, bool), StatisticsServiceError> {
+    let count = |column: usize| -> Result<u64, StatisticsServiceError> {
+        row.get::<_, Option<i64>>(column)
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| StatisticsServiceError::Unavailable)?
+            .ok_or(StatisticsServiceError::Unavailable)
+    };
+    let contributors = count(first)?;
+    let mut column = first + 1;
+    let mut sums = BTreeMap::new();
+    for (position, measure) in dataset.measures.iter().enumerate() {
+        if measure.is_sum() {
+            let sum_contributors = count(column)?;
+            let dominant = row.get::<_, Option<bool>>(column + 1).unwrap_or(false);
+            sums.insert(position, (sum_contributors, dominant));
+            column += 2;
+        }
+    }
+    let negative = row
+        .get::<_, Option<bool>>(column)
+        .ok_or(StatisticsServiceError::Unavailable)?;
+    Ok((RowDisclosure { contributors, sums }, negative))
+}
+
+/// The disclosure inputs `compute` read for one cell of the grid.
+struct RowDisclosure {
+    /// Distinct contributors among the cell's records.
+    contributors: u64,
+    /// By measure position: the distinct contributors with a value for the
+    /// summed field, and the p% rule's result.
+    sums: BTreeMap<usize, (u64, bool)>,
+}
+
+/// One input per cell, in cell order. A cell no row came back for has no
+/// records, so no contributors.
+fn cell_inputs(
+    dataset: &CompiledStatisticalDataset,
+    cells: &[Cell],
+    rows: &BTreeMap<(String, Vec<String>), RowDisclosure>,
+) -> Vec<CellDisclosureInput> {
+    cells
+        .iter()
+        .map(|cell| {
+            let codes = dataset
+                .dimensions
+                .iter()
+                .map(|dimension| cell.dimensions.get(&dimension.field).cloned())
+                .collect::<Option<Vec<_>>>();
+            let row = codes.and_then(|codes| rows.get(&(cell.period.clone(), codes)));
+            let position = dataset
+                .measures
+                .iter()
+                .position(|measure| measure.id() == cell.measure);
+            match (row, position) {
+                (Some(row), Some(position)) => match row.sums.get(&position) {
+                    Some((contributors, dominant)) => CellDisclosureInput {
+                        contributors: Some(*contributors),
+                        dominant: *dominant,
+                    },
+                    None => CellDisclosureInput {
+                        contributors: Some(row.contributors),
+                        dominant: false,
+                    },
+                },
+                _ => CellDisclosureInput {
+                    contributors: Some(0),
+                    dominant: false,
+                },
+            }
+        })
+        .collect()
+}
+
 fn map_period_range_error(error: StatisticsError, from: &str, to: &str) -> StatisticsServiceError {
     match error {
         StatisticsError::InvalidPeriodCode { code, .. } => StatisticsServiceError::QueryInvalid {
@@ -2221,6 +2483,7 @@ fn grouped_sql(
     population_where: &str,
     periods: &[Period],
     capture_history: bool,
+    protected: bool,
 ) -> Result<String, StatisticsServiceError> {
     if periods.is_empty() {
         return Err(StatisticsServiceError::QueryInvalid {
@@ -2233,13 +2496,19 @@ fn grouped_sql(
     }
     // A dataset with a non-additive measure computes every total over the unit
     // rows, which costs more per dimension than a cube over base cells.
-    let non_additive = dataset
-        .measures
-        .iter()
-        .any(|measure| !measure.is_additive());
+    //
+    // A protected release (see `ProtectedSums`) does too, since the contributor
+    // counts and largest contributions of a cell are not recoverable from the
+    // base cells.
+    let non_additive = protected
+        || dataset
+            .measures
+            .iter()
+            .any(|measure| !measure.is_additive());
     if non_additive && dataset.dimensions.len() > MAX_NON_ADDITIVE_DIMENSIONS {
         return Err(StatisticsServiceError::Unavailable);
     }
+
     let period_values = periods
         .iter()
         .map(|period| {
@@ -2296,9 +2565,15 @@ fn grouped_sql(
             .position(|(known, _)| *known == field)
             .expect("every measure field was collected")
     };
+    let protected_sums = protected
+        .then(|| ProtectedSums::new(dataset, entity, relations, &field_index))
+        .transpose()?;
     let mut base_select = vec!["periods.code AS period_code".to_owned()];
     base_select.extend(dimension_select);
-    if dataset.dimensions.is_empty() {
+    // Without dimensions the base cells are the finished cells, unless a
+    // protected release needs the rows for its contributor counts.
+    let direct = dataset.dimensions.is_empty() && !protected;
+    if direct {
         // Without dimensions the base cells are the finished cells.
         for (index, measure) in dataset.measures.iter().enumerate() {
             let measure_sql = measure_sql(
@@ -2327,6 +2602,9 @@ fn grouped_sql(
         // One row per record: the cube below computes every measure from rows.
         for (index, (_, expression)) in measure_fields.iter().enumerate() {
             base_select.push(format!("({expression}) AS field_{index}"));
+        }
+        if let Some(sums) = &protected_sums {
+            base_select.push(format!("({}) AS contributor", sums.contributor));
         }
     } else {
         base_select.push("count(*)::bigint AS cell_count".to_owned());
@@ -2402,7 +2680,7 @@ fn grouped_sql(
     // A dataset with a non-additive measure keeps the unit rows: its cube runs
     // over one row per period and record, since the distinct values of a group
     // are not recoverable from the base cells.
-    let group_by = if non_additive && dimension_count > 0 {
+    let group_by = if non_additive && !direct {
         String::new()
     } else {
         format!("GROUP BY {}", base_by.join(", "))
@@ -2416,15 +2694,11 @@ fn grouped_sql(
               WHERE {where_sql}
            {group_by}
          )",
-        base_name = if dimension_count == 0 {
-            "grouped"
-        } else {
-            "base"
-        },
+        base_name = if direct { "grouped" } else { "base" },
         select = base_select.join(", "),
         from_sql = relations.from_sql,
     );
-    let grouped = if dimension_count == 0 {
+    let grouped = if direct {
         base
     } else {
         let cube_select = (0..dimension_count)
@@ -2481,14 +2755,33 @@ fn grouped_sql(
             })
             .collect::<Vec<_>>()
             .join(", ");
+        // Without dimensions (a protected release only) the one cell of a
+        // period is the group of its rows, so there is nothing to cube.
+        let (cube_select, cube_clause) = if dimension_count == 0 {
+            (String::new(), String::new())
+        } else {
+            (
+                format!("{cube_select}, "),
+                format!(", CUBE({cube_columns})"),
+            )
+        };
         format!(
             "{base},
          grouped AS (
-             SELECT base.period_code, {cube_select}, {measure_select}
+             SELECT base.period_code, {cube_select}{measure_select}
                FROM base
-           GROUP BY base.period_code, CUBE({cube_columns})
+           GROUP BY base.period_code{cube_clause}
          )"
         )
+    };
+    // A protected release adds, per cell, the inputs of its disclosure rules.
+    let (grouped, source_cte, input_columns) = match &protected_sums {
+        Some(sums) => (
+            format!("{grouped},\n{}", sums.ctes(dimension_count)),
+            "released",
+            sums.result_columns(),
+        ),
+        None => (grouped, "grouped", String::new()),
     };
     let grouped_columns = (0..dataset.dimensions.len())
         .map(|index| format!("grouped.dimension_{index}"))
@@ -2496,6 +2789,7 @@ fn grouped_sql(
     let result_columns = std::iter::once("grouped.period_code".to_owned())
         .chain(grouped_columns)
         .chain((0..dataset.measures.len()).map(|index| format!("grouped.measure_{index}")))
+        .chain((!input_columns.is_empty()).then_some(input_columns))
         .collect::<Vec<_>>()
         .join(", ");
     if capture_history {
@@ -2516,7 +2810,7 @@ fn grouped_sql(
                   WHERE head.singleton
              )
              SELECT marker.latest_position, marker.snapshot_reference, {result_columns}
-               FROM marker LEFT JOIN grouped ON true
+               FROM marker LEFT JOIN {source_cte} AS grouped ON true
            ORDER BY grouped.period_code, {order_dimensions}",
             order_dimensions = if dataset.dimensions.is_empty() {
                 "grouped.period_code".to_owned()
@@ -2530,7 +2824,7 @@ fn grouped_sql(
     } else {
         Ok(format!(
             "WITH {grouped}
-             SELECT {result_columns} FROM grouped
+             SELECT {result_columns} FROM {source_cte} AS grouped
              ORDER BY grouped.period_code, {order_dimensions}",
             order_dimensions = if dataset.dimensions.is_empty() {
                 "grouped.period_code".to_owned()
@@ -2541,6 +2835,238 @@ fn grouped_sql(
                     .join(", ")
             },
         ))
+    }
+}
+
+/// The SQL of a protected release's disclosure inputs: for every cell, how many
+/// distinct contributors it has and, for each sum, whether the p% rule holds.
+///
+/// The rows are grouped to one row per period, dimension codes and contributor
+/// (`contrib_fine`), whose sums add up across totals; a cube over those rows
+/// (`contrib_cube`) gives every cell's per-contributor sums, and one more
+/// grouping per cell (`disclosure_inputs`) counts the contributors and ranks
+/// their sums. Cubing the per-contributor rows rather than the records keeps the
+/// cube's input to one row per contributor and base cell. A record with no
+/// contributor value groups with the others like it (`GROUP BY` treats NULLs as
+/// one group), so they are one contributor together and cannot collide with a
+/// real reference value. The two largest sums are read from an ordered array
+/// per cell, which holds one element per contributor of that cell at a time.
+///
+/// Only the publish and dry-run paths generate this. The percentage is part of
+/// the statement text sent to PostgreSQL and is returned in no row.
+struct ProtectedSums {
+    contributor: String,
+    percent: u8,
+    /// The distinct summed fields, by position in the measure fields.
+    fields: Vec<usize>,
+    /// For each sum measure: its position among the measures and its field.
+    sums: Vec<(usize, usize)>,
+}
+
+impl ProtectedSums {
+    fn new(
+        dataset: &CompiledStatisticalDataset,
+        entity: &CompiledEntity,
+        relations: &ReadRelations,
+        field_index: &dyn Fn(&str) -> usize,
+    ) -> Result<Self, StatisticsServiceError> {
+        let disclosure = dataset
+            .sum_disclosure
+            .as_ref()
+            .ok_or(StatisticsServiceError::Unavailable)?;
+        let contributor = match &disclosure.contributor {
+            Contributor::EachRecord => format!("({})::text", relations.id_expression),
+            Contributor::Field { field } => {
+                let expression = relations
+                    .field_expression(entity, field)
+                    .map_err(map_read_error)?;
+                if expression.encrypted {
+                    return Err(StatisticsServiceError::Unavailable);
+                }
+                format!("({})::text", expression.sql)
+            }
+        };
+        let mut fields = Vec::new();
+        let mut sums = Vec::new();
+        for (position, measure) in dataset.measures.iter().enumerate() {
+            if let Measure::Sum { field, .. } = measure {
+                let index = field_index(field);
+                if !fields.contains(&index) {
+                    fields.push(index);
+                }
+                sums.push((position, index));
+            }
+        }
+        if fields.is_empty() {
+            return Err(StatisticsServiceError::Unavailable);
+        }
+        Ok(Self {
+            contributor,
+            percent: disclosure.dominance_percent,
+            fields,
+            sums,
+        })
+    }
+
+    fn ctes(&self, dimension_count: usize) -> String {
+        let dimensions = (0..dimension_count)
+            .map(|index| format!("dimension_{index}"))
+            .collect::<Vec<_>>();
+        let list = |alias: &str| {
+            dimensions
+                .iter()
+                .map(|column| format!("{alias}.{column}"))
+                .collect::<Vec<_>>()
+        };
+        let select_list = |alias: &str| {
+            std::iter::once(format!("{alias}.period_code"))
+                .chain(list(alias))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let fine_fields = self
+            .fields
+            .iter()
+            .map(|field| {
+                format!(
+                    "sum((base.field_{field})::numeric) AS sum_{field},
+                     count(base.field_{field}) AS n_{field},
+                     min((base.field_{field})::numeric) AS min_{field}"
+                )
+            })
+            .collect::<Vec<_>>();
+        let fine_keys = std::iter::once("base.period_code".to_owned())
+            .chain(list("base"))
+            .chain(std::iter::once("base.contributor".to_owned()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cube_dimensions = (0..dimension_count)
+            .map(|index| {
+                format!(
+                    "CASE WHEN GROUPING(fine.dimension_{index}) = 1 THEN '_T' ELSE fine.dimension_{index} END AS dimension_{index}"
+                )
+            })
+            .collect::<Vec<_>>();
+        let cube_fields = self
+            .fields
+            .iter()
+            .map(|field| {
+                format!("sum(fine.sum_{field}) AS sum_{field}, sum(fine.n_{field}) AS n_{field}")
+            })
+            .collect::<Vec<_>>();
+        let cube_clause = if dimension_count == 0 {
+            String::new()
+        } else {
+            format!(", CUBE({})", list("fine").join(", "))
+        };
+        let cube_select = std::iter::once("fine.period_code".to_owned())
+            .chain(cube_dimensions)
+            .chain(std::iter::once("fine.contributor".to_owned()))
+            .chain(cube_fields)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let input_fields = self
+            .fields
+            .iter()
+            .map(|field| {
+                format!(
+                    "count(*) FILTER (WHERE cc.n_{field} > 0)::bigint AS contributors_{field},
+                     COALESCE(sum(cc.sum_{field}), 0) AS total_{field},
+                     array_agg(cc.sum_{field} ORDER BY cc.sum_{field} DESC)
+                         FILTER (WHERE cc.n_{field} > 0) AS ranked_{field}"
+                )
+            })
+            .collect::<Vec<_>>();
+        let input_select = std::iter::once(select_list("cc"))
+            .chain(std::iter::once(
+                "count(*)::bigint AS contributors".to_owned(),
+            ))
+            .chain(input_fields)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let join = std::iter::once("grouped.period_code = inputs.period_code".to_owned())
+            .chain(
+                dimensions
+                    .iter()
+                    .map(|column| format!("grouped.{column} = inputs.{column}")),
+            )
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        let sum_columns = self
+            .sums
+            .iter()
+            .map(|(position, field)| {
+                let predicate = dominance_predicate_sql(
+                    &format!("inputs.total_{field}"),
+                    &format!("COALESCE(inputs.ranked_{field}[1], 0)"),
+                    &format!("COALESCE(inputs.ranked_{field}[2], 0)"),
+                    &self.percent.to_string(),
+                );
+                format!(
+                    "inputs.contributors_{field} AS input_contributors_{position},
+                     {predicate} AS input_dominant_{position}"
+                )
+            })
+            .collect::<Vec<_>>();
+        let negative = if self.fields.is_empty() {
+            "false".to_owned()
+        } else {
+            let any = self
+                .fields
+                .iter()
+                .map(|field| format!("fine.min_{field} < 0"))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            format!("(SELECT COALESCE(bool_or({any}), false) FROM contrib_fine AS fine)")
+        };
+        let released_columns = std::iter::once("grouped.*".to_owned())
+            .chain(std::iter::once(
+                "inputs.contributors AS input_contributors".to_owned(),
+            ))
+            .chain(sum_columns)
+            .chain(std::iter::once(format!("{negative} AS input_negative")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "contrib_fine AS (
+                 SELECT {fine_keys}, {fine_fields}
+                   FROM base
+               GROUP BY {fine_keys}
+             ),
+             contrib_cube AS (
+                 SELECT {cube_select}
+                   FROM contrib_fine AS fine
+               GROUP BY fine.period_code, fine.contributor{cube_clause}
+             ),
+             disclosure_inputs AS (
+                 SELECT {input_select}
+                   FROM contrib_cube AS cc
+               GROUP BY {group_keys}
+             ),
+             released AS (
+                 SELECT {released_columns}
+                   FROM grouped
+              LEFT JOIN disclosure_inputs AS inputs ON {join}
+             )",
+            fine_fields = fine_fields.join(", "),
+            group_keys = select_list("cc"),
+        )
+    }
+
+    /// The columns `released` adds, in the order `compute` reads them: the
+    /// cell's contributor count, then a contributor count and the p% result
+    /// for each sum measure, then whether any summed value is negative.
+    fn result_columns(&self) -> String {
+        std::iter::once("grouped.input_contributors".to_owned())
+            .chain(self.sums.iter().flat_map(|(position, _)| {
+                [
+                    format!("grouped.input_contributors_{position}"),
+                    format!("grouped.input_dominant_{position}"),
+                ]
+            }))
+            .chain(std::iter::once("grouped.input_negative".to_owned()))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 

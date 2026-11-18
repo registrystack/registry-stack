@@ -73,6 +73,11 @@ async fn handler(
                 BRegProblemCode::StatisticalDatasetReleaseRefused,
                 Some(("refusalCode", "period-not-ended")),
             ))
+        } else if uri.contains("/statistics/negative-value/") {
+            Some((
+                BRegProblemCode::StatisticalDatasetReleaseRefused,
+                Some(("refusalCode", "negative-value")),
+            ))
         } else if uri.contains("/statistics/invalid-refusal/") {
             Some((
                 BRegProblemCode::StatisticalDatasetReleaseRefused,
@@ -860,6 +865,41 @@ async fn statistics_release_dry_run_maps_a_release_refusal_like_publish() {
     );
     // The exchange is sent once: a dry run is never resent.
     assert_eq!(captured.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn statistics_release_refusal_for_a_negative_summed_value_keeps_its_code() {
+    let (client, _) = client().await;
+    let key = BRegIdempotencyKey::parse("negative-key").unwrap();
+    let published = client
+        .statistics_publish(
+            "negative-value",
+            "2025-01",
+            BRegReleaseStatus::Final,
+            "publisher",
+            &key,
+        )
+        .await
+        .unwrap_err();
+    let dry_run = client
+        .statistics_release_dry_run(
+            "negative-value",
+            "2025-01",
+            BRegReleaseStatus::Final,
+            "publisher",
+        )
+        .await
+        .unwrap_err();
+    for refused in [published, dry_run] {
+        assert_eq!(
+            refused.problem_code(),
+            Some(BRegProblemCode::StatisticalDatasetReleaseRefused)
+        );
+        assert_eq!(
+            refused.refusal_code().map(|value| value.as_str()),
+            Some("negative-value")
+        );
+    }
 }
 
 #[tokio::test]

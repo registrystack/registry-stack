@@ -5599,6 +5599,10 @@ fn statistics_client_diagnostic(
                     "statistics.release.already-withdrawn",
                     "the version has already been withdrawn",
                 ),
+                Some("negative-value") => (
+                    "statistics.release.negative-value",
+                    "a summed field holds a negative value in the period; correct the records before publishing",
+                ),
                 _ => (
                     BRegProblemCode::StatisticalDatasetReleaseRefused.code(),
                     BRegProblemCode::StatisticalDatasetReleaseRefused.detail(),
@@ -15765,6 +15769,11 @@ mod tests {
                 "statistics.release.period-not-ended",
             ),
             (
+                Some(BRegProblemCode::StatisticalDatasetReleaseRefused),
+                Some("negative-value"),
+                "statistics.release.negative-value",
+            ),
+            (
                 Some(BRegProblemCode::StatisticalDatasetVersionConflict),
                 None,
                 "statistical-dataset.version-conflict",
@@ -15873,11 +15882,15 @@ mod tests {
                 let rendered = serde_json::to_value(report).unwrap();
                 assert_eq!(rendered["diagnostics"][0]["code"], expected, "{rendered}");
                 assert!(!rendered.to_string().contains("statistics-token-canary"));
-                if reason.is_some() {
-                    assert!(rendered["diagnostics"][0]["message"]
-                        .as_str()
-                        .unwrap()
-                        .contains("publish after"));
+                if let Some(reason) = reason {
+                    let message = rendered["diagnostics"][0]["message"].as_str().unwrap();
+                    assert!(
+                        message.contains(match reason {
+                            "negative-value" => "negative value",
+                            _ => "publish after",
+                        }),
+                        "{rendered}"
+                    );
                 }
                 // A key past its receipt horizon names the key and says the
                 // earlier request committed, so the operator reads rather than retries.

@@ -154,6 +154,7 @@ postgres_targets=(
   postgres_statistics_history
   postgres_statistics_measures
   postgres_statistics_exact
+  postgres_statistics_protected_sums
   postgres_logical_sql_names
   schema_fingerprint_rehearsal
 )

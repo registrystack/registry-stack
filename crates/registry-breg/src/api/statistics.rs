@@ -13,10 +13,10 @@ use crate::cursor::{
 };
 use crate::model::{CompiledStatisticalDataset, HttpMethod};
 use crate::postgres::{
-    StatisticsExactRequest, StatisticsLiveRequest, StatisticsPublishRequest,
-    StatisticsReleaseListCursor, StatisticsReleaseListRequest, StatisticsReleaseRefusal,
-    StatisticsReleaseSelection, StatisticsSeriesRequest, StatisticsServiceError,
-    StatisticsVersionReadRequest, StatisticsWithdrawalRequest,
+    StatisticsDryRunRequest, StatisticsExactRequest, StatisticsLiveRequest,
+    StatisticsPublishRequest, StatisticsReleaseListCursor, StatisticsReleaseListRequest,
+    StatisticsReleaseRefusal, StatisticsReleaseSelection, StatisticsSeriesRequest,
+    StatisticsServiceError, StatisticsVersionReadRequest, StatisticsWithdrawalRequest,
 };
 use crate::problem::ProblemCode;
 use crate::statistics::{
@@ -50,6 +50,7 @@ pub(super) enum Kind {
     Latest,
     Version,
     Publish,
+    DryRun,
     Withdraw,
 }
 impl Kind {
@@ -62,11 +63,12 @@ impl Kind {
             Self::Latest => "read-latest-release",
             Self::Version => "read-release-version",
             Self::Publish => "publish-release",
+            Self::DryRun => "dry-run-release",
             Self::Withdraw => "withdraw-release",
         }
     }
     fn method(self) -> HttpMethod {
-        if matches!(self, Self::Publish | Self::Withdraw) {
+        if matches!(self, Self::Publish | Self::DryRun | Self::Withdraw) {
             HttpMethod::Post
         } else {
             HttpMethod::Get
@@ -113,6 +115,7 @@ pub(super) fn routes(service: &HttpService) -> Router<Arc<HttpService>> {
                 ("/releases/{period}", Kind::Latest),
                 ("/releases/{period}/versions/{version}", Kind::Version),
                 ("/releases/{period}/versions", Kind::Publish),
+                ("/releases/{period}/versions:dry-run", Kind::DryRun),
                 (
                     "/releases/{period}/versions/{version}/withdrawal",
                     Kind::Withdraw,
@@ -160,7 +163,7 @@ pub(super) fn authorize_with_reason(
             .exact_reads
             .as_ref()
             .is_some_and(|exact| exact.readers.contains(id)),
-        Kind::Publish | Kind::Withdraw => {
+        Kind::Publish | Kind::DryRun | Kind::Withdraw => {
             dataset.releases.as_ref().is_some_and(|r| r.publisher == id)
         }
         _ => dataset.releases.as_ref().is_some_and(|r| {
@@ -185,7 +188,10 @@ pub(super) fn authorize_with_reason(
     claims
         .principal()
         .ok_or(ReadRefusalReason::ProfileAdmission)?;
-    if matches!(kind, Kind::Live | Kind::Publish | Kind::Withdraw) {
+    if matches!(
+        kind,
+        Kind::Live | Kind::Publish | Kind::DryRun | Kind::Withdraw
+    ) {
         let route = service
             .registry
             .routes()
@@ -525,7 +531,7 @@ async fn dispatch(
                 terminal: TerminalAudit {
                     context: context.audit_context().cloned(),
                     outcome: if success {
-                        if route.kind.method() == HttpMethod::Post {
+                        if route.kind.method() == HttpMethod::Post && route.kind != Kind::DryRun {
                             if lifecycle.as_ref().is_some_and(|l: &Lifecycle| l.replayed) {
                                 TerminalAuditOutcome::Replayed
                             } else {
@@ -556,10 +562,12 @@ async fn dispatch(
             },
             dataset_id: &route.dataset,
             period_code: period,
-            period_range: (route.kind == Kind::Exact)
-                .then(|| options.get("from").zip(options.get("to")))
-                .flatten()
-                .filter(|(from, to)| [from, to].into_iter().all(|code| audit_period_code(code))),
+            period_range: match route.kind {
+                Kind::Exact => options.get("from").zip(options.get("to")),
+                Kind::DryRun => period.zip(period),
+                _ => None,
+            }
+            .filter(|(from, to)| [from, to].into_iter().all(|code| audit_period_code(code))),
             version: lifecycle
                 .as_ref()
                 .map(|l| l.header.version as i64)
@@ -613,8 +621,10 @@ async fn execute(
     let backend = service.statistics.as_ref().ok_or_else(unavailable)?;
     let today = statistics_today(&service.registry, now)?;
     let selection = options.selection().map_err(statistics_invalid_query_at)?;
-    let csv =
-        !matches!(route.kind, Kind::List | Kind::Publish | Kind::Withdraw) && negotiate(headers);
+    let csv = !matches!(
+        route.kind,
+        Kind::List | Kind::Publish | Kind::DryRun | Kind::Withdraw
+    ) && negotiate(headers);
     let result = match route.kind {
         Kind::Live => backend
             .live(StatisticsLiveRequest {
@@ -760,6 +770,44 @@ async fn execute(
             let bytes=serde_json::to_vec(&json!({"items":page.items,"pageInfo":{"hasMore":page.has_more,"nextCursor":token}}))
                 .map_err(|_|unavailable())?;
             Ok((bytes_response(bytes, "application/json", false), n))
+        }
+        Kind::DryRun => {
+            // A dry run stores nothing, so it reads no Idempotency-Key.
+            if !single_content_type(headers, "application/json") {
+                return Err(unsupported_media_type());
+            }
+            let bytes = to_bytes(body, 4096).await.map_err(|_| invalid_request())?;
+            let value = parse_json_strict(&bytes).map_err(|_| invalid_request())?;
+            let object = value
+                .as_object()
+                .filter(|o| o.len() == 1)
+                .ok_or_else(invalid_request)?;
+            let status = match object.get("status").and_then(Value::as_str) {
+                Some("provisional") => ReleaseStatus::Provisional,
+                Some("final") => ReleaseStatus::Final,
+                _ => return Err(invalid_request()),
+            };
+            let outcome = backend
+                .dry_run(StatisticsDryRunRequest {
+                    context,
+                    dataset_id: &route.dataset,
+                    period_code: period.ok_or_else(concealed)?,
+                    status,
+                    computed_at: now,
+                    today,
+                    deadline,
+                })
+                .await
+                .map_err(service_problem)?;
+            let body = registry_platform_canonical_json::canonicalize_json(&json!({
+                "document": outcome.document,
+                "suppressions": outcome.suppressions,
+            }))
+            .map_err(|_| unavailable())?;
+            Ok((
+                bytes_response(body, "application/json", true),
+                outcome.result_count,
+            ))
         }
         Kind::Publish | Kind::Withdraw => {
             let key = single_header(headers, IDEMPOTENCY_KEY_HEADER)
@@ -914,6 +962,7 @@ fn service_problem(error: StatisticsServiceError) -> Response {
             Some((
                 "refusalCode",
                 match reason {
+                    StatisticsReleaseRefusal::NegativeValue => "negative-value",
                     StatisticsReleaseRefusal::PeriodNotEnded => "period-not-ended",
                     StatisticsReleaseRefusal::BeforeFirstPeriod => "before-first-period",
                     StatisticsReleaseRefusal::ProvisionalAfterFinal => "provisional-after-final",

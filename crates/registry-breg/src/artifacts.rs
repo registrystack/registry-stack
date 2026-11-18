@@ -4147,7 +4147,8 @@ fn problem_schema() -> Value {
                             "period-not-ended",
                             "before-first-period",
                             "provisional-after-final",
-                            "already-withdrawn"
+                            "already-withdrawn",
+                            "negative-value"
                         ]}
                     }
                 }
