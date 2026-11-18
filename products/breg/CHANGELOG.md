@@ -41,6 +41,12 @@
 
 - `rstack dev` runs BReg projects, including spatial projects, through the
   installed `bregctl`. See [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/).
+- BREAKING: `bregctl examples review` is removed. It drove the removed
+  `caseworkctl dev` and could no longer run. Start BReg and Casework together
+  with `rstack dev`.
+- BREAKING: `bregctl api --client` is removed. Pass `--url URL --header @FILE`
+  with the header file `rstack dev token RUN --as PERSON` writes, or use a
+  saved `--connection`. `bregctl dev` itself remains.
 - BREAKING: `bregctl explain access` emits `v1alpha9` and `bregctl explain
   model` emits `v1alpha8`. Access adds the required
   `claimContract.requesterClients` (every client a Record profile, statistical

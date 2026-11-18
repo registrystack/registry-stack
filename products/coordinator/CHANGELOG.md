@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- BREAKING: `coordinatorctl api --client` is removed. Pass `--url URL --header @FILE`
+  with a bearer header file, or use a saved `--connection`.
 - BREAKING: protected state schema version 6 adds the durable calendar cursor,
   which records each trigger's cron and timezone, and the optional
   service-deadline instant on each Run. Version 5 namespaces are refused;
