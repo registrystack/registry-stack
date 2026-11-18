@@ -130,6 +130,40 @@ fn refresh_requires_a_separate_scoped_service_profile() {
 }
 
 #[test]
+fn a_refresh_grant_outside_the_rule_names_the_rule_and_its_fix() {
+    // A scoped service profile that may Get the root but not List it.
+    let source = PROJECT.replace(
+        "accessProfiles:\n",
+        "accessProfiles:
+  - id: refresher
+    actorKind: service
+    requesterClients: [refresh-worker]
+    principalClaim: registry_principal
+    requiredScopes: [registry.refresh]
+    requiredPurposes: [local-consultation]
+    permissions:
+      records:
+        - {recordType: local-record, operations: [get], readableFields: [local-title], rowBoundaries: unrestricted}
+      refreshExternalProjections: [approved-subjects]
+",
+    );
+    let refusal = compile(&source).expect_err("a refresh grant without root List is refused");
+    let diagnostic = refusal
+        .diagnostics()
+        .iter()
+        .find(|d| d.code == "breg.external-view.invalid-refresh-grant")
+        .unwrap_or_else(|| panic!("{refusal:?}"));
+    for rule in ["indexed", "requiredPurposes", "List", "link's projection"] {
+        assert!(
+            diagnostic.message.contains(rule),
+            "{rule}: {}",
+            diagnostic.message
+        );
+    }
+    assert!(!diagnostic.message.contains("related collection"));
+}
+
+#[test]
 fn external_view_cannot_bypass_a_local_record_permission() {
     let source = PROJECT.replace("operations: [get, list]", "operations: [list]");
     rejects(&source, "breg.external-view.root-read-missing");

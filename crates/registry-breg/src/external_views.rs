@@ -724,7 +724,7 @@ pub(crate) fn compile(
                 });
                 if !may_refresh {
                     error(&mut diagnostics, "invalid-refresh-grant", path.clone(),
-                        "Grant refresh under the projection purpose and a permitted root list. Refreshing labels also requires a refresh grant for the related collection.");
+                        "Grant refresh only for an indexed projection whose purpose is one of the profile's requiredPurposes and that a view link uses, on a view whose root record type the profile may List. To refresh a link's label projection, also grant refresh for the link's projection.");
                 }
             }
             refresh.insert(

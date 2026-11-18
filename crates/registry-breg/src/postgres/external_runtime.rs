@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::api::external_views::{
     ExternalQuery, ExternalQueryMode, ExternalSourceChange, ExternalViewError, ExternalViewRequest,
-    ExternalViewService, RefreshMode, SourceChangeAdmission,
+    ExternalViewService, SourceChangeAdmission,
 };
 use crate::api::{
     AuthorizedRequestContext, RowBoundaryOperator, ServiceFuture, VerifiedRequestClaims,
@@ -122,10 +122,14 @@ enum Position {
         source_key: String,
         sort_value: Option<String>,
     },
-    Refresh {
-        after: RefreshAfter,
-        minimum_sequence: i64,
-    },
+}
+
+/// Which projection of a link a refresh plan writes: the link's own, or the
+/// labels of its members.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RefreshMode {
+    Projection,
+    Labels,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -543,30 +547,19 @@ impl PostgresExternalViewService {
         })
     }
 
-    async fn run(
-        &self,
-        request: ExternalViewRequest,
-        refresh: Option<RefreshMode>,
-    ) -> Result<Value> {
+    async fn run(&self, request: ExternalViewRequest) -> Result<Value> {
         if !profile_is_keyed(self.audit.profile()) {
             return Err(ExternalViewError::Unavailable);
         }
-        let plan = self.plan(&request, refresh)?;
+        let plan = self.plan(&request, None)?;
         let claims = strict_claim_context(&self.registry, &request.context, &plan.root.id)
             .map_err(|_| ExternalViewError::Unavailable)?;
-        let operation = match refresh {
-            Some(RefreshMode::Labels) => "external-projection-label-refresh",
-            Some(RefreshMode::Projection) => "external-projection-refresh",
-            None if plan.projection.mode == ExternalProjectionMode::Live => {
-                "external-view-live-read"
-            }
-            None => "external-view-indexed-read",
-        };
-        let method = if refresh.is_some() {
-            HttpMethod::Post
+        let operation = if plan.projection.mode == ExternalProjectionMode::Live {
+            "external-view-live-read"
         } else {
-            HttpMethod::Get
+            "external-view-indexed-read"
         };
+        let method = HttpMethod::Get;
         let target = request.root.map(|root| root.to_string());
         // The durable attempt precedes both protected SQL and any source I/O.
         let attempt = begin_pre_io_audit(
@@ -584,9 +577,7 @@ impl PostgresExternalViewService {
         )
         .await
         .map_err(|_| ExternalViewError::Unavailable)?;
-        let result = if refresh.is_some() {
-            self.refresh_page(&request, &plan, &claims).await
-        } else if plan.projection.mode == ExternalProjectionMode::Live {
+        let result = if plan.projection.mode == ExternalProjectionMode::Live {
             self.read_live(&request, &plan, &claims, operation).await
         } else {
             self.read_indexed(&request, &plan, &claims, operation).await
@@ -821,19 +812,17 @@ impl PostgresExternalViewService {
             label.as_ref().map(|(_, generation, _)| *generation),
         )?;
         let (query, position) = self.page_request(&request.query, &binding)?;
-        let after = match position {
-            Some(Position::Read {
+        let after = position.map(
+            |Position::Read {
+                 root_id,
+                 source_key,
+                 sort_value,
+             }| PageAfter {
                 root_id,
                 source_key,
                 sort_value,
-            }) => Some(PageAfter {
-                root_id,
-                source_key,
-                sort_value,
-            }),
-            Some(Position::Refresh { .. }) => return Err(ExternalViewError::InvalidCursor),
-            None => None,
-        };
+            },
+        );
         let mut expires_at = plan.source.grant_valid_until().timestamp();
         if let Some((_, _, label_expiry)) = &label {
             expires_at = expires_at.min(*label_expiry);
@@ -1016,6 +1005,22 @@ impl PostgresExternalViewService {
         method: HttpMethod,
         permitted: bool,
     ) -> Result<()> {
+        // The terminal entry carries the same pseudonymous references as its
+        // attempt, so the audit stream never holds a raw principal or root id.
+        let reference = |domain: &str, value: &str| {
+            self.audit
+                .profile()
+                .key_hasher()
+                .audit_reference_hash(domain, &self.expected.activation_id, value)
+                .map_err(|_| ExternalViewError::Unavailable)
+        };
+        let principal_reference = context
+            .principal()
+            .map(|principal| reference("breg-principal-v1", principal))
+            .transpose()?;
+        let record_reference = root
+            .map(|root| reference("breg-record-v1", &root.to_string()))
+            .transpose()?;
         let entry = read_terminal_entry(
             self.audit.profile(),
             ReadTerminalAudit {
@@ -1033,8 +1038,8 @@ impl PostgresExternalViewService {
                     package_revision: self.expected.activation_id.clone(),
                     selected_access_profile: context.selected_profile().to_owned(),
                     purpose_present: context.purpose().is_some(),
-                    principal_reference: context.principal().map(str::to_owned),
-                    record_reference: root.map(|root| root.to_string()),
+                    principal_reference,
+                    record_reference,
                     record_revision: None,
                     result_count: None,
                     field_set_reference: None,
@@ -1218,19 +1223,40 @@ impl ExternalViewService for PostgresExternalViewService {
         self.managed_refresh.get(plan)
     }
 
+    fn runnable_managed_plans(&self) -> ServiceFuture<'_, Result<Vec<String>>> {
+        Box::pin(self.run_runnable_managed_plans())
+    }
+
     fn managed_step(
         &self,
         plan: String,
         request: ExternalViewRequest,
-        start_sweep: bool,
     ) -> ServiceFuture<'_, Result<Value>> {
         Box::pin(async move {
-            timeout_at(
-                request.deadline,
-                self.run_managed_step(&plan, request, start_sweep),
-            )
-            .await
-            .map_err(|_| ExternalViewError::Unavailable)?
+            let configured = self
+                .managed_refresh
+                .get(&plan)
+                .map(|config| config.target.primary_projection.projection.clone());
+            let outcome = timeout_at(request.deadline, self.run_managed_step(&plan, request)).await;
+            if let Some(configured) = configured {
+                let projection = match &outcome {
+                    Ok(Err(ExternalViewError::ProjectionUnavailable(projection))) => projection,
+                    _ => &configured,
+                };
+                log_refresh(projection, &outcome);
+            }
+            outcome.map_err(|_| ExternalViewError::Unavailable)?
+        })
+    }
+
+    fn request_root_refresh(
+        &self,
+        request: ExternalViewRequest,
+    ) -> ServiceFuture<'_, Result<SourceChangeAdmission>> {
+        Box::pin(async move {
+            timeout_at(request.deadline, self.run_root_refresh(request))
+                .await
+                .map_err(|_| ExternalViewError::Unavailable)?
         })
     }
 
@@ -1254,58 +1280,18 @@ impl ExternalViewService for PostgresExternalViewService {
 
     fn read(&self, request: ExternalViewRequest) -> ServiceFuture<'_, Result<Value>> {
         Box::pin(async move {
-            timeout_at(request.deadline, self.run(request, None))
+            timeout_at(request.deadline, self.run(request))
                 .await
                 .map_err(|_| ExternalViewError::Unavailable)?
         })
     }
-
-    fn refresh(
-        &self,
-        request: ExternalViewRequest,
-        mode: RefreshMode,
-    ) -> ServiceFuture<'_, Result<Value>> {
-        Box::pin(async move {
-            let projection = self.refresh_projection(&request, mode);
-            let outcome = timeout_at(request.deadline, self.run(request, Some(mode))).await;
-            if let Some(projection) = projection {
-                log_refresh(&projection, &outcome);
-            }
-            outcome.map_err(|_| ExternalViewError::Unavailable)?
-        })
-    }
 }
 
-impl PostgresExternalViewService {
-    /// The projection a refresh request writes, when its view and link exist.
-    fn refresh_projection(
-        &self,
-        request: &ExternalViewRequest,
-        mode: RefreshMode,
-    ) -> Option<String> {
-        let link = self
-            .registry
-            .external_views()
-            .views
-            .get(&request.view)?
-            .links
-            .iter()
-            .find(|link| link.id.as_str() == request.link)?;
-        match mode {
-            RefreshMode::Projection => Some(link.projection.to_string()),
-            RefreshMode::Labels => link
-                .label
-                .as_ref()
-                .map(|label| label.projection.to_string()),
-        }
-    }
-}
-
-/// A refresh page that fails as a whole is logged by projection and reason
-/// category. Per-key outcomes of a completed page are logged when recorded.
-fn log_refresh(
+/// A refresh step that fails as a whole is logged by projection and reason
+/// category. Per-key outcomes of a completed step are logged when recorded.
+fn log_refresh<T>(
     projection: &str,
-    outcome: &std::result::Result<Result<Value>, tokio::time::error::Elapsed>,
+    outcome: &std::result::Result<Result<T>, tokio::time::error::Elapsed>,
 ) {
     let reason = match outcome {
         Ok(Ok(_)) => return,
@@ -1755,104 +1741,6 @@ impl PostgresExternalViewService {
             supporting_until: None,
             supporting: Vec::new(),
         })
-    }
-
-    async fn refresh_page(
-        &self,
-        request: &ExternalViewRequest,
-        plan: &Plan<'_>,
-        claims: &ClaimContext,
-    ) -> Result<HeldResponse> {
-        let mut session = self.session().await?;
-        let transaction = self
-            .transaction(&mut session, claims, request.deadline)
-            .await?;
-        let scope = active_scope(&transaction, plan.source, plan.projection.id.as_str()).await?;
-        let parent = if let Some(parent) = &plan.label_parent {
-            Some(
-                self.lock_scope(&transaction, parent.source, parent.projection.id.as_str())
-                    .await?,
-            )
-        } else {
-            None
-        };
-        let binding = self.cursor_binding(
-            request,
-            &scope,
-            None,
-            parent.as_ref().map(|(_, generation)| *generation),
-        )?;
-        let (query, position) = self.page_request(&request.query, &binding)?;
-        let (after, minimum_sequence) = match position {
-            Some(Position::Refresh {
-                after,
-                minimum_sequence,
-            }) => (Some(after), minimum_sequence),
-            Some(Position::Read { .. }) => return Err(ExternalViewError::InvalidCursor),
-            None => (
-                None,
-                store::next_refresh_sequence(&transaction, &scope)
-                    .await
-                    .map_err(|_| ExternalViewError::Unavailable)?,
-            ),
-        };
-        let page = self
-            .refresh_rows(
-                &transaction,
-                request,
-                plan,
-                parent.as_ref(),
-                after,
-                query.page_size,
-            )
-            .await?;
-        let (work, reused, invalid) = self
-            .prepare_refresh(
-                &transaction,
-                request,
-                plan,
-                &scope,
-                &page,
-                minimum_sequence,
-                &BTreeSet::new(),
-            )
-            .await?;
-        transaction
-            .commit()
-            .await
-            .map_err(|_| ExternalViewError::Unavailable)?;
-        session.disarm();
-        drop(session);
-
-        let attempted = work.len();
-        let tally = self
-            .execute_refresh(
-                request,
-                plan,
-                claims,
-                &scope,
-                parent.as_ref(),
-                &page,
-                work,
-                None,
-            )
-            .await?;
-        let published = tally.published;
-        let unavailable = invalid + attempted - published;
-        let expires_at = plan.grant_valid_until().timestamp();
-        let mut body = json!({"processed": page.rows.len(), "published": published, "reused": reused, "unavailable": unavailable});
-        if let Some(after) = page.next {
-            body["nextCursor"] = json!(self.next_cursor(
-                binding,
-                query,
-                Position::Refresh {
-                    after,
-                    minimum_sequence
-                },
-                expires_at
-            )?);
-        }
-        Ok(HeldResponse { body, expires_at })
     }
 
     #[allow(clippy::too_many_arguments)] // Selection, per-key tickets and sweep baseline share a transaction.
@@ -2654,14 +2542,14 @@ mod tests {
         let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
         tracing::dispatcher::with_default(&captured.subscriber(), || {
             log_refresh("person-indexed", &Ok(Ok(json!({"published": 1}))));
-            log_refresh("person-indexed", &Ok(Err(ExternalViewError::InvalidCursor)));
-            log_refresh(
+            log_refresh::<Value>("person-indexed", &Ok(Err(ExternalViewError::InvalidCursor)));
+            log_refresh::<Value>(
                 "person-labels",
                 &Ok(Err(ExternalViewError::ProjectionUnavailable(
                     "person-labels".to_owned(),
                 ))),
             );
-            log_refresh("person-indexed", &Err(elapsed));
+            log_refresh::<Value>("person-indexed", &Err(elapsed));
         });
         let logs = captured.text();
         assert_eq!(
@@ -2907,6 +2795,7 @@ mod postgres_tests {
     struct Served {
         fixture: Activated,
         router: axum::Router,
+        http: Arc<crate::api::HttpService>,
         service: Arc<PostgresExternalViewService>,
         scope: ProjectionScope,
         audit: crate::audit::test_support::AuditCapture,
@@ -2989,13 +2878,63 @@ mod postgres_tests {
                 ),
             )
             .with_external_views(service.clone());
+            let http = Arc::new(http);
             Self {
-                router: crate::api::router(Arc::new(http)),
+                router: crate::api::router(Arc::clone(&http)),
+                http,
                 fixture,
                 service,
                 scope,
                 audit,
             }
+        }
+
+        /// Run one in-process worker tick and return the `holders` plan's
+        /// step reports, empty when the plan had nothing due or ready.
+        async fn tick(&self) -> Vec<Value> {
+            let mut steps = Vec::new();
+            for tick in crate::api::external_views::managed_refresh_tick(&self.http).await {
+                assert_eq!(tick.plan, "holders");
+                assert!(tick.failure.is_none(), "{:?}", tick.failure);
+                steps.extend(tick.steps);
+            }
+            steps
+        }
+
+        /// POST `uri` with no body, returning the status and the JSON body
+        /// (null when empty).
+        async fn post(
+            &self,
+            uri: &str,
+            claims: crate::api::VerifiedRequestClaims,
+        ) -> (axum::http::StatusCode, Value) {
+            use tower::ServiceExt;
+            let mut request = axum::http::Request::post(uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            request.extensions_mut().insert(claims);
+            let response = self.router.clone().oneshot(request).await.unwrap();
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            (
+                status,
+                serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
+            )
+        }
+
+        async fn queued(&self) -> i64 {
+            self.fixture
+                .migration
+                .query_one(
+                    "SELECT count(*) FROM registry_internal.registry_external_refresh_work
+                     WHERE plan_id='holders'",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0)
         }
 
         /// POST `body` to the named action of the `holders` refresh plan,
@@ -4214,8 +4153,6 @@ mod postgres_tests {
     #[tokio::test]
     async fn managed_refresh_resumes_sweeps_and_rereads_only_the_notified_subject() {
         use axum::http::StatusCode;
-        use registry_platform_oidc::ActorKind;
-        use tower::ServiceExt;
         let batch = |keys: &[&str], revision: &str| {
             json!({
                 "request":{"endpoint":"synthetic-registry","method":"POST","path":"/people/batch","body":{
@@ -4259,81 +4196,28 @@ mod postgres_tests {
             Some(managed_person_plan()),
         )
         .await;
-        let actor = |client: &str, principal: &str, scope: &str, tenant: &str| {
-            crate::api::VerifiedRequestClaims::authenticated(
-                "registry_principal",
-                principal,
-                BTreeSet::from([scope.to_owned()]),
-                Some("consultation".to_owned()),
-                BTreeMap::from([(
-                    "tenant".to_owned(),
-                    crate::api::VerifiedClaimValue::direct_string_set([tenant]).unwrap(),
-                )]),
-            )
-            .unwrap()
-            .with_contextual_authority(
-                Some(ActorKind::Service),
-                Some(client.to_owned()),
-                None,
-                None,
-                BTreeMap::new(),
-            )
-            .unwrap()
-        };
-        let worker = actor("worker", "worker-principal", "registry.refresh", "allowed");
-        let wrong_worker = actor("worker", "worker-principal", "registry.refresh", "denied");
-        let notifier = actor(
-            "people-notifier",
-            "notifier-principal",
-            "people.changed",
-            "allowed",
-        );
-        let post = |action: &str, claims: crate::api::VerifiedRequestClaims, body: Value| {
-            let router = served.router.clone();
-            let mut request =
-                axum::http::Request::post(format!("/v1/external-refresh-plans/holders/{action}"))
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(axum::body::Body::from(body.to_string()))
-                    .unwrap();
-            request.extensions_mut().insert(claims);
-            async move {
-                let response = router.oneshot(request).await.unwrap();
-                let status = response.status();
-                let body = axum::body::to_bytes(response.into_body(), 4096)
-                    .await
-                    .unwrap();
-                (
-                    status,
-                    serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
-                )
-            }
-        };
+        let worker = service_actor("worker", "worker-principal", "registry.refresh");
+        let notifier = service_actor("people-notifier", "notifier-principal", "people.changed");
         let change = |selector: &str| json!({"projection":"people", "selector":selector});
         assert_eq!(
-            post("step", wrong_worker, json!({})).await.0,
-            StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            post("step", notifier.clone(), json!({})).await.0,
-            StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            post("source-changes", worker.clone(), change("first"))
+            served
+                .post_plan("source-changes", worker, change("first"))
                 .await
                 .0,
-            StatusCode::NOT_FOUND
+            StatusCode::NOT_FOUND,
+            "the worker identity is not a notifier"
         );
 
-        let (status, first) = post("step", worker.clone(), json!({})).await;
-        assert_eq!(status, StatusCode::OK, "{first}");
-        assert_eq!(first["published"], 2, "{first}");
-        assert_eq!(first["moreWork"], true, "{first}");
-        let (status, second) = post("step", worker.clone(), json!({})).await;
-        assert_eq!(status, StatusCode::OK, "{second}");
-        assert_eq!(second["published"], 1, "{second}");
-        assert_eq!(second["sweepCompleted"], true, "{second}");
-        let (_, idle) = post("step", worker.clone(), json!({})).await;
-        assert_eq!(idle["processed"], 0, "{idle}");
+        // A registered plan whose epoch has no snapshots is due, so the
+        // first tick sweeps every eligible root in two pages.
+        let swept = served.tick().await;
+        assert_eq!(swept.len(), 2, "{swept:?}");
+        assert_eq!(swept[0]["published"], 2, "{swept:?}");
+        assert_eq!(swept[0]["moreWork"], true, "{swept:?}");
+        assert_eq!(swept[1]["published"], 1, "{swept:?}");
+        assert_eq!(swept[1]["sweepCompleted"], true, "{swept:?}");
+        assert_eq!(swept[1]["moreWork"], false, "{swept:?}");
+        assert!(served.tick().await.is_empty(), "nothing is due or ready");
         let expiry = || async {
             served.fixture.migration.query_one(
                 "SELECT expires_at FROM registry_internal.registry_external_projection_snapshots
@@ -4343,10 +4227,14 @@ mod postgres_tests {
         };
         let original_expiry = expiry().await;
 
-        let accepted = post("source-changes", notifier.clone(), change("first")).await;
+        let accepted = served
+            .post_plan("source-changes", notifier.clone(), change("first"))
+            .await;
         assert_eq!(accepted.0, StatusCode::ACCEPTED);
         assert_eq!(
-            post("source-changes", notifier.clone(), change("first")).await,
+            served
+                .post_plan("source-changes", notifier.clone(), change("first"))
+                .await,
             accepted
         );
         let queued: i64 = served
@@ -4367,15 +4255,18 @@ mod postgres_tests {
         // The protected fixture root is indistinguishable from the eligible
         // one at admission, but never causes a source request.
         assert_eq!(
-            post("source-changes", notifier, change(ROOTS[3].1)).await,
+            served
+                .post_plan("source-changes", notifier, change(ROOTS[3].1))
+                .await,
             accepted
         );
-        let (_, targeted) = post("step", worker.clone(), json!({})).await;
-        assert_eq!(targeted["processed"], 2, "{targeted}");
-        assert_eq!(targeted["published"], 0, "{targeted}");
-        assert_eq!(targeted["settled"], 1, "{targeted}");
-        assert_eq!(targeted["retried"], 1, "{targeted}");
-        assert_eq!(targeted["moreWork"], false, "{targeted}");
+        let targeted = served.tick().await;
+        assert_eq!(targeted.len(), 1, "{targeted:?}");
+        assert_eq!(targeted[0]["processed"], 2, "{targeted:?}");
+        assert_eq!(targeted[0]["published"], 0, "{targeted:?}");
+        assert_eq!(targeted[0]["settled"], 1, "{targeted:?}");
+        assert_eq!(targeted[0]["retried"], 1, "{targeted:?}");
+        assert_eq!(targeted[0]["moreWork"], false, "{targeted:?}");
         // An upstream HTTP 403 is an unavailable source response. It
         // leaves the accepted cache expiry intact and retries this key.
         assert_eq!(expiry().await, original_expiry);
@@ -4389,9 +4280,10 @@ mod postgres_tests {
             )
             .await
             .unwrap();
-        let (_, retried) = post("step", worker.clone(), json!({})).await;
-        assert_eq!(retried["published"], 1, "{retried}");
-        assert_eq!(retried["settled"], 1, "{retried}");
+        let retried = served.tick().await;
+        assert_eq!(retried.len(), 1, "{retried:?}");
+        assert_eq!(retried[0]["published"], 1, "{retried:?}");
+        assert_eq!(retried[0]["settled"], 1, "{retried:?}");
         let caller = reader("reader-principal", &["allowed"]);
         let lookup = |root| {
             format!("/v1/external-views/view/people-link/records/{root}?accessProfile=reader")
@@ -4412,10 +4304,10 @@ mod postgres_tests {
         served.fixture.migration.execute(
             "UPDATE registry_internal.registry_external_refresh_plans SET next_due_at=clock_timestamp() WHERE plan_id='holders'", &[],
         ).await.unwrap();
-        let (_, page) = post("step", worker.clone(), json!({})).await;
-        assert_eq!(page["published"], 2, "{page}");
-        let (_, page) = post("step", worker, json!({})).await;
-        assert_eq!(page["sweepCompleted"], true, "{page}");
+        let resweep = served.tick().await;
+        assert_eq!(resweep.len(), 2, "{resweep:?}");
+        assert_eq!(resweep[0]["published"], 2, "{resweep:?}");
+        assert_eq!(resweep[1]["sweepCompleted"], true, "{resweep:?}");
         let (_, _, reconciled) = served.send(&lookup(ROOTS[2].0), caller).await;
         assert_eq!(
             reconciled["records"][0]["fields"]["family-name"], "family-third-missed-notification",
@@ -4428,8 +4320,6 @@ mod postgres_tests {
     #[tokio::test]
     async fn managed_related_labels_require_a_current_parent_and_local_change_reuses_it() {
         use axum::http::StatusCode;
-        use registry_platform_oidc::ActorKind;
-        use tower::ServiceExt;
         let endpoints = || {
             serde_json::from_value(json!([{"type":"endpoint","endpoint":"synthetic-registry"}]))
                 .unwrap()
@@ -4509,62 +4399,21 @@ mod postgres_tests {
             .await
             .unwrap();
 
-        let actor = |client: &str, principal: &str, scope: &str| {
-            crate::api::VerifiedRequestClaims::authenticated(
-                "registry_principal",
-                principal,
-                BTreeSet::from([scope.to_owned()]),
-                Some("consultation".to_owned()),
-                BTreeMap::from([(
-                    "tenant".to_owned(),
-                    crate::api::VerifiedClaimValue::direct_string_set(["allowed"]).unwrap(),
-                )]),
-            )
-            .unwrap()
-            .with_contextual_authority(
-                Some(ActorKind::Service),
-                Some(client.to_owned()),
-                None,
-                None,
-                BTreeMap::new(),
-            )
-            .unwrap()
-        };
-        let worker = actor("worker", "worker-principal", "registry.refresh");
-        let notifier = actor("people-notifier", "notifier-principal", "people.changed");
-        let post = |action: &str, claims: crate::api::VerifiedRequestClaims, body: Value| {
-            let router = served.router.clone();
-            let mut request =
-                axum::http::Request::post(format!("/v1/external-refresh-plans/holders/{action}"))
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(axum::body::Body::from(body.to_string()))
-                    .unwrap();
-            request.extensions_mut().insert(claims);
-            async move {
-                let response = router.oneshot(request).await.unwrap();
-                let status = response.status();
-                let body = axum::body::to_bytes(response.into_body(), 4096)
-                    .await
-                    .unwrap();
-                (
-                    status,
-                    serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
-                )
-            }
-        };
+        let notifier = service_actor("people-notifier", "notifier-principal", "people.changed");
         let change = |selector: &str| json!({"projection":"people", "selector":selector});
         for selector in ["alpha", "hidden"] {
             assert_eq!(
-                post("source-changes", notifier.clone(), change(selector))
+                served
+                    .post_plan("source-changes", notifier.clone(), change(selector))
                     .await
                     .0,
                 StatusCode::ACCEPTED
             );
         }
-        let (status, first) = post("step", worker.clone(), json!({})).await;
-        assert_eq!(status, StatusCode::OK, "{first}");
-        assert_eq!(first["settled"], 2, "{first}");
-        assert_eq!(first["published"], 1, "{first}");
+        let first = served.tick().await;
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert_eq!(first[0]["settled"], 2, "{first:?}");
+        assert_eq!(first[0]["published"], 1, "{first:?}");
         served
             .fixture
             .publish_collection(&parent, "first", &[("member", json!({"holder":"beta"}))])
@@ -4589,18 +4438,27 @@ mod postgres_tests {
         .unwrap();
         transaction.commit().await.unwrap();
         drop(client);
-        let (status, parent_step) = post("step", worker.clone(), json!({})).await;
-        assert_eq!(status, StatusCode::OK, "{parent_step}");
-        assert_eq!(parent_step["reused"], 1, "{parent_step}");
-        assert_eq!(parent_step["moreWork"], true, "{parent_step}");
+        // The local change re-reads no parent: the current parent is reused
+        // and its new holder becomes label work the same tick settles.
+        let mut steps = served.tick().await;
+        assert_eq!(steps[0]["reused"], 1, "{steps:?}");
+        assert_eq!(steps[0]["moreWork"], true, "{steps:?}");
         assert_eq!(
-            post("source-changes", notifier, change("alpha")).await.0,
+            served
+                .post_plan("source-changes", notifier, change("alpha"))
+                .await
+                .0,
             StatusCode::ACCEPTED
         );
-        let (status, label_step) = post("step", worker, json!({})).await;
-        assert_eq!(status, StatusCode::OK, "{label_step}");
-        assert_eq!(label_step["settled"], 2, "{label_step}");
-        assert_eq!(label_step["published"], 1, "{label_step}");
+        steps.extend(served.tick().await);
+        let total = |field: &str| {
+            steps[1..]
+                .iter()
+                .map(|step| step[field].as_i64().unwrap())
+                .sum::<i64>()
+        };
+        assert_eq!(total("settled"), 2, "{steps:?}");
+        assert_eq!(total("published"), 1, "{steps:?}");
         transcript.finish().unwrap();
         parent_transcript.finish().unwrap();
         served.fixture.cleanup().await;
@@ -4635,10 +4493,213 @@ mod postgres_tests {
     }
 
     /// Settled work leaves no queue row and no receipt. The audit log is the
-    /// durable record: every step and every admitted source change writes an
-    /// attempt and a terminal entry under its own operation.
+    /// durable record: every worker step writes an attempt and a terminal
+    /// entry under the configured service principal, and every admitted
+    /// source change and root refresh request writes its own pair under its
+    /// caller.
     #[tokio::test]
     async fn settled_refresh_work_leaves_paired_audit_entries_and_no_receipt() {
+        use axum::http::StatusCode;
+        let batch = |keys: &[&str], revision: &str| {
+            json!({
+                "request":{"endpoint":"synthetic-registry","method":"POST","path":"/people/batch","body":{
+                    "type":"batch","keys":keys,"fields":["family-name"]
+                }},
+                "response":{"status":200,"body":{"records":keys.iter().map(|key| json!({
+                    "subject":key,"state":"found","properties":{"family-name":format!("family-{key}-{revision}")}
+                })).collect::<Vec<_>>()}}
+            })
+        };
+        let transcript = Arc::new(
+            registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                serde_json::from_value(
+                    json!([{"type":"endpoint","endpoint":"synthetic-registry"}]),
+                )
+                .unwrap(),
+                serde_json::from_value(json!([
+                    batch(&["first", "second"], "initial"),
+                    batch(&["third"], "initial"),
+                    batch(&["first"], "corrected"),
+                    batch(&["second"], "corrected"),
+                ]))
+                .unwrap(),
+            ),
+        );
+        let mut sources = indexed_sources();
+        crate::external_source::tests::add_indexed_binding(
+            &mut sources,
+            "people",
+            "family-name",
+            Arc::clone(&transcript),
+        );
+        let served = Served::with_refresh(
+            &desk_project(),
+            sources,
+            Duration::from_secs(2),
+            Some(managed_person_plan()),
+        )
+        .await;
+        let receipts_absent: bool = served
+            .fixture
+            .migration
+            .query_one(
+                "SELECT to_regclass('registry_internal.registry_external_refresh_receipts') IS NULL",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert!(receipts_absent, "install creates no refresh receipts table");
+        let notifier = service_actor("people-notifier", "notifier-principal", "people.changed");
+
+        let swept = served.tick().await;
+        assert_eq!(swept.len(), 2, "{swept:?}");
+        assert_eq!(swept[1]["sweepCompleted"], true, "{swept:?}");
+        let (status, _) = served
+            .post_plan(
+                "source-changes",
+                notifier,
+                json!({"projection":"people","selector":"first"}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let targeted = served.tick().await;
+        assert_eq!(targeted.len(), 1, "{targeted:?}");
+        assert_eq!(targeted[0]["settled"], 1, "{targeted:?}");
+        assert_eq!(targeted[0]["published"], 1, "{targeted:?}");
+        let (status, body) = served
+            .post(&root_refresh(ROOTS[1].0, "desk"), desk_client())
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let refreshed = served.tick().await;
+        assert_eq!(refreshed.len(), 1, "{refreshed:?}");
+        assert_eq!(refreshed[0]["settled"], 1, "{refreshed:?}");
+        assert_eq!(refreshed[0]["published"], 1, "{refreshed:?}");
+        assert_eq!(served.queued().await, 0, "settlement removes the work row");
+
+        let entries = served.audit.entries();
+        let principal = |name: &str| {
+            json!(served
+                .service
+                .audit
+                .profile()
+                .key_hasher()
+                .audit_reference_hash(
+                    "breg-principal-v1",
+                    &served.fixture.expected.activation_id,
+                    name
+                )
+                .unwrap())
+        };
+        let phase = |operation: &str, phase: &str| {
+            entries
+                .iter()
+                .filter(|entry| {
+                    entry["record"]["operationId"] == operation && entry["record"]["phase"] == phase
+                })
+                .map(|entry| &entry["record"])
+                .collect::<Vec<_>>()
+        };
+        for (operation, count, actor) in [
+            ("external-refresh-plan-step", 4, "worker-principal"),
+            (
+                "external-refresh-plan-source-change",
+                1,
+                "notifier-principal",
+            ),
+            ("external-projection-refresh", 1, "desk-principal"),
+        ] {
+            let attempts = phase(operation, "attempt");
+            let terminals = phase(operation, "terminal");
+            assert_eq!(attempts.len(), count, "{operation}: {entries:?}");
+            assert_eq!(
+                attempts
+                    .iter()
+                    .map(|record| &record["requestId"])
+                    .collect::<Vec<_>>(),
+                terminals
+                    .iter()
+                    .map(|record| &record["requestId"])
+                    .collect::<Vec<_>>(),
+                "{operation}: each attempt has its own terminal entry"
+            );
+            assert!(
+                terminals
+                    .iter()
+                    .all(|record| record["outcome"] == "returned"),
+                "{operation}: {terminals:?}"
+            );
+            // The attempt names the actor; its terminal entry shares the
+            // attempt's request id.
+            assert!(
+                attempts
+                    .iter()
+                    .all(|record| record["principalReference"] == principal(actor)),
+                "{operation} is recorded under {actor}: {entries:?}"
+            );
+            // The terminal entry carries the attempt's pseudonymous principal
+            // and record references, never the raw principal or root id.
+            for (attempt, terminal) in attempts.iter().zip(&terminals) {
+                for reference in ["principalReference", "recordReference"] {
+                    assert_eq!(
+                        terminal.get(reference),
+                        attempt.get(reference).filter(|value| !value.is_null()),
+                        "{operation}: {reference} of {terminal:?}"
+                    );
+                }
+            }
+        }
+        let root_refresh = phase("external-projection-refresh", "attempt");
+        assert!(
+            root_refresh[0]["recordReference"].is_string(),
+            "the root refresh attempt names its root: {root_refresh:?}"
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry["record"]["operationId"] != "external-projection-label-refresh"),
+            "{entries:?}"
+        );
+        transcript.finish().unwrap();
+        served.fixture.cleanup().await;
+    }
+
+    /// [`labelled_members_project`] plus `desk`: a staff application's
+    /// service client that may read one local root and refresh the person
+    /// projection for it.
+    fn desk_project() -> Value {
+        let mut project = labelled_members_project();
+        project["accessProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"desk","principalClaim":"registry_principal","actorKind":"service",
+                "requesterClients":["desk-app"],"requiredScopes":["registry.refresh-one"],
+                "requiredPurposes":["consultation"],
+                "permissions":{
+                    "records":[{"recordType":"local-record","operations":["get","list"],"rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}],
+                    "refreshExternalProjections":["people"]
+                }
+            }));
+        project
+    }
+
+    fn desk_client() -> crate::api::VerifiedRequestClaims {
+        service_actor("desk-app", "desk-principal", "registry.refresh-one")
+    }
+
+    fn root_refresh(root: &str, profile: &str) -> String {
+        format!(
+            "/v1/external-views/view/people-link/records/{root}/refresh?accessProfile={profile}"
+        )
+    }
+
+    /// A staff application's service client asks for one root after a
+    /// correction at the source. The in-process worker re-reads that root's
+    /// key on its next tick, so the new value is served without waiting for
+    /// the plan's sweep.
+    #[tokio::test]
+    async fn a_root_refresh_shows_a_source_correction_after_one_worker_tick() {
         use axum::http::StatusCode;
         let batch = |keys: &[&str], revision: &str| {
             json!({
@@ -4672,89 +4733,239 @@ mod postgres_tests {
             Arc::clone(&transcript),
         );
         let served = Served::with_refresh(
+            &desk_project(),
+            sources,
+            Duration::from_secs(2),
+            Some(managed_person_plan()),
+        )
+        .await;
+        assert_eq!(
+            served.tick().await.len(),
+            2,
+            "the first sweep fills the view"
+        );
+        let caller = reader("reader-principal", &["allowed"]);
+        let lookup = |root| {
+            format!("/v1/external-views/view/people-link/records/{root}?accessProfile=reader")
+        };
+        let family = |body: &Value| body["records"][0]["fields"]["family-name"].clone();
+        let (_, _, before) = served.send(&lookup(ROOTS[0].0), caller.clone()).await;
+        assert_eq!(family(&before), "family-first-initial", "{before}");
+
+        // Only a profile that may Get the root and refresh its projection is
+        // admitted. The reader may Get but not refresh, and the worker's
+        // profile may refresh but only List. A root outside the caller's
+        // rows is concealed. None of them queues work.
+        for (uri, claims) in [
+            (root_refresh(ROOTS[0].0, "reader"), caller.clone()),
+            (
+                root_refresh(ROOTS[0].0, "refresh"),
+                service_actor("worker", "worker-principal", "registry.refresh"),
+            ),
+            (root_refresh(ROOTS[3].0, "desk"), desk_client()),
+            (
+                format!("{}&$top=1", root_refresh(ROOTS[0].0, "desk")),
+                desk_client(),
+            ),
+        ] {
+            let (status, body) = served.post(&uri, claims).await;
+            assert!(
+                matches!(status, StatusCode::NOT_FOUND | StatusCode::BAD_REQUEST),
+                "{uri}: {status} {body}"
+            );
+        }
+        assert_eq!(served.queued().await, 0);
+
+        let (status, body) = served
+            .post(&root_refresh(ROOTS[0].0, "desk"), desk_client())
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        assert_eq!(body, Value::Null, "a queued refresh has no body");
+        assert_eq!(served.queued().await, 1);
+        let refreshed = served.tick().await;
+        assert_eq!(refreshed.len(), 1, "{refreshed:?}");
+        assert_eq!(refreshed[0]["published"], 1, "{refreshed:?}");
+        let (_, _, after) = served.send(&lookup(ROOTS[0].0), caller.clone()).await;
+        assert_eq!(family(&after), "family-first-corrected", "{after}");
+        let (_, _, other) = served.send(&lookup(ROOTS[2].0), caller).await;
+        assert_eq!(family(&other), "family-third-initial", "{other}");
+
+        // No caller drives the plan or pages a whole link over HTTP.
+        for uri in [
+            "/v1/external-refresh-plans/holders/step".to_owned(),
+            "/v1/external-views/view/people-link/refresh?accessProfile=refresh".to_owned(),
+            "/v1/external-views/view/members-link/refresh-labels?accessProfile=refresh".to_owned(),
+        ] {
+            let (status, _) = served
+                .post(
+                    &uri,
+                    service_actor("worker", "worker-principal", "registry.refresh"),
+                )
+                .await;
+            assert!(
+                matches!(
+                    status,
+                    StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+                ),
+                "{uri}: {status}"
+            );
+        }
+        let (status, _, document) = served
+            .send("/openapi.json?accessProfile=desk", desk_client())
+            .await;
+        assert_eq!(status, StatusCode::OK, "{document}");
+        let paths = document["paths"].as_object().unwrap();
+        assert!(
+            paths.contains_key("/v1/external-views/view/people-link/records/{root}/refresh"),
+            "{:?}",
+            paths.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            paths.keys().all(|path| !path.ends_with("/step")
+                && !path.ends_with("/refresh-labels")
+                && !path.ends_with("-link/refresh")),
+            "{:?}",
+            paths.keys().collect::<Vec<_>>()
+        );
+        transcript.finish().unwrap();
+        served.fixture.cleanup().await;
+    }
+
+    /// A root refresh the HTTP layer admitted but the runtime cannot queue,
+    /// because the link's projection has no source binding or no configured
+    /// plan refreshes the link, is audited as a record route's refusal is:
+    /// an attempt under the caller and a refused terminal entry.
+    #[tokio::test]
+    async fn a_root_refresh_refused_after_admission_leaves_an_attempt_and_a_refused_terminal() {
+        use axum::http::StatusCode;
+        let transcript = Arc::new(
+            registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                serde_json::from_value(
+                    json!([{"type":"endpoint","endpoint":"synthetic-registry"}]),
+                )
+                .unwrap(),
+                Vec::new(),
+            ),
+        );
+        let mut bound = indexed_sources();
+        crate::external_source::tests::add_indexed_binding(
+            &mut bound,
+            "people",
+            "family-name",
+            Arc::clone(&transcript),
+        );
+        for (case, sources) in [
+            ("no source binding", indexed_sources()),
+            ("no configured plan", bound),
+        ] {
+            let served = Served::with(&desk_project(), sources, Duration::from_secs(2)).await;
+            let (status, body) = served
+                .post(&root_refresh(ROOTS[0].0, "desk"), desk_client())
+                .await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{case}: {body}");
+            assert_eq!(served.queued().await, 0, "{case}");
+            let entries = served.audit.entries();
+            let records = |phase: &str| {
+                entries
+                    .iter()
+                    .map(|entry| &entry["record"])
+                    .filter(|record| {
+                        record["operationId"] == "external-projection-refresh"
+                            && record["phase"] == phase
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let (attempts, terminals) = (records("attempt"), records("terminal"));
+            assert_eq!(attempts.len(), 1, "{case}: {entries:?}");
+            assert_eq!(terminals.len(), 1, "{case}: {entries:?}");
+            assert_eq!(
+                terminals[0]["requestId"], attempts[0]["requestId"],
+                "{case}"
+            );
+            assert_eq!(terminals[0]["outcome"], "refused", "{case}: {terminals:?}");
+            assert_eq!(
+                terminals[0]["principalReference"], attempts[0]["principalReference"],
+                "{case}"
+            );
+            assert!(
+                attempts[0]["recordReference"].is_string(),
+                "{case}: {attempts:?}"
+            );
+            served.fixture.cleanup().await;
+        }
+        transcript.finish().unwrap();
+    }
+
+    /// A plan whose projection scope was purged cannot step. The worker
+    /// records that as an invalid binding, logs it once and leaves the plan
+    /// until its next interval instead of retrying it every tick.
+    #[tokio::test]
+    async fn a_purged_projection_defers_its_plan_by_one_interval() {
+        use tracing::instrument::WithSubscriber;
+        let transcript = Arc::new(
+            registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                serde_json::from_value(
+                    json!([{"type":"endpoint","endpoint":"synthetic-registry"}]),
+                )
+                .unwrap(),
+                Vec::new(),
+            ),
+        );
+        let mut sources = indexed_sources();
+        crate::external_source::tests::add_indexed_binding(
+            &mut sources,
+            "people",
+            "family-name",
+            Arc::clone(&transcript),
+        );
+        let served = Served::with_refresh(
             &labelled_members_project(),
             sources,
             Duration::from_secs(2),
             Some(managed_person_plan()),
         )
         .await;
-        let receipts_absent: bool = served
-            .fixture
-            .migration
-            .query_one(
-                "SELECT to_regclass('registry_internal.registry_external_refresh_receipts') IS NULL",
-                &[],
-            )
+        let people = bound_scope(&served.fixture, "people").await;
+        store::withdraw_scope(&served.fixture.migration, &people)
             .await
-            .unwrap()
-            .get(0);
-        assert!(receipts_absent, "install creates no refresh receipts table");
-        let worker = service_actor("worker", "worker-principal", "registry.refresh");
-        let notifier = service_actor("people-notifier", "notifier-principal", "people.changed");
-
-        let (status, first) = served.post_plan("step", worker.clone(), json!({})).await;
-        assert_eq!(status, StatusCode::OK, "{first}");
-        assert_eq!(first["published"], 2, "{first}");
-        let (status, second) = served.post_plan("step", worker.clone(), json!({})).await;
-        assert_eq!(status, StatusCode::OK, "{second}");
-        assert_eq!(second["sweepCompleted"], true, "{second}");
-        let (status, _) = served
-            .post_plan(
-                "source-changes",
-                notifier,
-                json!({"projection":"people","selector":"first"}),
-            )
+            .unwrap();
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let ticks = crate::api::external_views::managed_refresh_tick(&served.http)
+            .with_subscriber(captured.subscriber())
             .await;
-        assert_eq!(status, StatusCode::ACCEPTED);
-        let (status, targeted) = served.post_plan("step", worker, json!({})).await;
-        assert_eq!(status, StatusCode::OK, "{targeted}");
-        assert_eq!(targeted["settled"], 1, "{targeted}");
-        assert_eq!(targeted["published"], 1, "{targeted}");
-        let queued: i64 = served
+        assert_eq!(ticks.len(), 1);
+        assert!(
+            matches!(
+                &ticks[0].failure,
+                Some(ExternalViewError::ProjectionUnavailable(projection)) if projection == "people"
+            ),
+            "{:?}",
+            ticks[0].failure
+        );
+        let row = served
             .fixture
             .migration
             .query_one(
-                "SELECT count(*) FROM registry_internal.registry_external_refresh_work
-                 WHERE plan_id='holders'",
+                "SELECT last_attempt_outcome,
+                        extract(epoch FROM next_due_at - clock_timestamp())::float8
+                 FROM registry_internal.registry_external_refresh_plans WHERE plan_id='holders'",
                 &[],
             )
             .await
-            .unwrap()
-            .get(0);
-        assert_eq!(queued, 0, "settlement removes the work row");
-
-        let entries = served.audit.entries();
-        let phase = |operation: &str, phase: &str| {
-            entries
-                .iter()
-                .filter(|entry| {
-                    entry["record"]["operationId"] == operation && entry["record"]["phase"] == phase
-                })
-                .map(|entry| {
-                    (
-                        entry["record"]["requestId"].as_str().unwrap().to_owned(),
-                        entry["record"]["outcome"].clone(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-        for (operation, count) in [
-            ("external-refresh-plan-step", 3),
-            ("external-refresh-plan-source-change", 1),
-        ] {
-            let attempts = phase(operation, "attempt");
-            let terminals = phase(operation, "terminal");
-            assert_eq!(attempts.len(), count, "{operation}: {entries:?}");
-            assert_eq!(
-                attempts.iter().map(|(id, _)| id).collect::<Vec<_>>(),
-                terminals.iter().map(|(id, _)| id).collect::<Vec<_>>(),
-                "{operation}: each attempt has its own terminal entry"
-            );
-            assert!(
-                terminals.iter().all(|(_, outcome)| outcome == "returned"),
-                "{operation}: {terminals:?}"
-            );
-        }
+            .unwrap();
+        assert_eq!(row.get::<_, String>(0), "invalid-binding");
+        let wait: f64 = row.get(1);
+        assert!((25.0..=30.0).contains(&wait), "{wait}");
+        let logs = captured.text();
+        let line = log_line(&logs, "people", "projection-unavailable");
+        assert!(line.contains(r#""level":"WARN""#), "{line}");
+        assert_eq!(logs.lines().count(), 1, "{logs}");
+        let audited = served.audit.entries().len();
+        assert!(
+            served.tick().await.is_empty(),
+            "a deferred plan is not stepped again"
+        );
+        assert_eq!(served.audit.entries().len(), audited);
         transcript.finish().unwrap();
         served.fixture.cleanup().await;
     }
@@ -4806,7 +5017,15 @@ mod postgres_tests {
             "family-name",
             Arc::clone(&transcript),
         );
-        let served = Served::with(&indexed_person_project(), sources, Duration::from_secs(2)).await;
+        let mut config = managed_person_plan();
+        config.available.get_mut("holders").unwrap().page_size = 9;
+        let served = Served::with_refresh(
+            &labelled_members_project(),
+            sources,
+            Duration::from_secs(2),
+            Some(config),
+        )
+        .await;
         insert_roots(
             &served,
             &rows
@@ -4815,40 +5034,22 @@ mod postgres_tests {
                 .collect::<Vec<_>>(),
         )
         .await;
-        let mut refresh = request("people-link");
-        refresh.query = ExternalQueryMode::First(ExternalQuery {
-            page_size: 9,
-            ..ExternalQuery::default()
-        });
-        let plan = served.service.plan(&refresh, None).ok().unwrap();
-        let claims = ClaimContext::for_compiled(
-            &served.service.registry,
-            &plan.root.id,
-            Some("reader-principal".to_owned()),
-            "reader",
-            Some("consultation".to_owned()),
-            vec![crate::postgres::context::RowBoundaryContext::Equals {
-                field: "tenant".to_owned(),
-                value: "allowed".to_owned(),
-            }],
-        )
-        .unwrap();
 
-        // The first page holds the three valid fixture keys, four invalid
-        // keys and two roots without a key.
+        // The first sweep page holds the three valid fixture keys, four
+        // invalid keys and two roots without a key. The sweep then moves
+        // past the page to the last root.
         let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
-        let first = served
-            .service
-            .refresh_page(&refresh, &plan, &claims)
+        let ticks = crate::api::external_views::managed_refresh_tick(&served.http)
             .with_subscriber(captured.subscriber())
-            .await
-            .ok()
-            .unwrap()
-            .body;
+            .await;
+        assert_eq!(ticks.len(), 1);
+        assert!(ticks[0].failure.is_none(), "{:?}", ticks[0].failure);
+        let steps = &ticks[0].steps;
+        assert_eq!(steps.len(), 2, "{steps:?}");
+        let (first, second) = (&steps[0], &steps[1]);
         assert_eq!(first["processed"], 9, "{first}");
         assert_eq!(first["published"], 3, "{first}");
         assert_eq!(first["unavailable"], 4, "{first}");
-        let cursor = first["nextCursor"].as_str().unwrap().to_owned();
         let logs = captured.text();
         let line = log_line(&logs, "people", "invalid-key");
         assert!(line.contains(r#""level":"WARN""#), "{line}");
@@ -4857,20 +5058,10 @@ mod postgres_tests {
         for value in ["\u{1D518}", "\u{E9}", "bell", "padded", "family-"] {
             assert!(!logs.contains(value), "{value} reached the log: {logs}");
         }
-
-        // The sweep moves past the page.
-        refresh.query = ExternalQueryMode::Continue(cursor);
-        let second = served
-            .service
-            .refresh_page(&refresh, &plan, &claims)
-            .await
-            .ok()
-            .unwrap()
-            .body;
         assert_eq!(second["processed"], 1, "{second}");
         assert_eq!(second["published"], 1, "{second}");
         assert_eq!(second["unavailable"], 0, "{second}");
-        assert!(second.get("nextCursor").is_none(), "{second}");
+        assert_eq!(second["sweepCompleted"], true, "{second}");
         // Only the valid keys reached the source, in the two recorded calls.
         transcript.finish().unwrap();
         let stored: Vec<String> = served
@@ -5177,8 +5368,21 @@ mod postgres_tests {
                 ),
             ),
         );
-        let served =
-            Served::with(&labelled_members_project(), sources, Duration::from_secs(2)).await;
+        let mut config = managed_person_plan();
+        let plan = config.available.get_mut("holders").unwrap();
+        plan.target.link = "members-link".to_owned();
+        plan.target.label_projection = Some(plan.target.primary_projection.clone());
+        plan.target.primary_projection.projection = "members".to_owned();
+        plan.target.primary_projection.operation = "members".to_owned();
+        plan.refresh_labels = true;
+        plan.page_size = 6;
+        let served = Served::with_refresh(
+            &labelled_members_project(),
+            sources,
+            Duration::from_secs(2),
+            Some(config),
+        )
+        .await;
         let members = bound_scope(&served.fixture, "members").await;
         served
             .fixture
@@ -5200,73 +5404,34 @@ mod postgres_tests {
             .publish_collection(&members, "second", &[("m1", json!({"holder":"delta"}))])
             .await;
 
-        let worker = crate::api::VerifiedRequestClaims::authenticated(
-            "registry_principal",
-            "worker-principal",
-            BTreeSet::from(["registry.refresh".to_owned()]),
-            Some("consultation".to_owned()),
-            BTreeMap::new(),
-        )
-        .unwrap()
-        .with_contextual_authority(
-            Some(registry_platform_oidc::ActorKind::Service),
-            Some("worker".to_owned()),
-            None,
-            None,
-            BTreeMap::new(),
-        )
-        .unwrap();
-        let mut refresh = ExternalViewRequest {
-            context: crate::api::AuthorizedRequestContext::new(
-                Some("worker-principal".to_owned()),
-                Some("consultation".to_owned()),
-                "refresh".to_owned(),
-                Vec::new(),
+        // The parents are current, so the sweep starts at its label phase.
+        served
+            .fixture
+            .migration
+            .execute(
+                "UPDATE registry_internal.registry_external_refresh_plans
+                 SET sweep_phase='labels',sweep_baseline=0,sweep_continuation=NULL
+                 WHERE plan_id='holders'",
+                &[],
             )
-            .with_audit_context(&worker),
-            correlation: RequestCorrelation::breg_created(),
-            view: "view".to_owned(),
-            link: "members-link".to_owned(),
-            root: None,
-            query: ExternalQueryMode::First(ExternalQuery {
-                page_size: 6,
-                ..ExternalQuery::default()
-            }),
-            deadline: Instant::now() + Duration::from_secs(5),
-        };
-        let plan = served
-            .service
-            .plan(&refresh, Some(RefreshMode::Labels))
-            .ok()
+            .await
             .unwrap();
-        let claims = ClaimContext::for_compiled(
-            &served.service.registry,
-            &plan.root.id,
-            Some("worker-principal".to_owned()),
-            "refresh",
-            Some("consultation".to_owned()),
-            vec![crate::postgres::context::RowBoundaryContext::Equals {
-                field: "tenant".to_owned(),
-                value: "allowed".to_owned(),
-            }],
-        )
-        .unwrap();
 
         // The first page holds the first parent's six members: two valid
         // selectors and four the source contract or the store would refuse.
+        // The label sweep then moves past the page to the second parent.
         let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
-        let first = served
-            .service
-            .refresh_page(&refresh, &plan, &claims)
+        let ticks = crate::api::external_views::managed_refresh_tick(&served.http)
             .with_subscriber(captured.subscriber())
-            .await
-            .ok()
-            .unwrap()
-            .body;
+            .await;
+        assert_eq!(ticks.len(), 1);
+        assert!(ticks[0].failure.is_none(), "{:?}", ticks[0].failure);
+        let steps = &ticks[0].steps;
+        assert_eq!(steps.len(), 2, "{steps:?}");
+        let (first, second) = (&steps[0], &steps[1]);
         assert_eq!(first["processed"], 6, "{first}");
         assert_eq!(first["published"], 2, "{first}");
         assert_eq!(first["unavailable"], 4, "{first}");
-        let cursor = first["nextCursor"].as_str().unwrap().to_owned();
         let logs = captured.text();
         let line = log_line(&logs, "people", "invalid-key");
         assert!(line.contains(r#""level":"WARN""#), "{line}");
@@ -5284,19 +5449,10 @@ mod postgres_tests {
             assert!(!logs.contains(value), "{value} reached the log: {logs}");
         }
 
-        // The acquisition moves past the page.
-        refresh.query = ExternalQueryMode::Continue(cursor);
-        let second = served
-            .service
-            .refresh_page(&refresh, &plan, &claims)
-            .await
-            .ok()
-            .unwrap()
-            .body;
         assert_eq!(second["processed"], 1, "{second}");
         assert_eq!(second["published"], 1, "{second}");
         assert_eq!(second["unavailable"], 0, "{second}");
-        assert!(second.get("nextCursor").is_none(), "{second}");
+        assert_eq!(second["sweepCompleted"], true, "{second}");
         // Only the valid selectors reached the source, in the two recorded
         // batches, and each of them now has its label.
         transcript.finish().unwrap();

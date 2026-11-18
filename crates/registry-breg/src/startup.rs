@@ -310,13 +310,14 @@ pub enum BackgroundTask {
     SubjectAccessLogRetention,
     EvidenceRetention,
     ExternalProjectionRetention,
+    ExternalRefresh,
     MetricsListener,
 }
 
 impl BackgroundTask {
     /// Every supervised task, used by exhaustive operational-log contract
     /// tests.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::HookWorker,
         Self::RecordTimerWorker,
         Self::AttachmentVerificationWorker,
@@ -324,8 +325,60 @@ impl BackgroundTask {
         Self::SubjectAccessLogRetention,
         Self::EvidenceRetention,
         Self::ExternalProjectionRetention,
+        Self::ExternalRefresh,
         Self::MetricsListener,
     ];
+}
+
+/// The external views startup stages that can refuse `serve` or a check.
+/// Each refusal logs its own code before startup returns
+/// [`StartupError::ExternalSources`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExternalViewsStage {
+    /// The runtime file's secret references could not be resolved.
+    SourceSecrets,
+    /// The external source binding list was refused.
+    SourceLoad,
+    /// The external projection store could not bind its scopes.
+    StoreInstall,
+    /// The external refresh plans could not be registered.
+    RefreshRegister,
+    /// The external projection status could not be read for a check.
+    StoreStatus,
+    /// The external refresh plan status could not be read for a check.
+    RefreshStatus,
+}
+
+impl ExternalViewsStage {
+    /// Every stage, used by exhaustive operational-log contract tests.
+    pub const ALL: [Self; 6] = [
+        Self::SourceSecrets,
+        Self::SourceLoad,
+        Self::StoreInstall,
+        Self::RefreshRegister,
+        Self::StoreStatus,
+        Self::RefreshStatus,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SourceSecrets => "external_source.secrets",
+            Self::SourceLoad => "external_source.load",
+            Self::StoreInstall => "external_store.install",
+            Self::RefreshRegister => "external_refresh.register",
+            Self::StoreStatus => "external_store.status",
+            Self::RefreshStatus => "external_refresh.status",
+        }
+    }
+}
+
+/// Log the refused external views stage by its code, then refuse startup.
+fn external_views_refused<E>(stage: ExternalViewsStage) -> impl FnOnce(E) -> StartupError {
+    move |_| {
+        OperationalEvent::ExternalViewsRefused(stage).emit();
+        StartupError::ExternalSources
+    }
 }
 
 /// How a supervised background task ended.
@@ -376,6 +429,12 @@ const fn background_task_stop_code(task: BackgroundTask, stop: BackgroundTaskSto
         }
         (BackgroundTask::ExternalProjectionRetention, BackgroundTaskStop::Returned) => {
             "external_projection.retention.returned"
+        }
+        (BackgroundTask::ExternalRefresh, BackgroundTaskStop::Panicked) => {
+            "external_refresh.worker.panicked"
+        }
+        (BackgroundTask::ExternalRefresh, BackgroundTaskStop::Returned) => {
+            "external_refresh.worker.returned"
         }
         (BackgroundTask::MetricsListener, BackgroundTaskStop::Panicked) => {
             "metrics.listener.panicked"
@@ -459,6 +518,9 @@ pub enum OperationalEvent {
     /// A supervised background task panicked, or returned before shutdown
     /// was requested. The code names the task and how it ended.
     BackgroundTaskStopped(BackgroundTask, BackgroundTaskStop),
+    /// An external views startup stage was refused. The code names the
+    /// stage; startup then stops with [`StartupError::ExternalSources`].
+    ExternalViewsRefused(ExternalViewsStage),
 }
 
 impl OperationalEvent {
@@ -593,6 +655,13 @@ impl OperationalEvent {
                 error: None,
                 code: Some(background_task_stop_code(*task, *stop)),
             },
+            Self::ExternalViewsRefused(stage) => OperationalLogRecord {
+                level: OperationalLogLevel::Error,
+                target: "registry_breg::startup",
+                message: "an external views startup stage was refused",
+                error: None,
+                code: Some(stage.as_str()),
+            },
             Self::PostgresBaselineAdvisory(advisory) => OperationalLogRecord {
                 level: match advisory.severity() {
                     AdvisorySeverity::Warning => OperationalLogLevel::Warn,
@@ -624,10 +693,10 @@ impl OperationalEvent {
             Self::Stopped => {
                 tracing::error!(target: "registry_breg::startup", message = record.message);
             }
-            Self::BackgroundTaskStopped(..) => {
+            Self::BackgroundTaskStopped(..) | Self::ExternalViewsRefused(_) => {
                 let code = record
                     .code
-                    .expect("background task stop records have a code");
+                    .expect("background task stop and stage refusal records have a code");
                 tracing::error!(target: "registry_breg::startup", code, message = record.message);
             }
             Self::StoppedWithError(StartupError::AuditDestination(reason)) => {
@@ -848,6 +917,7 @@ pub struct PreparedServer {
         Arc<crate::postgres::external_runtime::PostgresExternalViewService>,
         Arc<LastSuccess>,
     )>,
+    external_refresh: Option<(Arc<HttpService>, Arc<LastSuccess>)>,
     metrics: Option<PreparedMetricsListener>,
     #[cfg(feature = "wasm")]
     wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
@@ -941,6 +1011,7 @@ impl PreparedServer {
             access_log_retention: None,
             evidence_retention: None,
             external_projection_retention: None,
+            external_refresh: None,
             metrics: None,
             postgres_advisories: Vec::new(),
             unavailable_external_projections: BTreeMap::new(),
@@ -985,6 +1056,7 @@ impl PreparedServer {
             access_log_retention: None,
             evidence_retention: None,
             external_projection_retention: None,
+            external_refresh: None,
             metrics: None,
             postgres_advisories: Vec::new(),
             unavailable_external_projections: BTreeMap::new(),
@@ -1682,10 +1754,10 @@ async fn finish_prepared_server(
                 Arc::new(
                     config
                         .secret_resolver()
-                        .map_err(|_| StartupError::ExternalSources)?,
+                        .map_err(external_views_refused(ExternalViewsStage::SourceSecrets))?,
                 ),
             )
-            .map_err(|_| StartupError::ExternalSources)?;
+            .map_err(external_views_refused(ExternalViewsStage::SourceLoad))?;
             for (projection, reason) in sources.unavailable_projections() {
                 tracing::warn!(
                     projection = %projection,
@@ -1707,24 +1779,24 @@ async fn finish_prepared_server(
             external
                 .bind_configured_scopes(opening == AuditOpening::Serve)
                 .await
-                .map_err(|_| StartupError::ExternalSources)?;
+                .map_err(external_views_refused(ExternalViewsStage::StoreInstall))?;
             external
                 .configure_managed_refresh(
                     config.resolve_external_refresh(&registry),
                     opening == AuditOpening::Serve,
                 )
                 .await
-                .map_err(|_| StartupError::ExternalSources)?;
+                .map_err(external_views_refused(ExternalViewsStage::RefreshRegister))?;
             unavailable_external_projections = external.unavailable_projections().clone();
             if opening == AuditOpening::CheckOnly {
                 external_projection_status = external
                     .projection_status()
                     .await
-                    .map_err(|_| StartupError::ExternalSources)?;
+                    .map_err(external_views_refused(ExternalViewsStage::StoreStatus))?;
                 external_refresh_status = external
                     .managed_refresh_status()
                     .await
-                    .map_err(|_| StartupError::ExternalSources)?;
+                    .map_err(external_views_refused(ExternalViewsStage::RefreshStatus))?;
             }
             Some(Arc::new(external))
         };
@@ -1954,6 +2026,11 @@ async fn finish_prepared_server(
         .as_ref()
         .filter(|_| crate::postgres::external_projection::enabled(&registry))
         .map(|backend| (Arc::clone(backend), Arc::new(LastSuccess::default())));
+    // The refresh worker runs only when the runtime file configures a plan.
+    let external_refresh_progress = external_views
+        .as_ref()
+        .filter(|backend| backend.has_managed_refresh())
+        .map(|_| Arc::new(LastSuccess::default()));
     let mut service = HttpService::new(registry, read_identity, records, readiness, cursor_codec)
         .with_postgres_revisions(revisions)
         .with_snapshots(snapshots)
@@ -1972,6 +2049,8 @@ async fn finish_prepared_server(
         service = service.with_field_encryption(field_encryption);
     }
     let service = Arc::new(service);
+    let external_refresh =
+        external_refresh_progress.map(|last_success| (Arc::clone(&service), last_success));
     // The metrics registry exists only when the operator configured the
     // separate metrics listener; when absent, no series are recorded and no
     // metrics surface is served at all.
@@ -1997,6 +2076,10 @@ async fn finish_prepared_server(
                 ProgressWorker::ExternalProjectionRetention,
                 Arc::clone(last_success),
             );
+        }
+        if let Some((_, last_success)) = &external_refresh {
+            registry = registry
+                .with_worker_progress(ProgressWorker::ExternalRefresh, Arc::clone(last_success));
         }
         if let Some((_, last_success)) = &access_log_retention {
             registry = registry.with_worker_progress(
@@ -2029,6 +2112,7 @@ async fn finish_prepared_server(
         access_log_retention,
         evidence_retention,
         external_projection_retention,
+        external_refresh,
         metrics,
         postgres_advisories,
         unavailable_external_projections,
@@ -2270,6 +2354,7 @@ pub async fn serve_until_shutdown(
         access_log_retention,
         evidence_retention,
         external_projection_retention,
+        external_refresh,
         metrics,
         #[cfg(feature = "wasm")]
             wasm_runtime: _wasm_runtime,
@@ -2333,6 +2418,18 @@ pub async fn serve_until_shutdown(
                 task_stopped_tx.clone(),
             )
         });
+    let mut external_refresh_worker = external_refresh.map(|(service, last_success)| {
+        SupervisedTask::spawn(
+            BackgroundTask::ExternalRefresh,
+            crate::api::external_views::run_managed_refresh(
+                service,
+                last_success,
+                worker_shutdown_rx.clone(),
+            ),
+            worker_shutdown_rx.clone(),
+            task_stopped_tx.clone(),
+        )
+    });
     let mut access_log_worker = access_log_retention.map(|(pool, last_success)| {
         SupervisedTask::spawn(
             BackgroundTask::SubjectAccessLogRetention,
@@ -2424,6 +2521,9 @@ pub async fn serve_until_shutdown(
         if let Some(worker) = external_projection_worker.as_mut() {
             worker.join().await;
         }
+        if let Some(worker) = external_refresh_worker.as_mut() {
+            worker.join().await;
+        }
         if let Some(metrics_server) = metrics_server.as_mut() {
             metrics_server.join().await;
         }
@@ -2458,6 +2558,9 @@ pub async fn serve_until_shutdown(
                 worker.abort_and_join().await;
             }
             if let Some(worker) = external_projection_worker.as_mut() {
+                worker.abort_and_join().await;
+            }
+            if let Some(worker) = external_refresh_worker.as_mut() {
                 worker.abort_and_join().await;
             }
             Err(StartupError::Shutdown)
@@ -3117,6 +3220,26 @@ mod shutdown_tests {
         tokio::time::timeout(Duration::from_secs(5), signal)
             .await
             .expect("a fired signal resolves");
+    }
+}
+
+#[cfg(test)]
+mod external_views_stage_tests {
+    use super::*;
+
+    #[test]
+    fn a_store_install_failure_at_startup_logs_its_category() {
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let error = tracing::dispatcher::with_default(&captured.subscriber(), || {
+            Err::<(), ()>(()).map_err(external_views_refused(ExternalViewsStage::StoreInstall))
+        })
+        .expect_err("a refused stage is an error");
+        assert_eq!(error, StartupError::ExternalSources);
+        let logs = captured.text();
+        assert_eq!(logs.lines().count(), 1, "{logs}");
+        for expected in [r#""level":"ERROR""#, r#""code":"external_store.install""#] {
+            assert!(logs.contains(expected), "{logs}");
+        }
     }
 }
 

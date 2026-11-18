@@ -6,10 +6,12 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_oidc::ActorKind;
 use registry_platform_yaml::{ExternalId, LocalId, UniqueList};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+use crate::api::{VerifiedClaimValue, VerifiedContextError, VerifiedRequestClaims};
 use crate::contract::{external_id_map, local_id_map, Operation, RowBoundarySource};
 #[cfg(feature = "schema")]
 use crate::contract::{external_id_map_schema, local_id_map_schema};
@@ -243,7 +245,7 @@ impl ExternalRefreshConfig {
         };
         let refresh_labels = target.label_projection.is_some();
         let authority_digest = authority_digest(id, &worker, &target, &notifiers, refresh_labels);
-        Ok(ResolvedExternalRefreshPlan {
+        let resolved = ResolvedExternalRefreshPlan {
             id: id.to_owned(),
             worker,
             target,
@@ -252,7 +254,22 @@ impl ExternalRefreshConfig {
             page_size: plan.page_size,
             refresh_labels,
             authority_digest,
-        })
+        };
+        // Each worker step admits these claims through the profile as a
+        // request would be admitted, so a plan whose worker the profile
+        // refuses stays unavailable instead of failing on every tick.
+        let admitted = resolved
+            .worker_claims()
+            .is_ok_and(|claims| crate::api::authorize_profile_claims(profile, &claims).is_ok());
+        if !admitted {
+            return Err(problem(
+                worker_path,
+                "breg.external-refresh.worker-not-admitted",
+                "the worker access profile would refuse the worker identity this plan configures",
+                "Pin exactly one rowClaims value for each equals boundary and a list of 1 to 64 values for an in boundary, and keep the principal and each value within 512 bytes.",
+            ));
+        }
+        Ok(resolved)
     }
 }
 
@@ -435,6 +452,46 @@ pub(crate) struct ResolvedExternalRefreshPlan {
     pub(crate) authority_digest: String,
 }
 
+impl ResolvedExternalRefreshPlan {
+    /// The claims the worker presents to its access profile, built from the
+    /// runtime file in place of a verified token: the configured principal,
+    /// the profile's scopes, the link projection's purpose, the pinned values
+    /// of the profile's row-boundary claims, and the requester client, acting
+    /// as a service.
+    pub(crate) fn worker_claims(&self) -> Result<VerifiedRequestClaims, VerifiedContextError> {
+        let worker = &self.worker;
+        let row_claims = worker
+            .row_claims
+            .iter()
+            .filter(|(name, _)| self.target.target_claim_names.contains(*name))
+            .map(|(name, values)| {
+                let value = match values.len() {
+                    1 => VerifiedClaimValue::direct_string(
+                        values.iter().next().cloned().unwrap_or_default(),
+                    ),
+                    _ => VerifiedClaimValue::direct_string_set(values.iter().cloned()),
+                };
+                value.map(|value| (name.clone(), value))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        VerifiedRequestClaims::authenticated_with_actor_kind(
+            worker.principal_claim.clone(),
+            worker.principal.clone(),
+            worker.required_scopes.clone(),
+            Some(self.target.primary_projection.purpose.clone()),
+            row_claims,
+            ActorKind::Service,
+        )?
+        .with_contextual_authority(
+            Some(ActorKind::Service),
+            Some(worker.requester_client.clone()),
+            None,
+            None,
+            BTreeMap::new(),
+        )
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ResolvedExternalRefreshWorker {
@@ -615,7 +672,7 @@ fn problem(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::BoundaryOperator;
@@ -721,7 +778,7 @@ mod tests {
         assert_eq!(problem.code, "breg.external-refresh.view-missing");
     }
 
-    fn example_registry() -> CompiledRegistry {
+    pub(crate) fn example_registry() -> CompiledRegistry {
         let source = include_str!("../../../products/breg/examples/external-views/registry.yaml");
         let project = crate::parse_project_yaml(source.as_bytes()).unwrap();
         compile_project(&project, &[], CompileProfile::Authoring).unwrap()
@@ -747,17 +804,122 @@ mod tests {
         )
     }
 
-    fn holdings_plan(view: &str, link: &str) -> ExternalRefreshConfig {
+    /// A worker the example's `projection-refresh` profile admits: its
+    /// `jurisdiction` boundary is `equals`, so the worker pins one value.
+    fn admitted_worker_json() -> serde_json::Value {
+        let mut worker = worker_json();
+        worker["rowClaims"]["jurisdiction"] = "zone-a".into();
+        worker
+    }
+
+    fn plan_with_worker(
+        view: &str,
+        link: &str,
+        worker: serde_json::Value,
+    ) -> ExternalRefreshConfig {
         serde_json::from_value(serde_json::json!({
             "plans": {
                 "plan": {
                     "target": {"view": view, "link": link},
-                    "worker": worker_json(),
+                    "worker": worker,
                     "intervalSeconds": 60
                 }
             }
         }))
         .unwrap()
+    }
+
+    fn holdings_plan(view: &str, link: &str) -> ExternalRefreshConfig {
+        plan_with_worker(view, link, admitted_worker_json())
+    }
+
+    /// The example's licence holder plan under a worker its profile admits.
+    pub(crate) fn admitted_holder_plan() -> ResolvedExternalRefreshPlan {
+        let registry = example_registry();
+        let sources = [binding("person-indexed")];
+        let mut resolution =
+            holdings_plan("licence-holder-indexed", "holder").resolve(&registry, &sources);
+        resolution
+            .available
+            .remove("plan")
+            .unwrap_or_else(|| panic!("{:?}", resolution.unavailable))
+    }
+
+    fn holder_plan_problem(worker: serde_json::Value) -> ExternalRefreshPlanProblem {
+        let registry = example_registry();
+        let sources = [binding("person-indexed")];
+        let mut resolution = plan_with_worker("licence-holder-indexed", "holder", worker)
+            .resolve(&registry, &sources);
+        assert!(resolution.available.is_empty());
+        resolution.unavailable.remove("plan").unwrap()
+    }
+
+    #[test]
+    fn resolution_reports_a_requester_client_the_profile_does_not_admit() {
+        let mut worker = admitted_worker_json();
+        worker["requesterClient"] = "staff-app".into();
+        let problem = holder_plan_problem(worker);
+        assert_eq!(problem.code, "breg.external-refresh.worker-client-mismatch");
+        assert_eq!(
+            problem.path,
+            "/externalRefresh/plans/plan/worker/requesterClient"
+        );
+    }
+
+    #[test]
+    fn resolution_reports_a_row_boundary_claim_the_worker_does_not_pin() {
+        let mut worker = admitted_worker_json();
+        worker["rowClaims"] = serde_json::json!({"office": "licensing"});
+        let problem = holder_plan_problem(worker);
+        assert_eq!(problem.code, "breg.external-refresh.row-claim-missing");
+        assert_eq!(
+            problem.path,
+            "/externalRefresh/plans/plan/worker/rowClaims/jurisdiction"
+        );
+    }
+
+    /// The runtime admits the worker exactly as it would a request, so a
+    /// worker identity its profile would refuse never reaches the worker tick.
+    #[test]
+    fn a_plan_whose_worker_identity_its_profile_refuses_is_unavailable() {
+        // 300 characters fit the runtime file's identifier bound, but their
+        // 600 bytes exceed a verified claim value's bound.
+        let oversized = "é".repeat(300);
+        let cases = [
+            (
+                "two values for an equals boundary",
+                serde_json::json!({"jurisdiction": ["zone-a", "zone-b"]}),
+                None,
+            ),
+            (
+                "an empty list",
+                serde_json::json!({"jurisdiction": []}),
+                None,
+            ),
+            (
+                "an oversized row claim value",
+                serde_json::json!({"jurisdiction": oversized}),
+                None,
+            ),
+            (
+                "an oversized principal",
+                serde_json::json!({"jurisdiction": "zone-a"}),
+                Some(oversized.as_str()),
+            ),
+        ];
+        for (case, row_claims, principal) in cases {
+            let mut worker = admitted_worker_json();
+            worker["rowClaims"] = row_claims;
+            if let Some(principal) = principal {
+                worker["principal"] = principal.into();
+            }
+            let problem = holder_plan_problem(worker);
+            assert_eq!(
+                problem.code, "breg.external-refresh.worker-not-admitted",
+                "{case}"
+            );
+            assert_eq!(problem.path, "/externalRefresh/plans/plan/worker", "{case}");
+        }
     }
 
     #[test]
