@@ -2991,10 +2991,8 @@ jobs:
     # Evidence project and that a later export updates it. It drives three
     # native binaries over the reviewed teaching inputs and starts no service,
     # so it needs neither Docker nor the tutorial replay's writable checkout.
-    # It also proves the surface of evidencectl source add without a session:
-    # the review it performs by default, the matching bregctl it requires, and
-    # that a refused connection leaves both projects untouched. Successful
-    # preparation needs a retained session and is outside this offline proof.
+    # It also proves that evidencectl source import refuses a tampered export
+    # and that a refused update leaves the Evidence project untouched.
     name: Base Registry Engine to Evidence composition
     needs:
       - changes
