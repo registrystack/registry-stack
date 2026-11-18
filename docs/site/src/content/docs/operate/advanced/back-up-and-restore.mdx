@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-28"
+last_reviewed: "2026-11-18"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -56,7 +56,7 @@ up these alongside every database backup, on the same schedule:
   source values. Keep those copies no longer than the source grant permits storage. Before a
   physically restored copy or a promoted replica serves under changed source authority, run
   `bregctl external-projection purge` for each affected projection. See
-  [Physical backups, WAL, and replicas](https://github.com/registrystack/registry-stack/blob/main/products/breg/external-projection-storage.md#physical-backups-wal-and-replicas).
+  [Physical backups, WAL, and replicas](../../../configure/breg-external-projections/#physical-backups-wal-and-replicas).
 
 - The package directory, the runtime file, and the secret files it
   references. A restore needs the package the backup was taken under.

@@ -240,7 +240,7 @@ population. Grant indexed views to profiles whose
 need, and rate-limit indexed queries at the gateway.
 
 {/* Evidence: crates/registry-breg/src/external_views.rs, compile;
-    products/breg/external-projection-storage.md, Freshness and purge. */}
+    crates/registry-breg/src/postgres/external_view_query.rs. */}
 
 ## Bind the source in the runtime file
 
@@ -364,7 +364,7 @@ licence for the worker. A scheduled sweep covers anything missed.
 {/* Evidence: crates/registry-breg/src/external_refresh_config.rs, ExternalRefreshPlan,
     ExternalRefreshWorker, breg.external-refresh.worker-client-mismatch;
     crates/registry-breg/src/postgres/external_runtime/managed.rs, configure_managed_refresh;
-    products/breg/external-projection-storage.md, Refresh plans and the in-process worker. */}
+    crates/registry-breg/src/postgres/external_refresh_queue.rs, capture_local_record. */}
 
 ## Source changes
 
@@ -448,8 +448,7 @@ The worker rereads the licence under its own profile. Give the worker's profile 
 that covers every licence the staff profile can reach, or BReg accepts the request and refreshes
 nothing.
 
-{/* Evidence: products/breg/external-projection-storage.md, Refresh one record;
-    crates/registry-breg/src/external_views.rs, refresh-service-profile;
+{/* Evidence: crates/registry-breg/src/external_views.rs, refresh-service-profile;
     crates/registry-breg/src/api/external_views.rs, admission_response;
     products/breg/examples/external-views/registry.yaml, staff-refresh;
     products/breg/examples/external-views/journey.py. */}
@@ -503,13 +502,12 @@ pg_dump --dbname='service=breg-backup' --format=custom \
 Physical base backups, WAL archives, and streaming replicas carry cached source values. Keep them no
 longer than the source grant permits storage. Before BReg serves a restored physical copy for a
 deployment whose source authority changed, purge each affected projection on that copy. See
-[Physical backups, WAL, and replicas](https://github.com/registrystack/registry-stack/blob/main/products/breg/external-projection-storage.md#physical-backups-wal-and-replicas)
+[Physical backups, WAL, and replicas](../breg-external-projections/#physical-backups-wal-and-replicas)
 and [Back up and restore](../../operate/advanced/back-up-and-restore/).
 
 {/* Evidence: crates/registry-breg/src/external_projection_maintenance.rs, inspect and purge;
     crates/registry-breg/src/postgres/external_projection.rs, uninstall_queue;
-    crates/registry-breg/src/postgres/external_refresh_queue.rs;
-    products/breg/external-projection-storage.md, Logical backups. */}
+    crates/registry-breg/src/postgres/external_refresh_queue.rs, BACKUP_EXCLUDED_TABLES. */}
 
 The [synthetic licensing example](https://github.com/registrystack/registry-stack/blob/main/products/breg/examples/external-views/README.md)
 runs every view on this page against a synthetic source, including a related collection with a
@@ -520,4 +518,4 @@ person label.
 - [Control access and reads](../breg-access/)
 - [Watch the background workers](../../operate/breg-monitor/#watch-the-background-workers)
 - [Back up and restore](../../operate/advanced/back-up-and-restore/)
-- [External projection storage and recovery](https://github.com/registrystack/registry-stack/blob/main/products/breg/external-projection-storage.md)
+- [Operate indexed external projections](../breg-external-projections/)
