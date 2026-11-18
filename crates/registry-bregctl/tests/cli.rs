@@ -3283,6 +3283,34 @@ fn external_projection_has_inspect_and_purge_and_no_withdraw_or_rotate() {
     assert!(!help.contains("rotate"), "{help}");
 }
 
+#[test]
+fn external_projection_has_no_refresh_command() {
+    let output = bregctl(&[
+        "external-projection",
+        "refresh",
+        "--breg-url",
+        "https://breg.example",
+        "--plan",
+        "plan",
+        "--access-token-file",
+        "/token",
+    ]);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let help = bregctl(&["external-projection", "--help"]);
+    let help = String::from_utf8(help.stdout).expect("help is UTF-8");
+    let commands = help
+        .split("Commands:")
+        .nth(1)
+        .and_then(|rest| rest.split("Options:").next())
+        .expect("help lists commands");
+    let names: Vec<&str> = commands
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| *name != "help")
+        .collect();
+    assert_eq!(names, ["inspect", "purge"], "{help}");
+}
+
 /// The minimal project with its reader profile limited to the client `portal`.
 fn minimal_project_limited_to_portal(scratch: &TestProject, include_record_permissions: bool) {
     let example = minimal_example();

@@ -49,7 +49,6 @@ mod data_lifecycle;
 mod dev;
 mod doctor;
 mod explain_report;
-mod external_refresh;
 mod field_encryption;
 mod field_encryption_lifecycle;
 mod file_check;
@@ -461,27 +460,6 @@ enum ExternalProjectionCommand {
     Inspect(ExternalProjectionTargetArgs),
     /// End the scope and delete its cached rows; the projection stays unavailable until each replica restarts and binds again.
     Purge(ExternalProjectionTargetArgs),
-    /// Run bounded ready work for one managed refresh plan through its authenticated HTTP route.
-    Refresh(ExternalProjectionRefreshArgs),
-}
-
-#[derive(Debug, Args)]
-struct ExternalProjectionRefreshArgs {
-    /// Base Registry Engine base URL. HTTP is accepted only for loopback hosts.
-    #[arg(long, value_name = "URL")]
-    breg_url: String,
-    /// Managed external refresh plan ID.
-    #[arg(long, value_name = "ID")]
-    plan: String,
-    /// Absolute file containing one bearer access token and no other credential material.
-    #[arg(long, value_name = "ABSOLUTE_FILE")]
-    access_token_file: PathBuf,
-    /// Mark one full sweep due before processing ready work.
-    #[arg(long)]
-    start_sweep: bool,
-    /// Maximum wall-clock time spent stepping the plan in this invocation.
-    #[arg(long, value_name = "SECONDS", default_value_t = 50, value_parser = clap::value_parser!(u64).range(1..=300))]
-    maximum_run_seconds: u64,
 }
 
 #[derive(Debug, Args)]
@@ -3301,47 +3279,6 @@ where
             };
         }
         Command::ExternalProjection(args) => {
-            if let ExternalProjectionCommand::Refresh(refresh) = &args.command {
-                let outcome = external_refresh::run(external_refresh::ExternalRefreshRequest {
-                    breg_url: &refresh.breg_url,
-                    plan: &refresh.plan,
-                    access_token_file: &refresh.access_token_file,
-                    start_sweep: refresh.start_sweep,
-                    maximum_run: Duration::from_secs(refresh.maximum_run_seconds),
-                });
-                return match outcome {
-                    Ok(outcome) => {
-                        let result = if format == OutputFormat::Json {
-                            write_ctl_report(
-                                &mut *stdout,
-                                &json!({
-                                    "ok": true,
-                                    "command": "external-projection refresh",
-                                    "plan": outcome.plan,
-                                    "steps": outcome.steps,
-                                    "result": outcome.result,
-                                }),
-                            )
-                            .map_err(io::Error::other)
-                            .and_then(|()| writeln!(stdout))
-                        } else {
-                            render_report(
-                                "Ran bounded external projection refresh work.",
-                                &[
-                                    ("plan", outcome.plan),
-                                    ("steps", outcome.steps.to_string()),
-                                    ("moreWork", outcome.result.more_work().to_string()),
-                                ],
-                                stdout,
-                            )
-                        };
-                        write_result(result, stderr)
-                    }
-                    Err(error) => {
-                        write_failure(&external_refresh_failure(error), format, stdout, stderr)
-                    }
-                };
-            }
             use registry_breg::external_projection_maintenance as maintenance;
             let (command, lead, target) = match &args.command {
                 ExternalProjectionCommand::Inspect(target) => (
@@ -3354,9 +3291,6 @@ where
                     "Purged the external projection scope and its cached rows.",
                     target,
                 ),
-                ExternalProjectionCommand::Refresh(_) => {
-                    unreachable!("refresh returned before database maintenance dispatch")
-                }
             };
             let path = target.runtime_config.as_path();
             let projection = target.projection.as_str();
@@ -3387,9 +3321,6 @@ where
                     }
                     ExternalProjectionCommand::Purge(_) => {
                         maintenance::purge(path, projection).await
-                    }
-                    ExternalProjectionCommand::Refresh(_) => {
-                        unreachable!("refresh returned before database maintenance dispatch")
                     }
                 }
             });
@@ -3928,67 +3859,6 @@ fn external_projection_pairs(scope: &Value) -> Vec<(&'static str, String)> {
         pairs.push(("invalidated snapshots", text(&counts["invalidated"])));
     }
     pairs
-}
-
-fn external_refresh_failure(error: external_refresh::ExternalRefreshError) -> FailureReport {
-    use external_refresh::ExternalRefreshError as Error;
-    let (code, path, message, artifact, action) = match error {
-        Error::BRegUrl => (
-            "external-projection.refresh.breg-url-refused",
-            "--breg-url",
-            "the BReg URL must be an HTTPS service base URL, or loopback HTTP, without credentials, query, or fragment",
-            DiagnosticArtifact::CommandArguments,
-            SuggestedAction::CorrectCommandUsage,
-        ),
-        Error::Plan => (
-            "external-projection.refresh.plan-refused",
-            "--plan",
-            "the refresh plan must be a local identifier",
-            DiagnosticArtifact::CommandArguments,
-            SuggestedAction::CorrectCommandUsage,
-        ),
-        Error::Token => (
-            "external-projection.refresh.token-refused",
-            "--access-token-file",
-            "the access-token file must be an absolute, bounded regular file containing one bearer token",
-            DiagnosticArtifact::CommandArguments,
-            SuggestedAction::CorrectCommandUsage,
-        ),
-        Error::Runtime => (
-            "external-projection.refresh.runtime-unavailable",
-            "runtime",
-            "the bounded refresh client runtime is unavailable",
-            DiagnosticArtifact::ExternalProjectionOperation,
-            SuggestedAction::VerifyExternalProjectionOperation,
-        ),
-        Error::Transport => (
-            "external-projection.refresh.transport-failed",
-            "externalRefresh",
-            "the refresh step could not reach BReg or finish within its bounded request time",
-            DiagnosticArtifact::DataTransport,
-            SuggestedAction::VerifyDataTransport,
-        ),
-        Error::Refused => (
-            "external-projection.refresh.refused",
-            "externalRefresh",
-            "BReg refused the refresh step; verify the plan and the service token's worker authority",
-            DiagnosticArtifact::ExternalProjectionOperation,
-            SuggestedAction::VerifyExternalProjectionOperation,
-        ),
-        Error::Response => (
-            "external-projection.refresh.response-invalid",
-            "externalRefresh",
-            "BReg returned an invalid or oversized refresh step response",
-            DiagnosticArtifact::ExternalProjectionOperation,
-            SuggestedAction::VerifyExternalProjectionOperation,
-        ),
-    };
-    source_failure(
-        "external-projection refresh",
-        diagnostic(code, path, message),
-        artifact,
-        action,
-    )
 }
 
 fn external_projection_failure(
