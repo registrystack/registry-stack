@@ -357,14 +357,71 @@ def test_payer_rule_releases_a_waiting_return_url_request(service):
     assert "cancelled" in page(client, transfer_id).text.lower()
 
 
-def test_hosted_decision_beats_the_payer_rule(service):
+RULE = ("registry", "pilot", "ministry", "synthetic-citizen")
+
+
+@pytest.mark.parametrize(
+    ("outcome", "request_status", "payment_status", "reason"),
+    [
+        ("paid", "COM", "PAID", None),
+        ("failed", "RJC", "FAILED", "payer-rejected"),
+        ("cancelled", "RJC", "FAILED", "payer-cancelled"),
+        ("expired", "EXP", "EXPIRED", "request-expired"),
+    ],
+)
+@pytest.mark.parametrize("extra", [{}, RETURN_HEADER], ids=["no-return-url", "return-url"])
+def test_payer_rule_settles_at_creation(
+    service, outcome, request_status, payment_status, reason, extra
+):
     client, _, store = service
-    store.payer_outcome("registry", "pilot", "ministry", "synthetic-citizen", "failed")
-    store.collection_scenario("registry", "pilot", "ministry", "expired")
-    transfer_id = accept(client)
-    assert decide(client, transfer_id, "pay").status_code == 200
+    store.payer_outcome(*RULE, outcome)
+    transfer_id = accept(client, **extra)
+    # No advance and no page visit: the first read is already final.
+    result = poll(client, transfer_id)
+    assert (result["requestStatus"], result["paymentStatus"]) == (request_status, payment_status)
+    assert result.get("failureReason") == reason
+    assert ("PaymentReferenceID" in result) == (outcome == "paid")
+    assert len(store.inspect_collections()["payments"]) == (outcome == "paid")
+    html = page(client, transfer_id).text
+    assert 'name="decision"' not in html
+    assert ("This request is final" in html) is True
+    assert (RETURN in html) == bool(extra)
+    if extra:
+        link = re.search(r'href="([^"]+)"', html).group(1).replace("&amp;", "&")
+        assert parse_qs(urlsplit(link).query)["status"] == [outcome]
     store.advance(3)
-    assert poll(client, transfer_id)["paymentStatus"] == "PAID"
+    assert poll(client, transfer_id) == result
+
+
+def test_hosted_post_cannot_override_the_payer_rule(service):
+    client, _, store = service
+    store.payer_outcome(*RULE, "failed")
+    transfer_id = accept(client, **RETURN_HEADER)
+    before = poll(client, transfer_id)
+    # The page shows no form, so the token comes from storage.
+    with sqlite3.connect(store.path) as db:
+        token = db.execute(
+            "SELECT form_token FROM collection_hosted WHERE transfer_id=?", (transfer_id,)
+        ).fetchone()[0]
+    for decision in ("pay", "decline", "cancel"):
+        response = decide(client, transfer_id, decision, token=token)
+        # Refused: no redirect, no new decision, and the result page is shown.
+        assert response.status_code == 200
+        assert 'name="decision"' not in response.text
+    assert poll(client, transfer_id) == before
+    assert store.inspect_collections()["payments"] == []
+
+
+def test_requests_without_a_rule_are_unchanged_when_another_payer_has_one(service):
+    client, _, store = service
+    store.payer_outcome(*RULE, "failed")
+    other_request = intent(requestId="fee-002", rtpId=1002, billID="bill-002")
+    other_request["payerFiDetails"] = {"payerFIBIC": "TESTBANK", "financialAddress": "someone-else"}
+    waiting = accept(client, other_request, **RETURN_HEADER)
+    assert poll(client, waiting)["paymentStatus"] == "PENDING"
+    assert 'name="decision"' in page(client, waiting).text
+    assert decide(client, waiting, "pay").status_code == 303
+    assert poll(client, waiting)["paymentStatus"] == "PAID"
 
 
 def test_payer_rule_can_be_replaced_and_removed(service):

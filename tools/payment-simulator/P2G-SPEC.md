@@ -226,7 +226,8 @@ GovStack profile or the generated OpenAPI, and they need no bearer token.
   the return URL and changes nothing, so a double click or a replayed POST never
   creates a second payment reference. A wrong token is still `403`.
 - **Waiting.** A request created with a return URL is not advanced by the worker
-  or `advance`: it stays `PND/PENDING` until the payer decides. A request without
+  or `advance`: it stays `PND/PENDING` until the payer decides, unless a payer rule
+  settled it at creation. A request without
   a return URL advances as before and can also be decided at the page until it
   is final.
 
@@ -254,11 +255,14 @@ uv run payment-simulator payer-outcome --database .state/payments.sqlite \
 ```
 
 The rule matches `payerFiDetails.financialAddress` exactly and applies to new
-requests. An outcome is chosen in this order: the payer's decision at the hosted
-page, then the payer rule, then the biller's scenario. A matching payer rule also
-stops a request with a return URL from waiting, so that person's request settles
-without a visit to the page. The decision still wins if the payer reaches the
-page before the request is final, which is easiest to see with `serve --manual`.
+requests. A matching request is settled to its terminal state when it is
+created, so the first `GET /transferRequests/{id}` is already final, with a
+payment reference for `paid`. Nothing can decide it first: the hosted page then
+shows the result (and the return link), and a `POST /pay/{id}` is answered with
+that result page and changes nothing. An outcome is therefore chosen in this
+order: the payer rule, then, for requests without one, the payer's decision at
+the hosted page, then the biller's scenario. Changing or removing a rule does
+not affect requests already created.
 
 The payment receipt and terminal transition commit together, with one receipt
 per accepted request. `inspect-collections --database ...` provides separate
