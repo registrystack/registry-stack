@@ -116,7 +116,8 @@ belongs to the code. No field repeats a submitted value. Every response, refusal
 
 A token resolves to exactly one access profile in the deployed package, by the client it was issued
 to, the scopes it carries, and, when the profile names one, the actor kind in
-`registry_actor_kind`. A token that resolves to no profile is refused with `authentication.refused`.
+`registry_actor_kind`. A token that verifies but resolves to no profile is refused with
+`403 profile.not-authorized`; a credential that does not verify is `401 authentication.refused`.
 Messaging inherits no authorization from a calling product: being allowed to act on a record
 elsewhere does not make a caller allowed to send.
 

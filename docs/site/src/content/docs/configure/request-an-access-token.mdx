@@ -164,7 +164,8 @@ Python exposes it as `registry_client.auth.PrivateKeyJwt`; `registry_client.breg
 Rust exposes it in `registry_stack_client::auth`.
 
 The provider's `resource` is the RFC 8707 resource indicator for the issued access token.
-Its optional `audience` instead names the client assertion's audience (default: the token endpoint); it does not select an access-token audience.
+Its required `audience` instead names the client assertion's audience: the authorization server's issuer identifier, exactly as its metadata publishes it (RFC 10070 section 4).
+It has no default, a provider built without it is refused, and it does not select an access-token audience.
 Keep that distinction when you configure one shared OAuth registration.
 A provider does not choose scopes, derive an audience, or grant downstream authority.
 

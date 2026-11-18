@@ -13,7 +13,7 @@ standards_referenced: []
 
 This page states what Registry Coordinator holds, what it does not hold, and what you must do for
 its guarantees to hold.
-Each guarantee carries a stable identifier from `COORDINATOR-INV-01` to `COORDINATOR-INV-14`, and
+Each guarantee carries a stable identifier from `COORDINATOR-INV-01` to `COORDINATOR-INV-15`, and
 each accepted residual risk one from `COORDINATOR-RES-01` to `COORDINATOR-RES-27`.
 Terms follow [Author a Coordinator workflow](../../configure/coordinator/).
 Deployment steps are in [Deploy Registry Coordinator](../../operate/coordinator/).
@@ -675,6 +675,41 @@ restore hold, and unavailable durable audit.
     a_revision_keeps_due_occurrences_unless_its_schedule_changed,
     an_audit_outage_admits_and_reschedules_nothing. */}
 
+### COORDINATOR-INV-15: a connection credential names one assertion audience, and a live Run keeps it
+
+Threat: a client assertion whose audience is implicit or shared can be replayed to another
+authorization server, or to another endpoint of the same one (RFC 10070 section 4).
+A configuration that moves a connection to another audience while Runs are live would carry their
+later steps under an identity they were not admitted with.
+
+Enforcement: every connection `authorization` and `observationAuthorization` in `runtime.yaml`
+states `clientAssertionAudience`.
+There is no default: a configuration without it fails to load with `config.missing-key` naming the
+member, and a value that is not a bounded absolute URI is refused.
+The client assertion carries it as its only audience, with the header
+`typ: client-authentication+jwt`.
+A Scheduling `observationAuthorization` states the same audience, token endpoint, client and
+resource as its primary `authorization`.
+The audience is part of the connection's binding identity, so normal serving and apply refuse with
+`live-binding-conflict` while a live Run was admitted under another binding.
+`coordinatorctl deployment-status` reports the conflict, and `coordinator --recovery-only` inspects
+the Run with admissions and dispatch disabled.
+
+Refused: a connection credential without `clientAssertionAudience`, or with a value that is not a
+bounded absolute URI; an `observationAuthorization` whose audience differs from its primary's;
+normal serving or apply while a live Run's retained binding differs from the configuration.
+
+{/* Evidence: crates/registry-coordinator/src/runtime.rs client_assertion_audience;
+    crates/registry-coordinator/src/adapters.rs with_audience;
+    crates/registry-coordinator/src/store/recovery.rs scan_live_definitions;
+    crates/registry-coordinator/tests/runtime_config.rs
+    every_connection_credential_states_its_client_assertion_audience,
+    runtime_authorization_syntax_is_checked_offline_without_values,
+    task_bound_scheduling_requires_non_task_observation_authorization_offline,
+    binding_identity_never_resolves_secrets_and_pins_audience_and_task_authority;
+    crates/registry-coordinator/tests/deployment_postgres.rs
+    split_activation_and_real_router_enforce_owned_progress_and_operator_recovery. */}
+
 ## Operator obligations
 
 The guarantees hold only when you meet these obligations.
@@ -718,6 +753,12 @@ The residuals refer to them by number.
     Coordinator and the destinations cannot check this.
 12. Run workflows that must not share a Casework producer identity in separate deployments: one
     deployment is one trust domain.
+13. Set each connection's `clientAssertionAudience` to the authorization server's issuer
+    identifier, exactly as its metadata publishes it.
+    Finish live Runs on the earlier release before upgrading to one that requires the audience: a
+    Run admitted without it no longer matches its binding, so `deployment-status` reports
+    `live-binding-conflict` and normal serving refuses while it remains.
+    `coordinator --recovery-only` inspects it (COORDINATOR-INV-15).
 
 {/* Evidence: crates/registry-coordinator/tests/external_command_postgres.rs
     a_lost_acknowledgement_holds_and_retry_same_sends_the_same_command;
@@ -725,9 +766,11 @@ The residuals refer to them by number.
     unkeyed_hold_release_holds_an_ambiguous_dispatch_without_replay;
     crates/registry-coordinator/tests/deployment_postgres.rs
     a_run_whose_retained_definition_does_not_restore_is_held_alone,
-    start_input_is_not_bound_to_the_caller_subject;
+    start_input_is_not_bound_to_the_caller_subject,
+    split_activation_and_real_router_enforce_owned_progress_and_operator_recovery;
     crates/registry-coordinator/tests/runtime_config.rs
-    caller_policies_list_the_exact_subjects_they_admit. */}
+    caller_policies_list_the_exact_subjects_they_admit,
+    every_connection_credential_states_its_client_assertion_audience. */}
 
 ## Accepted residuals
 

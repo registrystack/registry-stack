@@ -370,6 +370,9 @@ adapter-job rescan "<job-file>" \
 
 An ordinary rescan writes the due marker and runs one pass.
 Unchanged items skip by digest, refused items retry, and held items remain held while unchanged.
+An item refused on the retry of a lost answer may already be admitted, so the rescan does not send it again under a new key: it is held as `adapter.job.revised-item`, or sent to `destination.revisedReceiver` when a Coordinator job names one.
+An item whose revised event may already be admitted is sent only to the same revised receiver with the same body.
+A changed receiver or body stops the rescan as `adapter.job.coordinator-receiver-changed` or `adapter.job.coordinator-body-changed` before any request; restoring the previous receiver and job definition lets the item settle.
 
 For a long-running process driven by the job's interval trigger, run:
 
@@ -413,6 +416,13 @@ database backup.
 A signed delivery left pending from before schema 103 has no recorded receiver or body identity, so
 the new binary stops it as `adapter.job.coordinator-identity-unrecorded` before any recipient call.
 The recovery is to restore that backup, settle the item with the previous binary, and upgrade again.
+Drain a direct BReg job the same way, and take a backup, before upgrading from a binary whose stored
+receiver identity did not include the client assertion audience: this binary's receiver identity
+includes it, so an item left pending stops as `adapter.job.breg-receiver-changed` before any BReg
+call, and no configuration clears it.
+The new `init-store` moves the store to schema 104, which the previous binary refuses, so the
+recovery is the same: restore that backup, settle the item with the previous binary, and upgrade
+again.
 Run the new binary's `init-store` once before you restart passes.
 Compatible embedded transitions serialize under the migration lock and can be repeated safely.
 An older binary refuses a store whose schema is newer than that binary supports.
@@ -439,9 +449,17 @@ original receiver recovers it.
 A direct BReg job fences the same way, and the recoveries are the same:
 
 - `adapter.job.breg-body-changed`: the mapped operation differs.
-- `adapter.job.breg-receiver-changed`: another BReg binding, base URL, token endpoint, caller, TLS
-  trust profile, access profile, Action, or mode.
+- `adapter.job.breg-receiver-changed`: another BReg binding, base URL, token endpoint, caller, client
+  assertion audience, TLS trust profile, access profile, Action, or mode. The exception is an item
+  left pending by a previous binary whose stored receiver identity did not include the client
+  assertion audience: no configuration clears its stop (see the upgrade steps above).
 - `adapter.job.breg-identity-unrecorded`: the item was staged before schema 103.
+
+Removing `destination.revisedReceiver` from a Coordinator job does not stop: a possibly admitted item
+then has no receiver and is held as `adapter.job.revised-item`, even when its revised event was sent
+and that answer lost.
+Restoring the receiver does not resend a held item, so check Coordinator for that Run before you
+resolve the hold.
 
 {/* Evidence: crates/registry-adapter-job/tests/signed_coordinator_event_postgres.rs
     pending_job_version_drift_stops_before_wire_and_restore_recovers;
@@ -503,6 +521,20 @@ A rerun after a restart is safe, because the cursor and the item store carry the
 
 {/* TODO[evidence]: no test pins the PostgreSQL source's resolve-once-into-pool behavior or the
     RabbitMQ reconnect reuse; the rows rest on the source construction code. */}
+
+## Change a source under asynchronous writes
+
+An asynchronous write is polled only at the source origin it was sent to; see
+[Asynchronous writes](../../configure/adapter/#asynchronous-writes).
+Rotating a source credential needs no care.
+Change the `baseUrl` of an endpoint that an asynchronous write, status or uncertainty route reaches
+only after that operation's writes have settled: an unfinished write is otherwise held and never
+polled.
+Its status link answers the stored 202, a same-key retry answers 409 without `Retry-After`, and the
+facade logs a value-free warning for each held poll.
+Restore the original `baseUrl` to let held writes finish, or let them expire.
+Let async writes settle before upgrading; rows written by an earlier version are quarantined and
+expire.
 
 ## Operate an SFTP job source
 
@@ -615,6 +647,28 @@ mutation.
 A held row remains held, and ordinary passes and rescans skip an unchanged held item.
 Resolve a BReg outcome in BReg, or a Coordinator Run and its linked review in their owning products.
 
+`adapter.job.revised-item` holds an item the destination may already have admitted under its key: a
+source edit after a hand-off that was accepted or whose answer was lost, or a `rescan` of an item
+refused on the retry of a lost answer.
+A Coordinator job that names a receiver for revisions sends such an item there as a `revised` event
+instead of holding it.
+Once that revised event may have been admitted (its answer was lost and its retry refused), a
+`rescan` sends it only to the same receiver with the same body; a changed receiver or body stops the
+pass as `adapter.job.coordinator-receiver-changed` or `adapter.job.coordinator-body-changed` before
+any request.
+Removing that receiver holds every such item, including one whose revised event was sent and whose
+answer was lost; restoring the receiver does not resend a held item, so check Coordinator for that
+Run before you resolve the hold.
+
+This hold is conservative.
+A refusal of the retry cannot show that the first attempt had no effect, so an item whose first
+attempt never reached the destination is held the same way: for example, a BReg request that timed
+out before it arrived, then a retry refused for invalid data.
+On a direct BReg job, or a Coordinator job without a receiver for revisions, correcting that item's
+source record does not deliver it, and no Adapter command releases the hold.
+Confirm under the destination's own authority that the first attempt left no effect, then make the
+registration there, outside the job.
+
 A refusal the destination answered is stored as `adapter.job.breg.<word>` or
 `adapter.job.coordinator.<word>`, where `<word>` is the destination's own refusal word.
 The prefix says which product to ask; the word is the one that product's documentation uses.
@@ -658,6 +712,9 @@ Confirm the job definition is the one you intend to run, stop any running pass o
 `adapter-job rebind-identity <job.yaml> --pack <pack> --runtime <runtime>` once.
 It records the job's current identity and keeps the stored items and the cursor, so the next pass
 reads source rows as new and can deliver them again.
+The rebind refuses only while a pass holds the job lease; it does not check for held items or items
+marked as possibly admitted (`admittedBefore` in `inspect`), so settle those under the destination's
+own authority before you rebind.
 The host never infers identity from stored keys, rewrites rows, or resets the cursor automatically.
 To keep the old identity instead, restore the previous job definition.
 [Upgrade and recover](#upgrade-and-recover) describes the receipt and the audit line.
