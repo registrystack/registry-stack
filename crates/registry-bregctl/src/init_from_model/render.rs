@@ -1271,10 +1271,11 @@ fn readme(plan: &Plan) -> String {
     let _ = writeln!(
         out,
         "\nThis model-derived project declares no lookup grant or selector profile. To add \
-         Evidence later, stop the retained session and run `evidencectl source add . ../evidence` \
-         to select the existing unique identifier, readable facts, explicit row scope, and a \
-         dedicated client. `bregctl dev prepare-source` previews and prepares that bounded \
-         policy successor; the next `bregctl dev` activates it while retaining records."
+         Evidence later, stop the retained session and run `bregctl dev prepare-source .` to \
+         select the existing unique identifier, readable facts, explicit row scope, and a \
+         dedicated client. It previews that bounded policy successor, `--apply` prepares it, and \
+         the next `bregctl dev` activates it while retaining records. Then add the source to an \
+         Evidence project with `bregctl generate evidence-source` and `evidencectl source import`."
     );
     if let Some(note) = sensitive_note(plan) {
         let _ = writeln!(out, "\n{note}");
@@ -2113,17 +2114,20 @@ mod tests {
         assert!(comments.contains("the caller supplies"), "{comments}");
     }
 
-    /// The guidance names the `evidencectl source add` spelling `--help`
-    /// documents: the Evidence project is positional, after the registry.
+    /// The guidance names commands that exist: `bregctl dev prepare-source`
+    /// for the lookup successor, then the export and import that add the
+    /// source to an Evidence project.
     #[test]
-    fn the_readme_adds_evidence_with_the_positional_project_spelling() {
+    fn the_readme_adds_evidence_with_prepare_source_then_import() {
         let (plan, _) = starter_plan("household");
         let text = readme(&plan);
+        assert!(text.contains("`bregctl dev prepare-source .`"), "{text}");
         assert!(
-            text.contains("`evidencectl source add . ../evidence`"),
+            text.contains("`bregctl generate evidence-source`"),
             "{text}"
         );
-        assert!(!text.contains("--project"), "{text}");
+        assert!(text.contains("`evidencectl source import`"), "{text}");
+        assert!(!text.contains("source add"), "{text}");
     }
 
     #[test]

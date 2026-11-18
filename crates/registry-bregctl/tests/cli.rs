@@ -1997,6 +1997,16 @@ fn bregctl(arguments: &[&str]) -> Output {
 }
 
 #[test]
+fn examples_review_is_not_a_command() {
+    let output = bregctl(&["examples", "review", "--help"]);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"),
+        "{output:?}"
+    );
+}
+
+#[test]
 fn offline_concept_listing_and_missing_principal_claim_offer_precise_recovery() {
     let listing = bregctl(&[
         "--format",

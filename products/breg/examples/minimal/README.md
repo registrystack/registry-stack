@@ -24,7 +24,7 @@ issuer, runs the authored journeys, starts the registry, and sends the scenario 
 `dev/` because `bregctl check` reads every YAML file under `tests/` as one of its own checks.
 `dev.yaml` names the products, the two callers and that file. Stopping the run with
 `rstack dev stop RUN` removes its data, and a run that is not stopped ends after its time to live.
-[Run a project with rstack dev](https://docs.registrystack.org/dev/configure/run-a-project-with-rstack-dev/)
+[Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/)
 describes tokens and the rest of the report.
 
 To call the registry, write a token header file for a caller and send a request with it:
@@ -34,7 +34,7 @@ rstack dev token RUN --as editor
 rstack breg api /v1/records/contacts --url BREG_URL --header @HEADER_FILE
 ```
 
-The [Change a registry with an Action](https://docs.registrystack.org/dev/tutorials/change-a-registry-with-an-action/)
+The [Change a registry with an Action](https://docs.registrystack.org/tutorials/change-a-registry-with-an-action/)
 tutorial adds scenarios for both Actions to `dev/scenarios.yaml`. Automatic application of a
 submitted Proposal runs after the response, so that scenario reads the Proposal until it is applied.
 

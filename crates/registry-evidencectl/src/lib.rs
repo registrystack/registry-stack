@@ -20,7 +20,6 @@ mod authoring;
 mod build;
 mod check;
 mod client;
-mod dev;
 mod doctor;
 mod evidence_binary;
 mod file_check;
@@ -38,7 +37,6 @@ mod report;
 mod request;
 mod runtime;
 mod scaffold;
-mod source_add;
 mod source_cli;
 mod source_import;
 mod source_mock;
@@ -126,8 +124,6 @@ enum Command {
     /// Inspect deployment artifact custody.
     #[command(subcommand)]
     Artifact(ArtifactCommand),
-    /// Run the private local issuer and Registry Evidence pair.
-    Dev(dev::DevArgs),
     /// Operate the optional Evidence wallet-delivery service.
     Oid4vci(oid4vci::Oid4vciArgs),
     /// Prepare a closed request for the active local project.
@@ -140,8 +136,6 @@ enum Command {
     /// Advanced: editor and tooling integration surfaces.
     #[command(subcommand)]
     Tooling(tooling::ToolingCommand),
-    #[command(name = "__dev-supervisor", hide = true)]
-    DevSupervisor(dev::SupervisorArgs),
     #[command(name = "rstack-dev", hide = true)]
     RstackDev(registry_rstack_dev::Args),
 }
@@ -190,8 +184,8 @@ struct CheckArgs {
     /// Editable Evidence project directory. Required unless --file is given.
     project: Option<PathBuf>,
     /// Check one tooling file on its own, offline: a client profile, reviewed
-    /// contracts, development state, a source-import baseline or journal, a
-    /// source resolution file, or a source export manifest.
+    /// contracts, a ThunderID task connection or session file, a source-import
+    /// baseline or journal, a source resolution file, or a source export manifest.
     #[arg(long, conflicts_with_all = ["project", "target", "production"])]
     file: Option<PathBuf>,
     /// Explicit deployment target whose governance and runtime structure are checked.
@@ -338,7 +332,6 @@ const HUMAN_ONLY_COMMANDS: &[&[&str]] = &[
     &["target", "new"],
     &["request", "prepare"],
     &["verify"],
-    &["__dev-supervisor"],
 ];
 
 /// The command tree with each human-only command's `--format` narrowed to the
@@ -731,7 +724,6 @@ fn run_entry() -> ExitCode {
                 "Correct the deployment target or package named by the command and rerun artifact inspect.",
             )
         }
-        Command::Dev(args) => safe_dev_command(dev::run_with_format(args, format)),
         Command::Oid4vci(args) => safe_command(
             oid4vci::run(args, format),
             "evidence.oid4vci.failed",
@@ -742,7 +734,6 @@ fn run_entry() -> ExitCode {
         Command::Request(command) => request::run(command),
         Command::Verify(args) => verify::run(args),
         Command::Tooling(command) => tooling::run(command, format),
-        Command::DevSupervisor(args) => dev::run_supervisor(args),
         Command::Runtime(_) => unreachable!("runtime bypasses report dispatch"),
         Command::RstackDev(_) => unreachable!("rstack-dev bypasses report dispatch"),
     };
@@ -768,10 +759,6 @@ fn run_entry() -> ExitCode {
             }
             if let Some(unknown) = error.downcast_ref::<suggest::UnknownSelectionPointer>() {
                 write_unknown_selection_failure(unknown, format);
-                return ExitCode::from(report::DOMAIN_REFUSAL_EXIT);
-            }
-            if let Some(mismatch) = error.downcast_ref::<source_add::BregctlVersionMismatch>() {
-                write_bregctl_version_mismatch(mismatch, format);
                 return ExitCode::from(report::DOMAIN_REFUSAL_EXIT);
             }
             if let Some(refused) = error.downcast_ref::<source_import::DocumentRefused>() {
@@ -1236,69 +1223,6 @@ fn safe_command(
     })
 }
 
-fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode> {
-    match result {
-        Err(error) => {
-            if let Some(refusal) = error.downcast_ref::<dev::DevRefusal>() {
-                return Err(SafeCliFailure {
-                    operational: refusal.operational,
-                    code: refusal.code.to_owned(),
-                    artifact: "local development project".to_owned(),
-                    path: refusal.path.clone(),
-                    message: refusal.message.clone(),
-                    suggested_action: refusal.suggested_action.clone(),
-                    // The typed message is the cause; there is no separate
-                    // failure chain to disclose.
-                    cause: None,
-                }
-                .into());
-            }
-            if let Some(failure) = error.downcast_ref::<dev::DevStartFailure>() {
-                return Err(SafeCliFailure {
-                    operational: true,
-                    code: "evidence.dev.start-failed".to_owned(),
-                    artifact: "local development session".to_owned(),
-                    path: "logs".to_owned(),
-                    message: "The local Evidence services failed before reaching readiness."
-                        .to_owned(),
-                    cause: None,
-                    suggested_action: format!(
-                        "Inspect the preserved startup logs at {}, correct the failed dependency, and retry dev start.",
-                        failure.logs.display()
-                    ),
-                }
-                .into());
-            }
-            if let Some(conflict) = error.downcast_ref::<dev::PortConflict>() {
-                return Err(SafeCliFailure {
-                    operational: true,
-                    code: "evidence.dev.port-unavailable".to_owned(),
-                    artifact: format!("127.0.0.1:{}", conflict.port),
-                    path: "$".to_owned(),
-                    message: format!(
-                        "Local port {} is already in use, so the local {} cannot start.",
-                        conflict.port, conflict.service
-                    ),
-                    cause: None,
-                    suggested_action: format!(
-                        "Free 127.0.0.1:{}, or rerun dev start with {} <port>.",
-                        conflict.port, conflict.flag
-                    ),
-                }
-                .into());
-            }
-            safe_command(
-                Err(error),
-                "evidence.dev.failed",
-                "local development project".to_owned(),
-                "Evidence could not complete the requested local lifecycle operation.",
-                "Correct the local project or service dependency and retry the lifecycle operation.",
-            )
-        }
-        Ok(code) => Ok(code),
-    }
-}
-
 fn write_safe_failure(failure: &SafeCliFailure, command: &str, format: OutputFormat) {
     match format {
         OutputFormat::Human => eprint!("{}", safe_failure_human(failure)),
@@ -1326,33 +1250,6 @@ fn write_unknown_selection_failure(
                 "message": format!("`--select {}` names nothing in this response schema.", unknown.pointer()),
                 "suggestedAction": "Rerun with one of the pointers in availablePointers, or pass --list-pointers to print them.",
                 "availablePointers": unknown.available_pointers(),
-            })],
-        )),
-    }
-}
-
-/// Render one refusal for a public `bregctl` that answered `--version` with
-/// a build other than this one. The human message already names both
-/// versions; the JSON diagnostic carries them as machine-readable siblings
-/// instead of leaving them inside a free-text cause.
-fn write_bregctl_version_mismatch(
-    mismatch: &source_add::BregctlVersionMismatch,
-    format: OutputFormat,
-) {
-    match format {
-        OutputFormat::Human => eprintln!("evidencectl: {mismatch}"),
-        OutputFormat::Json => print_report(&report::failure(
-            "source add",
-            report::DOMAIN_REFUSAL_EXIT,
-            vec![serde_json::json!({
-                "severity": "error",
-                "code": "evidencectl.bregctl.version-mismatch",
-                "artifact": "source add",
-                "path": "$",
-                "message": mismatch.to_string(),
-                "suggestedAction": "Set --bregctl-bin or BREGCTL_BIN to a matching bregctl binary.",
-                "foundVersion": mismatch.found,
-                "requiredVersion": mismatch.required,
             })],
         )),
     }
@@ -1655,14 +1552,6 @@ mod tests {
         assert!(!usage.contains("--project"), "{usage}");
     }
 
-    #[test]
-    fn public_reference_excludes_the_dev_supervisor() {
-        let command = command();
-        assert!(command
-            .find_subcommand("__dev-supervisor")
-            .is_some_and(clap::Command::is_hide_set));
-    }
-
     /// Commands that answer `--format json` with a JSON report.
     const JSON_REPORTING_COMMANDS: &[&str] = &[
         "connection check",
@@ -1781,36 +1670,6 @@ mod tests {
             unclassified.is_empty(),
             "unclassified commands: {unclassified:#?}"
         );
-    }
-
-    #[test]
-    fn dev_syntax_separates_start_options_from_lifecycle_subcommands() {
-        assert!(Cli::try_parse_from(["evidencectl", "dev", "start"]).is_ok());
-        assert!(Cli::try_parse_from(["evidencectl", "dev", "start", "project"]).is_ok());
-        assert!(Cli::try_parse_from([
-            "evidencectl",
-            "dev",
-            "start",
-            "project",
-            "--evidence-port",
-            "18080",
-            "--issuer-port",
-            "18081",
-        ])
-        .is_ok());
-        assert!(Cli::try_parse_from([
-            "evidencectl",
-            "dev",
-            "token",
-            "local-tutorial-caller",
-            "project"
-        ])
-        .is_ok());
-        assert!(Cli::try_parse_from(["evidencectl", "dev"]).is_err());
-        assert!(Cli::try_parse_from(["evidencectl", "dev", "--detach"]).is_err());
-        assert!(Cli::try_parse_from(["evidencectl", "dev", "--project", "project"]).is_err());
-        assert!(Cli::try_parse_from(["evidencectl", "dev", "stop"]).is_ok());
-        assert!(Cli::try_parse_from(["evidencectl", "dev", "stop", "project"]).is_ok());
     }
 
     #[test]
@@ -2084,47 +1943,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_dev_start_keeps_the_preserved_log_location() {
-        let error = safe_dev_command(Err(dev::DevStartFailure {
-            logs: PathBuf::from("/private/project/.evidence/failed-start"),
-        }
-        .into()))
-        .expect_err("failed start");
-        let failure = error
-            .downcast_ref::<SafeCliFailure>()
-            .expect("safe failure");
-        assert!(failure.operational);
-        assert_eq!(failure.code, "evidence.dev.start-failed");
-        assert!(failure
-            .suggested_action
-            .contains("/private/project/.evidence/failed-start"));
-    }
-
-    #[test]
-    fn busy_dev_port_keeps_the_safe_numeric_recovery_in_both_formats() {
-        let error = safe_dev_command(Err(dev::PortConflict {
-            port: 48123,
-            service: "Registry Evidence",
-            flag: "--evidence-port",
-        }
-        .into()))
-        .expect_err("busy port");
-        let failure = error
-            .downcast_ref::<SafeCliFailure>()
-            .expect("safe failure");
-        assert!(failure.operational);
-        assert_eq!(failure.code, "evidence.dev.port-unavailable");
-        for report in [
-            safe_failure_human(failure),
-            safe_failure_json(failure, "check").to_string(),
-        ] {
-            assert!(report.contains("48123"), "{report}");
-            assert!(report.contains("already in use"), "{report}");
-            assert!(report.contains("--evidence-port"), "{report}");
-        }
-    }
-
-    #[test]
     fn usage_failure_renderers_are_value_free_and_preserve_six_fields() {
         const CANARY: &str = "unknown-selector-value-never-render";
         let arguments = normalize_arguments(
@@ -2313,7 +2131,6 @@ mod tests {
                 "evidencectl artifact inspect",
             ]
             .contains(&path)
-                || path.starts_with("evidencectl dev ")
         };
         let documented: Vec<_> = projects
             .iter()
@@ -2327,7 +2144,6 @@ mod tests {
             std::collections::BTreeSet::from([
                 "evidencectl fixtures record-facts",
                 "evidencectl fixtures run",
-                "evidencectl source add",
                 "evidencectl source suggest",
                 "evidencectl source mock serve",
                 "evidencectl source mock generate",
@@ -2397,7 +2213,6 @@ mod tests {
                 "--output",
                 "candidate",
             ],
-            vec!["evidencectl", "source", "add", "registry"],
             vec!["evidencectl", "source", "diff", "exports/registry"],
             vec!["evidencectl", "source", "import", "exports/registry"],
             vec!["evidencectl", "source", "update", "exports/registry"],
@@ -2501,9 +2316,6 @@ mod tests {
     fn the_project_flag_is_refused_where_the_project_is_positional() {
         for command in [
             &["target", "explain"][..],
-            &["dev", "stop"],
-            &["dev", "clean"],
-            &["source", "add"],
             &["source", "suggest"],
             &["source", "detach"],
             &["fixtures", "run"],
@@ -2720,8 +2532,8 @@ mod tests {
         }
 
         for tokens in [
-            &["--format", "json", "source", "add", "help"][..],
-            &["source", "add", "help"][..],
+            &["--format", "json", "source", "diff", "help"][..],
+            &["source", "diff", "help"][..],
         ] {
             assert!(
                 !help_requested(&args(tokens)),

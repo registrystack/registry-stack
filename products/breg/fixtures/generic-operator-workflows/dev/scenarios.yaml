@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: record-lifecycle
+    steps:
+      - id: create-record-group
+        product: breg
+        as: operator
+        method: POST
+        path: /v1/records/record-groups
+        headers: {Idempotency-Key: create-record-group}
+        body: {data: {code: group-a, label: Example group}}
+        expect: {status: 201}
+        capture: {group: {type: pointer, pointer: /data/recordIdentifier}}
+      - id: create-record
+        product: breg
+        as: operator
+        method: POST
+        path: /v1/records/records
+        headers: {Idempotency-Key: create-record}
+        body: {data: {code: example, label: Example record, group: "{{group}}", status: active}}
+        expect: {status: 201}
+        capture: {record: {type: pointer, pointer: /data/recordIdentifier}}
+      - id: get-record
+        product: breg
+        as: operator
+        method: GET
+        path: "/v1/records/records/{{record}}"
+        expect:
+          status: 200
+          json: {/data/domainData/code: example}
+      - id: read-record-within-the-claim
+        product: breg
+        as: reader
+        method: GET
+        path: /v1/records/records
+        expect:
+          status: 200
+          checks:
+            - {pointer: /items, length: 1}

@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+# Synthetic local callers. A run signs their test tokens with a throwaway local
+# key under this logical issuer.
+issuer: https://identity.identifiers.example.test
+products:
+  - {product: breg, project: ., audience: "urn:example:generated-identifiers"}
+people:
+  clerk-a:
+    subject: synthetic-clerk-a
+    client: clerk-a
+    grants:
+      breg:
+        profile: application-clerk
+        scopes: ["registry:applications:write"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: application-administration
+          jurisdiction: zone-a
+  clerk-b:
+    subject: synthetic-clerk-b
+    client: clerk-b
+    grants:
+      breg:
+        profile: application-clerk
+        scopes: ["registry:applications:write"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: application-administration
+          jurisdiction: zone-b
+# Both people match the application-clerk profile, so each schema-test step
+# names its person.
+schemaTestPeople:
+  generated-application-numbers:
+    create-zone-a-first: clerk-a
+    create-zone-a-second: clerk-a
+    create-zone-b: clerk-b
+    read-zone-a-first: clerk-a
+    start-proposal: clerk-a
+    submit-proposal: clerk-a
+scenarioFile: dev/scenarios.yaml

@@ -20,97 +20,19 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde_json::{json, Value};
 
 use crate::authored;
-use crate::evidence_binary::{
-    EVIDENCE_BUNDLE_API_VERSION, EVIDENCE_BUNDLE_KIND, EVIDENCE_RUNTIME_API_VERSION,
-    EVIDENCE_RUNTIME_KIND,
-};
+use crate::evidence_binary::{EVIDENCE_BUNDLE_API_VERSION, EVIDENCE_BUNDLE_KIND};
 
 // The authoring form itself: what an adopter may write, and the checks that
 // shape must satisfy. It lives in a library so that this compiler and an editor
 // reach the same verdict from the same code; the reading of files below stays
 // here, because that library performs no input or output.
-pub(crate) use registry_evidence_authoring::{
-    layout::{FIXTURES_DIRECTORY, MAX_SOURCE_ARTIFACT_BYTES, SECRETS_DIRECTORY},
-    validate::valid_local_identifier,
+pub(crate) use registry_evidence_authoring::layout::{
+    FIXTURES_DIRECTORY, MAX_SOURCE_ARTIFACT_BYTES, SECRETS_DIRECTORY,
 };
 
 const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
 const LOCAL_AUDIENCE: &str = "urn:registrystack:evidence:local:gateway";
-const LOCAL_SIGNING_PRIVATE_FILENAME: &str = "signing-p256-private-jwk";
 const LOCAL_SIGNING_PUBLIC_FILENAME: &str = "signing-p256-public.jwk.json";
-#[cfg(test)]
-const OFFLINE_CHECK_PUBLIC_JWK: &str = r#"{"kty":"EC","crv":"P-256","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
-#[cfg(test)]
-const OFFLINE_CHECK_PUBLIC_JWK_FILE: &str =
-    "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json";
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CompiledConceptForm {
-    Boolean,
-    ControlledCode,
-    ControlledCategory,
-    BoundedDecimal,
-    DateBucket,
-    TimeBucket,
-    AudienceScopedEntityReference,
-    ControlledCodeList,
-    EntityReferenceList,
-    BoundedIdentifier,
-    BoundedInteger,
-    Structured,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CompiledConcept {
-    pub(crate) concept_alias: String,
-    pub(crate) concept_uri: String,
-    pub(crate) concept_form: CompiledConceptForm,
-}
-
-/// Closed metadata consumed later by `dev` and request preparation. It stays
-/// in memory here; this compiler does not create a second public artifact.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CompiledDefinition {
-    pub(crate) definition_alias: String,
-    pub(crate) requirement_uri: String,
-    pub(crate) purpose: String,
-    pub(crate) subjects: Vec<CompiledSubject>,
-    pub(crate) concepts: Vec<CompiledConcept>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CompiledSubject {
-    pub(crate) role: String,
-    pub(crate) selectors: Vec<CompiledSelector>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct CompiledSelector {
-    pub(crate) profile: String,
-    pub(crate) fields: Vec<String>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CompiledProject {
-    pub(crate) runtime_path: PathBuf,
-    pub(crate) definitions: Vec<CompiledDefinition>,
-    pub(crate) local_audience: String,
-    pub(crate) requester_tag: String,
-    pub(crate) caller_evidence_audience: String,
-    pub(crate) required_scopes: Vec<String>,
-    pub(crate) access_profiles: Vec<CompiledAccessProfile>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CompiledAccessProfile {
-    pub(crate) id: String,
-    pub(crate) digest: String,
-    pub(crate) requester_tags: Vec<String>,
-    pub(crate) definitions: Vec<String>,
-    pub(crate) actor_kind: Option<String>,
-    pub(crate) task_grant: Option<crate::access::TaskGrantBinding>,
-}
 
 /// A field-addressed refusal from a typed authored document.
 #[derive(Debug)]
@@ -152,13 +74,6 @@ pub(crate) fn cleanup_failure_line(path: &Path, error: &anyhow::Error) -> String
 }
 
 enum CompileProfile {
-    Local {
-        ports: LocalServicePorts,
-        audience: String,
-        active_public_jwk_file: String,
-        active_public_jwk: Vec<u8>,
-        admission: LocalAdmission,
-    },
     Production(Value),
 }
 
@@ -207,141 +122,6 @@ impl Default for LocalServicePorts {
             issuer: 8081,
         }
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn compile_normalized_local_project(
-    project_root: &Path,
-    staging_root: &Path,
-    evidence_bin: &Path,
-    ports: LocalServicePorts,
-    target: &Path,
-    audience: &str,
-    admission: &LocalAdmission,
-) -> Result<CompiledProject> {
-    let (connections, outbound_tls) = crate::build::local_dev_target_inputs(target)?;
-    compile_local_project_with_target_inputs_resource_and_authority(
-        project_root,
-        staging_root,
-        evidence_bin,
-        ports,
-        connections,
-        outbound_tls,
-        audience,
-        admission,
-        Some(&json!({"authoredTargetPath":target})),
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn compile_local_project_with_target_inputs_resource_and_authority(
-    project_root: &Path,
-    staging_root: &Path,
-    evidence_bin: &Path,
-    ports: LocalServicePorts,
-    source_connections: Value,
-    outbound_tls: Value,
-    audience: &str,
-    admission: &LocalAdmission,
-    compiled_target_bundle: Option<&Value>,
-) -> Result<CompiledProject> {
-    LocalServicePorts::new(ports.evidence, ports.issuer)?;
-    if !valid_local_audience(audience) {
-        bail!("local Evidence resource must be one exact bounded absolute URI");
-    }
-    let project_root = validate_project_root(project_root)?;
-    validate_private_empty_staging(staging_root)?;
-    validate_evidence_binary(evidence_bin)?;
-
-    // Resolve the complete plan before writing anything. Unsupported or
-    // ambiguous authoring inputs therefore leave the staging root empty.
-    let inputs = read_inputs(&project_root, true)?;
-    for source in inputs.project.sources.values() {
-        if crate::normalized::source_route_operations(&project_root, source)?
-            .iter()
-            .any(|operation| operation.component == "sqlite-extract")
-        {
-            bail!("local dev requires HTTP sources; SQLite extracts remain available through fixture and deployed runtime paths");
-        }
-    }
-    ensure_local_project_key_material(&project_root)?;
-    let (active_public_jwk_file, active_public_jwk) =
-        ensure_local_signing_public_jwk(&project_root)?;
-    let mut plan = compile_plan_with_connections(
-        inputs,
-        CompileProfile::Local {
-            ports,
-            audience: audience.to_owned(),
-            active_public_jwk_file,
-            active_public_jwk,
-            admission: admission.clone(),
-        },
-        source_connections,
-    )?;
-    let target_path = compiled_target_bundle
-        .and_then(|value| value.get("authoredTargetPath"))
-        .and_then(Value::as_str)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| project_root.join("local-target.yaml"));
-    let target_bytes = authored::read_authored_file(&target_path, "local EvidenceTarget")?;
-    let target = registry_evidence_authoring::target::read_target(
-        &target_path.to_string_lossy(),
-        &target_bytes,
-    )?
-    .value;
-    let target_root = crate::normalized::target_directory(&target_path)
-        .canonicalize()
-        .context("resolving local EvidenceTarget directory")?;
-    let runtime_source_connections =
-        crate::normalized::runtime_source_connections(&target_root, &target)?;
-    let runtime_source_acquisition = target
-        .source_acquisition
-        .as_ref()
-        .map(|source_acquisition| source_acquisition.runtime_value())
-        .transpose()?;
-    let (project, _) = crate::normalized::read(&project_root)?;
-    let authority_path = crate::normalized::safe_asset(&target_root, &target.authority)?;
-    let authority_bytes = authored::read_authored_file(&authority_path, "target authority")?;
-    plan.authority_document = Some(crate::normalized::compiled_authority(
-        &project,
-        &target,
-        &authority_path,
-        &authority_bytes,
-    )?);
-    plan.bundle["authentication"]["oidc"]["requiredScopes"] =
-        serde_json::to_value(&target.authentication.oidc.required_scopes)?;
-    if let Some(signing) = &target.signing {
-        plan.bundle["signing"]["maximumAssertionValiditySeconds"] =
-            json!(signing.maximum_assertion_validity_seconds);
-    }
-    check_target_signing_validity(&plan)?;
-    let compilation = write_plan(
-        &project_root,
-        staging_root,
-        &plan,
-        ports,
-        evidence_bin,
-        LocalRuntimeProjection {
-            source_connections: runtime_source_connections,
-            source_acquisition: runtime_source_acquisition,
-            outbound_tls,
-        },
-    )?;
-
-    if let Err(error) = check_with_evidence(evidence_bin, &compilation.runtime_path) {
-        // A rejected unpublished generation should remain removable by its
-        // owner. No path outside the caller-supplied staging root is changed.
-        set_bundle_modes(&staging_root.join("bundle"), 0o700, 0o600).with_context(|| {
-            format!("restoring owner write on the rejected generation after {error:#}")
-        })?;
-        fs::set_permissions(&compilation.runtime_path, fs::Permissions::from_mode(0o600))
-            .with_context(|| {
-                format!("restoring owner write on the rejected runtime settings after {error:#}")
-            })?;
-        return Err(error);
-    }
-
-    Ok(compilation)
 }
 
 pub(crate) fn valid_local_audience(value: &str) -> bool {
@@ -454,43 +234,13 @@ struct Inputs {
 struct CompilePlan {
     definitions: Vec<DefinitionPlan>,
     bundle: Value,
-    local_public_jwk: Option<(String, Vec<u8>)>,
     generated_artifacts: BTreeMap<String, Vec<u8>>,
-    authority_document: Option<Value>,
-}
-
-struct LocalRuntimeProjection {
-    source_connections: Value,
-    source_acquisition: Option<Value>,
-    outbound_tls: Value,
 }
 
 struct DefinitionPlan {
     definition_id: String,
     fixture_artifact: Option<String>,
-    purpose: String,
-    requirement_uri: String,
-    concepts: Vec<ConceptPlan>,
-    subjects: Vec<SubjectPlan>,
     requirement: Value,
-}
-
-#[derive(Debug)]
-struct SubjectPlan {
-    role: String,
-    selectors: Vec<SubjectSelectorPlan>,
-}
-
-#[derive(Debug)]
-struct SubjectSelectorPlan {
-    profile: String,
-    fields: Vec<String>,
-}
-
-struct ConceptPlan {
-    concept_alias: String,
-    concept_uri: String,
-    concept_form: CompiledConceptForm,
 }
 
 fn validate_project_root(project_root: &Path) -> Result<PathBuf> {
@@ -558,18 +308,6 @@ fn validate_private_empty_staging(staging_root: &Path) -> Result<()> {
         .with_context(|| format!("reading staging root {}", staging_root.display()))?;
     if entries.next().transpose()?.is_some() {
         bail!("local compilation staging root must be empty");
-    }
-    Ok(())
-}
-
-fn validate_evidence_binary(path: &Path) -> Result<()> {
-    let metadata = fs::metadata(path)
-        .with_context(|| format!("inspecting evidence binary {}", path.display()))?;
-    if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
-        bail!(
-            "evidence binary {} is not an executable file",
-            path.display()
-        );
     }
     Ok(())
 }
@@ -1120,7 +858,6 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
             .get("sourceConnections")
             .cloned()
             .unwrap_or_else(|| json!({})),
-        CompileProfile::Local { .. } => json!({}),
     };
     compile_plan_with_connections(inputs, profile, connections)
 }
@@ -1136,19 +873,7 @@ fn compile_plan_with_connections(
         &inputs.pack_routes,
     )
     .map_err(|findings| authored::file_findings_report("evidence.yaml", "project", findings))?;
-    let (mut bundle, local_public_jwk) = match profile {
-        CompileProfile::Production(governance) => (governance, None),
-        CompileProfile::Local {
-            ports,
-            audience,
-            active_public_jwk_file,
-            active_public_jwk,
-            admission,
-        } => (
-            render_local_bundle(ports, &active_public_jwk_file, &audience, &admission)?,
-            Some((active_public_jwk_file, active_public_jwk)),
-        ),
-    };
+    let CompileProfile::Production(mut bundle) = profile;
     let object = bundle
         .as_object_mut()
         .ok_or_else(|| anyhow!("target governance must be an object"))?;
@@ -1186,56 +911,9 @@ fn compile_plan_with_connections(
                 .find(|value| value["handle"] == id.as_str())
                 .expect("compiled definition")
                 .clone();
-            let subjects = definition
-                .subjects
-                .iter()
-                .map(|subject| SubjectPlan {
-                    role: subject.role.to_string(),
-                    selectors: subject
-                        .selectors
-                        .iter()
-                        .map(|selector| SubjectSelectorPlan {
-                            profile: selector.to_string(),
-                            fields: inputs.project.selector_profiles[selector]
-                                .fields
-                                .keys()
-                                .map(ToString::to_string)
-                                .collect(),
-                        })
-                        .collect(),
-                })
-                .collect();
-            let concepts = definition
-                .outputs
-                .iter()
-                .map(|(name, output)| ConceptPlan {
-                    concept_alias: name.to_string(),
-                    concept_uri: output.concept.clone(),
-                    concept_form: match output.value_type.as_str() {
-                        "boolean" => CompiledConceptForm::Boolean,
-                        "controlled-code" => CompiledConceptForm::ControlledCode,
-                        "bounded-decimal" => CompiledConceptForm::BoundedDecimal,
-                        "date-bucket" => CompiledConceptForm::DateBucket,
-                        "time-bucket" => CompiledConceptForm::TimeBucket,
-                        "audience-scoped-entity-reference" => {
-                            CompiledConceptForm::AudienceScopedEntityReference
-                        }
-                        "controlled-code-list" => CompiledConceptForm::ControlledCodeList,
-                        "entity-reference-list" => CompiledConceptForm::EntityReferenceList,
-                        "controlled-category" => CompiledConceptForm::ControlledCategory,
-                        "bounded-identifier" => CompiledConceptForm::BoundedIdentifier,
-                        "bounded-integer" => CompiledConceptForm::BoundedInteger,
-                        _ => CompiledConceptForm::Structured,
-                    },
-                })
-                .collect();
             DefinitionPlan {
                 definition_id: id.to_string(),
                 fixture_artifact: definition.fixtures.clone(),
-                purpose: definition.purpose.clone(),
-                requirement_uri: definition.semantics.requirement.clone(),
-                concepts,
-                subjects,
                 requirement,
             }
         })
@@ -1243,24 +921,8 @@ fn compile_plan_with_connections(
     Ok(CompilePlan {
         definitions,
         bundle,
-        local_public_jwk,
         generated_artifacts: compiled.artifacts,
-        authority_document: None,
     })
-}
-
-/// Read authored connection references without requiring runtime credentials.
-pub(crate) fn source_connection_users(
-    project_root: &Path,
-    connection: &str,
-) -> Result<Vec<String>> {
-    let (project, _) = crate::normalized::read(project_root)?;
-    Ok(project
-        .sources
-        .iter()
-        .filter(|(_, source)| source.connection.as_str() == connection)
-        .map(|(id, _)| id.to_string())
-        .collect())
 }
 
 /// Validate imported ordinary artifact references without synthesizing a
@@ -1411,208 +1073,6 @@ fn local_resource_identity(audience: &str, role: &str) -> String {
     }
 }
 
-fn write_plan(
-    project_root: &Path,
-    staging_root: &Path,
-    plan: &CompilePlan,
-    ports: LocalServicePorts,
-    evidence_bin: &Path,
-    projection: LocalRuntimeProjection,
-) -> Result<CompiledProject> {
-    write_bundle(project_root, None, staging_root, plan, evidence_bin, None)?;
-    create_private_directory(&staging_root.join("audit"))?;
-
-    let canonical_staging = fs::canonicalize(staging_root)
-        .with_context(|| format!("resolving staging root {}", staging_root.display()))?;
-    let secret_root = fs::canonicalize(project_root.join(SECRETS_DIRECTORY))
-        .context("resolving local secret directory")?;
-    let mut runtime = json!({
-        "apiVersion": EVIDENCE_RUNTIME_API_VERSION,
-        "kind": EVIDENCE_RUNTIME_KIND,
-        "package": {"root": canonical_staging.join("bundle").to_string_lossy()},
-        "listener": {
-            "bind": format!("127.0.0.1:{}", ports.evidence),
-            "tlsTermination": "operator-controlled-upstream",
-            "trustProxyIdentityHeaders": false,
-            "maximumRequestBytes": 65536,
-            "maximumConcurrentRequests": 64,
-            "requestTimeoutMilliseconds": 10000,
-            "shutdownGraceMilliseconds": 30000,
-        },
-        "secretProviders": {"file": {"root": secret_root.to_string_lossy()}},
-        "signer": {
-            "type": "local-jwk",
-            "privateKeyRef": format!("secret:file/{LOCAL_SIGNING_PRIVATE_FILENAME}"),
-        },
-        "audit": {
-            "path": canonical_staging.join("audit/evidence.jsonl").to_string_lossy(),
-        },
-        "outboundTls": projection.outbound_tls,
-        "sourceConnections": projection.source_connections,
-    });
-    if let Some(source_acquisition) = projection.source_acquisition {
-        runtime["sourceAcquisition"] = source_acquisition;
-    }
-    let authority = plan
-        .authority_document
-        .as_ref()
-        .context("local target requires complete authored authority")?;
-    let authority_root = canonical_staging.join("authority");
-    create_private_directory(&authority_root)?;
-    runtime["authority"] = json!({"root":authority_root,"target":authority["target"]});
-    let authority_path = canonical_staging.join("compiled-authority.yaml");
-    write_private_file(&authority_path, &yaml_bytes(authority)?)?;
-    let runtime_path = staging_root.join("runtime.yaml");
-    write_private_file(&runtime_path, &yaml_bytes(&runtime)?)?;
-    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o400))
-        .with_context(|| format!("sealing {}", runtime_path.display()))?;
-
-    let output = Command::new(evidence_bin)
-        .arg("authority")
-        .arg("activate")
-        .arg("--runtime-config")
-        .arg(&runtime_path)
-        .arg("--document")
-        .arg(&authority_path)
-        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
-        .output()
-        .context("activating the complete local target authority")?;
-    if !output.status.success() {
-        bail!(
-            "Evidence refused the complete local target authority: {}",
-            child_diagnostic(&output.stderr)
-        );
-    }
-
-    let definitions = plan
-        .definitions
-        .iter()
-        .map(|definition| CompiledDefinition {
-            definition_alias: definition.definition_id.clone(),
-            requirement_uri: definition.requirement_uri.clone(),
-            purpose: definition.purpose.clone(),
-            subjects: definition
-                .subjects
-                .iter()
-                .map(|subject| CompiledSubject {
-                    role: subject.role.clone(),
-                    selectors: subject
-                        .selectors
-                        .iter()
-                        .map(|selector| CompiledSelector {
-                            profile: selector.profile.clone(),
-                            fields: selector.fields.clone(),
-                        })
-                        .collect(),
-                })
-                .collect(),
-            concepts: definition
-                .concepts
-                .iter()
-                .map(|concept| CompiledConcept {
-                    concept_alias: concept.concept_alias.clone(),
-                    concept_uri: concept.concept_uri.clone(),
-                    concept_form: concept.concept_form,
-                })
-                .collect(),
-        })
-        .collect();
-    Ok(CompiledProject {
-        runtime_path,
-        definitions,
-        local_audience: plan.bundle["authentication"]["oidc"]["audience"]
-            .as_str()
-            .context("local Evidence audience missing")?
-            .to_owned(),
-        requester_tag: authority["accessProfiles"]
-            .as_object()
-            .and_then(|profiles| profiles.values().next())
-            .and_then(|profile| profile["requesterTags"].as_array())
-            .and_then(|tags| tags.first())
-            .and_then(Value::as_str)
-            .context("local target authority needs an identity tag")?
-            .to_owned(),
-        caller_evidence_audience: plan.bundle["requirements"]
-            .as_array()
-            .and_then(|definitions| definitions.first())
-            .and_then(|definition| definition["grantCeiling"]["audiences"].as_array())
-            .and_then(|audiences| audiences.first())
-            .and_then(Value::as_str)
-            .context("local definition needs an audience ceiling")?
-            .to_owned(),
-        required_scopes: plan.bundle["authentication"]["oidc"]["requiredScopes"]
-            .as_array()
-            .map_or_else(
-                || vec!["evidence:invoke".to_owned()],
-                |scopes| {
-                    scopes
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                },
-            ),
-        access_profiles: authority["accessProfiles"]
-            .as_object()
-            .context("compiled target profiles")?
-            .iter()
-            .map(|(id, profile)| {
-                let grants = profile["grants"]
-                    .as_array()
-                    .context("complete profile grants")?;
-                let definitions = grants
-                    .iter()
-                    .filter_map(|grant| {
-                        plan.definitions
-                            .iter()
-                            .find(|definition| grant["requirement"] == definition.requirement_uri)
-                            .map(|definition| definition.definition_id.clone())
-                    })
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect();
-                let has_task = grants
-                    .iter()
-                    .flat_map(|grant| grant["subjects"].as_array().into_iter().flatten())
-                    .any(|subject| subject["valueOrigin"] == "authenticated-grant");
-                let task_grant = if has_task {
-                    Some(crate::access::TaskGrantBinding {
-                        requester_clients: profile["requesterClients"]
-                            .as_array()
-                            .context("task profile requester clients")?
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .map(str::to_owned)
-                            .collect(),
-                        source_issuer: registry_platform_yaml::Url::new(
-                            profile["grantSourceIssuer"]
-                                .as_str()
-                                .context("task profile issuer")?,
-                        )
-                        .map_err(|_| anyhow!("task profile source issuer is invalid"))?,
-                    })
-                } else {
-                    None
-                };
-                Ok(CompiledAccessProfile {
-                    id: id.clone(),
-                    digest: crate::access::profile_digest(profile)?,
-                    requester_tags: profile["requesterTags"]
-                        .as_array()
-                        .context("profile tags")?
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect(),
-                    definitions,
-                    actor_kind: profile["actorKind"].as_str().map(str::to_owned),
-                    task_grant,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?,
-    })
-}
-
 fn write_bundle(
     project_root: &Path,
     deployment_target_root: Option<&Path>,
@@ -1637,15 +1097,6 @@ fn write_bundle(
         config,
         "compiled Evidence configuration",
     )?;
-    if let Some((path, bytes)) = &plan.local_public_jwk {
-        reserve_bundle_path(&artifacts, path)?;
-        insert_bundle_artifact(
-            &mut artifacts,
-            path,
-            bytes.clone(),
-            "local public signing key",
-        )?;
-    }
     for definition in &plan.definitions {
         if let Some(path) = &definition.fixture_artifact {
             let bytes = read_project_artifact(
@@ -1961,28 +1412,6 @@ fn set_bundle_modes(root: &Path, directory_mode: u32, file_mode: u32) -> Result<
     Ok(())
 }
 
-fn check_with_evidence(evidence_bin: &Path, runtime_path: &Path) -> Result<()> {
-    let mut command = Command::new(evidence_bin);
-    command
-        .arg("check")
-        .arg("--runtime-config")
-        .arg(runtime_path)
-        .env_remove("REGISTRY_EVIDENCE_RUNTIME");
-    let run = run_bounded_evidence(
-        command,
-        StandardOutput::Discarded,
-        &format!("{} check", evidence_bin.display()),
-    )?;
-    if run.status.success() {
-        return Ok(());
-    }
-    let diagnostic = child_diagnostic(&run.stderr);
-    if diagnostic.is_empty() {
-        bail!("Evidence rejected the compiled local generation");
-    }
-    bail!("Evidence rejected the compiled local generation: {diagnostic}")
-}
-
 fn render_discovery_description(
     evidence_bin: &Path,
     config_path: &Path,
@@ -2078,8 +1507,6 @@ const MAX_DISCOVERY_DESCRIPTION_BYTES: usize = 1024 * 1024;
 
 /// What a delegated `evidence` run does with its standard output.
 enum StandardOutput {
-    /// The caller reads nothing, so the child writes to the null device.
-    Discarded,
     /// The caller reads at most this many bytes of it.
     Bounded(usize),
 }
@@ -2109,7 +1536,6 @@ fn run_bounded_evidence(
 ) -> Result<BoundedEvidenceRun> {
     command.stdin(Stdio::null());
     command.stdout(match stdout {
-        StandardOutput::Discarded => Stdio::null(),
         StandardOutput::Bounded(_) => Stdio::piped(),
     });
     command.stderr(Stdio::piped());
@@ -2338,90 +1764,6 @@ mod tests {
     use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
 
     #[test]
-    fn local_target_compilation_refuses_a_symlinked_generated_parent_before_key_generation() {
-        let temporary = tempfile::tempdir().unwrap();
-        let root = temporary.path().canonicalize().unwrap();
-        let project = root.join("project");
-        let stage = root.join("stage");
-        let outside = root.join("outside");
-        for path in [&project, &stage, &outside] {
-            fs::create_dir(path).unwrap();
-            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/evidence/examples/standalone");
-        fs::copy(example.join("evidence.yaml"), project.join("evidence.yaml")).unwrap();
-        for (relative, bytes) in crate::normalized::read(&example).unwrap().1 {
-            let path = project.join(relative);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, bytes).unwrap();
-        }
-        std::os::unix::fs::symlink(&outside, project.join(".generated")).unwrap();
-        let evidence = root.join("evidence");
-        write_stub_evidence(&evidence, "#!/bin/sh\nexit 1\n");
-
-        let result = compile_local_project_with_target_inputs_resource_and_authority(
-            &project,
-            &stage,
-            &evidence,
-            LocalServicePorts::default(),
-            json!({}),
-            json!({}),
-            LOCAL_AUDIENCE,
-            &LocalAdmission::default(),
-            None,
-        );
-
-        assert!(result.is_err(), "linked generated parent must be refused");
-        assert_eq!(
-            fs::read_dir(&outside).unwrap().count(),
-            0,
-            "local compilation wrote outside the project"
-        );
-        assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn local_compilation_measures_definitions_against_the_target_signing_maximum() {
-        let temporary = tempfile::tempdir().unwrap();
-        let root = temporary.path().canonicalize().unwrap();
-        let project = root.join("project");
-        let stage = root.join("stage");
-        for path in [&project, &stage] {
-            fs::create_dir(path).unwrap();
-            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/evidence/examples/standalone");
-        copy_project_tree(&example, &project);
-        let mut target = fs::read_to_string(example.join("local-target.yaml")).unwrap();
-        target.push_str("signing:\n  maximumAssertionValiditySeconds: 100\n");
-        let target_path = project.join("local-target.yaml");
-        fs::write(&target_path, target).unwrap();
-        let evidence = root.join("evidence");
-        write_stub_evidence(&evidence, "#!/bin/sh\nexit 1\n");
-
-        let error = compile_normalized_local_project(
-            &project,
-            &stage,
-            &evidence,
-            LocalServicePorts::default(),
-            &target_path,
-            LOCAL_AUDIENCE,
-            &LocalAdmission::default(),
-        )
-        .expect_err("a 300 second definition exceeds the target's 100 second maximum");
-        let diagnostic = error
-            .downcast_ref::<AuthoredDiagnostic>()
-            .expect("the refusal is the authored validity diagnostic");
-        assert_eq!(
-            diagnostic.code,
-            "evidence.definition.validity-exceeds-signing-maximum"
-        );
-        assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
-    }
-
-    #[test]
     fn generated_yaml_indents_sequences_beneath_their_keys() {
         let bytes = yaml_bytes(&json!({"required": ["a", "b"]})).unwrap();
         assert_eq!(
@@ -2450,75 +1792,6 @@ mod tests {
             .open(path)
             .expect("stub");
         file.write_all(script.as_bytes()).expect("write stub");
-    }
-
-    fn copy_project_tree(source: &Path, destination: &Path) {
-        fs::create_dir_all(destination).expect("create copied project directory");
-        for entry in fs::read_dir(source).expect("read project directory") {
-            let entry = entry.expect("project entry");
-            let target = destination.join(entry.file_name());
-            if entry.file_type().expect("project entry type").is_dir() {
-                copy_project_tree(&entry.path(), &target);
-            } else {
-                fs::copy(entry.path(), target).expect("copy project file");
-            }
-        }
-    }
-
-    #[test]
-    fn normalized_local_compilation_projects_target_connections_into_runtime() {
-        let temporary = tempfile::tempdir().expect("temporary root");
-        let project = temporary.path().join("project");
-        let stage = temporary.path().join("stage");
-        copy_project_tree(
-            &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../products/evidence/examples/standalone"),
-            &project,
-        );
-        let target_path = project.join("local-target.yaml");
-        let mut target = fs::read_to_string(&target_path).expect("read local target");
-        target.push_str(
-            "sourceAcquisition:\n  maximumDataOperations: 3\n  acquisitionDeadlineMilliseconds: 4321\n  maximumResponseBytes: 54321\n",
-        );
-        fs::write(&target_path, target).expect("write target acquisition limits");
-        create_private_directory(&stage).expect("private staging directory");
-        let evidence = temporary.path().join("evidence-stub");
-        write_stub_evidence(
-            &evidence,
-            "#!/bin/sh\nif [ \"$1\" = render-discovery-description ]; then printf '{}'; fi\nexit 0\n",
-        );
-
-        let compiled = compile_normalized_local_project(
-            &project,
-            &stage,
-            &evidence,
-            LocalServicePorts::default(),
-            &target_path,
-            LOCAL_AUDIENCE,
-            &LocalAdmission::default(),
-        )
-        .expect("compile a local project with its target connection");
-        let runtime = crate::build::runtime_value(
-            &fs::read(&compiled.runtime_path).expect("read generated runtime"),
-        )
-        .expect("decode generated runtime");
-        let connection = &runtime["sourceConnections"]["synthetic-register"];
-        assert_eq!(connection["id"], "synthetic-register");
-        assert_eq!(connection["endpoints"][0]["endpoint"], "register");
-        assert_eq!(
-            connection["endpoints"][0]["credential"]["tokenRef"],
-            "secret:file/synthetic-source-token"
-        );
-        assert!(
-            connection["endpoints"][0].get("authentication").is_none(),
-            "the runtime must use the credential projection, not governed authentication metadata"
-        );
-        assert_eq!(runtime["sourceAcquisition"]["maximumDataOperations"], 3);
-        assert_eq!(
-            runtime["sourceAcquisition"]["acquisitionDeadlineMilliseconds"],
-            4321
-        );
-        assert_eq!(runtime["sourceAcquisition"]["maximumResponseBytes"], 54321);
     }
 
     #[test]
@@ -2601,28 +1874,6 @@ mod tests {
                     + 1,
             "{}",
             diagnostic.len()
-        );
-    }
-
-    #[test]
-    fn a_flooding_child_is_read_within_the_diagnostic_bound() {
-        let root = tempfile::tempdir().expect("tempdir");
-        let evidence = root.path().join("evidence-stub");
-        write_stub_evidence(
-            &evidence,
-            "#!/bin/sh\nyes 'evidence flooded standard error' | head -c 4194304 >&2\nexit 1\n",
-        );
-
-        let run = retry_busy_stub(|| {
-            run_bounded_evidence(Command::new(&evidence), StandardOutput::Discarded, "a stub")
-        })
-        .expect("the stub runs to completion");
-
-        assert!(!run.status.success());
-        assert!(
-            run.stderr.len() <= MAX_CHILD_DIAGNOSTIC_BYTES + 1,
-            "held {} bytes of the child's standard error",
-            run.stderr.len()
         );
     }
 
@@ -2742,34 +1993,10 @@ mod tests {
         assert_eq!(child_diagnostic(&stderr), "bundle rejected");
     }
 
-    #[test]
-    fn check_with_evidence_strips_child_terminal_control_sequences() {
-        let root = tempfile::tempdir().expect("tempdir");
-        let evidence = root.path().join("evidence-stub");
-        write_stub_evidence(
-            &evidence,
-            "#!/bin/sh\nprintf '\\033[1;31mbundle compilation failed\\033[0m' >&2\nexit 1\n",
-        );
-        let runtime_path = root.path().join("runtime.yaml");
-        fs::write(&runtime_path, "version: 1\n").expect("runtime");
-
-        let error = retry_busy_stub(|| check_with_evidence(&evidence, &runtime_path))
-            .expect_err("a rejected generation must fail");
-
-        assert_eq!(
-            format!("{error:#}"),
-            "Evidence rejected the compiled local generation: bundle compilation failed"
-        );
-    }
-
     fn minimal_definition_plan(definition_id: &str, validity_seconds: u64) -> DefinitionPlan {
         DefinitionPlan {
             definition_id: definition_id.to_owned(),
             fixture_artifact: None,
-            purpose: String::new(),
-            requirement_uri: String::new(),
-            concepts: Vec::new(),
-            subjects: Vec::new(),
             requirement: json!({"validitySeconds": validity_seconds}),
         }
     }
@@ -2778,9 +2005,7 @@ mod tests {
         CompilePlan {
             definitions: vec![minimal_definition_plan("record-status", validity_seconds)],
             bundle: json!({ "signing": signing }),
-            local_public_jwk: None,
             generated_artifacts: BTreeMap::new(),
-            authority_document: None,
         }
     }
 
@@ -3238,73 +2463,6 @@ mod tests {
     }
 
     #[test]
-    fn normalized_plan_preserves_sources_definitions_and_ceiling_enforcement() {
-        let project_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/evidence/examples/standalone");
-        let inputs = read_inputs(&project_root, false).unwrap();
-        let expected = registry_evidence_authoring::compile::compile_with_pack_routes(
-            &inputs.project,
-            &inputs.scripts,
-            &inputs.pack_routes,
-        )
-        .unwrap();
-        let (connections, _) =
-            crate::build::local_dev_target_inputs(&project_root.join("local-target.yaml")).unwrap();
-        let plan = compile_plan_with_connections(
-            inputs,
-            CompileProfile::Local {
-                ports: LocalServicePorts::default(),
-                audience: LOCAL_AUDIENCE.to_owned(),
-                active_public_jwk_file: OFFLINE_CHECK_PUBLIC_JWK_FILE.to_owned(),
-                active_public_jwk: OFFLINE_CHECK_PUBLIC_JWK.as_bytes().to_vec(),
-                admission: LocalAdmission::default(),
-            },
-            connections,
-        )
-        .unwrap();
-        assert_eq!(plan.bundle["requirements"], expected.model["requirements"]);
-        assert_eq!(
-            plan.bundle["selectorProfiles"],
-            expected.model["selectorProfiles"]
-        );
-        assert_eq!(plan.bundle["sources"].as_object().unwrap().len(), 3);
-        assert!(plan.bundle["sources"]
-            .as_object()
-            .unwrap()
-            .values()
-            .all(|source| source.get("authentication").is_none()
-                && source.get("baseUrl").is_none()
-                && source.get("tlsTrustProfile").is_none()));
-        assert_eq!(plan.bundle["requirements"].as_array().unwrap().len(), 4);
-        assert_eq!(plan.bundle["authorityProfiles"], json!({}));
-        assert!(plan.bundle["sources"]
-            .as_object()
-            .unwrap()
-            .values()
-            .all(|source| {
-                source
-                    .get("connection")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| plan.bundle["sourceConnections"].get(id).is_some())
-            }));
-        assert!(plan.bundle["requirements"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|definition| {
-                definition["grantCeiling"]["authorities"]
-                    .as_array()
-                    .is_some_and(|values| !values.is_empty())
-                    && definition["representations"]
-                        .as_array()
-                        .is_some_and(|values| !values.is_empty())
-                    && !definition["concepts"].as_array().unwrap().is_empty()
-            }));
-        assert!(plan
-            .generated_artifacts
-            .contains_key("derivations/adult-status.rhai"));
-    }
-    #[test]
     fn package_writer_creates_only_referenced_artifact_directories() {
         let root = tempfile::tempdir().unwrap();
         let evidence = root.path().join("evidence-stub");
@@ -3315,12 +2473,10 @@ mod tests {
         let plan = CompilePlan {
             definitions: Vec::new(),
             bundle: json!({}),
-            local_public_jwk: None,
             generated_artifacts: BTreeMap::from([(
                 "derivations/check.rhai".to_owned(),
                 b"fn derive(a,b,c){[]}\n".to_vec(),
             )]),
-            authority_document: None,
         };
         let bundle = write_bundle(root.path(), None, &stage, &plan, &evidence, None).unwrap();
         assert!(bundle.join("derivations/check.rhai").is_file());
@@ -3352,9 +2508,7 @@ mod tests {
                 },
                 "sourceConnections": {"declared-source": {"endpoints": []}},
             }),
-            local_public_jwk: None,
             generated_artifacts: BTreeMap::new(),
-            authority_document: None,
         };
 
         let error = write_bundle(
@@ -3416,12 +2570,10 @@ mod tests {
             let plan = CompilePlan {
                 definitions: Vec::new(),
                 bundle: json!({}),
-                local_public_jwk: None,
                 generated_artifacts: BTreeMap::from([(
                     reserved.to_owned(),
                     b"authored overwrite".to_vec(),
                 )]),
-                authority_document: None,
             };
             let error = write_bundle(root.path(), None, &stage, &plan, &evidence, None)
                 .expect_err("reserved output must be refused");
@@ -3457,12 +2609,10 @@ mod tests {
         let different = CompilePlan {
             definitions: vec![definition],
             bundle: json!({}),
-            local_public_jwk: None,
             generated_artifacts: BTreeMap::from([(
                 "fixtures/shared.yaml".to_owned(),
                 b"fixture: generated\n".to_vec(),
             )]),
-            authority_document: None,
         };
         let error = write_bundle(
             root.path(),
@@ -3485,9 +2635,7 @@ mod tests {
         let shared = CompilePlan {
             definitions: vec![first, second],
             bundle: json!({}),
-            local_public_jwk: None,
             generated_artifacts: BTreeMap::new(),
-            authority_document: None,
         };
         let bundle =
             write_bundle(root.path(), None, &shared_stage, &shared, &evidence, None).unwrap();
@@ -3496,5 +2644,31 @@ mod tests {
             b"fixture: authored\n"
         );
         set_bundle_modes(&bundle, 0o700, 0o600).unwrap();
+    }
+
+    #[test]
+    fn a_flooding_child_is_read_within_the_diagnostic_bound() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            "#!/bin/sh\nyes 'evidence flooded standard error' | head -c 4194304 >&2\nexit 1\n",
+        );
+
+        let run = retry_busy_stub(|| {
+            run_bounded_evidence(
+                Command::new(&evidence),
+                StandardOutput::Bounded(1),
+                "a stub",
+            )
+        })
+        .expect("the stub runs to completion");
+
+        assert!(!run.status.success());
+        assert!(
+            run.stderr.len() <= MAX_CHILD_DIAGNOSTIC_BYTES + 1,
+            "held {} bytes of the child's standard error",
+            run.stderr.len()
+        );
     }
 }

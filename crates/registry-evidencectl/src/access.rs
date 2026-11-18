@@ -17,7 +17,7 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use clap::{Args, Subcommand};
 use registry_evidence_authoring::formats::{decode_authored, ACCESS_CLIENT};
 use registry_evidence_authoring::{project::ActorKind, target::AccessProfile};
-use registry_platform_crypto::{PrivateJwk, PublicJwk};
+use registry_platform_crypto::PublicJwk;
 use registry_platform_yaml::{Decoded, Report, Severity, MAXIMUM_DOCUMENT_BYTES};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -26,15 +26,10 @@ use crate::{authoring, OutputFormat};
 
 const ACCESS_DIRECTORY: &str = "access";
 const CLIENTS_DIRECTORY: &str = "clients";
-const PRIVATE_STATE_DIRECTORY: &str = ".evidence";
-const PRIVATE_KEY_FILENAME: &str = "private.jwk";
-const MAX_DOCUMENT_BYTES: u64 = 64 * 1024;
 const MAX_CLIENTS: usize = 4_096;
 const MAX_PROFILES_PER_CLIENT: usize = 32;
 const PUBLIC_DIRECTORY_MODE: u32 = 0o755;
 const PUBLIC_FILE_MODE: u32 = 0o644;
-const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
-const PRIVATE_FILE_MODE: u32 = 0o600;
 
 #[derive(Debug, Subcommand)]
 pub enum AccessCommand {
@@ -62,17 +57,9 @@ pub(crate) fn client_document_schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(ClientDocument)).expect("a derived schema is JSON")
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct TaskGrantBinding {
-    pub(crate) requester_clients: Vec<String>,
-    pub(crate) source_issuer: registry_platform_yaml::Url,
-}
-
 struct LoadedProfile {
     profile: AccessProfile,
     digest: String,
-    audiences: BTreeSet<String>,
-    actors: BTreeSet<String>,
 }
 
 pub(crate) fn profile_digest(profile: &Value) -> Result<String> {
@@ -162,23 +149,6 @@ impl ActiveClientExchange {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ActiveClient {
-    pub(crate) client_id: String,
-    pub(crate) private_key_path: PathBuf,
-    pub(crate) evidence_audience: String,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ActiveClientRegistration {
-    pub(crate) client_id: String,
-    pub(crate) public_jwks: String,
-    pub(crate) requester_tags: Vec<String>,
-    pub(crate) actor_kind: String,
-    pub(crate) evidence_audience: String,
-    pub(crate) exchange: Option<ActiveClientExchange>,
-}
-
 pub fn run(command: AccessCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
         AccessCommand::Profile(ProfileCommand::List(args)) => {
@@ -223,84 +193,6 @@ fn list_access_profiles(project: &Path, format: OutputFormat) -> Result<ExitCode
     Ok(ExitCode::SUCCESS)
 }
 
-pub(crate) fn resolve_ready_client(
-    project: &Path,
-    client_id: &str,
-    profile_digests: &BTreeMap<String, String>,
-) -> Result<ActiveClient> {
-    validate_identifier(client_id, "client")?;
-    let registration = load_active_clients(project, profile_digests)?
-        .into_iter()
-        .find(|registration| registration.client_id == client_id)
-        .ok_or_else(|| anyhow::anyhow!("unknown or revoked active client {client_id}"))?;
-    let project = canonical_project(project)?;
-    let document = read_client_document(&client_document_path(&project, client_id))?;
-    let private_key_path = validate_private_client_key(&project, &document)?;
-    Ok(ActiveClient {
-        client_id: registration.client_id,
-        private_key_path,
-        evidence_audience: document.evidence_audience,
-    })
-}
-
-/// The exact client identifiers an active editable project registers, read
-/// without a compiled generation. A local session needs them before it
-/// compiles, to state in the bundle which clients that bundle admits.
-pub(crate) fn active_client_ids(project: &Path) -> Result<Vec<String>> {
-    let project = canonical_project(project)?;
-    let access_profiles = load_access_profiles(&project)?;
-    let mut ids = Vec::new();
-    for document in load_client_documents_if_present(&project)?.values() {
-        validate_client_profiles(&document.access_profiles, &access_profiles)?;
-        validate_client_identity(document, &access_profiles)?;
-        if document.status == ClientStatus::Revoked {
-            continue;
-        }
-        ids.push(document.client_id.clone());
-    }
-    Ok(ids)
-}
-
-/// Load active editable clients as exact local issuer registrations.
-pub(crate) fn load_active_clients(
-    project: &Path,
-    profile_digests: &BTreeMap<String, String>,
-) -> Result<Vec<ActiveClientRegistration>> {
-    let project = canonical_project(project)?;
-    let profiles = load_access_profiles(&project)?;
-    if profile_digests.len() != profiles.len()
-        || profiles
-            .iter()
-            .any(|(id, profile)| profile_digests.get(id) != Some(&profile.digest))
-    {
-        bail!("target access profiles differ from the active generation; stop and restart the session");
-    }
-    let mut registrations = Vec::new();
-    for document in load_client_documents_if_present(&project)?.values() {
-        validate_client_profiles(&document.access_profiles, &profiles)?;
-        validate_client_identity(document, &profiles)?;
-        if document.status == ClientStatus::Revoked {
-            continue;
-        }
-        let requester_tags = document
-            .access_profiles
-            .iter()
-            .flat_map(|id| profiles[id].profile.requester_tags.iter().cloned())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        registrations.push(ActiveClientRegistration {
-            client_id: document.client_id.clone(),
-            public_jwks: serde_json::to_string(&json!({"keys":document.keys}))?,
-            requester_tags,
-            actor_kind: resolved_client_actor(document, &profiles)?,
-            evidence_audience: document.evidence_audience.clone(),
-            exchange: document.exchange.clone(),
-        });
-    }
-    Ok(registrations)
-}
-
 /// An active client that presents a task authority assertion, with the
 /// access profiles it holds.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -325,179 +217,6 @@ pub(crate) fn active_exchange_clients(project: &Path) -> Result<Vec<ExchangeClie
             })
         })
         .collect())
-}
-
-/// Public, editable client admission for local bundle compilation. Private
-/// keys are checked separately when `dev` registers the issuer generation.
-pub(crate) fn service_caller_profiles(project: &Path) -> Result<BTreeSet<String>> {
-    Ok(load_access_profiles(project)?
-        .into_iter()
-        .filter_map(|(id, profile)| profile.actors.contains("service").then_some(id))
-        .collect())
-}
-
-pub(crate) fn generated_caller_audience(project: &Path, profile: &str) -> Result<String> {
-    let profiles = load_access_profiles(project)?;
-    let allowed = profile_audiences(&[profile.to_owned()], &profiles)?;
-    if allowed.len() != 1 {
-        bail!("profile {profile} has multiple audiences; register an access client with --evidence-audience before dev start");
-    }
-    Ok(allowed.first().expect("one audience").clone())
-}
-
-fn validate_client_profiles(
-    ids: &[String],
-    profiles: &BTreeMap<String, LoadedProfile>,
-) -> Result<()> {
-    if ids.is_empty() || ids.len() > MAX_PROFILES_PER_CLIENT {
-        bail!("a client must reference 1..={MAX_PROFILES_PER_CLIENT} access profiles");
-    }
-    let mut shapes = BTreeSet::new();
-    let mut tags = BTreeSet::new();
-    let mut actors: Option<BTreeSet<String>> = None;
-    for id in ids {
-        validate_identifier(id, "access profile")?;
-        let loaded = profiles
-            .get(id)
-            .with_context(|| format!("unknown target access profile {id}"))?;
-        actors = Some(match actors {
-            None => loaded.actors.clone(),
-            Some(current) => current.intersection(&loaded.actors).cloned().collect(),
-        });
-        tags.extend(loaded.profile.requester_tags.iter().map(String::as_str));
-        for grant in &loaded.profile.grants {
-            let subjects = grant
-                .subjects
-                .iter()
-                .map(|subject| (subject.role.as_str(), subject.selector_profile.as_str()))
-                .collect::<BTreeSet<_>>();
-            if !shapes.insert((grant.definition.as_str(), grant.purpose.as_str(), subjects)) {
-                bail!("selected access profiles contain overlapping complete grant tuples");
-            }
-        }
-    }
-    let actors = actors.unwrap_or_default();
-    if actors.is_empty() {
-        bail!("one local client needs a common actor kind across its access profiles");
-    }
-    for (id, loaded) in profiles {
-        if loaded
-            .profile
-            .requester_tags
-            .iter()
-            .all(|tag| tags.contains(tag.as_str()))
-            && !actors.is_disjoint(&loaded.actors)
-            && !ids.contains(id)
-        {
-            bail!("selected profile tags also match unassigned access profile {id}; use distinct identity tags");
-        }
-    }
-    Ok(())
-}
-
-fn profile_audiences(
-    ids: &[String],
-    profiles: &BTreeMap<String, LoadedProfile>,
-) -> Result<BTreeSet<String>> {
-    let mut audiences: Option<BTreeSet<String>> = None;
-    for id in ids {
-        let profile = profiles
-            .get(id)
-            .context("client names an unknown target access profile")?;
-        audiences = Some(match audiences {
-            None => profile.audiences.clone(),
-            Some(current) => current.intersection(&profile.audiences).cloned().collect(),
-        });
-    }
-    let audiences = audiences.unwrap_or_default();
-    if audiences.is_empty() {
-        bail!("selected access profiles have no common permitted audience");
-    }
-    Ok(audiences)
-}
-
-/// A local credential has one concrete actor. Optional target actor constraints
-/// remain bounded by the selected profiles and per-request definition ceilings.
-fn resolved_client_actor(
-    document: &ClientDocument,
-    profiles: &BTreeMap<String, LoadedProfile>,
-) -> Result<String> {
-    let mut actors: Option<BTreeSet<String>> = None;
-    for id in &document.access_profiles {
-        let profile = profiles
-            .get(id)
-            .context("client names an unknown target access profile")?;
-        actors = Some(match actors {
-            None => profile.actors.clone(),
-            Some(current) => current.intersection(&profile.actors).cloned().collect(),
-        });
-    }
-    let mut actors = actors.unwrap_or_default();
-    actors.retain(
-        |actor| match document.exchange.as_ref().map(|exchange| exchange.kind) {
-            Some(ActiveClientExchangeKind::InstitutionalGrant) => actor == "agent",
-            Some(ActiveClientExchangeKind::FirstParty) => {
-                matches!(actor.as_str(), "human" | "service")
-            }
-            None => matches!(actor.as_str(), "service" | "agent"),
-        },
-    );
-    match &document.actor_kind {
-        Some(actor) if actors.contains(actor.as_str()) => Ok(actor.as_str().to_owned()),
-        Some(_) => {
-            bail!("client actor kind is outside a selected definition ceiling or exchange mode")
-        }
-        None if actors.len() == 1 => Ok(actors.first().expect("one actor").clone()),
-        None if actors.is_empty() => {
-            bail!("selected profiles and exchange mode have no common actor kind")
-        }
-        None => bail!("choose --actor-kind from the selected definitions' common actor ceiling"),
-    }
-}
-
-fn validate_client_identity(
-    document: &ClientDocument,
-    profiles: &BTreeMap<String, LoadedProfile>,
-) -> Result<()> {
-    if !profile_audiences(&document.access_profiles, profiles)?
-        .contains(&document.evidence_audience)
-    {
-        bail!("client audience is outside a selected definition ceiling");
-    }
-    let actor = resolved_client_actor(document, profiles)?;
-    for id in &document.access_profiles {
-        let profile = &profiles[id].profile;
-        let task = profile.grants.iter().any(|grant| {
-            grant
-                .subjects
-                .iter()
-                .any(|subject| subject.value_origin.as_str() == "authenticated-grant")
-        });
-        if task
-            && (profile
-                .requester_clients
-                .as_ref()
-                .is_none_or(|clients| !clients.iter().any(|id| id == &document.client_id))
-                || profile.grant_source_issuer.is_none())
-        {
-            bail!("task client must be explicitly named by the target profile and trusted source issuer");
-        }
-        match document.exchange.as_ref().map(|exchange| exchange.kind) {
-            Some(ActiveClientExchangeKind::InstitutionalGrant) if !task || actor != "agent" => {
-                bail!("institutional exchange requires an assigned agent task-grant profile")
-            }
-            Some(ActiveClientExchangeKind::FirstParty)
-                if task || !matches!(actor.as_str(), "service" | "human") =>
-            {
-                bail!("first-party exchange cannot replace task-grant authority")
-            }
-            None if task || !matches!(actor.as_str(), "service" | "agent") => bail!(
-                "human and task-grant profiles require their explicit signed-context exchange"
-            ),
-            _ => {}
-        }
-    }
-    Ok(())
 }
 
 fn load_access_profiles(project: &Path) -> Result<BTreeMap<String, LoadedProfile>> {
@@ -557,49 +276,8 @@ fn load_access_profiles(project: &Path) -> Result<BTreeMap<String, LoadedProfile
         .access_profiles
         .into_iter()
         .map(|(id, profile)| {
-            let mut audiences: Option<BTreeSet<String>> = None;
-            let mut actors = BTreeSet::new();
-            for grant in &profile.grants {
-                let allowed = project_doc.assertion_definitions[&grant.definition]
-                    .grant_ceiling
-                    .audiences
-                    .iter()
-                    .cloned()
-                    .collect::<BTreeSet<_>>();
-                audiences = Some(match audiences {
-                    None => allowed,
-                    Some(current) => current.intersection(&allowed).cloned().collect(),
-                });
-                let allowed_actors = project_doc.assertion_definitions[&grant.definition]
-                    .grant_ceiling
-                    .actor_kinds
-                    .iter()
-                    .map(|actor| actor.as_str().to_owned())
-                    .collect::<BTreeSet<_>>();
-                actors.extend(allowed_actors);
-            }
-            if let Some(actor) = &profile.actor_kind {
-                actors.retain(|candidate| candidate == actor.as_str());
-            } else if !profile.grants.iter().any(|grant| {
-                grant
-                    .subjects
-                    .iter()
-                    .any(|subject| subject.value_origin.as_str() == "authenticated-grant")
-            }) {
-                // Ordinary agents require an explicitly agent-bound profile;
-                // task grants have their own complete signed-context profile.
-                actors.remove("agent");
-            }
             let digest = profile_digest(&compiled["accessProfiles"][id.as_str()])?;
-            Ok((
-                id.to_string(),
-                LoadedProfile {
-                    profile,
-                    digest,
-                    audiences: audiences.unwrap_or_default(),
-                    actors,
-                },
-            ))
+            Ok((id.to_string(), LoadedProfile { profile, digest }))
         })
         .collect()
 }
@@ -715,33 +393,6 @@ fn read_client_document(path: &Path) -> Result<ClientDocument> {
     let decoded = decode_client_document(&path.display().to_string(), text.as_bytes())?;
     validate_filename_id(path, &decoded.value.client_id, "client")?;
     Ok(decoded.value)
-}
-
-fn validate_private_client_key(project: &Path, document: &ClientDocument) -> Result<PathBuf> {
-    let private_root = project.join(PRIVATE_STATE_DIRECTORY);
-    let clients_root = private_root.join(CLIENTS_DIRECTORY);
-    let directory = clients_root.join(&document.client_id);
-    validate_path_mode(&private_root, true, PRIVATE_DIRECTORY_MODE)?;
-    validate_path_mode(&clients_root, true, PRIVATE_DIRECTORY_MODE)?;
-    validate_path_mode(&directory, true, PRIVATE_DIRECTORY_MODE)?;
-    let path = directory.join(PRIVATE_KEY_FILENAME);
-    let text = read_bounded_file(&path, MAX_DOCUMENT_BYTES, Some(PRIVATE_FILE_MODE))?;
-    let private = PrivateJwk::parse(&text).context("local client private JWK is invalid")?;
-    let registered_text = serde_json::to_string(&document.keys[0])
-        .context("rendering registered client public JWK")?;
-    let registered =
-        PublicJwk::parse(&registered_text).context("registered client public JWK is invalid")?;
-    if private
-        .public()
-        .jkt()
-        .context("deriving private-key thumbprint")?
-        != registered
-            .jkt()
-            .context("deriving registered-key thumbprint")?
-    {
-        bail!("local client private key does not match its registered public key");
-    }
-    Ok(path)
 }
 
 fn yaml_paths_if_present(directory: &Path, maximum: usize, label: &str) -> Result<Vec<PathBuf>> {
@@ -882,13 +533,6 @@ fn canonical_project(path: &Path) -> Result<PathBuf> {
         bail!("project root must be a directory");
     }
     Ok(project)
-}
-
-fn client_document_path(project: &Path, client_id: &str) -> PathBuf {
-    project
-        .join(ACCESS_DIRECTORY)
-        .join(CLIENTS_DIRECTORY)
-        .join(format!("{client_id}.yaml"))
 }
 
 fn local_client_uri(client_id: &str) -> String {

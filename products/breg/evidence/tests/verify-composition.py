@@ -337,7 +337,6 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
                       "--project", project, "--target", target, environment=environment, refused=True)
         assert "reads fact `status`" in refused, refused
         assert authored_snapshot(project) == before
-    guided = verify_source_add_review(workspace / "source-add", binaries, environment)
     return {
         "proofBoundary": "offline export/import, fixtures and package; no live services",
         "exportArtifacts": len(manifest["artifacts"]),
@@ -348,37 +347,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
         "consumedChangeRevisions": "both BReg definitions changed; offline definition unchanged",
         "nativeSourceUpdate": "passed", "renamedFactUpdate": "refused without authored changes",
         "loggedFixtureCases": sum(item["evaluatedCases"] for item in logged_fixtures["fixtures"]),
-        "sourceAddReview": guided,
     }
-
-
-def verify_source_add_review(workspace: Path, binaries: dict[str, Path], environment: dict[str, str]) -> dict:
-    """Guided setup names its prerequisites and leaves refused projects untouched."""
-    workspace.mkdir(mode=0o700)
-    registry, project = workspace / "registry", workspace / "evidence"
-    shutil.copytree(INPUTS / "registry", registry)
-    add_arguments = ("source", "add", registry, project, "--entity", "record",
-                     "--selector-field", "code", "--fields", "status", "--all-records")
-    version = run(binaries["bregctl"], "--version", environment=environment).strip()
-    help_text = run(binaries["evidencectl"], "source", "add", "--help", environment=environment)
-    assert all(word in help_text for word in ["bregctl", "PATH", "--apply"])
-    refused = run(binaries["evidencectl"], *add_arguments, "--dry-run",
-                  environment=environment, refused=True)
-    assert "evidencectl.usage" in refused, refused
-    mismatched = run(binaries["evidencectl"], *add_arguments, "--bregctl-bin", binaries["evidence"],
-                     environment=environment, refused=True)
-    assert version in mismatched and "BREGCTL_BIN" in mismatched, mismatched
-    before = authored_snapshot(registry)
-    for apply in [(), ("--apply",)]:
-        refused = run(binaries["evidencectl"], *add_arguments, *apply,
-                      environment=environment, refused=True)
-        assert "dev prepare-source" in refused, refused
-        assert not project.exists()
-        assert not (registry / ".breg").exists()
-        assert authored_snapshot(registry) == before
-    return {"reviewByDefault": True, "bregctlRequirement": version,
-            "missingRetainedSession": "refused without project changes",
-            "successfulLiveConnection": "not exercised by offline proof"}
 
 
 def main() -> None:

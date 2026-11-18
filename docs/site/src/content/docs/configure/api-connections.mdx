@@ -27,8 +27,8 @@ rstack breg api /v1/records/contacts --client editor
 ```
 
 The command finds the project, uses its running endpoint, and acquires a fresh credential for
-`editor`. You do not copy a token or construct an authorization header. Evidence and Messaging
-support the same local client selection with their own project and client names.
+`editor`. You do not copy a token or construct an authorization header. Messaging supports the
+same local client selection with its own project and client names.
 
 For a project run with `rstack dev`, `rstack dev token RUN_ID --as PERSON` writes a header file
 for each product the person has a grant in. Pass the product's address and that file:
@@ -37,7 +37,6 @@ for each product the person has a grant in. Pass the product's address and that 
 
 {/* Evidence: crates/registry-cli-api/src/project.rs, find_project;
     crates/registry-bregctl/src/dev/mod.rs, local_api_connection;
-    crates/registry-evidencectl/src/request.rs, local_api_connection;
     crates/registry-messagingctl/src/dev/mod.rs, api_connection;
     crates/registry-rstack-dev/src/lib.rs, token. */}
 

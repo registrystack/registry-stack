@@ -1,17 +1,18 @@
 # Identity-provider portability journey
 
-This opt-in local journey obtains actual tokens from the pinned stock ThunderID issuer and a
+This opt-in local journey obtains actual tokens from an `rstack dev` run's issuer (the "stock" issuer below) and a
 digest-pinned Keycloak 26.7.3 container, then passes them through BReg's real
 authenticator and HTTP router. It uses generated credentials and synthetic
-identities only. Docker, Cargo, and `uv` are required.
+identities only. Docker, Cargo, and `uv` are required. The run's person,
+audience and logical issuer come from [`dev.yaml`](dev.yaml).
 
 ```sh
-cargo build --locked -p registry-bregctl -p registry-breg --bin bregctl --bin breg
+cargo build --locked -p registry-rstack -p registry-bregctl -p registry-breg --bin rstack --bin bregctl --bin breg
 uv run products/breg/scripts/test-issuer-portability.py
 ```
 
-`CARGO_TARGET_DIR` is respected; `--bregctl` and `--breg` select already-built matching
-binaries. The runner owns a unique disposable container,
+`CARGO_TARGET_DIR` is respected; `--rstack`, `--bregctl` and `--breg` select
+already-built matching binaries. The runner owns a unique disposable container,
 dynamic loopback ports, and an owner-only temporary directory. It cleans up
 services and credentials when finished. It does not contact an existing realm.
 
@@ -32,7 +33,7 @@ The default registry project requires the `registry_principal` direct claim,
 `registry:read` permission, `registry-administration` purpose, and `districts`
 assignment. It authorizes GET only, for assigned districts. The proof covers:
 
-- Stock ThunderID and Keycloak service-account client credentials.
+- The `rstack dev` run issuer's test person and Keycloak service-account client credentials.
 - Keycloak's interactive authorization endpoint, real login form and session,
   authorization-code redirect, state validation, and PKCE code exchange.
   Direct password grants are disabled.
@@ -44,8 +45,8 @@ assignment. It authorizes GET only, for assigned districts. The proof covers:
 - New issuer acceptance after explicit trust replacement, old issuer refusal,
   and wrong-resource refusal.
 
-The stock issuer receives the exact resource, scopes, and authority from the retained development
-client registration. Keycloak uses an optional
+The stock issuer receives the exact resource, scopes, and authority from the person's grant
+in `dev.yaml`. Keycloak uses an optional
 `registry:read` client scope and a BReg audience mapper. Both therefore issue
 the same BReg permission and resource contract through different provisioning
 mechanisms. No production authentication dependency on either issuer is added.
@@ -54,7 +55,7 @@ The default router test uses a recording backend; the opt-in PostgreSQL case
 proves native Proposal issuer isolation and same-issuer receipt recovery.
 Broader database enforcement, hosted login UX, revocation operations, and
 production TLS are separate verification surfaces.
-Issuer JWKS are fetched from each live provider and then passed to BReg's
+The run's public JWKS file and Keycloak's published JWKS are passed to BReg's
 existing static-key-source interface. This journey does not prove remote-JWKS
 refresh or key rotation. Local HTTP is restricted to this disposable exercise.
 The scripted login client preserves secure cookies for the exact loopback

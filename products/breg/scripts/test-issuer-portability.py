@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["cryptography>=42"]
+# dependencies = ["cryptography>=42", "pyyaml>=6"]
 # ///
 # SPDX-License-Identifier: Apache-2.0
 """Exercise real disposable issuers through BREG's authenticated router.
 
-Uses the maintained stock ThunderID development issuer and an ordinary Cargo integration test.
+Uses the `rstack dev` run issuer (the "stock" issuer below), a disposable Keycloak container
+and an ordinary Cargo integration test.
 No existing containers, databases, or identity-provider accounts are touched.
 Tokens, generated credentials, and private keys live only in a temporary directory.
 """
@@ -32,6 +33,8 @@ import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
 from pathlib import Path
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -239,48 +242,39 @@ def human_token(issuer: str, password: str, callback: str) -> str:
         return json.load(response)["access_token"]
 
 
-def journey(root: Path, bregctl: str, breg: str, docker: str,
+def rstack_json(rstack: str, environment: dict[str, str], *args: str) -> dict:
+    return json.loads(run([rstack, "--format", "json", "dev", *args], env=environment).stdout)
+
+
+def journey(root: Path, rstack: str, bregctl: str, breg: str, docker: str,
             test_binaries: dict[str, str]) -> None:
     project = root / "stock-project"
     shutil.copytree(ROOT / "products/breg/acceptance/issuer-portability", project)
-    write(project / "dev-clients.yaml", """apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
-kind: BRegDevClients
-clients:
-  - id: clerk-service
-    accessProfiles: [clerk]
-    scopes: [registry:read]
-    claims:
-      registry_actor_kind: service
-      registry_principal: urn:institution:service-clerk
-      registry_purpose: registry-administration
-      districts: district-a
-      tenant_claim: tenant-a
-""")
-    breg_port, stock_port, database_port = port(), port(), port()
+    environment = dict(os.environ, RSTACK_BREGCTL_BIN=bregctl, RSTACK_BREG_BIN=breg)
+    plan = yaml.safe_load((project / "dev.yaml").read_text())
     keycloak_port = port()
     keycloak_origin = f"http://127.0.0.1:{keycloak_port}"
     issuer = keycloak_origin + "/realms/breg-issuer-journey"
     callback = f"http://127.0.0.1:{port()}/callback"
-    session_started = False
+    run_id = None
     name = "breg-issuer-journey-" + secrets.token_hex(6)
     client_secret, password = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
     try:
-        print("Starting the stock ThunderID issuer", flush=True)
-        run([bregctl, "--format", "json", "dev", "--breg-bin", breg,
-             "--docker-bin", docker, "--breg-port", str(breg_port),
-             "--issuer-port", str(stock_port), "--database-port", str(database_port),
-             str(project)])
-        session_started = True
-        state = json.loads((project / ".breg/dev/state.json").read_text())
-        stock_origin = f"http://127.0.0.1:{state['issuerPort']}"
-        audience = f"urn:breg:dev:{state['owner']}"
-        run([bregctl, "--format", "json", "dev", "token", "clerk-service", str(project)])
-        header = (project / ".breg/dev/secrets/clerk-service.header").read_text().strip()
+        print("Starting the rstack dev run and its issuer", flush=True)
+        report = rstack_json(rstack, environment, "start", str(project), "--ttl", "30m")
+        run_id = report["run_id"]
+        if report["status"] != "ready" or any(item["result"] != "passed" for item in report["scenarios"]):
+            raise RuntimeError("rstack dev run did not pass its scenarios")
+        run_directory = Path(report["runtimeConfigs"]["breg"]).parent
+        stock_origin = plan["issuer"]
+        audience = plan["products"][0]["audience"]
+        credentials = rstack_json(rstack, environment, "token", run_id, "--as", "clerk-service")["credentials"]
+        header = Path(credentials[0]["header_file"]).read_text().strip()
         prefix = "Authorization: Bearer "
         if not header.startswith(prefix):
-            raise RuntimeError("stock issuer did not produce the expected private header file")
+            raise RuntimeError("rstack dev did not produce the expected private header file")
         write(root / "stock.token", header[len(prefix):])
-        shutil.copyfile(project / ".breg/dev/secrets/issuer-jwks", root / "stock-jwks.json")
+        shutil.copyfile(run_directory / "jwks", root / "stock-jwks.json")
 
         write(root / "import/realm.json", realm(client_secret, password, callback, audience),
               container_readable=True)
@@ -303,7 +297,7 @@ clients:
             write(root / "keycloak-jwks.json", json.load(response))
         write(root / "journey.json", {
             "audience": audience,
-            "stock": {"issuer": stock_origin, "algorithm": "RS256", "token_type": "at+jwt",
+            "stock": {"issuer": stock_origin, "algorithm": "ES256", "token_type": "at+jwt",
                       "jwks_file": "stock-jwks.json"},
             "keycloak": {"issuer": issuer, "algorithm": "RS256", "token_type": "JWT",
                          "jwks_file": "keycloak-jwks.json"}})
@@ -318,13 +312,14 @@ clients:
     finally:
         subprocess.run([docker, "rm", "--force", name], stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL)
-        if session_started:
-            subprocess.run([bregctl, "--format", "json", "dev", "stop", "--remove",
-                            "--docker-bin", docker, str(project)], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
+        if run_id:
+            subprocess.run([rstack, "--format", "json", "dev", "stop", run_id], env=environment,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--rstack", type=Path,
+                        help="matching built rstack executable; default: Cargo target debug/rstack")
     parser.add_argument("--bregctl", type=Path,
                         help="matching built bregctl executable; default: Cargo target debug/bregctl")
     parser.add_argument("--breg", type=Path,
@@ -336,9 +331,10 @@ def main() -> None:
     if not docker:
         raise SystemExit("Docker is required for the disposable issuer services")
     target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
+    rstack = (args.rstack or target / "debug/rstack").resolve()
     bregctl = (args.bregctl or target / "debug/bregctl").resolve()
     breg = (args.breg or target / "debug/breg").resolve()
-    for name, binary in [("bregctl", bregctl), ("breg", breg)]:
+    for name, binary in [("rstack", rstack), ("bregctl", bregctl), ("breg", breg)]:
         if not binary.is_file():
             raise SystemExit(f"Build {name} first: cargo build --locked -p registry-{name} --bin {name}")
     if args.with_postgres and not os.environ.get("BREG_TEST_DATABASE_URL"):
@@ -353,7 +349,7 @@ def main() -> None:
     for signum in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(signum, stop)
     with tempfile.TemporaryDirectory(prefix="breg-issuer-journey-") as temporary:
-        journey(Path(temporary).resolve(), str(bregctl), str(breg), docker, test_binaries)
+        journey(Path(temporary).resolve(), str(rstack), str(bregctl), str(breg), docker, test_binaries)
 
 
 if __name__ == "__main__":

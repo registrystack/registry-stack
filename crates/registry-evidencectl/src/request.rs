@@ -31,11 +31,7 @@ use registry_platform_crypto::canonicalize_json;
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize as _, Zeroizing};
 
-use crate::{
-    access,
-    dev::{self, ReadyDevState},
-    evidence_binary,
-};
+use crate::evidence_binary;
 
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
@@ -110,10 +106,10 @@ pub struct PrepareArgs {
     )]
     header: Option<String>,
 
-    /// Evidence runtime configuration that pins the signer's public key and the subject bindings.
+    /// Runtime configuration file of the Evidence service, which pins the signer's public key and the subject bindings.
     #[arg(
         long,
-        value_name = "PATH",
+        value_name = "FILE",
         required_unless_present = "profile",
         conflicts_with = "profile"
     )]
@@ -748,46 +744,13 @@ fn read_bearer_header(argument: &str) -> Result<Zeroizing<String>> {
     Ok(Zeroizing::new(token.to_owned()))
 }
 
-struct RequestClient {
-    client_id: String,
-    private_key_path: PathBuf,
-}
-
-fn resolve_request_client(ready: &ReadyDevState, client_id: &str) -> Result<RequestClient> {
-    if ready.access_profiles.is_empty() {
-        bail!("--client requires an active generation with explicit access profiles");
-    }
-    let profile_digests = ready
-        .access_profiles
-        .iter()
-        .map(|policy| (policy.id.clone(), policy.digest.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let client = access::resolve_ready_client(&ready.project, client_id, &profile_digests)?;
-    Ok(RequestClient {
-        client_id: client.client_id,
-        private_key_path: client.private_key_path,
-    })
-}
-
-/// Resolve one active local Evidence client for the raw API command. The
-/// short-lived bearer remains in memory and the command does not create the
-/// reusable tutorial header written by `evidencectl dev token`.
+/// `api --client` selected a retained local session that no longer exists.
+/// Name the explicit connection flags that replace it.
 pub(crate) fn local_api_connection(
-    project: &Path,
-    client_id: &str,
+    _project: &Path,
+    _client_id: &str,
 ) -> std::result::Result<registry_cli_api::LocalConnection, String> {
-    local_api_connection_inner(project, client_id).map_err(|error| format!("{error:#}"))
-}
-
-fn local_api_connection_inner(
-    project: &Path,
-    client_id: &str,
-) -> Result<registry_cli_api::LocalConnection> {
-    let ready = dev::load_ready_state(project)?;
-    let client = resolve_request_client(&ready, client_id)?;
-    let token = dev::obtain_issuer_token(&ready, &client.client_id, &client.private_key_path)?;
-    registry_cli_api::LocalConnection::bearer(ready.evidence_origin, token)
-        .map_err(|error| anyhow!(error.to_string()))
+    Err("--client is not supported. Pass the service base URL with --url and a bearer credential with --header @FILE.".to_owned())
 }
 
 fn validate_closed_inputs<'a>(
@@ -1313,6 +1276,16 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn api_client_selection_is_refused_with_the_explicit_connection_flags() {
+        let message = match local_api_connection(Path::new("."), "reader") {
+            Err(message) => message,
+            Ok(_) => panic!("--client has no local resolver"),
+        };
+        assert!(message.contains("--url"), "{message}");
+        assert!(message.contains("--header @FILE"), "{message}");
+    }
 
     fn progressive_args(subject: Vec<&str>, subjects_file: Option<PathBuf>) -> PrepareArgs {
         PrepareArgs {

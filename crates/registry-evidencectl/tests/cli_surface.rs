@@ -10,7 +10,7 @@ use std::process::Command;
 
 /// The complete top-level subcommand set. Adding a command means adding it
 /// here; the point of the list is that an omission fails rather than passes.
-const TOP_LEVEL_COMMANDS: [&str; 22] = [
+const TOP_LEVEL_COMMANDS: [&str; 21] = [
     "client",
     "access",
     "keygen",
@@ -26,7 +26,6 @@ const TOP_LEVEL_COMMANDS: [&str; 22] = [
     "package",
     "fixtures",
     "source",
-    "dev",
     "request",
     "verify",
     "runtime",
@@ -118,6 +117,20 @@ fn access_client_add_is_not_a_command() {
 }
 
 #[test]
+fn dev_is_not_a_command() {
+    assert_usage_refusal(&["dev", "--help"]);
+    assert_usage_refusal(&["dev", "start", "--help"]);
+    assert!(!evidencectl(&["--help"]).contains("\n  dev "));
+}
+
+#[test]
+fn source_add_is_not_a_command() {
+    let source = evidencectl(&["source", "--help"]);
+    assert!(!source.contains("\n  add "), "{source}");
+    assert_usage_refusal(&["source", "add", "--help"]);
+}
+
+#[test]
 fn audit_show_is_not_a_command() {
     let help = evidencectl(&["--help"]);
     assert!(!help.contains("audit"), "{help}");
@@ -147,14 +160,9 @@ fn an_undeclared_command_is_still_refused() {
 }
 
 #[test]
-fn standard_check_option_and_retired_bare_dev_options_are_clear_in_help() {
+fn standard_check_option_is_clear_in_help() {
     let check = evidencectl(&["check", "--help"]);
     assert!(check.contains("--deny-warnings"), "{check}");
-
-    let dev = evidencectl(&["dev", "--help"]);
-    assert!(!dev.contains("--detach"), "{dev}");
-    assert!(!dev.contains("--project"), "{dev}");
-    assert!(dev.contains("start"), "{dev}");
 }
 
 #[test]
@@ -174,42 +182,17 @@ fn progressive_request_preparation_accepts_no_caller_supplied_selector() {
         .expect("the published contract decides whether request-origin selectors are required");
 }
 
-#[test]
-fn retired_preserved_context_flag_is_refused_and_explicit_target_is_accepted() {
-    for incomplete in [
-        vec!["--preserve-target-authenticated-context"],
-        vec![
-            "--preserve-target-authenticated-context",
-            "--target",
-            "target",
-        ],
-        vec![
-            "--preserve-target-authenticated-context",
-            "--issuer-project",
-            "issuer",
-        ],
-    ] {
-        let mut arguments = vec!["evidencectl", "dev", "start", "project"];
-        arguments.extend(incomplete);
-        assert!(
-            registry_evidencectl::command()
-                .try_get_matches_from(arguments)
-                .is_err(),
-            "incomplete preserved-context selection was accepted"
-        );
-    }
-    registry_evidencectl::command()
-        .try_get_matches_from([
-            "evidencectl",
-            "dev",
-            "start",
-            "project",
-            "--target",
-            "target",
-            "--issuer-project",
-            "issuer",
-        ])
-        .expect("the complete explicit selection is accepted");
+fn assert_usage_refusal(arguments: &[&str]) {
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(arguments)
+        .output()
+        .expect("run evidencectl");
+    assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).starts_with("error[evidencectl.usage]"),
+        "{arguments:?} did not use the standard usage refusal: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn evidencectl(arguments: &[&str]) -> String {

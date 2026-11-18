@@ -90,8 +90,9 @@ recordTypes:
   # hook declares `phase: after` and a handler such as
   # `{type: url, destinationId: registry-events}`. This project declares none:
   # a package refuses to activate until the runtime configuration binds every
-  # destination its URL handlers name. `bregctl dev` supplies local receiver
-  # bindings; operated deployments bind their own.
+  # destination its URL handlers name. A `rstack dev` run binds none, so a
+  # project with URL hooks cannot run there; operated deployments bind their
+  # own.
   - id: record
     primaryDataset: generic-registry
     route: records

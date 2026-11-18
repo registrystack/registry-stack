@@ -16,7 +16,7 @@ rstack dev start . --ttl 4h
 `rstack dev start` runs the authored journeys, starts the registry and sends the scenarios in the
 scenario file that `dev.yaml` names. Write a header file for a caller with `rstack dev token RUN --as
 PERSON` and send further requests with `rstack breg api PATH --url BREG_URL --header @HEADER_FILE`.
-[Run a project with rstack dev](https://docs.registrystack.org/dev/configure/run-a-project-with-rstack-dev/)
+[Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/)
 describes the report and token expiry.
 
 The `register-facility` scenario in `dev/scenarios.yaml` creates an operator, registers a facility

@@ -182,46 +182,6 @@ fn usage_errors_use_the_envelope_and_exit_two() {
 }
 
 #[test]
-fn a_malformed_name_prefix_is_a_usage_error() {
-    let workspace = tempfile::tempdir().expect("workspace");
-    let output = evidencectl()
-        .args(["--format", "json", "dev", "start"])
-        .arg(workspace.path())
-        .args(["--name-prefix", "CI_Job"])
-        .output()
-        .expect("run dev start");
-    let report = conforming(&output, "usage", USAGE, "usage-error");
-    assert_eq!(report["diagnostics"][0]["code"], "evidencectl.usage");
-
-    let output = evidencectl()
-        .args(["dev", "start"])
-        .arg(workspace.path())
-        .args(["--name-prefix", "CI_Job"])
-        .output()
-        .expect("run dev start");
-    assert_eq!(output.status.code(), Some(USAGE));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("--help"),
-        "the refusal names the next step: {stderr}"
-    );
-
-    // The usage refusal is value-free, so the help it points to carries the rule.
-    let output = evidencectl()
-        .args(["dev", "start", "--help"])
-        .output()
-        .expect("run dev start --help");
-    let help = String::from_utf8_lossy(&output.stdout)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(
-        help.contains("lowercase letters, digits, and") && help.contains("at most 32"),
-        "{help}"
-    );
-}
-
-#[test]
 fn init_check_and_explain_share_the_envelope() {
     let workspace = tempfile::tempdir().expect("workspace");
     let project = scaffold(workspace.path());
@@ -347,26 +307,6 @@ fn refusals_name_the_command_that_refused() {
         "target explain",
         OPERATIONAL_FAILURE,
         "operational-failure",
-    );
-
-    // A project with no running local session lacks the service the command
-    // depends on; the refusal names `dev start`.
-    let output = evidencectl()
-        .args(["--format", "json", "dev", "stop"])
-        .arg(workspace.path())
-        .output()
-        .expect("run dev stop");
-    let report = conforming(
-        &output,
-        "dev stop",
-        OPERATIONAL_FAILURE,
-        "operational-failure",
-    );
-    assert!(
-        report["diagnostics"][0]["suggestedAction"]
-            .as_str()
-            .is_some_and(|action| action.contains("evidencectl dev start")),
-        "{report}"
     );
 
     let output = evidencectl()

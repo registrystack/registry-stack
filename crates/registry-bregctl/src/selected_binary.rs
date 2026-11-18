@@ -36,20 +36,6 @@ pub(crate) const BREG_REVIEW: HelperSpec = HelperSpec {
     managed_env: "RSTACK_BREG_REVIEW_BIN",
 };
 
-pub(crate) const CASEWORKCTL: HelperSpec = HelperSpec {
-    binary: "caseworkctl",
-    component: "casework",
-    explicit_source: "--caseworkctl-bin",
-    managed_env: "RSTACK_CASEWORKCTL_BIN",
-};
-
-pub(crate) const CASEWORK: HelperSpec = HelperSpec {
-    binary: "casework",
-    component: "casework",
-    explicit_source: "--casework-bin",
-    managed_env: "RSTACK_CASEWORK_BIN",
-};
-
 pub(crate) fn resolve_managed(
     spec: HelperSpec,
     explicit: Option<&Path>,
@@ -171,11 +157,11 @@ mod tests {
     #[test]
     fn managed_resolution_refuses_a_same_version_runtime_with_wrong_identity() {
         let root = tempfile::tempdir().unwrap();
-        let (generation, selected) = fixture(root.path(), CASEWORK);
-        let override_path = root.path().join("other-casework");
+        let (generation, selected) = fixture(root.path(), BREG_REVIEW);
+        let override_path = root.path().join("other-breg-review");
         fs::write(&override_path, b"same version\n").unwrap();
         let error = resolve_managed_with_environment(
-            CASEWORK,
+            BREG_REVIEW,
             Some(&override_path),
             Some(generation.as_os_str()),
             Some(selected.as_os_str()),
@@ -183,7 +169,7 @@ mod tests {
         )
         .unwrap_err();
         let diagnostic = format!("{error:#}");
-        assert!(diagnostic.contains("--casework-bin"), "{diagnostic}");
+        assert!(diagnostic.contains("--breg-review-bin"), "{diagnostic}");
         assert!(diagnostic.contains("selected generation"), "{diagnostic}");
         assert!(diagnostic.contains("v-test"), "{diagnostic}");
     }
@@ -213,7 +199,7 @@ mod tests {
         let generation = root.path().join("generation");
         fs::create_dir(&generation).unwrap();
         let error = resolve_managed_with_environment(
-            CASEWORKCTL,
+            BREG_MCP,
             None,
             Some(generation.as_os_str()),
             None,
@@ -221,10 +207,7 @@ mod tests {
         )
         .unwrap_err();
         let diagnostic = format!("{error:#}");
-        assert!(
-            diagnostic.contains("rstack install casework"),
-            "{diagnostic}"
-        );
+        assert!(diagnostic.contains("rstack install breg"), "{diagnostic}");
         assert!(diagnostic.contains("will not install"), "{diagnostic}");
     }
 

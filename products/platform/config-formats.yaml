@@ -3297,37 +3297,6 @@ formats:
       boolean: none
     securityMembers: []
     restrictingMembers: []
-  - id: evidence/dev-state
-    product: evidence
-    title: evidencectl development state
-    files: [.evidence/dev/state.json]
-    syntax: json
-    audience: generated
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/evidence/dev-state/v6
-      kind: EvidenceDevState
-      checkedBy:
-        file: crates/registry-evidencectl/src/dev.rs
-        symbol: DEV_STATE_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/evidence/dev-state/v6
-      kind: EvidenceDevState
-    schema: none
-    reader:
-      crate: registry-evidencectl
-      file: crates/registry-evidencectl/src/dev.rs
-      function: read_state
-      type: DevState
-    check: evidencectl check --file {file}
-    example: products/evidence/examples/formats/dev-session/.evidence/dev/state.json
-    conformance:
-      requiredText: none
-      optionalText: none
-      integer: none
-      boolean: none
-    securityMembers: []
-    restrictingMembers: []
   - id: evidence/source-resolution
     product: evidence
     title: Evidence source import resolution file
@@ -3685,7 +3654,7 @@ formats:
       file: crates/registry-thunderid-tooling/src/task_connection.rs
       function: read
       type: TaskConnection
-    check: evidencectl dev check {file}
+    check: evidencectl check --file {file}
     example: products/platform/examples/task-connection.yaml
     conformance:
       requiredText: /bootstrapResource
@@ -3820,7 +3789,7 @@ formats:
       file: crates/registry-thunderid-tooling/src/container.rs
       function: read_session_state
       type: StateFile
-    check: evidencectl dev check {file}
+    check: evidencectl check --file {file}
     example: products/platform/examples/thunderid/session.json
     conformance:
       requiredText: none

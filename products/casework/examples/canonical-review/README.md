@@ -25,21 +25,23 @@ package Casework. A producer may select the policy by ID, or supply its compiled
 version and digest as a strict expectation. Each accepted review keeps the
 concrete policy binding.
 
-For a connected synthetic local demonstration, `bregctl examples review
-./reviewed-session --approve` composes the installed facility and canonical
-review templates and their public CLIs. The explicit flag uses Casework's normal
-staff decision API. Without it, the review remains pending. The source keeps
-its own disclosure and application authority throughout.
+For a connected synthetic local demonstration, run the paired facility and
+canonical review projects together under `rstack dev` with a plan that lists
+both products and the people who review. The
+[licensing plan](../../../platform/examples/licensing/dev.yaml) shows the shape
+of a paired BReg and Casework plan. The source keeps its own disclosure and
+application authority throughout.
 
 The source schema is vendored for offline policy compilation. BReg remains the authority for current human disclosure and reviewability. A Casework service credential never supplies displayed fields.
 
 ## Approve an exact task as Staff
 
-Run `bregctl --format json examples review ./reviewed-session` to start the
-connected demonstration and leave the Proposal pending. Set `CASEWORK_URL`
-to `caseworkUrl` from its JSON report. Run `rstack dev token RUN --as staff`
-to write the reviewer's owner-only header file, and set `STAFF_HEADER` to
-the returned `headerFile` path. The file carries the bearer and Casework profile.
+Start the paired projects with `rstack --format json dev start` and leave the
+Proposal pending. Set `CASEWORK_URL` to the `casework` address under `products`
+in its JSON report. Run `rstack dev token RUN --as staff` to write the
+reviewer's owner-only header file, and set `STAFF_HEADER` to the
+`header_file` path of the Casework credential it returns. The file carries the
+bearer and Casework profile.
 
 With that header file and `Registry-Source-Profile: proposal-reviewer`, read
 `GET /v1/review-tasks` and inspect the selected task's current context at

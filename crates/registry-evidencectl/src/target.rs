@@ -12,7 +12,7 @@ use anyhow::{bail, Context as _, Result};
 use clap::{Args, Subcommand};
 use registry_evidence_authoring::{
     project::{self, EvidenceProject},
-    target::{self, EvidenceTarget, TargetConnection},
+    target::{self, EvidenceTarget},
 };
 use serde_json::{json, Value};
 
@@ -192,57 +192,6 @@ fn copy_explicit_target(source: &Path, destination: &Path) -> Result<()> {
     )?;
     copy_new(&public_key, &staging.path().join(key), MAX_TARGET_BYTES)?;
     publish(staging, destination)
-}
-
-/// Preflight a local Source connection without changing the target.
-pub(crate) fn check_local_connection(directory: &Path, name: &str, binding: &Value) -> Result<()> {
-    if !crate::authoring::valid_local_identifier(name) || !binding.is_object() {
-        bail!("local source connection requires a valid name and a mapping");
-    }
-    let binding: TargetConnection = serde_json::from_value(binding.clone())
-        .context("local source connection must have valid authored settings")?;
-    if !directory.try_exists()? {
-        return reject_existing(directory);
-    }
-    let name = name.parse()?;
-    let target = read_target(directory)?;
-    if let Some(existing) = target.connections.get(&name) {
-        if existing != &binding {
-            bail!("local source connection already has different authored settings; review it or choose another connection name");
-        }
-    }
-    Ok(())
-}
-
-/// Add one Source connection by atomically replacing target.yaml.
-pub(crate) fn ensure_local_connection(
-    project: &Path,
-    directory: &Path,
-    name: &str,
-    binding: Value,
-) -> Result<()> {
-    check_local_connection(directory, name, &binding)?;
-    if !directory.exists() {
-        if directory
-            .extension()
-            .and_then(|extension| extension.to_str())
-            == Some("yaml")
-        {
-            bail!("local target file is absent; run `evidencectl init` or pass --target with an existing normalized EvidenceTarget");
-        }
-        return create_local_target(project, directory, json!({name: binding}), json!({}));
-    }
-    let path = target_path(directory);
-    let mut target = read_target(&path)?;
-    let id = name.parse()?;
-    if target.connections.contains_key(&id) {
-        return Ok(());
-    }
-    let binding = serde_json::from_value(binding)
-        .context("local source connection must have valid authored settings")?;
-    target.connections.insert(id, binding);
-    let bytes = render_target(&target)?;
-    replace_plain_file(&path, bytes.as_bytes())
 }
 
 /// Create a local target with a complete grant for every AssertionDefinition.
@@ -575,20 +524,6 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn replace_plain_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        bail!("target.yaml must remain a plain file");
-    }
-    let parent = path.parent().context("target.yaml requires a parent")?;
-    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
-    staged.as_file().set_permissions(metadata.permissions())?;
-    staged.write_all(bytes)?;
-    staged.as_file().sync_all()?;
-    staged.persist(path).context("publishing target.yaml")?;
-    Ok(())
-}
-
 fn publish(staging: tempfile::TempDir, destination: &Path) -> Result<()> {
     let staged = staging.keep();
     if let Err(error) = rename_noreplace(&staged, destination) {
@@ -790,23 +725,6 @@ mod tests {
         let destination = root.path().join("target");
         fs::create_dir(&destination).unwrap();
         assert!(reject_existing(&destination).is_err());
-    }
-
-    #[test]
-    fn connection_names_and_shapes_are_bounded_before_io() {
-        let root = tempfile::tempdir().unwrap();
-        assert!(check_local_connection(
-            root.path().join("missing").as_path(),
-            "../bad",
-            &json!({})
-        )
-        .is_err());
-        assert!(check_local_connection(
-            root.path().join("missing").as_path(),
-            "source",
-            &json!(true)
-        )
-        .is_err());
     }
 
     #[test]
