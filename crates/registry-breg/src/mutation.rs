@@ -2720,17 +2720,48 @@ pub(super) fn external_refresh_capture(
     }
 }
 
+/// Stage refresh work inside a savepoint. A failed capture is rolled back to
+/// the savepoint and logged by category and entity id only; the Record write
+/// still commits. A view read joins cached values by the Record's current link
+/// value, so the Record answers `unavailable` until the next sweep covers it.
 pub(super) async fn capture_external_refresh_rows(
     transaction: &Transaction<'_>,
     captures: &[LocalRecordCapture],
     enabled: bool,
 ) -> Result<(), MutationError> {
+    const SAVEPOINT: &str = "external_refresh_capture";
+    let Some(first) = captures.first() else {
+        return Ok(());
+    };
     if !enabled {
         return Ok(());
     }
-    capture_local_records(transaction, captures)
+    transaction
+        .batch_execute(&format!("SAVEPOINT {SAVEPOINT}"))
         .await
         .map_err(|_| MutationError::Unavailable)?;
+    let error = match capture_local_records(transaction, captures).await {
+        Ok(_) => {
+            return transaction
+                .batch_execute(&format!("RELEASE SAVEPOINT {SAVEPOINT}"))
+                .await
+                .map_err(|_| MutationError::Unavailable);
+        }
+        Err(error) => error,
+    };
+    transaction
+        .batch_execute(&format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}"))
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    // The queue error's text is a fixed, value-free reason ("input is
+    // invalid" or "unavailable").
+    tracing::warn!(
+        category = "external_refresh.capture_failed",
+        entity_id = %first.entity_id,
+        records = captures.len(),
+        reason = %error,
+        "external refresh capture failed; the next sweep covers the Record"
+    );
     Ok(())
 }
 
@@ -4820,6 +4851,164 @@ mod tests {
         waiting.expect("the mutation waits for the first plan lock");
         last_lock.expect("the mutation must not lock a later plan before the first one");
         assert_eq!(work_count, 2);
+    }
+
+    /// A failed capture must not fail the Record write: the write commits, the
+    /// failure is logged under a fixed category with the entity id and no
+    /// values, and the next sweep picks the Record up.
+    #[tokio::test]
+    async fn a_failed_external_refresh_capture_leaves_the_record_write_committed() {
+        use crate::postgres::{
+            begin_registry_transaction,
+            external_projection::postgres_tests::Activated,
+            external_refresh_queue::{register_plans, PlanRegistration},
+            external_view_query::tests::{compile_project, project},
+        };
+        use tracing::Level;
+
+        let mut source = project();
+        source["accessProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id":"writer","principalClaim":"registry_principal",
+                "requiredScopes":["registry.write"],"requiredPurposes":["consultation"],
+                "permissions":{"records":[{
+                    "recordType":"local-record","operations":["create","get"],
+                    "readableFields":["tenant"],"writableFields":["subject-key","tenant"],
+                    "rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]
+                }]}
+            }));
+        let registry = compile_project(&source);
+        let fixture = Activated::new(&registry).await;
+        let scope = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let lock = RegistryLockKey::derive(registry.registry_id()).unwrap();
+        let timeout = Duration::from_secs(10);
+        let mut setup_client = fixture.pool.get().await.unwrap();
+        let setup = begin_registry_transaction(&mut setup_client, lock, timeout, &fixture.expected)
+            .await
+            .unwrap();
+        register_plans(
+            &setup,
+            &[PlanRegistration {
+                plan_id: "plan".to_owned(),
+                package_digest: fixture.expected.package_digest.clone(),
+                activation_id: fixture.expected.activation_uuid().unwrap(),
+                authority_digest: "authority".to_owned(),
+                root_entity_id: "local-record".to_owned(),
+                watched_fields: BTreeSet::from(["subject-key".to_owned()]),
+                projection_epochs: vec![scope.epoch],
+                interval_seconds: 900,
+                page_size: 50,
+                max_pending: 100,
+            }],
+        )
+        .await
+        .unwrap();
+        setup.commit().await.unwrap();
+        drop(setup_client);
+        fixture
+            .migration
+            .batch_execute(&format!(
+                "REVOKE EXECUTE ON FUNCTION registry_internal.capture_external_refresh_records(jsonb)
+                 FROM PUBLIC, \"{}\"",
+                fixture.database.runtime_role.as_str()
+            ))
+            .await
+            .unwrap();
+
+        let audit = fixture.database.audit(
+            registry_platform_audit::AuditProfile::production_from_secret_bytes(
+                vec![0x5a; 32].into(),
+            )
+            .unwrap(),
+        );
+        let coordinator =
+            MutationTransaction::new(lock, timeout, fixture.expected.clone(), "instance", audit);
+        let plan = MutationPlan::from_compiled(&registry, "records.local-record.create").unwrap();
+        assert!(plan.external_refresh_enabled);
+        let claims = ClaimContext::for_compiled(
+            &registry,
+            "local-record",
+            Some("principal-canary".to_owned()),
+            "writer",
+            Some("consultation".to_owned()),
+            vec![crate::postgres::RowBoundaryContext::Equals {
+                field: "tenant".to_owned(),
+                value: "tenant-canary".to_owned(),
+            }],
+        )
+        .unwrap();
+        let request = MutationRequest {
+            plan: &plan,
+            idempotency_key: "capture-failure-key",
+            claims: &claims,
+            record_id: None,
+            expected_etag: None,
+            body: MutationBody::Create(Map::from_iter([
+                (
+                    "subjectKey".to_owned(),
+                    Value::String("subject-canary".to_owned()),
+                ),
+                (
+                    "tenant".to_owned(),
+                    Value::String("tenant-canary".to_owned()),
+                ),
+            ])),
+            response_fields: BTreeSet::from(["tenant".to_owned()]),
+            representation: crate::record_profile::RecordRepresentation::Json,
+            correlation: crate::correlation::RequestCorrelation::breg_created(),
+        };
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let outcome = {
+            let _guard =
+                tracing::dispatcher::set_default(&captured.subscriber_with_max_level(Level::WARN));
+            let mut client = fixture.pool.get_for_test().await.unwrap();
+            coordinator.execute(&mut client, request).await
+        };
+        let table = &registry.entities()["local-record"].physical_table;
+        let records: i64 = fixture
+            .database
+            .admin
+            .query_one(
+                &format!("SELECT count(*) FROM registry_data.\"{table}\""),
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        let work: i64 = fixture
+            .migration
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_external_refresh_work",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        fixture.cleanup().await;
+
+        outcome.expect("the Record write commits although the capture failed");
+        assert_eq!(records, 1, "the Record write is committed");
+        assert_eq!(
+            work, 0,
+            "no refresh work row is written for the failed capture"
+        );
+        let logs = captured.text();
+        assert_eq!(logs.lines().count(), 1, "one warning: {logs}");
+        assert!(logs.contains(r#""level":"WARN""#), "{logs}");
+        assert!(logs.contains("external_refresh.capture_failed"), "{logs}");
+        assert!(logs.contains("local-record"), "{logs}");
+        assert!(
+            logs.contains("external refresh queue is unavailable"),
+            "{logs}"
+        );
+        for value in ["subject-canary", "tenant-canary", "principal-canary"] {
+            assert!(!logs.contains(value), "{value} reached the log: {logs}");
+        }
     }
 
     /// Every record write converts its values here. A value a caller never
