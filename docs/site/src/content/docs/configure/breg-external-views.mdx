@@ -1,0 +1,520 @@
+---
+title: Show data from another registry
+description: Show fields that another registry owns beside Base Registry Engine Records, live or from an indexed copy, then bind the source, keep the copy current, purge it, and back it up.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-18"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+A licence in a Base Registry Engine (BReg) registry often names its holder by a person number that
+the population register owns. An external view shows the holder's name beside the licence without
+copying it into the licence Record. The population register stays the authority for the name, and
+an Adapter pack route answers for it.
+
+An external view is live or indexed:
+
+- A live view asks the source each time a caller reads one Record, and keeps nothing.
+- An indexed view answers from a copy that BReg refreshes in the background, so a caller can
+  filter, sort, and count Records by an outside field.
+
+The examples on this page come from the synthetic licensing project, where a `licence` Record holds
+the holder's person number in `holder-key`.
+
+## Show a person live
+
+Declare the outside record type, a live projection of it, and a view on the local `licence` record
+type in `registry.yaml`:
+
+```yaml title="registry.yaml"
+externalRecordTypes:
+  - id: person
+    authority: urn:example:population-register
+    identifierScheme: urn:example:person-number
+    display: {label: Person}
+    fields:
+      - {id: given-name, type: string, classification: restricted}
+      - {id: family-name, type: string, classification: restricted}
+
+externalProjections:
+  - id: person-live
+    recordType: person
+    sourceRoute: person-exact
+    sourceRouteVersion: "1"
+    purpose: licensing
+    scope: licensing-holders
+    mode: live
+    cardinality: one
+    fields: [given-name, family-name]
+
+externalViews:
+  - id: licence-holder-live
+    recordType: licence
+    links:
+      - id: holder
+        projection: person-live
+        fromField: holder-key
+```
+
+The projection names the Adapter pack route that answers it. When the deployment binds the pack,
+BReg refuses a route whose version, authority, purpose, scope, selector scheme, or record
+identifier scheme differs from the projection and its record type. The route must disclose to host
+profiles (`localDisclosure: host-profiles`), and a live projection of one record needs an exact
+lookup route.
+
+Grant the view in the officer's [access profile](../../reference/glossary/#access-profile). The
+same profile must grant Get on `licence`, and its `requiredPurposes` must name the projection's
+[purpose](../../reference/glossary/#purpose):
+
+```yaml title="registry.yaml"
+      externalViews:
+        - view: licence-holder-live
+          links:
+            - {link: holder, readableFields: [given-name, family-name]}
+```
+
+Read one licence with its holder:
+
+```sh test-skip="needs a live registry and source"
+bregctl api \
+  '/v1/external-views/licence-holder-live/holder/records/LICENCE_ID?accessProfile=officer' \
+  --url "$BREG_URL" \
+  --token-file "$OFFICER_TOKEN_FILE"
+```
+
+```json
+{
+  "status": "available",
+  "authority": "urn:example:population-register",
+  "records": [
+    {
+      "rootId": "LICENCE_ID",
+      "availability": "available",
+      "fields": {"given-name": "Ari", "family-name": "Lee"}
+    }
+  ]
+}
+```
+
+A record's `availability` is `absent` when the source answers that the person does not exist, or
+when the licence's `holder-key` is empty. When the source cannot answer, `status` is `unavailable`
+and `records` is empty. A caller who may not read the licence receives `404`, the same answer as
+for a licence that does not exist.
+
+Write access to `holder-key` decides which person BReg asks the source for. Grant write access to a
+link field only to identities trusted to assert that link.
+
+{/* Evidence: products/breg/examples/external-views/registry.yaml;
+    crates/registry-breg/src/external_source.rs, check_pack_contract;
+    crates/registry-breg/src/postgres/external_runtime.rs, view_response and response_row;
+    crates/registry-breg/src/api/external_views.rs, external_view_problem. */}
+
+## List licences filtered by holder name
+
+Filtering, sorting, and counting by an outside field need an indexed projection. BReg keeps a
+copy of the approved fields for each linked person and answers queries from that copy:
+
+```yaml title="registry.yaml"
+externalProjections:
+  - id: person-indexed
+    recordType: person
+    sourceRoute: person-batch
+    sourceRouteVersion: "1"
+    purpose: licensing
+    scope: licensing-holders
+    mode: indexed
+    cardinality: one
+    cacheTtlSeconds: 300
+    fields: [given-name, family-name]
+
+externalViews:
+  - id: licence-holder-indexed
+    recordType: licence
+    links:
+      - id: holder
+        projection: person-indexed
+        fromField: holder-key
+```
+
+`cacheTtlSeconds` is the longest BReg serves a copied value, counted from when the source observed
+it. An indexed projection requires it and a live one refuses it. The pack route of an indexed
+projection of one record answers batch lookups and must retain its records (`retention: retain`).
+
+Grant the officer the fields it may filter, sort, and count by. A query also needs List on
+`licence`, and a count needs `allowCount` on `licence`:
+
+```yaml title="registry.yaml"
+    permissions:
+      records:
+        - recordType: licence
+          operations: [get, list]
+          readableFields: [licence-number, jurisdiction]
+          allowCount: true
+          rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
+      externalViews:
+        - view: licence-holder-indexed
+          links:
+            - link: holder
+              readableFields: [given-name, family-name]
+              filterableFields: [family-name]
+              sortableFields: [family-name]
+              allowCount: true
+```
+
+List the licences whose holder's family name is Lee, sorted by family name, with a count:
+
+```sh test-skip="needs a live registry and source"
+bregctl api \
+  '/v1/external-views/licence-holder-indexed/holder/records?accessProfile=officer&$filter=family-name%20eq%20%27Lee%27&$orderby=family-name&$count=true&$top=20' \
+  --url "$BREG_URL" \
+  --token-file "$OFFICER_TOKEN_FILE"
+```
+
+```json
+{
+  "status": "available",
+  "authority": "urn:example:population-register",
+  "records": [
+    {
+      "rootId": "LICENCE_ID",
+      "availability": "available",
+      "fields": {"given-name": "Ari", "family-name": "Lee"}
+    },
+    {
+      "rootId": "OTHER_LICENCE_ID",
+      "availability": "available",
+      "fields": {"given-name": "Mina", "family-name": "Lee"}
+    }
+  ],
+  "count": 2
+}
+```
+
+`$filter` accepts one `eq` comparison on a filterable field, against a literal or `null`. `$top`
+accepts 1 to 100 and defaults to 50. When more licences match than `$top`, the response carries
+`nextCursor`. For the next page, send that value as `$skiptoken` with the same `accessProfile` and
+no other query option. A cursor is bound to its caller, query,
+and projection, and a purge or a fresh projection epoch invalidates it.
+
+Each list page checks that every licence the caller may list has a current copy before it selects
+rows. While any one lacks it, the page answers `503` with the problem code
+`external_view.incomplete`, never a partial result. A read of one licence answers with `status`
+`unavailable` instead.
+
+{/* Evidence: products/breg/examples/external-views/registry.yaml;
+    crates/registry-breg/src/api/external_views.rs, plan_query;
+    crates/registry-breg/src/postgres/external_runtime.rs, ExternalViewError::Incomplete;
+    crates/registry-breg/src/problem.rs, ExternalViewIncomplete. */}
+
+## Why live and indexed are separate views
+
+A live view and an indexed view of the same person are separate grants because they disclose
+different things. A live read shows one licence's holder to a caller who may already open that
+licence. A filter, sort, or count over an indexed view tells the caller something about every
+licence it may list: which ones have a holder named Lee, and how many. Granting the live view does
+not grant the indexed one.
+
+`bregctl check` holds each grant to that difference:
+
+- `breg.external-view.live-query`: filter, sort, and count are granted only on an indexed
+  projection.
+- `breg.external-view.processing-wider-than-read`: a filterable or sortable field must also be
+  readable.
+- `breg.external-view.root-read-missing`: a view grant needs Get on the local record type in the
+  same profile.
+- `breg.external-view.root-query-missing`: a filter, sort, or count needs List on the local record
+  type, and a count needs `allowCount` on it too.
+- `breg.external-view.purpose-not-granted`: the profile's `requiredPurposes` must name the
+  projection's purpose.
+
+Each list page checks coverage over every licence the caller may list, so its cost grows with that
+population. Grant indexed views to profiles whose
+[row boundaries](../../reference/glossary/#row-boundary) narrow them to the licences their callers
+need, and rate-limit indexed queries at the gateway.
+
+{/* Evidence: crates/registry-breg/src/external_views.rs, compile;
+    products/breg/external-projection-storage.md, Freshness and purge. */}
+
+## Bind the source in the runtime file
+
+The project declares what a view may show. The deployment's runtime file decides whether BReg may
+contact the source, and which fields it may copy. Add one `externalSources` entry per projection:
+
+```yaml title="runtime.yaml"
+externalSources:
+  person-indexed:
+    packFile: /etc/breg/packs/population-register/pack.yaml
+    packDigest: sha256:PACK_DIGEST
+    connection:
+      id: population-register
+      endpoints:
+        - endpoint: synthetic-registry
+          baseUrl: https://population.example.test
+          credential:
+            type: static-api-key
+            valueRef: secret:file/population-register-key
+    endpointPolicies:
+      - endpoint: synthetic-registry
+        baseUrl: https://population.example.test
+        clientIdentity: forbidden
+        authentication: {type: static-api-key}
+    allowedFields: [family-name, given-name]
+    grantValidUntil: "2027-06-30T00:00:00Z"
+    acquisition:
+      maximumDataOperations: 8
+      attemptTimeoutMilliseconds: 5000
+      maximumResponseBytes: 65536
+```
+
+- `packFile` is the absolute path of the reviewed pack, and `packDigest` its `sha256:` digest.
+  BReg refuses a pack whose bytes differ.
+- `allowedFields` is the operator's approval to copy each field. It must cover every field the
+  projection declares. A missing field is refused with its name and the path
+  `/externalSources/person-indexed/allowedFields`.
+- `grantValidUntil` is the source grant's cutoff, as an RFC 3339 timestamp. A copied value expires
+  at the earlier of this cutoff and its cache lifetime. Set it no later than the source permits
+  storage.
+- `cacheTtlSeconds` is optional and can only shorten the authored lifetime.
+- `acquisition` sets ceilings on one acquisition that narrow the pack's own: at most 1,000 data
+  operations, a 60,000 ms attempt timeout, and 16 MiB of response.
+
+Check the project directory with the complete runtime file before you start BReg:
+
+```sh test-skip="needs a reviewed pack and runtime file"
+bregctl check licensing --runtime-config /etc/breg/runtime.yaml
+```
+
+To review the bindings without contacting the source, generate a facts file. It verifies the
+pinned packs and bindings and records each projection's capabilities and binding and grant digests:
+
+```sh test-skip="needs a reviewed pack and runtime file"
+bregctl generate external-source-facts licensing \
+  --runtime-config /etc/breg/runtime.yaml \
+  --output external-source-facts.json
+```
+
+A projection with no binding, or one that fails to bind at startup, stays unbound. Its views answer
+`503` with `source.unavailable` and the field path `/externalProjections/person-indexed`, while
+other views keep serving.
+
+{/* Evidence: crates/registry-breg/src/external_source.rs, ExternalSourceMembers,
+    ExternalSourceAcquisition;
+    crates/registry-bregctl/src/lib.rs, generate_external_source_facts;
+    crates/registry-breg/src/api/external_views.rs, projection_unavailable. */}
+
+## Refresh plans and the in-process worker
+
+An indexed view stays current through a refresh plan in the same runtime file. Each plan targets one
+indexed view link and names the worker identity BReg refreshes as. BReg runs every plan that
+resolves inside the server process. No scheduler, access token, or step request is involved.
+
+```yaml title="runtime.yaml"
+externalRefresh:
+  plans:
+    licensing-holders:
+      target:
+        view: licence-holder-indexed
+        link: holder
+      worker:
+        accessProfile: projection-refresh
+        requesterClient: licensing-refresh
+        principal: synthetic-licensing-refresh
+        rowClaims:
+          jurisdiction: zone-a
+      intervalSeconds: 120
+```
+
+The worker's `accessProfile` is a service profile on the view's root record type. It grants List on
+`licence`, declares no `requireConsent`, and lists the projection under
+`permissions.refreshExternalProjections`. Its `requesterClient` must be one the profile admits.
+`principal` supplies the profile's principal claim, and `rowClaims` pins every claim the profile's
+row boundaries use: exactly one value for an equals boundary, and a list of 1 to 64 values for an
+`in` boundary. `bregctl check` refuses a plan whose worker identity the profile would refuse, with
+`breg.external-refresh.worker-not-admitted`. When the profile also refreshes the link's
+label projection, the plan refreshes the labels too.
+
+The worker acts as that service principal without a token from your identity provider. Revoking
+the client at the identity provider does not stop it. To stop a plan, remove it from the runtime
+file and restart BReg.
+
+`intervalSeconds` accepts 1 to 31536000 and runs from the start of one sweep to the start of the
+next. Keep the interval, the time a sweep takes, and a margin for retries inside the effective
+cache lifetime. `pageSize` defaults to 50 and accepts 1 to 100. Every indexed link whose projection
+has a binding needs a plan; `bregctl check` reports a missing one as
+`breg.external-refresh.plan-missing`.
+
+`bregctl check` with the runtime file reports each plan problem as an error with a
+`breg.external-refresh.*` code and the path to fix, and `bregctl doctor` refuses a plan that
+cannot resolve. At startup, such a plan is logged and skipped, and other plans and views keep
+serving. `bregctl doctor` also reports each
+plan's state as an `external-refresh.status` advisory and warns with
+`external-refresh.grant-expired` and `external-refresh.ttl-headroom`. See
+[Watch the background workers](../../operate/breg-monitor/#watch-the-background-workers).
+
+A Record write that changes `holder-key`, or a field the worker's row boundary uses, queues that
+licence for the worker. A scheduled sweep covers anything missed.
+
+{/* Evidence: crates/registry-breg/src/external_refresh_config.rs, ExternalRefreshPlan,
+    ExternalRefreshWorker, breg.external-refresh.worker-client-mismatch;
+    crates/registry-breg/src/postgres/external_runtime/managed.rs, configure_managed_refresh;
+    products/breg/external-projection-storage.md, Refresh plans and the in-process worker. */}
+
+## Source changes
+
+When the source can notify BReg of a change, add `sourceChanges` to the plan, keyed by the link's
+projection or its label projection:
+
+```yaml title="runtime.yaml"
+      sourceChanges:
+        person-indexed:
+          requesterClient: population-change-notifier
+          requiredScope: registry:licensing:source-change
+```
+
+The notifier uses its own BReg service client, with a token that holds the required scope. It
+posts the projection and the source's selector:
+
+```json title="change.json"
+{"projection": "person-indexed", "selector": "PERSON_NUMBER"}
+```
+
+```sh test-skip="needs a live registry"
+bregctl api '/v1/external-refresh-plans/licensing-holders/source-changes' \
+  --method POST \
+  --input change.json \
+  --url "$BREG_URL" \
+  --token-file "$NOTIFIER_TOKEN_FILE"
+```
+
+A `202` acknowledges a committed queue entry, and a repeated change also answers `202`. The answer
+does not report whether any licence links to that person. A `429` with `Retry-After` means the
+plan's queue is full. BReg has already scheduled a reconciliation sweep; retry after that many
+seconds if the change is still current. Any other caller receives `404`. The
+[signed webhook bridge example](https://github.com/registrystack/registry-stack/blob/main/products/breg/examples/webhook-receiver/README.md)
+shows admission and retry.
+
+{/* Evidence: crates/registry-breg/src/api/external_views.rs, admit_source_change;
+    crates/registry-breg/src/external_refresh_config.rs, ExternalRefreshNotifier. */}
+
+## Refresh one holder
+
+A staff application can ask for one licence's outside values to be refreshed, for example right
+after an officer corrects the source. It calls with its own service client, under a service profile
+that names that client, its scope, and its purpose:
+
+```yaml title="registry.yaml"
+  - id: staff-refresh
+    actorKind: service
+    requesterClients: [staff-app]
+    principalClaim: registry_principal
+    requiredScopes: [registry:licensing:staff-refresh]
+    requiredPurposes: [licensing]
+    permissions:
+      records:
+        - recordType: licence
+          operations: [get, list]
+          readableFields: [holder-key, jurisdiction]
+          rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
+      refreshExternalProjections: [person-indexed]
+```
+
+`bregctl check` refuses `refreshExternalProjections` on any profile that is not a service profile
+with explicit clients, scopes, and purposes, with the code `refresh-service-profile`. Officers do
+not call this route themselves: the staff application decides which of its users may ask.
+
+```sh test-skip="needs a live registry"
+bregctl api \
+  '/v1/external-views/licence-holder-indexed/holder/records/LICENCE_ID/refresh?accessProfile=staff-refresh' \
+  --method POST \
+  --url "$BREG_URL" \
+  --token-file "$STAFF_APP_TOKEN_FILE"
+```
+
+BReg admits the caller when the selected profile may Get the licence and lists the link's
+projection under `permissions.refreshExternalProjections`. It queues that licence with the same
+upsert a source change uses and answers `202`. A `429` with `Retry-After` means the plan's queue
+is full; retry after that many seconds. Any other caller receives `404`. The worker takes the
+licence on its next tick, every five seconds, so poll the read route for the new values. The
+request is audited as `external-projection-refresh`. Rate-limit these requests at the gateway.
+
+The worker rereads the licence under its own profile. Give the worker's profile a row boundary
+that covers every licence the staff profile can reach, or BReg accepts the request and refreshes
+nothing.
+
+{/* Evidence: products/breg/external-projection-storage.md, Refresh one record;
+    crates/registry-breg/src/external_views.rs, refresh-service-profile;
+    crates/registry-breg/src/api/external_views.rs, admission_response;
+    products/breg/examples/external-views/registry.yaml, staff-refresh;
+    products/breg/examples/external-views/journey.py. */}
+
+## Purge, retire, and back up
+
+:::caution
+A purge erases the copy but does not stop acquisition. Remove the binding and its refresh plans
+first, or BReg binds again at the next start and copies fresh values.
+:::
+
+To stop copying from a source and erase what BReg holds:
+
+1. Remove the projection's `externalSources` entry and every plan that targets its views from the
+   runtime file, then restart each BReg instance. Its views answer `503` with `source.unavailable`.
+2. Inspect the stored scope:
+
+   ```sh test-skip="needs a live database"
+   bregctl external-projection inspect \
+     --runtime-config /etc/breg/runtime.yaml \
+     --projection person-indexed
+   ```
+
+3. Purge it:
+
+   ```sh test-skip="needs a live database"
+   bregctl external-projection purge \
+     --runtime-config /etc/breg/runtime.yaml \
+     --projection person-indexed
+   ```
+
+Both commands connect with the migration role, take the registry lock, read no source values, and
+record an audit entry. A renewed binding or grant needs no maintenance. When its contract,
+operation, allowed fields, or cache lifetime changed, the next start moves the projection to a
+fresh epoch and the retention worker deletes the old copy.
+
+To retire a view, remove it, its projection, and their grants from `registry.yaml`, then activate
+the new package. When a package declares no indexed projection, activation drops the refresh queue
+and the projection store.
+
+BReg keeps the copy in six PostgreSQL tables, four for the store and two for the refresh queue, and
+one sequence. They are ordinary logged tables. For a logical backup, exclude their data with one
+quoted pattern and keep their schema:
+
+```sh test-skip="needs a live database"
+pg_dump --dbname='service=breg-backup' --format=custom \
+  --exclude-table-data='registry_internal.registry_external_*' \
+  --file=registry.backup
+```
+
+Physical base backups, WAL archives, and streaming replicas carry cached source values. Keep them no
+longer than the source grant permits storage. Before BReg serves a restored physical copy for a
+deployment whose source authority changed, purge each affected projection on that copy. See
+[Physical backups, WAL, and replicas](https://github.com/registrystack/registry-stack/blob/main/products/breg/external-projection-storage.md#physical-backups-wal-and-replicas)
+and [Back up and restore](../../operate/advanced/back-up-and-restore/).
+
+{/* Evidence: crates/registry-breg/src/external_projection_maintenance.rs, inspect and purge;
+    crates/registry-breg/src/postgres/external_projection.rs, uninstall_queue;
+    crates/registry-breg/src/postgres/external_refresh_queue.rs;
+    products/breg/external-projection-storage.md, Logical backups. */}
+
+The [synthetic licensing example](https://github.com/registrystack/registry-stack/blob/main/products/breg/examples/external-views/README.md)
+runs every view on this page against a synthetic source, including a related collection with a
+person label.
+
+## Next
+
+- [Control access and reads](../breg-access/)
+- [Watch the background workers](../../operate/breg-monitor/#watch-the-background-workers)
+- [Back up and restore](../../operate/advanced/back-up-and-restore/)
+- [External projection storage and recovery](https://github.com/registrystack/registry-stack/blob/main/products/breg/external-projection-storage.md)

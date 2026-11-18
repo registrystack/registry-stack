@@ -892,6 +892,7 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'configure/breg-statistics',
     'configure/breg-evidence',
     'configure/breg-external-projections',
+    'configure/breg-external-views',
     'configure/breg-journeys',
     'operate/breg',
     'operate/breg-changes',

@@ -778,6 +778,7 @@ export default defineConfig({
                 { label: 'Publish statistics', slug: 'configure/breg-statistics' },
                 { label: 'Export a lookup for Evidence', slug: 'configure/breg-evidence' },
                 { label: 'External projections', slug: 'configure/breg-external-projections' },
+                { label: 'Show data from another registry', slug: 'configure/breg-external-views' },
                 { label: 'Test with journeys', slug: 'configure/breg-journeys' },
               ],
             },
