@@ -720,6 +720,7 @@ mod tests {
                 "baseUrl": "https://evidence.example.org",
                 "clientId": "client",
                 "privateKey": {"type": "environment", "variable": "EVIDENCE_KEY"},
+                "oauth": {"clientAssertionAudience": "https://issuer.example.org"},
                 "expected": {"definitions": {"status-check": {
                     "configurationRevision": format!("sha256:{}", "1".repeat(64)),
                     "evidenceType": "urn:example:evidence-type:status",

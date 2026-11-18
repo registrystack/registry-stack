@@ -106,6 +106,19 @@ const PRINCIPAL_CLASS: &str = "scheduling-principal-v1";
 const ISSUER_CLASS: &str = "scheduling-issuer-v1";
 const SCHEDULING_MANAGER_SUBJECT: &str = "schedulingManager";
 
+/// How the appointment-detail route admitted its caller. The service reads it
+/// to decide which authority the read rests on: a caller holding the reads
+/// scope may read what it owns, while a caller admitted only through its task
+/// grant reads what that grant covers, owner or not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DetailAdmission {
+    /// The caller holds the configured reads scope.
+    ReadsScope,
+    /// The caller holds no reads scope; its `appointment.read` task grant
+    /// admitted it.
+    Grant,
+}
+
 /// One verified caller, as the authenticator resolved them.
 pub struct Caller {
     /// The verified actor kind: `human`, `agent`, or `service`.
@@ -1539,12 +1552,14 @@ impl SchedulingService {
         result
     }
 
-    /// One appointment by id under retained ownership or a current detail grant.
+    /// One appointment by id under retained ownership (for a caller holding the
+    /// reads scope) or a current detail grant.
     /// Detail grants name the service and location; source-managed claims also
     /// require their retained manager binding. They do not bind an appointment id.
     pub async fn get_appointment(
         &self,
         caller: &Caller,
+        admission: DetailAdmission,
         appointment_id: Uuid,
         now: DateTime<Utc>,
     ) -> Result<AppointmentDocument, ServiceError> {
@@ -1553,7 +1568,8 @@ impl SchedulingService {
             .await?
             .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
         match claim.source_manager.as_ref() {
-            None if claim.is_owned_by(&caller.issuer, &caller.subject) => {}
+            None if admission == DetailAdmission::ReadsScope
+                && claim.is_owned_by(&caller.issuer, &caller.subject) => {}
             None if claim.owner.is_some() => {
                 let offering = self.claim_offering(&claim, now).await?;
                 let grant = self

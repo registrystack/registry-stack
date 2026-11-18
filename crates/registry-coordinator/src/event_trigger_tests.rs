@@ -699,6 +699,7 @@ mod postgres {
             "eventSources":{"registry":{"source":BREG_SOURCE,"signingKeyRef":"secret:file/event-key"}},
             "connections":{"source":{"type":"breg","baseUrl":"http://127.0.0.1:9999","profile":"synthetic-reader",
                 "authorization":{"tokenEndpoint":"http://127.0.0.1:9998/token","clientId":"synthetic-client",
+                    "clientAssertionAudience":"http://127.0.0.1:9998",
                     "signingKeyRef":"secret:file/client-key","resource":"urn:example:registry","scopes":["records:read"]}}}
         })).unwrap()
     }

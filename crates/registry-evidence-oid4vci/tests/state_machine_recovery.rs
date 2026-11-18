@@ -62,13 +62,14 @@ tokenClient:
   tokenEndpoint: https://mint.example.org/token
   clientId: evidence-oid4vci
   privateKeyRef: secret:file/unused-delivery-client.jwk.json
+  clientAssertionAudience: https://mint.example.org
 offers:
   issuer: https://mint.example.org
   jwksUri: https://mint.example.org/.well-known/jwks.json
   audiences: ["https://wallet.example.org"]
   algorithms: [EdDSA]
   allowedClients: [adopter-front-end]
-  requiredScopes: unrestricted
+  requiredScopes: [oid4vci:offer]
   maximumTokenLifetimeSeconds: 900
 store:
   maximumOffers: 4096

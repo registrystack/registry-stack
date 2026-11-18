@@ -89,7 +89,7 @@ the other verification mode's kind is refused.
 
 Profile-driven procedures can use `EvidenceClient::from_profile_with_authorization`
 with a context-bound `ExchangeAuthorization`. The profile must pin `oauth.resource`
-and `oauth.scopes`; its `clientId` and optional assertion audience, plus the
+and `oauth.scopes`; its `clientId` and assertion audience, plus the
 discovered issuer and token endpoint, must match the exchange provider before
 any credential is acquired. The profile still governs service trust, selected
 definition expectations, and the retained verification context. Its

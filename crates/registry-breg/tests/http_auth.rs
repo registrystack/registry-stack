@@ -423,18 +423,31 @@ impl Harness {
 }
 
 async fn contextual_harness() -> Harness {
-    let project = parse_project_yaml(CONTEXTUAL_PROJECT.as_bytes()).expect("project parses");
+    contextual_harness_with(
+        CONTEXTUAL_PROJECT,
+        AuthorityClaimConfig::new("sub", Some("registry_purpose".to_owned())),
+        None,
+    )
+    .await
+}
+
+async fn contextual_harness_with(
+    source: &str,
+    claims: AuthorityClaimConfig,
+    max_token_lifetime: Option<std::time::Duration>,
+) -> Harness {
+    let project = parse_project_yaml(source.as_bytes()).expect("project parses");
     let registry = Arc::new(
         compile_project(&project, &[], CompileProfile::Authoring).expect("project compiles"),
     );
     let idp = MockIdp::start().await;
     let mut verifier = verifier_config(&idp);
     verifier.allowed_clients = vec!["agent-client".to_owned()];
-    let claims = AuthorityClaimConfig::new("sub", Some("registry_purpose".to_owned()))
-        .with_contextual_claims(
-            ClaimNames::default(),
-            BTreeMap::from([("agent-client".to_owned(), ACTOR_ID.to_owned())]),
-        );
+    verifier.max_token_lifetime = max_token_lifetime;
+    let claims = claims.with_contextual_claims(
+        ClaimNames::default(),
+        BTreeMap::from([("agent-client".to_owned(), ACTOR_ID.to_owned())]),
+    );
     let authenticator = Arc::new(
         authenticator_with_verifier(&registry, &idp, verifier, claims)
             .expect("contextual authentication config is valid"),
@@ -803,6 +816,194 @@ async fn task_grant_is_exactly_bound_and_cannot_fall_back_to_standing_authority(
         2,
         "the profile's Get-only ceiling refuses List before Record IO"
     );
+}
+
+fn delegated_task_claims(now: u64) -> Value {
+    json!({
+        "aud": AUDIENCE,
+        "sub": PRINCIPAL,
+        "registry_principal": PRINCIPAL,
+        "azp": "agent-client",
+        "registry_actor_kind": "agent",
+        "registry_purpose": "record-review",
+        "request_purpose": "record-review",
+        "registry_grant_id": "00000000-0000-4000-8000-0000000000bf",
+        "registry_approver": "h:synthetic-approver",
+        "registry_grant_source_issuer": "https://casework.example",
+        "registry_grant_client": "agent-client",
+        "registry_grant_resource": AUDIENCE,
+        "registry_grant_exp": now + 600,
+        "registry_grant_bounds": {"type":"breg","permissions":[{"collection":"cases","operations":["get"]}]},
+        "identity": {"tenant_claim": "tenant-from-approved-identity"}
+    })
+}
+
+async fn delegated_read_status(harness: &Harness, token: &str) -> StatusCode {
+    harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=delegated-agent"),
+            &[bearer(token)],
+            None,
+        )
+        .await
+        .status()
+}
+
+#[tokio::test]
+async fn task_grant_must_name_the_request_principal_and_purpose() {
+    // The deployment reads the principal from a claim other than `sub` and the
+    // request purpose from a claim other than the grant's contextual purpose,
+    // and the task profile accepts two purposes. The grant still binds only
+    // the request that names its own principal and purpose.
+    let source = CONTEXTUAL_PROJECT
+        .replace("principalClaim: sub", "principalClaim: registry_principal")
+        .replace(
+            "requiredPurposes: [record-review]\n    taskGrant",
+            "requiredPurposes: [record-review, record-audit]\n    taskGrant",
+        );
+    assert!(source.contains("requiredPurposes: [record-review, record-audit]"));
+    let harness = contextual_harness_with(
+        &source,
+        AuthorityClaimConfig::new("registry_principal", Some("request_purpose".to_owned())),
+        None,
+    )
+    .await;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = delegated_task_claims(now);
+    let token = harness.signed_token(claims.clone(), "JWT");
+    assert_eq!(
+        delegated_read_status(&harness, &token).await,
+        StatusCode::OK
+    );
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 1);
+
+    for (claim, value) in [
+        ("registry_principal", "another-principal-never-rendered"),
+        ("registry_purpose", "record-audit"),
+    ] {
+        let mut mismatched = claims.clone();
+        mismatched[claim] = json!(value);
+        let token = harness.signed_token(mismatched, "JWT");
+        assert_eq!(
+            delegated_read_status(&harness, &token).await,
+            StatusCode::NOT_FOUND,
+            "a grant that does not name the request's {claim} value is concealed"
+        );
+        assert_eq!(harness.records.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn task_grant_tokens_are_issued_for_at_most_fifteen_minutes() {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let grant = |issued_at: u64, expires_at: u64| {
+        let mut claims = delegated_task_claims(now);
+        claims["iat"] = json!(issued_at);
+        claims["exp"] = json!(expires_at);
+        claims
+    };
+    // Runtime configuration always caps the issued lifetime of every token,
+    // at most 7200 s. A task grant needs a shorter token than that ceiling.
+    let capped = contextual_harness_with(
+        CONTEXTUAL_PROJECT,
+        AuthorityClaimConfig::new("sub", Some("registry_purpose".to_owned())),
+        Some(std::time::Duration::from_secs(7200)),
+    )
+    .await;
+    let fifteen_minutes = capped.signed_token(grant(now, now + 900), "JWT");
+    assert_eq!(
+        delegated_read_status(&capped, &fifteen_minutes).await,
+        StatusCode::OK
+    );
+    for (issued_at, expires_at) in [(now - 6600, now + 600), (now, now + 901)] {
+        let token = capped.signed_token(grant(issued_at, expires_at), "JWT");
+        let response = capped
+            .send(
+                &format!("/v1/records/cases/{RECORD_ID}?accessProfile=delegated-agent"),
+                &[bearer(&token)],
+                None,
+            )
+            .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "a task grant in a token issued for {} s is refused",
+            expires_at - issued_at
+        );
+        assert_eq!(body_json(response).await["code"], "authentication.refused");
+    }
+    // A task-grant token's `iat` may not be later than now plus the
+    // verifier's clock leeway.
+    let future_issued = capped.signed_token(grant(now + 86_400, now + 86_400 + 900), "JWT");
+    let response = capped
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=delegated-agent"),
+            &[bearer(&future_issued)],
+            None,
+        )
+        .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "a task grant in a token issued a day ahead is refused"
+    );
+    assert_eq!(body_json(response).await["code"], "authentication.refused");
+    assert_eq!(capped.records.calls.load(Ordering::SeqCst), 1);
+
+    // Tokens without a task grant keep the deployment's ordinary ceiling.
+    let ordinary = capped.signed_token(
+        json!({
+            "aud": AUDIENCE,
+            "sub": PRINCIPAL,
+            "azp": "agent-client",
+            "registry_actor_kind": "human",
+            "registry_purpose": "record-review",
+            "scope": "registry.read",
+            "iat": now - 3000,
+            "exp": now + 600
+        }),
+        "JWT",
+    );
+    let standing = capped
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-human"),
+            &[bearer(&ordinary)],
+            None,
+        )
+        .await;
+    assert_eq!(standing.status(), StatusCode::OK);
+
+    // Without a configured ceiling the verifier accepts any lifetime and does
+    // not require `iat`; the task-grant bound still holds.
+    let uncapped = contextual_harness().await;
+    let week = uncapped.signed_token(grant(now - 604_200, now + 600), "JWT");
+    assert_eq!(
+        delegated_read_status(&uncapped, &week).await,
+        StatusCode::UNAUTHORIZED,
+        "a week-long token with ten minutes left is refused"
+    );
+    let mut without_issued_at = grant(now, now + 600);
+    without_issued_at["iss"] = json!(uncapped.idp.issuer());
+    without_issued_at["nbf"] = json!(now);
+    without_issued_at.as_object_mut().unwrap().remove("iat");
+    let token = sign_ed25519_compact_jwt(
+        fixtures::ED25519_PRIVATE_JWK,
+        "JWT",
+        "registry-platform-testing-ed25519-1",
+        without_issued_at,
+    );
+    assert_eq!(
+        delegated_read_status(&uncapped, &token).await,
+        StatusCode::UNAUTHORIZED,
+        "a task grant in a token without an issue time is refused"
+    );
+    assert_eq!(uncapped.records.calls.load(Ordering::SeqCst), 0);
 }
 
 #[test]

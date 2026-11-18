@@ -8,7 +8,7 @@ from urllib.parse import parse_qs
 from bootstrap import ensure_built
 
 ensure_built()
-from registry_breg_client import PrivateKeyJwt, BaseRegistryClientError
+from registry_breg_client import BaseRegistryClient, PrivateKeyJwt, BaseRegistryClientError
 
 
 class TokenExchangeTests(unittest.TestCase):
@@ -33,7 +33,7 @@ class TokenExchangeTests(unittest.TestCase):
         thread.start()
         try:
             config = {'token_endpoint':f'http://127.0.0.1:{server.server_port}/token',
-                'client_id':'test-client', 'client_key':json.loads(Path(__file__).with_name('exchange-test-key.json').read_text()),
+                'audience':f'http://127.0.0.1:{server.server_port}', 'client_id':'test-client', 'client_key':json.loads(Path(__file__).with_name('exchange-test-key.json').read_text()),
                 'resource':'urn:test:resource', 'scopes':['records:get']}
             provider = PrivateKeyJwt(config)
             self.assertEqual(provider.bearer_token(), 'service-token')
@@ -67,3 +67,21 @@ class TokenExchangeTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join()
+
+    def test_configuration_states_the_client_assertion_audience(self):
+        # RFC 10070 section 4: the client assertion names the authorization
+        # server's issuer identifier as its audience, so the configuration states it.
+        config = {'token_endpoint':'https://issuer.example.invalid/token', 'audience':'https://issuer.example.invalid',
+            'client_id':'test-client', 'client_key':json.loads(Path(__file__).with_name('exchange-test-key.json').read_text()),
+            'resource':'urn:test:resource', 'scopes':['records:get']}
+        PrivateKeyJwt(config)
+        BaseRegistryClient('https://registry.example.invalid/tenant', authorization={'private_key_jwt':config})
+        without_audience = {name: value for name, value in config.items() if name != 'audience'}
+        for changed in (without_audience, {**without_audience, 'audience':None}):
+            for construct in (lambda: PrivateKeyJwt(changed),
+                              lambda: BaseRegistryClient('https://registry.example.invalid/tenant',
+                                                         authorization={'private_key_jwt':changed})):
+                with self.subTest(config=changed), self.assertRaises(BaseRegistryClientError) as raised:
+                    construct()
+                self.assertEqual(raised.exception.kind, 'configuration')
+                self.assertIn('audience', str(raised.exception))

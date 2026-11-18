@@ -2188,6 +2188,59 @@ mod tests {
     }
 
     #[test]
+    fn task_grant_attaches_only_for_the_context_principal_and_purpose() {
+        let registry = compiled_registry();
+        let context = || {
+            ClaimContext::for_compiled(
+                &registry,
+                "entry",
+                Some("agent".to_owned()),
+                "operator",
+                Some("operations".to_owned()),
+                vec![
+                    RowBoundaryContext::Equals {
+                        field: "tenant".to_owned(),
+                        value: "tenant-a".to_owned(),
+                    },
+                    RowBoundaryContext::In {
+                        field: "region".to_owned(),
+                        values: BTreeSet::from(["north".to_owned()]),
+                    },
+                ],
+            )
+            .expect("exact compiled context is accepted")
+        };
+        let grant = |principal: &str, purpose: &str| -> crate::task_grant::TaskGrantBinding {
+            serde_json::from_value(serde_json::json!({
+                "grantId": Uuid::new_v4().to_string(),
+                "sourceIssuer": "https://casework.test",
+                "principal": principal,
+                "client": "agent-client",
+                "resource": "urn:breg:test",
+                "purpose": purpose,
+                "bounds": {"type": "breg", "permissions": [{"collection": "entries", "operations": ["get"]}]},
+                "subjects": {"subject_reference": "synthetic-subject"},
+                "expiresAt": chrono::Utc::now().timestamp() + 900
+            }))
+            .expect("grant fixture parses")
+        };
+
+        let bound = context()
+            .with_task_grant(grant("agent", "operations"))
+            .expect("the grant names the context principal and purpose");
+        assert_eq!(
+            bound.task_grant().map(|grant| grant.principal()),
+            Some("agent")
+        );
+        assert!(context()
+            .with_task_grant(grant("someone-else", "operations"))
+            .is_err());
+        assert!(context()
+            .with_task_grant(grant("agent", "other-purpose"))
+            .is_err());
+    }
+
+    #[test]
     fn optional_boundary_absence_is_a_refusal_while_malformed_snapshots_are_invalid() {
         let registry = compiled_registry();
         let entity = &registry.entities()["entry"];

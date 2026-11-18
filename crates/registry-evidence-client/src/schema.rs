@@ -304,6 +304,15 @@ mod tests {
             document["oauth"]["scopes"] = serde_json::json!([])
         }));
         assert!(refused(&schema, &instance, &|document| {
+            document.as_object_mut().unwrap().remove("oauth");
+        }));
+        assert!(refused(&schema, &instance, &|document| {
+            document["oauth"]
+                .as_object_mut()
+                .unwrap()
+                .remove("clientAssertionAudience");
+        }));
+        assert!(refused(&schema, &instance, &|document| {
             document["maximumMetadataCacheSeconds"] = Value::from(601)
         }));
         assert!(refused(&schema, &instance, &|document| {
@@ -324,11 +333,13 @@ mod tests {
                 "contracts",
                 "verification",
                 "expected",
-                "oauth",
                 "maximumMetadataCacheSeconds",
             ] {
                 object.remove(optional);
             }
+            let oauth = object["oauth"].as_object_mut().unwrap();
+            oauth.remove("resource");
+            oauth.remove("scopes");
         }));
     }
 

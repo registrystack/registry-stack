@@ -2368,7 +2368,8 @@ mod tests {
                 "statusProfile": "review-status",
                 "tokenEndpoint": "https://identity.example.test/token",
                 "clientIdRef": "secret:file/client-id",
-                "clientAssertionKeyRef": "secret:file/client-key"
+                "clientAssertionKeyRef": "secret:file/client-key",
+                "clientAssertionAudience": "https://identity.example.test"
             }
         });
         let mut project = referenced_policy().2;
@@ -2409,6 +2410,7 @@ mod tests {
             "tokenEndpoint": "https://identity.example.test/token",
             "clientIdRef": "secret:file/delegated-client-id",
             "clientAssertionKeyRef": "secret:file/delegated-client-key",
+            "clientAssertionAudience": "https://identity.example.test",
             "resource": "urn:casework:facility-registry",
             "scopes": ["registry:proposal:review"],
             "generation": "test-generation"
@@ -2621,10 +2623,12 @@ mod tests {
         value["contextProviders"] = json!({"facility":{
             "baseUrl":"https://registry.example.test", "statusProfile":"review-status",
             "tokenEndpoint":"https://identity.example.test/token", "clientIdRef":"secret:file/client-id", "clientAssertionKeyRef":"secret:file/client-key",
+            "clientAssertionAudience":"https://identity.example.test",
             "delegatedDisplayExchange": {
                 "tokenEndpoint":"https://identity.example.test/token",
                 "clientIdRef":"secret:file/delegated-client-id",
                 "clientAssertionKeyRef":"secret:file/delegated-client-key",
+                "clientAssertionAudience":"https://identity.example.test",
                 "resource":"urn:casework:facility-breg",
                 "scopes":["registry:proposal:review"],
                 "generation":"test-generation"
@@ -2689,14 +2693,16 @@ mod tests {
                 "statusProfile": "review-status",
                 "tokenEndpoint": "https://identity.example.test/token",
                 "clientIdRef": "secret:file/client-id",
-                "clientAssertionKeyRef": "secret:file/client-key"
+                "clientAssertionKeyRef": "secret:file/client-key",
+                "clientAssertionAudience": "https://identity.example.test"
             },
             "registry_main": {
                 "baseUrl": "https://registry.example.test",
                 "statusProfile": "review-status",
                 "tokenEndpoint": "https://identity.example.test/token",
                 "clientIdRef": "secret:file/other-id",
-                "clientAssertionKeyRef": "secret:file/other-key"
+                "clientAssertionKeyRef": "secret:file/other-key",
+                "clientAssertionAudience": "https://identity.example.test"
             }
         });
         let config = read_operator(&value, directory.path());
@@ -2757,6 +2763,7 @@ mod tests {
         value["contextProviders"] = json!({"source-deployment": {
             "baseUrl":"https://source.example.test", "statusProfile":"status", "tokenEndpoint":"https://identity.example.test/token",
             "clientIdRef":"secret:file/client", "clientAssertionKeyRef":"secret:file/key",
+            "clientAssertionAudience":"https://identity.example.test",
             "humanSourceAuthentication":{"audience":"urn:example:breg"}
         }});
         let config = read_operator(&value, directory.path());
@@ -2787,6 +2794,7 @@ mod tests {
             "tokenEndpoint": "https://identity.example.test/token",
             "clientIdRef": "secret:file/client-id",
             "clientAssertionKeyRef": "secret:file/client-key",
+            "clientAssertionAudience": "https://identity.example.test",
             "resource": "urn:example:registry",
             "scopes": ["registry:proposal:review-status"]
         });
@@ -2817,6 +2825,7 @@ mod tests {
                     "tokenEndpoint": "https://identity.example.test/token",
                     "clientIdRef": "secret:file/source-id",
                     "clientAssertionKeyRef": "secret:file/source-key",
+                    "clientAssertionAudience": "https://identity.example.test",
                     "resource": "urn:example:registry",
                     "scopes": ["registry:proposal:review"],
                     "generation": ""
@@ -2846,6 +2855,56 @@ mod tests {
             assert_eq!(diagnostic.path, pointer);
             assert!(diagnostic.message.contains(rule), "{diagnostic:?}");
             assert!(diagnostic.source.is_some(), "{diagnostic:?}");
+        }
+    }
+
+    /// The client assertion audience is the authorization server's issuer
+    /// identifier and has no default, so a binding or a delegated exchange
+    /// that does not state it is refused when the file is read.
+    #[test]
+    fn a_context_provider_without_an_assertion_audience_is_refused_naming_the_member() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = json!({
+            "tokenEndpoint": "https://identity.example.test/token",
+            "clientIdRef": "secret:file/source-id",
+            "clientAssertionKeyRef": "secret:file/source-key",
+            "clientAssertionAudience": "https://identity.example.test",
+            "resource": "urn:example:registry",
+            "scopes": ["registry:proposal:review"],
+            "generation": "casework-source-v1"
+        });
+        let binding = json!({
+            "baseUrl": "https://registry.example.test",
+            "statusProfile": "review-status",
+            "tokenEndpoint": "https://identity.example.test/token",
+            "clientIdRef": "secret:file/client-id",
+            "clientAssertionKeyRef": "secret:file/client-key",
+            "clientAssertionAudience": "https://identity.example.test",
+            "delegatedDisplayExchange": client
+        });
+        for pointer in [
+            "/contextProviders/registry-main",
+            "/contextProviders/registry-main/delegatedDisplayExchange",
+        ] {
+            let mut value = operator_value(directory.path(), directory.path());
+            value["contextProviders"] = json!({ "registry-main": binding.clone() });
+            value
+                .pointer_mut(pointer)
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("the member exists")
+                .remove("clientAssertionAudience");
+            let path = write_operator(&value, directory.path());
+            let check = check_runtime(&path, None, false);
+            let diagnostic = check
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "config.missing-key")
+                .unwrap_or_else(|| panic!("{pointer}: no missing-key diagnostic: {check:?}"));
+            assert!(
+                diagnostic.message.contains("clientAssertionAudience"),
+                "{diagnostic:?}"
+            );
+            assert!(diagnostic.path.starts_with(pointer), "{diagnostic:?}");
         }
     }
 

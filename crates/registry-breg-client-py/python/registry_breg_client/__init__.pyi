@@ -97,7 +97,9 @@ class ExchangeKeyClient(TypedDict):
     client_key: dict[str, JsonValue]
     resource: str
     scopes: Sequence[str]
-    audience: NotRequired[str | None]
+    # The authorization server's issuer identifier, exactly as its metadata
+    # publishes it: the client assertion's only audience (RFC 10070 section 4).
+    audience: str
     assertion_lifetime_seconds: NotRequired[int | None]
     refresh_margin_seconds: NotRequired[int | None]
     attempt_timeout_seconds: NotRequired[float | None]

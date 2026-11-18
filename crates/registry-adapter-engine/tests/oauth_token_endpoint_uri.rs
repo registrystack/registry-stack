@@ -11,6 +11,7 @@ fn binding(endpoint: &str, private_key: bool) -> EndpointBinding {
             "tokenEndpoint":endpoint,
             "clientIdRef":"secret:env/UNRESOLVED_CLIENT_ID",
             "clientAssertionKeyRef":"secret:env/UNRESOLVED_ASSERTION_KEY",
+            "clientAssertionAudience":"https://issuer.invalid",
             "maximumCacheSeconds":60
         })
     } else {

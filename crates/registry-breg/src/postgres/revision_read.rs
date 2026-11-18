@@ -40,10 +40,10 @@ use crate::stored_bytes;
 
 use super::cancellation::QueryCancellationGuard;
 use super::history_read::HISTORY_STATEMENT_TIMEOUT;
-use super::read::{load_retained_plaintext_fields, open_history_row_members};
+use super::read::{load_retained_plaintext_fields, open_history_row_members, strict_claim_context};
 use super::{
     begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
-    ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
+    ExpectedRegistryIdentity, RegistryLockKey, RuntimePool,
 };
 
 const MAX_JOURNAL_TEXT_BYTES: usize = 512;
@@ -1237,44 +1237,6 @@ impl RevisionReadResult {
             result_count,
         })
     }
-}
-
-fn strict_claim_context(
-    registry: &CompiledRegistry,
-    context: &AuthorizedRequestContext,
-    entity_id: &str,
-) -> Result<ClaimContext, ReadServiceError> {
-    let row_boundaries = context
-        .row_boundaries()
-        .iter()
-        .map(|boundary| match boundary.operator() {
-            ApiRowBoundaryOperator::Equals => {
-                let values = boundary.values();
-                if values.len() != 1 {
-                    return Err(ReadServiceError::Unavailable);
-                }
-                Ok(RowBoundaryContext::Equals {
-                    field: boundary.field().to_owned(),
-                    value: values.first().ok_or(ReadServiceError::Unavailable)?.clone(),
-                })
-            }
-            ApiRowBoundaryOperator::In => Ok(RowBoundaryContext::In {
-                field: boundary.field().to_owned(),
-                values: boundary.values().clone(),
-            }),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    ClaimContext::for_compiled(
-        registry,
-        entity_id,
-        context.principal().map(str::to_owned),
-        context.selected_profile(),
-        context.purpose().map(str::to_owned),
-        row_boundaries,
-    )
-    .map(|claims| claims.with_audit_context(context.audit_context().cloned()))
-    .and_then(|claims| claims.with_recipients(context.recipients().clone()))
-    .map_err(|_| ReadServiceError::Unavailable)
 }
 
 fn field_set_reference(

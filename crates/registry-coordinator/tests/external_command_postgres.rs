@@ -123,6 +123,7 @@ impl Harness {
             "responseSchema":{"type":"object"},
             "authorization":{
                 "tokenEndpoint":"http://127.0.0.1:9999/token", "clientId":"bill-issuer",
+                "clientAssertionAudience":"http://127.0.0.1:9999",
                 "signingKeyRef":"secret:file/bill-issuer",
                 "resource":"https://payments.example.test", "scopes":["bills.create"]
             }

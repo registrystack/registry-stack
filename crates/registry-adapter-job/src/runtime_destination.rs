@@ -59,8 +59,9 @@ enum RuntimeDestinationBinding {
         token_endpoint: Url,
         client_id: String,
         private_key_ref: SecretReference,
-        #[serde(default)]
-        client_assertion_audience: Option<String>,
+        /// The authorization server's issuer identifier, the sole client
+        /// assertion audience RFC 10070 section 4 allows.
+        client_assertion_audience: String,
         scopes: Vec<String>,
         resource: String,
         attempt_timeout_milliseconds: BoundedU64<1, 10_000>,
@@ -157,7 +158,17 @@ fn load_runtime_bindings(
         .ok_or_else(|| "the runtime config carries no destinations block".to_string())?;
     let bindings =
         serde_json::from_value::<BTreeMap<LocalId, RuntimeDestinationBinding>>(bindings.clone())
-            .map_err(|_| "the runtime destinations block was refused".to_string())?;
+            .map_err(|error| {
+                // A missing member is named, because its name is the fix.
+                // Any other refusal stays value-free: serde's text for it
+                // can echo the refused value.
+                let text = error.to_string();
+                if text.starts_with("missing field ") {
+                    format!("the runtime destinations block was refused: {text}")
+                } else {
+                    "the runtime destinations block was refused".to_string()
+                }
+            })?;
     Ok(bindings)
 }
 
@@ -227,6 +238,7 @@ async fn activate_direct<'a>(
         .and_then(|json| PrivateJwk::parse(json).ok())
         .ok_or_else(|| "the direct BReg private key was refused".to_string())?;
     let mut token_config = PrivateKeyJwtConfig::new(token_endpoint.to_url(), client_id, key)
+        .with_audience(client_assertion_audience)
         .with_scopes(scopes.iter().cloned())
         .with_resource(resource)
         .with_attempt_timeout(Duration::from_millis(attempt_timeout_milliseconds.get()))
@@ -235,9 +247,6 @@ async fn activate_direct<'a>(
         } else {
             FetchUrlPolicy::dev()
         });
-    if let Some(audience) = client_assertion_audience {
-        token_config = token_config.with_audience(audience);
-    }
     if let Some(profile) = token_tls_trust_profile {
         let roots = registry_adapter_engine::auth::capture_ca_bundle(core, profile.as_str())
             .map_err(|_| "the direct BReg token TLS material was refused".to_string())?;
@@ -313,6 +322,7 @@ async fn activate_direct<'a>(
             base_url: base_url.as_str(),
             token_endpoint: token_endpoint.as_str(),
             client_id,
+            client_assertion_audience,
             data_tls_trust_profile: data_tls_trust_profile.as_ref().map(LocalId::as_str),
             access_profile,
             action,
@@ -345,7 +355,7 @@ fn direct_breg_bind_refusal(
         ConnectorFault::Native { code: Some(code) }
             if code == TOKEN_UNAVAILABLE || code == "authentication.refused" =>
         {
-            format!("adapter.job.breg-credential-refused: no bearer credential BReg accepts was obtained; check `destinations.{binding}` tokenEndpoint, clientId, privateKeyRef, scopes and resource, and that BReg trusts the issuer")
+            format!("adapter.job.breg-credential-refused: no bearer credential BReg accepts was obtained; check `destinations.{binding}` tokenEndpoint, clientAssertionAudience, clientId, privateKeyRef, scopes and resource, and that BReg trusts the issuer")
         }
         _ => format!(
             "adapter.job.breg-metadata-refused: BReg's metadata could not be read under access profile `{profile}`; check that `destinations.{binding}` baseUrl names a BReg deployment of a compatible version"
@@ -722,6 +732,43 @@ mod tests {
                 .is_err(),
             "unknown and fallback fields are refused"
         );
+    }
+
+    /// A direct BReg binding states its client assertion audience, the
+    /// authorization server's issuer identifier RFC 10070 section 4 makes
+    /// its sole value, and the refusal of one that does not names the member.
+    #[test]
+    fn a_direct_breg_binding_states_its_assertion_audience() {
+        let directory = tempfile::tempdir().expect("a runtime directory");
+        let runtime_path = directory.path().join("runtime.json");
+        std::fs::write(
+            &runtime_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "apiVersion": registry_adapter_core::ADAPTER_JOB_RUNTIME_API_VERSION,
+                "kind": registry_adapter_core::ADAPTER_JOB_RUNTIME_KIND,
+                "id": "audience-test",
+                "endpoints": [],
+                "destinations": {
+                    "breg-main": {
+                        "type": "direct-breg",
+                        "baseUrl": "https://breg.example/",
+                        "tokenEndpoint": "https://identity.example/token",
+                        "clientId": "adapter-job",
+                        "privateKeyRef": "secret:env/BREG_CLIENT_KEY",
+                        "scopes": ["registry.write"],
+                        "resource": "https://breg.example/",
+                        "attemptTimeoutMilliseconds": 3000
+                    }
+                }
+            }))
+            .expect("serialize the runtime"),
+        )
+        .expect("write the runtime");
+        let runtime = registry_adapter_engine::job_sources::JobRuntimeConfig::load(&runtime_path)
+            .expect("the runtime document loads");
+        let message = load_runtime_bindings(&runtime)
+            .expect_err("a direct BReg binding without an assertion audience is refused");
+        assert!(message.contains("clientAssertionAudience"), "{message}");
     }
 
     #[test]

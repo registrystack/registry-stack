@@ -803,10 +803,12 @@ mod tests {
                 "tokenEndpoint": "https://identity.example.test/oauth2/token",
                 "clientIdRef": "secret:file/breg-client-id",
                 "clientAssertionKeyRef": "secret:env/BREG_CLIENT_ASSERTION_KEY",
+                "clientAssertionAudience": "https://identity.example.test",
                 "delegatedDisplayExchange": {
                     "tokenEndpoint": "https://identity.example.test/oauth2/token",
                     "clientIdRef": "secret:file/breg-delegated-client-id",
                     "clientAssertionKeyRef": "secret:env/BREG_DELEGATED_CLIENT_ASSERTION_KEY",
+                    "clientAssertionAudience": "https://identity.example.test",
                     "resource": "urn:casework:facility-breg",
                     "scopes": ["registry:proposal:review"],
                     "generation": "test-generation"

@@ -155,7 +155,7 @@ fn token(grant: u64, permissions: Value) -> Value {
         "registry_actor_kind":"agent","registry_purpose":"registry-administration","scope":"proposal:manage",
         "registry_grant_id":format!("00000000-0000-4000-8000-{grant:012x}"),"registry_approver":"h:approver",
         "registry_grant_source_issuer":"https://casework.example","registry_grant_client":"agent-client",
-        "registry_grant_resource":"urn:example:breg","registry_grant_exp":now+600,
+        "registry_grant_resource":"urn:example:breg","registry_grant_exp":now+600,"exp":now+900,
         "registry_grant_bounds":{"type":"breg","permissions":permissions},
         "identity":{"jurisdiction":"zone-a","recordJurisdiction":"zone-a"},"jurisdiction":"zone-b","recordJurisdiction":"zone-b"})
 }

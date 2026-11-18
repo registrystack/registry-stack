@@ -8,6 +8,7 @@
           "$ref": "#/$defs/Url"
         },
         "clientAssertionAudience": {
+          "description": "The authorization server's issuer identifier: the client assertion's\nsole audience. It has no default.",
           "type": "string"
         },
         "clientAssertionKeyRef": {
@@ -47,7 +48,8 @@
         "statusProfile",
         "tokenEndpoint",
         "clientIdRef",
-        "clientAssertionKeyRef"
+        "clientAssertionKeyRef",
+        "clientAssertionAudience"
       ],
       "type": "object"
     },
@@ -92,6 +94,7 @@
       "description": "Dedicated per-call delegation for staff-subject source disclosure. This is\nseparate from the provider's status and task-context service credential.",
       "properties": {
         "clientAssertionAudience": {
+          "description": "The authorization server's issuer identifier: the client assertion's\nsole audience. It has no default.",
           "type": "string"
         },
         "clientAssertionKeyRef": {
@@ -120,6 +123,7 @@
         "tokenEndpoint",
         "clientIdRef",
         "clientAssertionKeyRef",
+        "clientAssertionAudience",
         "resource",
         "scopes",
         "generation"

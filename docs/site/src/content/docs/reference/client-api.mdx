@@ -508,10 +508,13 @@ A Python `token` that is neither a string nor an object carrying exactly the one
 the `authorization` option of the BReg namespace, which names the static case explicitly
 in both languages.
 
-The private-key-JWT configuration requires `token_endpoint`, `client_id`, and `client_key` (Node:
-`tokenEndpoint`, `clientId`, `clientKey`). Its optional members in Python are `audience`,
-`resource`, `scopes`, `assertion_lifetime_seconds`, `refresh_margin_seconds`,
-`attempt_timeout_seconds`, `connect_timeout_seconds`, and `user_agent`. Node takes the same eight
+The private-key-JWT configuration requires `token_endpoint`, `client_id`, `client_key`, and
+`audience` (Node: `tokenEndpoint`, `clientId`, `clientKey`, `audience`). `audience` is the
+authorization server's issuer identifier, exactly as its metadata publishes it: the client
+assertion's only audience (RFC 10070 section 4). It has no default, and the assertion carries
+`typ: client-authentication+jwt`. Its optional members in Python are `resource`, `scopes`,
+`assertion_lifetime_seconds`, `refresh_margin_seconds`, `attempt_timeout_seconds`,
+`connect_timeout_seconds`, and `user_agent`. Node takes the same seven
 in camel case, with `attemptTimeoutMilliseconds` and `connectTimeoutMilliseconds` for the timeouts, and adds string-valued
 `trustedRootCertificates` for the token endpoint. Python has no nested trust anchor for the token
 endpoint: its top-level `trusted_root_certificates` crosses as genuine `bytes` and the nested

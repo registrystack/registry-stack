@@ -3989,6 +3989,36 @@ fn evidence_provider_logical_ids_are_not_governed_fields_and_bindings_stay_close
     }
 }
 
+/// RFC 10070 section 4: an Evidence provider's client assertion names the
+/// authorization server's issuer identifier as its audience. A `privateKeyJwt`
+/// binding states it, and one without it is refused when the configuration is
+/// read.
+#[test]
+fn evidence_provider_private_key_jwt_states_its_client_assertion_audience() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let audience = "      assertionAudience: https://issuer.example\n";
+    let stated = format!(
+        "{base}evidenceProviders:\n  verify-main:\n    baseUrl: https://evidence.example/\n    trustBindingId: civil\n    trustedJwksRef: secret:file/evidence-jwks\n    privateKeyJwt:\n      tokenEndpoint: https://issuer.example/oauth2/token\n      clientId: action-client\n      privateKeyRef: secret:file/evidence-client-key\n{audience}      resource: urn:example:evidence\n      scopes: [evidence:invoke]\n"
+    );
+    parse_runtime_config_with_env(&stated, env_lookup)
+        .expect("a private-key JWT binding that states its assertion audience is accepted");
+
+    let error = parse_runtime_config_with_env(&stated.replace(audience, ""), env_lookup)
+        .expect_err("a private-key JWT binding without its assertion audience is refused");
+    assert_eq!(
+        reader_refusal(&error),
+        (
+            "config.missing-key",
+            "/evidenceProviders/verify-main/privateKeyJwt"
+        )
+    );
+    let RuntimeConfigError::Reader(reader) = &error else {
+        unreachable!("the shared reader decided this refusal");
+    };
+    assert!(reader.to_string().contains("assertionAudience"), "{reader}");
+}
+
 #[test]
 fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refused() {
     let fixture = RuntimeFixture::new();

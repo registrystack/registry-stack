@@ -1114,7 +1114,7 @@ async fn current_private_key_jwt_preserves_signed_claims_audience_resource_and_k
     let key = PrivateJwk::parse(CLIENT_ASSERTION_PRIVATE_JWK).unwrap();
     registry_platform_crypto::verify(signing_input.as_bytes(), &signature, &key.public()).unwrap();
     assert_eq!(header["alg"], json!("ES384"));
-    assert_eq!(header["typ"], json!("JWT"));
+    assert_eq!(header["typ"], json!("client-authentication+jwt"));
     assert_eq!(claims["aud"], json!(assertion_audience));
     assert_eq!(claims["iss"], json!("synthetic-client"));
     assert_eq!(claims["sub"], json!("synthetic-client"));
@@ -1126,59 +1126,21 @@ async fn current_private_key_jwt_preserves_signed_claims_audience_resource_and_k
         .as_str()
         .is_some_and(|value| !value.is_empty()));
 
-    let default_server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "access_token":"default-audience-token", "token_type":"Bearer", "expires_in":60
-        })))
-        .expect(1)
-        .mount(&default_server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/data"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "lookup":"matched", "facts":{"ok":true}
-        })))
-        .expect(1)
-        .mount(&default_server)
-        .await;
-    let (_root, secrets) = resolver(&[
-        ("client-id", b"synthetic-client"),
-        ("assertion-key", CLIENT_ASSERTION_PRIVATE_JWK.as_bytes()),
-    ]);
-    let default_token_endpoint = format!("{}/token", default_server.uri());
-    let default_program = compile_program(
-        &default_server.uri(),
-        json!({"type":"oauth2-private-key-jwt"}),
-        json!({
-            "type":"oauth2-private-key-jwt", "tokenEndpoint":default_token_endpoint,
-            "clientIdRef":"secret:file/client-id",
-            "clientAssertionKeyRef":"secret:file/assertion-key",
-            "maximumCacheSeconds":0
-        }),
-        json!({
-            "type":"oauth2-private-key-jwt", "tokenEndpoint":default_token_endpoint
-        }),
-        secrets,
-        1_000,
-    )
-    .unwrap();
-    execute(&default_program).await.unwrap();
-    let default_requests = default_server.received_requests().await.unwrap();
-    let default_form = parameters(
-        &default_requests
-            .iter()
-            .find(|request| request.url.path() == "/token")
-            .unwrap()
-            .body,
+    // The assertion audience is the authorization server's issuer identifier
+    // (RFC 10070 section 4) and has no default, so a reviewed policy without
+    // it is refused, naming the member.
+    let missing_audience = serde_json::from_value::<EvidenceConnectionPolicy>(json!({
+        "endpoint":"provider", "baseUrl":server.uri(),
+        "clientIdentity":"forbidden",
+        "authentication":{"type":"oauth2-private-key-jwt", "tokenEndpoint":token_endpoint}
+    }))
+    .expect_err("a private-key JWT policy without an assertion audience was accepted");
+    assert!(
+        missing_audience
+            .to_string()
+            .contains("clientAssertionAudience"),
+        "{missing_audience}"
     );
-    let default_assertion = default_form
-        .iter()
-        .find_map(|(name, value)| (name == "client_assertion").then_some(value.as_str()))
-        .unwrap();
-    let default_claims = decode_jws_segment(default_assertion.split('.').nth(1).unwrap());
-    assert_eq!(default_claims["aud"], json!(default_token_endpoint));
 
     let mut mismatched_key: Value =
         serde_json::from_str(CLIENT_ASSERTION_ED25519_PRIVATE_JWK).unwrap();
@@ -1232,9 +1194,13 @@ async fn current_private_key_jwt_preserves_signed_claims_audience_resource_and_k
                 "type":"oauth2-private-key-jwt", "tokenEndpoint":token_endpoint,
                 "clientIdRef":"secret:file/client-id",
                 "clientAssertionKeyRef":"secret:file/assertion-key",
+                "clientAssertionAudience":assertion_audience,
                 "maximumCacheSeconds":0
             }),
-            json!({"type":"oauth2-private-key-jwt", "tokenEndpoint":token_endpoint}),
+            json!({
+                "type":"oauth2-private-key-jwt", "tokenEndpoint":token_endpoint,
+                "clientAssertionAudience":assertion_audience
+            }),
             secrets,
             1_000,
         )
@@ -1507,6 +1473,7 @@ fn current_pack_compile_refuses_invalid_authentication_contracts() {
             "tokenEndpoint":"http://127.0.0.1:1/token",
             "clientIdRef":"secret:file/client-id",
             "clientAssertionKeyRef":"secret:file/assertion-key",
+            "clientAssertionAudience":"http://127.0.0.1:1",
             "credentialPlacement":"form-body", "maximumCacheSeconds":0
         }),
     ] {

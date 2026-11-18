@@ -703,11 +703,19 @@ async fn answer_async_status(
         .checked_add(absolute_deadline.duration_since(deadline_clock))
         .expect("the fixed status deadline fits SystemTime");
     let recovery = match store
-        .acquire_status_recovery(&pending, deadline_wall, requested_deadline)
+        .acquire_status_recovery(
+            &pending,
+            crate::custody::async_source_digest(&state.loaded, operation),
+            deadline_wall,
+            requested_deadline,
+        )
         .await
     {
         Ok(RecoveryLease::Acquired(recovery)) => recovery,
-        Ok(RecoveryLease::Busy) => {
+        Ok(lease @ (RecoveryLease::Busy | RecoveryLease::Quarantined)) => {
+            if matches!(lease, RecoveryLease::Quarantined) {
+                warn_held_async_write(&operation.binding);
+            }
             if let Err(fault) = append_all(&state.journal, vec![created]).await {
                 tracing::error!(%fault, "the audit journal could not record a leased status lookup");
                 return facade_problem(
@@ -1641,6 +1649,7 @@ async fn answer(
                 record_type: operation.record_type.clone(),
                 recovery_id: completion.uncertainty.as_ref().map(|_| new_recovery_id()),
                 effect_deadline,
+                source_digest: crate::custody::async_source_digest(&state.loaded, operation),
             });
         let context = match (async_write, operation.resume_step_count()) {
             (Some(async_write), None) => crate::custody::WriteExecutionContext::new_async(
@@ -2423,6 +2432,16 @@ fn retryable_conflict(mut response: Response) -> Response {
     response
 }
 
+/// Report an asynchronous write whose pinned source origin is absent or
+/// differs from the configured one. Its row is answered from custody and is
+/// never polled until it expires; restoring the pinned origin releases it.
+fn warn_held_async_write(binding: &str) {
+    tracing::warn!(
+        binding,
+        "an asynchronous write is not polled: its pinned source origin is absent or differs from the configured endpoints"
+    );
+}
+
 /// How an exchange ended once the response was built, before the journal
 /// commits it.
 enum Finished {
@@ -2689,11 +2708,19 @@ async fn run_bounded_wait(
         return replay_response(committed.stored);
     };
     let recovery = match store
-        .acquire_status_recovery(&lookup, now_wall, deadline_wall)
+        .acquire_status_recovery(
+            &lookup,
+            crate::custody::async_source_digest(&state.loaded, operation),
+            now_wall,
+            deadline_wall,
+        )
         .await
     {
         Ok(RecoveryLease::Acquired(recovery)) => recovery,
-        Ok(RecoveryLease::Busy | RecoveryLease::Stale) => {
+        Ok(lease @ (RecoveryLease::Busy | RecoveryLease::Stale | RecoveryLease::Quarantined)) => {
+            if matches!(lease, RecoveryLease::Quarantined) {
+                warn_held_async_write(&operation.binding);
+            }
             return replay_response(committed.stored);
         }
         Err(error) => {
@@ -3018,7 +3045,10 @@ async fn run_uncertainty_recovery(
         .await
     {
         Ok(RecoveryLease::Acquired(recovery)) => recovery,
-        Ok(lease @ (RecoveryLease::Busy | RecoveryLease::Stale)) => {
+        Ok(lease @ (RecoveryLease::Busy | RecoveryLease::Stale | RecoveryLease::Quarantined)) => {
+            if matches!(lease, RecoveryLease::Quarantined) {
+                warn_held_async_write(&operation.binding);
+            }
             if let Err(fault) = append_all(&state.journal, conflict(events)).await {
                 tracing::error!(%fault, "the uncertain-effect journal could not commit");
                 return facade_problem(
@@ -3037,7 +3067,8 @@ async fn run_uncertainty_recovery(
                 physical_request_id,
             );
             // Another checker holds the lease and may still prove the outcome;
-            // an expired or uncorrelated effect is spent.
+            // an expired or uncorrelated effect is spent, and a held one
+            // cannot be checked under this configuration.
             return match lease {
                 RecoveryLease::Busy => retryable_conflict(problem),
                 _ => problem,

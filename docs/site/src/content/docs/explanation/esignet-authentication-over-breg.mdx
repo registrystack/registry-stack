@@ -225,7 +225,7 @@ breg:
   account_check_fields: [uin, status]
 token_client:
   token_endpoint: https://issuer.example.com/oauth2/token
-  assertion_audience: https://issuer.example.com/oauth2/token
+  assertion_audience: https://issuer.example.com
   client_id: esignet-source
   private_key_file: /run/secrets/registry-client.jwk
   key_id: esignet-source-2026-09
@@ -240,6 +240,8 @@ claim_map:
 
 `route`, `selector`, and `access_profile` name what the project declares; `client_id`,
 `resource`, and `scopes` match the issuer and the runtime file.
+`assertion_audience` is the issuer's identifier, exactly as its metadata publishes it, not its token
+endpoint (RFC 10070 section 4).
 `selector_field`, `provisioned_fields`, and `account_check_fields` take API names, which default to
 the camelCase form of each field ID, so `given-name` becomes `givenName`.
 `account_check_fields` must include `selector_field`.

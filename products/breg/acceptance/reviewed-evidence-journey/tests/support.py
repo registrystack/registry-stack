@@ -82,7 +82,8 @@ class Harness:
         )
         if not refused and value.get("kind") == "CaseworkReport":
             assert value["ok"] and value["status"] == "complete", "Casework command incomplete"
-            return value["data"]
+            # caseworkctl flattens its payload members into the report.
+            return value
         return value
 
     def check(self, label, condition):

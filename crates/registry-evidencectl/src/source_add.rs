@@ -117,8 +117,9 @@ struct Endpoints {
     breg_url: String,
     token_endpoint: String,
     audience: String,
-    #[serde(default)]
-    client_assertion_audience: Option<String>,
+    /// The authorization server's issuer identifier, the client assertion's
+    /// sole audience (RFC 10070 section 4). It has no default.
+    client_assertion_audience: String,
     #[serde(default)]
     resource: Option<String>,
 }
@@ -359,14 +360,12 @@ fn configure(
         "accessProfile": selection.access_profile, "selectorProfile": selection.selector_profile,
         "rowScope": row_scope, "bregUrl": inspection.endpoints.breg_url,
         "tokenEndpoint": inspection.endpoints.token_endpoint, "audience": inspection.endpoints.audience,
+        "clientAssertionAudience": inspection.endpoints.client_assertion_audience,
         "requiresRestart": preview["requiresRestart"],
         "recoveredPriorApply": inspection.recovered_prior_apply || preview["recoveredPriorApply"] == true,
     });
     if let Some(resource) = &inspection.endpoints.resource {
         report["resource"] = json!(resource);
-    }
-    if let Some(audience) = &inspection.endpoints.client_assertion_audience {
-        report["clientAssertionAudience"] = json!(audience);
     }
     if let Some(scope) = &prepared_scope {
         report["scope"] = json!(scope);
@@ -856,30 +855,29 @@ fn validate_endpoints(endpoints: &Endpoints) -> Result<()> {
             bail!("BReg reported an invalid OAuth resource");
         }
     }
-    if let Some(audience) = &endpoints.client_assertion_audience {
-        if audience.is_empty()
-            || audience.len() > 512
-            || !audience.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
-        {
-            bail!("BReg reported an invalid client assertion audience");
-        }
-        let url = url::Url::parse(audience)
-            .context("BReg reported an invalid client assertion audience")?;
-        let token = url::Url::parse(&endpoints.token_endpoint)
-            .context("BReg reported an invalid local token endpoint")?;
-        if url.scheme() != "http"
-            || !matches!(url.host(), Some(url::Host::Ipv4(address)) if address.is_loopback())
-                && !matches!(url.host(), Some(url::Host::Ipv6(address)) if address.is_loopback())
-            || url.port().is_none()
-            || url.path() != "/"
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-            || url.origin() != token.origin()
-        {
-            bail!("BReg reported an invalid client assertion audience");
-        }
+    let audience = &endpoints.client_assertion_audience;
+    if audience.is_empty()
+        || audience.len() > 512
+        || !audience.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+    {
+        bail!("BReg reported an invalid client assertion audience");
+    }
+    let url =
+        url::Url::parse(audience).context("BReg reported an invalid client assertion audience")?;
+    let token = url::Url::parse(&endpoints.token_endpoint)
+        .context("BReg reported an invalid local token endpoint")?;
+    if url.scheme() != "http"
+        || !matches!(url.host(), Some(url::Host::Ipv4(address)) if address.is_loopback())
+            && !matches!(url.host(), Some(url::Host::Ipv6(address)) if address.is_loopback())
+        || url.port().is_none()
+        || url.path() != "/"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.origin() != token.origin()
+    {
+        bail!("BReg reported an invalid client assertion audience");
     }
     Ok(())
 }
@@ -894,6 +892,7 @@ fn connection(endpoints: &Endpoints, scope: Option<&str>, name: &str) -> Value {
                     "clientIdRef": format!("secret:file/{name}-client-id"),
                     "clientAssertionKeyRef": format!("secret:file/{name}-client-key"),
                     "audience": endpoints.audience, "maximumCacheSeconds": 60,
+                    "clientAssertionAudience": endpoints.client_assertion_audience,
                 },
             },
         },
@@ -901,9 +900,6 @@ fn connection(endpoints: &Endpoints, scope: Option<&str>, name: &str) -> Value {
     let authentication = &mut binding["endpoints"]["registry"]["authentication"];
     if let Some(resource) = &endpoints.resource {
         authentication["resource"] = json!(resource);
-    }
-    if let Some(audience) = &endpoints.client_assertion_audience {
-        authentication["clientAssertionAudience"] = json!(audience);
     }
     if let Some(scope) = scope {
         authentication["scope"] = json!(scope);
@@ -1896,18 +1892,36 @@ assertionDefinitions:
             breg_url: "https://provider.example".into(),
             token_endpoint: "http://127.0.0.1:9091/token".into(),
             audience: "urn:test".into(),
-            client_assertion_audience: None,
+            client_assertion_audience: "http://127.0.0.1:9091".into(),
             resource: None,
         };
         assert!(validate_endpoints(&endpoints).is_err());
     }
 
+    /// The client assertion audience is the authorization server's issuer
+    /// identifier (RFC 10070 section 4) and has no default, so a source
+    /// handoff that does not state it is refused before any authoring.
     #[test]
-    fn older_source_handoff_keeps_optional_token_parameters_absent() {
+    fn a_source_handoff_without_a_client_assertion_audience_is_refused() {
+        let error = serde_json::from_value::<Endpoints>(json!({
+            "bregUrl": "http://127.0.0.1:19090/",
+            "tokenEndpoint": "http://127.0.0.1:19091/token",
+            "audience": "urn:test:registry"
+        }))
+        .expect_err("a handoff without an assertion audience was accepted");
+        assert!(
+            error.to_string().contains("clientAssertionAudience"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn source_handoff_keeps_optional_token_parameters_absent() {
         let endpoints: Endpoints = serde_json::from_value(json!({
             "bregUrl": "http://127.0.0.1:19090/",
             "tokenEndpoint": "http://127.0.0.1:19091/token",
-            "audience": "urn:legacy:registry"
+            "audience": "urn:legacy:registry",
+            "clientAssertionAudience": "http://127.0.0.1:19091"
         }))
         .unwrap();
         assert!(validate_endpoints(&endpoints).is_ok());
@@ -1922,7 +1936,10 @@ assertionDefinitions:
         let authentication = binding["endpoints"]["registry"]["authentication"].clone();
         assert_eq!(authentication["type"], "oauth2-private-key-jwt");
         assert!(authentication.get("resource").is_none());
-        assert!(authentication.get("clientAssertionAudience").is_none());
+        assert_eq!(
+            authentication["clientAssertionAudience"],
+            "http://127.0.0.1:19091"
+        );
         assert!(authentication.get("scope").is_none());
         assert_eq!(authentication["audience"], "urn:legacy:registry");
     }
@@ -1967,7 +1984,7 @@ assertionDefinitions:
             breg_url: "http://127.0.0.1:19090/".into(),
             token_endpoint: "http://127.0.0.1:19091/token".into(),
             audience: "urn:test:registry".into(),
-            client_assertion_audience: Some("http://127.0.0.1:19091".into()),
+            client_assertion_audience: "http://127.0.0.1:19091".into(),
             resource: None,
         };
         assert!(validate_endpoints(&endpoints).is_ok());
@@ -1980,7 +1997,7 @@ assertionDefinitions:
             "https://127.0.0.1:19091",
             "http://127.0.0.1:19091/#fragment",
         ] {
-            endpoints.client_assertion_audience = Some(invalid.into());
+            endpoints.client_assertion_audience = invalid.into();
             assert!(validate_endpoints(&endpoints).is_err(), "{invalid}");
         }
     }
@@ -1991,7 +2008,7 @@ assertionDefinitions:
             breg_url: "http://127.0.0.1:19090/".into(),
             token_endpoint: "http://127.0.0.1:19091/oauth2/token".into(),
             audience: "urn:test:registry".into(),
-            client_assertion_audience: None,
+            client_assertion_audience: "http://127.0.0.1:19091".into(),
             resource: Some("https://[::1]/records".into()),
         };
         assert!(validate_endpoints(&endpoints).is_ok());

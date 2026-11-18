@@ -21,7 +21,8 @@ test('exchange preserves service cache and sends exact independent grant request
   try {
     const clientKey = crypto.generateKeyPairSync('ec', {namedCurve:'prime256v1'}).privateKey.export({format:'jwk'});
     Object.assign(clientKey, {alg:'ES256', kid:'synthetic-test'});
-    const config = {tokenEndpoint:`http://127.0.0.1:${server.address().port}/token`, clientId:'test-client',
+    const config = {tokenEndpoint:`http://127.0.0.1:${server.address().port}/token`,
+      audience:`http://127.0.0.1:${server.address().port}`, clientId:'test-client',
       clientKey, resource:'urn:test:resource', scopes:['records:get'], attemptTimeoutMilliseconds:5_000,
       connectTimeoutMilliseconds:2_000};
     const provider = new PrivateKeyJwt(config);

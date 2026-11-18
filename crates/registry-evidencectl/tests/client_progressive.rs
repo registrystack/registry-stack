@@ -7,6 +7,10 @@ use std::{
 
 use serde_json::{json, Value};
 
+/// The authorization server's issuer identifier, the client assertion's
+/// audience.
+const ISSUER: &str = "https://identity.example.test";
+
 #[test]
 fn profile_create_writes_the_strict_https_default_as_an_owner_only_file() {
     let directory = tempfile::tempdir().unwrap();
@@ -22,6 +26,8 @@ fn profile_create_writes_the_strict_https_default_as_an_owner_only_file() {
             "relying-party",
             "--private-key-file",
             "keys/client-private.jwk",
+            "--client-assertion-audience",
+            ISSUER,
             "--output",
         ])
         .arg(&output)
@@ -43,11 +49,46 @@ fn profile_create_writes_the_strict_https_default_as_an_owner_only_file() {
             "verification": {
                 "maximumAssertionLifetimeSeconds": 300,
                 "clockSkewSeconds": 30
-            }
+            },
+            "oauth": {"clientAssertionAudience": ISSUER}
         })
     );
     registry_evidence_client::EvidenceClientProfile::from_file(&output)
         .expect("created profile is accepted by the progressive client");
+}
+
+/// The client assertion audience is the authorization server's issuer
+/// identifier (RFC 10070 section 4) and has no default, so a profile is not
+/// created without it.
+#[test]
+fn profile_create_requires_the_client_assertion_audience() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("client.json");
+    let refused = command()
+        .args([
+            "client",
+            "profile",
+            "create",
+            "--base-url",
+            "https://evidence.example.test/",
+            "--client-id",
+            "relying-party",
+            "--private-key-file",
+            "keys/client-private.jwk",
+            "--output",
+        ])
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "a profile without an assertion audience was not refused"
+    );
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("--client-assertion-audience"), "{stderr}");
+    assert!(stderr.contains("issuer identifier"), "{stderr}");
+    assert!(!output.exists());
 }
 
 #[test]
@@ -66,6 +107,8 @@ fn local_loopback_and_environment_keys_are_explicit() {
             "--private-key-env",
             "EVIDENCE_CLIENT_PRIVATE_JWK",
             "--local-loopback-discovery",
+            "--client-assertion-audience",
+            "http://127.0.0.1:8091",
             "--output",
         ])
         .arg(&output)
@@ -120,6 +163,8 @@ fn unsafe_transport_paths_and_replacement_are_refused_without_echoing_paths() {
             "client",
             "--private-key-file",
             key_path,
+            "--client-assertion-audience",
+            ISSUER,
         ]);
         if loopback {
             command.arg("--local-loopback-discovery");
@@ -162,6 +207,8 @@ fn profile_creation_enforces_the_sdk_client_identifier_bound() {
                 &client_id,
                 "--private-key-file",
                 "key.jwk",
+                "--client-assertion-audience",
+                ISSUER,
                 "--output",
             ])
             .arg(&output)
@@ -200,6 +247,8 @@ fn profile_creation_refuses_invalid_expected_service_identities() {
                 "client",
                 "--private-key-file",
                 "key.jwk",
+                "--client-assertion-audience",
+                ISSUER,
                 option,
                 &value,
                 "--output",
@@ -233,6 +282,7 @@ fn the_progressive_client_help_is_complete() {
         "--private-key-file",
         "--private-key-env",
         "--local-loopback-discovery",
+        "--client-assertion-audience",
         "--output",
     ] {
         assert!(help.contains(option), "missing {option}: {help}");
@@ -245,7 +295,7 @@ fn unsafe_profile_permissions_fail_before_network_or_artifact_creation() {
     let profile = directory.path().join("client.json");
     fs::write(
         &profile,
-        br#"{"apiVersion":"id.registrystack.org/formats/evidence/client-profile/v1","kind":"EvidenceClientProfile","baseUrl":"https://evidence.example.test/","clientId":"client","privateKey":{"type":"environment","variable":"EVIDENCE_KEY"},"trust":{"type":"https-discovery"},"contracts":{"type":"published"},"verification":{"maximumAssertionLifetimeSeconds":300,"clockSkewSeconds":30}}"#,
+        br#"{"apiVersion":"id.registrystack.org/formats/evidence/client-profile/v1","kind":"EvidenceClientProfile","baseUrl":"https://evidence.example.test/","clientId":"client","privateKey":{"type":"environment","variable":"EVIDENCE_KEY"},"trust":{"type":"https-discovery"},"contracts":{"type":"published"},"verification":{"maximumAssertionLifetimeSeconds":300,"clockSkewSeconds":30},"oauth":{"clientAssertionAudience":"https://identity.example.test"}}"#,
     )
     .unwrap();
     fs::set_permissions(&profile, fs::Permissions::from_mode(0o644)).unwrap();
@@ -279,6 +329,8 @@ fn profile_create(output: &Path) -> Output {
             "client",
             "--private-key-file",
             "key.jwk",
+            "--client-assertion-audience",
+            ISSUER,
             "--output",
         ])
         .arg(output)
@@ -318,6 +370,8 @@ fn the_retired_out_spelling_of_output_is_refused() {
             "relying-party",
             "--private-key-file",
             "keys/client-private.jwk",
+            "--client-assertion-audience",
+            ISSUER,
         ],
         vec!["client", "contracts", "fetch", "--profile", "profile.json"],
     ] {

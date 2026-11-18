@@ -249,15 +249,9 @@ pub struct ExchangeConfig {
     /// Secret reference to the private JWK the gateway signs its client
     /// assertions with, under a declared provider.
     pub private_key_ref: SecretReference,
-    /// The client-assertion audience, when the authorization server expects
-    /// one other than its token endpoint. Omitted, the assertion names the
-    /// token endpoint.
-    #[serde(default)]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "ExternalId", skip_serializing_if = "Option::is_none")
-    )]
-    pub assertion_audience: Option<ExternalId>,
+    /// The authorization server's issuer identifier, exactly as its metadata
+    /// publishes it: the client assertion's sole audience. It has no default.
+    pub assertion_audience: ExternalId,
 }
 
 /// The audit block every Registry Stack product shares: the hash key, then a
@@ -577,5 +571,18 @@ mod tests {
             exchange.private_key_ref.as_str(),
             "secret:env/GATEWAY_PRIVATE_KEY"
         );
+    }
+
+    /// The client assertion audience is the authorization server's issuer
+    /// identifier and has no default.
+    #[test]
+    fn exchange_credentials_without_an_assertion_audience_are_refused() {
+        let error = serde_json::from_value::<ExchangeConfig>(serde_json::json!({
+            "tokenEndpoint": "https://login.example.test/token",
+            "clientId": "gateway-client",
+            "privateKeyRef": "secret:env/GATEWAY_PRIVATE_KEY"
+        }))
+        .expect_err("an exchange without an assertion audience was accepted");
+        assert!(error.to_string().contains("`assertionAudience`"), "{error}");
     }
 }

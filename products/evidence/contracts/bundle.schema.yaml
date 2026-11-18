@@ -1094,7 +1094,7 @@ $defs:
           credentialPlacement: {enum: [basic-header, form-body]}
       - type: object
         additionalProperties: false
-        required: [type, tokenEndpoint]
+        required: [type, tokenEndpoint, clientAssertionAudience]
         properties:
           type: {const: oauth2-private-key-jwt}
           tokenEndpoint: {$ref: '#/$defs/Url'}

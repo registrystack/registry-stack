@@ -334,6 +334,7 @@ fn check_refuses_a_command_without_its_bound_command_connection() {
                 "    baseUrl: http://127.0.0.1:9020\n",
                 "    authorization:\n",
                 "      tokenEndpoint: http://127.0.0.1:8090/token\n",
+                "      clientAssertionAudience: http://127.0.0.1:8090\n",
                 "      clientId: case-system\n",
                 "      signingKeyRef: secret:env/CLIENT_KEY\n",
                 "      resource: urn:example:messaging\n",

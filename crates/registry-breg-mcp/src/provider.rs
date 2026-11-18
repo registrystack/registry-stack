@@ -125,10 +125,7 @@ fn breg_delegation(
         token_endpoint: exchange.token_endpoint.to_url(),
         client_id: exchange.client_id.to_string(),
         private_key: key,
-        assertion_audience: exchange
-            .assertion_audience
-            .as_ref()
-            .map(ToString::to_string),
+        assertion_audience: exchange.assertion_audience.to_string(),
         gateway_resource: gateway_resource.to_owned(),
         downstream_resource: registry.audience.as_str().to_owned(),
         downstream_scopes: registry

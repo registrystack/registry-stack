@@ -385,6 +385,7 @@ impl NativeCoordinator {
                     "type": "breg", "baseUrl": breg_origin, "profile": "writer",
                     "authorization": {
                         "tokenEndpoint": issuer.token_endpoint(), "clientId": "application-reader",
+                        "clientAssertionAudience": issuer.issuer(),
                         "signingKeyRef": "secret:file/client-key", "resource": "urn:example:applications",
                         "scopes": ["applications:read"]
                     }
@@ -397,6 +398,7 @@ impl NativeCoordinator {
                     "authorization": {
                         "tokenEndpoint": issuer.token_endpoint(),
                         "clientId": casework_native_service::PRODUCER_CLIENT,
+                        "clientAssertionAudience": issuer.issuer(),
                         "signingKeyRef": "secret:file/client-key",
                         "resource": casework_native_service::AUDIENCE,
                         "scopes": ["casework:review"]

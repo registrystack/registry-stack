@@ -295,7 +295,10 @@ substitute a Registry Record ETag or construct an attachment route.
 `breg.PrivateKeyJwt` wraps the shared Rust OAuth provider. Construct it with the
 same `PrivateKeyJwtConfig` used by client authorization. Call
 `await provider.exchange(subjectToken)` to exchange a short-lived signed task
-assertion for an access token. Set `resource` and `scopes` explicitly. Every
+assertion for an access token. Set `resource` and `scopes` explicitly. The
+configuration requires `audience`: the authorization server's issuer
+identifier, exactly as its metadata publishes it, which the client assertion
+names as its only audience (RFC 10070 section 4). Every
 exchange authenticates the client afresh and bypasses the ordinary service
 cache; `await provider.bearerToken()` uses that separate client-credentials
 cache. Neither method logs or persists the returned credential. The application

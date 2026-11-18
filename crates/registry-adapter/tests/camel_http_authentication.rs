@@ -726,7 +726,7 @@ mod oauth2_private_key_jwt {
                 token_endpoint: Url::new(token_endpoint).expect("url"),
                 client_id_ref: secret(client_id_env),
                 client_assertion_key_ref: secret(key_env),
-                client_assertion_audience: None,
+                client_assertion_audience: token_endpoint.trim_end_matches("/token").to_owned(),
                 scope: None,
                 audience: None,
                 resource: None,
@@ -776,7 +776,7 @@ mod oauth2_private_key_jwt {
         );
         assert!(
             body.contains("client_assertion=assertion.cid-pj.http%3A%2F%2F127.0.0.1"),
-            "the audience defaults to the token endpoint as written: {body}"
+            "the audience is the issuer identifier as written: {body}"
         );
         assert!(
             body.ends_with(".pkjwt-key-pem"),
@@ -1113,7 +1113,7 @@ mod marker_secret_absence {
                     token_endpoint: Url::new(&token_endpoint).expect("url"),
                     client_id_ref: secret("ADAPTER_MARK_PKJWT_ID"),
                     client_assertion_key_ref: secret("ADAPTER_MARK_PKJWT_KEY"),
-                    client_assertion_audience: None,
+                    client_assertion_audience: double.url(""),
                     scope: None,
                     audience: None,
                     resource: None,

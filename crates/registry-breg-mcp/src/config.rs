@@ -765,6 +765,7 @@ exchange:
   tokenEndpoint: https://login.example.test/token
   clientId: citizen-gateway
   privateKeyRef: secret:file/gateway-key
+  assertionAudience: https://login.example.test
 service:
   name: Address correction
   description: Correct the postal address the registry holds for you.
@@ -811,7 +812,7 @@ rateLimits:
             token_endpoint: Url::new(token_endpoint).expect("token endpoint"),
             client_id: ExternalId::new("citizen-gateway").expect("client"),
             private_key_ref: SecretReference::parse("secret:file/unused").expect("reference"),
-            assertion_audience: None,
+            assertion_audience: ExternalId::new("https://login.example.test").expect("audience"),
         };
         (registry, exchange)
     }

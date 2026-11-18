@@ -37,6 +37,13 @@ pub const DEFAULT_ASSERTION_LIFETIME_SECONDS: i64 = 60;
 /// that bound is refused with a code that says nothing about the reason.
 pub const MAXIMUM_ASSERTION_LIFETIME_SECONDS: i64 = 300;
 
+/// The `typ` header of every client assertion signed here.
+///
+/// RFC 10070 section 4 types a client authentication JWT explicitly, which
+/// tells the server the assertion names the issuer identifier as its sole
+/// audience.
+pub const CLIENT_ASSERTION_TYP: &str = "client-authentication+jwt";
+
 /// Why an assertion was not signed.
 ///
 /// Deliberately not `#[non_exhaustive]`: a caller renders each of these as its
@@ -73,9 +80,9 @@ pub struct ClientAssertionRequest<'a> {
     /// The registered client identifier. RFC 7523 section 2.2 puts it in both
     /// `iss` and `sub`.
     pub client_id: &'a str,
-    /// What the authorization server expects in `aud`. RFC 7523 section 3
-    /// recommends the token endpoint URL, and a server that published something
-    /// else refuses an assertion carrying anything but that value.
+    /// The authorization server's issuer identifier, the sole `aud` value.
+    /// RFC 10070 section 4 requires it, and a conforming server refuses an
+    /// assertion whose audience is anything else, its token endpoint included.
     pub audience: &'a str,
     /// Seconds from `issued_at` until the assertion expires. Must be within
     /// `1..=MAXIMUM_ASSERTION_LIFETIME_SECONDS`.
@@ -125,7 +132,10 @@ pub fn sign_client_assertion(
         .map_err(|_| ClientAssertionError::UnsupportedAlgorithm)?;
 
     let mut header = Map::new();
-    header.insert("typ".to_owned(), Value::String("JWT".to_owned()));
+    header.insert(
+        "typ".to_owned(),
+        Value::String(CLIENT_ASSERTION_TYP.to_owned()),
+    );
     let claims = json!({
         "iss": request.client_id,
         "sub": request.client_id,
@@ -162,7 +172,7 @@ mod tests {
     /// The instant the assertions in this module are dated from.
     const NOW: i64 = 1_785_000_000;
     const CLIENT_ID: &str = "urn:example:client:relying-party";
-    const AUDIENCE: &str = "https://tokens.example.org/token";
+    const AUDIENCE: &str = "https://tokens.example.org";
     const KEY_ID: &str = "client-key-2026-01";
 
     /// One test-only signing key per algorithm the crypto crate registers.
@@ -232,7 +242,10 @@ mod tests {
             .expect("the assertion is signed");
 
         let (header, claims, signature) = parts(&assertion);
-        assert_eq!(header, json!({"alg": "EdDSA", "typ": "JWT", "kid": KEY_ID}));
+        assert_eq!(
+            header,
+            json!({"alg": "EdDSA", "typ": CLIENT_ASSERTION_TYP, "kid": KEY_ID})
+        );
         assert_eq!(claims["iss"], json!(CLIENT_ID));
         assert_eq!(claims["sub"], json!(CLIENT_ID));
         assert_eq!(claims["iss"], claims["sub"]);
@@ -279,6 +292,20 @@ mod tests {
         );
     }
 
+    /// RFC 10070 section 4 types a client authentication JWT explicitly, so a
+    /// server can tell it carries the issuer identifier as its sole audience.
+    #[test]
+    fn an_assertion_is_typed_as_a_client_authentication_jwt() {
+        let assertion = sign_client_assertion(
+            &signing_key(ED25519_JWK),
+            &request(DEFAULT_ASSERTION_LIFETIME_SECONDS),
+        )
+        .expect("the assertion is signed");
+
+        let (header, _, _) = parts(&assertion);
+        assert_eq!(header["typ"], json!("client-authentication+jwt"));
+    }
+
     /// A caller states how long its assertion is good for, and `exp` says so.
     #[test]
     fn an_assertion_expires_after_the_requested_lifetime() {
@@ -317,7 +344,7 @@ mod tests {
             let (header, _, signature) = parts(&assertion);
             assert_eq!(
                 header,
-                json!({"alg": expected_alg, "typ": "JWT", "kid": KEY_ID})
+                json!({"alg": expected_alg, "typ": CLIENT_ASSERTION_TYP, "kid": KEY_ID})
             );
             verify(
                 signing_input(&assertion).as_bytes(),

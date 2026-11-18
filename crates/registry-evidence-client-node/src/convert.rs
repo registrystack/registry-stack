@@ -226,7 +226,6 @@ fn validate_exchange_client(value: &Value, what: &str) -> Result<(), ConversionE
     require_omitted_instead_of_null(
         object,
         &[
-            "audience",
             "assertionLifetimeSeconds",
             "refreshMarginSeconds",
             "attemptTimeoutMilliseconds",
@@ -236,6 +235,7 @@ fn validate_exchange_client(value: &Value, what: &str) -> Result<(), ConversionE
         ],
         what,
     )?;
+    required_string(object, "audience")?;
     optional_i64(object, "assertionLifetimeSeconds")?;
     optional_i64(object, "refreshMarginSeconds")?;
     optional_u64(object, "attemptTimeoutMilliseconds")?;
@@ -798,7 +798,8 @@ pub fn batch_spec_from_json(value: &Value) -> Result<EvidenceRequestBatchSpec, C
 }
 
 /// `token.privateKeyJwt`'s own shape mirrors [`PrivateKeyJwtConfig`]'s builder
-/// surface: one required endpoint, client identifier, and signing key, plus
+/// surface: one required endpoint, client identifier, signing key, and
+/// assertion audience (the authorization server's issuer identifier), plus
 /// the same optional knobs the Rust type exposes for its own outbound
 /// exchange with the token endpoint.
 fn private_key_jwt_provider_from_json(value: &Value) -> Result<PrivateKeyJwt, ConfigError> {
@@ -825,7 +826,6 @@ fn private_key_jwt_provider_from_json(value: &Value) -> Result<PrivateKeyJwt, Co
     require_omitted_instead_of_null(
         object,
         &[
-            "audience",
             "resource",
             "scopes",
             "assertionLifetimeSeconds",
@@ -862,10 +862,9 @@ fn private_key_jwt_provider_from_json(value: &Value) -> Result<PrivateKeyJwt, Co
         )))
     })?;
 
-    let mut config = PrivateKeyJwtConfig::new(token_endpoint, client_id, client_key);
-    if let Some(audience) = optional_string(object, "audience").map_err(ConfigError::Shape)? {
-        config = config.with_audience(audience);
-    }
+    let audience = required_string(object, "audience").map_err(ConfigError::Shape)?;
+    let mut config =
+        PrivateKeyJwtConfig::new(token_endpoint, client_id, client_key).with_audience(audience);
     if let Some(resource) = optional_string(object, "resource").map_err(ConfigError::Shape)? {
         config = config.with_resource(resource);
     }
@@ -1884,6 +1883,33 @@ mod tests {
         config_from_json(&config_json).expect("the config converts");
     }
 
+    /// RFC 10070 section 4 makes the assertion audience the authorization
+    /// server's issuer identifier, which no other member determines, so a
+    /// configuration that states none is refused and the refusal names it.
+    #[test]
+    fn a_private_key_jwt_token_without_an_audience_is_a_shape_error_naming_it() {
+        let config_json = serde_json::json!({
+            "baseUrl": "https://evidence.example.org",
+            "trustedJwks": one_key_jwks_json(),
+            "revokedKeyIds": [],
+            "token": {
+                "privateKeyJwt": {
+                    "tokenEndpoint": "https://issuer.example.org/token",
+                    "clientId": "example-client",
+                    "clientKey": generated_client_key_json("signing-key-1"),
+                },
+            },
+        });
+        let error = config_from_json(&config_json).expect_err("a missing audience is refused");
+        let ConfigError::Shape(shape) = &error else {
+            panic!("expected a shape refusal, got {error:?}");
+        };
+        assert!(
+            shape.0.contains("`audience`"),
+            "the refusal names the member: {shape:?}"
+        );
+    }
+
     #[test]
     fn an_exchange_authorization_converts_and_cannot_share_a_token() {
         let key = generated_client_key_json("exchange-key");
@@ -1894,6 +1920,7 @@ mod tests {
             "authorization": {"exchange": {
                 "client": {
                     "tokenEndpoint": "https://issuer.example.org/token",
+                    "audience": "https://issuer.example.org",
                     "clientId": "example-client",
                     "clientKey": key,
                     "resource": "urn:registry:evidence",
@@ -1910,6 +1937,19 @@ mod tests {
             }}
         });
         config_from_json(&config).expect("the verified exchange shape converts offline");
+        let mut unstated = config.clone();
+        unstated["authorization"]["exchange"]["client"]
+            .as_object_mut()
+            .unwrap()
+            .remove("audience");
+        let error = config_from_json(&unstated).expect_err("a missing audience is refused");
+        let ConfigError::Shape(shape) = &error else {
+            panic!("expected a shape refusal, got {error:?}");
+        };
+        assert!(
+            shape.0.contains("`audience`"),
+            "the refusal names the member: {shape:?}"
+        );
         config["token"] = serde_json::json!({"static":"ambiguous"});
         assert!(matches!(
             config_from_json(&config),
@@ -1929,6 +1969,7 @@ mod tests {
             "token": {
                 "privateKeyJwt": {
                     "tokenEndpoint": "https://issuer.example.org/token",
+                    "audience": "https://issuer.example.org",
                     "clientId": "example-client",
                     "clientKey": generated_es256_client_key_json("signing-key-es256"),
                 },
@@ -1953,6 +1994,7 @@ mod tests {
                 "token": {
                     "privateKeyJwt": {
                         "tokenEndpoint": "https://issuer.example.org/token",
+                        "audience": "https://issuer.example.org",
                         "clientId": "example-client",
                         "clientKey": generated_client_key_json("signing-key-1"),
                         "scopes": scopes,
@@ -2040,6 +2082,7 @@ mod tests {
             "token": {
                 "privateKeyJwt": {
                     "tokenEndpoint": "https://issuer.example.org/token",
+                    "audience": "https://issuer.example.org",
                     "clientId": "example-client",
                     // Missing every member a JWK needs.
                     "clientKey": {},
@@ -2065,6 +2108,7 @@ mod tests {
             "token": {
                 "privateKeyJwt": {
                     "tokenEndpoint": "https://issuer.example.org/token",
+                    "audience": "https://issuer.example.org",
                     "clientId": "example-client",
                     "clientKey": generated_client_key_json("signing-key-1"),
                     // The contract accepts 1..=300 seconds.
@@ -2438,6 +2482,7 @@ mod tests {
             "token": {
                 "privateKeyJwt": {
                     "tokenEndpoint": "https://issuer.example.org/token",
+                    "audience": "https://issuer.example.org",
                     "clientId": "example-client",
                     "clientKey": {
                         "kty": "OKP",

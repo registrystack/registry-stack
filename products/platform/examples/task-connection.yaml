@@ -3,7 +3,7 @@ apiVersion: id.registrystack.org/formats/platform/task-connection/v1alpha1
 kind: PlatformTaskConnection
 caseworkUrl: http://127.0.0.1:8090
 tokenEndpoint: http://127.0.0.1:8091/oauth2/token
-clientAssertionAudience: http://127.0.0.1:8091/oauth2/token
+clientAssertionAudience: http://127.0.0.1:8091
 bootstrapResource: urn:registry:casework
 secretProviders:
   file:

@@ -234,6 +234,15 @@ adapter-job rescan <job-file> \
 An ordinary rescan writes the due marker and runs one pass.
 Unchanged items skip by digest, refused items retry, and held items remain held
 while unchanged.
+An item refused on the retry of a lost answer may already be admitted, so the
+rescan does not send it again under a new key: it is held as
+`adapter.job.revised-item`, or sent to `destination.revisedReceiver` when a
+Coordinator job names one.
+An item whose revised event may already be admitted is sent only to the same
+revised receiver with the same body. A changed receiver or body stops the
+rescan as `adapter.job.coordinator-receiver-changed` or
+`adapter.job.coordinator-body-changed` before any request; restoring the
+previous receiver and job definition lets the item settle.
 
 For a long-running process driven by the job's interval trigger, run:
 
@@ -270,6 +279,14 @@ recorded receiver or body identity, so the new binary stops it as
 `adapter.job.coordinator-identity-unrecorded` before any recipient call; the
 recovery is to restore that backup, settle the item with the previous binary,
 and upgrade again.
+Drain a direct BReg job the same way, and take a backup, before upgrading from
+a binary whose stored receiver identity did not include the client assertion
+audience: this binary's receiver identity includes it, so an item left pending
+stops as `adapter.job.breg-receiver-changed`
+before any BReg call, and no configuration clears it. The new `init-store`
+moves the store to schema 104, which the previous binary refuses, so the
+recovery is the same: restore that backup, settle the item with the previous
+binary, and upgrade again.
 Run the new binary's `init-store` once before restarting passes.
 Compatible embedded transitions serialize under the migration lock and can be
 repeated safely.
@@ -291,8 +308,16 @@ change. A changed receiver stops as `adapter.job.coordinator-receiver-changed`
 instead; restoring the original receiver recovers it. A direct BReg job fences
 the same way under `adapter.job.breg-body-changed` (the mapped operation
 differs), `adapter.job.breg-receiver-changed` (another BReg binding, base URL, token
-endpoint, caller, TLS trust profile, access profile, Action or mode) and `adapter.job.breg-identity-unrecorded`
-(staged before schema 103); the recoveries are the same.
+endpoint, caller, client assertion audience, TLS trust profile, access profile, Action or mode) and `adapter.job.breg-identity-unrecorded`
+(staged before schema 103); the recoveries are the same. The exception is an
+item left pending by a previous binary whose stored receiver identity did not
+include the client assertion audience: its `adapter.job.breg-receiver-changed`
+stop is not cleared by restoring any configuration (see Upgrade and recover).
+Removing `destination.revisedReceiver` from a Coordinator job does not stop: a
+possibly admitted item then has no receiver and is held as
+`adapter.job.revised-item`, even when its revised event was sent and that
+answer lost. Restoring the receiver does not resend a held item, so check
+Coordinator for that Run before you resolve the hold.
 
 A pass that stops as `adapter.job.identity-migration-required` found stored
 items that predate the job's item-identity binding (store schema 103). Confirm

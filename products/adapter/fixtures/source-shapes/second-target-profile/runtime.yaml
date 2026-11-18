@@ -18,7 +18,7 @@ endpoints:
       tokenEndpoint: https://auth.example.invalid/oauth2/token
       clientIdRef: secret:env/HOUSEHOLDS_CLIENT_ID
       clientAssertionKeyRef: secret:file/households-assertion.jwk
-      clientAssertionAudience: https://auth.example.invalid/oauth2/token
+      clientAssertionAudience: https://auth.example.invalid
       scope: households.read
       maximumCacheSeconds: 300
     tlsTrustProfile: households-ca

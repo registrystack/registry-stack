@@ -1900,6 +1900,10 @@ pub(crate) fn strict_claim_context(
     )
     .map(|claims| claims.with_audit_context(context.audit_context().cloned()))
     .and_then(|claims| claims.with_recipients(context.recipients().clone()))
+    .and_then(|claims| match context.task_grant() {
+        Some(grant) => claims.with_task_grant(grant.clone()),
+        None => Ok(claims),
+    })
     .map_err(|_| ReadServiceError::Unavailable)
 }
 
@@ -3285,6 +3289,78 @@ mod tests {
             super::validate_spatial_query(entity, operation, &just_over).is_err(),
             "backend rejects a span that f64 subtraction would round down"
         );
+    }
+
+    #[test]
+    fn strict_claim_context_carries_the_admitted_task_grant() {
+        let registry = compile_project(
+            &parse_project_json(
+                br#"{
+                  "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+                  "kind":"BRegProject",
+                  "project":{"id":"task-read","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+                  "datasets":[{"id":"test-dataset"}],"recordTypes":[{
+                    "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"public",
+                    "fields":[{"id":"label","type":"string","required":true,"maximumLength":32,"classification":"public"}]
+                  }],
+                  "accessProfiles":[{
+                    "id":"task-reader","principalClaim":"registry_principal","actorKind":"agent",
+                    "requesterClients":["agent-client"],"requiredScopes":"unrestricted","requiredPurposes":["review"],
+                    "taskGrant":{"sourceIssuer":"https://casework.test"},
+                    "permissions":{"records":[{
+                      "recordType":"case","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"
+                    }]}
+                  }]
+                }"#,
+            )
+            .expect("fixture parses"),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .expect("fixture compiles");
+        let grant = |principal: &str| -> crate::task_grant::TaskGrantBinding {
+            serde_json::from_value(json!({
+                "grantId": "00000000-0000-4000-8000-0000000000c1",
+                "sourceIssuer": "https://casework.test",
+                "principal": principal,
+                "client": "agent-client",
+                "resource": "urn:breg:test",
+                "purpose": "review",
+                "bounds": {"type": "breg", "permissions": [{"collection": "cases", "operations": ["get"]}]},
+                "subjects": {"subject_reference": "synthetic-subject"},
+                "expiresAt": chrono::Utc::now().timestamp() + 900
+            }))
+            .expect("grant fixture parses")
+        };
+        let context = AuthorizedRequestContext::new(
+            Some("agent".to_owned()),
+            Some("review".to_owned()),
+            "task-reader".to_owned(),
+            Vec::new(),
+        );
+
+        let claims = super::strict_claim_context(
+            &registry,
+            &context.clone().with_task_grant(Some(grant("agent"))),
+            "case",
+        )
+        .expect("the admitted grant names the request principal and purpose");
+        assert_eq!(
+            claims.task_grant().map(|grant| grant.principal()),
+            Some("agent"),
+            "the database claim context carries the grant the request was admitted with"
+        );
+        let standing = super::strict_claim_context(&registry, &context, "case")
+            .expect("a request without a grant keeps its standing context");
+        assert!(standing.task_grant().is_none());
+        assert!(matches!(
+            super::strict_claim_context(
+                &registry,
+                &context.with_task_grant(Some(grant("someone-else"))),
+                "case",
+            ),
+            Err(ReadServiceError::Unavailable)
+        ));
     }
 
     #[test]

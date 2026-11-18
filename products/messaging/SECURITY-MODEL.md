@@ -20,9 +20,17 @@ access token from the configured issuer and audience, from a client in
 `authentication.oidc.allowedClients`, signed by a published or static key. An
 exchanged token is refused unless `assertionIssuers` declares its authority.
 `allowedClients: unrestricted` is refused in every mode, because an access
-profile resolves from the matched client. Every refusal is the same
-`401 authentication.refused`; causes are told apart only by value-free metric
-reasons and rate-limited log stage labels. A client listed in two access
+profile resolves from the matched client. A refused or malformed credential,
+or one whose verified claims do not resolve to a client, is
+`401 authentication.refused` with a `WWW-Authenticate: Bearer` challenge. A
+credential that verifies but resolves to no usable access profile (including an
+exchanged token when `assertionIssuers` declares no authority) is
+`403 profile.not-authorized`. A verifier that cannot reach a verdict, because
+the issuer's discovery document or key set cannot be fetched, read or used, is
+`503 service.unavailable` with `Retry-After: 5`; the credential is not what is
+wrong, so a caller should retry rather than rotate it. Causes inside each
+status are told apart only by value-free metric reasons and rate-limited log
+stage labels. A client listed in two access
 profiles is refused when the package loads, and a profile must state its
 scopes or write `unrestricted`. (MESSAGING-SEC-01, -04)
 
@@ -163,6 +171,17 @@ The invariants above hold only if the deployment does the following.
 12. **Rotating `audit.hashKeyRef` changes pseudonyms only.** It frees no spent
     idempotency key, so an exact retry across a rotation replays its receipt or
     is refused as expired, and never sends again.
+13. **Drain or cancel queued and retrying messages before a provider id
+    points at a different account or receiver.** The worker looks up the
+    transport by the provider id stored on the message each time it sends, and
+    callbacks match on provider id plus reference. A message accepted for the
+    old receiver is therefore sent, and retried, through whatever the id names
+    when the worker picks it up, and a report from the new account can match an
+    older message under the same id. Messaging stores no receiver digest and
+    has no rebind command. Give an incompatible receiver a new provider id and
+    keep the old one configured until its queued, `unknown` and retained
+    callback work has settled; or drain or cancel those messages first. Same
+    receiver credential rotation needs none of this.
 
 ## 3. Accepted residuals
 

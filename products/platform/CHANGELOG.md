@@ -20,6 +20,18 @@
 - A BReg project with encrypted fields runs under `rstack dev` without extra
   setup. Each run draws its own development data key into its run directory,
   readable only by your user, and the key is removed with the run.
+- BREAKING: a private_key_jwt client assertion's audience has no default.
+  `registry-platform-httputil`'s `PrivateKeyJwt::new` refuses a
+  `PrivateKeyJwtConfig` without `with_audience`, and
+  `PrivateKeyJwtConfig::check_identity` takes the audience as `&str`. The
+  assertion `registry-platform-authcommon` signs carries that audience as its
+  only value and has the header `typ: client-authentication+jwt`
+  (`CLIENT_ASSERTION_TYP`, RFC 10070 section 4). The MCP gateway runtime configuration
+  requires `assertionAudience` on a token exchange, and a saved CLI connection
+  using `private-key-jwt` requires `assertionAudience`, so `--private-key-jwt`
+  without `--assertion-audience` is refused. Migration: set the audience
+  member to the authorization server's issuer identifier, exactly as its
+  metadata publishes it.
 
 ## 0.46.0 - 2026-11-08
 

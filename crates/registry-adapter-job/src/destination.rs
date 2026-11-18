@@ -316,7 +316,9 @@ impl JobDestination for FixtureDestination {
     ) -> Pin<Box<dyn Future<Output = HandOffOutcome> + Send + 'a>> {
         Box::pin(async move {
             // The request body is exactly the deliverable, canonically
-            // serialized: the same bytes a retry of this hand-off sends.
+            // serialized: the same bytes a retry of this hand-off sends,
+            // except `admittedBefore`, which can only turn true. This test
+            // destination has no hold: it sends possibly admitted items.
             let body = serde_json::json!({
                 "jobId": job.id.as_str(),
                 "jobVersion": job.version,

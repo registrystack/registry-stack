@@ -3,7 +3,7 @@ kind: CaseworkProject
 project: {id: licensing-review, version: "1"}
 accessProfiles:
   administrator:
-    principalClaim: registry_principal
+    principalClaim: sub
     requiredScopes: ["casework:admin"]
     actsAs: administrator
   reviewer:

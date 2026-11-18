@@ -2831,10 +2831,7 @@ fn task_grant_binding(
         return Ok(None);
     };
     let grant = claims.grant().ok_or("task_grant_missing")?;
-    if grant.source_issuer() != expected.source_issuer
-        || Some(grant.client()) != claims.requester_client()
-        || !profile.required_purposes.contains(grant.purpose())
-    {
+    if !profile.required_purposes.contains(grant.purpose()) {
         return Err("task_grant_binding_mismatched");
     }
     let actual = grant
@@ -2880,9 +2877,32 @@ fn task_grant_binding(
     }) {
         return Err("task_grant_bounds_mismatched");
     }
-    crate::task_grant::TaskGrantBinding::from_verified(grant, claims.grant_subjects().clone())
-        .map(Some)
-        .map_err(|_| "task_grant_invalid")
+    bind_task_grant(&expected.source_issuer, claims).map(Some)
+}
+
+/// Binds a verified task grant to the request it arrived with. Every route
+/// that admits a task grant uses this: the grant must come from the
+/// profile's source issuer, name the verified requester client, the request
+/// principal and the request purpose, and its deadline must not have passed.
+fn bind_task_grant(
+    source_issuer: &str,
+    claims: &VerifiedRequestClaims,
+) -> Result<crate::task_grant::TaskGrantBinding, &'static str> {
+    let grant = claims.grant().ok_or("task_grant_missing")?;
+    if grant.source_issuer() != source_issuer
+        || Some(grant.client()) != claims.requester_client()
+        || Some(grant.principal()) != claims.principal()
+        || Some(grant.purpose()) != claims.purpose()
+    {
+        return Err("task_grant_binding_mismatched");
+    }
+    let binding =
+        crate::task_grant::TaskGrantBinding::from_verified(grant, claims.grant_subjects().clone())
+            .map_err(|_| "task_grant_invalid")?;
+    if !binding.is_current() {
+        return Err("task_grant_expired");
+    }
+    Ok(binding)
 }
 
 fn verified_row_boundaries(
@@ -4669,6 +4689,19 @@ impl ReadQueryError {
             Self::CursorInvalid => cursor_invalid(),
         }
     }
+}
+
+/// Extract only the selector needed for admission. Full validation follows
+/// authorization, so malformed options cannot reveal an inaccessible target.
+fn admission_profile(raw: Option<&str>) -> Option<String> {
+    raw.filter(|raw| raw.len() <= MAX_RAW_QUERY_BYTES)?
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find_map(|(name, value)| {
+            (percent_decode(name).ok().as_deref() == Some("accessProfile"))
+                .then(|| percent_decode(value).ok())
+                .flatten()
+        })
 }
 
 fn percent_decode(value: &str) -> Result<String, QueryParseError> {

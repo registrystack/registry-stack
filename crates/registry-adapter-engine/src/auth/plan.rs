@@ -401,18 +401,16 @@ impl AuthPlan {
             ) => {
                 validate_token_endpoint(token_endpoint)?;
                 let parameters = validate_request_parameters(scope, audience, resource)?;
-                if let Some(audience) = client_assertion_audience {
-                    if audience.len() > 512 || audience.contains('\0') || audience.trim().is_empty()
-                    {
-                        return Err(AuthPlanFault::AssertionAudienceInvalid);
-                    }
+                // The audience is the issuer identifier exactly as the
+                // operator wrote it, because RFC 10070 section 4 compares
+                // it by Simple String Comparison.
+                let assertion_audience = client_assertion_audience;
+                if assertion_audience.len() > 512
+                    || assertion_audience.contains('\0')
+                    || assertion_audience.trim().is_empty()
+                {
+                    return Err(AuthPlanFault::AssertionAudienceInvalid);
                 }
-                // The default audience is the token endpoint exactly as
-                // the operator wrote it, because RFC 7523 section 3
-                // compares it by Simple String Comparison.
-                let assertion_audience = client_assertion_audience
-                    .clone()
-                    .unwrap_or_else(|| token_endpoint.as_str().to_owned());
                 Ok(Self {
                     kind: AuthKind::Oauth2PrivateKeyJwt,
                     static_credential: None,
@@ -421,7 +419,7 @@ impl AuthPlan {
                         token_endpoint.as_str().to_owned(),
                         client_id_ref.clone(),
                         client_assertion_key_ref.clone(),
-                        assertion_audience,
+                        assertion_audience.clone(),
                         parameters,
                         CacheBounds {
                             maximum: Duration::from_secs(maximum_cache_seconds.get()),
@@ -777,7 +775,7 @@ mod tests {
         }
     }
 
-    fn pkjwt_credential(audience: Option<String>) -> RuntimeCredential {
+    fn pkjwt_credential(audience: String) -> RuntimeCredential {
         RuntimeCredential::Oauth2PrivateKeyJwt {
             token_endpoint: Url::new("https://token.example.invalid/token").expect("url"),
             client_id_ref: secret("CLIENT_ID"),
@@ -838,7 +836,7 @@ mod tests {
             ),
             (
                 EndpointAuthentication::Oauth2PrivateKeyJwt {},
-                pkjwt_credential(None),
+                pkjwt_credential("https://token.example.invalid".to_owned()),
                 AuthKind::Oauth2PrivateKeyJwt,
             ),
         ];
@@ -1227,7 +1225,7 @@ mod tests {
         for audience in ["", "   ", &"a".repeat(513)] {
             let binding = binding(
                 "https://cases.example.invalid",
-                Some(pkjwt_credential(Some(audience.to_owned()))),
+                Some(pkjwt_credential(audience.to_owned())),
             );
             assert_eq!(
                 AuthPlan::compile(&EndpointAuthentication::Oauth2PrivateKeyJwt {}, &binding)
@@ -1238,7 +1236,7 @@ mod tests {
         }
         let binding = binding(
             "https://cases.example.invalid",
-            Some(pkjwt_credential(Some("token.example.invalid".to_owned()))),
+            Some(pkjwt_credential("token.example.invalid".to_owned())),
         );
         assert!(
             AuthPlan::compile(&EndpointAuthentication::Oauth2PrivateKeyJwt {}, &binding).is_ok()

@@ -101,7 +101,7 @@ entries:
       - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_maintained_pack_matrix_executes_exact_routes_within_the_shared_budget}
       - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: actual_pack_http_failures_keep_exact_categories_one_send_and_no_facts}
   - id: acceptance-row-19
-    summary: OAuth token requests and responses are absent from all diagnostics, no placement can put client credentials in the token URL, a source authenticates by client secret or by signed client assertion but never by both, and the assertion audience is the token endpoint unless the bundle governs it.
+    summary: OAuth token requests and responses are absent from all diagnostics, no placement can put client credentials in the token URL, a source authenticates by client secret or by signed client assertion but never by both, and the assertion audience is the authorization server's issuer identifier, which the bundle states and which has no default.
     tests:
       - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_oauth_redaction_fixture_fails_closed_before_data_sends}
       - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_oauth_client_credentials_preserve_placement_resource_cache_and_redaction}
@@ -110,6 +110,7 @@ entries:
       - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: retained_pack_failures_are_value_free}
       - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_private_key_jwt_preserves_signed_claims_audience_resource_and_key_refusals}
       - {file: crates/registry-evidence/src/config.rs, name: a_client_assertion_audience_without_an_assertion_key_is_refused}
+      - {file: crates/registry-evidence/src/config.rs, name: the_client_assertion_audience_is_a_bounded_required_string}
       - {file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_binary_client_secrets_are_refused_before_token_or_data_requests}
   - id: acceptance-row-20
     summary: Live-source tests are ignored by default, read-only, and refuse missing or permissively stored credential files.

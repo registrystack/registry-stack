@@ -209,15 +209,15 @@ pub enum RuntimeCredential {
         /// The private JWK the client assertion is signed with.
         #[serde(rename = "clientAssertionKeyRef")]
         client_assertion_key_ref: SecretReference,
-        /// Audience claim of the signed assertion, defaulting to the
-        /// token endpoint.
+        /// Audience claim of the signed assertion: the authorization
+        /// server's issuer identifier, its sole value under RFC 10070
+        /// section 4. Required, because no endpoint the binding names is
+        /// that identifier.
         #[serde(
             rename = "clientAssertionAudience",
-            default,
-            deserialize_with = "bounded_token_parameter",
-            skip_serializing_if = "Option::is_none"
+            deserialize_with = "bounded_required_token_parameter"
         )]
-        client_assertion_audience: Option<String>,
+        client_assertion_audience: String,
         #[serde(
             default,
             deserialize_with = "bounded_token_parameter",
@@ -259,20 +259,27 @@ fn bounded_token_parameter<'de, D>(deserializer: D) -> Result<Option<String>, D:
 where
     D: serde::Deserializer<'de>,
 {
-    let text = Option::<String>::deserialize(deserializer)?;
-    match text {
-        Some(text)
-            if text.is_empty() || text.len() > crate::naming::MAX_TOKEN_PARAMETER_BYTES =>
-        {
-            Err(serde::de::Error::custom(
-                registry_platform_yaml::Invalid::expected(
-                    "a token-request parameter of at least 1 and at most 512 bytes",
-                    "Write a non-empty scope, audience, resource, or clientAssertionAudience of at most 512 bytes.",
-                ),
-            ))
-        }
-        text => Ok(text),
+    Option::<String>::deserialize(deserializer)?
+        .map(bounded_token_text)
+        .transpose()
+}
+
+/// [`bounded_token_parameter`] for a parameter the binding must state.
+fn bounded_required_token_parameter<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    bounded_token_text(String::deserialize(deserializer)?)
+}
+
+fn bounded_token_text<E: serde::de::Error>(text: String) -> Result<String, E> {
+    if text.is_empty() || text.len() > crate::naming::MAX_TOKEN_PARAMETER_BYTES {
+        return Err(E::custom(registry_platform_yaml::Invalid::expected(
+            "a token-request parameter of at least 1 and at most 512 bytes",
+            "Write a non-empty scope, audience, resource, or clientAssertionAudience of at most 512 bytes.",
+        )));
     }
+    Ok(text)
 }
 
 impl RuntimeCredential {
@@ -574,7 +581,7 @@ mod tests {
         for json in [
             r#"{"type": "oauth2-client-credentials", "tokenEndpoint": "not a url at all", "clientIdRef": "secret:env/ID", "clientSecretRef": "secret:env/S", "credentialPlacement": "basic-header", "maximumCacheSeconds": 0}"#,
             r#"{"type": "oauth2-client-credentials", "tokenEndpoint": "ftp://token.example.invalid/token", "clientIdRef": "secret:env/ID", "clientSecretRef": "secret:env/S", "credentialPlacement": "basic-header", "maximumCacheSeconds": 0}"#,
-            r#"{"type": "oauth2-private-key-jwt", "tokenEndpoint": "token.example.invalid/oauth/token", "clientIdRef": "secret:env/ID", "clientAssertionKeyRef": "secret:file/assertion.pem", "maximumCacheSeconds": 0}"#,
+            r#"{"type": "oauth2-private-key-jwt", "tokenEndpoint": "token.example.invalid/oauth/token", "clientIdRef": "secret:env/ID", "clientAssertionKeyRef": "secret:file/assertion.pem", "clientAssertionAudience": "https://token.example.invalid", "maximumCacheSeconds": 0}"#,
         ] {
             assert!(
                 serde_json::from_str::<RuntimeCredential>(json).is_err(),
@@ -649,11 +656,32 @@ mod tests {
         }
     }
 
+    /// RFC 10070 section 4 makes the authorization server's issuer identifier
+    /// the sole audience of a client assertion, and no endpoint the binding
+    /// names is that identifier, so a private-key-jwt binding states it and
+    /// the reader refuses one that does not, naming the member.
+    #[test]
+    fn a_private_key_jwt_binding_states_its_assertion_audience() {
+        let error = serde_json::from_value::<RuntimeCredential>(serde_json::json!({
+            "type": "oauth2-private-key-jwt",
+            "tokenEndpoint": "https://token.example.invalid/oauth/token",
+            "clientIdRef": "secret:env/CLIENT_ID",
+            "clientAssertionKeyRef": "secret:file/assertion.pem",
+            "maximumCacheSeconds": 0
+        }))
+        .expect_err("a binding without an assertion audience is refused");
+        assert!(
+            error.to_string().contains("clientAssertionAudience"),
+            "{error}"
+        );
+    }
+
     /// The token-request text parameters are bounded at the reader:
     /// `scope`, `audience`, `resource`, and `clientAssertionAudience`
     /// each refuse below one byte or above the shared ceiling, on both
-    /// OAuth2 kinds; an absent parameter stays absent, and a parameter at
-    /// the ceiling round-trips.
+    /// OAuth2 kinds; an absent optional parameter stays absent, an absent
+    /// `clientAssertionAudience` is refused, and a parameter at the ceiling
+    /// round-trips.
     #[test]
     fn token_request_parameters_are_bounded_at_the_reader() {
         fn parameter<'a>(credential: &'a RuntimeCredential, field: &str) -> Option<&'a str> {
@@ -679,7 +707,7 @@ mod tests {
                     scope.as_deref(),
                     audience.as_deref(),
                     resource.as_deref(),
-                    client_assertion_audience.as_deref(),
+                    Some(client_assertion_audience.as_str()),
                 ),
                 _ => return None,
             };
@@ -711,10 +739,14 @@ mod tests {
                 "tokenEndpoint": "https://token.example.invalid/oauth/token",
                 "clientIdRef": "secret:env/CLIENT_ID",
                 "clientAssertionKeyRef": "secret:file/assertion.pem",
+                "clientAssertionAudience": "https://token.example.invalid",
                 "maximumCacheSeconds": 0
             });
-            if let Some(value) = value {
-                json[field] = serde_json::json!(value);
+            match value {
+                Some(value) => json[field] = serde_json::json!(value),
+                None => {
+                    json.as_object_mut().expect("an object").remove(field);
+                }
             }
             serde_json::to_string(&json).expect("json")
         };
@@ -730,9 +762,13 @@ mod tests {
         ];
         for (kind, fields) in kinds {
             for field in fields {
-                let credential: RuntimeCredential =
-                    serde_json::from_str(&kind(field, None)).expect("an absent parameter parses");
-                assert_eq!(parameter(&credential, field), None, "absent at {field}");
+                let absent = serde_json::from_str::<RuntimeCredential>(&kind(field, None));
+                if *field == "clientAssertionAudience" {
+                    assert!(absent.is_err(), "{field} is required");
+                } else {
+                    let credential = absent.expect("an absent parameter parses");
+                    assert_eq!(parameter(&credential, field), None, "absent at {field}");
+                }
                 let credential: RuntimeCredential =
                     serde_json::from_str(&kind(field, Some(&at_ceiling)))
                         .expect("a parameter at the ceiling parses");

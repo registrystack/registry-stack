@@ -1443,6 +1443,17 @@ process (draft, declare), several `to` steps in sequence.
   past it, or when no such proof path is declared, they remain spent
   permanently and the 409 carries no `Retry-After`. Recovery never grants
   authority to repeat the mutation.
+- Recovery is bound to the source origin the write reached. The precommit
+  also pins a digest of the configured `baseUrl` of every endpoint the write,
+  status and uncertainty routes reach (credentials are outside it, so a
+  rotation keeps recovery), and every poll, whether a status GET, a bounded
+  wait or a same-key retry's uncertainty check, runs only while the current
+  runtime configuration yields the same digest. A row whose pin differs, or
+  that carries none, is never polled: its status link answers the exact
+  stored 202, a bounded wait returns the committed 202, and a retry answers
+  409 without `Retry-After`, until the accepted expiry or the effect deadline
+  ends it. Restoring the original `baseUrl` lets that work finish. Each held
+  poll logs a value-free warning; it adds no journal event kind.
 - The artifact fence binds recovery authority to one artifact (the digest of
   the project, profile and pack bytes) per `runtime.id`. Only a deployment
   that declares an asynchronous or resumable write activates it: activation
@@ -1574,6 +1585,12 @@ Rules:
   in the runtime config, never derived from a response. Token requests are
   engine sends outside `maximumUpstreamCalls`, bounded separately: at most
   two per endpoint per exchange.
+- The `oauth2-private-key-jwt` assertion carries `clientAssertionAudience`
+  as its only audience and has the header `typ: client-authentication+jwt`
+  (RFC 10070 section 4). The member is required and has no default: it is
+  the authorization server's issuer identifier, exactly as its metadata
+  publishes it, and a runtime credential without it is refused when the
+  configuration is read.
 - The token request goes through the endpoint's own outbound client: the
   same trust profile, as in Evidence, and the same mTLS identity (Evidence
   has no client identity; this half is the adapter's own rule).
@@ -2144,11 +2161,15 @@ refused codes and counts, and `rescan` retries refused items on request.
 
 **Changed items.** An item that changes after a first hand-off is
 revised, and a `pending` row counts as possibly accepted, because a lost
-response may hide a real effect. A revised item never becomes a second
-registration: the job either holds it for an operator or, when the job
-names a Coordinator receiver for revisions, sends it there as a `revised`
-event so that a workflow can reach a person. Automatic correction of
-submitted, approved, or applied work is out of scope.
+response may hide a real effect. A refusal that answers the retry of such
+a hand-off says nothing about the first attempt, so that refused row also
+counts as possibly accepted, and a later edit of it or a `rescan` retry of
+it is revised too. A revised item never becomes a second
+registration: the job either holds it for an operator as
+`adapter.job.revised-item` or, when the job names a Coordinator receiver
+for revisions, sends it there as a `revised` event so that a workflow can
+reach a person. A held item has no release command. Automatic correction
+of submitted, approved, or applied work is out of scope.
 
 The pass hands each item to its destination through one seam. The
 destination answers in one of three ways: accepted, with its reference;
@@ -2174,12 +2195,16 @@ sends it under keys derived from the item, so a lost response is recovered
 by sending the same request again and BReg replays its receipt. The job
 stores no prepared attempt: a retry re-reads the source, re-maps, and
 resends. The job freezes two public digests durably before the first send:
-the receiver (BReg binding, base URL, token endpoint, caller, TLS trust
-profile, access profile, Action and mode) and the mapped operation. A possibly accepted `pending` sequence whose receiver
+the receiver (BReg binding, base URL, token endpoint, caller, client
+assertion audience, TLS trust profile, access profile, Action and mode) and
+the mapped operation. A possibly accepted `pending` sequence whose receiver
 or mapped operation differs on retry stops the pass before any BReg call,
 with the position unchanged, as `adapter.job.breg-receiver-changed` or
 `adapter.job.breg-body-changed`; restoring the original configuration lets
-it settle. A pending row staged before the digests were recorded stops as
+it settle. A row left pending by a previous binary whose stored receiver
+identity did not include the client assertion audience is the exception:
+no configuration clears it, and it settles only with that binary on the
+pre-upgrade store. A pending row staged before the digests were recorded stops as
 `adapter.job.breg-identity-unrecorded`. If the item itself changed, BReg
 answers `idempotency.key-reused` and the item is held for an operator, which
 is the safe direction. A Proposal uses two command
@@ -2224,9 +2249,22 @@ The event data has one fixed wrapper: `job: {id, version}`, `key`,
 only when known. Event identity and event time are stable for one item
 sequence; transport time, signature and monotonically increasing delivery
 attempt are renewed for retry. The selected public receiver identity is
-frozen durably before sending. A possibly accepted pending sequence cannot
-be retargeted by configuration changes: the pass stops without advancing
-position, and restoring the original receiver permits recovery.
+frozen durably before sending. A pending sequence with a frozen receiver
+cannot be retargeted by configuration changes: when the selected receiver
+differs, the pass stops as `adapter.job.coordinator-receiver-changed`
+without advancing position, and restoring the original receiver permits
+recovery. A rescan of an item whose refusal answered its last attempt
+clears its frozen receiver; the receiver selected when the item is next
+sent is frozen in its place. A refused item whose revised event may have
+been admitted (that event's answer was lost and its retry was refused) keeps
+the sequence's frozen receiver and body: a rescan sends it only to that
+receiver with that body, and a changed receiver or body stops the pass as
+`adapter.job.coordinator-receiver-changed` or
+`adapter.job.coordinator-body-changed` before any request. A possibly
+accepted item on a job with no revised trigger has no receiver to select:
+it is held as `adapter.job.revised-item` and sent nowhere, even when its
+revised event was sent and that answer was lost, and restoring the revised
+trigger does not resend a held item.
 
 `destination.revisedReceiver` optionally selects a revised-item `trigger`,
 `eventType`, and `dataSchema` inside the same workflow and runtime binding.

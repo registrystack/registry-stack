@@ -73,7 +73,7 @@ test('profile and exchange compose without losing pins or authority binding', as
       kind: 'EvidenceClientProfile', baseUrl: origin, clientId: 'profile-staff',
       privateKey: { type: 'environment', variable: 'UNUSED_PROFILE_EXCHANGE_KEY' },
       trust: { type: 'local-loopback-discovery' }, contracts: { type: 'published' },
-      oauth: { resource: 'urn:registry:evidence', scopes: ['evidence:invoke'] },
+      oauth: { clientAssertionAudience: origin, resource: 'urn:registry:evidence', scopes: ['evidence:invoke'] },
       expected: { definitions: { 'farmer-status': {
         configurationRevision: revision, evidenceType: contracts.definitions[0].evidenceType,
         purpose: contracts.definitions[0].purpose, assuranceProfile: contracts.assuranceProfile,
@@ -81,8 +81,8 @@ test('profile and exchange compose without losing pins or authority binding', as
       } } },
     }), { mode: 0o600 });
     const authorization = (resource) => ({ exchange: {
-      client: { tokenEndpoint: `${origin}/token`, clientId: 'profile-staff', clientKey: key(),
-        resource, scopes: ['evidence:invoke'] },
+      client: { tokenEndpoint: `${origin}/token`, audience: origin, clientId: 'profile-staff',
+        clientKey: key(), resource, scopes: ['evidence:invoke'] },
       context: { issuer: 'https://portal.example', subject: 'person-1', audience: origin,
         generation: 'verified-1', deadlineSeconds: Math.floor(Date.now() / 1000) + 120 },
       firstParty: { key: key(), attributes: { registry_actor_kind: 'human' } },

@@ -132,6 +132,7 @@ mod tests {
                 "agent-client",
                 key(),
             )
+            .with_audience(server.uri())
             .with_resource("urn:casework")
             .with_scopes(scopes.iter().copied()),
         )

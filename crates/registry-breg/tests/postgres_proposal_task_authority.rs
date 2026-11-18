@@ -315,6 +315,7 @@ fn token(grant: u64, permissions: Value) -> Value {
         "registry_grant_client":"agent-client",
         "registry_grant_resource":"urn:example:breg",
         "registry_grant_exp":now+600,
+        "exp":now+900,
         "registry_grant_bounds":{"type":"breg","permissions":permissions},
         "identity":{"jurisdiction":"zone-a"},
         "jurisdiction":"zone-b"

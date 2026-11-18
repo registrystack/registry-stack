@@ -59,8 +59,9 @@ Deployment behavior is in the [README](README.md),
   those identifiers.
 - **Task grants.** A grant is bounded: 900 seconds for an immediate grant, at
   most 604800 seconds (seven days) for a `deferred` one. Responsibility
-  changes, release, a changed subject, template deactivation and revocation
-  end a grant, and it cannot be revived by reassigning back. Deferred grants
+  changes, release, a decision on the review task, a changed subject,
+  template deactivation and revocation end a grant, and it cannot be revived
+  by reassigning back. Deferred grants
   cannot carry Evidence bounds (CASEWORK-SEC-18, CASEWORK-SEC-27).
 - **Completion signals.** The completion wake-up carries no result and no
   destination authority. The authenticated result fetch and result feed are
@@ -101,6 +102,12 @@ Deployment behavior is in the [README](README.md),
    copy of that key too. Restart every instance, because the list is read at
    startup. Revoke the key at the issuer and at every other relying party
    (CASEWORK-RES-09).
+10. Issue every person's tokens with the same principal claim. Casework trusts
+    one issuer and refuses a `casework.yaml` whose reviewer, initiator and
+    requester access profiles name different `principalClaim` values, because
+    one person would then appear as two principals and separation-of-duties
+    and one-seat checks would compare the wrong identities (CASEWORK-SEC-16).
+    Producer profiles, which are services, share one claim among themselves.
 
 ## 3. Accepted residuals
 

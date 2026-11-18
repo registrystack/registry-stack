@@ -143,11 +143,9 @@ impl JobDestination for SignedCoordinatorEventDestination {
     ) -> Pin<Box<dyn Future<Output = HandOffOutcome> + Send + 'a>> {
         Box::pin(async move {
             let Some(selected) = self.selected(item) else {
-                if item.delivery_attempt > 1 {
-                    return HandOffOutcome::StopPass {
-                        code: crate::pass::COORDINATOR_RECEIVER_CHANGED.to_string(),
-                    };
-                }
+                // A possibly admitted item with no revised receiver has
+                // nowhere to go. This branch never sends, so the item is
+                // held for an operator, whatever its earlier attempts were.
                 return HandOffOutcome::Held {
                     code: REVISED_ITEM.to_string(),
                     run_id: item.prior_run_id.clone(),
@@ -333,8 +331,12 @@ mod tests {
         assert_ne!(first, receiver_identity(&changed));
     }
 
+    /// Without a revised receiver a possibly admitted item has nowhere to
+    /// go, and this branch never sends, so every attempt is held: a first
+    /// attempt, a rescan of a refusal, and a retry whose earlier answer was
+    /// lost look the same to the destination.
     #[tokio::test]
-    async fn an_absent_revised_receiver_holds_a_first_attempt_but_stops_a_pending_retry() {
+    async fn an_absent_revised_receiver_holds_a_possibly_admitted_item_on_every_attempt() {
         let policy = Arc::new(
             registry_platform_httputil::destination::EventDestinationPolicy::new(
                 "coordinator-test",
@@ -368,21 +370,13 @@ mod tests {
         revised.admitted_before = true;
         revised.sequence = 2;
         revised.prior_run_id = Some("3a8b49f8-89fd-49f7-a2ea-60af3d694ec8".to_string());
+        let held = HandOffOutcome::Held {
+            code: REVISED_ITEM.to_string(),
+            run_id: revised.prior_run_id.clone(),
+        };
 
-        assert_eq!(
-            destination.deliver(&job(), &revised).await,
-            HandOffOutcome::Held {
-                code: REVISED_ITEM.to_string(),
-                run_id: revised.prior_run_id.clone(),
-            }
-        );
-
+        assert_eq!(destination.deliver(&job(), &revised).await, held);
         revised.delivery_attempt = 2;
-        assert_eq!(
-            destination.deliver(&job(), &revised).await,
-            HandOffOutcome::StopPass {
-                code: crate::pass::COORDINATOR_RECEIVER_CHANGED.to_string(),
-            }
-        );
+        assert_eq!(destination.deliver(&job(), &revised).await, held);
     }
 }

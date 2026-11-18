@@ -62,8 +62,9 @@ test('exchange authorization constructs offline and rejects an ambiguous token',
   });
   const config = validConfig({
     authorization: { exchange: {
-      client: { tokenEndpoint: 'https://issuer.example/token', clientId: 'staff-client',
-        clientKey: key(), resource: 'urn:registry:evidence', scopes: ['evidence:invoke'] },
+      client: { tokenEndpoint: 'https://issuer.example/token', audience: 'https://issuer.example',
+        clientId: 'staff-client', clientKey: key(), resource: 'urn:registry:evidence',
+        scopes: ['evidence:invoke'] },
       context: { issuer: 'https://portal.example', subject: 'staff-1',
         audience: 'https://issuer.example', generation: 'verified-1',
         deadlineSeconds: Math.floor(Date.now() / 1000) + 300 },
@@ -140,6 +141,7 @@ test('direct private-key JWT timeouts use attempt and connection names', () => {
   };
   const token = { privateKeyJwt: {
     tokenEndpoint: 'https://issuer.example/token',
+    audience: 'https://issuer.example',
     clientId: 'direct-client',
     clientKey,
     attemptTimeoutMilliseconds: 5_000,
@@ -150,6 +152,10 @@ test('direct private-key JWT timeouts use attempt and connection names', () => {
     ...token.privateKeyJwt,
     requestTimeoutMs: 5_000,
   } } })));
+  const { audience: _audience, ...unstated } = token.privateKeyJwt;
+  assert.throws(() => new EvidenceClient(validConfig({ token: { privateKeyJwt: unstated } })),
+    error => error instanceof EvidenceClientError && error.kind === 'configuration'
+      && error.message.includes('`audience`'));
 });
 
 test('fromProfile returns the public wrapper and preserves consumer subclasses', () => {
@@ -166,6 +172,7 @@ test('fromProfile returns the public wrapper and preserves consumer subclasses',
         privateKey: { type: 'environment', variable: 'UNUSED_PRIVATE_JWK' },
         trust: { type: 'https-discovery' },
         contracts: { type: 'published' },
+        oauth: { clientAssertionAudience: 'https://identity.example.org' },
         verification: {
           maximumAssertionLifetimeSeconds: 300,
           clockSkewSeconds: 30,

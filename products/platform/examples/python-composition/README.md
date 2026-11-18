@@ -28,9 +28,11 @@ schema at
 profiles, and credential file paths.
 Each product gets a separate resource-bound provider. A `privateKeyJwt` object
 uses the released canonical helper's `token_endpoint`, `client_id`,
-`client_key`, `resource`, and `scopes` settings instead of a `headerFile`.
-Its optional `audience` identifies the OAuth token endpoint as the client
-assertion's recipient. It is distinct from `resource`, which requests the
+`client_key`, `audience`, `resource`, and `scopes` settings instead of a
+`headerFile`. Its required `audience` is the authorization server's issuer
+identifier, exactly as its metadata publishes it, which the client assertion
+carries as its only audience (RFC 10070 section 4); it has no default. It is
+distinct from `resource`, which requests the
 product access token. Each product validates that access token's audience,
 scopes, and permissions; this application does not impose a singleton audience.
 Keep the key and token configuration out of source control.

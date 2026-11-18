@@ -57,7 +57,7 @@ test('shared PrivateKeyJwt endpoint failure retains its canonical token error', 
     const base=`http://127.0.0.1:${server.address().port}`;
     const clientKey=generateKeyPairSync('ec',{namedCurve:'prime256v1'}).privateKey.export({format:'jwk'});
     Object.assign(clientKey,{alg:'ES256',kid:'canary-client'});
-    const provider=new PrivateKeyJwt({tokenEndpoint:base+'/token',clientId:'canary-client',clientKey,resource:'urn:render:test',scopes:['render:render']});
+    const provider=new PrivateKeyJwt({tokenEndpoint:base+'/token',audience:base,clientId:'canary-client',clientKey,resource:'urn:render:test',scopes:['render:render']});
     const caller=new RenderClient({baseUrl:base});
     await assert.rejects(caller.render(provider,'receipt',{issuedAt:'2026-10-23T00:00:00Z',data:{}}),error=>error instanceof BaseRegistryClientError && error.kind==='token' && error.status===503);
     assert.equal(acquisitions,1);assert.equal(renders,0);

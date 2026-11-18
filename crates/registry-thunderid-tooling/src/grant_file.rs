@@ -343,7 +343,7 @@ mod tests {
 kind: PlatformTaskConnection
 caseworkUrl: http://127.0.0.1:9
 tokenEndpoint: http://127.0.0.1:9/oauth2/token
-clientAssertionAudience: http://127.0.0.1:9/oauth2/token
+clientAssertionAudience: http://127.0.0.1:9
 bootstrapResource: urn:registry:casework
 secretProviders:
   file:

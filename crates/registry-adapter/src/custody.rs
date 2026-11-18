@@ -38,6 +38,10 @@ pub struct AsyncWriteContext {
     pub record_type: String,
     pub recovery_id: Option<String>,
     pub effect_deadline: SystemTime,
+    /// [`async_source_digest`] for the operation: the artifact digest covers
+    /// no runtime file, so the source origin every poll may reach is pinned
+    /// separately.
+    pub source_digest: [u8; 32],
 }
 
 /// Active-artifact and finite-deadline authority for a compiled linear write.
@@ -82,10 +86,35 @@ pub(crate) fn source_digest(
     loaded: &crate::engine::load::Loaded,
     steps: &[registry_adapter_core::Step],
 ) -> [u8; 32] {
-    let bases = serde_json::to_vec(&source_endpoint_bases(loaded, steps))
-        .expect("a map of strings serializes");
+    origin_digest(
+        b"registry-adapter:resume-source:v1\0",
+        &source_endpoint_bases(loaded, steps),
+    )
+}
+
+/// The digest an asynchronous write pins as its source origin: the bases of
+/// every endpoint its write, status and uncertainty routes reach. A status
+/// poll or uncertainty check runs only while the configuration yields the
+/// same digest, so a source-native identifier is only ever checked at the
+/// origin that issued it. Credentials are outside it.
+pub(crate) fn async_source_digest(
+    loaded: &crate::engine::load::Loaded,
+    operation: &crate::engine::load::ServedOperation,
+) -> [u8; 32] {
+    let mut bases = source_endpoint_bases(loaded, &operation.steps);
+    if let Some(completion) = &operation.async_completion {
+        bases.extend(source_endpoint_bases(loaded, &completion.status.steps));
+        if let Some(uncertainty) = &completion.uncertainty {
+            bases.extend(source_endpoint_bases(loaded, &uncertainty.status.steps));
+        }
+    }
+    origin_digest(b"registry-adapter:async-source:v1\0", &bases)
+}
+
+fn origin_digest(domain: &[u8], bases: &BTreeMap<String, Option<&str>>) -> [u8; 32] {
+    let bases = serde_json::to_vec(bases).expect("a map of strings serializes");
     let mut digest = Sha256::new();
-    digest.update(b"registry-adapter:resume-source:v1\0");
+    digest.update(domain);
     digest.update(bases);
     digest.finalize().into()
 }
@@ -405,10 +434,15 @@ impl WriteExecutionContext {
             WriteState::Executing { key, .. } | WriteState::Uncertain { key } => key.clone(),
             _ => return Err(IdempotencyError::StateConflict),
         };
-        let artifact_digest = self
+        let (artifact_digest, source_digest) = self
             .async_write
             .as_ref()
-            .and_then(|write| write.recovery_id.as_ref().map(|_| write.artifact_digest))
+            .and_then(|write| {
+                write
+                    .recovery_id
+                    .as_ref()
+                    .map(|_| (write.artifact_digest, write.source_digest))
+            })
             .ok_or(IdempotencyError::StateConflict)?;
         self.store
             .acquire_uncertain_recovery(
@@ -420,6 +454,7 @@ impl WriteExecutionContext {
                     request_digest: self.request_digest,
                 },
                 artifact_digest,
+                source_digest,
                 now,
                 requested_deadline,
             )
@@ -597,6 +632,7 @@ impl WriteCustody for WriteExecutionContext {
                                 record_type: &async_write.record_type,
                                 recovery_id: async_write.recovery_id.as_deref(),
                                 effect_deadline: async_write.effect_deadline,
+                                source_digest: async_write.source_digest,
                             },
                             now,
                         )

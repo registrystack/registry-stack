@@ -293,6 +293,7 @@ fn async_attempt<'a>(
         concrete_operation: "records-create.person",
         record_type: "person",
         recovery_id,
+        source_digest: SOURCE_DIGEST,
         effect_deadline,
     }
 }
@@ -1060,7 +1061,7 @@ async fn v0600_additively_admits_one_step_without_rewriting_v0500_rows() {
         .expect("upgrade v0500 to the additive single-step constraint");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700, 800]
+        vec![100, 200, 300, 400, 500, 600, 700, 800, 900]
     );
     assert_eq!(
         client
@@ -1120,7 +1121,7 @@ async fn v0700_adds_optional_semantic_headers_without_rewriting_v0600_custody() 
         .expect("upgrade v0600 response custody to semantic headers");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700, 800]
+        vec![100, 200, 300, 400, 500, 600, 700, 800, 900]
     );
     let row = client
         .query_one(
@@ -1623,7 +1624,7 @@ async fn an_interrupted_migration_commits_neither_its_schema_nor_its_ledger_row(
         .into_iter()
         .map(|row| row.get::<_, i64>(0))
         .collect::<Vec<_>>();
-    assert_eq!(versions, [100, 200, 300, 400, 500, 600, 700, 800]);
+    assert_eq!(versions, [100, 200, 300, 400, 500, 600, 700, 800, 900]);
 }
 
 #[tokio::test]
@@ -1662,7 +1663,7 @@ async fn migration_owns_a_separate_idempotency_ledger_and_is_idempotent() {
     );
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700, 800]
+        vec![100, 200, 300, 400, 500, 600, 700, 800, 900]
     );
 }
 
@@ -1706,7 +1707,7 @@ async fn logical_deployment_migration_accepts_an_empty_v0100_ledger() {
         .expect("an empty v0100 ledger can adopt the logical deployment namespace");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700, 800]
+        vec![100, 200, 300, 400, 500, 600, 700, 800, 900]
     );
 }
 
@@ -1778,7 +1779,7 @@ async fn response_identity_migration_accepts_and_preserves_expired_v0200_tombsto
         .expect("an expired tombstone has no response identity to recover");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700, 800]
+        vec![100, 200, 300, 400, 500, 600, 700, 800, 900]
     );
     let row = client
         .query_one(
@@ -1807,7 +1808,7 @@ async fn current_rows_do_not_block_a_subsequent_startup() {
         .expect("the applied semantic migration does not inspect current rows again");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700, 800]
+        vec![100, 200, 300, 400, 500, 600, 700, 800, 900]
     );
     assert_eq!(
         client
@@ -1851,7 +1852,7 @@ async fn current_cached_response_ids_do_not_block_a_subsequent_startup() {
         .expect("an already-applied response-id migration accepts current custody");
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700, 800]
+        vec![100, 200, 300, 400, 500, 600, 700, 800, 900]
     );
     assert_eq!(
         client
@@ -2600,7 +2601,7 @@ async fn v0400_preserves_v0300_terminal_and_spent_rows_without_inventing_async_a
 
     assert_eq!(
         migration_versions(&client).await,
-        vec![100, 200, 300, 400, 500, 600, 700, 800]
+        vec![100, 200, 300, 400, 500, 600, 700, 800, 900]
     );
     let rows = client
         .query(
@@ -2839,7 +2840,7 @@ async fn one_recovery_lease_owns_a_row_and_terminal_status_lives_until_original_
         .checked_add(Duration::from_secs(3))
         .expect("lease deadline is representable");
     let RecoveryLease::Acquired(recovery) = store
-        .acquire_status_recovery(&status, accepted_at, lease_deadline)
+        .acquire_status_recovery(&status, SOURCE_DIGEST, accepted_at, lease_deadline)
         .await
         .expect("acquire the first recovery lease")
     else {
@@ -2848,7 +2849,7 @@ async fn one_recovery_lease_owns_a_row_and_terminal_status_lives_until_original_
     assert_eq!(recovery.source_id(), Some("source-operation-lease"));
     assert!(matches!(
         store
-            .acquire_status_recovery(&status, accepted_at, lease_deadline)
+            .acquire_status_recovery(&status, SOURCE_DIGEST, accepted_at, lease_deadline)
             .await
             .expect("contend for the recovery lease"),
         RecoveryLease::Busy
@@ -2981,6 +2982,7 @@ async fn uncertainty_is_permanently_spent_and_only_precommitted_correlation_can_
             .acquire_uncertain_recovery(
                 request(&owner, "records-create.person", "uncorrelated-key", 111,),
                 [112; 32],
+                SOURCE_DIGEST,
                 now,
                 effect_deadline,
             )
@@ -3017,6 +3019,7 @@ async fn uncertainty_is_permanently_spent_and_only_precommitted_correlation_can_
         .acquire_uncertain_recovery(
             request(&owner, "records-create.person", "correlated-key", 113),
             [112; 32],
+            SOURCE_DIGEST,
             now,
             effect_deadline,
         )
@@ -3048,6 +3051,176 @@ async fn uncertainty_is_permanently_spent_and_only_precommitted_correlation_can_
             .expect("retry after uncertainty metadata expiry"),
         Claim::EffectUnknown { .. }
     ));
+}
+
+#[tokio::test]
+async fn async_recovery_leases_only_a_row_pinned_to_the_configured_source_origin() {
+    const OTHER_SOURCE_DIGEST: [u8; 32] = [0xa5; 32];
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(10)).await;
+    let client = isolated.client().await;
+    let owner = caller("source-pin-owner");
+    let now = SystemTime::now();
+    let effect_deadline = now
+        .checked_add(Duration::from_secs(5))
+        .expect("effect deadline is representable");
+    let lease_deadline = now
+        .checked_add(Duration::from_secs(3))
+        .expect("lease deadline is representable");
+
+    let Claim::Execute(mut accepted_write) = store
+        .claim(
+            request(&owner, "records-create.person", "pinned-status-key", 121),
+            now,
+        )
+        .await
+        .expect("claim the pinned asynchronous write")
+    else {
+        panic!("the pinned asynchronous write must execute");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut accepted_write,
+            request(&owner, "records-create.person", "pinned-status-key", 121),
+            async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 122, effect_deadline),
+            now,
+        )
+        .await
+        .expect("precommit the source pin");
+    store
+        .accept(
+            accepted_write,
+            "source-operation-pinned",
+            response(202, b"application/json", br#"{"status":"accepted"}"#),
+            now,
+        )
+        .await
+        .expect("commit accepted custody");
+    let StatusLookup::Accepted(status) = store
+        .lookup_status(status_lookup(&owner, RESPONSE_REQUEST_ID, 122), now)
+        .await
+        .expect("load pending status")
+    else {
+        panic!("status must be accepted");
+    };
+
+    assert!(matches!(
+        store
+            .acquire_status_recovery(&status, OTHER_SOURCE_DIGEST, now, lease_deadline)
+            .await
+            .expect("check status under a different source origin"),
+        RecoveryLease::Quarantined
+    ));
+    let RecoveryLease::Acquired(recovery) = store
+        .acquire_status_recovery(&status, SOURCE_DIGEST, now, lease_deadline)
+        .await
+        .expect("check status under the pinned source origin")
+    else {
+        panic!("the pinned source origin must lease the accepted row");
+    };
+    store
+        .release_recovery(recovery)
+        .await
+        .expect("release the pending status check");
+
+    client
+        .execute(
+            "UPDATE adapter_idempotency_entries SET async_source_digest = NULL \
+             WHERE response_request_id = $1",
+            &[&RESPONSE_REQUEST_ID],
+        )
+        .await
+        .expect("model an accepted row written without a source pin");
+    assert!(matches!(
+        store
+            .acquire_status_recovery(&status, SOURCE_DIGEST, now, lease_deadline)
+            .await
+            .expect("check status for a row without a source pin"),
+        RecoveryLease::Quarantined
+    ));
+
+    let Claim::Execute(mut uncertain_write) = store
+        .claim(
+            request(&owner, "records-create.person", "pinned-uncertain-key", 123),
+            now,
+        )
+        .await
+        .expect("claim the pinned uncertain write")
+    else {
+        panic!("the pinned uncertain write must execute");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut uncertain_write,
+            request(&owner, "records-create.person", "pinned-uncertain-key", 123),
+            async_attempt(
+                OTHER_RESPONSE_REQUEST_ID,
+                Some(RECOVERY_ID),
+                122,
+                effect_deadline,
+            ),
+            now,
+        )
+        .await
+        .expect("precommit the uncertain source pin");
+    assert!(matches!(
+        store
+            .acquire_uncertain_recovery(
+                request(&owner, "records-create.person", "pinned-uncertain-key", 123),
+                [122; 32],
+                OTHER_SOURCE_DIGEST,
+                now,
+                effect_deadline,
+            )
+            .await
+            .expect("check uncertainty under a different source origin"),
+        RecoveryLease::Quarantined
+    ));
+    let RecoveryLease::Acquired(recovery) = store
+        .acquire_uncertain_recovery(
+            request(&owner, "records-create.person", "pinned-uncertain-key", 123),
+            [122; 32],
+            SOURCE_DIGEST,
+            now,
+            effect_deadline,
+        )
+        .await
+        .expect("check uncertainty under the pinned source origin")
+    else {
+        panic!("the pinned source origin must lease the uncertain row");
+    };
+    store
+        .release_recovery(recovery)
+        .await
+        .expect("release the uncertainty check");
+
+    let after_custody = now
+        .checked_add(Duration::from_secs(30))
+        .expect("post-expiry time is representable");
+    store
+        .sweep_expired(after_custody, 100)
+        .await
+        .expect("erase expired asynchronous custody");
+    assert!(matches!(
+        store
+            .lookup_status(
+                status_lookup(&owner, RESPONSE_REQUEST_ID, 122),
+                after_custody
+            )
+            .await
+            .expect("look up the expired unpinned status link"),
+        StatusLookup::NotFound
+    ));
+    let pinned_rows: i64 = client
+        .query_one(
+            "SELECT count(*) FROM adapter_idempotency_entries \
+             WHERE async_source_digest IS NOT NULL",
+            &[],
+        )
+        .await
+        .expect("count source pins after expiry")
+        .get(0);
+    assert_eq!(pinned_rows, 0);
 }
 
 #[tokio::test]
@@ -3515,7 +3688,7 @@ async fn an_expired_recovery_capability_cannot_finish_but_its_successor_can() {
         .checked_add(Duration::from_secs(1))
         .expect("first terminal lease deadline is representable");
     let RecoveryLease::Acquired(expired) = store
-        .acquire_status_recovery(&status, now, first_lease_until)
+        .acquire_status_recovery(&status, SOURCE_DIGEST, now, first_lease_until)
         .await
         .expect("acquire the terminal capability that will expire")
     else {
@@ -3550,7 +3723,12 @@ async fn an_expired_recovery_capability_cannot_finish_but_its_successor_can() {
         .checked_add(Duration::from_secs(2))
         .expect("successor terminal lease deadline is representable");
     let RecoveryLease::Acquired(successor) = store
-        .acquire_status_recovery(&status, after_first_lease, successor_lease_until)
+        .acquire_status_recovery(
+            &status,
+            SOURCE_DIGEST,
+            after_first_lease,
+            successor_lease_until,
+        )
         .await
         .expect("acquire a successor terminal capability")
     else {
@@ -3615,6 +3793,7 @@ async fn an_expired_uncertain_capability_cannot_accept_but_its_successor_can() {
                 145,
             ),
             [146; 32],
+            SOURCE_DIGEST,
             now,
             first_lease_until,
         )
@@ -3667,6 +3846,7 @@ async fn an_expired_uncertain_capability_cannot_accept_but_its_successor_can() {
                 145,
             ),
             [146; 32],
+            SOURCE_DIGEST,
             after_first_lease,
             successor_lease_until,
         )
@@ -3818,7 +3998,7 @@ async fn accepted_and_terminal_custody_roll_back_with_the_callers_journal_transa
         panic!("terminal rollback row must be accepted");
     };
     let RecoveryLease::Acquired(recovery) = store
-        .acquire_status_recovery(&status, now, effect_deadline)
+        .acquire_status_recovery(&status, SOURCE_DIGEST, now, effect_deadline)
         .await
         .expect("lease terminal rollback row")
     else {
@@ -3907,6 +4087,7 @@ async fn accepted_and_terminal_custody_roll_back_with_the_callers_journal_transa
                 155,
             ),
             [152; 32],
+            SOURCE_DIGEST,
             now,
             effect_deadline,
         )
@@ -3989,6 +4170,7 @@ async fn a_dropped_recovery_capability_stays_busy_until_its_lease_expires_then_r
         .acquire_uncertain_recovery(
             request(&owner, "records-create.person", "cancelled-recovery", 161),
             [162; 32],
+            SOURCE_DIGEST,
             now,
             first_lease_until,
         )
@@ -4003,6 +4185,7 @@ async fn a_dropped_recovery_capability_stays_busy_until_its_lease_expires_then_r
             .acquire_uncertain_recovery(
                 request(&owner, "records-create.person", "cancelled-recovery", 161,),
                 [162; 32],
+                SOURCE_DIGEST,
                 now,
                 first_lease_until,
             )
@@ -4021,6 +4204,7 @@ async fn a_dropped_recovery_capability_stays_busy_until_its_lease_expires_then_r
         .acquire_uncertain_recovery(
             request(&owner, "records-create.person", "cancelled-recovery", 161),
             [162; 32],
+            SOURCE_DIGEST,
             after_lease,
             second_lease_until,
         )

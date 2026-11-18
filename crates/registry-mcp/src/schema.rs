@@ -429,7 +429,8 @@ mod tests {
             "type":"casework", "authority":"delegated-staff-read",
             "baseUrl":"http://127.0.0.1:8120/", "readerPolicy":"reviewer",
             "authorization": {"exchange": {"tokenEndpoint":"http://127.0.0.1:8111/token",
-                "clientId":"staff-gateway", "privateKeyRef":"secret:env/MCP_KEY"},
+                "clientId":"staff-gateway", "privateKeyRef":"secret:env/MCP_KEY",
+                "assertionAudience":"http://127.0.0.1:8111"},
                 "audience":"urn:fixture:casework", "scopes":["casework:assistant-read"]}
         });
         assert!(validator().is_valid(&runtime));
@@ -450,7 +451,7 @@ mod tests {
             "type":"casework","authority":"delegated-staff-read","baseUrl":"http://127.0.0.1:8120/",
             "readerPolicy":"reviewer","sourceProfile":"reviewer-source","pageSize":20,
             "authorization":{
-                "exchange":{"tokenEndpoint":"http://127.0.0.1:8111/token","clientId":"staff-gateway","privateKeyRef":"secret:env/MCP_EXCHANGE_PRIVATE_KEY"},
+                "exchange":{"tokenEndpoint":"http://127.0.0.1:8111/token","clientId":"staff-gateway","privateKeyRef":"secret:env/MCP_EXCHANGE_PRIVATE_KEY","assertionAudience":"http://127.0.0.1:8111"},
                 "audience":"urn:example:casework","scopes":["casework:staff"]
             }
         });

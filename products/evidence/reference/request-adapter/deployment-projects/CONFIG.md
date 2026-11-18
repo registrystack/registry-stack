@@ -540,7 +540,7 @@ sourceConnections:
         authentication:
           type: oauth2-private-key-jwt
           tokenEndpoint: https://identity.gov.example/token
-          clientAssertionAudience: https://identity.gov.example/client-auth
+          clientAssertionAudience: https://identity.gov.example
           audience: https://registry.gov.example
           resource: https://registry.gov.example
 ```
@@ -634,11 +634,12 @@ credential:
   maximumCacheSeconds: 300
 ```
 
-`oauth2-private-key-jwt` follows the same split. Its policy may additionally
-pin `clientAssertionAudience`; its runtime credential supplies `clientIdRef`
-and `clientAssertionKeyRef`. Omission uses the exact token endpoint as the
-assertion audience. State another audience only when the authorization server
-expects a different exact identifier, such as an issuer behind a proxy.
+`oauth2-private-key-jwt` follows the same split. Its policy additionally pins
+the required `clientAssertionAudience`: the authorization server's issuer
+identifier, exactly as its metadata publishes it, which the client assertion
+carries as its only audience (RFC 10070 section 4). It has no default. Its
+runtime credential supplies `clientIdRef`, `clientAssertionKeyRef`, and the
+same `clientAssertionAudience`.
 
 OAuth `credentialPlacement` is `basic-header` or `form-body`. Client secrets
 never travel in a query string. `audience` is a token-request parameter, while
@@ -812,7 +813,7 @@ sourceConnections:
           tokenEndpoint: https://identity.gov.example/token
           clientIdRef: secret:file/workload-client-id
           clientAssertionKeyRef: secret:file/workload-client-key
-          clientAssertionAudience: https://identity.gov.example/client-auth
+          clientAssertionAudience: https://identity.gov.example
           audience: https://registry.gov.example
           resource: https://registry.gov.example
           maximumCacheSeconds: 60
@@ -882,14 +883,16 @@ with `evidence.target.trust-profile-unused` at
 | `sourceConnections.<name>.outboundTls.trustProfiles` | when a governed endpoint names a private trust profile | Connection-local map containing only the logical ids selected by that connection's endpoints, each bound to a bounded CA bundle file and captured once at startup. Extra and missing profiles are refused. |
 | `sourceConnections.<name>.allowedPrivateCidrs` | no | Additional private CIDR authority for this connection. Omission or `[]` grants none. Numeric loopback development endpoints use their separate loopback rule and do not require `127.0.0.0/8` here. |
 | `sourceAcquisition.maximumDataOperations` | no | Finite positive data-operation budget for one pack-route acquisition, default 5. Token acquisition and credential refresh follow their own bounded accounting. |
-| `sourceAcquisition.acquisitionDeadlineMilliseconds` | no | Finite positive elapsed-time budget for one acquisition, default 30,000 milliseconds. It includes endpoint admission and data operations and cannot be extended by an endpoint attempt timeout. |
+| `sourceAcquisition.acquisitionDeadlineMilliseconds` | no | Finite positive elapsed-time budget for one acquisition, default 30,000 milliseconds, maximum 300,000 milliseconds (a larger value is refused at load). It includes endpoint admission and data operations and cannot be extended by an endpoint attempt timeout. |
 | `sourceAcquisition.maximumResponseBytes` | no | Finite positive aggregate response-byte budget for one acquisition, default 1,048,576 bytes. Per-endpoint and pack response ceilings still apply. |
 | `sourceExtracts` | no | Closed map of at most 64 logical extract names, each a local identifier of the same grammar. Omission binds none, which is what a runtime file for a bundle with no extract source says. |
 | `sourceExtracts.<name>.path` | for each name | Absolute path to one read-only regular file. Names must exactly match bundle `extractProfile` references. |
 
-You own the `sourceAcquisition` budget. The runtime accepts any positive value
-for each of the three members and sets no upper limit, so a typo such as an
-extra zero is accepted and widens what one request may spend on the source.
+You own the `sourceAcquisition` budget. The runtime refuses an
+`acquisitionDeadlineMilliseconds` above 300,000 at load, but accepts any
+positive value for `maximumDataOperations` and `maximumResponseBytes` with no
+upper limit, so a typo such as an extra zero in either is accepted and widens
+what one request may spend on the source.
 Raise a member above its default only for a route that needs it, and keep each
 value near what the heaviest reviewed route uses:
 
@@ -898,8 +901,8 @@ value near what the heaviest reviewed route uses:
   above about 64 deserves a second look.
 - `acquisitionDeadlineMilliseconds`: below the time your callers wait, because
   the acquisition and the release append share it. Stay at the 30,000
-  default unless a slow source needs more; a value above about 600,000 (ten
-  minutes) is almost certainly a mistake.
+  default unless a slow source needs more. The maximum is 300,000 (five
+  minutes); a larger value is refused at load.
 - `maximumResponseBytes`: the total of the largest responses that route reads,
   and no more. The 1 MiB default matches the per-endpoint ceiling; a value above
   about 16 MiB is unusual.
