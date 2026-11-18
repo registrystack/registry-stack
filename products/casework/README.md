@@ -470,23 +470,11 @@ cargo test --locked -p registry-casework --features postgres-test --lib \
   -- --ignored
 ```
 
-For an explicitly declared synthetic browser run, `caseworkctl generate
-run-source PROJECT --binding FILE` checks an existing producer's exact old
-issuer/profile/subject and its declared development identity/grant chain.
-The closed request format is `CaseworkRunSource` v1alpha1; see
-[the example](examples/run-source/run-source.json). `--output NEW_DIRECTORY` captures
-the checked source closure. `--expected-source-digest DIGEST` refuses drift;
-`--issuer ACTUAL_LOOPBACK_URL` changes only the selected producer issuer and,
-when separately opted in, its existing initiator issuer on the new copy.
-Without `--issuer`, original bytes are preserved. Inspection without `--output`
-writes nothing. This source preparation does not activate a package: run normal
-provider pairing, check, package, apply and doctor on the prepared source.
-Missing provider descriptions remain missing until normal pairing, and ordinary
-production packaging still refuses an incomplete closure.
-
-`rstack dev` owns the corresponding [run declaration](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/).
-Subjects and grants never change. Initiator opt-in acknowledges issuer trust
-under the existing producer, not an enforced subject allowlist. Original and
-transformed hashes and the exact permitted pointers are reported without
-subjects or secrets; failure to write the owner-only output receipt fails the
-command. An existing output directory is never overwritten.
+For an explicitly declared synthetic browser run, `rstack dev` binds the run
+issuer itself. It checks that the existing producer's exact issuer, profile and
+subject match the plan's declared development identity and grant, writes the
+allocated loopback issuer into a private copy of the project, then runs the
+public `caseworkctl check` and `package` on that copy. Subjects and grants never
+change. Initiator opt-in acknowledges issuer trust under the existing producer,
+not an enforced subject allowlist. See the
+[run declaration](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/).

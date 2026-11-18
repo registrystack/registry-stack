@@ -126,6 +126,24 @@ fn current_offline_reports_match_the_typed_contract_and_committed_check_example(
 }
 
 #[test]
+fn generate_run_source_is_not_a_command() {
+    let root = repo_root();
+    let (report, _) = output(
+        &root,
+        &[
+            "generate",
+            "run-source",
+            STANDALONE,
+            "--binding",
+            "run-source.json",
+        ],
+        2,
+    );
+    assert_eq!(report["status"], "usage-error");
+    assert_eq!(report["command"], "usage");
+}
+
+#[test]
 fn advanced_calendar_revision_example_is_readable() {
     let path = repo_root().join(
         "products/casework/examples/multi-stage-routing-clocks/holiday-sets/office-holidays-7.yaml",

@@ -66,13 +66,6 @@
   `humanSourceCredentialContract()` (Python:
   `human_source_credential_contract`). See
   [RUNTIME-CONFIG.md](RUNTIME-CONFIG.md).
-- `caseworkctl generate run-source PROJECT --binding FILE` prepares a copy of an
-  existing review producer for a synthetic browser run, from a
-  `CaseworkRunSource` v1alpha1 file. It checks the producer's exact issuer,
-  profile and subject, `--output NEW_DIRECTORY` captures the source closure,
-  `--expected-source-digest` refuses drift and `--issuer` changes only the
-  selected loopback issuer. Without `--output` it writes nothing. It does not
-  activate a package; `rstack dev` uses it. See the [example](examples/run-source/run-source.json).
 - `caseworkctl check` refuses a review policy in which a stage offers no
   advancing outcome. Every stage must offer an outcome whose settlement is
   `approved` (`answered` for an answer policy), whether it lists `outcomes` or

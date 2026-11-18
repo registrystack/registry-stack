@@ -1716,42 +1716,6 @@ formats:
       boolean: none
     securityMembers: []
     restrictingMembers: []
-  - id: casework/run-source
-    product: casework
-    title: Casework exact synthetic run source binding
-    files: [run-source.json]
-    syntax: json
-    audience: generated
-    stability: experimental
-    current:
-      apiVersion: id.registrystack.org/formats/casework/run-source/v1alpha1
-      kind: CaseworkRunSource
-      checkedBy:
-        file: crates/registry-caseworkctl/src/run_source.rs
-        symbol: API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/casework/run-source/v1alpha1
-      kind: CaseworkRunSource
-    schema:
-      path: products/casework/generated/run-source/run-source.schema.json
-      id: https://id.registrystack.org/schemas/casework/run-source/run-source.v1alpha1.schema.json
-      origin: generated
-      generator: cargo run -p registry-caseworkctl --features schema --example dev-clients-schema -- --output products/casework/generated
-      driftCheck: crates/registry-caseworkctl/src/schema.rs
-    reader:
-      crate: registry-caseworkctl
-      file: crates/registry-caseworkctl/src/run_source.rs
-      function: generate
-      type: Request
-    check: caseworkctl generate run-source {project} --binding run-source.json
-    example: products/casework/examples/run-source/run-source.json
-    conformance: none
-    securityMembers:
-      - pointer: /binding/producer
-        whenOmitted: refused
-      - pointer: /binding/initiator
-        whenOmitted: closed
-    restrictingMembers: []
   - id: casework/report
     product: casework
     title: caseworkctl --format json output (CaseworkReport)
