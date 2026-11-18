@@ -153,20 +153,41 @@ pub enum Measure {
         field: String,
         scale: u8,
     },
+    /// The number of distinct values of a `reference` field among the records
+    /// that have a value for it.
+    DistinctCount { id: String, field: String },
 }
 
 impl Measure {
     pub fn id(&self) -> &str {
         match self {
-            Self::Count { id } | Self::Sum { id, .. } | Self::Mean { id, .. } => id,
+            Self::Count { id }
+            | Self::Sum { id, .. }
+            | Self::Mean { id, .. }
+            | Self::DistinctCount { id, .. } => id,
         }
     }
 
-    /// The value of a cell no record falls into: a count and a sum are zero, and
-    /// a mean has none.
+    /// True when a total of this measure is the total of its cells' values:
+    /// a count adds up across the cells, and a sum and a mean are computed from
+    /// the cells' sums and counts. A distinct count does not: the owners of two
+    /// districts are not the sum of each district's owners, so a dataset that
+    /// declares one computes its totals over the records.
+    pub fn is_additive(&self) -> bool {
+        !matches!(self, Self::DistinctCount { .. })
+    }
+
+    /// True for a measure whose value is a whole number of records or values,
+    /// which a minimum-count-and-rounding release suppresses and rounds.
+    pub fn is_count_like(&self) -> bool {
+        matches!(self, Self::Count { .. } | Self::DistinctCount { .. })
+    }
+
+    /// The value of a cell no record falls into: a count, a distinct count and
+    /// a sum are zero, and a mean has none.
     fn empty_value(&self) -> Option<CellValue> {
         match self {
-            Self::Count { .. } => Some(CellValue::Count(0)),
+            Self::Count { .. } | Self::DistinctCount { .. } => Some(CellValue::Count(0)),
             Self::Sum { scale, .. } => Some(CellValue::Decimal(zero_decimal(*scale))),
             Self::Mean { .. } => None,
         }
@@ -175,7 +196,7 @@ impl Measure {
     /// True when `value` is a value this measure can report.
     fn admits(&self, value: &Option<CellValue>) -> bool {
         match (self, value) {
-            (Self::Count { .. }, Some(CellValue::Count(_))) => true,
+            (Self::Count { .. } | Self::DistinctCount { .. }, Some(CellValue::Count(_))) => true,
             (Self::Sum { scale, .. }, Some(CellValue::Decimal(text)))
             | (Self::Mean { scale, .. }, Some(CellValue::Decimal(text))) => {
                 is_decimal_text(text, *scale)
@@ -242,7 +263,7 @@ pub fn maximum_decimal_characters(
         _ => return None,
     };
     let (extra_integer_digits, scale) = match measure {
-        Measure::Count { .. } => return None,
+        Measure::Count { .. } | Measure::DistinctCount { .. } => return None,
         Measure::Sum { scale, .. } => (19, usize::from(*scale)),
         Measure::Mean { scale, .. } => (
             usize::from(usize::from(*scale) < field_scale),
@@ -1121,10 +1142,10 @@ fn validate_document(document: &StatisticsDocument) -> Result<(), StatisticsErro
         .dataset
         .measures
         .iter()
-        .any(|measure| !matches!(measure, Measure::Count { .. }))
+        .any(|measure| !measure.is_count_like())
     {
         return Err(StatisticsError::InvalidDocument(
-            "a minimum-count-and-rounding release carries count measures only",
+            "a minimum-count-and-rounding release carries counts and distinct counts only",
         ));
     }
     let mut seen_cells = BTreeSet::new();

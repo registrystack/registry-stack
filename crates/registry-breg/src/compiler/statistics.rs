@@ -27,6 +27,9 @@ use crate::statistics::{
 pub const MAX_STATISTICAL_CELLS_PER_PERIOD: usize = 10_000;
 /// PostgreSQL accepts at most twelve elements in one `CUBE`, which computes the totals.
 pub const MAX_STATISTICAL_DIMENSIONS: usize = 12;
+/// A dataset with a non-additive measure (a distinct count) computes its totals
+/// over the records, not the base cells, which is dearer per dimension.
+pub const MAX_NON_ADDITIVE_DIMENSIONS: usize = 4;
 
 pub(super) fn compile(
     project: &RegistryProject,
@@ -141,7 +144,9 @@ pub(super) fn compile(
                 ));
             }
         }
-        if !measure_fields.is_empty() {
+        // A minimum-count-and-rounding release carries counts and distinct
+        // counts; a sum or a mean is read live.
+        if measures.iter().any(|measure| !measure.is_count_like()) {
             let releasing = grants
                 .publish
                 .iter()
@@ -158,7 +163,7 @@ pub(super) fn compile(
                     &root,
                     &source.id,
                     &format!(
-                        "a minimum-count-and-rounding release carries counts only and a sum or mean is read live: remove publish and read-releases from {}, declare count measures only, or release exact values with disclosure type exact-public-values over a register classified public",
+                        "a minimum-count-and-rounding release carries counts and distinct counts only and a sum or mean is read live: remove publish and read-releases from {}, declare count and distinct-count measures only, or release exact values with disclosure type exact-public-values over a register classified public",
                         quoted(&releasing)
                     ),
                 ));
@@ -346,6 +351,18 @@ pub(super) fn compile(
                 &format!("declare at most {MAX_STATISTICAL_DIMENSIONS} dimensions"),
             ));
         }
+        if source.dimensions.len() > MAX_NON_ADDITIVE_DIMENSIONS
+            && measures.iter().any(|measure| !measure.is_additive())
+        {
+            errors.push(error(
+                "breg.statistical-dataset.non-additive-dimensions",
+                &format!("{root}.dimensions"),
+                &source.id,
+                &format!(
+                    "a dataset with a distinct count declares at most {MAX_NON_ADDITIVE_DIMENSIONS} dimensions, because its totals are computed over the records, not the base cells"
+                ),
+            ));
+        }
         let cell_count = dimensions
             .iter()
             .try_fold(measures.len().max(1), |cells, dimension| {
@@ -436,7 +453,7 @@ pub(super) fn compile(
             .filter_map(|measure| {
                 let field_id = match measure {
                     Measure::Sum { field, .. } | Measure::Mean { field, .. } => field,
-                    Measure::Count { .. } => return None,
+                    Measure::Count { .. } | Measure::DistinctCount { .. } => return None,
                 };
                 let (field_type, _) = field(unit, field_id)?;
                 maximum_decimal_characters(measure, field_type)
@@ -920,6 +937,7 @@ fn compile_measures(
     }
     let mut seen = BTreeSet::new();
     let mut counts = 0_usize;
+    let mut distinct_fields = BTreeSet::new();
     let mut measures = Vec::new();
     for (index, measure) in source.measures.iter().enumerate() {
         let path = format!("{path}[{index}]");
@@ -986,6 +1004,40 @@ fn compile_measures(
                     },
                 }
             }
+            StatisticalMeasureSource::DistinctCount {
+                field: field_id, ..
+            } => {
+                measure_fields.insert(field_id.clone());
+                if !distinct_fields.insert(field_id.as_str()) {
+                    errors.push(error(
+                        "breg.statistical-dataset.measure-distinct-count-duplicate",
+                        &format!("{path}.field"),
+                        &source.id,
+                        &format!(
+                            "declare one distinct count over field `{field_id}`; a second would publish the same numbers twice"
+                        ),
+                    ));
+                    continue;
+                }
+                let Some((field_type, _)) = field(unit, field_id) else {
+                    continue;
+                };
+                if !matches!(field_type, FieldTypeSource::Reference { .. }) {
+                    errors.push(error(
+                        "breg.statistical-dataset.measure-field-type",
+                        &format!("{path}.field"),
+                        &source.id,
+                        &format!(
+                            "measure `{id}` counts the distinct values of field `{field_id}`; use a reference field"
+                        ),
+                    ));
+                    continue;
+                }
+                Measure::DistinctCount {
+                    id: id.to_string(),
+                    field: field_id.clone(),
+                }
+            }
         };
         measures.push(compiled);
     }
@@ -1016,7 +1068,7 @@ fn validate_measure_fields_readable(
                 &path,
                 &source.id,
                 &format!(
-                    "add field `{field}` to readableFields for {subject} on `{}`, or remove the sum or mean over it",
+                    "add field `{field}` to readableFields for {subject} on `{}`, or remove the sum, mean or distinct count over it",
                     unit.id
                 ),
             ));

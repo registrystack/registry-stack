@@ -813,3 +813,350 @@ impl ReadinessProbe for AlwaysReady {
         Box::pin(async { true })
     }
 }
+
+/// A parcel: category code, event date, owner (an index into the owner list, or
+/// `None` for a parcel with no owner), amount and quantity.
+type Parcel = (
+    &'static str,
+    &'static str,
+    Option<usize>,
+    Option<&'static str>,
+    Option<&'static str>,
+);
+
+/// `registry_source` over parcels that reference an owner. The analyst reads
+/// live, a statistician reads exact values, a publisher publishes with rounding
+/// and a reader reads the releases.
+fn parcel_source(dimensions: &[&str], measures: Value) -> Value {
+    let mut source = registry_source(dimensions, measures);
+    source["recordTypes"].as_array_mut().unwrap().push(json!({
+        "id":"owner","primaryDataset":"statistics-measures","route":"owners","mutationMode":"mutable",
+        "fields":[{"id":"name","type":"string","maximumLength":80,"classification":"internal"}]
+    }));
+    source["recordTypes"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"id":"owner","type":"reference","target":"owner","classification":"internal"}),
+        );
+    let readable = json!([
+        "subject",
+        "active",
+        "category",
+        "event-date",
+        "amount",
+        "quantity",
+        "owner"
+    ]);
+    source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"] = readable.clone();
+    source["accessProfiles"].as_array_mut().unwrap().push(
+        json!({"id":"statistician","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]}}),
+    );
+    source["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"analyst"});
+    source
+}
+
+/// `parcel_source` with a publisher and a reader of releases; its measures are
+/// counts and distinct counts only.
+fn released_parcel_source(dimensions: &[&str], measures: Value) -> Value {
+    let mut source = parcel_source(dimensions, measures);
+    let readable =
+        source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"].clone();
+    source["accessProfiles"][0]["permissions"]["datasets"][0]["operations"] =
+        json!(["read-live", "read-releases"]);
+    source["accessProfiles"].as_array_mut().unwrap().extend([
+        json!({"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+            "recordType":"record","operations":["list"],"readableFields":readable,
+            "filterableFields":["subject","active","category","event-date"],"allowCount":true,
+            "rowBoundaries":"unrestricted"
+        }],"datasets":[{"dataset":"records-by-category","operations":["publish","read-releases"]}]}}),
+        json!({"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "datasets":[{"dataset":"records-by-category","operations":["read-releases"]}]}}),
+    ]);
+    source
+}
+
+/// The fixture over `parcel_source`, with the owners and parcels inserted
+/// through the administrative connection.
+async fn parcel_fixture(
+    source: Value,
+    owner_count: usize,
+    parcels: &[Parcel],
+) -> (TestDatabase, tokio::task::JoinHandle<()>, axum::Router) {
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("parses");
+    let compiled = compile_project(&project, &[], CompileProfile::Authoring).expect("compiles");
+    let (database, task, app) = fixture_for(source, &[]).await;
+    let owner = &compiled.entities()["owner"];
+    let record = &compiled.entities()["record"];
+    let column = |field: &str| quote_identifier(&record.fields[field].physical_name);
+    let owners_table = quote_identifier(&owner.physical_table);
+    let table = quote_identifier(&record.physical_table);
+    let activation: String = database
+        .admin
+        .query_one(
+            "SELECT active_activation_id::text FROM registry_internal.registry_state WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("the active activation is recorded")
+        .get(0);
+    let owner_id = |index: usize| format!("00000000-0000-4000-8000-{:012}", index + 1);
+    for index in 0..owner_count {
+        database
+            .admin
+            .execute(
+                &format!(
+                    "INSERT INTO registry_data.{owners_table} (record_id, record_revision, record_lifecycle, active_package_revision)
+                     VALUES ($1::text::uuid, 1, 'active', $2)"
+                ),
+                &[&owner_id(index), &activation],
+            )
+            .await
+            .expect("owner inserts");
+    }
+    let sql = format!(
+        "INSERT INTO registry_data.{table}
+             (record_id, record_revision, record_lifecycle, active_package_revision,
+              {subject}, {active}, {category}, {event_date}, {amount}, {quantity}, {owner})
+         VALUES ($1::text::uuid, 1, 'active', $7, $1, true, $2, $3, $4::text::numeric,
+                 $5::text::bigint, $6::text::uuid)",
+        subject = column("subject"),
+        active = column("active"),
+        category = column("category"),
+        event_date = column("event-date"),
+        amount = column("amount"),
+        quantity = column("quantity"),
+        owner = column("owner"),
+    );
+    for (index, (code, date, owner, amount, quantity)) in parcels.iter().enumerate() {
+        let id = format!("00000000-0000-4000-9000-{:012}", index + 1);
+        let date = NaiveDate::parse_from_str(date, "%Y-%m-%d").expect("seed date parses");
+        let owner = owner.map(owner_id);
+        database
+            .admin
+            .execute(
+                &sql,
+                &[&id, code, &date, amount, quantity, &owner, &activation],
+            )
+            .await
+            .expect("parcel inserts");
+    }
+    (database, task, app)
+}
+
+fn distinct_measures() -> Value {
+    json!([
+        {"id":"parcels","type":"count"},
+        {"id":"owners","type":"distinct-count","field":"owner"}
+    ])
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_distinct_count_total_is_computed_over_the_records_not_added_from_the_cells() {
+    // Owner 0 holds parcels in both categories, so the national total of distinct
+    // owners (3) is below the sum of the category values (2 + 2). A parcel with
+    // no owner counts as a parcel and as no owner.
+    let parcels: Vec<Parcel> = vec![
+        ("a", "2025-03-10", Some(0), None, None),
+        ("a", "2025-03-11", Some(0), None, None),
+        ("a", "2025-03-12", Some(1), None, None),
+        ("a", "2025-03-13", None, None, None),
+        ("b", "2025-03-14", Some(0), None, None),
+        ("b", "2025-03-15", Some(2), None, None),
+    ];
+    let (database, task, app) = parcel_fixture(
+        parcel_source(&["category"], distinct_measures()),
+        3,
+        &parcels,
+    )
+    .await;
+    let document = body_json(live(&app, "2025-03", "2025-03", None).await).await;
+    for (category, parcels, owners) in [("a", 4, 2), ("b", 2, 2), ("c", 0, 0), ("_T", 6, 3)] {
+        assert_eq!(
+            cell(&document, "2025-03", Some(category), "parcels"),
+            json!([parcels, "exact"]),
+            "{category} parcels"
+        );
+        assert_eq!(
+            cell(&document, "2025-03", Some(category), "owners"),
+            json!([owners, "exact"]),
+            "{category} owners"
+        );
+    }
+    task.abort();
+    database.cleanup().await;
+
+    // Without dimensions the one cell is the total.
+    let (database, task, app) =
+        parcel_fixture(parcel_source(&[], distinct_measures()), 3, &parcels).await;
+    let document = body_json(live(&app, "2025-03", "2025-03", None).await).await;
+    assert_eq!(
+        cell(&document, "2025-03", None, "owners"),
+        json!([3, "exact"])
+    );
+    assert_eq!(
+        cell(&document, "2025-03", None, "parcels"),
+        json!([6, "exact"])
+    );
+    task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dataset_with_a_distinct_count_reports_the_same_sums_and_means_as_without_one() {
+    let parcels: Vec<Parcel> = vec![
+        ("a", "2025-03-10", Some(0), Some("1.00"), Some("1")),
+        ("a", "2025-03-11", Some(1), Some("2.50"), Some("2")),
+        ("a", "2025-03-12", Some(1), None, None),
+        ("b", "2025-03-13", Some(0), Some("-1.25"), Some("-3")),
+        ("b", "2025-03-14", None, Some("6.00"), Some("6")),
+    ];
+    let shared = [
+        json!({"id":"parcels","type":"count"}),
+        json!({"id":"amount-sum","type":"sum","field":"amount"}),
+        json!({"id":"quantity-sum","type":"sum","field":"quantity"}),
+        json!({"id":"amount-mean","type":"mean","field":"amount","scale":2}),
+        json!({"id":"quantity-mean","type":"mean","field":"quantity","scale":0}),
+    ];
+    let mut with = shared.to_vec();
+    with.push(json!({"id":"owners","type":"distinct-count","field":"owner"}));
+    let mut documents = Vec::new();
+    for measures in [shared.to_vec(), with] {
+        let (database, task, app) =
+            parcel_fixture(parcel_source(&["category"], json!(measures)), 2, &parcels).await;
+        documents.push(body_json(live(&app, "2025-03", "2025-03", None).await).await);
+        task.abort();
+        database.cleanup().await;
+    }
+    let without_distinct: Vec<&Value> = documents[1]["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|cell| cell["measure"] != "owners")
+        .collect();
+    let baseline: Vec<&Value> = documents[0]["cells"].as_array().unwrap().iter().collect();
+    assert!(!baseline.is_empty());
+    assert_eq!(baseline, without_distinct);
+    assert_eq!(
+        cell(&documents[1], "2025-03", Some("_T"), "owners"),
+        json!([2, "exact"])
+    );
+}
+
+/// Eighteen parcels in March: twelve in `a` by eight owners (four hold two
+/// parcels), six in `b` by two of those owners.
+fn release_parcels() -> Vec<Parcel> {
+    const DAYS: [&str; 18] = [
+        "2025-03-01",
+        "2025-03-02",
+        "2025-03-03",
+        "2025-03-04",
+        "2025-03-05",
+        "2025-03-06",
+        "2025-03-07",
+        "2025-03-08",
+        "2025-03-09",
+        "2025-03-10",
+        "2025-03-11",
+        "2025-03-12",
+        "2025-03-13",
+        "2025-03-14",
+        "2025-03-15",
+        "2025-03-16",
+        "2025-03-17",
+        "2025-03-18",
+    ];
+    let a_owners = [0, 0, 1, 1, 2, 2, 3, 3, 4, 5, 6, 7];
+    let b_owners = [0, 0, 0, 1, 1, 1];
+    a_owners
+        .iter()
+        .map(|owner| ("a", *owner))
+        .chain(b_owners.iter().map(|owner| ("b", *owner)))
+        .zip(DAYS)
+        .map(|((category, owner), day)| (category, day, Some(owner), None, None))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_distinct_count_is_read_live_exact_and_released_with_rounding_on_its_own_value() {
+    let (database, task, app) = parcel_fixture(
+        released_parcel_source(&["category"], distinct_measures()),
+        8,
+        &release_parcels(),
+    )
+    .await;
+
+    // Live: exact values.
+    let live_document = body_json(live(&app, "2025-03", "2025-03", None).await).await;
+    for (category, parcels, owners) in [("a", 12, 8), ("b", 6, 2), ("c", 0, 0), ("_T", 18, 8)] {
+        assert_eq!(
+            cell(&live_document, "2025-03", Some(category), "parcels"),
+            json!([parcels, "exact"])
+        );
+        assert_eq!(
+            cell(&live_document, "2025-03", Some(category), "owners"),
+            json!([owners, "exact"])
+        );
+    }
+
+    // Exact: the profile without record access reads the same cells.
+    let mut request = Request::builder()
+        .method("GET")
+        .uri("/v1/statistics/records-by-category:exact?accessProfile=statistician&from=2025-03&to=2025-03")
+        .body(Body::empty())
+        .expect("request builds");
+    request
+        .extensions_mut()
+        .insert(release_claims("statistician"));
+    let exact = app.clone().call(request).await.expect("router responds");
+    assert_eq!(exact.status(), StatusCode::OK);
+    assert_eq!(body_json(exact).await["cells"], live_document["cells"]);
+
+    // Release: counts and distinct counts are suppressed and rounded each on
+    // its own value.
+    let published = release_request(
+        &app,
+        "POST",
+        "/v1/statistics/records-by-category/releases/2025-03/versions?accessProfile=publisher",
+        release_claims("publisher"),
+        Some("distinct-release"),
+    )
+    .await;
+    assert_eq!(
+        published.status(),
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&body_bytes(published).await)
+    );
+    let read = release_request(
+        &app,
+        "GET",
+        "/v1/statistics/records-by-category/releases/2025-03/versions/1?accessProfile=reader",
+        release_claims("reader"),
+        None,
+    )
+    .await;
+    assert_eq!(read.status(), StatusCode::OK);
+    let document = body_json(read).await;
+    for (category, measure, expected) in [
+        // 12 parcels round to 10; 8 owners round to 10.
+        ("a", "parcels", json!([10, "rounded"])),
+        ("a", "owners", json!([10, "rounded"])),
+        // 6 parcels round to 5; 2 owners are below the minimum.
+        ("b", "parcels", json!([5, "rounded"])),
+        ("b", "owners", json!([Value::Null, "suppressed"])),
+        ("c", "owners", json!([0, "exact"])),
+        // 18 parcels round to 20; 8 distinct owners round to 10, not to 20.
+        ("_T", "parcels", json!([20, "rounded"])),
+        ("_T", "owners", json!([10, "rounded"])),
+    ] {
+        assert_eq!(
+            cell(&document, "2025-03", Some(category), measure),
+            expected,
+            "{category} {measure}"
+        );
+    }
+    task.abort();
+    database.cleanup().await;
+}

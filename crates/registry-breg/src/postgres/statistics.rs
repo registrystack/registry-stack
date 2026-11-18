@@ -14,7 +14,7 @@ use tokio_postgres::types::ToSql;
 
 use crate::api::{AuthorizedRequestContext, ReadServiceError};
 use crate::audit::RegistryAudit;
-use crate::compiler::MAX_STATISTICAL_DIMENSIONS;
+use crate::compiler::{MAX_NON_ADDITIVE_DIMENSIONS, MAX_STATISTICAL_DIMENSIONS};
 use crate::history_reference::SnapshotReference;
 use crate::idempotency::{
     insert_result, lock_and_load, resolve_binding, HeldResponse, IdempotencyBinding,
@@ -653,7 +653,7 @@ impl PostgresStatisticsService {
         for measure in &dataset.measures {
             let field = match measure {
                 Measure::Sum { field, .. } | Measure::Mean { field, .. } => field,
-                Measure::Count { .. } => {
+                Measure::Count { .. } | Measure::DistinctCount { .. } => {
                     decimal_bounds.push(None);
                     continue;
                 }
@@ -701,7 +701,7 @@ impl PostgresStatisticsService {
             {
                 let column = first_value + index;
                 values.push(match (measure, bound) {
-                    (Measure::Count { .. }, _) => {
+                    (Measure::Count { .. } | Measure::DistinctCount { .. }, _) => {
                         let count = row
                             .get::<_, Option<i64>>(column)
                             .ok_or(StatisticsServiceError::Unavailable)?;
@@ -2230,6 +2230,15 @@ fn grouped_sql(
     if dataset.dimensions.len() > MAX_STATISTICAL_DIMENSIONS {
         return Err(StatisticsServiceError::Unavailable);
     }
+    // A dataset with a non-additive measure computes every total over the unit
+    // rows, which costs more per dimension than a cube over base cells.
+    let non_additive = dataset
+        .measures
+        .iter()
+        .any(|measure| !measure.is_additive());
+    if non_additive && dataset.dimensions.len() > MAX_NON_ADDITIVE_DIMENSIONS {
+        return Err(StatisticsServiceError::Unavailable);
+    }
     let period_values = periods
         .iter()
         .map(|period| {
@@ -2258,11 +2267,14 @@ fn grouped_sql(
         .enumerate()
         .map(|(index, expression)| format!("{expression} AS dimension_{index}"))
         .collect::<Vec<_>>();
-    // Each distinct measure field is summed and counted once, however many
-    // measures read it. A field's index is its position in this list.
+    // Each distinct measure field is read once, however many measures read it.
+    // A field's index is its position in this list.
     let mut measure_fields: Vec<(&str, String)> = Vec::new();
     for measure in &dataset.measures {
-        let (Measure::Sum { field, .. } | Measure::Mean { field, .. }) = measure else {
+        let (Measure::Sum { field, .. }
+        | Measure::Mean { field, .. }
+        | Measure::DistinctCount { field, .. }) = measure
+        else {
             continue;
         };
         if measure_fields.iter().any(|(known, _)| known == field) {
@@ -2286,16 +2298,29 @@ fn grouped_sql(
     base_select.extend(dimension_select);
     if dataset.dimensions.is_empty() {
         // Without dimensions the base cells are the finished cells.
-        base_select.extend(dataset.measures.iter().enumerate().map(|(index, measure)| {
-            let measure_sql = measure_sql(measure, "count(*)::bigint", |field| {
-                let expression = &measure_fields[field_index(field)].1;
-                (
-                    format!("sum(({expression})::numeric)"),
-                    format!("count({expression})::numeric"),
-                )
-            });
-            format!("{measure_sql} AS measure_{index}")
-        }));
+        for (index, measure) in dataset.measures.iter().enumerate() {
+            let measure_sql = measure_sql(
+                measure,
+                "count(*)::bigint",
+                |field| {
+                    let expression = &measure_fields[field_index(field)].1;
+                    (
+                        format!("sum(({expression})::numeric)"),
+                        format!("count({expression})::numeric"),
+                    )
+                },
+                |field| {
+                    let expression = &measure_fields[field_index(field)].1;
+                    format!("count(DISTINCT {expression})::bigint")
+                },
+            );
+            base_select.push(format!("{measure_sql} AS measure_{index}"));
+        }
+    } else if non_additive {
+        // One row per record: the cube below computes every measure from rows.
+        for (index, (_, expression)) in measure_fields.iter().enumerate() {
+            base_select.push(format!("({expression}) AS field_{index}"));
+        }
     } else {
         base_select.push("count(*)::bigint AS cell_count".to_owned());
         for (index, (_, expression)) in measure_fields.iter().enumerate() {
@@ -2361,11 +2386,20 @@ fn grouped_sql(
         .map(|period| format!("({population_where}) AND ({period})"))
         .unwrap_or_else(|| population_where.to_owned());
     // One pass over the unit rows counts the base cells, and sums and counts each
-    // measure field. PostgreSQL then returns every cell as a finished value: the
+    // measure field. (A dataset with a non-additive measure instead selects the
+    // rows and lets the cube aggregate them.) PostgreSQL then returns every cell as a finished value: the
     // totals (a dimension column of `_T`) are a cube over the base cells, which adds
     // the counts and sums, and divides the added sums by the added counts for a
     // mean, without a second pass over the rows.
     let dimension_count = dataset.dimensions.len();
+    // A dataset with a non-additive measure keeps the unit rows: its cube runs
+    // over one row per period and record, since the distinct values of a group
+    // are not recoverable from the base cells.
+    let group_by = if non_additive && dimension_count > 0 {
+        String::new()
+    } else {
+        format!("GROUP BY {}", base_by.join(", "))
+    };
     let base = format!(
         "periods(code, start_date, end_date, reference_date) AS (VALUES {period_values}),
          {base_name} AS (
@@ -2373,7 +2407,7 @@ fn grouped_sql(
                FROM {from_sql}
                {period_join}
               WHERE {where_sql}
-           GROUP BY {group_by}
+           {group_by}
          )",
         base_name = if dimension_count == 0 {
             "grouped"
@@ -2382,7 +2416,6 @@ fn grouped_sql(
         },
         select = base_select.join(", "),
         from_sql = relations.from_sql,
-        group_by = base_by.join(", "),
     );
     let grouped = if dimension_count == 0 {
         base
@@ -2404,13 +2437,35 @@ fn grouped_sql(
             .iter()
             .enumerate()
             .map(|(index, measure)| {
-                let measure_sql = measure_sql(measure, "sum(base.cell_count)::bigint", |field| {
-                    let index = field_index(field);
-                    (
-                        format!("sum(base.field_sum_{index})"),
-                        format!("sum(base.field_count_{index})::numeric"),
+                let measure_sql = if non_additive {
+                    measure_sql(
+                        measure,
+                        "count(*)::bigint",
+                        |field| {
+                            let index = field_index(field);
+                            (
+                                format!("sum((base.field_{index})::numeric)"),
+                                format!("count(base.field_{index})::numeric"),
+                            )
+                        },
+                        |field| {
+                            format!("count(DISTINCT base.field_{})::bigint", field_index(field))
+                        },
                     )
-                });
+                } else {
+                    measure_sql(
+                        measure,
+                        "sum(base.cell_count)::bigint",
+                        |field| {
+                            let index = field_index(field);
+                            (
+                                format!("sum(base.field_sum_{index})"),
+                                format!("sum(base.field_count_{index})::numeric"),
+                            )
+                        },
+                        |_| unreachable!("a distinct count makes the dataset non-additive"),
+                    )
+                };
                 format!("{measure_sql} AS measure_{index}")
             })
             .collect::<Vec<_>>()
@@ -2480,7 +2535,8 @@ fn grouped_sql(
 
 /// The SQL of one measure's value over a group of cells, as text for a sum or
 /// mean. `count` is the group's record count; `sum_and_count` gives the group's
-/// sum of a field and the number of records that have a value for it.
+/// sum of a field and the number of records that have a value for it;
+/// `distinct_count` gives the number of distinct values of a field.
 ///
 /// A mean is rounded half away from zero by integer arithmetic on exact
 /// `numeric` values: `div` truncates, so `div(2 * abs(S) * 10^s + N, 2 * N)` is
@@ -2490,9 +2546,11 @@ fn measure_sql(
     measure: &Measure,
     count: &str,
     sum_and_count: impl Fn(&str) -> (String, String),
+    distinct_count: impl Fn(&str) -> String,
 ) -> String {
     match measure {
         Measure::Count { .. } => count.to_owned(),
+        Measure::DistinctCount { field, .. } => distinct_count(field),
         Measure::Sum { field, scale, .. } => {
             let (sum, _) = sum_and_count(field);
             format!("round(COALESCE({sum}, 0), {scale})::text")

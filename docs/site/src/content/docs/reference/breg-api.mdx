@@ -919,11 +919,11 @@ CSV bytes. The release listing omits `Repr-Digest`. A version header's `contentD
 the canonical stored JSON; a withdrawn version's header omits it. No strong `ETag` is issued.
 
 A JSON document lists the declared measures in `dataset.measures`, and each cell names its measure
-in `measure`. A count's `value` is a JSON integer. A sum's and a mean's `value` is a decimal string such as
+in `measure`. A count's and a distinct count's `value` is a JSON integer. A sum's and a mean's `value` is a decimal string such as
 `"1234.50"` with exactly the measure's `scale` digits after the point, or null for a mean over no values,
 whose status is `not-applicable`. Statuses are `exact`, `suppressed`, `rounded`, and `not-applicable`; the
 vocabulary can grow, so treat an unknown status as no usable value. A release under
-`minimum-count-and-rounding` uses `exact`, `suppressed`, and `rounded`, and carries counts only; sums and
+`minimum-count-and-rounding` uses `exact`, `suppressed`, and `rounded`, and carries counts and distinct counts only; sums and
 means are live only. A release under `exact-public-values` uses `exact` and `not-applicable` only, and
 carries every measure type.
 
