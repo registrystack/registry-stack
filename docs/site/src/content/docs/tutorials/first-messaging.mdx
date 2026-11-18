@@ -1,6 +1,6 @@
 ---
 title: Send your first message
-description: Run the Registry Messaging starter locally, send one SMS through the mock provider until it is delivered, and send one email you can read in Mailpit.
+description: Run the Registry Messaging starter locally with rstack dev, send one SMS through the mock provider until it is delivered, and send one email you can read in Mailpit.
 status: draft
 owner: registry-docs
 source_repos:
@@ -22,11 +22,11 @@ starter package's caller, and read back what each provider reported.
   outcome="One SMS reported delivered by the mock provider and one email received by Mailpit, both sent through a local Messaging runtime."
   time="About 20 minutes, plus the image download"
   level="Local evaluation only"
-  prerequisites={['Linux amd64 or arm64, or macOS on Apple Silicon', 'Running Docker', 'curl 7.76 or later', 'jq', 'Free loopback ports 8107 and 9107', 'The tools required by the release verification procedure']}
+  prerequisites={['Linux amd64 or arm64, or macOS on Apple Silicon', 'Running Docker', 'curl 7.76 or later', 'jq', 'The tools required by the release verification procedure']}
 />
 
 {/* Evidence: crates/registry-messagingctl/src/lib.rs, Command;
-    crates/registry-messagingctl/src/dev/mod.rs, StartArgs and TokenArgs;
+    products/platform/PROJECT-DEV.md, Messaging and its sinks;
     products/messaging/README.md, Running locally. */}
 
 ## Install Registry Stack
@@ -62,61 +62,93 @@ created: tutorial-work/notices
   providers/sms-gateway/provider.yaml
   ...
   templates/appointment-reminder/1/template.yaml
-next: Run messagingctl check --project DIRECTORY, then messagingctl dev DIRECTORY to run it locally against PostgreSQL and Mailpit containers.
+next: Run messagingctl check --project DIRECTORY, then rstack dev start DIRECTORY to run it locally against PostgreSQL and Mailpit containers.
 ```
 
-The starter declares two sender profiles: `transactional` sends email through an SMTP provider, and
+The package holds `dev.yaml`, the development plan, beside `messaging.yaml`. The starter declares two sender profiles: `transactional` sends email through an SMTP provider, and
 `reminders-sms` sends SMS through an HTTP gateway. One access profile lets the caller
 `case-system` send an appointment reminder through either.
 
 {/* Evidence: crates/registry-messagingctl/src/starter.rs;
     products/messaging/examples/providers/mock/provider.yaml. */}
 
-## Start the session
+## Start the run
+
+`dev.yaml` lists Messaging as the one product and names two synthetic people: `case-system`, who
+may send, and `operator`, who may read and operate. Its scenario file sends one SMS before the run
+reports ready. The plan holds no keys and no addresses:
+
+```yaml title="dev.yaml" test-excerpt="tutorial-work/notices/dev.yaml"
+issuer: https://identity.starter.example.test
+products:
+  - {product: messaging, project: ., audience: "urn:example:messaging"}
+people:
+  case-system:
+    subject: case-system
+    client: case-system
+    grants:
+      messaging:
+        profile: case-notices
+        scopes: ["messaging:send"]
+        claims: {registry_actor_kind: service}
+  operator:
+    subject: operator
+    client: operations-console
+    grants:
+      messaging:
+        profile: operations
+        scopes: ["messaging:operate"]
+scenarioFile: tests/scenarios.yaml
+```
 
 :::caution[Use synthetic data only]
-The session writes private local credentials and a log under `tutorial-work/notices/.messaging/dev/`.
-Keep that directory out of version control, and send only to example addresses and numbers.
+A run writes private local credentials and a log under its own directory, outside your project.
+Send only to example addresses and numbers.
 :::
 
-```sh
-rstack messaging dev tutorial-work/notices
-```
-
-```text
-ready
-  api: http://127.0.0.1:8107
-  metrics: http://127.0.0.1:9107/metrics
-  mailpit: http://127.0.0.1:32838
-  mock gateway: http://127.0.0.1:56575
-  runtime config: <directory>/tutorial-work/notices/.messaging/dev/runtime.yaml
-  log: <directory>/tutorial-work/notices/.messaging/dev/logs/messaging.log
-next: messagingctl dev token CLIENT, then send with curl -H @HEADER_FILE; Ctrl-C stops the session
-```
-
-Leave it running. The session runs PostgreSQL and Mailpit in containers, a mock SMS gateway, and
-the Messaging runtime on port 8107. Your Mailpit and gateway ports differ.
-
-## Open a second terminal
-
-Open a second terminal and change into the project. Every later command runs there:
+Check the plan, then start the run. It starts PostgreSQL and Mailpit in containers, a mock SMS
+gateway, and the Messaging runtime on free loopback ports. The first start pulls the images.
+[Run a project with rstack dev](../../configure/run-a-project-with-rstack-dev/) explains the
+options and how to recover a failed run:
 
 ```sh
-cd tutorial-work/notices
+rstack dev check tutorial-work/notices
+rstack --format json dev start tutorial-work/notices --ttl 2h > run.json
+run_id="$(jq -r .run_id run.json)"
+messaging_url="$(jq -r .products.messaging run.json)"
+mailpit_url="$(jq -r '.sinks["mail-relay"].url' run.json)"
+jq -r '.scenarios[] | "\(.id): \(.result)"' run.json
 ```
 
-{/* Evidence: crates/registry-messagingctl/src/dev/mod.rs, StartArgs and DevArgs;
-    crates/registry-messagingctl/src/lib.rs, render_dev. */}
+```text test-expect
+Development plan is valid
+0 errors, 0 warnings in 1 file
+unknown-message-is-not-visible: passed
+send-a-reminder-sms: passed
+```
+
+The run sent the scenario's SMS through the mock gateway and read back its delivery report.
+`messaging_url` is the runtime's address and `mailpit_url` is the mailbox every email provider
+sends to. Your ports differ. Each call below needs a short-lived token for `case-system`. This
+function asks for one and prints the header file to pass to the commands:
+
+```sh
+headers_for() {
+  rstack dev token "$run_id" --as "$1" | awk '$1 == "messaging" && $2 == "headers" {print $3}'
+}
+```
+
+{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack-dev/src/messaging.rs, start_sinks;
+    products/messaging/examples/starter/dev.yaml. */}
 
 ## Send an SMS
 
 Submit the reminder to an example number. The idempotency key is yours to choose: the same body
 sent again under it returns the same message instead of sending a second one. `--input` selects
-`POST`, and the API command gets a fresh token for the local `case-system` client without writing
-a header file:
+`POST`, and `--header` passes the token header file for `case-system`:
 
-{/* Evidence: crates/registry-messagingctl/src/dev/mod.rs, api_connection;
-    crates/registry-cli-api/src/api.rs, run_api, request_method. */}
+{/* Evidence: crates/registry-cli-api/src/api.rs, run_api, request_method;
+    crates/registry-rstack/src/cli.rs, dev token. */}
 
 ```sh
 cat > sms-request.json <<'JSON'
@@ -129,7 +161,8 @@ cat > sms-request.json <<'JSON'
 }
 JSON
 rstack messaging api /v1/messages \
-  --client case-system \
+  --url "$messaging_url" \
+  --header @"$(headers_for case-system)" \
   --idempotency-key tutorial-sms-1 \
   --input sms-request.json \
   --output sms.json
@@ -142,7 +175,8 @@ report back. Read the message until the report has arrived, for up to ten second
 sms_id="$(jq -r .id sms.json)"
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   rstack messaging api "/v1/messages/$sms_id" \
-    --client case-system \
+    --url "$messaging_url" \
+    --header @"$(headers_for case-system)" \
     --output sms-status.json
   if [ "$(jq -r .report sms-status.json)" = "delivered" ]; then break; fi
   sleep 1
@@ -166,8 +200,8 @@ provider said afterwards: delivered. `status` combines the two. The answer never
 
 {/* Evidence: crates/registry-messaging-core/src/wire.rs, derive_status();
     crates/registry-messaging/src/callbacks.rs; crates/registry-messaging/src/runtime.rs,
-    WORKER_IDLE_POLL; observed with messagingctl 0.42.0-dev on 2026-10-19, delivered about 1.4
-    seconds after acceptance. */}
+    WORKER_IDLE_POLL; products/platform/PROJECT-DEV.md, Messaging and its sinks, the gateway
+    reports delivery about a quarter of a second after it accepts a send. */}
 
 ## Send an email
 
@@ -186,14 +220,16 @@ cat > email-request.json <<'JSON'
 }
 JSON
 rstack messaging api /v1/messages \
-  --client case-system \
+  --url "$messaging_url" \
+  --header @"$(headers_for case-system)" \
   --idempotency-key tutorial-email-1 \
   --input email-request.json \
   --output email.json
 email_id="$(jq -r .id email.json)"
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   rstack messaging api "/v1/messages/$email_id" \
-    --client case-system \
+    --url "$messaging_url" \
+    --header @"$(headers_for case-system)" \
     --output email-status.json
   if [ "$(jq -r .dispatch email-status.json)" = "submitted" ]; then break; fi
   sleep 1
@@ -213,11 +249,10 @@ jq '{status, dispatch, report, correlationId}' email-status.json
 The status stays `submitted`. The mail server accepted the message, and SMTP sends no delivery
 report back, so Messaging cannot say more.
 
-Read what Mailpit received. The session file records Mailpit's address:
+Read what Mailpit received:
 
 ```sh
-mailpit="$(jq -r .detail.mailpit .messaging/dev/session.json)"
-curl --silent --show-error "$mailpit/api/v1/messages" |
+curl --silent --show-error "$mailpit_url/api/v1/messages" |
   jq -r '.messages[0] | "To: \(.To[0].Address)\nSubject: \(.Subject)\n\(.Snippet)"'
 ```
 
@@ -231,23 +266,22 @@ Messaging rendered the French subject and body from the template and the request
 the Mailpit address in a browser to see the HTML part.
 
 {/* Evidence: crates/registry-messaging/src/messages.rs, MessageReport;
-    crates/registry-messagingctl/src/dev/mod.rs, Session; observed with messagingctl 0.42.0-dev
-    on 2026-10-19. */}
+    crates/registry-rstack-dev/src/messaging.rs, start_sinks. */}
 
-## Stop the session
+## Stop the run
 
-Press Ctrl-C in the first terminal:
-
-```text
-stopped; the session's containers are removed
-session directory: <directory>/tutorial-work/notices/.messaging/dev
+```sh
+rstack dev stop "$run_id"
 ```
 
-The database and the mailbox are gone. The session directory keeps the log and the audit journal
-until the next `rstack messaging dev` replaces it.
+```text
+Run RUN_ID stopped
+```
 
-{/* Evidence: crates/registry-messagingctl/src/lib.rs, render_dev;
-    crates/registry-messagingctl/src/dev/mod.rs, clear_previous. */}
+The database, the mailbox and the gateway are gone, and so are the run's keys and files. The run
+would have stopped by itself after two hours. Your project was never written to.
+
+{/* Evidence: products/platform/PROJECT-DEV.md, Stop the run. */}
 
 ## Next
 

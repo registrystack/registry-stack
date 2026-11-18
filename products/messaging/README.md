@@ -43,131 +43,37 @@ with the caller's source of record.
 
 ## Running locally
 
-`messagingctl dev` runs a package end to end on one machine. It needs Docker.
-
-The development database pulls
-`docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`.
-Mailpit pulls its pinned image from `ghcr.io/axllent/mailpit`.
-The `messagingctl dev` help names both exact references for an egress allowlist.
-To start a local session:
+`rstack dev` runs a package end to end on one machine from a development plan. It needs Docker for
+PostgreSQL and, when a provider is `smtp`, Mailpit. `messagingctl init` writes the plan, `dev.yaml`,
+and a scenario file with the starter:
 
 ```bash
 messagingctl init ./notices
-messagingctl dev ./notices
-# in another terminal
+rstack dev check ./notices
+rstack --format json dev start ./notices --ttl 2h > run.json
+RUN="$(jq -r .run_id run.json)"
+HEADERS="$(rstack dev token "$RUN" --as case-system | awk '$1 == "messaging" && $2 == "headers" {print $3}')"
 printf '%s\n' '{"senderProfile":"reminders-sms","to":{"phone":"+15555550100"},"template":{"id":"appointment-reminder-sms","version":"1"},"locale":"en","data":{"name":"Ada","day":"2026-10-01","office":"North"}}' |
-  messagingctl api /v1/messages --project ./notices --client case-system \
-    --idempotency-key first --input -
+  rstack messaging api /v1/messages --url "$(jq -r .products.messaging run.json)" \
+    --header @"$HEADERS" --idempotency-key first --input -
+rstack dev stop "$RUN"
 ```
 
-The session runs in the foreground until Ctrl-C or SIGTERM and owns
-everything it starts: a pinned PostgreSQL container serving TLS with a
-certificate the session generates, a pinned Mailpit container every `smtp`
-provider sends to, a mock gateway every `http` provider sends to, and the
-Messaging runtime itself, in the `messagingctl` process, on a
-`development-loopback` listener at `--port` (8107) with metrics at
-`--metrics-port` (9107). Both containers publish on 127.0.0.1 only and are
-removed with their volumes when the session stops, so nothing a session sent
-or recorded outlives it. The mock gateway speaks the example provider under
-`examples/providers/mock`: it answers each send after `--mock-latency-ms`
-(200) and then posts a delivery report, signed with the session's callback
-key, to the runtime's callback route, so an SMS reaches `delivered` and an
-email reaches `submitted` with its message in Mailpit.
+The run owns everything it starts: a PostgreSQL server, a pinned Mailpit container every `smtp`
+provider sends to, a mock gateway every `http` provider sends to, and the Messaging runtime on a
+`development-loopback` listener. The containers publish on 127.0.0.1 only and carry the run's label,
+so `stop`, TTL expiry and `stop --recover` remove them with the run. The mock gateway answers each
+send with `queued` and about a quarter of a second later posts a delivery report, signed with the
+run's callback key, to the runtime's callback route, so an SMS reaches `delivered` and an email
+reaches `submitted` with its message in Mailpit. The run report lists each sink under `sinks`.
 
-The session's secrets, generated `runtime.yaml`, audit journal, and JSON log
-live in the project's private `.messaging/dev` directory (mode 0700, files
-0600, ignored by git through `.messaging/.gitignore`), and the next start in
-the project replaces it. A second start in the same project is refused while
-the first runs. In the default standalone session, `messagingctl dev token CLIENT`
-signs a one-hour bearer token for a client one access profile names,
-carrying that profile's scopes and actor kind, with the key the running
-session's runtime trusts. It writes the token as a header file under
-`.messaging/dev/tokens/`. The tokens and the key are for this session only;
-nothing about the session is a production posture.
-
-A local Messaging session can instead borrow the issuer of a ready BReg
-development session. The BReg owner's `dev-clients.yaml` registers every
-Messaging requester client at one explicit Messaging resource:
-
-```yaml
-apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
-kind: BRegDevClients
-clients:
-  - id: case-system
-    accessProfiles: []
-    scopes: [messaging:send]
-    claims: {registry_actor_kind: service}
-  - id: operations-console
-    accessProfiles: []
-    scopes: [messaging:operate]
-    claims: {}
-issuer:
-  resources:
-    - audience: urn:registrystack:messaging:notices
-      scopes: [messaging:send, messaging:operate]
-  clientResources:
-    case-system: urn:registrystack:messaging:notices
-    operations-console: urn:registrystack:messaging:notices
-```
-
-With that owner already ready, start Messaging with the paired options:
-
-```bash
-messagingctl dev ./notices \
-  --issuer-project /absolute/path/to/breg-owner \
-  --resource urn:registrystack:messaging:notices
-```
-
-`--issuer-project` and `--resource` are accepted only together. The explicit
-resource binds this Messaging invocation to its intended audience; a real
-OAuth grant proves that each client can use it.
-Messaging invokes the public `bregctl dev export-client` command for the
-clients named by its access profiles, so the `bregctl` of the same Registry
-Stack release must be on `PATH`; it never reads the owner's private `.breg`
-state. It requests each
-profile's exact scopes for the explicit resource through the shared
-`PrivateKeyJwt` client, configures `scopeClaim: scope`, snapshots the ready
-issuer's bounded public RS256 keys through `local::snapshot`, and verifies an
-issued token with `MessagingAuthenticator` before reporting ready. The runtime
-uses that static key snapshot and otherwise has the same generated
-configuration and lifecycle as a standalone session. No token-exchange trust
-is configured.
-
-In a borrowed session, `messagingctl dev token CLIENT` requires the Messaging
-session to be ready. It exports the current owner credential into private
-scratch space, compares the credential and public endpoint binding with the
-session capture, obtains a new token for the retained resource and scopes,
-and verifies that token against the retained static keys and the same caller
-identity before replacing the header file. Restarting the BReg owner with its
-retained keys and registrations continues to work. A changed credential,
-endpoint, signing key, or principal is refused until Messaging is restarted;
-that new foreground start discards its old files and captures the current
-public trust again. Messaging never starts, stops, resets, or removes the BReg
-owner. Stopping Messaging removes only its own PostgreSQL and Mailpit
-containers and their volumes.
-
-`products/messaging/scripts/test-dev.sh` exercises the standalone path, and
-`products/messaging/scripts/test-dev-shared-issuer.sh` exercises the shared
-issuer path.
-
-`.messaging/dev/session.json` is the typed session record. Its envelope names
-`MessagingDevState`; the format registry checks the current `apiVersion` and
-`kind` wherever the file is read. It is written when the session starts, as
-each container starts, and when the session is ready. It holds `owner`, the
-value of the `org.registrystack.messagingctl.dev-owner` label on every
-container the session started; `state`, `starting`, `ready`, `stopped`, or
-`stop-failed`; `containers`,
-the containers started so far; and `detail`, empty while starting and the
-ready report once ready. A borrowed session also records the public issuer
-binding needed to compare the credentials kept in its private session files;
-no bearer token or private key is written into the state document. Mailpit
-publishes on a port Docker picks, so `detail.mailpit` is where a script reads
-the Mailpit address; `detail.api`, `detail.metrics`, and
-`detail.mockGateway` name the other endpoints. The next start in the project
-reads `owner` to remove the containers an interrupted session left.
-`messagingctl check --dev-state FILE` checks this generated record offline,
-without contacting the issuer or reading credentials. Cleanup also recognizes
-pre-envelope records with a valid owner identifier.
+The run's secrets, generated `runtime.yaml`, audit journal and logs live in its own directory
+outside the project, which the project never writes to. `rstack dev token RUN --as PERSON` signs a
+short-lived bearer token for a person the plan names, carrying the access profile's scopes and
+actor kind, with the key the run's runtime trusts. The tokens and the key are for this run only;
+nothing about a run is a production posture. A plan that lists BReg and Messaging runs both against
+one issuer. [Run a project with rstack dev](../../docs/site/src/content/docs/configure/run-a-project-with-rstack-dev.mdx)
+and `products/platform/PROJECT-DEV.md` describe the plan, the sinks and the run report.
 
 To run the runtime yourself, `messagingctl init DIRECTORY` creates an editable
 project with `messaging.yaml`, `providers/`, and `templates/`. Check that
@@ -272,6 +178,8 @@ MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   -p registry-messagingctl --features postgres-test --test postgres_messages_cli
 products/messaging/scripts/test-dev.sh
 products/messaging/scripts/test-dev-shared-issuer.sh
+python3 products/platform/scripts/test-rstack-dev.py --bin-dir "$CARGO_TARGET_DIR/debug" \
+  --scratch-parent "$TMPDIR" --messaging
 ```
 
 The checkpoint runs the database-free checks: dependency direction,
@@ -289,6 +197,9 @@ two Messaging requester clients and their explicit resource, runs the same
 Messaging journey with borrowed tokens, exercises retained-owner restart and
 replacement refusals, and requires Messaging cleanup to leave the owner
 running.
+The harness's `--messaging` mode needs Docker: it runs the starter under `rstack dev` with no other
+product, requires the scenario's SMS to reach the run's gateway, sends an email that reaches the
+run's Mailpit, and requires the stopped run to leave no container.
 Each PostgreSQL suite works in its own schema inside the database the
 URL names and fails, rather than skipping, when the URL is absent. A test
 binary that skips because its database is absent is not database

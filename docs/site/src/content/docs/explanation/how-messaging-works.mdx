@@ -34,12 +34,12 @@ that turn a rendered message into the gateway's request and read the gateway's a
 endpoint, credentials, and callback secret belong to the runtime file, together with the database,
 the token issuer, the audit journal, and retention.
 
-`messagingctl dev` writes this runtime file for local runs and points both providers at local
+`rstack dev` writes this runtime file for local runs and points both providers at local
 stand-ins.
 
 {/* Evidence: crates/registry-messaging-core/src/package.rs, MessagingProject, SenderProfile,
     and RetryPolicy; crates/registry-messaging/src/config.rs, RuntimeConfig;
-    crates/registry-messagingctl/src/dev/config.rs. */}
+    crates/registry-rstack-dev/src/messaging.rs, start_sinks and config. */}
 
 ## What exists at runtime?
 

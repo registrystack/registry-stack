@@ -7,8 +7,8 @@
 # What this gate is for: proving that the commands the Messaging tutorials
 # document still run, and that a short list of behaviours a successful exit
 # does not already prove still holds: an accepted submission, an SMS the mock
-# provider reports delivered, an email Mailpit received, a session that removes
-# its containers when it stops.
+# provider reports delivered, an email Mailpit received, a run that reports it
+# stopped.
 #
 # What this gate is NOT for: policing what a page says. It pins no fence count,
 # no command string and no documented output. Prose, output blocks and command
@@ -27,8 +27,9 @@
 #   scripts/check-messaging-tutorial.sh              replay every registered tutorial
 #   scripts/check-messaging-tutorial.sh --dry-run    resolve the journeys only
 #
-# The full run needs Docker because `messagingctl dev` runs PostgreSQL and
-# Mailpit in containers. The dry run needs neither Docker nor a compiler, which
+# The full run needs Docker because `rstack dev` runs PostgreSQL and Mailpit in
+# containers. It keeps every run's state in a directory under the work root and
+# stops the runs a journey leaves behind. The dry run needs neither Docker nor a compiler, which
 # is what lets it run in the docs checks.
 #
 # Registering a tutorial means adding its slug to MESSAGING_TUTORIALS and a
@@ -42,15 +43,6 @@
 #                                              that heading, in document order
 #                   run:<Heading>|<n>          execute the nth sh fence under
 #                                              that heading
-#                   session:<Heading>          start the one single-line sh
-#                                              fence under that heading in the
-#                                              background, the way a reader
-#                                              leaves it running in a first
-#                                              terminal, and wait for its
-#                                              `ready` line
-#                   stop-session               send the session SIGINT, the
-#                                              Ctrl-C the page tells a reader
-#                                              to press, and wait for it
 #                 The |<n> suffix is optional wherever a heading holds a single
 #                 sh fence. Skipping is implicit: a fence under no listed
 #                 heading is simply not run, and the summary names it so a
@@ -88,17 +80,7 @@
 #                                              of building from source; set all
 #                                              three or none
 #   MESSAGING_TUTORIAL_CARGO_PROFILE           ci (default) or release
-#   MESSAGING_TUTORIAL_READY_SECONDS           how long a session may take to
-#                                              report ready (default 600, which
-#                                              covers pulling both images)
 #   MESSAGING_TUTORIAL_DOCS_ROOT               docs content directory override (tests)
-#
-# MESSAGINGCTL_DEV_PORT and MESSAGINGCTL_DEV_METRICS_PORT are deliberately not
-# set here. The tutorial's own commands pass no port flags, so leaving both
-# unset replays the default ports a reader gets. They reach `messagingctl dev`
-# through the environment when a caller exports them, which is how a developer
-# whose machine already listens on 8107 or 9107 runs this gate; CI exports
-# neither.
 
 set -euo pipefail
 
@@ -106,10 +88,7 @@ SITE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$SITE_ROOT/../.." && pwd)"
 DOCS_ROOT="${MESSAGING_TUTORIAL_DOCS_ROOT:-$SITE_ROOT/src/content/docs}"
 BUILD_PROFILE="${MESSAGING_TUTORIAL_CARGO_PROFILE:-ci}"
-READY_SECONDS="${MESSAGING_TUTORIAL_READY_SECONDS:-600}"
 TARGET_DIR="$REPO_ROOT/target/messaging-tutorial-source"
-# The label `messagingctl dev` puts on every container a session starts.
-OWNER_LABEL='org.registrystack.messagingctl.dev-owner'
 
 # ---------------------------------------------------------------------------
 # Registered tutorials
@@ -219,16 +198,14 @@ load_spec() {
 	case "$1" in
 	tutorials/first-messaging)
 		# The page opens with a release installation, which this source gate
-		# replaces with a managed generation around the binaries under test. The session
-		# runs in a first terminal until Ctrl-C; everything after it runs in
-		# a second terminal, which is this journey's own shell.
+		# replaces with a managed generation around the binaries under test.
+		# The run it starts keeps going until the page stops it.
 		SPEC_STEPS=(
 			"run:Create a package"
-			"session:Start the session"
-			"run:Open a second terminal"
+			"run:Start the run"
 			"run:Send an SMS"
 			"run:Send an email"
-			"stop-session"
+			"run:Stop the run"
 		)
 		# The status polls give up quietly after ten one-second tries, so the
 		# transcript holds the provider outcomes the page promises.
@@ -236,11 +213,12 @@ load_spec() {
 			'"status": "delivered"'
 			'"status": "submitted"'
 			"Subject: Votre rendez-vous du 01/10/2026"
-			"containers are removed"
+			"send-a-reminder-sms: passed"
+			"stopped"
 		)
 		;;
 	configure/messaging)
-		# The page continues in the tutorial's project, after its session
+		# The page continues in the tutorial's project, after its run
 		# stopped: it edits a template, previews it, and packages the
 		# project. Every command fails on a refusal, so no assertion is
 		# needed.
@@ -286,68 +264,47 @@ done
 
 # The system temporary directory is a link wherever /tmp or TMPDIR is one.
 # Resolving the work root once keeps every path this gate records on the
-# physical path the session reports.
+# physical path the runner reports.
 WORK_ROOT="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/messaging-tutorial.XXXXXX")" && pwd -P)"
 READER_DIR="$WORK_ROOT/reader"
 SHIM_DIR="$WORK_ROOT/bin"
-SESSION_PID_FILE="$WORK_ROOT/session.pid"
+# Where `rstack dev` keeps its runs for this gate, so the cleanup stops exactly
+# the runs the journey started.
+DEV_STATE_DIR="$WORK_ROOT/rstack-dev"
 
-# Stop the development session the replay started, and reclaim its containers
-# and volumes. A journey that fails halfway leaves `messagingctl dev` running
-# with a PostgreSQL and a Mailpit container behind it, and deleting the work
-# root alone would orphan both. The session removes its own containers when
-# it stops, so SIGINT comes first; the label sweep then removes whatever a
-# killed or crashed session left, by the owner its record names. Both steps
-# are idempotent, so a journey that already stopped its session costs nothing
-# here.
-# Returns non-zero when a container was left behind, which is what keeps its
-# session record under the work root for a second attempt.
-stop_dev_sessions() {
-	local pid record owner container status=0 _
-	if [[ -f "$SESSION_PID_FILE" ]]; then
-		pid="$(<"$SESSION_PID_FILE")"
-		if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-			kill -INT "$pid" 2>/dev/null || true
-			for _ in $(seq 1 120); do
-				kill -0 "$pid" 2>/dev/null || break
-				sleep 0.5
-			done
-			if kill -0 "$pid" 2>/dev/null; then
-				printf 'the development session %s did not stop on SIGINT; killing it\n' "$pid" >&2
-				kill -KILL "$pid" 2>/dev/null || true
-			fi
-		fi
-	fi
-	[[ -d "$READER_DIR" ]] || return 0
-	while IFS= read -r record; do
-		if ! owner="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["owner"])' "$record")"; then
-			printf 'could not read the session owner from %s\n' "$record" >&2
+# Stop every development run the replay started, which removes its PostgreSQL
+# and Mailpit containers. A journey that fails halfway leaves its run going,
+# and deleting the work root alone would orphan the containers. Stopping is
+# idempotent, so a journey that already stopped its run costs nothing here.
+# Returns non-zero when a run could not be stopped, which is what keeps its
+# state under the work root for `rstack dev stop RUN --recover`.
+stop_dev_runs() {
+	local directory run status=0
+	[[ -d "$DEV_STATE_DIR" ]] || return 0
+	# The glob skips the hidden bookkeeping directories the runner keeps here.
+	for directory in "$DEV_STATE_DIR"/*/; do
+		[[ -d "$directory" ]] || continue
+		run="$(basename "$directory")"
+		if ! RSTACK_DEV_STATE_DIR="$DEV_STATE_DIR" "$SHIM_DIR/rstack" dev stop "$run" >/dev/null; then
+			printf 'could not stop the rstack dev run %s\n' "$run" >&2
 			status=1
-			continue
 		fi
-		while IFS= read -r container; do
-			[[ -n "$container" ]] || continue
-			if ! docker rm --force --volumes "$container" >/dev/null; then
-				printf 'could not remove container %s of the session in %s\n' "$container" "$record" >&2
-				status=1
-			fi
-		done < <(docker ps --all --quiet --filter "label=$OWNER_LABEL=$owner")
-	done < <(find "$READER_DIR" -path '*/.messaging/dev/session.json' 2>/dev/null)
+	done
 	return "$status"
 }
 
 cleanup() {
 	local exit_code=$?
 	set +e
-	if stop_dev_sessions; then
+	if stop_dev_runs; then
 		chmod -R u+w "$WORK_ROOT" 2>/dev/null
 		rm -rf "$WORK_ROOT"
 	else
-		# The session record under the work root names the owner label the
-		# containers carry, so removing the work root now would leave them
-		# with nothing that says which session they belong to.
-		printf 'keeping %s: remove the containers labelled %s by the owner each session.json names\n' \
-			"$WORK_ROOT" "$OWNER_LABEL" >&2
+		# The run's state under the work root is what `rstack dev stop RUN
+		# --recover` reads, so removing the work root now would leave the
+		# containers with nothing that says which run they belong to.
+		printf 'keeping %s: run RSTACK_DEV_STATE_DIR=%s rstack dev stop RUN --recover for each run in it\n' \
+			"$WORK_ROOT" "$DEV_STATE_DIR" >&2
 	fi
 	if ((exit_code == 0)); then
 		printf 'Registry Messaging tutorial gate: PASS\n'
@@ -491,29 +448,6 @@ resolve_fences() {
 	printf '%s\n' "$matched"
 }
 
-# Resolve a session: address to its one fence, and require that fence to be
-# a single command line. The gate starts that line in the background, so a
-# second line would either run in the foreground ahead of it or be lost; a
-# reader, too, starts exactly one command in the first terminal.
-resolve_session_fence() {
-	local slug="$1" address="$2" fence_dir="$3"
-	local matched
-	matched="$(resolve_fences "$slug" "$address" "$fence_dir")" || exit $?
-	if [[ "$matched" == *' '* ]]; then
-		printf 'tutorial spec error in %s: the session heading "%s" holds more than one sh fence (%s); a session starts exactly one command\n' \
-			"$slug" "$address" "$matched" >&2
-		exit 1
-	fi
-	local lines
-	lines="$(grep -c . "$fence_dir/fence-$matched.sh" || true)"
-	if [[ "$lines" != 1 ]]; then
-		printf 'tutorial spec error in %s: the session fence under "%s" holds %s command lines; a session starts exactly one command\n' \
-			"$slug" "$address" "$lines" >&2
-		exit 1
-	fi
-	printf '%s\n' "$matched"
-}
-
 # Emit the sh fences named by a run: step, in document order.
 emit_run_step() {
 	local slug="$1" address="$2" fence_dir="$3"
@@ -528,55 +462,6 @@ emit_run_step() {
 	done
 }
 
-# Emit a session: step: start the fence's one command in the background, the
-# way a reader leaves it running in a first terminal, record its process id
-# for the stop step and the outer cleanup, and wait for its ready report.
-emit_session_step() {
-	local slug="$1" address="$2" fence_dir="$3"
-	local number
-	number="$(resolve_session_fence "$slug" "$address" "$fence_dir")" || exit $?
-	printf '\nprintf "==> %s fence %s (session, left running)\\n"\n' "$slug" "$number"
-	local session_command
-	IFS= read -r session_command <"$fence_dir/fence-$number.sh"
-	# The redirection is emitted literally; the journey shell expands it.
-	# shellcheck disable=SC2016
-	printf '%s >"$MESSAGING_TUTORIAL_SESSION_LOG" 2>&1 &\n' "$session_command"
-	# These variables and substitutions belong to the generated journey shell.
-	# shellcheck disable=SC2016
-	printf '%s\n' \
-		'session_pid=$!' \
-		'printf '\''%s\n'\'' "$session_pid" >"$MESSAGING_TUTORIAL_SESSION_PID_FILE"' \
-		'session_deadline=$((SECONDS + MESSAGING_TUTORIAL_READY_SECONDS))' \
-		'until grep -q '\''^ready$'\'' "$MESSAGING_TUTORIAL_SESSION_LOG"; do' \
-		'if ! kill -0 "$session_pid" 2>/dev/null; then' \
-		'cat "$MESSAGING_TUTORIAL_SESSION_LOG"' \
-		'printf '\''the session stopped before it reported ready\n'\'' >&2' \
-		'exit 1' \
-		'fi' \
-		'if ((SECONDS >= session_deadline)); then' \
-		'cat "$MESSAGING_TUTORIAL_SESSION_LOG"' \
-		'printf '\''the session did not report ready in %s seconds\n'\'' "$MESSAGING_TUTORIAL_READY_SECONDS" >&2' \
-		'exit 1' \
-		'fi' \
-		'sleep 1' \
-		'done' \
-		'cat "$MESSAGING_TUTORIAL_SESSION_LOG"' \
-		'session_reported="$(wc -l <"$MESSAGING_TUTORIAL_SESSION_LOG")"'
-}
-
-# Emit the stop-session step: the Ctrl-C the page tells a reader to press, then
-# what the session printed as it stopped.
-emit_stop_session_step() {
-	local slug="$1"
-	printf '\nprintf "==> %s stop the session (Ctrl-C)\\n"\n' "$slug"
-	# These variables and substitutions belong to the generated journey shell.
-	# shellcheck disable=SC2016
-	printf '%s\n' \
-		'kill -INT "$session_pid"' \
-		'wait "$session_pid"' \
-		'tail -n "+$((session_reported + 1))" "$MESSAGING_TUTORIAL_SESSION_LOG"'
-}
-
 emit_journey() {
 	local slug="$1" fence_dir="$2"
 	printf 'set -euo pipefail\n'
@@ -585,8 +470,6 @@ emit_journey() {
 	for step in ${SPEC_STEPS[@]+"${SPEC_STEPS[@]}"}; do
 		case "$step" in
 		run:*) emit_run_step "$slug" "${step#run:}" "$fence_dir" ;;
-		session:*) emit_session_step "$slug" "${step#session:}" "$fence_dir" ;;
-		stop-session) emit_stop_session_step "$slug" ;;
 		*)
 			printf 'tutorial spec error in %s: unknown step: %s\n' "$slug" "$step" >&2
 			exit 2
@@ -607,8 +490,6 @@ resolve_journey_fences() {
 	for step in ${SPEC_STEPS[@]+"${SPEC_STEPS[@]}"}; do
 		case "$step" in
 		run:*) matched="$(resolve_fences "$slug" "${step#run:}" "$fence_dir")" || exit $? ;;
-		session:*) matched="$(resolve_session_fence "$slug" "${step#session:}" "$fence_dir")" || exit $? ;;
-		stop-session) continue ;;
 		*)
 			printf 'tutorial spec error in %s: unknown step: %s\n' "$slug" "$step" >&2
 			exit 2
@@ -707,6 +588,7 @@ check_excerpts() {
 
 if ((DRY_RUN == 0)) && ((${#MESSAGING_TUTORIALS[@]} > 0)); then
 	prepare_toolset
+	mkdir -m 700 "$DEV_STATE_DIR"
 fi
 
 for slug in "${MESSAGING_TUTORIALS[@]}"; do
@@ -789,10 +671,7 @@ for slug in "${MESSAGING_TUTORIALS[@]}"; do
 	if ! (
 		unset CARGO_TARGET_DIR
 		cd "$reader_dir"
-		MESSAGING_TUTORIAL_SESSION_LOG="$WORK_ROOT/session-$run_name.log" \
-			MESSAGING_TUTORIAL_SESSION_PID_FILE="$SESSION_PID_FILE" \
-			MESSAGING_TUTORIAL_READY_SECONDS="$READY_SECONDS" \
-			PATH="$SHIM_DIR:$PATH" bash "$run_script"
+		RSTACK_DEV_STATE_DIR="$DEV_STATE_DIR" PATH="$SHIM_DIR:$PATH" bash "$run_script"
 	) 2>&1 | tee "$run_log"; then
 		printf 'tutorial %s failed; the transcript ends just before this line\n' \
 			"$slug" >&2

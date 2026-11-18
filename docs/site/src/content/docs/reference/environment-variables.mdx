@@ -181,15 +181,15 @@ Other values, including an empty value, tracing directives, and `debug`, stop `m
 with exit status 2 before it reads its runtime configuration; `messaging --version` and
 `--help` answer whatever the variable holds.
 The level covers the Messaging crates only; a dependency's log lines never reach the stream.
-A `messagingctl dev` session reads the same variable and writes the records to the session's
-private log file instead.
+An `rstack dev` run starts `messaging serve` with the environment it inherits, so the run's
+Messaging runtime reads the same variable.
 
 Pass the runtime file explicitly with `messaging --runtime-config <FILE> serve`.
 Messaging has no fixed environment variable for that path.
 
 {/* Evidence: crates/registry-messaging/src/main.rs;
     crates/registry-messaging/src/runtime.rs, operational_log_level();
-    crates/registry-messagingctl/src/dev/mod.rs, initialize_logging(). */}
+    crates/registry-rstack-dev/src/products.rs, product runtime start. */}
 
 </DocsetProduct>
 
