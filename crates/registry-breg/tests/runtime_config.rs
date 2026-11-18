@@ -5249,3 +5249,117 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
     assert!(!fixture.secret_root.join("missing-task-status-key").exists());
     assert!(!fixture.secret_root.join("missing-task-status-ca").exists());
 }
+
+fn external_source_entry(digest: &str, ca_file: &Path) -> Value {
+    let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/adapter/examples/external-projections/pack.yaml")
+        .canonicalize()
+        .expect("example pack exists");
+    json!({
+        "packFile": pack.to_str().unwrap(),
+        "packDigest": digest,
+        "connection": {"id": "synthetic-licensing", "endpoints": [{
+            "endpoint": "synthetic-registry",
+            "baseUrl": "https://source.example.test",
+            "tlsTrustProfile": "source-ca",
+            "credential": {"type": "static-api-key", "valueRef": "secret:file/source-key"}}],
+            "outboundTls": {"trustProfiles": {"source-ca": {"caBundleFile": ca_file.to_str().unwrap()}}}},
+        "endpointPolicies": [{"endpoint": "synthetic-registry",
+            "baseUrl": "https://source.example.test", "tlsTrustProfile": "source-ca",
+            "clientIdentity": "forbidden", "authentication": {"type": "static-api-key"}}],
+        "allowedFields": ["given-name", "family-name"],
+        "grantValidUntil": "2030-01-01T00:00:00Z",
+        "acquisition": {"maximumDataOperations": 8, "attemptTimeoutMilliseconds": 8000,
+            "maximumResponseBytes": 262144}
+    })
+}
+
+fn external_sources_runtime(fixture: &RuntimeFixture, entries: Value) -> String {
+    format!(
+        "{}externalSources: {entries}\n",
+        valid_runtime(&fixture.secret_root, &fixture.package_root)
+    )
+}
+
+#[test]
+fn an_external_source_entry_is_keyed_by_its_projection_and_errors_name_its_member() {
+    let fixture = RuntimeFixture::new();
+    let ca = fixture.path("source-ca.pem");
+    fs::write(&ca, "").expect("ca fixture writes");
+    let entry = external_source_entry("sha256:not-a-digest", &ca);
+    let error = parse_runtime_config(&external_sources_runtime(
+        &fixture,
+        json!({"person-indexed": entry}),
+    ))
+    .unwrap_err();
+    assert_eq!(
+        path_of(&error),
+        "/externalSources/person-indexed/packDigest"
+    );
+}
+
+#[test]
+fn retired_refresh_members_are_unknown_to_the_runtime_reader() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    for (block, member) in [
+        ("externalRefresh: {workers: {}}", "workers"),
+        (
+            "externalRefresh: {plans: {p: {target: {view: v, link: l}, worker: {accessProfile: a, requesterClient: c, principal: x, rowClaims: {}}, intervalSeconds: 1, refreshLabels: true}}}",
+            "refreshLabels",
+        ),
+    ] {
+        let error = parse_runtime_config(&format!("{base}{block}\n")).unwrap_err();
+        assert!(
+            path_of(&error).ends_with(member) || error.to_string().contains(member),
+            "{member}: {} {error}",
+            path_of(&error)
+        );
+    }
+}
+
+#[test]
+fn the_offline_check_binds_an_external_source_against_the_package() {
+    let fixture = RuntimeFixture::new();
+    let ca = fixture.path("source-ca.pem");
+    fs::write(&ca, "").expect("ca fixture writes");
+    let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/adapter/examples/external-projections/pack.yaml");
+    let digest = registry_platform_config::sha256_uri(&fs::read(&pack).expect("pack reads"));
+    let source = external_sources_runtime(
+        &fixture,
+        json!({"person-indexed": external_source_entry(&digest, &ca)}),
+    );
+    let path = fixture.path("runtime-external.yaml");
+    fs::write(&path, &source).expect("runtime fixture writes");
+    let example = include_str!("../../../products/breg/examples/external-views/registry.yaml");
+    let compile = |text: &str| {
+        let project =
+            registry_breg::contract::parse_project_yaml(text.as_bytes()).expect("example parses");
+        compile_project(&project, &[], CompileProfile::Authoring).expect("example compiles")
+    };
+    let matching = check_runtime_config(&path, true, Some(&compile(example)));
+    assert!(
+        matching
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "breg.runtime.invalid-external-sources"),
+        "{:?}",
+        matching.diagnostics
+    );
+    let mismatched = check_runtime_config(
+        &path,
+        true,
+        Some(&compile(
+            &example.replace("scope: licensing-holders", "scope: another-scope"),
+        )),
+    );
+    let diagnostic = mismatched
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.runtime.invalid-external-sources")
+        .unwrap_or_else(|| panic!("{:?}", mismatched.diagnostics));
+    assert_eq!(diagnostic.path, "/externalSources/person-indexed/packFile");
+    assert!(diagnostic.message.contains("another-scope"));
+    assert!(diagnostic.message.contains("licensing-holders"));
+}

@@ -31,11 +31,10 @@ externalRecordTypes:
 externalProjections:
   - id: approved-subjects
     recordType: external-subject
-    operation: subjects-by-key
-    operationVersion: "1"
+    sourceRoute: subjects-by-key
+    sourceRouteVersion: "1"
     purpose: local-consultation
     scope: approved-subjects
-    selectorScheme: urn:example:subject-key
     mode: indexed
     cardinality: one
     cacheTtlSeconds: 600
@@ -47,8 +46,6 @@ externalViews:
       - id: subject
         projection: approved-subjects
         fromField: subject-key
-        identifierScheme: urn:example:subject-key
-        fields: [label, code]
 accessProfiles:
   - id: reader
     principalClaim: registry_principal
@@ -106,16 +103,6 @@ fn external_views_are_compiled_separately_from_owned_fields_and_permissions() {
 }
 
 #[test]
-fn direct_link_rejects_another_identifier_scheme() {
-    let original = "        identifierScheme: urn:example:subject-key";
-    let changed = "        identifierScheme: urn:example:other-key";
-    rejects(
-        &PROJECT.replace(original, changed),
-        "breg.external-view.identifier-scheme-mismatch",
-    );
-}
-
-#[test]
 fn query_grant_cannot_use_a_hidden_external_field() {
     rejects(
         &PROJECT.replace("filterableFields: [label]", "filterableFields: [code]"),
@@ -166,8 +153,6 @@ fn external_openapi_uses_named_view_and_field_grants() {
     assert_eq!(fields["label"]["type"], "string");
     assert!(fields.get("code").is_none());
     assert!(schema["properties"].get("count").is_none());
-    assert!(document["paths"]["/v1/external-views/local-with-subject/subject/refresh"].is_null());
-    assert!(document["paths"]["/v1/external-refresh-plans/{plan}/step"].is_null());
 }
 
 #[test]
@@ -221,23 +206,6 @@ fn refresh_link_gets_a_managed_index_matching_its_row_policy() {
         .find(|statement| statement.id == format!("entity.local-record.index.{}", managed.0))
         .expect("managed index is emitted in reviewed DDL");
     assert!(statement.sql.contains("record_id"));
-    let document: serde_json::Value = serde_json::from_slice(
-        &registry
-            .artifacts()
-            .get("generated/openapi.json")
-            .unwrap()
-            .bytes,
-    )
-    .unwrap();
-    let paths = &document["paths"];
-    assert_eq!(
-        paths["/v1/external-refresh-plans/{plan}/step"]["post"]["operationId"],
-        "external-refresh-plan-step",
-    );
-    assert_eq!(
-        paths["/v1/external-refresh-plans/{plan}/hints"]["post"]["responses"]["202"]["description"],
-        "Hint accepted or already admitted, without checking local matches",
-    );
 }
 
 #[test]

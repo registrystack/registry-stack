@@ -5990,14 +5990,13 @@ fn linked_registry() -> registry_breg::CompiledRegistry {
             "fields":[{"id":"label","type":"string","classification":"internal"}]
           }],
           "externalProjections":[{
-            "id":"approved-subjects","recordType":"external-subject","operation":"subjects-by-key","operationVersion":"1",
-            "purpose":"local-consultation","scope":"approved-subjects","selectorScheme":"urn:example:subject-key",
+            "id":"approved-subjects","recordType":"external-subject","sourceRoute":"subjects-by-key","sourceRouteVersion":"1",
+            "purpose":"local-consultation","scope":"approved-subjects",
             "mode":"indexed","cardinality":"one","cacheTtlSeconds":600,"fields":["label"]
           }],
           "externalViews":[{
             "id":"local-with-subject","recordType":"local-record",
-            "links":[{"id":"subject","projection":"approved-subjects","fromField":"subjectkey",
-              "identifierScheme":"urn:example:subject-key","fields":["label"]}]
+            "links":[{"id":"subject","projection":"approved-subjects","fromField":"subjectkey"}]
           }],
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",

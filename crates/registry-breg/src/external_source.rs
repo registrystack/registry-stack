@@ -52,17 +52,44 @@ const MAXIMUM_CA_BYTES: usize =
     registry_platform_httputil::destination::MAX_DESTINATION_CA_BUNDLE_BYTES;
 const MAXIMUM_CACHE_TTL_SECONDS: u64 = crate::external_views::MAXIMUM_CACHE_TTL_SECONDS as u64;
 
-/// Operator binding for one already declared projection. The reviewed pack
-/// provides the acquisition ceiling; runtime configuration can narrow it.
+/// Operator binding for one already declared projection, keyed in the runtime
+/// file by the projection's ID. The reviewed pack provides the acquisition
+/// ceiling; runtime configuration can narrow it.
+#[derive(Clone)]
+pub struct ExternalSourceBinding {
+    pub id: LocalId,
+    members: ExternalSourceMembers,
+}
+
+impl ExternalSourceBinding {
+    pub fn new(id: LocalId, members: ExternalSourceMembers) -> Self {
+        Self { id, members }
+    }
+}
+
+impl std::ops::Deref for ExternalSourceBinding {
+    type Target = ExternalSourceMembers;
+
+    fn deref(&self) -> &ExternalSourceMembers {
+        &self.members
+    }
+}
+
+/// The members of one `externalSources` entry; the entry's key is the ID of
+/// the projection it binds.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ExternalSourceBinding {
-    pub id: LocalId,
+pub struct ExternalSourceMembers {
+    /// Absolute path of the reviewed Adapter pack file.
     pub pack_file: String,
+    /// The pack file's `sha256:` digest; BReg refuses a pack whose bytes differ.
     pub pack_digest: Digest,
+    /// How BReg reaches the source: endpoints, credentials references and TLS trust.
     pub connection: AdapterEndpointBindings,
     pub endpoint_policies: UniqueIdList<EvidenceConnectionPolicy>,
+    /// The operator-approved subset of outside fields BReg may copy. It must
+    /// cover every field the projection declares.
     pub allowed_fields: UniqueList<LocalId>,
     /// The reviewed source grant cutoff, as an RFC 3339 timestamp.
     pub grant_valid_until: String,
@@ -71,6 +98,7 @@ pub struct ExternalSourceBinding {
     /// cacheTtlSeconds, then purges it. A live projection refuses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_ttl_seconds: Option<BoundedU64<1, MAXIMUM_CACHE_TTL_SECONDS>>,
+    /// Per-acquisition ceilings that narrow the pack's own.
     pub acquisition: ExternalSourceAcquisition,
 }
 
@@ -80,12 +108,16 @@ impl Identified for ExternalSourceBinding {
     }
 }
 
+/// Ceilings on one acquisition from the source.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExternalSourceAcquisition {
+    /// Most data operations one acquisition may run.
     pub maximum_data_operations: BoundedU64<1, 1000>,
+    /// Time allowed for one attempt, in milliseconds.
     pub attempt_timeout_milliseconds: BoundedU64<1, 60000>,
+    /// Most response bytes one acquisition may read.
     pub maximum_response_bytes: BoundedU64<1, MAXIMUM_RESPONSE_BYTES>,
 }
 
@@ -101,14 +133,36 @@ pub enum ExternalSourceError {
     Unbound,
     #[error("the active package declares no projection with this ID")]
     UnknownProjection,
-    #[error("another binding describes the same connection differently")]
-    ConnectionConflict,
     #[error("the external source grant does not permit this acquisition")]
     Grant,
     #[error("the source result is incompatible with the approved BReg field types")]
     Result,
     #[error("the external source acquisition was refused: {0}")]
     Acquisition(#[from] ProjectionError),
+}
+
+/// One binding check that failed: the `externalSources` member of the runtime
+/// file at fault, and a reason naming that member and the values that
+/// disagree. The reason is the unavailable text and the check diagnostic; it
+/// never holds a credential.
+#[derive(Debug)]
+pub(crate) struct BindingRefusal {
+    pub(crate) member: &'static str,
+    pub(crate) reason: String,
+}
+
+impl BindingRefusal {
+    fn new(member: &'static str, reason: impl Into<String>) -> Self {
+        Self {
+            member,
+            reason: reason.into(),
+        }
+    }
+
+    /// A refusal whose reason is the generic message of an `ExternalSourceError`.
+    fn plain(kind: ExternalSourceError, member: &'static str) -> Self {
+        Self::new(member, kind.to_string())
+    }
 }
 
 #[derive(Default)]
@@ -169,7 +223,7 @@ impl ExternalSourceService {
         bindings: &[ExternalSourceBinding],
         resolver: Arc<SecretResolver>,
     ) -> Result<Self, ExternalSourceError> {
-        validate_bindings(bindings)?;
+        validate_bindings(bindings).map_err(|_| ExternalSourceError::Configuration)?;
         let mut result = Self::default();
         let mut connections = BTreeMap::new();
         for binding in bindings {
@@ -178,8 +232,8 @@ impl ExternalSourceService {
                 Ok(bound) => {
                     result.bindings.insert(id.to_owned(), bound);
                 }
-                Err(error) => {
-                    result.unavailable.insert(id.to_owned(), error.to_string());
+                Err(refusal) => {
+                    result.unavailable.insert(id.to_owned(), refusal.reason);
                 }
             }
         }
@@ -253,37 +307,106 @@ impl ExternalSourceService {
 
 type SharedConnections<'a> = BTreeMap<&'a str, (String, EvidenceRuntimeBindings)>;
 
-fn bind_one<'a>(
+/// What a binding establishes from the pack and the compiled projection
+/// alone, before any connection or credential is read.
+struct OfflineBinding {
+    program: ProjectionPackProgram,
+    fields: BTreeSet<String>,
+    field_types: FieldTypes,
+    cache_ttl_seconds: Option<u32>,
+    grant_valid_until: DateTime<Utc>,
+}
+
+/// Read the pack, check its digest and compile it, then hold it to the
+/// projection's contract and the approved fields. It reads no credential and
+/// opens no connection, so `check_runtime_config` runs the same steps.
+fn bind_offline(
     compiled: &CompiledRegistry,
-    binding: &'a ExternalSourceBinding,
-    connections: &mut SharedConnections<'a>,
-    resolver: &Arc<SecretResolver>,
-) -> Result<BoundExternalSource, ExternalSourceError> {
+    binding: &ExternalSourceBinding,
+) -> Result<OfflineBinding, BindingRefusal> {
     let catalog = compiled.external_views();
     let projection = catalog
         .projections
         .get(binding.id.as_str())
-        .ok_or(ExternalSourceError::UnknownProjection)?;
+        .ok_or_else(|| {
+            BindingRefusal::new(
+                "id",
+                format!(
+                    "the package declares no external projection `{}`",
+                    binding.id.as_str()
+                ),
+            )
+        })?;
     let record = catalog
         .record_types
         .get(projection.record_type.as_str())
-        .ok_or(ExternalSourceError::Contract)?;
-    let (pack, artifacts) = load_pack(Path::new(&binding.pack_file), &binding.pack_digest)?;
+        .ok_or_else(|| BindingRefusal::plain(ExternalSourceError::Contract, "id"))?;
+    let (pack, artifacts) = load_pack(Path::new(&binding.pack_file), &binding.pack_digest)
+        .map_err(|_| {
+            BindingRefusal::new("packFile",
+                "the pack file or a file it pins could not be read, or its bytes do not match packDigest or the pinned digest",
+            )
+        })?;
     let limits = EvidenceLimits::try_new(
         binding.acquisition.maximum_data_operations.get(),
         binding.acquisition.attempt_timeout_milliseconds.get(),
         binding.acquisition.maximum_response_bytes.get() as usize,
     )
-    .map_err(|_| ExternalSourceError::Configuration)?;
+    .map_err(|_| BindingRefusal::plain(ExternalSourceError::Configuration, "acquisition"))?;
     let program = compile_projection_pack(&pack, projection.operation.as_str(), &artifacts, limits)
-        .map_err(|_| ExternalSourceError::Contract)?;
+        .map_err(|_| {
+            BindingRefusal::new("packFile",
+                format!(
+                    "the pack has no usable source route `{}`, which the projection's sourceRoute names",
+                    projection.operation.as_str()
+                ),
+            )
+        })?;
     check_pack_contract(projection, record, &program)?;
     let (fields, field_types) = project_fields(projection, record, binding)?;
     let cache_ttl_seconds =
         effective_ttl(projection, binding.cache_ttl_seconds.map(|ttl| ttl.get()))?;
-    let grant_valid_until = parse_grant_cutoff(&binding.grant_valid_until)?;
+    let grant_valid_until = parse_grant_cutoff(&binding.grant_valid_until)
+        .map_err(|error| BindingRefusal::plain(error, "grantValidUntil"))?;
+    Ok(OfflineBinding {
+        program,
+        fields,
+        field_types,
+        cache_ttl_seconds,
+        grant_valid_until,
+    })
+}
 
-    let ca_bundles = capture_ca_bundles(&binding.connection)?;
+/// Run the offline checks of one binding. `check_runtime_config` reports a
+/// refusal at `/externalSources/<id>/<member>`.
+pub(crate) fn check_binding_offline(
+    compiled: &CompiledRegistry,
+    binding: &ExternalSourceBinding,
+) -> Result<(), BindingRefusal> {
+    bind_offline(compiled, binding).map(|_| ())
+}
+
+fn bind_one<'a>(
+    compiled: &CompiledRegistry,
+    binding: &'a ExternalSourceBinding,
+    connections: &mut SharedConnections<'a>,
+    resolver: &Arc<SecretResolver>,
+) -> Result<BoundExternalSource, BindingRefusal> {
+    let projection = compiled
+        .external_views()
+        .projections
+        .get(binding.id.as_str())
+        .ok_or_else(|| BindingRefusal::plain(ExternalSourceError::UnknownProjection, "id"))?;
+    let OfflineBinding {
+        program,
+        fields,
+        field_types,
+        cache_ttl_seconds,
+        grant_valid_until,
+    } = bind_offline(compiled, binding)?;
+
+    let ca_bundles = capture_ca_bundles(&binding.connection)
+        .map_err(|error| BindingRefusal::plain(error, "connection"))?;
     let ca_digests: BTreeMap<_, _> = ca_bundles
         .iter()
         .map(|(name, bytes)| (name, sha256_uri(bytes)))
@@ -294,7 +417,8 @@ fn bind_one<'a>(
         "connection":binding.connection,
         "endpointPolicies":binding.endpoint_policies,
         "caDigests":ca_digests
-    }))?;
+    }))
+    .map_err(|error| BindingRefusal::plain(error, "connection"))?;
     let connection_id = binding.connection.id.as_str();
     let connection = match connections.entry(connection_id) {
         std::collections::btree_map::Entry::Vacant(entry) => {
@@ -312,14 +436,23 @@ fn bind_one<'a>(
         std::collections::btree_map::Entry::Occupied(entry) => {
             let (previous, runtime) = entry.into_mut();
             if previous.as_str() != connection_fingerprint.as_str() {
-                return Err(ExternalSourceError::ConnectionConflict);
+                return Err(BindingRefusal::new("connection",
+                    format!(
+                        "another binding describes connection `{connection_id}` differently; bindings that share a connection id must describe it identically"
+                    ),
+                ));
             }
             runtime
         }
     };
     let program = program
         .bind_live(connection, connection_id, &binding.endpoint_policies)
-        .map_err(|_| ExternalSourceError::Contract)?;
+        .map_err(|_| {
+            BindingRefusal::new(
+                "endpointPolicies",
+                "the endpoint policies do not cover the pack's endpoints and connection",
+            )
+        })?;
     // The scope fingerprints cover only what grants authority over cached
     // rows: the reviewed source contract, its operation and the allowed
     // fields. Connection details, CA bundles, acquisition limits, the grant
@@ -328,12 +461,14 @@ fn bind_one<'a>(
     let binding_fingerprint = fingerprint(&json!({
         "operation":projection.operation,
         "sourceContract":source_contract
-    }))?;
+    }))
+    .map_err(|error| BindingRefusal::plain(error, "packFile"))?;
     let grant_fingerprint = fingerprint(&json!({
         "operation":projection.operation,
         "sourceContract":source_contract,
         "allowedFields":fields
-    }))?;
+    }))
+    .map_err(|error| BindingRefusal::plain(error, "allowedFields"))?;
     Ok(BoundExternalSource {
         program,
         fields,
@@ -346,26 +481,72 @@ fn bind_one<'a>(
     })
 }
 
-pub(crate) fn validate_bindings(
-    bindings: &[ExternalSourceBinding],
-) -> Result<(), ExternalSourceError> {
-    let mut ids = BTreeSet::new();
-    if bindings.len() > MAXIMUM_BINDINGS
-        || !bindings
-            .iter()
-            .all(|binding| ids.insert(binding.id.as_str()))
-        || !lookalike_local_id_pairs(bindings.iter().map(Identified::id)).is_empty()
+/// A binding the runtime file writes wrongly: the RFC 6901 pointer of the
+/// member at fault and why.
+#[derive(Debug)]
+pub(crate) struct BindingFault {
+    pub(crate) path: String,
+    pub(crate) reason: String,
+}
+
+impl BindingFault {
+    fn at(id: &str, member: &str, reason: &str) -> Self {
+        Self {
+            path: format!("/externalSources/{id}/{member}"),
+            reason: reason.to_owned(),
+        }
+    }
+}
+
+/// Hold each entry to the rules its own members state; the first fault, in
+/// ID order, is the one reported.
+pub(crate) fn validate_bindings(bindings: &[ExternalSourceBinding]) -> Result<(), BindingFault> {
+    if bindings.len() > MAXIMUM_BINDINGS {
+        return Err(BindingFault {
+            path: "/externalSources".to_owned(),
+            reason: format!("at most {MAXIMUM_BINDINGS} projections may be bound"),
+        });
+    }
+    if let Some((first, second)) = lookalike_local_id_pairs(bindings.iter().map(Identified::id))
+        .into_iter()
+        .next()
     {
-        return Err(ExternalSourceError::Configuration);
+        return Err(BindingFault {
+            path: format!("/externalSources/{second}"),
+            reason: format!(
+                "the ID `{second}` differs from `{first}` only by separators; give each binding a distinct ID"
+            ),
+        });
     }
     for binding in bindings {
-        parse_grant_cutoff(&binding.grant_valid_until)?;
-        if !valid_absolute_file(&binding.pack_file)
-            || binding.allowed_fields.is_empty()
-            || binding.allowed_fields.len() > 256
-            || binding.endpoint_policies.is_empty()
-        {
-            return Err(ExternalSourceError::Configuration);
+        let id = binding.id.as_str();
+        if parse_grant_cutoff(&binding.grant_valid_until).is_err() {
+            return Err(BindingFault::at(
+                id,
+                "grantValidUntil",
+                "write the grant cutoff as an RFC 3339 timestamp of at most 64 characters",
+            ));
+        }
+        if !valid_absolute_file(&binding.pack_file) {
+            return Err(BindingFault::at(
+                id,
+                "packFile",
+                "give a bounded absolute path with no `.` or `..` segment",
+            ));
+        }
+        if binding.allowed_fields.is_empty() || binding.allowed_fields.len() > 256 {
+            return Err(BindingFault::at(
+                id,
+                "allowedFields",
+                "list between 1 and 256 approved fields",
+            ));
+        }
+        if binding.endpoint_policies.is_empty() {
+            return Err(BindingFault::at(
+                id,
+                "endpointPolicies",
+                "declare at least one endpoint policy",
+            ));
         }
     }
     Ok(())
@@ -384,8 +565,20 @@ fn check_pack_contract(
     projection: &ExternalProjectionSource,
     record: &ExternalRecordTypeSource,
     program: &ProjectionPackProgram,
-) -> Result<(), ExternalSourceError> {
+) -> Result<(), BindingRefusal> {
     let contract = program.contract();
+    let refuse = |member: &str, pack: &str, project: &str| {
+        BindingRefusal::new(
+            "packFile",
+            format!("the pack's {member} is `{pack}`, but the project declares `{project}`"),
+        )
+    };
+    if contract.local_disclosure != ProjectionLocalDisclosure::HostProfiles {
+        return Err(BindingRefusal::new(
+            "packFile",
+            "the pack's route must disclose to host profiles (localDisclosure: host-profiles)",
+        ));
+    }
     let expected_operation = match (projection.mode, projection.cardinality) {
         (_, ExternalCardinality::Many) => ProjectionOperationKind::ByParent,
         (ExternalProjectionMode::Live, ExternalCardinality::One) => ProjectionOperationKind::Exact,
@@ -393,30 +586,85 @@ fn check_pack_contract(
             ProjectionOperationKind::Batch
         }
     };
-    if contract.local_disclosure != ProjectionLocalDisclosure::HostProfiles
-        || contract.operation != expected_operation
-        || contract.operation_version != projection.operation_version.as_str()
-        || contract.authority != record.authority.as_str()
-        || contract.purpose != projection.purpose.as_str()
-        || contract.scope != projection.scope.as_str()
-        || contract.selector_scheme != projection.selector_scheme.as_str()
-        || contract.record_key_scheme != record.identifier_scheme.as_str()
-        || (projection.mode == ExternalProjectionMode::Indexed
-            && contract.retention != ProjectionRetention::Retain)
+    if contract.operation != expected_operation {
+        return Err(refuse(
+            "operation kind",
+            &format!("{:?}", contract.operation),
+            &format!("{expected_operation:?}"),
+        ));
+    }
+    for (member, pack, project) in [
+        (
+            "sourceRouteVersion",
+            contract.operation_version.as_str(),
+            projection.operation_version.as_str(),
+        ),
+        (
+            "authority",
+            contract.authority.as_str(),
+            record.authority.as_str(),
+        ),
+        (
+            "purpose",
+            contract.purpose.as_str(),
+            projection.purpose.as_str(),
+        ),
+        ("scope", contract.scope.as_str(), projection.scope.as_str()),
+        (
+            "selectorScheme",
+            contract.selector_scheme.as_str(),
+            projection.selector_scheme.as_str(),
+        ),
+        (
+            "record identifierScheme",
+            contract.record_key_scheme.as_str(),
+            record.identifier_scheme.as_str(),
+        ),
+    ] {
+        if pack != project {
+            return Err(refuse(member, pack, project));
+        }
+    }
+    if projection.mode == ExternalProjectionMode::Indexed
+        && contract.retention != ProjectionRetention::Retain
     {
-        return Err(ExternalSourceError::Contract);
+        return Err(BindingRefusal::new(
+            "packFile",
+            "an indexed projection needs a pack route that retains its records (retention: retain)",
+        ));
     }
     for id in projection.fields.iter() {
         let field = record
             .fields
             .iter()
             .find(|field| field.id == *id)
-            .ok_or(ExternalSourceError::Contract)?;
+            .ok_or_else(|| {
+                BindingRefusal::new(
+                    "packFile",
+                    format!(
+                        "projection field `{}` is not a field of record type `{}`",
+                        id.as_str(),
+                        record.id.as_str()
+                    ),
+                )
+            })?;
         let schema = program.fields_schema().as_value()["properties"]
             .get(id.as_str())
-            .ok_or(ExternalSourceError::Contract)?;
+            .ok_or_else(|| {
+                BindingRefusal::new(
+                    "packFile",
+                    format!("the pack's route does not return field `{}`", id.as_str()),
+                )
+            })?;
         if !compatible_field(field.value_type, field.nullable, schema) {
-            return Err(ExternalSourceError::Contract);
+            return Err(BindingRefusal::new(
+                "packFile",
+                format!(
+                    "the pack's type for field `{}` is not the record type's {:?}",
+                    id.as_str(),
+                    field.value_type
+                ),
+            ));
         }
     }
     Ok(())
@@ -459,19 +707,25 @@ fn project_fields(
     projection: &ExternalProjectionSource,
     record: &ExternalRecordTypeSource,
     binding: &ExternalSourceBinding,
-) -> Result<(BTreeSet<String>, FieldTypes), ExternalSourceError> {
+) -> Result<(BTreeSet<String>, FieldTypes), BindingRefusal> {
     let approved: BTreeSet<_> = binding.allowed_fields.iter().map(LocalId::as_str).collect();
     let mut fields = BTreeSet::new();
     let mut types = BTreeMap::new();
     for id in projection.fields.iter() {
         if !approved.contains(id.as_str()) {
-            return Err(ExternalSourceError::Grant);
+            return Err(BindingRefusal::new("allowedFields",
+                format!(
+                    "projection field `{field}` is not in binding `{binding_id}`'s allowedFields; add it at /externalSources/{binding_id}/allowedFields to approve copying it",
+                    field = id.as_str(),
+                    binding_id = binding.id.as_str()
+                ),
+            ));
         }
         let field = record
             .fields
             .iter()
             .find(|field| field.id == *id)
-            .ok_or(ExternalSourceError::Contract)?;
+            .ok_or_else(|| BindingRefusal::plain(ExternalSourceError::Contract, "allowedFields"))?;
         fields.insert(id.as_str().to_owned());
         types.insert(id.as_str().to_owned(), (field.value_type, field.nullable));
     }
@@ -483,7 +737,7 @@ fn project_fields(
 fn effective_ttl(
     projection: &ExternalProjectionSource,
     deployment: Option<u64>,
-) -> Result<Option<u32>, ExternalSourceError> {
+) -> Result<Option<u32>, BindingRefusal> {
     match (projection.mode, projection.cache_ttl_seconds, deployment) {
         (ExternalProjectionMode::Live, None, None) => Ok(None),
         (ExternalProjectionMode::Indexed, Some(authored), deployment) => {
@@ -493,7 +747,9 @@ fn effective_ttl(
             });
             Ok(Some(shortened))
         }
-        _ => Err(ExternalSourceError::Configuration),
+        _ => Err(BindingRefusal::new("cacheTtlSeconds",
+            "only an indexed projection takes a cacheTtlSeconds, and an indexed projection must declare one in the package",
+        )),
     }
 }
 
@@ -934,38 +1190,60 @@ pub(crate) mod tests {
             EvidenceLimits::default(),
         )
         .unwrap();
-        assert!(matches!(
-            check_pack_contract(&projection, &record, &restricted),
-            Err(ExternalSourceError::Contract)
-        ));
+        assert!(check_pack_contract(&projection, &record, &restricted)
+            .unwrap_err()
+            .reason
+            .contains("host-profiles"));
 
         let mut wrong_scope = projection.clone();
         wrong_scope.scope = ExternalId::new("different-scope").unwrap();
-        assert!(matches!(
-            check_pack_contract(&wrong_scope, &record, &program),
-            Err(ExternalSourceError::Contract)
-        ));
+        let refusal = check_pack_contract(&wrong_scope, &record, &program).unwrap_err();
+        assert_eq!(refusal.member, "packFile");
+        assert!(refusal.reason.contains("scope"), "{}", refusal.reason);
 
         let mut wrong_scheme = record.clone();
         wrong_scheme.identifier_scheme = ExternalId::new("urn:example:unrelated").unwrap();
-        assert!(matches!(
-            check_pack_contract(&projection, &wrong_scheme, &program),
-            Err(ExternalSourceError::Contract)
-        ));
+        let refusal = check_pack_contract(&projection, &wrong_scheme, &program).unwrap_err();
+        assert!(
+            refusal.reason.contains("identifierScheme"),
+            "{}",
+            refusal.reason
+        );
 
         let mut wrong_type = record.clone();
         wrong_type.fields[0].value_type = ExternalFieldType::Integer;
-        assert!(matches!(
-            check_pack_contract(&projection, &wrong_type, &program),
-            Err(ExternalSourceError::Contract)
-        ));
+        let refusal = check_pack_contract(&projection, &wrong_type, &program).unwrap_err();
+        assert!(refusal.reason.contains("family-name"), "{}", refusal.reason);
 
         let mut indexed = projection;
         indexed.mode = ExternalProjectionMode::Indexed;
-        assert!(matches!(
-            check_pack_contract(&indexed, &record, &program),
-            Err(ExternalSourceError::Contract)
-        ));
+        assert!(check_pack_contract(&indexed, &record, &program).is_err());
+    }
+
+    #[test]
+    fn a_pack_contract_mismatch_names_the_member_and_both_values() {
+        let (pack, artifacts) = example();
+        let program =
+            compile_projection_pack(&pack, "person-exact", &artifacts, EvidenceLimits::default())
+                .unwrap();
+        let (projection, record) = project_contracts();
+        let mut other_purpose = projection.clone();
+        other_purpose.purpose = ExternalId::new("marketing").unwrap();
+        let refusal = check_pack_contract(&other_purpose, &record, &program).unwrap_err();
+        assert!(refusal.reason.contains("purpose"), "{}", refusal.reason);
+        assert!(refusal.reason.contains("licensing"), "{}", refusal.reason);
+        assert!(refusal.reason.contains("marketing"), "{}", refusal.reason);
+
+        let mut other_version = projection;
+        other_version.operation_version = ExternalId::new("2").unwrap();
+        let refusal = check_pack_contract(&other_version, &record, &program).unwrap_err();
+        assert!(
+            refusal.reason.contains("sourceRouteVersion"),
+            "{}",
+            refusal.reason
+        );
+        assert!(refusal.reason.contains("`1`"), "{}", refusal.reason);
+        assert!(refusal.reason.contains("`2`"), "{}", refusal.reason);
     }
 
     #[test]
@@ -1138,10 +1416,10 @@ pub(crate) mod tests {
     fn a_deployment_cache_lifetime_only_shortens_the_authored_one() {
         let (live, _) = project_contracts();
         assert!(matches!(effective_ttl(&live, None), Ok(None)));
-        assert!(matches!(
-            effective_ttl(&live, Some(60)),
-            Err(ExternalSourceError::Configuration)
-        ));
+        assert_eq!(
+            effective_ttl(&live, Some(60)).unwrap_err().member,
+            "cacheTtlSeconds"
+        );
         let mut indexed = live;
         indexed.mode = ExternalProjectionMode::Indexed;
         indexed.cache_ttl_seconds = Some(registry_platform_yaml::BoundedU32::new(300).unwrap());
@@ -1331,11 +1609,22 @@ pub(crate) mod tests {
         binding["packDigest"] = json!(sha256_uri(pack.as_bytes()));
     }
 
+    /// A binding as a runtime file keys it: the `id` member names the entry
+    /// and the rest are its members.
+    fn parse_binding(binding: &Value) -> ExternalSourceBinding {
+        let mut members = binding.clone();
+        let id = members
+            .as_object_mut()
+            .and_then(|members| members.remove("id"))
+            .unwrap();
+        ExternalSourceBinding::new(
+            LocalId::new(id.as_str().unwrap()).unwrap(),
+            serde_json::from_value(members).unwrap(),
+        )
+    }
+
     fn load_values(registry: &CompiledRegistry, bindings: &[Value]) -> ExternalSourceService {
-        let bindings = bindings
-            .iter()
-            .map(|binding| serde_json::from_value(binding.clone()).unwrap())
-            .collect::<Vec<ExternalSourceBinding>>();
+        let bindings = bindings.iter().map(parse_binding).collect::<Vec<_>>();
         ExternalSourceService::load(registry, &bindings, Arc::new(SecretResolver::disabled()))
             .unwrap()
     }
@@ -1407,9 +1696,15 @@ pub(crate) mod tests {
         let mut narrowed = original;
         narrowed["allowedFields"] = json!(["family-name"]);
         let service = load_values(&registry, &[narrowed]);
-        assert_eq!(
-            service.unavailable_projections().get("person-indexed"),
-            Some(&ExternalSourceError::Grant.to_string())
+        let reason = service
+            .unavailable_projections()
+            .get("person-indexed")
+            .unwrap();
+        assert!(reason.contains("`given-name`"), "{reason}");
+        assert!(reason.contains("person-indexed"), "{reason}");
+        assert!(
+            reason.contains("/externalSources/person-indexed/allowedFields"),
+            "{reason}"
         );
     }
 
@@ -1431,11 +1726,13 @@ pub(crate) mod tests {
         let unavailable = service.unavailable_projections();
         assert_eq!(
             unavailable.get("person-live").map(String::as_str),
-            Some(ExternalSourceError::Artifact.to_string().as_str())
+            Some(
+                "the pack file or a file it pins could not be read, or its bytes do not match packDigest or the pinned digest"
+            )
         );
         assert_eq!(
             unavailable.get("retired-projection").map(String::as_str),
-            Some(ExternalSourceError::UnknownProjection.to_string().as_str())
+            Some("the active package declares no projection with this ID")
         );
         for unbound in ["holdings-live", "holdings-indexed"] {
             assert_eq!(
@@ -1460,7 +1757,7 @@ pub(crate) mod tests {
             "cacheTtlSeconds":60,
             "acquisition":{"maximumDataOperations":8,"attemptTimeoutMilliseconds":8000,"maximumResponseBytes":262144}
         });
-        let parsed: ExternalSourceBinding = serde_json::from_value(binding.clone()).unwrap();
+        let parsed = parse_binding(&binding);
         assert_eq!(parsed.cache_ttl_seconds.map(|ttl| ttl.get()), Some(60));
         for (member, value) in [
             ("allowedSelectors", json!(["person-7"])),
@@ -1470,8 +1767,9 @@ pub(crate) mod tests {
             ),
         ] {
             let mut retired = binding.clone();
+            retired.as_object_mut().unwrap().remove("id");
             retired[member] = value;
-            assert!(serde_json::from_value::<ExternalSourceBinding>(retired).is_err());
+            assert!(serde_json::from_value::<ExternalSourceMembers>(retired).is_err());
         }
     }
 

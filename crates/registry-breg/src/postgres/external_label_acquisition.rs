@@ -448,9 +448,9 @@ mod tests {
                 {"id":"member","authority":"urn:test:source","identifierScheme":"urn:test:member","fields":[{"id":"holder","type":"string","classification":"restricted","nullable":true}]},
                 {"id":"label-record","authority":"urn:test:source","identifierScheme":"urn:test:person","fields":[{"id":"name","type":"string","classification":"internal"}]}],
             "externalProjections":[
-                {"id":"parent","recordType":"member","operation":"members","operationVersion":"1","purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys","mode":"indexed","cardinality":"many","cacheTtlSeconds":60,"fields":["holder"]},
-                {"id":"label","recordType":"label-record","operation":"batch","operationVersion":"1","purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:person","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["name"]}],
-            "externalViews":[{"id":"view","recordType":"local-record","links":[{"id":"members","projection":"parent","fromField":"subject-key","identifierScheme":"urn:test:keys","fields":["holder"],"label":{"projection":"label","fromField":"holder","identifierScheme":"urn:test:person","fields":["name"]}}]}],
+                {"id":"parent","recordType":"member","sourceRoute":"members","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys","mode":"indexed","cardinality":"many","cacheTtlSeconds":60,"fields":["holder"]},
+                {"id":"label","recordType":"label-record","sourceRoute":"batch","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["name"]}],
+            "externalViews":[{"id":"view","recordType":"local-record","links":[{"id":"members","projection":"parent","fromField":"subject-key","label":{"projection":"label","fromField":"holder"}}]}],
             "accessProfiles":[{"id":"refresh","principalClaim":"registry_principal","actorKind":"service","requesterClients":["worker"],"requiredScopes":["registry.refresh"],"requiredPurposes":["consultation"],"permissions":{
                 "records":[{"recordType":"local-record","operations":["list"],"rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}],
                 "refreshExternalProjections":["parent","label"]}}]

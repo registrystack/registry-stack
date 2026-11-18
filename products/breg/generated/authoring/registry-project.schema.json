@@ -2799,21 +2799,12 @@
       "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
       "type": "string"
     },
-    "ExternalLabelSource": {
+    "ExternalLabelDeclaration": {
       "additionalProperties": false,
+      "description": "Authoring form of a link label. The identifier scheme and fields come from\nthe projection it names.",
       "properties": {
-        "fields": {
-          "items": {
-            "$ref": "#/$defs/LocalId"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
         "fromField": {
           "$ref": "#/$defs/LocalId"
-        },
-        "identifierScheme": {
-          "$ref": "#/$defs/ExternalId"
         },
         "projection": {
           "$ref": "#/$defs/LocalId"
@@ -2821,9 +2812,32 @@
       },
       "required": [
         "projection",
-        "fromField",
-        "identifierScheme",
-        "fields"
+        "fromField"
+      ],
+      "type": "object"
+    },
+    "ExternalLinkDeclaration": {
+      "additionalProperties": false,
+      "description": "Authoring form of a view link. The identifier scheme and fields come from\nthe projection it names.",
+      "properties": {
+        "fromField": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "label": {
+          "$ref": "#/$defs/ExternalLabelDeclaration",
+          "description": "An optional to-one label on a row of an indexed related collection."
+        },
+        "projection": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "id",
+        "projection",
+        "fromField"
       ],
       "type": "object"
     },
@@ -2873,51 +2887,9 @@
       ],
       "type": "object"
     },
-    "ExternalLinkSource": {
+    "ExternalProjectionDeclaration": {
       "additionalProperties": false,
-      "properties": {
-        "fields": {
-          "items": {
-            "$ref": "#/$defs/LocalId"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "fromField": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "identifierScheme": {
-          "$ref": "#/$defs/ExternalId"
-        },
-        "label": {
-          "$ref": "#/$defs/ExternalLabelSource",
-          "description": "An optional to-one label on a row of an indexed related collection."
-        },
-        "projection": {
-          "$ref": "#/$defs/LocalId"
-        }
-      },
-      "required": [
-        "id",
-        "projection",
-        "fromField",
-        "identifierScheme",
-        "fields"
-      ],
-      "type": "object"
-    },
-    "ExternalProjectionMode": {
-      "enum": [
-        "live",
-        "indexed"
-      ],
-      "type": "string"
-    },
-    "ExternalProjectionSource": {
-      "additionalProperties": false,
+      "description": "Authoring form of an external projection. `compile` fills the derived\nmembers of [`ExternalProjectionSource`].",
       "properties": {
         "cacheTtlSeconds": {
           "format": "uint32",
@@ -2941,12 +2913,6 @@
         "mode": {
           "$ref": "#/$defs/ExternalProjectionMode"
         },
-        "operation": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "operationVersion": {
-          "$ref": "#/$defs/ExternalId"
-        },
         "purpose": {
           "$ref": "#/$defs/ExternalId"
         },
@@ -2957,22 +2923,36 @@
           "$ref": "#/$defs/ExternalId"
         },
         "selectorScheme": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "Required for cardinality `many`; refused for `one`, which selects by\nthe record type's identifier scheme."
+        },
+        "sourceRoute": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The source route the projection calls."
+        },
+        "sourceRouteVersion": {
           "$ref": "#/$defs/ExternalId"
         }
       },
       "required": [
         "id",
         "recordType",
-        "operation",
-        "operationVersion",
+        "sourceRoute",
+        "sourceRouteVersion",
         "purpose",
         "scope",
-        "selectorScheme",
         "mode",
         "cardinality",
         "fields"
       ],
       "type": "object"
+    },
+    "ExternalProjectionMode": {
+      "enum": [
+        "live",
+        "indexed"
+      ],
+      "type": "string"
     },
     "ExternalRecordTypeSource": {
       "additionalProperties": false,
@@ -3018,6 +2998,30 @@
       ],
       "type": "object"
     },
+    "ExternalViewDeclaration": {
+      "additionalProperties": false,
+      "description": "Authoring form of an external view.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/ExternalLinkDeclaration"
+          },
+          "type": "array"
+        },
+        "recordType": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "id",
+        "recordType",
+        "links"
+      ],
+      "type": "object"
+    },
     "ExternalViewPermissionSource": {
       "additionalProperties": false,
       "properties": {
@@ -3033,29 +3037,6 @@
       },
       "required": [
         "view",
-        "links"
-      ],
-      "type": "object"
-    },
-    "ExternalViewSource": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "links": {
-          "items": {
-            "$ref": "#/$defs/ExternalLinkSource"
-          },
-          "type": "array"
-        },
-        "recordType": {
-          "$ref": "#/$defs/LocalId"
-        }
-      },
-      "required": [
-        "id",
-        "recordType",
         "links"
       ],
       "type": "object"
@@ -6110,7 +6091,7 @@
     },
     "externalProjections": {
       "items": {
-        "$ref": "#/$defs/ExternalProjectionSource"
+        "$ref": "#/$defs/ExternalProjectionDeclaration"
       },
       "type": "array"
     },
@@ -6122,7 +6103,7 @@
     },
     "externalViews": {
       "items": {
-        "$ref": "#/$defs/ExternalViewSource"
+        "$ref": "#/$defs/ExternalViewDeclaration"
       },
       "type": "array"
     },
