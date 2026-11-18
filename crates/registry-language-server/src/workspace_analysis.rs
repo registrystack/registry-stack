@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use tower_lsp_server::ls_types::{Position, Range};
+
 use crate::refs::SymbolKind;
+use crate::yaml::YamlPointerResolver;
 
 const API_VERSION: &str = "id.registrystack.org/formats/platform/workspace-analysis/v1alpha1";
 // A 16 MiB authorized source snapshot expands to roughly 21.4 MiB when base64 encoded. Keep the
@@ -75,6 +78,8 @@ struct Request {
     #[serde(default)]
     target: Option<Identity>,
     #[serde(default)]
+    position: Option<PositionInput>,
+    #[serde(default)]
     targets: Vec<Identity>,
     #[serde(default)]
     max_results: Option<usize>,
@@ -89,6 +94,16 @@ enum Operation {
     Impact,
     References,
     Definition,
+}
+
+/// A zero-based cursor position in one snapshot file. `character` counts UTF-16 code units, as
+/// in the Language Server Protocol.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PositionInput {
+    file: String,
+    line: u32,
+    character: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -250,6 +265,10 @@ impl Identity {
 struct Location {
     file: String,
     pointer: String,
+    /// Filled only on `definition` and `references` results, when the file has a precise range
+    /// for the pointer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    range: Option<Range>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -331,6 +350,9 @@ struct Analysis {
     provenance: Vec<Provenance>,
     check_groups: Vec<String>,
     coverage: Coverage,
+    /// Exact source bytes by path, kept for range lookups on navigation queries.
+    #[serde(skip)]
+    sources: HashMap<String, Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -343,6 +365,7 @@ pub fn execute_workspace_analysis(input: Value) -> Result<Value, WorkspaceAnalys
     let request: Request = serde_json::from_value(input)
         .map_err(|error| WorkspaceAnalysisError::new("invalid-input", error.to_string()))?;
     validate_request_header(&request)?;
+    validate_query_inputs(&request)?;
     let after = analyze_snapshot(
         request.workspace_binding,
         request.revision,
@@ -356,21 +379,25 @@ pub fn execute_workspace_analysis(input: Value) -> Result<Value, WorkspaceAnalys
             Ok(json!({ "apiVersion": API_VERSION, "engine": engine, "analysis": after }))
         }
         Operation::References => {
-            let target = request.target.ok_or_else(|| {
-                WorkspaceAnalysisError::new("invalid-input", "references requires target")
-            })?;
-            validate_identity(&target)?;
-            let result = find_references(&after, target, request.max_results.unwrap_or(1_000))?;
+            let mut ranges = RangeResolver::new(&after.sources);
+            let max_results = request.max_results.unwrap_or(1_000);
+            let result = match query_target(request.target, request.position, &after, &mut ranges)?
+            {
+                Some(target) => find_references(&after, target, max_results, &mut ranges)?,
+                None => no_target_references(&after),
+            };
             Ok(
                 json!({ "apiVersion": API_VERSION, "engine": engine, "analysis": after, "references": result }),
             )
         }
         Operation::Definition => {
-            let target = request.target.ok_or_else(|| {
-                WorkspaceAnalysisError::new("invalid-input", "definition requires target")
-            })?;
-            validate_identity(&target)?;
-            let result = find_definitions(&after, &target, request.max_results.unwrap_or(1_000))?;
+            let mut ranges = RangeResolver::new(&after.sources);
+            let max_results = request.max_results.unwrap_or(1_000);
+            let result = match query_target(request.target, request.position, &after, &mut ranges)?
+            {
+                Some(target) => find_definitions(&after, &target, max_results, &mut ranges)?,
+                None => no_target_definitions(&after),
+            };
             Ok(
                 json!({ "apiVersion": API_VERSION, "engine": engine, "analysis": after, "definition": result }),
             )
@@ -447,6 +474,199 @@ fn validate_request_header(request: &Request) -> Result<(), WorkspaceAnalysisErr
     Ok(())
 }
 
+/// `definition` and `references` take exactly one of `target` and `position`; no other
+/// operation takes a `position`.
+fn validate_query_inputs(request: &Request) -> Result<(), WorkspaceAnalysisError> {
+    match request.operation {
+        Operation::Definition | Operation::References => {
+            match (request.target.is_some(), request.position.is_some()) {
+                (true, false) | (false, true) => Ok(()),
+                (true, true) => Err(WorkspaceAnalysisError::new(
+                    "invalid-input",
+                    "definition and references take either target or position, not both",
+                )),
+                (false, false) => Err(WorkspaceAnalysisError::new(
+                    "invalid-input",
+                    "definition and references require target or position",
+                )),
+            }
+        }
+        Operation::Analyze | Operation::Impact if request.position.is_some() => {
+            Err(WorkspaceAnalysisError::new(
+                "invalid-input",
+                "position is only valid for definition and references",
+            ))
+        }
+        Operation::Analyze | Operation::Impact => Ok(()),
+    }
+}
+
+/// The identity a `definition` or `references` query is about: the supplied `target`, or the
+/// identity under the cursor for a `position`. A position with no identity under it is `None`.
+fn query_target(
+    target: Option<Identity>,
+    position: Option<PositionInput>,
+    analysis: &Analysis,
+    ranges: &mut RangeResolver<'_>,
+) -> Result<Option<Identity>, WorkspaceAnalysisError> {
+    if let Some(position) = position {
+        return identity_at(analysis, ranges, &position);
+    }
+    let target = target.ok_or_else(|| {
+        WorkspaceAnalysisError::new("invalid-input", "query requires target or position")
+    })?;
+    validate_identity(&target)?;
+    Ok(Some(target))
+}
+
+/// Parses each file at most once and maps pointers to UTF-16 ranges.
+struct RangeResolver<'a> {
+    sources: &'a HashMap<String, Vec<u8>>,
+    parsed: HashMap<String, Option<YamlPointerResolver>>,
+}
+
+impl<'a> RangeResolver<'a> {
+    fn new(sources: &'a HashMap<String, Vec<u8>>) -> Self {
+        Self {
+            sources,
+            parsed: HashMap::new(),
+        }
+    }
+
+    fn document(&mut self, file: &str) -> Option<&YamlPointerResolver> {
+        let sources = self.sources;
+        self.parsed
+            .entry(file.to_owned())
+            .or_insert_with(|| {
+                let text = std::str::from_utf8(sources.get(file)?).ok()?;
+                YamlPointerResolver::parse(text.to_owned())
+            })
+            .as_ref()
+    }
+
+    /// The precise range for a location, or the whole document when `whole_document` is set and
+    /// the pointer is empty. `None` when the file has no precise range for the pointer.
+    fn locate(&mut self, location: &Location, whole_document: bool) -> Option<Range> {
+        let document = self.document(&location.file)?;
+        if location.pointer.is_empty() {
+            return whole_document.then(|| document.document_range());
+        }
+        document.range_at_pointer(&location.pointer)
+    }
+
+    fn definition(&mut self, definition: &Definition) -> Definition {
+        let mut definition = definition.clone();
+        definition.location.range = self.locate(&definition.location, true);
+        definition
+    }
+
+    fn reference(&mut self, reference: &Reference) -> Reference {
+        let mut reference = reference.clone();
+        reference.location.range = self.locate(&reference.location, false);
+        reference
+    }
+}
+
+/// The identity whose reference or definition token contains the position. The narrowest token
+/// wins; ties prefer a reference, then an object definition, then a file definition.
+fn identity_at(
+    analysis: &Analysis,
+    ranges: &mut RangeResolver<'_>,
+    position: &PositionInput,
+) -> Result<Option<Identity>, WorkspaceAnalysisError> {
+    let bytes = ranges.sources.get(&position.file).ok_or_else(|| {
+        WorkspaceAnalysisError::new(
+            "file-out-of-scope",
+            format!("position file {} is not in the snapshot", position.file),
+        )
+    })?;
+    let text = std::str::from_utf8(bytes).map_err(|_| {
+        WorkspaceAnalysisError::new(
+            "location-unavailable",
+            format!("position file {} is not UTF-8 text", position.file),
+        )
+    })?;
+    if !position_in_document(text, position) {
+        return Err(WorkspaceAnalysisError::new(
+            "invalid-input",
+            "the UTF-16 position is outside the snapshot file",
+        ));
+    }
+    if ranges.document(&position.file).is_none() {
+        return Err(WorkspaceAnalysisError::new(
+            "location-unavailable",
+            format!("position file {} could not be parsed", position.file),
+        ));
+    }
+    let cursor = Position::new(position.line, position.character);
+    let mut candidates: Vec<(u64, u8, String, Identity)> = Vec::new();
+    let in_file = |location: &Location| location.file == position.file;
+    for reference in analysis.references.iter().filter(|r| in_file(&r.location)) {
+        add_candidate(
+            &mut candidates,
+            ranges,
+            &reference.location,
+            &reference.target,
+            cursor,
+            0,
+        );
+    }
+    for definition in analysis
+        .definitions
+        .iter()
+        .filter(|definition| in_file(&definition.location))
+    {
+        let priority = match definition.identity {
+            Identity::Object { .. } => 1,
+            _ => 2,
+        };
+        add_candidate(
+            &mut candidates,
+            ranges,
+            &definition.location,
+            &definition.identity,
+            cursor,
+            priority,
+        );
+    }
+    candidates.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    Ok(candidates.into_iter().next().map(|candidate| candidate.3))
+}
+
+fn add_candidate(
+    candidates: &mut Vec<(u64, u8, String, Identity)>,
+    ranges: &mut RangeResolver<'_>,
+    location: &Location,
+    identity: &Identity,
+    cursor: Position,
+    priority: u8,
+) {
+    let Some(range) = ranges.locate(location, false) else {
+        return;
+    };
+    if (cursor.line, cursor.character) >= (range.start.line, range.start.character)
+        && (cursor.line, cursor.character) < (range.end.line, range.end.character)
+    {
+        let width = (u64::from(range.end.line.saturating_sub(range.start.line)) << 32)
+            + u64::from(range.end.character.saturating_sub(range.start.character));
+        candidates.push((width, priority, identity.key(), identity.clone()));
+    }
+}
+
+fn position_in_document(text: &str, position: &PositionInput) -> bool {
+    text.split('\n')
+        .nth(position.line as usize)
+        .map(|line| {
+            line.trim_end_matches('\r').encode_utf16().count() >= position.character as usize
+        })
+        .unwrap_or(false)
+}
+
 fn analyze_snapshot(
     workspace_binding: String,
     revision: String,
@@ -486,6 +706,7 @@ fn analyze_snapshot(
             location: Location {
                 file: file.output.path.clone(),
                 pointer: String::new(),
+                range: None,
             },
             owner: None,
         });
@@ -515,6 +736,7 @@ fn analyze_snapshot(
             location: Location {
                 file: fact.file,
                 pointer: fact.pointer,
+                range: None,
             },
             owner: fact.owner,
         });
@@ -587,6 +809,7 @@ fn analyze_snapshot(
             location: Location {
                 file: mapping.file,
                 pointer: mapping.pointer,
+                range: None,
             },
         });
     }
@@ -620,6 +843,7 @@ fn analyze_snapshot(
             location: Location {
                 file: mention.file,
                 pointer: mention.pointer,
+                range: None,
             },
             provider: "workspace-v1",
         });
@@ -677,6 +901,7 @@ fn analyze_snapshot(
                     location: Location {
                         file: generated_fact.path.clone(),
                         pointer: String::new(),
+                        range: None,
                     },
                     owner: None,
                 });
@@ -721,6 +946,7 @@ fn analyze_snapshot(
                         location: Location {
                             file: generated_fact.path.clone(),
                             pointer: String::new(),
+                            range: None,
                         },
                         provider: "generation",
                     });
@@ -757,7 +983,11 @@ fn analyze_snapshot(
     Ok(Analysis {
         api_version: API_VERSION,
         snapshot,
-        files: files.into_iter().map(|file| file.output).collect(),
+        files: files.iter().map(|file| file.output.clone()).collect(),
+        sources: files
+            .into_iter()
+            .map(|file| (file.output.path, file.bytes))
+            .collect(),
         definitions,
         references,
         declared_mappings: mappings,
@@ -930,6 +1160,7 @@ fn add_native_breg_facts(
             location: Location {
                 file: authored.clone(),
                 pointer: String::new(),
+                range: None,
             },
             owner: Some(Identity::authored(authored.clone())),
         });
@@ -950,6 +1181,7 @@ fn add_native_breg_facts(
             location: Location {
                 file: authored.clone(),
                 pointer: String::new(),
+                range: None,
             },
             provider: "native-breg",
         });
@@ -1106,6 +1338,7 @@ fn find_references(
     analysis: &Analysis,
     target: Identity,
     max_results: usize,
+    ranges: &mut RangeResolver<'_>,
 ) -> Result<Value, WorkspaceAnalysisError> {
     let max_results = bounded_limit(
         "maxResults",
@@ -1135,13 +1368,15 @@ fn find_references(
     all.sort_by(|left, right| left.1.id.cmp(&right.1.id));
     let truncated = all.len() > max_results;
     all.truncate(max_results);
-    let incoming: Vec<&Reference> = all
+    let incoming: Vec<Reference> = all
         .iter()
-        .filter_map(|(direction, reference)| (*direction == "incoming").then_some(*reference))
+        .filter(|(direction, _)| *direction == "incoming")
+        .map(|(_, reference)| ranges.reference(reference))
         .collect();
-    let outgoing: Vec<&Reference> = all
+    let outgoing: Vec<Reference> = all
         .iter()
-        .filter_map(|(direction, reference)| (*direction == "outgoing").then_some(*reference))
+        .filter(|(direction, _)| *direction == "outgoing")
+        .map(|(_, reference)| ranges.reference(reference))
         .collect();
     let mut gaps = analysis.coverage.gaps.clone();
     if !exists {
@@ -1172,6 +1407,7 @@ fn find_definitions(
     analysis: &Analysis,
     target: &Identity,
     max_results: usize,
+    ranges: &mut RangeResolver<'_>,
 ) -> Result<Value, WorkspaceAnalysisError> {
     let max_results = bounded_limit(
         "maxResults",
@@ -1188,6 +1424,10 @@ fn find_definitions(
         .collect();
     let truncated = matches.len() > max_results;
     matches.truncate(max_results);
+    let matches: Vec<Definition> = matches
+        .into_iter()
+        .map(|definition| ranges.definition(definition))
+        .collect();
     let mut gaps = analysis.coverage.gaps.clone();
     if matches.is_empty() {
         gaps.push(CoverageGap {
@@ -1210,6 +1450,29 @@ fn find_definitions(
         "truncated": truncated,
         "coverage": coverage(gaps, matches.is_empty()),
     }))
+}
+
+/// A `definition` answer for a position with no identity under it.
+fn no_target_definitions(analysis: &Analysis) -> Value {
+    json!({
+        "target": null,
+        "targetExists": false,
+        "definitions": [],
+        "truncated": false,
+        "coverage": coverage(analysis.coverage.gaps.clone(), false),
+    })
+}
+
+/// A `references` answer for a position with no identity under it.
+fn no_target_references(analysis: &Analysis) -> Value {
+    json!({
+        "target": null,
+        "targetExists": false,
+        "incoming": [],
+        "outgoing": [],
+        "truncated": false,
+        "coverage": coverage(analysis.coverage.gaps.clone(), false),
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]

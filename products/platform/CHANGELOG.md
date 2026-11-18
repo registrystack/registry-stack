@@ -50,8 +50,9 @@
   product's `check` command.
 - `registry-language-server` is now a standalone binary and a release asset of
   its own: a plain two-file archive with the release's checksums, first shipped
-  with v0.47.0. It runs on stdio by default, with `--workspace-analysis` and
-  `--workspace-lsp` for Studio. See its
+  with v0.47.0. It runs on stdio by default, with `--workspace-analysis` for
+  Studio: `definition` and `references` take a `target` or a cursor `position`
+  and return a `range` on every location. See its
   [README](../../crates/registry-language-server/README.md).
 
 ## 0.46.0 - 2026-11-08
