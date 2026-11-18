@@ -164,9 +164,7 @@ Requester and subject handles are keyed pseudonyms prefixed `hmac-sha256:v<versi
 from the audit master: protected correlators, not anonymous values. A record never
 carries a raw selector, a released or source value, or an access token. No supported tool turns a
 person's identifier into their access history, so do not expose the audit master or raw records
-to build one. On a local development session, `evidencectl audit show` reads the last operation,
-as [Stop and read the audit](../../tutorials/request-evidence-as-sd-jwt-vc/#stop-and-read-the-audit)
-shows.
+to build one. Read audit entries from the configured destination.
 
 The closed `executionBounds` object appears only on current `/v3` access attempts. Its members are
 `maximumDataOperations`, `acquisitionDeadlineMilliseconds`, and `maximumResponseBytes`. Evidence captures the

@@ -28,6 +28,12 @@ const DEFAULT_IMAGE: &str =
 const POSTGIS_IMAGE: &str =
     "postgis/postgis:18-3.6@sha256:4a43e3c3e5d55b9208240fc71db543b79c638766280c625a425bd0a2390989c4";
 const POSTGIS_PLATFORM: &str = "linux/amd64";
+/// The mail sink a run starts when a Messaging project declares an `smtp`
+/// provider.
+const MAILPIT_IMAGE: &str =
+    "ghcr.io/axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d";
+const MAILPIT_SMTP_PORT: &str = "1025";
+const MAILPIT_UI_PORT: &str = "8025";
 
 /// How long the server may take to accept connections, and then to serve TLS.
 const READY_DEADLINE: Duration = Duration::from_secs(60);
@@ -71,6 +77,25 @@ impl Image {
             }
         }
     }
+
+    pub(super) fn mailpit() -> Self {
+        Self {
+            reference: MAILPIT_IMAGE,
+            platform: None,
+        }
+    }
+}
+
+/// The name of a managed run's Mailpit container.
+pub(super) fn mailpit_name(run_id: &str) -> String {
+    format!("rstack-dev-mailpit-{run_id}")
+}
+
+/// A started Mailpit: the loopback ports Docker published for its SMTP
+/// listener and its web interface and API.
+pub(super) struct Mailpit {
+    pub(super) smtp_port: u16,
+    pub(super) ui_port: u16,
 }
 
 /// The name of a managed run's container.
@@ -128,7 +153,7 @@ impl Docker {
         }
         arguments.push(image.reference);
         self.run(&arguments, None, PULL_DEADLINE)
-            .with_context(|| format!("cannot pull the PostgreSQL image {}", image.reference))
+            .with_context(|| format!("cannot pull the image {}", image.reference))
             .map_err(operational)?;
         Ok(())
     }
@@ -246,6 +271,85 @@ impl Docker {
         })
     }
 
+    /// Start the run's Mailpit container, published on loopback only and
+    /// labelled with the run, and wait until it reports ready. A failure
+    /// leaves the container under the run's label, for the run's cleanup to
+    /// remove.
+    pub(super) fn start_mailpit(&self, run_id: &str) -> Result<Mailpit> {
+        self.start_mailpit_labelled(run_id).map_err(operational)
+    }
+
+    fn start_mailpit_labelled(&self, run_id: &str) -> Result<Mailpit> {
+        let name = mailpit_name(run_id);
+        let label = format!("{LABEL}={run_id}");
+        let smtp = format!("127.0.0.1::{MAILPIT_SMTP_PORT}");
+        let ui = format!("127.0.0.1::{MAILPIT_UI_PORT}");
+        let id = self
+            .run(
+                &[
+                    "run",
+                    "--detach",
+                    "--name",
+                    &name,
+                    "--label",
+                    &label,
+                    "--publish",
+                    &smtp,
+                    "--publish",
+                    &ui,
+                    MAILPIT_IMAGE,
+                ],
+                None,
+                COMMAND_DEADLINE,
+            )
+            .context("cannot start the Mailpit container")?;
+        let id = id.trim().to_owned();
+        ensure!(
+            id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "docker run did not report the ID of container {name}"
+        );
+        let published = |container_port: &str| -> Result<u16> {
+            let answer = self.run(
+                &["port", &id, &format!("{container_port}/tcp")],
+                None,
+                COMMAND_DEADLINE,
+            )?;
+            answer
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix("127.0.0.1:"))
+                .find_map(|port| port.parse::<u16>().ok().filter(|port| *port != 0))
+                .with_context(|| {
+                    format!(
+                        "Docker did not publish port {container_port} of container {name} on 127.0.0.1 (it answered {:?}); refusing to use it",
+                        answer.trim()
+                    )
+                })
+        };
+        let mailpit = Mailpit {
+            smtp_port: published(MAILPIT_SMTP_PORT)?,
+            ui_port: published(MAILPIT_UI_PORT)?,
+        };
+        let deadline = Instant::now() + self.ready_deadline;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let error = match self.run(
+                &["exec", &id, "/mailpit", "readyz"],
+                None,
+                remaining.max(READY_POLL),
+            ) {
+                Ok(_) => return Ok(mailpit),
+                Err(error) => error,
+            };
+            if Instant::now() >= deadline {
+                bail!(
+                    "Mailpit in container {name} (label {label}) was not ready within {} s: {error:#}",
+                    self.ready_deadline.as_secs()
+                );
+            }
+            thread::sleep(READY_POLL);
+        }
+    }
+
     /// Wait until the server accepts TCP connections. The image's first-start
     /// server listens on its socket only, so this waits for the final server.
     fn await_ready(&self, id: &str, name: &str, label: &str) -> Result<()> {
@@ -336,7 +440,7 @@ impl Docker {
                 None,
                 COMMAND_DEADLINE,
             )
-            .context("cannot list the run's PostgreSQL container")?
+            .context("cannot list the run's containers")?
             .lines()
             .map(str::trim)
             .filter(|id| !id.is_empty())
@@ -348,7 +452,7 @@ impl Docker {
         let mut arguments = vec!["rm", "--force", "--volumes"];
         arguments.extend(ids.iter().map(String::as_str));
         self.run(&arguments, None, COMMAND_DEADLINE)
-            .context("cannot remove the run's PostgreSQL container")?;
+            .context("cannot remove the run's containers")?;
         Ok(ids)
     }
 
@@ -599,6 +703,51 @@ mod tests {
             assert!(error.is::<super::super::Operational>(), "{error:#}");
             assert_eq!(fake.containers().len(), 1);
         }
+    }
+
+    #[test]
+    fn smtp_provider_starts_a_labelled_mailpit() {
+        let fake = Fake::new();
+        fs::write(fake.state().join("port-answer"), "127.0.0.1:49200\n").unwrap();
+
+        let mailpit = fake.docker.start_mailpit(RUN_ID).unwrap();
+
+        assert_eq!((mailpit.smtp_port, mailpit.ui_port), (49200, 49200));
+        let run = fake.invocations("run");
+        assert_eq!(run.len(), 1, "{run:?}");
+        assert!(run[0].contains(" --publish 127.0.0.1::1025 "), "{run:?}");
+        assert!(run[0].contains(" --publish 127.0.0.1::8025 "), "{run:?}");
+        assert_eq!(run[0].matches("--publish").count(), 2, "{run:?}");
+        assert!(
+            run[0].contains(&format!(" --label {LABEL}={RUN_ID} ")),
+            "{run:?}"
+        );
+        assert!(
+            run[0].ends_with(Image::mailpit().reference),
+            "the pinned image runs: {run:?}"
+        );
+        assert!(
+            Image::mailpit().reference.contains("@sha256:"),
+            "the image is pinned by digest"
+        );
+        assert_eq!(fake.invocations("exec").len(), 1);
+
+        // The run's label removes it along with the run's other containers.
+        let removed = fake.docker.remove(RUN_ID).unwrap();
+        assert_eq!(removed.len(), 1);
+        assert!(fake.containers().is_empty());
+    }
+
+    #[test]
+    fn mailpit_published_off_loopback_is_refused_and_stays_labelled() {
+        let fake = Fake::new();
+        fs::write(fake.state().join("port-answer"), "0.0.0.0:49201\n").unwrap();
+
+        let error = fake.docker.start_mailpit(RUN_ID).err().unwrap();
+
+        assert!(format!("{error:#}").contains("127.0.0.1"), "{error:#}");
+        assert!(error.is::<super::super::Operational>(), "{error:#}");
+        assert_eq!(fake.containers().len(), 1);
     }
 
     #[test]

@@ -2071,7 +2071,9 @@ fn live_runs(state: &std::path::Path) -> Vec<String> {
     match fs::read_dir(state) {
         Ok(entries) => entries
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .filter(|name| name != "failed")
+            // A `.RUN_ID.removing` directory is a stopped run whose files are
+            // still being deleted.
+            .filter(|name| name != "failed" && !name.starts_with('.'))
             .collect(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => panic!("cannot read the run state: {error}"),
@@ -2720,6 +2722,14 @@ fn evidence_alone_runs_end_to_end() {
         .unwrap()
         .starts_with("http://127.0.0.1:"));
     assert_eq!(report["database"]["mode"], "none", "{report}");
+    // The report names the runtime configuration the run wrote, so a user can
+    // hand it to `evidencectl request prepare --runtime-config`.
+    let config = report["runtimeConfigs"]["evidence"].as_str().unwrap();
+    assert!(
+        std::path::Path::new(config).is_absolute()
+            && config.ends_with("/evidence-candidate/runtime.yaml"),
+        "{report}"
+    );
 }
 
 #[test]
@@ -2732,6 +2742,106 @@ fn evidence_only_plan_never_calls_docker() {
     assert_eq!(report["status"], "ready", "{report}");
     let calls = fs::read_to_string(docker_state.join("argv.log")).unwrap_or_default();
     assert_eq!(calls, "", "Evidence alone ran Docker: {calls}");
+}
+
+/// `rstack dev` with only the Messaging tools: no BReg or Casework binary is
+/// set, so the launcher runs the built `messagingctl` as the host. The fake
+/// Docker CLI logs its calls in `docker_state`.
+fn messaging_only_dev(state: &std::path::Path, docker_state: &std::path::Path) -> Command {
+    let mut command = rstack_dev(state, true);
+    command
+        .env_remove("RSTACK_BREGCTL_BIN")
+        .env_remove("RSTACK_BREG_BIN")
+        .env_remove("RSTACK_CASEWORK_BIN")
+        .env("RSTACK_MESSAGINGCTL_BIN", host("messagingctl"))
+        .env("RSTACK_MESSAGING_BIN", host("messaging"))
+        .env("FAKE_DOCKER_STATE", docker_state);
+    command
+}
+
+#[test]
+#[ignore = "requires RSTACK_DEV_DATABASE_URL, RSTACK_DEV_DATABASE_CA and built messagingctl and messaging binaries"]
+fn messaging_alone_runs_end_to_end() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let project = scratch.path().join("project");
+    let docker_state = scratch.path().join("docker");
+    fs::create_dir(&docker_state).unwrap();
+    copy_tree(&example_project("messaging/examples/starter"), &project);
+
+    let started = with_test_database(
+        messaging_only_dev(&state, &docker_state).args(["start", utf8(&project)]),
+    )
+    .output()
+    .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
+    let run_id = report["run_id"].as_str().unwrap_or_default().to_owned();
+    if !started.status.success() {
+        messaging_only_dev(&state, &docker_state)
+            .args(["stop", &run_id])
+            .output()
+            .unwrap();
+        panic!("{started:?}");
+    }
+    assert_eq!(report["status"], "ready", "{report}");
+    for scenario in report["scenarios"].as_array().unwrap() {
+        assert_eq!(scenario["result"], "passed", "{report}");
+    }
+    let products = report["products"].as_object().unwrap();
+    assert_eq!(products.len(), 1, "{report}");
+    assert!(
+        report["runtimeConfigs"]["messaging"]
+            .as_str()
+            .unwrap()
+            .ends_with("/messaging-runtime.yaml"),
+        "{report}"
+    );
+
+    // The report names where each provider's sent messages can be read.
+    let gateway = report["sinks"]["sms-gateway"]["url"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(report["sinks"]["sms-gateway"]["type"], "http", "{report}");
+    assert_eq!(report["sinks"]["mail-relay"]["type"], "smtp", "{report}");
+    let sent = Command::new(system_binary("curl"))
+        .args(["--silent", "--show-error", "--noproxy", "*", &gateway])
+        .output()
+        .unwrap();
+    let sent: serde_json::Value = serde_json::from_slice(&sent.stdout).unwrap();
+    let sent = sent["sent"].as_array().unwrap();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0]["provider"], "sms-gateway");
+    assert_eq!(sent[0]["body"]["to"], "+15555550100");
+
+    // The one smtp provider got a labelled Mailpit container.
+    let calls = fs::read_to_string(docker_state.join("argv.log")).unwrap();
+    assert!(
+        calls.lines().any(|line| line.starts_with("run ")
+            && line.contains("axllent/mailpit")
+            && line.contains(&format!("org.registrystack.rstack.dev-run={run_id}"))),
+        "{calls}"
+    );
+
+    let stopped = messaging_only_dev(&state, &docker_state)
+        .args(["stop", &run_id])
+        .output()
+        .unwrap();
+    assert!(stopped.status.success(), "{stopped:?}");
+    assert_eq!(live_runs(&state), Vec::<String>::new());
+    let left: Vec<_> = fs::read_dir(docker_state.join("containers"))
+        .unwrap()
+        .collect();
+    assert!(left.is_empty(), "containers left behind: {left:?}");
+    assert!(
+        std::net::TcpStream::connect(
+            gateway
+                .trim_start_matches("http://")
+                .trim_end_matches("/sent")
+        )
+        .is_err(),
+        "the mock gateway still listens"
+    );
 }
 
 /// Points `command` at the TLS PostgreSQL test server that

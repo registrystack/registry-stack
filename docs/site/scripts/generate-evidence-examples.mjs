@@ -17,6 +17,7 @@ export const exampleFiles = [
   'fhir/adapter-packs/fhir-read-through/schemas/provider-organization.json',
   'fhir/adapter-packs/fhir-read-through/scripts/fhir.rhai',
   'fhir/dev-authority.yaml',
+  'fhir/dev.yaml',
   'fhir/discover-records.py',
   'fhir/evidence.yaml',
   'fhir/fixtures/coverage-status.yaml',
@@ -26,6 +27,7 @@ export const exampleFiles = [
   'fhir/local-target.yaml',
   'fhir/serve-source.py',
   'fhir/source.openapi.yaml',
+  'fhir/tests/scenarios.yaml',
   'fhir/test_source.py',
   'standalone/.gitignore',
   'standalone/README.md',
@@ -37,6 +39,7 @@ export const exampleFiles = [
   'standalone/adapter-packs/synthetic-register/schemas/person.json',
   'standalone/adapter-packs/synthetic-register/scripts/lookup.rhai',
   'standalone/dev-authority.yaml',
+  'standalone/dev.yaml',
   'standalone/evidence.yaml',
   'standalone/fixtures/adult-status.yaml',
   'standalone/fixtures/legal-parent-relationship.yaml',
@@ -50,6 +53,7 @@ export const exampleFiles = [
   'standalone/projections/person-facts.rhai',
   'standalone/schemas/person-facts.json',
   'standalone/serve-source.py',
+  'standalone/tests/scenarios.yaml',
 ].sort();
 
 export const sourceRecipeFiles = [

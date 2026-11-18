@@ -107,13 +107,10 @@ rstack evidence source import ./registry-status-export --project ./evidence
 
 The import checks every artifact's checksum, then adds the `registry-status` Source, its selector
 profiles, and two Functions. It adds no assertion definition and no caller grant: the registry's
-profile does not become an Evidence permission. For a local registry with a stopped development
-session, `rstack evidence source add` does both steps, driving the BReg tooling selected from the
-same managed release.
+profile does not become an Evidence permission.
 
 {/* Evidence: crates/registry-breg/src/evidence_source.rs;
-    crates/registry-evidencectl/src/source_import/mod.rs, replace_project_sections;
-    crates/registry-evidencectl/src/source_add.rs, check_public_bregctl. */}
+    crates/registry-evidencectl/src/source_import/mod.rs, replace_project_sections. */}
 
 ## Add the assertion definitions
 

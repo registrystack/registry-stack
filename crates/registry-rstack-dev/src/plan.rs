@@ -237,6 +237,10 @@ impl Product {
     }
 }
 
+/// The most test people one plan defines: enough for a load test to give each
+/// synthetic caller its own principal and per-principal rate limit.
+const MAXIMUM_PEOPLE: usize = 256;
+
 /// The development plan: the products to start, the test people who call them, and the scenarios to run.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -247,7 +251,7 @@ pub(super) struct Plan {
     pub issuer: String,
     /// The products to start, each with its project directory and token audience. List each product at most once.
     pub products: Vec<ProductPlan>,
-    /// The test people, keyed by a lowercase local identifier. Define 1 to 32, and give at least one grant to every started product.
+    /// The test people, keyed by a lowercase local identifier. Define 1 to 256, and give at least one grant to every started product.
     #[cfg_attr(
         feature = "schema",
         schemars(schema_with = "keyed_schema::<LocalId, TestPerson>")
@@ -1168,10 +1172,10 @@ impl Plan {
             )?;
         }
         require(
-            (1..=32).contains(&self.people.len()),
+            (1..=MAXIMUM_PEOPLE).contains(&self.people.len()),
             "/people",
-            "The plan must define 1 to 32 test people.",
-            "Add or remove test people until people contains between 1 and 32 entries.",
+            "The plan must define 1 to 256 test people.",
+            "Add or remove test people until people contains between 1 and 256 entries.",
         )?;
         for (name, person) in &self.people {
             require(
@@ -1734,6 +1738,25 @@ mod tests {
         .unwrap();
         write_scenarios(root.path(), json!({"id": "smoke", "steps": [step]}));
         (root, plan)
+    }
+
+    #[test]
+    fn a_plan_takes_up_to_256_test_people() {
+        let step = json!({"id": "list", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}});
+        let (root, mut plan) = plan(step);
+        let person = serde_json::to_value(&plan.people["operator"]).unwrap();
+        let copy = || serde_json::from_value::<TestPerson>(person.clone()).unwrap();
+        for index in 1..256 {
+            plan.people.insert(format!("person-{index}"), copy());
+        }
+        assert_eq!(plan.people.len(), 256);
+        plan.validate(root.path()).unwrap();
+
+        plan.people.insert("person-256".to_owned(), copy());
+        let refusal = plan.validate(root.path()).unwrap_err().to_string();
+        assert!(refusal.contains("/people"), "{refusal}");
+        assert!(refusal.contains("1 to 256 test people"), "{refusal}");
     }
 
     /// Writes `tests/scenarios.yaml` holding one scenario.

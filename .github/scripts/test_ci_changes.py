@@ -1584,6 +1584,12 @@ class CiChangesTest(unittest.TestCase):
                 "evidence_tutorial"
             ]
         )
+        # The tutorials start and token their runs through the rstack binary.
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-rstack/src/cli.rs",))[
+                "evidence_tutorial"
+            ]
+        )
         # The gate runs the stock issuer, so an issuer-tooling change that breaks the served
         # tutorial has to reach the job that replays it.
         self.assertTrue(
@@ -1661,17 +1667,17 @@ class CiChangesTest(unittest.TestCase):
             self.assertIn(test, breg_job)
             self.assertIn(f"fn {test.rsplit('::', 1)[1]}()", source)
 
-    def test_evidence_lifecycle_runs_current_authoring_and_fixture_proofs_exactly(
+    def test_evidence_starter_authoring_and_fixture_proofs_run_exactly(
         self,
     ) -> None:
         step = next(
             step
             for step in self.workflow_jobs["evidence-tutorials"]["steps"]
-            if step.get("name") == "Test the exact local Evidence lifecycle"
+            if step.get("name") == "Test the Evidence starter, authoring and fixture proofs"
         )
         script = step["run"]
-        self.assertIn("-p registry-evidencectl --test dev_lifecycle --", script)
-        self.assertIn("--ignored --test-threads=1", script)
+        # The local lifecycle is `rstack dev`, replayed by the tutorial gate.
+        self.assertNotIn("dev_lifecycle", script)
         self.assertEqual(
             "${{ github.workspace }}/target/debug/evidence", step["env"]["EVIDENCE_BIN"]
         )
@@ -1981,6 +1987,18 @@ class CiChangesTest(unittest.TestCase):
                 "casework_tutorial"
             ]
         )
+        # The job also runs Evidence alone and Messaging alone under
+        # `rstack dev`, so their runtimes, tools and example projects reach it.
+        for path in (
+            "crates/registry-evidence/src/main.rs",
+            "crates/registry-evidencectl/src/main.rs",
+            "crates/registry-messaging/src/lib.rs",
+            "crates/registry-messagingctl/src/main.rs",
+            "products/evidence/examples/standalone/dev.yaml",
+            "products/messaging/examples/starter/dev.yaml",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["casework_tutorial"])
         # Pages that share the tutorials directory and reach none of the
         # Registry Casework replay; the BReg review guide is skipped.
         for path in (

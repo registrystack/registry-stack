@@ -1126,7 +1126,7 @@ relevant product pages on this site rather than duplicating release notes.
   `bregctl dev stop --remove` on a session an earlier release started.
 
 {/* Evidence: crates/registry-bregctl/src/dev/mod.rs, DEFAULT_DATABASE_PORT;
-    crates/registry-caseworkctl/src/dev/mod.rs, DEFAULT_DATABASE_PORT. */}
+    release/notes/v0.39.0.md. */}
 
 - `bregctl check` reports `access.profile.create_required_field_not_writable` when a direct
   create or import grant omits a required writable stored field. A missing or malformed
@@ -1509,8 +1509,7 @@ relevant product pages on this site rather than duplicating release notes.
 
 {/* Evidence: crates/registry-platform-audit/src/writer.rs, recover_torn_tail and
     reserved_companion_collision; crates/registry-evidence/src/main.rs, install_operational_logging;
-    crates/registry-scheduling/src/main.rs, main; crates/registry-evidencectl/src/audit_view.rs,
-    render_unreleased. */}
+    crates/registry-scheduling/src/main.rs, main; release/notes/v0.36.0.md. */}
 
 - BREAKING: `evidencectl` follows the shared ctl report and exit contract.
   Under `--format json` each command writes one object on standard output
@@ -2486,7 +2485,7 @@ relevant product pages on this site rather than duplicating release notes.
   exchange modes, and `bregctl examples run` runs the scenarios a project
   authors in `examples/scenarios.json`. See [evidencectl](../reference/cli/evidencectl/).
 
-{/* Evidence: crates/registry-evidencectl/src/access.rs, grant_bootstrap_scope;
+{/* Evidence: release/notes/v0.32.0.md;
     crates/registry-bregctl/src/dev/examples.rs, Scenario. */}
 
 - Local ThunderID development containers are now named per state root. After
@@ -2501,7 +2500,7 @@ relevant product pages on this site rather than duplicating release notes.
 - Registry Mint retired; the `mint` config key and retired CLI flags are refused.
 
 {/* Evidence: crates/registry-bregctl/src/dev/mod.rs, DevArgs;
-    crates/registry-caseworkctl/src/dev/mod.rs, read_state();
+    release/notes/v0.31.0.md;
     crates/registry-evidencectl/src/dev.rs, DevArgs and read_state(). */}
 
 - Grant authority removed: Base Registry Engine (BReg) `taskGrant.authority` and task status client
@@ -2556,7 +2555,7 @@ relevant product pages on this site rather than duplicating release notes.
   `caseworkctl dev start` starts a retained local runtime with its PostgreSQL
   container, pinned stock issuer, and seeded directory.
 
-{/* Evidence: crates/registry-casework/install.sh; crates/registry-caseworkctl/src/dev/mod.rs;
+{/* Evidence: crates/registry-casework/install.sh; release/notes/v0.30.0.md;
     docs/site/scripts/run-tutorial.mjs. */}
 
 - Registry Casework names the failing secret reference and the rule it broke

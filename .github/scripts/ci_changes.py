@@ -392,6 +392,8 @@ CASEWORK_TUTORIAL_INPUTS = (
     "products/breg/acceptance/reviewed-evidence-journey/**",
     "products/platform/examples/licensing/**",
     "products/platform/scripts/test-rstack-dev.py",
+    "products/evidence/examples/standalone/**",
+    "products/messaging/examples/starter/**",
 )
 
 # Every input the Registry Messaging tutorial gate replays or is built from.
@@ -554,10 +556,11 @@ BREG_CONTRACTS_LANES = (
 # wallet-flow test, so the adapter is deliberately not exempt.
 EVIDENCE_TUTORIAL_EXEMPT_PACKAGES = frozenset({"registry-evidence-client-node"})
 
-# The tutorial uses the maintained stock issuer lifecycle for bearer tokens.
+# The tutorials start their runs and fetch bearer tokens with the rstack
+# binary, and some use the maintained stock issuer lifecycle.
 EVIDENCE_TUTORIAL_PACKAGES = (
     EVIDENCE_PACKAGES - EVIDENCE_TUTORIAL_EXEMPT_PACKAGES
-) | frozenset({"registry-thunderid-tooling"})
+) | frozenset({"registry-thunderid-tooling", "registry-rstack"})
 
 # The application tutorial imports the assembled `registry-stack-client`
 # wheel, which the gate builds from every product's Python binding, so a
@@ -583,8 +586,20 @@ BREG_TUTORIAL_PACKAGES = frozenset(
 # starts and seeds the local session, and issuer tooling, because every call the
 # reader makes carries a token that session issued. The clients in the Casework
 # shard are not on the replayed path.
+# The job also runs Evidence alone and Messaging alone under `rstack dev`.
 CASEWORK_TUTORIAL_PACKAGES = frozenset(
-    {"registry-casework", "registry-caseworkctl", "registry-breg", "registry-bregctl", "registry-rstack", "registry-thunderid-tooling"}
+    {
+        "registry-casework",
+        "registry-caseworkctl",
+        "registry-breg",
+        "registry-bregctl",
+        "registry-rstack",
+        "registry-thunderid-tooling",
+        "registry-evidence",
+        "registry-evidencectl",
+        "registry-messaging",
+        "registry-messagingctl",
+    }
 )
 
 # The gate builds and runs exactly messagingctl, which links the Messaging

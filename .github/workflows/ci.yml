@@ -2424,15 +2424,12 @@ jobs:
             release/scripts/smoke-registry-client-package.py
           printf 'REGISTRY_CLIENT_PY_WHEEL=%s\n' "${wheel}" >>"${GITHUB_ENV}"
 
-      - name: Test the exact local Evidence lifecycle
+      - name: Test the Evidence starter, authoring and fixture proofs
         shell: bash
         env:
           EVIDENCE_BIN: ${{ github.workspace }}/target/debug/evidence
         run: |
           set -euo pipefail
-          cargo test --locked \
-            -p registry-evidencectl --test dev_lifecycle -- \
-            --ignored --test-threads=1
           # The generated SQLite starter target must pass the offline target
           # check, which runs the binding checks of the runtime built above.
           cargo test --locked -p registry-evidencectl --test scaffold \
@@ -2496,7 +2493,7 @@ jobs:
             | tee "${RUNNER_TEMP}/evidence-wallet-device-run.log"
           grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-wallet-device-run.log" || { echo "::error::expected exactly one passing test for a_simulated_wallet_completes_the_device_run_harness"; exit 1; }
 
-      - name: Execute the Evidence tutorials with the stock issuer
+      - name: Execute the Evidence tutorials on rstack dev
         shell: bash
         env:
           RSTACK_BIN: ${{ github.workspace }}/target/debug/rstack
@@ -2722,6 +2719,16 @@ jobs:
             --database managed \
             --scratch-parent "${RUNNER_TEMP}" \
             --spatial
+
+      - name: Verify that Messaging runs alone with Mailpit and a mock gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked -p registry-messaging -p registry-messagingctl --bins
+          python3 products/platform/scripts/test-rstack-dev.py \
+            --bin-dir "${GITHUB_WORKSPACE}/target/debug" \
+            --scratch-parent "${RUNNER_TEMP}" \
+            --messaging
 
       - name: Execute the Registry Casework tutorials from a reader directory
         shell: bash

@@ -20,8 +20,8 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 If you integrate an institution's existing HTTP API with Registry Evidence, you connect one of its
 operations here and return a verified answer from it. You start a new project, so you are no
-longer in the standalone project from your first assertion; if that one is still
-running, run `rstack evidence dev stop .` in its directory first, because both use the same ports.
+longer in the standalone project from your first assertion; if its run is still going, stop it
+with `rstack dev stop RUN_ID` first.
 
 <QuickstartMeta
   outcome="A verified coverage-status assertion from a FHIR API."
@@ -29,7 +29,6 @@ running, run `rstack evidence dev stop .` in its directory first, because both u
   level="Local development with a synthetic public server"
   prerequisites={[
     'The Evidence component for rstack, v0.45.0 or later, installed as in your first Evidence assertion',
-    'Running Docker',
     'Python 3, tar, and jq',
     'Internet access',
   ]}
@@ -276,34 +275,41 @@ Organization selector file: ready
 
 {/* Evidence: products/evidence/examples/fhir/{serve-source.py,discover-records.py}, application/fhir+json, O_EXCL. */}
 
-## Start Registry Evidence and request one assertion
+## Start a run and request one assertion
 
-Register the client you will request as:
+The project's `dev.yaml` names one caller, `caller`, and a run to test it. A run starts Registry
+Evidence with its own signing keys and its own token issuer, so there is nothing to register and
+nothing to install beyond `rstack`. Start it and keep its address:
 
 ```sh
-rstack evidence access client add fhir-client --access-profile fhir-service --generate-local-key
+rstack dev check .
+rstack --format json dev start . --ttl 2h > run.json
+run_id="$(jq -r .run_id run.json)"
+evidence_url="$(jq -r .products.evidence run.json)"
+runtime_config="$(jq -r .runtimeConfigs.evidence run.json)"
+headers_for() {
+  rstack dev token "$run_id" --as "$1" | awk '$1 == "evidence" && $2 == "headers" { print $3 }'
+}
+```
+
+```sh
+jq -c .people run.json
 ```
 
 ```text test-expect
-Added client fhir-client with access profile fhir-service.
+["caller","stranger"]
 ```
 
-Start the gateway and its local token issuer; they run until you stop them:
-
-```sh
-rstack evidence dev start . --target local-target.yaml --evidence-port 18080 --issuer-port 8082
-```
-
-```text test-excerpt
-Evidence ready at http://127.0.0.1:18080
-Issuer ready at http://127.0.0.1:8082
-```
+`headers_for caller` prints the path of a header file that carries a token for `caller`. Tokens last
+at most five minutes, so ask for one each time you call.
 
 Prepare the request from the subject file:
 
 ```sh
 rstack evidence request prepare fhir-coverage-status \
-  --client fhir-client \
+  --evidence-url "$evidence_url" \
+  --header @"$(headers_for caller)" \
+  --runtime-config "$runtime_config" \
   --purpose coverage-record-verification \
   --subjects-file ../fhir-coverage-subjects.json \
   --name fhir-coverage
@@ -319,7 +325,8 @@ Send it and verify the signed response offline:
 
 ```sh
 rstack evidence api /v1/evidence \
-  --client fhir-client \
+  --url "$evidence_url" \
+  --header @"$(headers_for caller)" \
   --input .evidence/requests/fhir-coverage/request.json \
   --accept application/jose+json \
   --output fhir-coverage.jws.json
@@ -348,31 +355,19 @@ jq '.supportedValues' fhir-coverage.verified.json
 The [assertion](../../reference/glossary/#assertion) carries one Boolean, whether the coverage is
 active, and none of the coverage record.
 
-{/* Evidence: crates/registry-evidencectl/src/{request,verify}.rs, prepare_local. */}
+{/* Evidence: products/evidence/examples/fhir/dev.yaml;
+    crates/registry-evidencectl/src/{request,verify}.rs, prepare_local. */}
 
-## Stop, read the audit, and clean up
+## Stop the run and clean up
 
-The audit view reads only a stopped session, so stop the gateway first:
-
-```sh
-rstack evidence dev stop .
-rstack evidence audit show --last-operation
-```
-
-```text test-excerpt
-ACCESS AUTHORIZED fhir-coverage-status coverage-record-verification requester=<pseudonym>
-DISCLOSURE RELEASED coverage-record-reports-active
-```
-
-Cleaning removes the stopped session's directory, `.evidence/dev`, and the audit with it, so read
-the audit first. The project, its registered client, and the prepared request stay:
+Stop the run, which removes its generated keys and state. The project and the prepared request stay:
 
 ```sh
-rstack evidence dev clean .
+rstack dev stop "$run_id"
 ```
 
 ```text test-expect
-Removed stopped local Evidence state
+Run <run-id> stopped
 ```
 
 Press `Ctrl+C` in the read-through helper's terminal, then remove the subject files:
@@ -382,8 +377,7 @@ cd ..
 rm -f fhir-coverage-subjects.json fhir-organization-subjects.json
 ```
 
-{/* Evidence: crates/registry-evidencectl/src/dev.rs, clean_dev, remove_completed_dev_root;
-    crates/registry-evidencectl/src/audit_view.rs, render_authorized. */}
+{/* Evidence: products/platform/PROJECT-DEV.md, stop. */}
 
 ## Next
 

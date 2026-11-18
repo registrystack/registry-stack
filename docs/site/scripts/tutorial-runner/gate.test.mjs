@@ -176,7 +176,7 @@ test('a page running the toolset under another toolset, or skipping every one of
 
 test('a skipped page running the commands of two toolsets, neither serving the other, may declare either', async () => {
   const toolsets = { ...TOOLSETS, evidence: { commands: /(^|[^\w./-])(evidencectl|evidence)([^\w-]|$)/mu } };
-  const both = '```sh\nbregctl check project\nevidencectl source add\n```\n';
+  const both = '```sh\nbregctl check project\nevidencectl check .\n```\n';
   const pages = {
     'tutorials/composed': { frontmatter: 'tutorial_test:\n  toolset: breg\n  skip: needs a container\n', body: both },
     'tutorials/replayed': { frontmatter: 'tutorial_test:\n  toolset: breg\n', body: both },

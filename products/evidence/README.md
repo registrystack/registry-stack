@@ -122,32 +122,27 @@ HTTP, authentication or operational-limit detail, and the human report contains
 no source values or credentials.
 
 `evidencectl check --file <file>` checks one tooling file offline, including a
-client profile, local access client registration, reviewed contracts, development state or source-import document.
+client profile, reviewed contracts, development state or source-import document.
 Diagnostics identify files, fields and available source spans. The common exit
 classes are `0` success, `1` refusal, `2` usage and `3` operational failure.
 Use global `--format json` for machine-readable reports.
 
-Register a local client with `access client add <id> --access-profile <profile>
---generate-local-key`, then use `dev start <project> --target <target.yaml>`.
-The local lifecycle starts the pinned stock OAuth issuer and Evidence. Request
-preparation retains authorization privately and closes verifier expectations
-before the response exists. Stop and clean with `dev stop` and `dev clean`.
-An explicitly configured shared issuer can be selected with `--issuer-project`;
-Evidence still verifies its own clients, resources, scopes and complete grants.
+Run a project locally with `rstack dev start`, from a `dev.yaml` plan beside the
+project. The run is its own token issuer and starts Evidence, so it needs no
+Docker and no database. `rstack dev token <run> --as <person>` writes the header
+file for a synthetic caller. Request preparation retains authorization privately
+and closes verifier expectations before the response exists. Stop with
+`rstack dev stop`. Evidence still verifies its own clients, resources, scopes and
+complete grants.
 
-`evidencectl api PATH --client CLIENT` reuses that ready local session without
-writing the tutorial bearer header. It resolves the exact registered client
-against the retained access-profile digests, obtains a fresh short-lived token
-with the client's retained private key, and sends it only to the Evidence
-origin in the validated ready state. A saved or explicit remote connection is
-operator-selected. Both follow the shared
+`evidencectl api PATH --url URL --header @FILE` sends a request with that header
+file, without writing the bearer header to the terminal. It sends the header only
+to the named Evidence origin. It follows the shared
 [`registry-cli-api` security boundary](../../crates/registry-cli-api/README.md#security-boundary),
 which supplies transport and credentials but no Evidence authority. The
 runtime still decides authentication, complete-grant authorization, selector
 minimization, audit, and disclosure.
 
-`ready_and_stopped_handoffs_validate_the_closed_lifecycle_state` in
-`crates/registry-evidencectl/src/dev.rs` pins the ready-state handoff, and
 `raw_api_response_bypasses_the_ctl_report_envelope` in
 `crates/registry-evidencectl/tests/api_cli.rs` pins the product command's raw
 response path. The shared README names the transport and credential tests.

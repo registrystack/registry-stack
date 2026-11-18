@@ -392,7 +392,7 @@
       "additionalProperties": {
         "$ref": "#/$defs/TestPerson"
       },
-      "description": "The test people, keyed by a lowercase local identifier. Define 1 to 32, and give at least one grant to every started product.",
+      "description": "The test people, keyed by a lowercase local identifier. Define 1 to 256, and give at least one grant to every started product.",
       "propertyNames": {
         "$ref": "#/$defs/LocalId"
       },

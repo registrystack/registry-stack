@@ -98,7 +98,7 @@ for pool_file in subjects.txt absent.txt private-canaries.txt pool-summary.json;
 done
 
 environment_fields=$(python3 "$support" describe --root "$run_dir" --repository "$repository_root") || exit 2
-read -r evidence_url _ _ load_clients runtime_library_path <<<"$environment_fields"
+read -r evidence_url _ _ _ load_clients runtime_library_path <<<"$environment_fields"
 if [[ -n "$runtime_library_path" ]]; then
   export DYLD_FALLBACK_LIBRARY_PATH="$runtime_library_path${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
 fi
@@ -131,7 +131,7 @@ require_token_window() {
     total=$(python3 -c 'import sys; print(float(sys.argv[1])+float(sys.argv[2]))' "$total" "$seconds")
   done
   python3 -c 'import sys; raise SystemExit(0 if float(sys.argv[1]) <= 240 else 1)' "$total" || {
-    printf '%s\n' "$label must finish within 4 minutes so one fresh evidencectl dev token per client remains valid." >&2
+    printf '%s\n' "$label must finish within 4 minutes so one fresh rstack dev token per client remains valid." >&2
     exit 2
   }
 }
@@ -146,7 +146,7 @@ require_client_headroom() {
     exit 2
   fi
   python3 -c 'import sys; raise SystemExit(0 if float(sys.argv[1]) <= 0.9*int(sys.argv[2]) else 1)' "$rate" "$load_clients" || {
-    printf '%s\n' "$label=$rate exceeds 90% of the $load_clients load clients' combined stock limit; restart with a larger LOAD_CLIENTS (see README)." >&2
+    printf '%s\n' "$label=$rate exceeds 90% of the $load_clients load clients' combined stock limit; restart with a larger LOAD_CLIENTS, at most 256 (see README)." >&2
     exit 2
   }
 }
@@ -249,7 +249,10 @@ case "$profile" in
       "offeredOps=$OPS" "duration=$DURATION" "randomSeed=$RANDOM_SEED"
     ;;
   burst)
-    export OPS="${OPS:-20}" PEAK_OPS="${PEAK_OPS:-100}"
+    # The default peak is 100 operations/s, capped at what the load clients can
+    # offer under their combined stock limit.
+    default_peak=$((load_clients * 9 / 10 < 100 ? load_clients * 9 / 10 : 100))
+    export OPS="${OPS:-20}" PEAK_OPS="${PEAK_OPS:-$default_peak}"
     export BASELINE_DURATION="${BASELINE_DURATION:-30s}" RAMP_DURATION="${RAMP_DURATION:-15s}"
     export PEAK_DURATION="${PEAK_DURATION:-30s}" RECOVERY_DURATION="${RECOVERY_DURATION:-90s}"
     require_token_window 'burst phase schedule' "$BASELINE_DURATION" "$RAMP_DURATION" "$PEAK_DURATION" "$RAMP_DURATION" "$RECOVERY_DURATION"

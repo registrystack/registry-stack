@@ -14,13 +14,13 @@ The project owns the reviewed GET paths, selector profiles, response bounds,
 raw-resource projection, private Facts, derivation Functions, and Outputs. The
 local target owns the nested loopback endpoint binding and process resources.
 `dev-authority.yaml` grants each complete request shape, including both subject
-roles for coverage and both permitted signed representations. Client
-registration selects an existing profile and does not create authority.
+roles for coverage and both permitted signed representations. The
+people in `dev.yaml` select an existing profile and do not create authority.
 
 Start from a writable copy in the matching Registry Stack source archive. Use an
 active `rstack` installation that includes the Evidence component. Use `evidence`
 and `evidencectl` native tools that match that installation, plus Python 3.9 or
-later and Docker. The [Connect an institution API](../../../../docs/site/src/content/docs/tutorials/connect-an-institution-source.mdx)
+later. The [Connect an institution API](../../../../docs/site/src/content/docs/tutorials/connect-an-institution-source.mdx)
 owns discovery, the local source, request preparation, verification,
 and cleanup. Run discovery from the copy's parent directory so its owner-only
 selector files stay outside the project. Never commit those files, credentials,

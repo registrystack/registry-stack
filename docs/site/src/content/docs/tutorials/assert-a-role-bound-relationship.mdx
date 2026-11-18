@@ -21,14 +21,14 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 If you write assertion definitions, this tutorial shows you one that binds two subjects in distinct
 roles and releases one Boolean: is the candidate in the child's complete legal-parent set? You
 continue in the project from [Control who can request evidence](../control-who-can-request-evidence/),
-with the source and Registry Evidence still running.
+with the source and the run still going.
 
 <QuickstartMeta
   outcome="A verified relationship assertion bound to a child and a candidate parent."
   time="About 10 minutes"
   level="Local development with synthetic data"
   prerequisites={[
-    'The project, source, and Registry Evidence left running by Control who can request evidence',
+    'The project, source, and run left going by Control who can request evidence',
   ]}
 />
 
@@ -71,15 +71,30 @@ the parent list never enters the assertion.
 
 Prepare one request with both roles, send it, verify the response, and read it:
 
+In a new terminal, read the run back from `run.json` and redefine the helper that fetches a token
+header file:
+
+```sh test-cwd="first-evidence-assertion/adult-status"
+run_id="$(jq -r .run_id run.json)"
+evidence_url="$(jq -r .products.evidence run.json)"
+runtime_config="$(jq -r .runtimeConfigs.evidence run.json)"
+headers_for() {
+  rstack dev token "$run_id" --as "$1" | awk '$1 == "evidence" && $2 == "headers" {print $3}'
+}
+```
+
 ```sh
 rstack evidence request prepare legal-parent-relationship \
-  --client tutorial-client \
+  --evidence-url "$evidence_url" \
+  --header @"$(headers_for caller)" \
+  --runtime-config "$runtime_config" \
   --purpose relationship-check \
   --subject child:record-id=child \
   --subject candidate-parent:record-id=parent \
   --name legal-parent-relationship
 rstack evidence api /v1/evidence \
-  --client tutorial-client \
+  --url "$evidence_url" \
+  --header @"$(headers_for caller)" \
   --input .evidence/requests/legal-parent-relationship/request.json \
   --accept application/jose+json \
   --output legal-parent.jws.json
@@ -105,7 +120,9 @@ Leave out the candidate parent, and `request prepare` refuses before it writes a
 
 ```sh test-exit="1"
 rstack evidence request prepare legal-parent-relationship \
-  --client tutorial-client \
+  --evidence-url "$evidence_url" \
+  --header @"$(headers_for caller)" \
+  --runtime-config "$runtime_config" \
   --purpose relationship-check \
   --subject child:record-id=child \
   --name missing-candidate-parent
@@ -119,7 +136,9 @@ Give the `child` role twice, and it refuses again:
 
 ```sh test-exit="1"
 rstack evidence request prepare legal-parent-relationship \
-  --client tutorial-client \
+  --evidence-url "$evidence_url" \
+  --header @"$(headers_for caller)" \
+  --runtime-config "$runtime_config" \
   --purpose relationship-check \
   --subject child:record-id=child \
   --subject child:record-id=parent \
@@ -135,7 +154,9 @@ Swap the two values. The request is complete, but the source holds no parent set
 
 ```sh
 rstack evidence request prepare legal-parent-relationship \
-  --client tutorial-client \
+  --evidence-url "$evidence_url" \
+  --header @"$(headers_for caller)" \
+  --runtime-config "$runtime_config" \
   --purpose relationship-check \
   --subject child:record-id=parent \
   --subject candidate-parent:record-id=child \
@@ -144,7 +165,8 @@ rstack evidence request prepare legal-parent-relationship \
 
 ```sh test-exit="1"
 rstack evidence api /v1/evidence \
-  --client tutorial-client \
+  --url "$evidence_url" \
+  --header @"$(headers_for caller)" \
   --input .evidence/requests/swapped-relationship/request.json \
   --accept application/jose+json \
   --output swapped-relationship.json
@@ -161,7 +183,7 @@ evidence.unavailable
 Registry Evidence returns `evidence.unavailable` for any subject it cannot resolve, so the refusal
 does not say which record was missing.
 
-Leave the source and Registry Evidence running; the next tutorial continues with them.
+Leave the source and the run going; the next tutorial continues with them.
 
 {/* Evidence: crates/registry-evidencectl/src/request.rs, validate_closed_inputs;
     crates/registry-evidence/src/problem.rs, EvidenceNotAvailable. */}

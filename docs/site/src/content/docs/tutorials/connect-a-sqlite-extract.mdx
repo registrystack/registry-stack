@@ -149,12 +149,11 @@ Proof: offline synthetic fixture evaluation; no live dependency readiness was ch
 
 Each case writes a read-only synthetic extract, and the `evidence` binary runs the fixed statement
 against it and evaluates the answer. Fixtures are how you run this project locally, because
-`rstack evidence dev start` refuses a SQLite Source: local serving has no way to bind an extract file.
+a development run has no way to bind an extract file.
 A warning or error names the file and key to correct.
 
 {/* Evidence: crates/registry-evidencectl/src/fixtures.rs, run_fixtures;
     crates/registry-platform-sqlite/src/statement.rs, materialize_fixture;
-    crates/registry-evidencectl/src/dev.rs, refuse_unservable_project;
     crates/registry-evidencectl/templates/sqlite-extract/fixtures/record-status.yaml. */}
 
 ## Adapt it to your extract
