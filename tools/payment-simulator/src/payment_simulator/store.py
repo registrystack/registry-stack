@@ -486,8 +486,9 @@ class Store:
                 (scope.producer, scope.tenant, scope.institution, request.billID),
             ).fetchone():
                 raise ApiError(409, "collection.bill-in-use", "Bill already has a payment request")
-            # Precedence for requests that never reach the hosted page: payer rule, then
-            # the biller's scenario. A hosted decision overrides both when it is made.
+            # A payer rule settles the request at creation, so nothing, including a fast
+            # click on the hosted page, can decide it first. Without one, the biller's
+            # scenario applies and a hosted decision overrides it.
             rule = db.execute(
                 "SELECT outcome FROM payer_outcomes WHERE producer=? AND tenant=? AND biller=? "
                 "AND address=?",
@@ -535,6 +536,10 @@ class Store:
                     int(bool(scope.return_url) and rule is None),
                 ),
             )
+            if rule is not None:
+                self.settle(
+                    db, {"transfer_id": transfer_id, "reference": None}, rule["outcome"], None
+                )
             response = {
                 "responseCode": "00",
                 "responseDescription": "Accepted",
