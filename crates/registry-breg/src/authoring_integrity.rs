@@ -628,6 +628,19 @@ pub(crate) fn project_diagnostics(
     ] {
         add_collisions(document, &mut errors, code, &values);
     }
+    for (index, dataset) in project.statistical_datasets.iter().enumerate() {
+        let values = indexed_ids(
+            &format!("/statisticalDatasets/{index}/measures"),
+            &dataset.measures,
+            |item| item.id().as_str(),
+        );
+        add_collisions(
+            document,
+            &mut errors,
+            "breg.statistical-dataset.measure-id-collision",
+            &values,
+        );
+    }
     add_key_collisions(
         document,
         &mut errors,

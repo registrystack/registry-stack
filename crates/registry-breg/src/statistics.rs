@@ -273,8 +273,9 @@ pub fn is_decimal_text(text: &str, scale: u8) -> bool {
 ///   count), so it gains 19 integer digits over the field's `p - s` (19 for
 ///   `int64`) and keeps the field's `s` fractional digits.
 /// - A mean or percentile never exceeds the field's largest value in magnitude, so
-///   it keeps the field's integer digits, plus one when a scale below the field's rounds
-///   99.99 up to 100, and has the measure's `scale` fractional digits.
+///   it keeps the field's integer digits (at least one, the zero of a value below
+///   one), plus one when a scale below the field's rounds 99.99 up to 100, and has
+///   the measure's `scale` fractional digits.
 ///
 /// A ratio has no field; [`maximum_measure_characters`] bounds it.
 ///
@@ -289,7 +290,10 @@ pub fn maximum_decimal_characters(
         FieldTypeSource::Decimal {
             precision, scale, ..
         } => (
-            usize::from(*precision).saturating_sub(usize::from(*scale)),
+            // PostgreSQL prints the zero of a value below one.
+            usize::from(*precision)
+                .saturating_sub(usize::from(*scale))
+                .max(1),
             usize::from(*scale),
         ),
         _ => return None,
@@ -1632,7 +1636,8 @@ fn validate_document(document: &StatisticsDocument) -> Result<(), StatisticsErro
             }
         }
         // A suppressed cell withholds a value its measure would admit; any other
-        // cell carries one the measure admits, and only a mean admits none.
+        // cell carries one the measure admits, and a mean, a ratio and a
+        // percentile admit none.
         if cell.status != CellStatus::Suppressed && !measure.admits(&cell.value) {
             return Err(StatisticsError::InvalidDocument(
                 "a cell value does not fit its measure's type and scale",

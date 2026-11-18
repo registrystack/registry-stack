@@ -742,21 +742,26 @@ Each lists the condition, the consequence, the mitigation, and the related matri
 {/* TODO[evidence]: no test or symbol found that shows an aggregate statistical read emits no
     per-subject access-log hit. */}
 
-### `BREG-RES-22`: the standing-agent publish ceiling needs a declared actor kind
+### `BREG-RES-22`: the standing-agent ceiling needs a declared actor kind
 
-- Condition: a profile that holds `publish` on a statistical dataset declares no `actorKind`.
-- Consequence: the ceiling refuses publish and withdraw only for a profile that declares
-  `actorKind: agent` and no `taskGrant`.
+- Condition: a profile that holds `publish` or `read-exact` on a statistical dataset declares no
+  `actorKind`, or the dataset's `exactReads` profile declares none.
+- Consequence: the ceiling refuses publish, withdraw, and read-exact only for a profile that
+  declares `actorKind: agent` and no `taskGrant`.
+  It refuses an `exactReads` profile that declares `actorKind: agent` or a `taskGrant`.
   A profile without an `actorKind` accepts every actor kind by its own declaration, as it does for
-  every other operation, so an agent token can publish through it.
+  every other operation.
+  So an agent token can publish or read exact values through it.
   The publisher's dry run (`versions:dry-run`) belongs to the publisher alone and stores nothing.
   It reserves no version and writes one audit entry.
 - Mitigation: declare `actorKind: human` or `actorKind: service` on every profile that holds
-  `publish`.
+  `publish` or `read-exact`, and on the `exactReads` profile.
 - Related: `BREG-SEC-168`.
 
 {/* Evidence: crates/registry-breg/tests/standing_agent_ceiling.rs,
-    standing_agent_cannot_publish_a_statistical_release. */}
+    standing_agent_cannot_publish_a_statistical_release;
+    crates/registry-breg/tests/compiler_statistics.rs,
+    a_standing_agent_cannot_read_exact_or_anchor_exact_reads. */}
 
 ### `BREG-RES-23`: a revoked task grant keeps reading until its token expires
 

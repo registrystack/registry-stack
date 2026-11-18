@@ -220,6 +220,37 @@ async fn a_sum_and_mean_are_served_as_decimal_strings_in_json_and_csv() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_mean_over_a_decimal_whose_precision_equals_its_scale_keeps_its_leading_zero() {
+    let rows: Vec<Row> = vec![("a", "2025-03-10", Some("-0.50"), Some("1"))];
+    let mut source = registry_source(
+        &["category"],
+        json!([
+            {"id":"records","type":"count"},
+            {"id":"amount-mean","type":"mean","field":"amount","scale":2},
+            {"id":"amount-median","type":"percentile","field":"amount","percentile":50,"scale":2}
+        ]),
+    );
+    source["recordTypes"][0]["fields"][4] = json!(
+        {"id":"amount","type":"decimal","precision":2,"scale":2,"classification":"internal"}
+    );
+    let (database, migration_task, app) = fixture_for(source, &rows).await;
+
+    let response = live(&app, "2025-03", "2025-03", None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let document = body_json(response).await;
+    for measure in ["amount-mean", "amount-median"] {
+        assert_eq!(
+            cell(&document, "2025-03", Some("a"), measure),
+            json!(["-0.50", "exact"]),
+            "{measure}"
+        );
+    }
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_dataset_without_dimensions_rounds_half_away_from_zero_and_stays_exact_in_int64() {
     let mut rows: Vec<Row> = vec![
         // January: quantities 1 and 2; mean 1.5.
