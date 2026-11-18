@@ -39,6 +39,7 @@ product can take back.
 | Review, evidence, and function providers | Their own decisions, within the exact bindings BReg freezes. | A provider that decides wrongly. BReg binds the result to the frozen request but does not judge it (`BREG-SEC-34`). |
 | Host users who can write audit files | Nothing. | Rewriting or removing lines of a local audit file. Ship the stream to append-only storage (obligation 2). |
 | Package authors | Authoring the project under review. | A reviewed package that is wrong. Deployment-only values (environment, instance, database) are refused in a package, so the same bytes are promoted unchanged (`BREG-SEC-01`). |
+| BReg's in-process refresh worker | Running each configured refresh plan as that plan's service principal, inside the worker profile's root List boundary, its pinned row claims, and its `refreshExternalProjections` grant (`BREG-SEC-204`). | A plan that names a wider identity than intended. The worker presents no token from the issuer, so revoking that identity at the identity provider does not stop it. Removing the plan from the runtime file and restarting does. |
 
 {/* Evidence: products/breg/contracts/security-invariant-matrix.yaml, invariants;
     crates/registry-breg/tests/compiler_contract.rs,
@@ -51,6 +52,28 @@ product can take back.
     split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writes_nothing;
     crates/registry-breg/tests/postgres_proposal_review_delivery.rs,
     first_acceptance_refuses_wrong_policy_id_or_exact_pin. */}
+
+### In-process refresh worker
+
+Indexed external views are refreshed by a worker inside BReg, not by an outside client.
+This moves a trust boundary: the operator who writes the runtime file now chooses the identity
+each refresh plan acts as (`externalRefresh.plans.<id>.worker`), and BReg builds that caller's
+claims itself, as it does for record timers.
+The worker acts with the profile's required scopes and purposes, the configured principal, and
+the pinned row claims.
+`bregctl check` refuses a profile that lacks root List or `refreshExternalProjections`, declares
+`requireConsent`, does not admit the requester client, or leaves a row-boundary claim unpinned.
+It also refuses a plan whose configured identity the profile would refuse on a request, such as
+two values pinned for an `equals` boundary or a principal over 512 bytes, as
+`breg.external-refresh.worker-not-admitted`.
+At startup such a plan is logged and skipped while other plans run.
+A configuration change, not an identity-provider revoke, stops the worker.
+Each attempt and terminal settlement is audited as `external-refresh-plan-step`, and the terminal
+entry carries the same pseudonymous principal and record references as its attempt.
+
+{/* Evidence: crates/registry-breg/src/external_refresh_config.rs, ExternalRefreshWorker,
+    breg.external-refresh.worker-not-admitted;
+    crates/registry-breg/src/postgres/external_runtime/managed.rs, external-refresh-plan-step. */}
 
 ### Supply chain
 
@@ -267,46 +290,73 @@ The residuals refer to these obligations by number.
     Review a change to it as you would review a disclosure.
     See [Operate indexed external projections](../../configure/breg-external-projections/).
     {/* Evidence: crates/registry-breg/src/postgres/external_runtime.rs, from_field. */}
-18. Keep the external projection cache out of logical backups.
-    Dump with the seven `--exclude-table-data` options for the `registry_external_projection_*`
-    and `registry_external_refresh_*` tables, so a restore starts with no source values, old
-    bindings, queued selectors, or refresh receipts.
-    Physical backups and storage snapshots cannot exclude them and need a separately approved
-    erasure and restore procedure
-    ([back up logically](../../configure/breg-external-projections/#back-up-logically)).
+18. Keep the external projection cache out of logical backups, and own its physical copies.
+    Dump with `--exclude-table-data='registry_internal.registry_external_*'`, which covers the
+    four projection store tables and the two refresh queue tables, so a restore starts with no
+    source values, old bindings, or queued selectors.
+    The cache tables are logged, so physical backups, storage snapshots, WAL archives, and
+    streaming replicas carry cached source values and cannot exclude them.
+    Keep those copies no longer than the source grant permits storage, or erase them under a
+    separately approved procedure.
+    Before a physical restore or a replica promotion serves under changed source authority, run
+    `bregctl external-projection purge` for each affected projection
+    ([back up logically](../../configure/breg-external-projections/#back-up-logically),
+    [physical copies](../../configure/breg-external-projections/#physical-backups-wal-and-replicas)).
     {/* Evidence: crates/registry-breg/src/postgres/external_projection.rs,
          BACKUP_EXCLUDED_TABLES, backup_policy_excludes_every_projection_table,
          projection_expiry_purge_and_excluded_backup_restore_are_closed. */}
 19. Withdraw a source grant in deployment configuration.
-    Remove the binding and restart; that is the only cutoff for acquisition.
-    `bregctl external-projection withdraw` purges retained values and refresh receipts but does not
+    Remove the binding and its refresh plans and restart; that is the only cutoff for acquisition.
+    `bregctl external-projection purge` erases retained values and refresh receipts but does not
     stop acquisition, and a binding that stays configured acquires again at the next start.
     Record the withdrawal in deployment configuration or at the source authority so it also holds
     after a restore
-    ([stop acquisition](../../configure/breg-external-projections/#stop-acquisition-withdraw-and-renew)).
+    ([stop acquisition](../../configure/breg-external-projections/#stop-acquisition-purge-and-renew)).
     {/* Evidence: crates/registry-bregctl/src/lib.rs, ExternalProjectionCommand;
-         crates/registry-bregctl/tests/external_projection.rs. */}
+         crates/registry-bregctl/tests/external_projection.rs;
+         crates/registry-breg/src/external_projection_maintenance.rs, purge. */}
 20. Give each refresh plan a scoped service identity.
-    Match the configured requester client, principal, profile and relevant row claims against the
-    verified token before acquiring external values.
+    The plan's worker acts as its configured principal under its access profile, with no token, so
+    grant that profile root List and `refreshExternalProjections` only for the projections and rows
+    the plan must keep current.
+    The worker refreshes a root only inside its own row boundary, so pin row claims that cover
+    every root a profile granted one-root refresh can reach.
+    A root outside the worker's boundary is not refreshed.
+    Approve each outside field in `allowedFields` of the deployment binding; a package that adds a
+    projection field leaves the projection unavailable until you do.
     Give a change notifier a separate service client and scope.
     It may submit an approved selector for a configured projection.
-    A queued hint grants no right to read a root or disclose a source value.
+    A queued source change grants no right to read a root or disclose a source value.
     Verify signed webhook deliveries before forwarding their selectors.
+    One-root refresh is for a staff application's service client: the compiler refuses
+    `refreshExternalProjections` on any profile that is not a service profile with explicit
+    clients, scopes and purposes (`refresh-service-profile`).
+    Grant it only to the service profile of an application whose users may ask for a root to be
+    refreshed.
+    Each admitted request is audited as `external-projection-refresh`, with a refused terminal
+    entry when no plan refreshes the link or its projection has no source binding.
     See
-    [managed refresh](../../configure/breg-external-projections/#schedule-refresh-and-inspect-coverage).
+    [refresh plans](../../configure/breg-external-projections/#refresh-plans-and-the-in-process-worker).
     The refresh path extends `BREG-SEC-204` to `BREG-SEC-207`.
     Its proofs cover worker and notifier separation, identical admission for an eligible and a
-    protected selector, current-scope reconciliation, row policy before a targeted lookup can
-    settle no match, and queue generations and leases beside the per-key publication proofs.
+    protected selector, current-scope reconciliation, and row policy before a targeted lookup can
+    settle no match.
+    The plan lease is the only worker serializer; work rows carry no lease of their own.
+    The queue proofs check that settlement fences on the plan lease and the work row's enqueue
+    generation, so a newer capture wins over the one a worker holds, and that an authority change
+    fences queued work, beside the per-key publication proofs.
+    Admission counts pending work against a soft per-plan limit: concurrent captures can overshoot
+    it by at most each writer's own batch.
     A restore from a backup that excluded the projection tables also starts with empty refresh
-    tables.
+    queue tables.
     {/* Evidence: crates/registry-breg/src/postgres/external_runtime.rs,
          managed_refresh_resumes_sweeps_and_rereads_only_the_notified_subject;
          crates/registry-breg/src/postgres/external_runtime/targeted.rs,
          selector_lookup_skips_a_large_excluded_prefix_and_exhausts_no_witness;
          crates/registry-breg/src/postgres/external_refresh_queue.rs,
          durable_queue_fences_newer_enqueues_and_authority_changes;
+         crates/registry-breg/src/external_views.rs, refresh-service-profile;
+         crates/registry-breg/src/postgres/external_runtime/managed.rs, "external-projection-refresh", MAX_PENDING;
          crates/registry-breg/src/postgres/external_projection.rs,
          projection_expiry_purge_and_excluded_backup_restore_are_closed. */}
 
