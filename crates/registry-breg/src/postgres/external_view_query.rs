@@ -723,8 +723,8 @@ pub(crate) mod tests {
                 {"id":"label","type":"string","classification":"internal"},
                 {"id":"hidden","type":"string","classification":"restricted"}
             ]}],
-            "externalProjections":[{"id":"projection","recordType":"external-record","operation":"batch","operationVersion":"1","purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["label","hidden"]}],
-            "externalViews":[{"id":"view","recordType":"local-record","links":[{"id":"link","projection":"projection","fromField":"subject-key","identifierScheme":"urn:test:keys","fields":["label","hidden"]}]}],
+            "externalProjections":[{"id":"projection","recordType":"external-record","sourceRoute":"batch","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["label","hidden"]}],
+            "externalViews":[{"id":"view","recordType":"local-record","links":[{"id":"link","projection":"projection","fromField":"subject-key"}]}],
             "accessProfiles":[{"id":"reader","principalClaim":"registry_principal","requiredScopes":["registry.read"],"requiredPurposes":["consultation"],"permissions":{
                 "records":[{"recordType":"local-record","operations":["get","list"],"allowCount":true,"rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}],
                 "externalViews":[{"view":"view","links":[{"link":"link","readableFields":["label"],"filterableFields":["label"],"sortableFields":["label"],"allowCount":true}]}]
@@ -1343,7 +1343,6 @@ mod postgres_tests {
             .push(serde_json::json!({"id":"issued","type":"date","classification":"internal"}));
         for path in [
             "/externalProjections/0/fields",
-            "/externalViews/0/links/0/fields",
             "/accessProfiles/0/permissions/externalViews/0/links/0/readableFields",
             "/accessProfiles/0/permissions/externalViews/0/links/0/sortableFields",
         ] {
@@ -1429,6 +1428,7 @@ mod postgres_tests {
         let (migration, migration_task) = database.connect_migration().await;
         let mut project = super::tests::project();
         project["externalProjections"][0]["cardinality"] = Value::from("many");
+        project["externalProjections"][0]["selectorScheme"] = Value::from("urn:test:keys");
         let registry = super::tests::compile_project(&project);
         super::super::install_compiled_schema(&migration, &registry, &database.runtime_role)
             .await

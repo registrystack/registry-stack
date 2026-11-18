@@ -111,9 +111,9 @@ pub struct RegistryProject {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub external_record_types: Vec<crate::external_views::ExternalRecordTypeSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub external_projections: Vec<crate::external_views::ExternalProjectionSource>,
+    pub external_projections: Vec<crate::external_views::ExternalProjectionDeclaration>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub external_views: Vec<crate::external_views::ExternalViewSource>,
+    pub external_views: Vec<crate::external_views::ExternalViewDeclaration>,
     /// Named organizations and frozen groups that consent may be given to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recipients: Option<RecipientsSource>,

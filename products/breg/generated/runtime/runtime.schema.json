@@ -463,16 +463,7 @@
             "$ref": "#/$defs/ExternalRefreshPlan"
           },
           "default": {},
-          "propertyNames": {
-            "$ref": "#/$defs/LocalId"
-          },
-          "type": "object"
-        },
-        "workers": {
-          "additionalProperties": {
-            "$ref": "#/$defs/ExternalRefreshWorker"
-          },
-          "default": {},
+          "description": "Refresh plans keyed by plan ID. Each names the indexed link it keeps\ncurrent and the worker identity that runs it.",
           "propertyNames": {
             "$ref": "#/$defs/LocalId"
           },
@@ -485,10 +476,12 @@
       "additionalProperties": false,
       "properties": {
         "requesterClient": {
-          "$ref": "#/$defs/ExternalId"
+          "$ref": "#/$defs/ExternalId",
+          "description": "The requester client of the source-change notifier."
         },
         "requiredScope": {
-          "$ref": "#/$defs/ExternalId"
+          "$ref": "#/$defs/ExternalId",
+          "description": "The scope that client must hold."
         }
       },
       "required": [
@@ -501,6 +494,7 @@
       "additionalProperties": false,
       "properties": {
         "intervalSeconds": {
+          "description": "Seconds between refresh sweeps.",
           "format": "uint32",
           "maximum": 31536000,
           "minimum": 1,
@@ -513,25 +507,24 @@
           "minimum": 1,
           "type": "integer"
         },
-        "refreshLabels": {
-          "default": false,
-          "type": "boolean"
-        },
         "sourceChanges": {
           "additionalProperties": {
             "$ref": "#/$defs/ExternalRefreshNotifier"
           },
           "default": {},
+          "description": "Notifiers allowed to report a source change, keyed by projection ID.",
           "propertyNames": {
             "$ref": "#/$defs/LocalId"
           },
           "type": "object"
         },
         "target": {
-          "$ref": "#/$defs/ExternalRefreshTarget"
+          "$ref": "#/$defs/ExternalRefreshTarget",
+          "description": "The external view and link this plan keeps current."
         },
         "worker": {
-          "$ref": "#/$defs/LocalId"
+          "$ref": "#/$defs/ExternalRefreshWorker",
+          "description": "The service identity BReg refreshes as."
         }
       },
       "required": [
@@ -545,10 +538,12 @@
       "additionalProperties": false,
       "properties": {
         "link": {
-          "$ref": "#/$defs/LocalId"
+          "$ref": "#/$defs/LocalId",
+          "description": "The link of that view whose projection is refreshed."
         },
         "view": {
-          "$ref": "#/$defs/LocalId"
+          "$ref": "#/$defs/LocalId",
+          "description": "The external view, whose root record type the profile lists."
         }
       },
       "required": [
@@ -561,19 +556,23 @@
       "additionalProperties": false,
       "properties": {
         "accessProfile": {
-          "$ref": "#/$defs/LocalId"
+          "$ref": "#/$defs/LocalId",
+          "description": "The service access profile, on the target root record type, the worker runs under."
         },
         "principal": {
-          "$ref": "#/$defs/ExternalId"
+          "$ref": "#/$defs/ExternalId",
+          "description": "The principal the refresh acts as."
         },
         "requesterClient": {
-          "$ref": "#/$defs/ExternalId"
+          "$ref": "#/$defs/ExternalId",
+          "description": "The requester client that profile admits."
         },
         "rowClaims": {
           "additionalProperties": {
             "$ref": "#/$defs/RawRowClaimValues"
           },
           "default": {},
+          "description": "Values the worker pins for the claims the profile's row boundaries use.",
           "propertyNames": {
             "$ref": "#/$defs/ExternalId"
           },
@@ -589,20 +588,24 @@
     },
     "ExternalSourceAcquisition": {
       "additionalProperties": false,
+      "description": "Ceilings on one acquisition from the source.",
       "properties": {
         "attemptTimeoutMilliseconds": {
+          "description": "Time allowed for one attempt, in milliseconds.",
           "format": "uint64",
           "maximum": 60000,
           "minimum": 1,
           "type": "integer"
         },
         "maximumDataOperations": {
+          "description": "Most data operations one acquisition may run.",
           "format": "uint64",
           "maximum": 1000,
           "minimum": 1,
           "type": "integer"
         },
         "maximumResponseBytes": {
+          "description": "Most response bytes one acquisition may read.",
           "format": "uint64",
           "maximum": 16777216,
           "minimum": 1,
@@ -616,14 +619,16 @@
       ],
       "type": "object"
     },
-    "ExternalSourceBinding": {
+    "ExternalSourceMembers": {
       "additionalProperties": false,
-      "description": "Operator binding for one already declared projection. The reviewed pack\nprovides the acquisition ceiling; runtime configuration can narrow it.",
+      "description": "The members of one `externalSources` entry; the entry's key is the ID of\nthe projection it binds.",
       "properties": {
         "acquisition": {
-          "$ref": "#/$defs/ExternalSourceAcquisition"
+          "$ref": "#/$defs/ExternalSourceAcquisition",
+          "description": "Per-acquisition ceilings that narrow the pack's own."
         },
         "allowedFields": {
+          "description": "The operator-approved subset of outside fields BReg may copy. It must\ncover every field the projection declares.",
           "items": {
             "$ref": "#/$defs/LocalId"
           },
@@ -638,7 +643,8 @@
           "type": "integer"
         },
         "connection": {
-          "$ref": "#/$defs/AdapterEndpointBindings"
+          "$ref": "#/$defs/AdapterEndpointBindings",
+          "description": "How BReg reaches the source: endpoints, credentials references and TLS trust."
         },
         "endpointPolicies": {
           "items": {
@@ -650,18 +656,16 @@
           "description": "The reviewed source grant cutoff, as an RFC 3339 timestamp.",
           "type": "string"
         },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
         "packDigest": {
-          "$ref": "#/$defs/Digest"
+          "$ref": "#/$defs/Digest",
+          "description": "The pack file's `sha256:` digest; BReg refuses a pack whose bytes differ."
         },
         "packFile": {
+          "description": "Absolute path of the reviewed Adapter pack file.",
           "type": "string"
         }
       },
       "required": [
-        "id",
         "packFile",
         "packDigest",
         "connection",
@@ -2289,18 +2293,20 @@
     "externalRefresh": {
       "$ref": "#/$defs/ExternalRefreshConfig",
       "default": {
-        "plans": {},
-        "workers": {}
+        "plans": {}
       },
       "description": "Managed scheduled and targeted refresh plans. Omission starts no\nrefresh worker and admits no source-change notifier."
     },
     "externalSources": {
-      "default": [],
-      "description": "Independent acquisition bindings. Omission permits no source calls.",
-      "items": {
-        "$ref": "#/$defs/ExternalSourceBinding"
+      "additionalProperties": {
+        "$ref": "#/$defs/ExternalSourceMembers"
       },
-      "type": "array"
+      "default": {},
+      "description": "Independent acquisition bindings. Omission permits no source calls.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "fieldEncryption": {
       "$ref": "#/$defs/RawFieldEncryptionConfig",

@@ -592,14 +592,13 @@ fn link_first(source: &mut Value) {
         "fields":[{"id":"label","type":"string","classification":"internal"}]
     }]);
     source["externalProjections"] = json!([{
-        "id":"approved-subjects","recordType":"external-subject","operation":"subjects-by-key","operationVersion":"1",
-        "purpose":"local-consultation","scope":"approved-subjects","selectorScheme":"urn:example:subject-key",
+        "id":"approved-subjects","recordType":"external-subject","sourceRoute":"subjects-by-key","sourceRouteVersion":"1",
+        "purpose":"local-consultation","scope":"approved-subjects",
         "mode":"indexed","cardinality":"one","cacheTtlSeconds":600,"fields":["label"]
     }]);
     source["externalViews"] = json!([{
         "id":"target-with-subject","recordType":"target",
-        "links":[{"id":"subject","projection":"approved-subjects","fromField":"first",
-            "identifierScheme":"urn:example:subject-key","fields":["label"]}]
+        "links":[{"id":"subject","projection":"approved-subjects","fromField":"first"}]
     }]);
 }
 

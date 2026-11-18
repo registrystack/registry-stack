@@ -59,29 +59,27 @@ externalRecordTypes:
 externalProjections:
   - id: person-live
     recordType: person
-    operation: person-exact
-    operationVersion: "1"
+    sourceRoute: person-exact
+    sourceRouteVersion: "1"
     purpose: licensing
     scope: licensing-holders
-    selectorScheme: urn:example:person-number
     mode: live
     cardinality: one
     fields: [given-name, family-name]
   - id: person-indexed
     recordType: person
-    operation: person-batch
-    operationVersion: "1"
+    sourceRoute: person-batch
+    sourceRouteVersion: "1"
     purpose: licensing
     scope: licensing-holders
-    selectorScheme: urn:example:person-number
     mode: indexed
     cardinality: one
     cacheTtlSeconds: 300
     fields: [given-name, family-name]
   - id: holdings-live
     recordType: holding
-    operation: holdings-by-business
-    operationVersion: "1"
+    sourceRoute: holdings-by-business
+    sourceRouteVersion: "1"
     purpose: licensing
     scope: licensed-business-holdings
     selectorScheme: urn:example:business-number
@@ -90,8 +88,8 @@ externalProjections:
     fields: [share-class, share-count, shareholder-type, shareholder-key]
   - id: holdings-indexed
     recordType: holding
-    operation: holdings-by-business
-    operationVersion: "1"
+    sourceRoute: holdings-by-business
+    sourceRouteVersion: "1"
     purpose: licensing
     scope: licensed-business-holdings
     selectorScheme: urn:example:business-number
@@ -107,37 +105,27 @@ externalViews:
       - id: holder
         projection: person-live
         fromField: holder-key
-        identifierScheme: urn:example:person-number
-        fields: [given-name, family-name]
   - id: licence-holder-indexed
     recordType: licence
     links:
       - id: holder
         projection: person-indexed
         fromField: holder-key
-        identifierScheme: urn:example:person-number
-        fields: [given-name, family-name]
   - id: business-holdings-live
     recordType: licensed-business
     links:
       - id: holdings
         projection: holdings-live
         fromField: business-key
-        identifierScheme: urn:example:business-number
-        fields: [share-class, share-count, shareholder-type, shareholder-key]
   - id: business-holdings-indexed
     recordType: licensed-business
     links:
       - id: holdings
         projection: holdings-indexed
         fromField: business-key
-        identifierScheme: urn:example:business-number
-        fields: [share-class, share-count, shareholder-type, shareholder-key]
         label:
           projection: person-indexed
           fromField: person-key
-          identifierScheme: urn:example:person-number
-          fields: [given-name, family-name]
 
 accessProfiles:
   - id: officer

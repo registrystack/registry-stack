@@ -26,12 +26,8 @@ const MAXIMUM_INTERVAL_SECONDS: u32 = 31_536_000;
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ExternalRefreshConfig {
-    #[serde(default, deserialize_with = "local_id_map")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "local_id_map_schema::<ExternalRefreshWorker>")
-    )]
-    workers: BTreeMap<String, ExternalRefreshWorker>,
+    /// Refresh plans keyed by plan ID. Each names the indexed link it keeps
+    /// current and the worker identity that runs it.
     #[serde(default, deserialize_with = "local_id_map")]
     #[cfg_attr(
         feature = "schema",
@@ -41,10 +37,6 @@ pub(crate) struct ExternalRefreshConfig {
 }
 
 impl ExternalRefreshConfig {
-    pub(crate) fn workers(&self) -> &BTreeMap<String, ExternalRefreshWorker> {
-        &self.workers
-    }
-
     pub(crate) fn plans(&self) -> &BTreeMap<String, ExternalRefreshPlan> {
         &self.plans
     }
@@ -67,6 +59,7 @@ impl ExternalRefreshConfig {
                 }
             }
         }
+        resolution.report_unplanned_links(registry, sources, &self.plans);
         resolution
     }
 
@@ -78,15 +71,8 @@ impl ExternalRefreshConfig {
         sources: &[ExternalSourceBinding],
     ) -> Result<ResolvedExternalRefreshPlan, ExternalRefreshPlanProblem> {
         let plan_path = format!("/externalRefresh/plans/{id}");
-        let worker_id = plan.worker.as_str();
-        let worker = self.workers.get(worker_id).ok_or_else(|| {
-            problem(
-                format!("{plan_path}/worker"),
-                "breg.external-refresh.worker-missing",
-                "the plan refers to an external refresh worker that is not declared",
-                "Declare the worker under externalRefresh.workers or select an existing worker.",
-            )
-        })?;
+        let worker_path = format!("{plan_path}/worker");
+        let worker = &plan.worker;
         let views = registry.external_views();
         let view = views.views.get(plan.target.view.as_str()).ok_or_else(|| {
             problem(
@@ -109,25 +95,7 @@ impl ExternalRefreshConfig {
                 )
             })?;
         let primary = resolved_projection(link.projection.as_str(), &plan_path, registry, sources)?;
-        let label = if plan.refresh_labels {
-            let label = link.label.as_ref().ok_or_else(|| {
-                problem(
-                    format!("{plan_path}/refreshLabels"),
-                    "breg.external-refresh.label-missing",
-                    "refreshLabels is enabled but the target link declares no related label",
-                    "Disable refreshLabels or select a link with a declared label projection.",
-                )
-            })?;
-            Some(resolved_projection(
-                label.projection.as_str(),
-                &plan_path,
-                registry,
-                sources,
-            )?)
-        } else {
-            None
-        };
-
+        let profile_id = worker.access_profile.as_str();
         let root = registry
             .entities()
             .get(view.record_type.as_str())
@@ -139,32 +107,44 @@ impl ExternalRefreshConfig {
                     "Rebuild the project so the external view and its root record type agree.",
                 )
             })?;
-        let profile_id = worker.access_profile.as_str();
         let profile = root.access_profiles.get(profile_id).ok_or_else(|| {
             problem(
-                format!("/externalRefresh/workers/{worker_id}/accessProfile"),
+                format!("{worker_path}/accessProfile"),
                 "breg.external-refresh.profile-missing",
                 "the worker access profile is not declared on the target root record type",
                 "Select a service profile that can list the target root and refresh its projection.",
             )
         })?;
-        if !profile.operations.contains(&Operation::List)
-            || !views
-                .refresh
-                .get(profile_id)
-                .is_some_and(|ids| ids.contains(&link.projection))
-            || label.as_ref().is_some_and(|label| {
-                !views.refresh.get(profile_id).is_some_and(|ids| {
-                    ids.iter()
-                        .any(|id| id.as_str() == label.projection.as_str())
-                })
+        let granted = views.refresh.get(profile_id);
+        // The link's label is refreshed when, and only when, the worker
+        // profile's grant covers the label's projection.
+        let label_projection = link.label.as_ref().filter(|label| {
+            granted.is_some_and(|ids| {
+                ids.iter()
+                    .any(|id| id.as_str() == label.projection.as_str())
             })
+        });
+        let label = label_projection
+            .map(|label| {
+                resolved_projection(label.projection.as_str(), &plan_path, registry, sources)
+            })
+            .transpose()?;
+        if !profile.operations.contains(&Operation::List)
+            || !granted.is_some_and(|ids| ids.contains(&link.projection))
         {
             return Err(problem(
-                format!("/externalRefresh/workers/{worker_id}/accessProfile"),
+                format!("{worker_path}/accessProfile"),
                 "breg.external-refresh.profile-authority-missing",
-                "the worker profile does not grant root List and every projection this plan refreshes",
-                "Grant List on the target root and refreshExternalProjections for the primary and enabled label projections.",
+                "the worker profile does not grant root List and refreshExternalProjections for the link's projection",
+                "Grant List on the target root and refreshExternalProjections for the link's projection; a label projection the grant also covers is refreshed with it.",
+            ));
+        }
+        if !profile.require_consent.is_empty() {
+            return Err(problem(
+                format!("{worker_path}/accessProfile"),
+                "breg.external-refresh.profile-authority-missing",
+                "the worker profile declares a consent boundary, which a refresh worker has no recipient to satisfy",
+                "Select a service profile on the target root that declares no requireConsent.",
             ));
         }
         if !profile
@@ -172,7 +152,7 @@ impl ExternalRefreshConfig {
             .contains(worker.requester_client.as_str())
         {
             return Err(problem(
-                format!("/externalRefresh/workers/{worker_id}/requesterClient"),
+                format!("{worker_path}/requesterClient"),
                 "breg.external-refresh.worker-client-mismatch",
                 "the worker requester client is not admitted by its access profile",
                 "Use a requester client declared by the selected access profile.",
@@ -187,7 +167,7 @@ impl ExternalRefreshConfig {
             .is_some_and(|values| values != principal_value)
         {
             return Err(problem(
-                format!("/externalRefresh/workers/{worker_id}/rowClaims/{principal_claim}"),
+                format!("{worker_path}/rowClaims/{principal_claim}"),
                 "breg.external-refresh.principal-claim-conflict",
                 "rowClaims conflicts with the principal value for the profile principal claim",
                 "Remove this rowClaims entry; principal supplies the expected principal claim value.",
@@ -203,7 +183,7 @@ impl ExternalRefreshConfig {
             .find(|claim| !expected_claims.contains_key(*claim))
         {
             return Err(problem(
-                format!("/externalRefresh/workers/{worker_id}/rowClaims/{missing}"),
+                format!("{worker_path}/rowClaims/{missing}"),
                 "breg.external-refresh.row-claim-missing",
                 "the worker does not pin a value for a claim used by this plan's root List boundary",
                 "Add the expected claim value under the worker's rowClaims map.",
@@ -227,14 +207,6 @@ impl ExternalRefreshConfig {
                     "Key sourceChanges by the primary projection or by its enabled label projection.",
                 ));
             }
-            if notifier.requester_client == worker.requester_client {
-                return Err(problem(
-                    format!("{plan_path}/sourceChanges/{projection}/requesterClient"),
-                    "breg.external-refresh.notifier-worker-client-conflict",
-                    "the notifier and refresh worker must use distinct requester clients",
-                    "Bind the notifier to a separate service client with only its hint scope.",
-                ));
-            }
             notifiers.insert(
                 projection.clone(),
                 ResolvedExternalRefreshNotifier {
@@ -245,7 +217,7 @@ impl ExternalRefreshConfig {
         }
 
         let worker = ResolvedExternalRefreshWorker {
-            id: worker_id.to_owned(),
+            id: id.to_owned(),
             access_profile: profile_id.to_owned(),
             requester_client: worker.requester_client.as_str().to_owned(),
             principal: worker.principal.as_str().to_owned(),
@@ -269,8 +241,8 @@ impl ExternalRefreshConfig {
             primary_projection: primary,
             label_projection: label,
         };
-        let authority_digest =
-            authority_digest(id, &worker, &target, &notifiers, plan.refresh_labels);
+        let refresh_labels = target.label_projection.is_some();
+        let authority_digest = authority_digest(id, &worker, &target, &notifiers, refresh_labels);
         Ok(ResolvedExternalRefreshPlan {
             id: id.to_owned(),
             worker,
@@ -278,7 +250,7 @@ impl ExternalRefreshConfig {
             notifiers,
             interval: Duration::from_secs(u64::from(plan.interval_seconds)),
             page_size: plan.page_size,
-            refresh_labels: plan.refresh_labels,
+            refresh_labels,
             authority_digest,
         })
     }
@@ -288,9 +260,13 @@ impl ExternalRefreshConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ExternalRefreshWorker {
+    /// The service access profile, on the target root record type, the worker runs under.
     access_profile: LocalId,
+    /// The requester client that profile admits.
     requester_client: ExternalId,
+    /// The principal the refresh acts as.
     principal: ExternalId,
+    /// Values the worker pins for the claims the profile's row boundaries use.
     #[serde(default, deserialize_with = "row_claim_map")]
     #[cfg_attr(
         feature = "schema",
@@ -310,8 +286,11 @@ impl ExternalRefreshWorker {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ExternalRefreshPlan {
+    /// The external view and link this plan keeps current.
     target: ExternalRefreshTarget,
-    worker: LocalId,
+    /// The service identity BReg refreshes as.
+    worker: ExternalRefreshWorker,
+    /// Seconds between refresh sweeps.
     #[serde(deserialize_with = "crate::contract::bounded_u32::<_, 1, MAXIMUM_INTERVAL_SECONDS>")]
     #[cfg_attr(
         feature = "schema",
@@ -325,8 +304,7 @@ pub(crate) struct ExternalRefreshPlan {
         schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_PAGE_SIZE>")
     )]
     page_size: u16,
-    #[serde(default)]
-    refresh_labels: bool,
+    /// Notifiers allowed to report a source change, keyed by projection ID.
     #[serde(default, deserialize_with = "local_id_map")]
     #[cfg_attr(
         feature = "schema",
@@ -339,10 +317,6 @@ pub(crate) struct ExternalRefreshPlan {
 impl ExternalRefreshPlan {
     pub(crate) const fn page_size(&self) -> u16 {
         self.page_size
-    }
-
-    pub(crate) const fn refresh_labels(&self) -> bool {
-        self.refresh_labels
     }
 
     pub(crate) fn source_changes(&self) -> &BTreeMap<String, ExternalRefreshNotifier> {
@@ -358,7 +332,9 @@ const fn default_page_size() -> u16 {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExternalRefreshTarget {
+    /// The external view, whose root record type the profile lists.
     view: LocalId,
+    /// The link of that view whose projection is refreshed.
     link: LocalId,
 }
 
@@ -366,7 +342,9 @@ struct ExternalRefreshTarget {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ExternalRefreshNotifier {
+    /// The requester client of the source-change notifier.
     requester_client: ExternalId,
+    /// The scope that client must hold.
     required_scope: ExternalId,
 }
 
@@ -403,6 +381,44 @@ where
 pub(crate) struct ExternalRefreshResolution {
     pub(crate) available: BTreeMap<String, ResolvedExternalRefreshPlan>,
     pub(crate) unavailable: BTreeMap<String, ExternalRefreshPlanProblem>,
+}
+
+impl ExternalRefreshResolution {
+    /// An indexed link whose projection is bound but that no plan targets
+    /// would never refresh; report it under `<view>/<link>`.
+    fn report_unplanned_links(
+        &mut self,
+        registry: &CompiledRegistry,
+        sources: &[ExternalSourceBinding],
+        plans: &BTreeMap<String, ExternalRefreshPlan>,
+    ) {
+        let catalog = registry.external_views();
+        for (view_id, view) in &catalog.views {
+            for link in &view.links {
+                let indexed = catalog
+                    .projections
+                    .get(link.projection.as_str())
+                    .is_some_and(|projection| projection.mode == ExternalProjectionMode::Indexed);
+                let bound = sources
+                    .iter()
+                    .any(|binding| binding.id.as_str() == link.projection.as_str());
+                let planned = plans.values().any(|plan| {
+                    plan.target.view.as_str() == view_id && plan.target.link == link.id
+                });
+                if indexed && bound && !planned {
+                    self.unavailable.insert(
+                        format!("{view_id}/{}", link.id.as_str()),
+                        problem(
+                            "/externalRefresh/plans".to_owned(),
+                            "breg.external-refresh.plan-missing",
+                            "an indexed link with a bound source has no refresh plan, so its cache is never refreshed",
+                            "Add a plan under externalRefresh.plans that targets the view and link.",
+                        ),
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -505,35 +521,21 @@ fn resolved_projection(
                 "Add an externalSources binding keyed by the projection ID.",
             )
         })?;
-    let authored_ttl = projection.cache_ttl_seconds.as_ref().map(|ttl| ttl.get());
-    let effective_cache_ttl_seconds = match (
-        authored_ttl,
-        binding
-            .cache_ttl_seconds
-            .as_ref()
-            .map(|ttl| ttl.get() as u32),
-    ) {
-        (Some(authored), Some(bound)) => authored.min(bound),
-        (Some(authored), None) => authored,
-        (None, _) => {
-            return Err(problem(
-                format!("{plan_path}/target"),
-                "breg.external-refresh.cache-ttl-missing",
-                "the indexed projection declares no cache lifetime",
-                "Declare cacheTtlSeconds on the indexed projection.",
-            ))
-        }
-    };
+    // An indexed projection always declares cacheTtlSeconds and a source
+    // binding always carries a valid grant cutoff; compile and binding
+    // validation refuse the alternatives before a plan resolves.
+    let authored = projection
+        .cache_ttl_seconds
+        .as_ref()
+        .map(|ttl| ttl.get())
+        .expect("compile requires cacheTtlSeconds on an indexed projection");
+    let effective_cache_ttl_seconds = binding
+        .cache_ttl_seconds
+        .as_ref()
+        .map_or(authored, |bound| authored.min(bound.get() as u32));
     let grant_valid_until = DateTime::parse_from_rfc3339(&binding.grant_valid_until)
         .map(|value| value.with_timezone(&Utc))
-        .map_err(|_| {
-            problem(
-                "/externalSources".to_owned(),
-                "breg.external-refresh.grant-cutoff-invalid",
-                "the source binding grant cutoff is invalid",
-                "Write grantValidUntil as an RFC 3339 timestamp.",
-            )
-        })?;
+        .expect("binding validation requires an RFC 3339 grant cutoff");
     Ok(ResolvedExternalRefreshProjection {
         projection: id.to_owned(),
         operation: projection.operation.as_str().to_owned(),
@@ -649,80 +651,65 @@ mod tests {
         compile_project(&project, &[], CompileProfile::Authoring).unwrap()
     }
 
+    const WORKER: &str = r#"{
+        "accessProfile": "projection-refresh",
+        "requesterClient": "licensing-refresh",
+        "principal": "synthetic-licensing-refresh",
+        "rowClaims": {"jurisdiction": ["zone-a", "zone-b"], "office": "licensing"}
+    }"#;
+
+    fn worker_json() -> serde_json::Value {
+        serde_json::from_str(WORKER).unwrap()
+    }
+
     #[test]
     fn strict_shape_accepts_scalar_and_set_claims_and_defaults_plan_settings() {
         let config: ExternalRefreshConfig = serde_json::from_value(serde_json::json!({
-            "workers": {
-                "licensing-zone-a": {
-                    "accessProfile": "projection-refresh",
-                    "requesterClient": "licensing-refresh",
-                    "principal": "synthetic-licensing-refresh",
-                    "rowClaims": {
-                        "jurisdiction": ["zone-a", "zone-b"],
-                        "office": "licensing"
-                    }
-                }
-            },
             "plans": {
                 "licensing-holders": {
                     "target": {"view": "licence-holder-indexed", "link": "holder"},
-                    "worker": "licensing-zone-a",
+                    "worker": worker_json(),
                     "intervalSeconds": 900
                 }
             }
         }))
         .unwrap();
-        assert_eq!(
-            config.workers()["licensing-zone-a"].row_claims()["jurisdiction"].len(),
-            2
-        );
         let plan = &config.plans()["licensing-holders"];
+        assert_eq!(plan.worker.row_claims()["jurisdiction"].len(), 2);
         assert_eq!(plan.page_size(), 50);
-        assert!(!plan.refresh_labels());
         assert!(plan.source_changes().is_empty());
     }
 
     #[test]
     fn strict_shape_refuses_unknown_and_out_of_range_plan_members() {
+        let target = serde_json::json!({"view":"view","link":"link"});
         for plan in [
-            serde_json::json!({"target":{"view":"view","link":"link"},"worker":"worker","intervalSeconds":0}),
-            serde_json::json!({"target":{"view":"view","link":"link"},"worker":"worker","intervalSeconds":1,"pageSize":101}),
-            serde_json::json!({"target":{"view":"view","link":"link"},"worker":"worker","intervalSeconds":1,"surprise":true}),
+            serde_json::json!({"target":target,"worker":worker_json(),"intervalSeconds":0}),
+            serde_json::json!({"target":target,"worker":worker_json(),"intervalSeconds":1,"pageSize":101}),
+            serde_json::json!({"target":target,"worker":worker_json(),"intervalSeconds":1,"surprise":true}),
+            serde_json::json!({"target":target,"worker":worker_json(),"intervalSeconds":1,"refreshLabels":true}),
+            serde_json::json!({"target":target,"worker":"licensing-zone-a","intervalSeconds":1}),
         ] {
             assert!(serde_json::from_value::<ExternalRefreshPlan>(plan).is_err());
         }
     }
 
     #[test]
-    fn resolution_reports_dangling_worker_and_view_at_the_operator_setting() {
-        let registry = empty_registry();
-        let missing_worker: ExternalRefreshConfig = serde_json::from_value(serde_json::json!({
-            "plans": {
-                "holders": {
-                    "target": {"view": "holders", "link": "holder"},
-                    "worker": "missing",
-                    "intervalSeconds": 60
-                }
-            }
-        }))
-        .unwrap();
-        let resolution = missing_worker.resolve(&registry, &[]);
-        let problem = &resolution.unavailable["holders"];
-        assert_eq!(problem.path, "/externalRefresh/plans/holders/worker");
-        assert_eq!(problem.code, "breg.external-refresh.worker-missing");
+    fn a_workers_map_is_an_unknown_member_of_the_block() {
+        assert!(serde_json::from_value::<ExternalRefreshConfig>(
+            serde_json::json!({"workers": {}, "plans": {}})
+        )
+        .is_err());
+    }
 
+    #[test]
+    fn resolution_reports_a_dangling_view_at_the_operator_setting() {
+        let registry = empty_registry();
         let missing_view: ExternalRefreshConfig = serde_json::from_value(serde_json::json!({
-            "workers": {
-                "worker": {
-                    "accessProfile": "refresh",
-                    "requesterClient": "refresh-worker",
-                    "principal": "refresh-worker"
-                }
-            },
             "plans": {
                 "holders": {
                     "target": {"view": "missing", "link": "holder"},
-                    "worker": "worker",
+                    "worker": worker_json(),
                     "intervalSeconds": 60
                 }
             }
@@ -732,6 +719,84 @@ mod tests {
         let problem = &resolution.unavailable["holders"];
         assert_eq!(problem.path, "/externalRefresh/plans/holders/target/view");
         assert_eq!(problem.code, "breg.external-refresh.view-missing");
+    }
+
+    fn example_registry() -> CompiledRegistry {
+        let source = include_str!("../../../products/breg/examples/external-views/registry.yaml");
+        let project = crate::parse_project_yaml(source.as_bytes()).unwrap();
+        compile_project(&project, &[], CompileProfile::Authoring).unwrap()
+    }
+
+    fn binding(projection: &str) -> ExternalSourceBinding {
+        ExternalSourceBinding::new(
+            registry_platform_yaml::LocalId::new(projection).unwrap(),
+            serde_json::from_value(serde_json::json!({
+                "packFile": "/deferred/pack.yaml",
+                "packDigest": format!("sha256:{}", "0".repeat(64)),
+                "connection": {"id": "synthetic", "endpoints": []},
+                "endpointPolicies": [],
+                "allowedFields": ["given-name"],
+                "grantValidUntil": "2030-01-01T00:00:00Z",
+                "acquisition": {
+                    "maximumDataOperations": 8,
+                    "attemptTimeoutMilliseconds": 8000,
+                    "maximumResponseBytes": 262144
+                }
+            }))
+            .unwrap(),
+        )
+    }
+
+    fn holdings_plan(view: &str, link: &str) -> ExternalRefreshConfig {
+        serde_json::from_value(serde_json::json!({
+            "plans": {
+                "plan": {
+                    "target": {"view": view, "link": link},
+                    "worker": worker_json(),
+                    "intervalSeconds": 60
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_plan_refreshes_the_labels_its_worker_profile_is_granted() {
+        let registry = example_registry();
+        let sources = [binding("holdings-indexed"), binding("person-indexed")];
+        let granted =
+            holdings_plan("business-holdings-indexed", "holdings").resolve(&registry, &sources);
+        let plan = granted
+            .available
+            .get("plan")
+            .unwrap_or_else(|| panic!("{:?}", granted.unavailable));
+        assert!(plan.refresh_labels);
+    }
+
+    #[test]
+    fn a_link_without_a_label_refreshes_no_labels() {
+        let registry = example_registry();
+        let sources = [binding("person-indexed")];
+        let resolution =
+            holdings_plan("licence-holder-indexed", "holder").resolve(&registry, &sources);
+        let plan = resolution
+            .available
+            .get("plan")
+            .unwrap_or_else(|| panic!("{:?}", resolution.unavailable));
+        assert!(!plan.refresh_labels);
+    }
+
+    #[test]
+    fn a_bound_indexed_link_without_a_plan_is_reported() {
+        let registry = example_registry();
+        let sources = [binding("person-indexed")];
+        let resolution = ExternalRefreshConfig::default().resolve(&registry, &sources);
+        let problem = &resolution.unavailable["licence-holder-indexed/holder"];
+        assert_eq!(problem.code, "breg.external-refresh.plan-missing");
+        assert_eq!(problem.path, "/externalRefresh/plans");
+        assert!(!resolution
+            .unavailable
+            .contains_key("business-holdings-indexed/holdings"));
     }
 
     #[test]

@@ -69,7 +69,65 @@ pub enum ExternalCardinality {
 /// The deployment binding and the stored scope hold the same bound.
 pub const MAXIMUM_CACHE_TTL_SECONDS: u32 = 31_536_000;
 
+/// Authoring form of an external projection. `compile` fills the derived
+/// members of [`ExternalProjectionSource`].
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ExternalProjectionDeclaration {
+    pub id: LocalId,
+    pub record_type: LocalId,
+    /// The source route the projection calls.
+    pub source_route: LocalId,
+    pub source_route_version: ExternalId,
+    pub purpose: ExternalId,
+    pub scope: ExternalId,
+    /// Required for cardinality `many`; refused for `one`, which selects by
+    /// the record type's identifier scheme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector_scheme: Option<ExternalId>,
+    pub mode: ExternalProjectionMode,
+    pub cardinality: ExternalCardinality,
+    pub fields: UniqueSet<LocalId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_ttl_seconds: Option<BoundedU32<1, MAXIMUM_CACHE_TTL_SECONDS>>,
+}
+
+/// Authoring form of an external view.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ExternalViewDeclaration {
+    pub id: LocalId,
+    pub record_type: LocalId,
+    pub links: Vec<ExternalLinkDeclaration>,
+}
+
+/// Authoring form of a view link. The identifier scheme and fields come from
+/// the projection it names.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ExternalLinkDeclaration {
+    pub id: LocalId,
+    pub projection: LocalId,
+    pub from_field: LocalId,
+    /// An optional to-one label on a row of an indexed related collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<ExternalLabelDeclaration>,
+}
+
+/// Authoring form of a link label. The identifier scheme and fields come from
+/// the projection it names.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ExternalLabelDeclaration {
+    pub projection: LocalId,
+    pub from_field: LocalId,
+}
+
+/// The compiled form of an external projection, as packaged.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ExternalProjectionSource {
@@ -87,7 +145,6 @@ pub struct ExternalProjectionSource {
     pub cache_ttl_seconds: Option<BoundedU32<1, MAXIMUM_CACHE_TTL_SECONDS>>,
 }
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ExternalViewSource {
@@ -96,7 +153,6 @@ pub struct ExternalViewSource {
     pub links: Vec<ExternalLinkSource>,
 }
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ExternalLinkSource {
@@ -105,12 +161,10 @@ pub struct ExternalLinkSource {
     pub from_field: LocalId,
     pub identifier_scheme: ExternalId,
     pub fields: UniqueSet<LocalId>,
-    /// An optional to-one label on a row of an indexed related collection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<ExternalLabelSource>,
 }
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ExternalLabelSource {
@@ -285,18 +339,21 @@ pub(crate) fn compile(
         "/externalRecordTypes",
         &mut diagnostics,
     );
-    let projections = index(
+    // Indexing the declarations reports duplicate identifiers; the compiled
+    // projections and views are built below.
+    index(
         &project.external_projections,
         |source| &source.id,
         "/externalProjections",
         &mut diagnostics,
     );
-    let views = index(
+    index(
         &project.external_views,
         |source| &source.id,
         "/externalViews",
         &mut diagnostics,
     );
+    let mut projections = BTreeMap::new();
 
     for (index, record_type) in project.external_record_types.iter().enumerate() {
         let path = format!("/externalRecordTypes/{index}");
@@ -325,11 +382,9 @@ pub(crate) fn compile(
 
     for (index, projection) in project.external_projections.iter().enumerate() {
         let path = format!("/externalProjections/{index}");
-        validate_uri(
-            &projection.selector_scheme,
-            &format!("{path}/selectorScheme"),
-            &mut diagnostics,
-        );
+        if let Some(scheme) = &projection.selector_scheme {
+            validate_uri(scheme, &format!("{path}/selectorScheme"), &mut diagnostics);
+        }
         let Some(record_type) = record_types.get(projection.record_type.as_str()) else {
             error(
                 &mut diagnostics,
@@ -357,16 +412,28 @@ pub(crate) fn compile(
                 "Select at least one field declared by the external record type.",
             );
         }
-        if projection.cardinality == ExternalCardinality::One
-            && projection.selector_scheme != record_type.identifier_scheme
-        {
-            error(
-                &mut diagnostics,
-                "identifier-scheme-mismatch",
-                format!("{path}/selectorScheme"),
-                "An exact operation selects the external record by its declared identifier scheme.",
-            );
-        }
+        let selector_scheme = match (projection.cardinality, &projection.selector_scheme) {
+            (ExternalCardinality::One, None) => Some(record_type.identifier_scheme.clone()),
+            (ExternalCardinality::One, Some(_)) => {
+                error(
+                    &mut diagnostics,
+                    "selector-scheme",
+                    format!("{path}/selectorScheme"),
+                    "Remove selectorScheme: a cardinality-one projection selects by its record type's identifierScheme.",
+                );
+                None
+            }
+            (ExternalCardinality::Many, None) => {
+                error(
+                    &mut diagnostics,
+                    "selector-scheme",
+                    format!("{path}/selectorScheme"),
+                    "Set selectorScheme: a cardinality-many projection names the identifier scheme of the key it selects by.",
+                );
+                None
+            }
+            (ExternalCardinality::Many, Some(scheme)) => Some(scheme.clone()),
+        };
         match (projection.mode, projection.cache_ttl_seconds) {
             (ExternalProjectionMode::Live, Some(_)) => error(
                 &mut diagnostics,
@@ -382,8 +449,27 @@ pub(crate) fn compile(
             ),
             _ => {}
         }
+        if let Some(selector_scheme) = selector_scheme {
+            projections.insert(
+                projection.id.as_str().to_owned(),
+                ExternalProjectionSource {
+                    id: projection.id.clone(),
+                    record_type: projection.record_type.clone(),
+                    operation: projection.source_route.clone(),
+                    operation_version: projection.source_route_version.clone(),
+                    purpose: projection.purpose.clone(),
+                    scope: projection.scope.clone(),
+                    selector_scheme,
+                    mode: projection.mode,
+                    cardinality: projection.cardinality,
+                    fields: projection.fields.clone(),
+                    cache_ttl_seconds: projection.cache_ttl_seconds,
+                },
+            );
+        }
     }
 
+    let mut views = BTreeMap::new();
     let mut local_schemes = BTreeMap::new();
     for (index, view) in project.external_views.iter().enumerate() {
         let path = format!("/externalViews/{index}");
@@ -405,6 +491,7 @@ pub(crate) fn compile(
             );
         }
         let mut link_ids = BTreeSet::new();
+        let mut compiled_links = Vec::new();
         for (link_index, link) in view.links.iter().enumerate() {
             let path = format!("{path}/links/{link_index}");
             if !link_ids.insert(&link.id) {
@@ -424,16 +511,19 @@ pub(crate) fn compile(
                 );
                 continue;
             };
-            if link.identifier_scheme != projection.selector_scheme
-                || local_schemes
-                    .insert(
-                        (&view.record_type, &link.from_field),
-                        &link.identifier_scheme,
-                    )
-                    .is_some_and(|scheme| scheme != &link.identifier_scheme)
+            if local_schemes
+                .insert(
+                    (&view.record_type, &link.from_field),
+                    &projection.selector_scheme,
+                )
+                .is_some_and(|scheme| scheme != &projection.selector_scheme)
             {
-                error(&mut diagnostics, "identifier-scheme-mismatch", format!("{path}/identifierScheme"),
-                    "Use one consistent local identifier scheme that matches the approved source selector.");
+                error(
+                    &mut diagnostics,
+                    "selector-scheme-conflict",
+                    format!("{path}/fromField"),
+                    "Link one local field to projections that share one selector scheme.",
+                );
             }
             if !root.stored_fields.iter().any(|field| {
                 field.logical.id == link.from_field.as_str()
@@ -450,15 +540,7 @@ pub(crate) fn compile(
                 error(&mut diagnostics, "invalid-root-key", format!("{path}/fromField"),
                     "Select a stored UUID or bounded string identifier supported by direct binding.");
             }
-            if link.fields.is_empty() || !link.fields.is_subset(&projection.fields) {
-                error(
-                    &mut diagnostics,
-                    "field-set",
-                    format!("{path}/fields"),
-                    "Select at least one field from the approved projection.",
-                );
-            }
-            if let Some(label) = &link.label {
+            let label = link.label.as_ref().and_then(|label| {
                 validate_label(
                     label,
                     projection,
@@ -466,9 +548,25 @@ pub(crate) fn compile(
                     &projections,
                     &path,
                     &mut diagnostics,
-                );
-            }
+                )
+            });
+            compiled_links.push(ExternalLinkSource {
+                id: link.id.clone(),
+                projection: link.projection.clone(),
+                from_field: link.from_field.clone(),
+                identifier_scheme: projection.selector_scheme.clone(),
+                fields: projection.fields.clone(),
+                label,
+            });
         }
+        views.insert(
+            view.id.as_str().to_owned(),
+            ExternalViewSource {
+                id: view.id.clone(),
+                record_type: view.record_type.clone(),
+                links: compiled_links,
+            },
+        );
     }
 
     let mut grants = BTreeMap::new();
@@ -647,42 +745,87 @@ pub(crate) fn compile(
     })
 }
 
+/// Checks a link label against its parent projection and returns the compiled
+/// label, or `None` after reporting each broken rule at its own path.
 fn validate_label(
-    label: &ExternalLabelSource,
+    label: &ExternalLabelDeclaration,
     parent: &ExternalProjectionSource,
     record_types: &BTreeMap<String, ExternalRecordTypeSource>,
     projections: &BTreeMap<String, ExternalProjectionSource>,
     path: &str,
     diagnostics: &mut Vec<Diagnostic>,
-) {
-    let valid = parent.cardinality == ExternalCardinality::Many
-        && parent.mode == ExternalProjectionMode::Indexed
-        && parent.fields.contains(&label.from_field)
-        && record_types
-            .get(parent.record_type.as_str())
-            .is_some_and(|record_type| {
-                record_type.fields.iter().any(|field| {
-                    field.id == label.from_field
-                        && matches!(
-                            field.value_type,
-                            ExternalFieldType::String | ExternalFieldType::Uuid
-                        )
-                })
-            })
-        && projections
-            .get(label.projection.as_str())
-            .is_some_and(|projection| {
-                projection.mode == ExternalProjectionMode::Indexed
-                    && projection.cardinality == ExternalCardinality::One
-                    && projection.purpose == parent.purpose
-                    && projection.selector_scheme == label.identifier_scheme
-                    && !label.fields.is_empty()
-                    && label.fields.is_subset(&projection.fields)
-            });
-    if !valid {
-        error(diagnostics, "invalid-label", format!("{path}/label"),
-            "Link an indexed related row to an indexed exact label with compatible identifiers, fields, and purpose.");
+) -> Option<ExternalLabelSource> {
+    let before = diagnostics.len();
+    if parent.cardinality != ExternalCardinality::Many
+        || parent.mode != ExternalProjectionMode::Indexed
+    {
+        error(
+            diagnostics,
+            "invalid-label",
+            format!("{path}/label"),
+            "Put a label only on a link to an indexed cardinality-many projection.",
+        );
     }
+    if !parent.fields.contains(&label.from_field) {
+        error(
+            diagnostics,
+            "invalid-label",
+            format!("{path}/label/fromField"),
+            "Select a field of the parent projection to read the label key from.",
+        );
+    } else if !record_types
+        .get(parent.record_type.as_str())
+        .is_some_and(|record_type| {
+            record_type.fields.iter().any(|field| {
+                field.id == label.from_field
+                    && matches!(
+                        field.value_type,
+                        ExternalFieldType::String | ExternalFieldType::Uuid
+                    )
+            })
+        })
+    {
+        error(
+            diagnostics,
+            "invalid-label",
+            format!("{path}/label/fromField"),
+            "Select a string or uuid field as the label key.",
+        );
+    }
+    let target = projections.get(label.projection.as_str());
+    match target {
+        None => error(
+            diagnostics,
+            "invalid-label",
+            format!("{path}/label/projection"),
+            "Select a declared external projection for the label.",
+        ),
+        Some(target)
+            if target.mode != ExternalProjectionMode::Indexed
+                || target.cardinality != ExternalCardinality::One =>
+        {
+            error(
+                diagnostics,
+                "invalid-label",
+                format!("{path}/label/projection"),
+                "Select an indexed cardinality-one projection for the label.",
+            );
+        }
+        Some(target) if target.purpose != parent.purpose => error(
+            diagnostics,
+            "invalid-label",
+            format!("{path}/label/projection"),
+            "Select a label projection with the same purpose as the linked projection.",
+        ),
+        Some(_) => {}
+    }
+    let target = target?;
+    (diagnostics.len() == before).then(|| ExternalLabelSource {
+        projection: label.projection.clone(),
+        from_field: label.from_field.clone(),
+        identifier_scheme: target.selector_scheme.clone(),
+        fields: target.fields.clone(),
+    })
 }
 
 fn validate_uri(value: &ExternalId, path: &str, diagnostics: &mut Vec<Diagnostic>) {

@@ -327,8 +327,10 @@ pub enum RuntimeConfigError {
     Reader(ReaderRefusal),
     #[error("runtime configuration contains an invalid deployment binding")]
     InvalidBinding,
-    #[error("runtime configuration contains an invalid external source binding")]
-    InvalidExternalSources,
+    /// One `externalSources` entry breaks a rule of its own; `path` is the
+    /// member at fault.
+    #[error("{reason}")]
+    InvalidExternalSource { path: String, reason: String },
     #[error(
         "runtime configuration taskGrantStatus must contain at most 32 unique absolute source issuers; configure safe service/token URLs, non-empty client and assertion audience, absolute resource identifiers, one status scope token, and a status path with one {{grantId}} segment"
     )]
@@ -416,7 +418,7 @@ impl RuntimeConfigError {
         match self {
             Self::Reader(refusal) => &refusal.deciding_diagnostic().code,
             Self::InvalidBinding => "breg.runtime.invalid-binding",
-            Self::InvalidExternalSources => "breg.runtime.invalid-external-sources",
+            Self::InvalidExternalSource { .. } => "breg.runtime.invalid-external-sources",
             Self::InvalidTaskGrantStatus => "breg.runtime.invalid-task-grant-status",
             Self::InvalidInstanceId => "breg.runtime.invalid-instance-id",
             Self::EnvironmentIdentityConflict => "breg.runtime.environment-identity-conflict",
@@ -458,7 +460,7 @@ impl RuntimeConfigError {
         match self {
             Self::Reader(refusal) => &refusal.deciding_diagnostic().path,
             Self::InvalidBinding | Self::Secret => "",
-            Self::InvalidExternalSources => "/externalSources",
+            Self::InvalidExternalSource { path, .. } => path,
             Self::InvalidTaskGrantStatus => "/taskGrantStatus",
             Self::InvalidInstanceId => "/identity/instanceId",
             Self::EnvironmentIdentityConflict => "/identity/databaseInitializationEnvironment",
@@ -502,8 +504,8 @@ impl RuntimeConfigError {
             Self::InvalidTaskGrantStatus => {
                 "Configure at most 32 distinct taskGrantStatus source issuers, safe service/token URLs, a client and assertion audience, absolute resource identifiers, one statusScope token, and a statusPath that starts with / and holds exactly one {grantId} segment."
             }
-            Self::InvalidExternalSources => {
-                "Use distinct projection IDs, a bounded absolute packFile, approved fields and an explicit grant cutoff. A deployment cacheTtlSeconds may only shorten an indexed projection's cache lifetime."
+            Self::InvalidExternalSource { .. } => {
+                "Correct the member the path names. Key each binding by the ID of a projection the package declares; give it a bounded absolute packFile, approved fields, endpoint policies and an RFC 3339 grant cutoff."
             }
             Self::InvalidBinding => {
                 "Give every identity value as trimmed text without control characters, and declare in the runtime file, with a valid endpoint and credential, every task grant status source, Evidence provider, and review authority the package relies on."
@@ -793,6 +795,7 @@ pub fn check_runtime_config(
                             ));
                         }
                     }
+                    diagnostics.extend(external_source_diagnostics(&check, &config, registry));
                     for problem in config.external_refresh_diagnostics(registry) {
                         diagnostics.push(check.error_at(
                             RUNTIME_CONFIG_KIND,
@@ -810,6 +813,47 @@ pub fn check_runtime_config(
         diagnostics,
         unavailable: check.unavailable,
     }
+}
+
+/// Bind each `externalSources` entry offline against the compiled registry:
+/// read its pack, check the digest, and hold the pack to the projection's
+/// contract and the approved fields. No connection opens and no credential is
+/// read. A pack path or digest that holds an expression the check did not
+/// fill is skipped with a warning.
+fn external_source_diagnostics(
+    check: &registry_platform_config::RuntimeFileCheck<RawRuntimeConfig>,
+    config: &RuntimeConfig,
+    registry: &CompiledRegistry,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for binding in config.external_sources() {
+        let id = binding.id.as_str();
+        let base = format!("/externalSources/{id}");
+        if check.defers_within(&format!("{base}/packFile"))
+            || check.defers_within(&format!("{base}/packDigest"))
+        {
+            let mut warning = check.error_at(
+                RUNTIME_CONFIG_KIND,
+                registry_platform_config::INCOMPLETE_CODE,
+                &base,
+                "The check does not fill an expression in this binding's packFile or packDigest, so it did not read the pack.",
+                "Check the file again with --environment, where the variable the expression names is set.",
+            );
+            warning.severity = Severity::Warning;
+            diagnostics.push(warning);
+            continue;
+        }
+        if let Err(refusal) = crate::external_source::check_binding_offline(registry, binding) {
+            diagnostics.push(check.error_at(
+                RUNTIME_CONFIG_KIND,
+                "breg.runtime.invalid-external-sources",
+                &format!("{base}/{}", refusal.member),
+                refusal.reason,
+                "Correct the binding, or the pack or package it disagrees with, so the pack's route matches the projection the package declares.",
+            ));
+        }
+    }
+    diagnostics
 }
 
 fn runtime_definition_id_diagnostics(
@@ -839,15 +883,6 @@ fn runtime_definition_id_diagnostics(
             "reviewAuthorities",
             "breg.runtime.review-authority-id-collision",
             raw.review_authorities
-                .keys()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-        ),
-        (
-            "externalRefresh/workers",
-            "breg.runtime.external-refresh-id-collision",
-            raw.external_refresh
-                .workers()
                 .keys()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
@@ -926,6 +961,10 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
         | ["fieldEncryption", "provider", "unixSocketPath"]
         | ["destinations", "hooks", _, "path"] => "/deferred",
         ["taskGrantStatus", _, "statusPath"] => "/{grantId}",
+        ["externalSources", _, "packFile"] => "/deferred/pack.yaml",
+        ["externalSources", _, "packDigest"] => {
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        }
         ["attachmentStorage" | "attachmentVerification", "url"]
         | ["destinations", "hooks", _, "origin"]
         | ["evidenceProviders", _, "baseUrl"]
@@ -1020,11 +1059,35 @@ fn validate_pool_acquisition_budget(
     Ok(())
 }
 
+/// The `externalSources` entries as bindings in ID order, each held to the
+/// rules its own members state.
+fn external_source_bindings(
+    raw: std::collections::BTreeMap<String, crate::external_source::ExternalSourceMembers>,
+) -> Result<Vec<crate::external_source::ExternalSourceBinding>> {
+    let bindings: Vec<_> = raw
+        .into_iter()
+        .map(|(id, members)| {
+            registry_platform_yaml::LocalId::new(id)
+                .map(|id| crate::external_source::ExternalSourceBinding::new(id, members))
+        })
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|_| RuntimeConfigError::InvalidExternalSource {
+            path: "/externalSources".to_owned(),
+            reason: "an externalSources key must be a projection ID".to_owned(),
+        })?;
+    crate::external_source::validate_bindings(&bindings).map_err(|fault| {
+        RuntimeConfigError::InvalidExternalSource {
+            path: fault.path,
+            reason: fault.reason,
+        }
+    })?;
+    Ok(bindings)
+}
+
 impl RuntimeConfig {
     fn from_raw(raw: RawRuntimeConfig) -> Result<Self> {
         validate_runtime_definition_ids(&raw)?;
-        crate::external_source::validate_bindings(&raw.external_sources)
-            .map_err(|_| RuntimeConfigError::InvalidExternalSources)?;
+        let external_sources = external_source_bindings(raw.external_sources)?;
         let listener = ListenerConfig::from_raw(raw.listener)?;
         let identity = DeploymentIdentity::from_raw(raw.identity)?;
         let secret_providers = SecretProvidersConfig::from_raw(raw.secret_providers)?;
@@ -1087,7 +1150,7 @@ impl RuntimeConfig {
             audit,
             cursor,
             event_destinations,
-            external_sources: raw.external_sources.into_vec(),
+            external_sources,
             external_refresh: raw.external_refresh,
             evidence_providers: raw.evidence_providers,
             review_authorities,
@@ -1608,14 +1671,6 @@ fn validate_runtime_definition_ids(raw: &RawRuntimeConfig) -> Result<()> {
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
             RuntimeConfigError::ReviewAuthorityIdCollision,
-        ),
-        (
-            raw.external_refresh
-                .workers()
-                .keys()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            RuntimeConfigError::ExternalRefreshIdCollision,
         ),
         (
             raw.external_refresh
@@ -3138,9 +3193,15 @@ struct RawRuntimeConfig {
     #[serde(default)]
     destinations: RawDestinationsConfig,
     /// Independent acquisition bindings. Omission permits no source calls.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "local_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            schema_with = "local_id_map_schema::<crate::external_source::ExternalSourceMembers>"
+        )
+    )]
     external_sources:
-        registry_platform_yaml::UniqueIdList<crate::external_source::ExternalSourceBinding>,
+        std::collections::BTreeMap<String, crate::external_source::ExternalSourceMembers>,
     /// Managed scheduled and targeted refresh plans. Omission starts no
     /// refresh worker and admits no source-change notifier.
     #[serde(default)]
@@ -4524,7 +4585,7 @@ mod schema_tests {
         let schema = super::runtime_config_schema().unwrap();
         for (map, identifier) in [
             ("/$defs/RawDestinationsConfig/properties/hooks", "LocalId"),
-            ("/$defs/ExternalRefreshConfig/properties/workers", "LocalId"),
+            ("/properties/externalSources", "LocalId"),
             ("/$defs/ExternalRefreshConfig/properties/plans", "LocalId"),
             (
                 "/$defs/ExternalRefreshPlan/properties/sourceChanges",
