@@ -3571,6 +3571,208 @@ mod tests {
         }
     }
 
+    const PRODUCER_ISSUER: &str = "https://issuer.example.invalid/";
+
+    /// A dev.yaml plan and a Casework project document that agree on one
+    /// producer with an initiator pin. Each case breaks one agreement.
+    fn run_issuer_fixture(with_initiator: bool) -> (Value, Value) {
+        let mut guard = json!({"producer": {
+            "expectedIssuer": PRODUCER_ISSUER,
+            "expectedProfile": "review-producer",
+            "expectedSubject": "breg-producer"
+        }});
+        if with_initiator {
+            guard["initiator"] = json!({"expectedIssuer": "https://initiator.example.invalid/", "trust": "run-test-people"});
+        }
+        let plan = json!({
+            "issuer": "http://127.0.0.1:41000/",
+            "products": [
+                {"product": "breg", "project": "breg", "audience": "registry"},
+                {"product": "casework", "project": "casework", "audience": "review"}
+            ],
+            "people": {"authority": {
+                "subject": "breg-producer", "client": "authority-client",
+                "grants": {"casework": {
+                    "profile": "review-producer", "scopes": ["review.write"]
+                }}
+            }},
+            "scenarioFile": "tests/scenarios.yaml",
+            "bindings": {"bregReviewAuthority": {
+                "id": "authority", "producer": "producer", "identity": "authority",
+                "runIssuerBinding": guard
+            }}
+        });
+        let mut producer = json!({
+            "issuer": PRODUCER_ISSUER,
+            "profile": "review-producer",
+            "subject": "breg-producer",
+            "audience": "unrelated-member"
+        });
+        if with_initiator {
+            producer["trustedInitiatorIssuer"] = json!("https://initiator.example.invalid/");
+        }
+        let casework = json!({
+            "name": "synthetic-project",
+            "accessProfiles": {"review-producer": {"requiredScopes": ["review.write"]}},
+            "trustedProducers": {
+                "producer": producer,
+                "other-producer": {"issuer": "https://other.example.invalid/"}
+            }
+        });
+        (plan, casework)
+    }
+
+    fn write_casework_project(root: &Path, casework: &Value) -> PathBuf {
+        let project = root.join("project");
+        fs::create_dir(&project).unwrap();
+        fs::write(
+            project.join("casework.yaml"),
+            serde_norway::to_string(casework).unwrap(),
+        )
+        .unwrap();
+        fs::write(project.join("notes.txt"), "kept as written").unwrap();
+        project
+    }
+
+    #[test]
+    fn casework_run_issuer_binding_refuses_each_mismatch_at_its_pointer() {
+        type Break = fn(&mut Value, &mut Value);
+        const BINDING: &str = "/bindings/bregReviewAuthority/runIssuerBinding";
+        let cases: [(&str, String, Break); 9] = [
+            (
+                "the producer is not in casework.yaml",
+                "/bindings/bregReviewAuthority/producer".to_owned(),
+                |_, casework| {
+                    casework["trustedProducers"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("producer");
+                },
+            ),
+            (
+                "the producer issuer differs from the binding",
+                format!("{BINDING}/producer/expectedIssuer"),
+                |_, casework| {
+                    casework["trustedProducers"]["producer"]["issuer"] =
+                        json!("https://elsewhere.example.invalid/");
+                },
+            ),
+            (
+                "casework.yaml profile differs from the binding",
+                format!("{BINDING}/producer/expectedProfile"),
+                |_, casework| {
+                    casework["trustedProducers"]["producer"]["profile"] = json!("other-profile");
+                },
+            ),
+            (
+                "the grant profile differs from the binding",
+                format!("{BINDING}/producer/expectedProfile"),
+                |plan, _| {
+                    plan["people"]["authority"]["grants"]["casework"]["profile"] =
+                        json!("other-profile");
+                },
+            ),
+            (
+                "casework.yaml subject differs from the binding",
+                format!("{BINDING}/producer/expectedSubject"),
+                |_, casework| {
+                    casework["trustedProducers"]["producer"]["subject"] = json!("other-subject");
+                },
+            ),
+            (
+                "the identity subject differs from the binding",
+                format!("{BINDING}/producer/expectedSubject"),
+                |plan, _| {
+                    plan["people"]["authority"]["subject"] = json!("not-the-producer");
+                },
+            ),
+            (
+                "a required scope is missing from the grant",
+                "/people/authority/grants/casework/scopes".to_owned(),
+                |plan, _| {
+                    plan["people"]["authority"]["grants"]["casework"]["scopes"] =
+                        json!(["review.read"]);
+                },
+            ),
+            (
+                "the producer has no initiator pin",
+                format!("{BINDING}/initiator/expectedIssuer"),
+                |_, casework| {
+                    casework["trustedProducers"]["producer"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("trustedInitiatorIssuer");
+                },
+            ),
+            (
+                "the initiator pin differs from the binding",
+                format!("{BINDING}/initiator/expectedIssuer"),
+                |_, casework| {
+                    casework["trustedProducers"]["producer"]["trustedInitiatorIssuer"] =
+                        json!("https://elsewhere.example.invalid/");
+                },
+            ),
+        ];
+        let root = tempfile::tempdir().unwrap();
+        for (index, (name, pointer, break_it)) in cases.into_iter().enumerate() {
+            let (mut plan, mut casework) = run_issuer_fixture(true);
+            break_it(&mut plan, &mut casework);
+            let case_root = root.path().join(index.to_string());
+            fs::create_dir(&case_root).unwrap();
+            let project = write_casework_project(&case_root, &casework);
+            let plan: Plan = serde_json::from_value(plan).unwrap();
+            let error = checked_casework_run_issuer(&plan, &project).unwrap_err();
+            let refusal = error
+                .downcast_ref::<plan::SemanticRefusal>()
+                .unwrap_or_else(|| panic!("{name}: not a semantic refusal: {error}"));
+            assert!(
+                refusal
+                    .to_string()
+                    .starts_with(&format!("dev.yaml {pointer}: ")),
+                "{name}: {refusal}"
+            );
+        }
+        let (plan, casework) = run_issuer_fixture(true);
+        let project = write_casework_project(root.path(), &casework);
+        let plan: Plan = serde_json::from_value(plan).unwrap();
+        checked_casework_run_issuer(&plan, &project).unwrap();
+    }
+
+    #[test]
+    fn binding_the_run_issuer_changes_only_the_producer_issuer_members() {
+        for with_initiator in [false, true] {
+            let (plan, casework) = run_issuer_fixture(with_initiator);
+            let plan: Plan = serde_json::from_value(plan).unwrap();
+            let root = tempfile::tempdir().unwrap();
+            let project = write_casework_project(root.path(), &casework);
+            let before = fs::read(project.join("casework.yaml")).unwrap();
+            let bound = root.path().join("bound");
+            bind_casework_run_issuer(&plan, &project, &bound).unwrap();
+
+            assert_eq!(fs::read(project.join("casework.yaml")).unwrap(), before);
+            assert_eq!(
+                fs::read(bound.join("notes.txt")).unwrap(),
+                b"kept as written"
+            );
+            let parse = |path: PathBuf| -> Value {
+                registry_platform_yaml::Reader::new(path.display().to_string())
+                    .scan(&fs::read(&path).unwrap())
+                    .unwrap()
+                    .unwrap()
+                    .to_json_value()
+            };
+            let source = parse(project.join("casework.yaml"));
+            let mut expected = source.clone();
+            expected["trustedProducers"]["producer"]["issuer"] = json!(plan.issuer);
+            if with_initiator {
+                expected["trustedProducers"]["producer"]["trustedInitiatorIssuer"] =
+                    json!(plan.issuer);
+            }
+            assert_ne!(expected, source);
+            assert_eq!(parse(bound.join("casework.yaml")), expected);
+        }
+    }
+
     #[test]
     fn node_older_than_24_is_refused() {
         let root = tempfile::tempdir().unwrap();
