@@ -201,9 +201,12 @@ no other query option. A cursor is bound to its caller, query,
 and projection, and a purge or a fresh projection epoch invalidates it.
 
 Each list page checks that every licence the caller may list has a current copy before it selects
-rows. While any one lacks it, the page answers `503` with the problem code
-`external_view.incomplete`, never a partial result. A read of one licence answers with `status`
-`unavailable` instead.
+rows. A plain list, with no `$filter`, `$orderby` or `$count`, keeps serving while some licence
+lacks one: that licence reads with `availability` `unavailable` and no fields, and the page
+`status` is `unavailable`. A filter, a sort or a count reads the outside values of every licence,
+so until each one has a current copy it answers `503` with the problem code
+`external_view.incomplete`, never a partial result. A list over a related collection has no row to
+mark, so it answers the same way unless it reads one licence.
 
 {/* Evidence: products/breg/examples/external-views/registry.yaml;
     crates/registry-breg/src/api/external_views.rs, plan_query;
