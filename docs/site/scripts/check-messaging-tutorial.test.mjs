@@ -528,10 +528,6 @@ async function replayStandIn(options = {}) {
       join(root, 'docs/configure/api-connections.mdx'),
       '---\ntitle: stub\n---\n\n```sh\nmessagingctl connection list\n```\n',
     );
-    await writeFile(
-      join(root, 'docs/configure/coordinator.mdx'),
-      '---\ntitle: stub\n---\n\n```sh\nmessagingctl generate templates --project ./notices\n```\n',
-    );
     await writeFile(join(root, 'docs/operate/messaging.mdx'), STAND_IN_DEPLOY_PAGE);
     const bin = join(root, 'messagingctl');
     const runtime = join(root, 'messaging');
