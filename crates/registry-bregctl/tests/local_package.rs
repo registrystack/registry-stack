@@ -18,9 +18,9 @@ fn project(root: &std::path::Path, extra: &str) {
     fs::write(
         root.join("dev.yaml"),
         format!(
-            "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json\n\
-apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\n\
-kind: BRegProjectDev\n\
+            "# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json\n\
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\n\
+kind: RStackDev\n\
 issuer: https://issuer.example.invalid\n\
 products:\n  - {{product: breg, project: ., audience: registry}}\n\
 people:\n  operator:\n    subject: operator\n    client: operator-client\n    grants:\n      breg: {{profile: operator, scopes: []}}\n\
@@ -387,13 +387,18 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
         }
         assignments.insert(journey["id"].as_str().unwrap().to_owned(), steps.into());
     }
-    fs::write(project.join("dev.yaml"), serde_json::to_vec_pretty(&serde_json::json!({
-        "apiVersion":"id.registrystack.org/formats/breg/project-dev/v1alpha1","kind":"BRegProjectDev",
-        "issuer":"https://issuer.example.invalid",
-        "products":[{"product":"breg","project":".","audience":"registry"}],
-        "people":people,"schemaTestPeople":assignments,
-        "scenarioFile":"scenarios.yaml"
-    })).unwrap()).unwrap();
+    fs::write(
+        project.join("dev.yaml"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "apiVersion":"id.registrystack.org/formats/rstack/dev/v1alpha1","kind":"RStackDev",
+            "issuer":"https://issuer.example.invalid",
+            "products":[{"product":"breg","project":".","audience":"registry"}],
+            "people":people,"schemaTestPeople":assignments,
+            "scenarioFile":"scenarios.yaml"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     // The BReg project is the development project root here, and `bregctl
     // check` reads every YAML file under its tests/, so the scenario file
     // stays outside tests/.

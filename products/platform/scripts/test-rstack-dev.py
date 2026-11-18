@@ -196,9 +196,10 @@ def dev_output(bin_dir, env, cwd, *args, expected=0):
         bin_dir / "rstack",
         "--install-root",
         install_root,
+        "--format",
+        "json",
         "dev",
         *args,
-        "--json",
         env=env,
         cwd=cwd,
         timeout=390,
@@ -241,15 +242,31 @@ def get(url, headers):
         return error.code
 
 
+def get_body(url, headers):
+    with HTTP.open(Request(url, headers=headers), timeout=5) as response:
+        return response.status, response.read().decode()
+
+
 def kid(headers):
     jwt_header = headers["Authorization"].split()[1].split(".")[0]
     return json.loads(base64.urlsafe_b64decode(jwt_header + "==="))["kid"]
 
 
+def run_is_gone(bin_dir, env, cwd, run):
+    """A stopped, cleaned-up run is unknown: status refuses it as a usage error."""
+    try:
+        report = dev(bin_dir, env, cwd, "status", run, expected=2)
+    except RuntimeError:
+        return False
+    assert report["error"]["class"] == "usage", report
+    assert "no development run" in report["error"]["message"], report
+    return True
+
+
 def wait_for_stop(bin_dir, env, cwd, run):
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
-        if dev(bin_dir, env, cwd, "status", run)["status"] == "stopped":
+        if run_is_gone(bin_dir, env, cwd, run):
             return
         time.sleep(0.2)
     raise RuntimeError("the run did not finish its TTL cleanup")
@@ -404,6 +421,42 @@ def create_owner(pg, pg_env, url):
     return owner_url, {**pg_env, "PGUSER": "devowner", "PGPASSWORD": password}
 
 
+ALONE_EXAMPLES = (
+    # example, product, person, path read with the token, text the body holds,
+    # the other product's binaries, which must never be reached
+    ("products/breg/examples/minimal", "breg", "editor",
+     "/v1/records/contacts", "Example contact", ("casework", "caseworkctl")),
+    ("products/casework/examples/standalone-decision", "casework", "staff",
+     "/v1/review-policies", "decision", ("breg", "bregctl")),
+)
+
+
+def verify_alone(root, bin_dir, env):
+    """Each product's own example runs end to end with no other product present."""
+    for example, product, person, path, text, absent in ALONE_EXAMPLES:
+        checkout = root / f"alone-{product}"
+        shutil.copytree(STACK / example, checkout)
+        missing = str(root / "no-such-binary")
+        alone_env = {
+            **env,
+            **{f"RSTACK_{name.upper()}_BIN": missing for name in absent},
+        }
+        report = dev(bin_dir, alone_env, checkout, "start", ".")
+        run = report["run_id"]
+        try:
+            assert report["scenarios"][0]["result"] == "passed", report
+            assert list(report["products"]) == [product], report
+            headers = credential(bin_dir, alone_env, checkout, run, person)
+            status, body = get_body(report["products"][product] + path, headers)
+            assert status == 200 and text in body, (status, body)
+        finally:
+            stopped = dev(bin_dir, alone_env, checkout, "stop", run)
+        assert stopped["status"] == "stopped", stopped
+        assert not (Path(env["RSTACK_DEV_STATE_DIR"]) / run).exists()
+        assert_nothing_listening(bin_dir, report["products"].values())
+        print(f"{product} alone ran its example end to end and stopped cleanly")
+
+
 def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
     checkout = root / "licensing"
     shutil.copytree(project, checkout)
@@ -423,6 +476,9 @@ def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
     try:
         exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env)
         verify_authored_scenarios(root, bin_dir, checkout, state, env)
+        baseline_alone = inventory(pg, pg_env)
+        verify_alone(root, bin_dir, env)
+        assert inventory(pg, pg_env) == baseline_alone
         verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env)
         verify_startup_loss(bin_dir, pg, checkout, state, env, pg_env)
         verify_provisioning_deadline(bin_dir, pg, checkout, state, env, pg_env)
@@ -737,7 +793,7 @@ def verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env)
         "the lost supervisor's administrator lock was not released",
     )
     assert live_runs(state) == []
-    assert dev(bin_dir, env, checkout, "status", run)["status"] == "stopped"
+    assert run_is_gone(bin_dir, env, checkout, run)
     print("A lost supervisor was recovered by hand from the facts stop reported")
     verify_recover(bin_dir, pg, checkout, state, env, pg_env)
 
@@ -768,7 +824,7 @@ def verify_recover(bin_dir, pg, checkout, state, env, pg_env):
         "the recovery's administrator lock was not released",
     )
     assert live_runs(state) == []
-    assert dev(bin_dir, env, checkout, "status", run)["status"] == "stopped"
+    assert run_is_gone(bin_dir, env, checkout, run)
     assert dev(bin_dir, env, checkout, "stop", run, "--recover")["status"] == "stopped"
     print("stop --recover released a lost supervisor's processes, databases and roles")
 
@@ -1043,8 +1099,8 @@ def spatial_project(root, name):
         f"{longitude + 0.01:.6f},{latitude + 0.01:.6f}"
     )
     plan = {
-        "apiVersion": "id.registrystack.org/formats/breg/project-dev/v1alpha1",
-        "kind": "BRegProjectDev",
+        "apiVersion": "id.registrystack.org/formats/rstack/dev/v1alpha1",
+        "kind": "RStackDev",
         "issuer": "https://spatial-smoke.example.invalid",
         "products": [{"product": "breg", "project": "registry", "audience": "breg"}],
         "people": people,
@@ -1182,8 +1238,8 @@ def encrypted_project(root, name):
     )
     body = f"encrypted-note-{secrets.token_hex(8)}"
     plan = {
-        "apiVersion": "id.registrystack.org/formats/breg/project-dev/v1alpha1",
-        "kind": "BRegProjectDev",
+        "apiVersion": "id.registrystack.org/formats/rstack/dev/v1alpha1",
+        "kind": "RStackDev",
         "issuer": "https://directory-smoke.example.invalid",
         "products": [
             {"product": "breg", "project": "registry", "audience": "directory"}
@@ -1539,6 +1595,9 @@ def exercise_managed(root, bin_dir, project, spatial):
         assert labelled_containers(report["run_id"]) == set()
         assert_nothing_listening(bin_dir, report["products"].values())
         print("A managed run passed its journey on its own loopback TLS server and removed it")
+
+        verify_alone(root, bin_dir, env)
+        assert labelled_containers() == baseline
 
         short = dev(bin_dir, env, checkout, "start", ".", "--ttl", "1s")
         started.append(short["run_id"])

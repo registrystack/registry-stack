@@ -348,6 +348,12 @@ registry_cargo_build "$PWD" --locked -p registry-caseworkctl
 ./target/debug/caseworkctl --version
 ```
 
+The helper exports `DYLD_FALLBACK_LIBRARY_PATH` into the shell that calls it, so
+run it in your current shell, not in a pipeline or subshell: the variable is
+lost when that shell exits, and the binary then aborts at start-up. Pass every
+package whose binaries you will run in the one build; a build whose messages
+name more or fewer than one AWS-LC FIPS output is refused.
+
 Do not disable the workspace `fips` feature, force a static AWS-LC FIPS build on
 macOS, or select a dylib by globbing `target/*/build`: those approaches either
 weaken the production-equivalent crypto path, fail on macOS, or can select a

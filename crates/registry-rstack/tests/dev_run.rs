@@ -212,9 +212,9 @@ fn project(root: &std::path::Path, extra: &str) {
     fs::write(
         root.join("dev.yaml"),
         format!(
-            "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json\n\
-apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\n\
-kind: BRegProjectDev\n\
+            "# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json\n\
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\n\
+kind: RStackDev\n\
 issuer: https://issuer.example.invalid\n\
 products:\n  - {{product: breg, project: ., audience: registry}}\n\
 people:\n  operator:\n    subject: operator\n    client: operator-client\n    grants:\n      breg: {{profile: operator, scopes: []}}\n\
@@ -305,10 +305,10 @@ fn every_helper_failure_prints_the_error_envelope() {
             2,
         ),
         (
-            "token for a run that is not ready",
+            "token for a run that does not exist",
             vec!["token", other_run, "--as", "operator"],
-            "domain",
-            1,
+            "usage",
+            2,
         ),
         (
             "stop with a malformed run ID",
@@ -573,8 +573,8 @@ fn semantic_project(root: &std::path::Path, grant: &str, step_extra: &str) {
     fs::write(
         root.join("dev.yaml"),
         format!(
-            "apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\n\
-kind: BRegProjectDev\n\
+            "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\n\
+kind: RStackDev\n\
 issuer: https://issuer.example.invalid\n\
 products:\n  - {{product: breg, project: ., audience: private-audience-marker}}\n\
 people:\n  operator:\n    subject: private-subject-marker\n    client: private-client-marker\n    grants:\n      {grant}: {{profile: private-profile-marker, scopes: []}}\n\
@@ -772,8 +772,8 @@ fn casework_reference_project(
     fs::write(
         root.join("dev.yaml"),
         format!(
-            "apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\n\
-kind: BRegProjectDev\n\
+            "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\n\
+kind: RStackDev\n\
 issuer: https://issuer.example.invalid\n\
 products:\n  - {{product: breg, project: ., audience: \"urn:example:registry\"}}\n  - {{product: casework, project: casework, audience: \"urn:example:review\"}}\n\
 people:\n  operator:\n    subject: operator\n    client: operator-client\n    grants:\n      breg: {{profile: operator, scopes: [registry:read]}}\n  reviewer:\n    subject: reviewer\n    client: reviewer-client\n    grants:\n      casework: {{profile: {casework_profile}, scopes: [casework:review]}}\n\
@@ -808,7 +808,7 @@ fn assert_dangling_schema_assignment(
     assert_eq!(report["command"], "dev-check");
     assert_eq!(report["status"], "domain-refusal");
     let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "breg.project-dev.invalid-plan");
+    assert_eq!(diagnostic["code"], "rstack.dev.invalid-plan");
     assert_eq!(diagnostic["path"], path);
     assert_eq!(diagnostic["message"], message);
     assert_eq!(diagnostic["suggestedAction"], suggested_action);
@@ -1376,6 +1376,29 @@ fn check_refuses_an_unknown_plan_field_without_allocating_run_state() {
 }
 
 #[test]
+fn old_kind_is_refused_with_the_new_name() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    project(scratch.path(), "");
+    let plan = fs::read_to_string(scratch.path().join("dev.yaml")).unwrap();
+    let (_, members) = plan.split_once("issuer:").unwrap();
+    fs::write(
+        scratch.path().join("dev.yaml"),
+        format!(
+            "apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\nkind: BRegProjectDev\nissuer:{members}"
+        ),
+    )
+    .unwrap();
+
+    let result = check(scratch.path(), &state, true);
+
+    assert!(!result.status.success(), "{result:?}");
+    let report = String::from_utf8_lossy(&result.stdout);
+    assert!(report.contains("RStackDev"), "{report}");
+    assert!(!state.exists());
+}
+
+#[test]
 fn check_renders_both_locations_of_a_duplicate_key() {
     let scratch = tempfile::tempdir().unwrap();
     let state = scratch.path().join("state");
@@ -1408,7 +1431,7 @@ fn check_distinguishes_unavailable_input_from_an_invalid_plan() {
     assert_eq!(report["status"], "operational-failure");
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "breg.project-dev.check-unavailable"
+        "rstack.dev.check-unavailable"
     );
     assert!(!state.exists());
 }
@@ -1428,7 +1451,7 @@ fn check_reports_an_actionable_value_free_poll_relationship() {
     assert_eq!(result.status.code(), Some(1));
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "breg.project-dev.invalid-scenarios");
+    assert_eq!(diagnostic["code"], "rstack.dev.invalid-scenarios");
     assert_eq!(
         diagnostic["path"],
         "/scenarios/0/steps/0/poll/pollIntervalMilliseconds"
@@ -1544,8 +1567,8 @@ fn start_rejects_a_dangling_breg_grant_profile_before_allocating_state() {
     .unwrap();
     fs::write(
         scratch.path().join("dev.yaml"),
-        "apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\n\
-kind: BRegProjectDev\n\
+        "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\n\
+kind: RStackDev\n\
 issuer: https://issuer.example.invalid\n\
 products:\n  - {product: breg, project: ., audience: registry}\n\
 people:\n  editor:\n    subject: editor\n    client: editor-client\n    grants:\n      breg:\n        profile: directory-editor\n        scopes: [registry:directory:write]\n        claims: {registry_purpose: directory-administration}\n  unused:\n    subject: unused\n    client: unused-client\n    grants:\n      breg: {profile: private-profile-marker, scopes: []}\n\
@@ -1950,7 +1973,7 @@ fn a_malformed_plan_names_its_field_before_allocating_run_state() {
     let state = scratch.path().join("state");
     fs::write(
         scratch.path().join("dev.yaml"),
-        "apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\nkind: BRegProjectDev\nissuer: https://example.test\nproducts: [{product: coordinator, project: registry, audience: test}]\npeople: {}\nscenarioFile: tests/scenarios.yaml\n",
+        "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\nkind: RStackDev\nissuer: https://example.test\nproducts: [{product: coordinator, project: registry, audience: test}]\npeople: {}\nscenarioFile: tests/scenarios.yaml\n",
     )
     .unwrap();
     // The plan lists no hosting product, so the first available host reports
@@ -2066,8 +2089,8 @@ fn worker_restores_a_valid_plan_whose_captured_input_exceeds_512_kib() {
     // larger than the body itself.
     assert!(raw.len() > 512 * 1024, "raw body: {}", raw.len());
     let plan = serde_json::json!({
-        "apiVersion": "id.registrystack.org/formats/breg/project-dev/v1alpha1",
-        "kind": "BRegProjectDev",
+        "apiVersion": "id.registrystack.org/formats/rstack/dev/v1alpha1",
+        "kind": "RStackDev",
         "issuer": "https://issuer.example.invalid",
         "products": [{"product": "breg", "project": ".", "audience": "registry"}],
         "people": {"operator": {
@@ -2302,8 +2325,8 @@ fn casework_only_project(root: &std::path::Path) {
     fs::write(
         root.join("dev.yaml"),
         concat!(
-            "apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\n",
-            "kind: BRegProjectDev\n",
+            "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\n",
+            "kind: RStackDev\n",
             "issuer: https://issuer.example.invalid\n",
             "products:\n",
             "  - {product: casework, project: casework, audience: \"urn:example:review\"}\n",
@@ -2435,6 +2458,155 @@ fn a_casework_only_run_starts_reports_and_stops_without_breg() {
     let stopped: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
     assert_eq!(stopped["status"], "stopped", "{stopped}");
     assert_eq!(live_runs(&state), Vec::<String>::new());
+}
+
+/// Copies the files under `source` into `target`, keeping the layout.
+fn copy_tree(source: &std::path::Path, target: &std::path::Path) {
+    fs::create_dir_all(target).unwrap();
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let destination = target.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &destination);
+        } else {
+            fs::copy(entry.path(), destination).unwrap();
+        }
+    }
+}
+
+/// A product's example project under `products/`.
+fn example_project(relative: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products")
+        .join(relative)
+}
+
+/// A path no binary lives at, so a run that reaches for it fails.
+fn missing_binary(state: &std::path::Path) -> std::path::PathBuf {
+    state.join("no-such-binary")
+}
+
+/// Sends GET to `url` with the header lines in `header_file` and returns the
+/// status code and body. The header file holds a credential, so it is passed
+/// by name and never printed.
+fn get_with_headers(url: &str, header_file: &str) -> (u16, String) {
+    let output = Command::new(system_binary("curl"))
+        .args([
+            "--silent",
+            "--show-error",
+            "--noproxy",
+            "*",
+            "--max-time",
+            "20",
+        ])
+        .args(["--header", &format!("@{header_file}")])
+        .args(["--write-out", "\n%{http_code}", url])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "curl failed: {:?}", output.status);
+    let text = String::from_utf8(output.stdout).unwrap();
+    let (body, status) = text.rsplit_once('\n').unwrap();
+    (status.parse().unwrap(), body.to_owned())
+}
+
+/// Starts the copied example with the products' own `rstack dev`, reads
+/// `read_path` from the `product` URL the report names with `person`'s token,
+/// and stops the run. `dev` builds each `rstack dev` command, so a caller
+/// leaves out every host the example must not need.
+fn run_example_alone(
+    dev: &dyn Fn(&std::path::Path) -> Command,
+    example: &str,
+    product: &str,
+    person: &str,
+    read_path: &str,
+    read_contains: &str,
+) {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let project = scratch.path().join("project");
+    copy_tree(&example_project(example), &project);
+
+    let started = with_test_database(dev(&state).args(["start", utf8(&project)]))
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
+    let run_id = report["run_id"].as_str().unwrap_or_default().to_owned();
+    let stop = || dev_json(&state, &["stop", &run_id]);
+    if !started.status.success() {
+        stop();
+        panic!("{started:?}");
+    }
+    assert_eq!(report["status"], "ready", "{report}");
+    assert_eq!(report["scenarios"][0]["result"], "passed", "{report}");
+    let products = report["products"].as_object().unwrap();
+    assert_eq!(products.len(), 1, "{report}");
+    let url = products[product].as_str().unwrap().to_owned();
+
+    let token = dev(&state)
+        .args(["token", &run_id, "--as", person])
+        .output()
+        .unwrap();
+    let read = if token.status.success() {
+        let token: serde_json::Value = serde_json::from_slice(&token.stdout).unwrap();
+        let header_file = token["credentials"][0]["header_file"].as_str().unwrap();
+        get_with_headers(&format!("{url}{read_path}"), header_file)
+    } else {
+        (0, format!("token failed: {:?}", token.status))
+    };
+    let stopped = dev(&state).args(["stop", &run_id]).output().unwrap();
+    if !stopped.status.success() {
+        stop();
+    }
+
+    assert_eq!(read.0, 200, "{}", read.1);
+    assert!(read.1.contains(read_contains), "{}", read.1);
+    assert!(stopped.status.success(), "{stopped:?}");
+    let stopped: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(stopped["status"], "stopped", "{stopped}");
+    assert_eq!(live_runs(&state), Vec::<String>::new());
+}
+
+#[test]
+#[ignore = "requires RSTACK_DEV_DATABASE_URL, RSTACK_DEV_DATABASE_CA and built bregctl and breg binaries"]
+fn breg_alone_runs_end_to_end() {
+    // No Casework binary exists, so any Casework call fails the run.
+    run_example_alone(
+        &|state| {
+            let mut command = rstack_dev(state, true);
+            command
+                .env("RSTACK_BREGCTL_BIN", host("bregctl"))
+                .env("RSTACK_BREG_BIN", host("breg"))
+                .env("RSTACK_CASEWORKCTL_BIN", missing_binary(state))
+                .env("RSTACK_CASEWORK_BIN", missing_binary(state));
+            command
+        },
+        "breg/examples/minimal",
+        "breg",
+        "editor",
+        "/v1/records/contacts",
+        "Example contact",
+    );
+}
+
+#[test]
+#[ignore = "requires RSTACK_DEV_DATABASE_URL, RSTACK_DEV_DATABASE_CA and built caseworkctl and casework binaries"]
+fn casework_alone_runs_end_to_end() {
+    // No BReg binary exists, so any BReg call fails the run.
+    run_example_alone(
+        &|state| {
+            let mut command = casework_only_dev(state);
+            command
+                .env("RSTACK_BREGCTL_BIN", missing_binary(state))
+                .env("RSTACK_BREG_BIN", missing_binary(state))
+                .env("RSTACK_CASEWORK_BIN", host("casework"));
+            command
+        },
+        "casework/examples/standalone-decision",
+        "casework",
+        "staff",
+        "/v1/review-policies",
+        "decision",
+    );
 }
 
 /// Points `command` at the TLS PostgreSQL test server that

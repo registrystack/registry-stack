@@ -613,6 +613,14 @@
       "description": "Registry Stack project check acceptances JSON Schema."
     },
     {
+      "glob": "products/platform/schemas/rstack-dev-error.v1.schema.json",
+      "sourcePath": "crates/registry-rstack/src/cli.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "rstack error report JSON Schema."
+    },
+    {
       "glob": "products/evidence/generated/oid4vci-runtime/*.schema.json",
       "sourcePath": "crates/registry-evidence-oid4vci/src/schema.rs",
       "owner": "evidence",

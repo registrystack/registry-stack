@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 /// Each generated schema and the committed minimal example of its format.
 const EXAMPLES: &[(&str, &str)] = &[
     (
-        "project-dev.v1alpha1.schema.json",
+        "dev.v1alpha1.schema.json",
         "products/platform/examples/licensing/dev.yaml",
     ),
     (
@@ -26,7 +26,7 @@ const EXAMPLES: &[(&str, &str)] = &[
 
 /// The identifiers the catalog records, in file-name order.
 const IDENTIFIERS: [&str; 2] = [
-    "https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json",
+    "https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json",
 ];
 
@@ -69,6 +69,47 @@ fn every_committed_example_satisfies_its_generated_schema() {
     }
 }
 
+#[test]
+fn the_plan_schema_names_the_rstack_dev_format() {
+    let documents = documents().expect("the development schemas generate");
+    let schema: Value = serde_json::from_str(&documents["dev.v1alpha1.schema.json"])
+        .expect("a generated schema is JSON");
+
+    assert_eq!(schema["$id"], IDENTIFIERS[0]);
+    assert_eq!(
+        schema["properties"]["apiVersion"]["const"],
+        "id.registrystack.org/formats/rstack/dev/v1alpha1"
+    );
+    assert_eq!(schema["properties"]["kind"]["const"], "RStackDev");
+}
+
+/// Examples that run one product alone.
+#[test]
+fn the_single_product_examples_satisfy_the_plan_schema() {
+    let documents = documents().expect("the development schemas generate");
+    let plan = compile(&documents["dev.v1alpha1.schema.json"]);
+    let scenarios = compile(&documents["scenarios.v1alpha1.schema.json"]);
+
+    // BReg reads every YAML file directly under tests/ as a BReg test, so its
+    // scenario file lives outside tests/.
+    for (directory, scenario_file) in [
+        ("products/breg/examples/minimal", "dev/scenarios.yaml"),
+        (
+            "products/casework/examples/standalone-decision",
+            "tests/scenarios.yaml",
+        ),
+    ] {
+        assert!(
+            plan.is_valid(&example(&format!("{directory}/dev.yaml"))),
+            "{directory}/dev.yaml"
+        );
+        assert!(
+            scenarios.is_valid(&example(&format!("{directory}/{scenario_file}"))),
+            "{directory}/{scenario_file}"
+        );
+    }
+}
+
 fn project_dev_with_studio_identifiers() -> Value {
     let mut plan = example("products/platform/examples/licensing/dev.yaml");
     let applicant = plan["people"]
@@ -98,7 +139,7 @@ fn scenarios_with_studio_identifiers() -> Value {
 #[test]
 fn project_dev_schema_accepts_the_readers_local_and_derived_identifiers() {
     let documents = documents().expect("the development schemas generate");
-    let schema = compile(&documents["project-dev.v1alpha1.schema.json"]);
+    let schema = compile(&documents["dev.v1alpha1.schema.json"]);
 
     assert!(schema.is_valid(&project_dev_with_studio_identifiers()));
 }
@@ -114,7 +155,7 @@ fn scenarios_schema_accepts_the_readers_local_derived_and_capture_identifiers() 
 #[test]
 fn project_dev_schema_refuses_identifiers_the_reader_refuses() {
     let documents = documents().expect("the development schemas generate");
-    let schema = compile(&documents["project-dev.v1alpha1.schema.json"]);
+    let schema = compile(&documents["dev.v1alpha1.schema.json"]);
     let valid = project_dev_with_studio_identifiers();
 
     for person in ["-person", "1person", "Person", "person.name"] {
@@ -199,7 +240,7 @@ fn authored_scenarios_schema_closes_the_envelope_and_reuses_runner_steps() {
 #[test]
 fn project_dev_schema_requires_a_scenario_file_and_refuses_an_inline_journey() {
     let documents = documents().expect("the development schemas generate");
-    let schema = compile(&documents["project-dev.v1alpha1.schema.json"]);
+    let schema = compile(&documents["dev.v1alpha1.schema.json"]);
     let valid = example("products/platform/examples/licensing/dev.yaml");
     assert!(schema.is_valid(&valid));
 

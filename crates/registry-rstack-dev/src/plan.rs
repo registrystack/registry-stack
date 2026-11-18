@@ -58,8 +58,8 @@ impl ScalarHook for LiteralText {
 }
 use url::Url as ParsedUrl;
 
-pub(crate) const API_VERSION: &str = "id.registrystack.org/formats/breg/project-dev/v1alpha1";
-pub(crate) const KIND: &str = "BRegProjectDev";
+pub(crate) const API_VERSION: &str = "id.registrystack.org/formats/rstack/dev/v1alpha1";
+pub(crate) const KIND: &str = "RStackDev";
 pub(crate) const SCENARIOS_API_VERSION: &str =
     "id.registrystack.org/formats/rstack/scenarios/v1alpha1";
 pub(crate) const SCENARIOS_KIND: &str = "RStackScenarios";
@@ -238,7 +238,7 @@ impl Product {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Plan {
-    /// HTTPS logical issuer, or `run` for an application or an explicitly bound BReg and Casework pair.
+    /// The issuer name written into every test token. Use an HTTPS URL that the products' trusted issuers and producers name. Set `run` instead only when the plan declares an `application` or a paired BReg and Casework `runIssuerBinding`: each of those requires `run`, and `run` requires one of them.
     #[cfg_attr(feature = "schema", schemars(schema_with = "issuer_schema"))]
     pub issuer: String,
     /// The products to start, each with its project directory and token audience. List each product at most once.
@@ -251,7 +251,7 @@ pub(super) struct Plan {
     pub people: BTreeMap<String, TestPerson>,
     /// Project-relative path to the authored Stack scenarios file. Required: a development run exists to run scenarios.
     pub scenario_file: PathBuf,
-    /// Run-local connections between BReg and Casework. Leave empty when the products do not call each other.
+    /// Run-local connections between BReg and Casework. Leave empty when the products do not call each other. A `runIssuerBinding` replaces the producer's fixed issuer with the run's own, so it requires `issuer: run`.
     #[serde(default)]
     pub bindings: super::bindings::Bindings,
     /// Chooses the test person for a BReg fixture step in tests/journeys.yaml, keyed by journey identifier and then step identifier. Needed only when several people could run the step; every named person needs a BReg grant.
@@ -873,7 +873,7 @@ fn read_plan(root: &Path) -> Result<Decoded<Plan>> {
 fn refusal_report(decoded: &Decoded<Plan>, refusal: &SemanticRefusal) -> Report {
     let diagnostic = decoded.document.diagnostic_at_value(
         Severity::Error,
-        "breg.project-dev.invalid-plan",
+        "rstack.dev.invalid-plan",
         &refusal.field,
         &refusal.reason,
         &refusal.remedy,
@@ -903,7 +903,7 @@ fn read_scenarios(root: &Path, plan: &Plan) -> Result<(Vec<Journey>, String)> {
     if let Err(refusal) = decoded.value.validate(plan) {
         let diagnostic = decoded.document.diagnostic_at_value(
             Severity::Error,
-            "breg.project-dev.invalid-scenarios",
+            "rstack.dev.invalid-scenarios",
             &refusal.field,
             &refusal.reason,
             &refusal.remedy,

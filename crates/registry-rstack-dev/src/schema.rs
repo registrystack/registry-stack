@@ -31,9 +31,9 @@ struct DevFormat {
 fn formats() -> [DevFormat; 2] {
     [
         DevFormat {
-            namespace: "breg",
-            format: "project-dev",
-            title: "Registry Stack project development plan",
+            namespace: "rstack",
+            format: "dev",
+            title: "Registry Stack development plan",
             spec: plan::FORMAT,
             members: plan::schema,
         },

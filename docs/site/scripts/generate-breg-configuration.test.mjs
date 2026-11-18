@@ -62,7 +62,7 @@ test('BReg covers every committed tool schema, in the order an adopter meets the
     ...await committed('products/breg/generated/tools'),
     ...await committed('products/platform/generated/dev'),
   ].sort(), TOOL_CONTRACTS.map((entry) => entry.file).sort());
-  assert.deepEqual(TOOL_CONTRACTS.map((entry) => entry.id), ['project-dev', 'rstack-scenarios', 'dev-clients', 'example-scenarios',
+  assert.deepEqual(TOOL_CONTRACTS.map((entry) => entry.id), ['rstack-dev', 'rstack-scenarios', 'dev-clients', 'example-scenarios',
     'journeys', 'schema-test-credentials', 'migration-descriptor', 'backup-binding', 'model-selection']);
 });
 
@@ -74,9 +74,9 @@ test('BReg tool and service references read the committed schemas they name', as
   for (const entry of [...TOOL_CONTRACTS, ...SERVICE_CONTRACTS]) {
     const schema = JSON.parse(await readFile(new URL(entry.file, root), 'utf8'));
     assert.ok(typeof schema.title === 'string' && schema.title.length > 0, entry.file);
-    if (entry.id === 'project-dev') {
+    if (entry.id === 'rstack-dev') {
       assert.equal(schema.$id,
-        'https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json');
+        'https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json');
     }
   }
   for (const entry of [...document.tools, ...document.services]) {
@@ -86,8 +86,8 @@ test('BReg tool and service references read the committed schemas they name', as
   const fields = (group, id) => new Map(document[group].find((entry) => entry.id === id)
     .fields.map((field) => [field.key_path, field]));
 
-  const projectDev = fields('tools', 'project-dev');
-  assert.deepEqual(projectDev.get('kind').values, ['BRegProjectDev']);
+  const projectDev = fields('tools', 'rstack-dev');
+  assert.deepEqual(projectDev.get('kind').values, ['RStackDev']);
   assert.ok(projectDev.has('products[].product'));
   assert.ok(fields('tools', 'rstack-scenarios').has('scenarios[].steps[].expect.status'));
 

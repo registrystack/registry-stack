@@ -345,13 +345,13 @@
       "type": "string"
     }
   },
-  "$id": "https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json",
+  "$id": "https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "The development plan: the products to start, the test people who call them, and the scenarios to run.",
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/project-dev/v1alpha1",
+      "const": "id.registrystack.org/formats/rstack/dev/v1alpha1",
       "description": "The format and version this file is written in.",
       "type": "string"
     },
@@ -362,7 +362,7 @@
     "bindings": {
       "$ref": "#/$defs/Bindings",
       "default": {},
-      "description": "Run-local connections between BReg and Casework. Leave empty when the products do not call each other."
+      "description": "Run-local connections between BReg and Casework. Leave empty when the products do not call each other. A `runIssuerBinding` replaces the producer's fixed issuer with the run's own, so it requires `issuer: run`."
     },
     "issuer": {
       "anyOf": [
@@ -373,10 +373,10 @@
           "const": "run"
         }
       ],
-      "description": "HTTPS logical issuer, or `run` for an application or an explicitly bound BReg and Casework pair."
+      "description": "The issuer name written into every test token. Use an HTTPS URL that the products' trusted issuers and producers name. Set `run` instead only when the plan declares an `application` or a paired BReg and Casework `runIssuerBinding`: each of those requires `run`, and `run` requires one of them."
     },
     "kind": {
-      "const": "BRegProjectDev",
+      "const": "RStackDev",
       "description": "The kind of document this file is.",
       "type": "string"
     },
@@ -434,6 +434,6 @@
     "people",
     "scenarioFile"
   ],
-  "title": "Registry Stack project development plan",
+  "title": "Registry Stack development plan",
   "type": "object"
 }

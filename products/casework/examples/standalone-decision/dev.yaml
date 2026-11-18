@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+# Casework alone: no BReg, no Evidence. The issuer is the logical name the
+# `requester` entry in casework.yaml trusts. A run signs its test tokens with a
+# throwaway local key under this name.
+issuer: https://identity.standalone.example.test
+products:
+  - {product: casework, project: ., audience: "urn:example:standalone-decision"}
+people:
+  administrator:
+    subject: administrator
+    client: standalone-workbench
+    grants:
+      casework:
+        profile: administrator
+        scopes: ["casework:admin"]
+        claims: {registry_actor_kind: human}
+  staff:
+    subject: staff
+    client: standalone-workbench
+    grants:
+      casework:
+        profile: staff
+        scopes: ["casework:staff"]
+        claims: {registry_actor_kind: human}
+  requester:
+    subject: requester
+    client: standalone-requester
+    grants:
+      casework:
+        profile: requester
+        scopes: ["casework:request"]
+scenarioFile: tests/scenarios.yaml

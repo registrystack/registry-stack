@@ -1,6 +1,6 @@
-# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json
-apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1
-kind: BRegProjectDev
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
 issuer: https://issuer.example.test
 products:
   - {product: breg, project: registry, audience: "urn:journey:breg"}
