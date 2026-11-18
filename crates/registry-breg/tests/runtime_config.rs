@@ -5363,3 +5363,91 @@ fn the_offline_check_binds_an_external_source_against_the_package() {
     assert!(diagnostic.message.contains("another-scope"));
     assert!(diagnostic.message.contains("licensing-holders"));
 }
+
+/// The serialized source writes an absent optional member as null, which an
+/// authored file never carries.
+fn without_nulls(value: &mut Value) {
+    match value {
+        Value::Object(members) => {
+            members.retain(|_, member| !member.is_null());
+            members.values_mut().for_each(without_nulls);
+        }
+        Value::Array(items) => items.iter_mut().for_each(without_nulls),
+        _ => {}
+    }
+}
+
+#[test]
+fn a_refresh_worker_profile_with_a_consent_boundary_is_refused() {
+    // The consent fixture declares a consent-gated service profile; a refresh
+    // profile that keeps the gate has no recipient to satisfy it.
+    let authored =
+        registry_breg::contract::parse_project_yaml(include_bytes!("fixtures/consent-access.yaml"))
+            .expect("the consent fixture parses");
+    let mut project = serde_json::to_value(authored).expect("the project serializes");
+    without_nulls(&mut project);
+    project["externalRecordTypes"] = json!([{
+        "id": "external-person", "authority": "urn:example:population-register",
+        "identifierScheme": "urn:example:person-number",
+        "fields": [{"id": "family-name", "type": "string", "classification": "internal"}]
+    }]);
+    project["externalProjections"] = json!([{
+        "id": "person-indexed", "recordType": "external-person",
+        "sourceRoute": "person-batch", "sourceRouteVersion": "1",
+        "purpose": "food-assistance", "scope": "population", "mode": "indexed",
+        "cardinality": "one", "cacheTtlSeconds": 300, "fields": ["family-name"]
+    }]);
+    project["externalViews"] = json!([{
+        "id": "person-view", "recordType": "person",
+        "links": [{"id": "register", "projection": "person-indexed", "fromField": "district"}]
+    }]);
+    let mut refresh = project["accessProfiles"][0].clone();
+    refresh["id"] = json!("person-refresh");
+    refresh["default"] = json!(false);
+    refresh["requesterClients"] = json!(["wfp-scope"]);
+    refresh["permissions"] = json!({
+        "records": [{
+            "recordType": "person", "rowBoundaries": "unrestricted",
+            "operations": ["list"], "readableFields": ["district"],
+            "requireConsent": [{"record": "consent-decision", "on": "id"}]
+        }],
+        "refreshExternalProjections": ["person-indexed"]
+    });
+    project["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(refresh);
+    let registry = compile_project(
+        &parse_project_json(&serde_json::to_vec(&project).unwrap()).expect("the project parses"),
+        &[],
+        CompileProfile::Authoring,
+    )
+    .expect("a refresh profile with a consent boundary compiles");
+
+    let fixture = RuntimeFixture::new();
+    let ca = fixture.path("source-ca.pem");
+    fs::write(&ca, "").expect("ca fixture writes");
+    let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/adapter/examples/external-projections/pack.yaml");
+    let digest = registry_platform_config::sha256_uri(&fs::read(&pack).expect("pack reads"));
+    let mut runtime = external_sources_runtime(
+        &fixture,
+        json!({"person-indexed": external_source_entry(&digest, &ca)}),
+    );
+    runtime.push_str(
+        "externalRefresh:\n  plans:\n    people:\n      target: {view: person-view, link: register}\n      worker:\n        accessProfile: person-refresh\n        requesterClient: wfp-scope\n        principal: refresh-service\n      intervalSeconds: 60\n",
+    );
+    let path = fixture.path("runtime-refresh-consent.yaml");
+    fs::write(&path, &runtime).expect("runtime fixture writes");
+    let check = check_runtime_config(&path, true, Some(&registry));
+    let diagnostic = check
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.external-refresh.profile-authority-missing")
+        .unwrap_or_else(|| panic!("{:?}", check.diagnostics));
+    assert_eq!(
+        diagnostic.path,
+        "/externalRefresh/plans/people/worker/accessProfile"
+    );
+    assert!(diagnostic.message.contains("consent boundary"));
+}
