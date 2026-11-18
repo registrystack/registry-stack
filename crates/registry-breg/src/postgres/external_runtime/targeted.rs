@@ -351,8 +351,8 @@ mod postgres_tests {
                 {"id":"tenant","type":"string","maximumLength":32,"classification":"internal"}
             ]}],
             "externalRecordTypes": [{"id":"subject","authority":"urn:test:source","identifierScheme":"urn:test:subject","fields":[{"id":"name","type":"string","classification":"internal"}]}],
-            "externalProjections": [{"id":"subjects","recordType":"subject","operation":"subjects","operationVersion":"1","purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:subject","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["name"]}],
-            "externalViews": [{"id":"view","recordType":"local-record","links":[{"id":"subject","projection":"subjects","fromField":"subject-key","identifierScheme":"urn:test:subject","fields":["name"]}]}],
+            "externalProjections": [{"id":"subjects","recordType":"subject","sourceRoute":"subjects","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["name"]}],
+            "externalViews": [{"id":"view","recordType":"local-record","links":[{"id":"subject","projection":"subjects","fromField":"subject-key"}]}],
             "accessProfiles": [{"id":"refresh","principalClaim":"registry_principal","actorKind":"service","requesterClients":["worker"],"requiredScopes":["registry.refresh"],"requiredPurposes":["consultation"],"permissions":{
                 "records":[{"recordType":"local-record","operations":["list"],"rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}],
                 "refreshExternalProjections":["subjects"]

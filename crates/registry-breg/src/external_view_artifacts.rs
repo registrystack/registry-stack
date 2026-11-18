@@ -151,25 +151,22 @@ fn append_managed_refresh_paths(paths: &mut Map<String, Value>) {
             "503": {"description": "The current plan or source is unavailable"}
         }
     }}));
-    paths.insert("/v1/external-refresh-plans/{plan}/hints".to_owned(), json!({"post": {
-        "operationId": "external-refresh-plan-hint",
-        "summary": "Admit an authenticated source change hint",
+    paths.insert("/v1/external-refresh-plans/{plan}/source-changes".to_owned(), json!({"post": {
+        "operationId": "external-refresh-plan-source-change",
+        "summary": "Admit an authenticated source change",
         "security": [{"bearerAuth": []}],
         "parameters": [plan],
         "requestBody": body(json!({"type": "object", "additionalProperties": false,
-            "required": ["hintId", "projection", "selectorScheme", "selector"],
+            "required": ["projection", "selector"],
             "properties": {
-                "hintId": {"type": "string", "minLength": 1, "maxLength": 256},
                 "projection": {"type": "string", "minLength": 1},
-                "selectorScheme": {"type": "string", "minLength": 1},
                 "selector": {"type": "string", "minLength": 1, "maxLength": 512}
             }})),
         "responses": {
-            "202": {"description": "Hint accepted or already admitted, without checking local matches"},
-            "400": {"description": "Invalid hint"},
+            "202": {"description": "Source change queued, without checking local matches; a repeated change updates the queued one"},
+            "400": {"description": "Invalid source change"},
             "404": {"description": "Plan or projection is unavailable to the notifier"},
-            "409": {"description": "Hint ID conflicts with an accepted hint"},
-            "429": {"description": "Hint admission is at capacity", "headers": {
+            "429": {"description": "Source change admission is at capacity", "headers": {
                 "Retry-After": {"schema": {"type": "integer", "minimum": 1}}
             }},
             "503": {"description": "The current plan or source is unavailable"}
@@ -330,4 +327,41 @@ fn cursor_parameter() -> Value {
 
 fn count_schema() -> Value {
     json!({"type":"integer","minimum":0})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keys(value: &Value) -> BTreeSet<&str> {
+        value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect()
+    }
+
+    #[test]
+    fn a_source_change_names_only_the_projection_and_the_selector() {
+        let mut paths = Map::new();
+        append_managed_refresh_paths(&mut paths);
+        assert!(!paths.contains_key("/v1/external-refresh-plans/{plan}/hints"));
+        let operation = &paths["/v1/external-refresh-plans/{plan}/source-changes"]["post"];
+        assert_eq!(
+            operation["operationId"],
+            "external-refresh-plan-source-change"
+        );
+        let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
+        assert_eq!(schema["required"], json!(["projection", "selector"]));
+        assert_eq!(
+            keys(&schema["properties"]),
+            BTreeSet::from(["projection", "selector"])
+        );
+        assert_eq!(
+            keys(&operation["responses"]),
+            BTreeSet::from(["202", "400", "404", "429", "503"]),
+            "a repeated source change is accepted again, never a conflict"
+        );
+    }
 }
