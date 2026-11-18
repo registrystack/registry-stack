@@ -201,6 +201,23 @@ accessProfiles:
           readableFields: [business-key, jurisdiction]
           rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
       refreshExternalProjections: [person-indexed, holdings-indexed]
+  - id: staff-refresh
+    actorKind: service
+    requesterClients: [staff-app]
+    principalClaim: registry_principal
+    requiredScopes: [registry:licensing:staff-refresh]
+    requiredPurposes: [licensing]
+    permissions:
+      records:
+        - recordType: licence
+          operations: [get, list]
+          readableFields: [holder-key, jurisdiction]
+          rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
+        - recordType: licensed-business
+          operations: [get, list]
+          readableFields: [business-key, jurisdiction]
+          rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
+      refreshExternalProjections: [person-indexed, holdings-indexed]
   - id: fixture-editor
     principalClaim: registry_principal
     requiredScopes: [registry:licensing:write]

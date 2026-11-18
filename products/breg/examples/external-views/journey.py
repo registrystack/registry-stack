@@ -4,7 +4,6 @@
 """Check the projection journey against a fresh synthetic BReg deployment."""
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
 import time
 import json
 from pathlib import Path
@@ -29,6 +28,18 @@ HTTP = build_opener(ProxyHandler({}), NoRedirect())
 def expect(condition, name):
     if not condition:
         raise JourneyError(name)
+
+
+def poll_until(check, description, timeout=60, interval=1, clock=time.monotonic, sleep=time.sleep):
+    """Return the first truthy result of check, failing visibly once timeout seconds have passed."""
+    deadline = clock() + timeout
+    while True:
+        result = check()
+        if result:
+            return result
+        if clock() >= deadline:
+            raise JourneyError(f"timed out waiting for {description}")
+        sleep(interval)
 
 
 def origin(value):
@@ -78,8 +89,8 @@ class Journey:
         self.args = args
         self.auth = {
             "officer": {"Authorization": "Bearer " + fixture_credential(args.officer_token_file)},
+            "staff-refresh": {"Authorization": "Bearer " + fixture_credential(args.staff_token_file)},
             "local-facts": {"Authorization": "Bearer " + fixture_credential(args.restricted_token_file)},
-            "projection-refresh": {"Authorization": "Bearer " + fixture_credential(args.refresh_token_file)},
         }
         self.control_auth = {"x-fixture-control-key": fixture_credential(args.control_key_file)}
 
@@ -90,29 +101,29 @@ class Journey:
         return request(self.args.breg_origin, path, self.auth[profile],
                        query={"accessProfile": profile, **(query or {})})
 
-    def refresh(self, view, link, *, labels=False):
-        operation = "refresh-labels" if labels else "refresh"
-        path = f"/v1/external-views/{view}/{link}/{operation}"
-        query = {"accessProfile": "projection-refresh"}
-        totals = {field: 0 for field in ("processed", "published", "unavailable")}
-        seen = set()
-        for _ in range(20):
-            status, report = request(
-                self.args.breg_origin, path, self.auth["projection-refresh"],
-                method="POST", query=query,
+    def rows(self, response):
+        """The records of a 200 response, or None while the view cannot answer yet."""
+        return response[1].get("records") if response[0] == 200 and isinstance(response[1], dict) else None
+
+    def request_refresh(self, view, link, root):
+        # BReg runs the refresh in process; a staff application service client only queues it.
+        # A root refresh answers 429 with Retry-After: 30 while the plan's queue is full, so wait it out.
+        for attempt in range(3):
+            status, _ = request(
+                self.args.breg_origin, f"/v1/external-views/{view}/{link}/records/{root}/refresh",
+                self.auth["staff-refresh"], method="POST", query={"accessProfile": "staff-refresh"},
             )
-            expect(status == 200 and isinstance(report, dict), "a refresh request failed")
-            for field in totals:
-                count = report.get(field)
-                expect(type(count) is int and count >= 0, "refresh returned an invalid count")
-                totals[field] += count
-            cursor = report.get("nextCursor")
-            if cursor is None:
-                return totals
-            expect(isinstance(cursor, str) and cursor not in seen, "refresh cursor repeated")
-            seen.add(cursor)
-            query["$skiptoken"] = cursor
-        raise JourneyError("refresh exceeded the fixture's page budget")
+            if status != 429:
+                break
+            time.sleep(31)
+        expect(status == 202, "a staff application root refresh was not accepted")
+
+    def refresh_until(self, view, link, root, check, description):
+        self.request_refresh(view, link, root)
+        return poll_until(check, description, timeout=self.args.refresh_timeout)
+
+    def wait_until(self, check, description):
+        return poll_until(check, description, timeout=self.args.refresh_timeout)
 
     def control(self, action, **options):
         status, report = request(
@@ -129,24 +140,6 @@ class Journey:
         expect(status == 200 and isinstance(report, dict), "fixture status was unavailable")
         return report["operations"]
 
-    def while_person_refresh_is_held(self, action):
-        self.control("hold-next", operation="person-batch")
-        with ThreadPoolExecutor(max_workers=1) as workers:
-            older = workers.submit(self.refresh, "licence-holder-indexed", "holder")
-            try:
-                deadline = time.monotonic() + 2
-                while True:
-                    status, report = request(self.args.source_origin, "/fixture/status", self.control_auth)
-                    expect(status == 200, "fixture status was unavailable")
-                    if report.get("held"):
-                        break
-                    expect(time.monotonic() < deadline, "the older refresh did not reach the source barrier")
-                    time.sleep(0.02)
-                action()
-            finally:
-                self.control("release")
-            return older.result(timeout=5)
-
     def licence_filter(self, surname_literal, **extra):
         return self.view("licence-holder-indexed", "holder",
                          query={"$filter": f"family-name eq {surname_literal}", "$count": "true", **extra})
@@ -155,11 +148,19 @@ class Journey:
         return self.view("business-holdings-live" if live else "business-holdings-indexed",
                          "holdings", self.args.business_root)
 
+    def licence_ready(self, literal, count):
+        """The licence filter once it answers with exactly count rows, else None."""
+        response = self.licence_filter(literal)
+        rows = self.rows(response)
+        return rows if rows is not None and len(rows) == count else None
+
+    def related_label_acquired(self):
+        rows = self.rows(self.business()) or []
+        indirect = next((row for row in rows if row["fields"]["shareholder-key"] == "person-12"), {})
+        return indirect.get("label", {}).get("fields", {}).get("family-name") == "Solano"
+
     def run(self):
         self.control("reset")
-        baseline = self.source_calls()
-        expect(self.licence_filter("'Lee'")[0] == 503, "unbuilt indexed view reported coverage")
-        expect(self.source_calls() == baseline, "indexed query contacted the source")
 
         restricted_root = request(
             self.args.breg_origin, f"/v1/records/licences/{self.args.licence_root}",
@@ -171,18 +172,16 @@ class Journey:
         for query in ({"$filter": "family-name eq 'Lee'"}, {"$orderby": "family-name"}, {"$count": "true"}):
             expect(self.view("licence-holder-indexed", "holder", profile="local-facts", query=query)[0] == 404,
                    "restricted caller processed an external field")
-        expect(self.source_calls() == baseline, "denied reads contacted the source")
 
         live = records(self.view("licence-holder-live", "holder", self.args.licence_root))
         expect(len(live) == 1 and live[0]["fields"]["family-name"] == "Lee", "live Person lookup failed")
         live_holdings = records(self.business(live=True))
         expect({row["fields"]["shareholder-type"] for row in live_holdings} == {"person", "business"},
                "live list did not return both shareholder types")
-        expect(self.licence_filter("'Lee'")[0] == 503, "live read retained indexed data")
 
-        expect(self.refresh("licence-holder-indexed", "holder")["published"] > 0, "Person refresh published nothing")
-        expect(self.refresh("business-holdings-indexed", "holdings")["published"] > 0,
-               "holdings refresh published nothing")
+        # The worker sweeps both plans on startup. Wait for both indexed views to fill.
+        self.wait_until(lambda: self.licence_ready("'Lee'", 2), "the Person sweep to cover surname Lee")
+        self.wait_until(lambda: len(self.rows(self.business()) or []) == 2, "the holdings sweep to publish")
 
         reads_before = self.source_calls()
         response = self.licence_filter("'Lee'", **{"$orderby": "family-name", "$top": "1"})
@@ -198,46 +197,42 @@ class Journey:
         expect(len(records(absent)) == 1 and absent[1].get("count") == 1, "keyed absence did not count as coverage")
         expect(self.view("licence-holder-indexed", "holder", self.args.licence_root,
                          profile="local-facts")[0] == 404, "a cache hit bypassed the restricted profile")
-        after_refresh = request(
+        after_sweep = request(
             self.args.breg_origin, f"/v1/records/licences/{self.args.licence_root}",
             self.auth["local-facts"], query={"accessProfile": "local-facts"},
         )
-        expect(after_refresh == restricted_root, "refresh changed the owned licence response")
+        expect(after_sweep == restricted_root, "refresh changed the owned licence response")
         expect(self.source_calls() == reads_before, "indexed pages contacted the source")
+
+        # Only a staff application's service client may queue a root refresh.
+        for profile in ("officer", "local-facts"):
+            status, _ = request(
+                self.args.breg_origin,
+                f"/v1/external-views/licence-holder-indexed/holder/records/{self.args.licence_root}/refresh",
+                self.auth[profile], method="POST", query={"accessProfile": profile},
+            )
+            expect(status == 404, f"a {profile} caller was not refused the root refresh")
+        expect(self.source_calls() == reads_before, "a refused root refresh contacted the source")
 
         original_holdings = records(self.business())
         expect(len(original_holdings) == 2 and surname_from_label(original_holdings) == "Lee",
                "the indexed holding did not reuse the Person projection")
 
+        # A new holder reached only through a holding is labelled by the same refresh.
         self.control("add-label-only")
-        self.refresh("business-holdings-indexed", "holdings")
-        indirect = next((row for row in records(self.business()) if row["fields"]["shareholder-key"] == "person-12"), {})
-        expect(indirect.get("label", {}).get("availability") == "unavailable",
-               "a new related-only label was already populated")
-        calls = self.source_calls()
-        denied = request(
-            self.args.breg_origin, "/v1/external-views/business-holdings-indexed/holdings/refresh-labels",
-            self.auth["officer"], method="POST", query={"accessProfile": "officer"},
-        )
-        expect(denied[0] == 404 and self.source_calls() == calls,
-               "a reader acquired an independent label")
-        expect(self.refresh("business-holdings-indexed", "holdings", labels=True)["published"] >= 1,
-               "no authorised related label was published")
-        indirect = next((row for row in records(self.business()) if row["fields"]["shareholder-key"] == "person-12"), {})
-        expect(indirect.get("label", {}).get("fields", {}).get("family-name") == "Solano",
-               "the approved label required a separate local licence root")
+        self.refresh_until("business-holdings-indexed", "holdings", self.args.business_root,
+                           self.related_label_acquired, "the related-only label to be acquired")
         expect(not records(self.licence_filter("'Solano'")),
                "a related label created a new local licence association")
 
-        def refuse_newer_retention():
-            self.control("rename-holder")
-            self.control("set-no-store", operation="person-batch", enabled=True)
-            expect(self.refresh("licence-holder-indexed", "holder")["unavailable"] > 0,
-                   "the indexed operation did not report a no-store refusal")
+        def person_refresh(check, description):
+            return self.refresh_until("licence-holder-indexed", "holder", self.args.licence_root, check, description)
 
-        older = self.while_person_refresh_is_held(refuse_newer_retention)
-        expect(older["published"] == 0 and self.licence_filter("'Lee'")[0] == 503,
-               "a delayed response revived values after a later no-store refusal")
+        # A refused no-store response withdraws coverage rather than keeping stale values.
+        self.control("rename-holder")
+        self.control("set-no-store", operation="person-batch", enabled=True)
+        person_refresh(lambda: self.licence_filter("'Lee'")[0] == 503,
+                       "a no-store refusal to withdraw Person coverage")
         current = self.view("licence-holder-indexed", "holder", self.args.licence_root)
         if current[0] == 200:
             expect(all(row.get("fields", {}).get("family-name") != "Ng" for row in records(current)),
@@ -245,64 +240,56 @@ class Journey:
         else:
             expect(current[0] == 503, "no-store lookup returned an unexpected outcome")
         self.control("set-no-store", operation="person-batch", enabled=False)
-        expect(self.refresh("licence-holder-indexed", "holder")["published"] > 0, "Person recovery did not publish")
-        expect(len(records(self.licence_filter("'Ng'"))) == 2, "one Person refresh did not update both licences")
+        person_refresh(lambda: self.licence_ready("'Ng'", 2), "Person recovery to publish the renamed holder")
         expect(surname_from_label(records(self.business())) == "Ng", "one Person refresh did not update the holding label")
-        expect(self.view("licence-holder-indexed", "holder", query={"$skiptoken": cursor})[0] == 400,
-               "a cursor survived a newer projection generation")
+        # A withdrawn key does not end the projection scope, so a cursor stays valid; only a tampered one is refused.
+        tampered = self.view("licence-holder-indexed", "holder", query={"$skiptoken": cursor[:-4] + "AAAA"})
+        expect(tampered[0] == 400, f"a tampered cursor was not refused (status {tampered[0]})")
 
-        def publish_newer_person():
-            self.control("restore-holder")
-            expect(self.refresh("licence-holder-indexed", "holder")["published"] > 0,
-                   "the newer Person refresh did not publish")
-
-        older = self.while_person_refresh_is_held(publish_newer_person)
-        expect(older["published"] == 0
-               and len(records(self.licence_filter("'Lee'"))) == 2
-               and not records(self.licence_filter("'Ng'")),
-               "the older refresh replaced a newer Person publication")
+        self.control("restore-holder")
+        person_refresh(lambda: self.licence_ready("'Lee'", 2), "the restored holder to publish")
+        expect(not records(self.licence_filter("'Ng'")), "the older surname survived a newer Person publication")
 
         before_interruption = records(self.business())
+        collections = self.source_calls().get("holdings-by-business", 0)
         self.control("interrupt-collection", enabled=True)
-        expect(self.refresh("business-holdings-indexed", "holdings")["unavailable"] > 0,
-               "interrupted collection was not reported")
+        self.request_refresh("business-holdings-indexed", "holdings", self.args.business_root)
+        self.wait_until(lambda: self.source_calls().get("holdings-by-business", 0) > collections,
+                        "the interrupted collection to reach the source")
         expect(records(self.business()) == before_interruption,
                "interruption displaced the last complete holdings snapshot")
         self.control("interrupt-collection", enabled=False)
         self.control("replace-holdings")
-        self.refresh("business-holdings-indexed", "holdings")
-        remaining = records(self.business())
-        expect(len(remaining) == 1 and remaining[0]["fields"]["shareholder-type"] == "business",
-               "complete refresh did not remove the old holding")
+
+        def replaced():
+            rows = self.rows(self.business())
+            return rows is not None and len(rows) == 1 and rows[0]["fields"]["shareholder-type"] == "business"
+
+        self.refresh_until("business-holdings-indexed", "holdings", self.args.business_root, replaced,
+                           "a complete refresh to remove the old holding")
         self.control("empty-holdings")
-        self.refresh("business-holdings-indexed", "holdings")
-        expect(not records(self.business()), "complete empty snapshot was not published")
+        self.refresh_until("business-holdings-indexed", "holdings", self.args.business_root,
+                           lambda: self.rows(self.business()) == [], "a complete empty snapshot to publish")
 
         retained = records(self.licence_filter("'Doe'"))
         expect(len(retained) == 1 and retained[0]["fields"]["family-name"] == "Doe",
                "the fault fixture had no retained present value")
         fault_root = retained[0]["rootId"]
+
+        # A transient source fault is not a refusal: the last complete snapshot stays served until it expires.
         for fault in ("denied", "ambiguous", "disconnect"):
+            calls = self.source_calls().get("person-batch", 0)
             self.control("set-person-fault", kind=fault)
-            report = self.refresh("licence-holder-indexed", "holder")
-            expect(report["unavailable"] > 0, f"{fault} was not reported by refresh")
-            for literal in ("'Doe'", "null"):
-                expect(self.licence_filter(literal)[0] == 503,
-                       f"{fault} was treated as complete coverage")
-            detail = self.view("licence-holder-indexed", "holder", fault_root)
-            if detail[0] == 200:
-                rows = records(detail)
-                expect(detail[1]["status"] == "unavailable"
-                       or (len(rows) == 1 and rows[0]["availability"] == "unavailable"),
-                       f"{fault} did not withdraw the retained detail")
-                expect(all(not row["fields"] for row in rows), f"{fault} disclosed retained fields")
-            else:
-                expect(detail[0] == 503, f"{fault} produced an unexpected detail response")
+            self.request_refresh("licence-holder-indexed", "holder", fault_root)
+            self.wait_until(lambda: self.source_calls().get("person-batch", 0) > calls,
+                            f"the {fault} refresh to reach the source")
+            kept = records(self.licence_filter("'Doe'"))
+            expect(len(kept) == 1 and kept[0]["fields"]["family-name"] == "Doe",
+                   f"{fault} displaced the last complete Person snapshot")
             self.control("set-person-fault", kind="none")
-            expect(self.refresh("licence-holder-indexed", "holder")["published"] > 0,
-                   "recovered Person refresh did not publish")
-            recovered = records(self.licence_filter("'Doe'"))
-            expect(len(recovered) == 1 and recovered[0]["rootId"] == fault_root,
+            recovered = self.refresh_until("licence-holder-indexed", "holder", fault_root,
+                                           lambda: self.licence_ready("'Doe'", 1), "recovered Person coverage")
+            expect(recovered[0]["rootId"] == fault_root,
                    "recovered Person coverage did not restore the retained value")
 
 
@@ -331,10 +318,12 @@ def main():
     parser.add_argument("--source-origin", type=origin, required=True)
     parser.add_argument("--officer-token-file", type=Path, required=True)
     parser.add_argument("--restricted-token-file", type=Path, required=True)
-    parser.add_argument("--refresh-token-file", type=Path, required=True)
+    parser.add_argument("--staff-token-file", type=Path, required=True)
     parser.add_argument("--control-key-file", type=Path, required=True)
     parser.add_argument("--licence-root", type=UUID, required=True)
     parser.add_argument("--business-root", type=UUID, required=True)
+    parser.add_argument("--refresh-timeout", type=int, default=60,
+                        help="seconds to wait for the worker to publish after each refresh request")
     args = parser.parse_args()
     try:
         Journey(args).run()

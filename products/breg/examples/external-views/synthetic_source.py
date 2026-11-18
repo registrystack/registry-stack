@@ -351,23 +351,38 @@ def runtime_fragment(origin, key_file_name, grant_cutoff):
         "endpoint": "synthetic-registry", "baseUrl": origin, "clientIdentity": "forbidden",
         "authentication": {"type": "static-api-key"},
     }]
-    bindings = []
+    bindings = {}
     for binding, fields in (
         ("person-live", PERSON_FIELDS),
         ("person-indexed", PERSON_FIELDS),
         ("holdings-live", HOLDING_FIELDS - {"person-key"}),
         ("holdings-indexed", HOLDING_FIELDS),
     ):
-        entry = {
-            "id": binding, "packFile": str(pack), "packDigest": pack_digest,
+        bindings[binding] = {
+            "packFile": str(pack), "packDigest": pack_digest,
             "connection": connection, "endpointPolicies": policy,
             "allowedFields": sorted(fields),
             "grantValidUntil": grant_cutoff,
             "acquisition": {"maximumDataOperations": 8, "attemptTimeoutMilliseconds": 8000,
                             "maximumResponseBytes": 262144},
         }
-        bindings.append(entry)
     return {"externalSources": bindings}
+
+
+def refresh_runtime(interval_seconds, page_size, source_changes=None):
+    """The runtime externalRefresh section: BReg refreshes both indexed views in process."""
+    # The worker holds no bearer token; its client only has to be listed on the access profile.
+    worker = {"accessProfile": "projection-refresh", "requesterClient": "licensing-refresh",
+              "principal": "synthetic-licensing-refresh", "rowClaims": {"jurisdiction": "zone-a"}}
+    plans = {
+        "holders": {"target": {"view": "licence-holder-indexed", "link": "holder"},
+                    "worker": dict(worker), "intervalSeconds": interval_seconds, "pageSize": page_size},
+        "holdings": {"target": {"view": "business-holdings-indexed", "link": "holdings"},
+                     "worker": dict(worker), "intervalSeconds": interval_seconds, "pageSize": page_size},
+    }
+    if source_changes:
+        plans["holders"]["sourceChanges"] = source_changes
+    return {"plans": plans}
 
 
 def main():

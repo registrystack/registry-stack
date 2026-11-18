@@ -26,7 +26,7 @@ import fixture_path
 fixture_path.ensure_importable()
 from journey import HTTP, Journey, JourneyError, expect, request
 from recovery import ScopeRecovery
-from synthetic_source import Fixture, handler, runtime_fragment
+from synthetic_source import Fixture, handler, refresh_runtime, runtime_fragment
 
 PROJECT = Path(__file__).resolve().parents[2] / "examples/external-views"
 ISSUER = "https://fixture-issuer.example.test/licensing"
@@ -35,9 +35,14 @@ KEY_ID = "external-views-fixture"
 IDENTITIES = {
     "officer": ("officer", "human", "read"),
     "restricted": ("restricted", "human", "read"),
-    "licensing-refresh": ("refresh", "service", "refresh"),
+    "staff-app": ("staff-app", "service", "staff-refresh"),
     "fixture-editor": ("editor", "service", "write"),
 }
+# The in-process worker holds no token, but its requester client must be an allowed client.
+WORKER_CLIENT = "licensing-refresh"
+# The worker sweeps once on startup; the long interval keeps later sweeps out of the journey.
+SMALL_INTERVAL_SECONDS = 3600
+REFRESH_TIMEOUT_SECONDS = 60
 MANAGED_NOTIFIER = {"population-change-notifier": ("notifier", "service", "person-change-hint")}
 URL_FILES = ("rehearsal-migration-url", "rehearsal-runtime-url", "migration-url", "runtime-url")
 
@@ -156,7 +161,7 @@ def runtime_config(work, roles, pack, listener, prefix="", identities=IDENTITIES
             "oidc": {
                 "issuer": ISSUER, "audience": AUDIENCE, "allowedAlgorithm": "EdDSA",
                 "accessTokenType": "JWT", "scopeClaim": "scope", "scopeSeparator": " ",
-                "allowedClients": sorted(identities), "maximumTokenLifetimeSeconds": token_lifetime,
+                "allowedClients": sorted({*identities, WORKER_CLIENT}), "maximumTokenLifetimeSeconds": token_lifetime,
                 "leewayMilliseconds": 30000,
                 "jwksSource": {"type": "static", "documentRef": "secret:file/oidc-jwks"},
             },
@@ -180,7 +185,7 @@ def verify_source_facts(facts, bindings, indexed_ttl):
            and all(isinstance(fact, dict) for fact in projections)
            and {fact.get("id") for fact in projections} == projection_ids,
            "source facts did not cover the four expected projections")
-    expected = {binding["id"]: binding for binding in bindings["externalSources"]}
+    expected = bindings["externalSources"]
     for fact in projections:
         projection = fact["id"]
         binding = expected[projection]
@@ -351,8 +356,8 @@ def run(options):
             runtime = work / "runtime.json"
             package = work / "build/package"
             bindings = runtime_fragment(source_origin, "source-key", cutoff)
-            if options.managed_refresh:
-                bindings["externalRefresh"] = scale.managed_runtime()
+            bindings["externalRefresh"] = (scale.managed_runtime(options.managed_refresh) if scale
+                                           else refresh_runtime(SMALL_INTERVAL_SECONDS, 100))
             write_json(runtime, runtime_config(work, roles, package, address, identities=identities,
                                                token_lifetime=token_lifetime, **bindings))
             facts_path = work / "external-source-facts.json"
@@ -378,18 +383,19 @@ def run(options):
                 journey = Journey(argparse.Namespace(
                     breg_origin=origin, source_origin=source_origin,
                     officer_token_file=tokens["officer"], restricted_token_file=tokens["restricted"],
-                    refresh_token_file=tokens["licensing-refresh"], control_key_file=keys / "control-key",
+                    staff_token_file=tokens["staff-app"],
+                    control_key_file=keys / "control-key", refresh_timeout=REFRESH_TIMEOUT_SECONDS,
                     licence_root=licence, business_root=business,
                 ))
                 journey.run()
                 print("Basic external view HTTP checks passed", flush=True)
                 if options.recovery:
-                    print("Withdrawing holdings scope during a paged refresh", flush=True)
+                    print("Purging the holdings scope during an in-flight refresh", flush=True)
                     recovery = ScopeRecovery(journey, fixture, work, facts, ctl, runtime, write_json)
-                    recovery.withdraw_and_rotate()
+                    recovery.purge()
             if options.recovery:
                 expect(recovery is not None, "scope recovery did not run before the restart")
-                print("Restarting and rebuilding the rotated holdings scope", flush=True)
+                print("Restarting and rebuilding the purged holdings scope", flush=True)
                 with serving(breg, runtime, work, "breg-restarted.log", origin):
                     recovery.verify_rebuild()
         finally:
@@ -405,9 +411,9 @@ def main():
     parser.add_argument("--postgres-ca-file", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True, help="new private directory for fixture evidence")
     parser.add_argument("--project-dir", type=Path, help="saved native project for the small fixture")
-    parser.add_argument("--recovery", action="store_true", help="exercise small fixture scope withdrawal and restart")
+    parser.add_argument("--recovery", action="store_true", help="exercise small fixture scope purge and restart")
     parser.add_argument("--scale", action="store_true", help="run the million-record acceptance fixture")
-    parser.add_argument("--managed-refresh", action="store_true", help="exercise managed refresh with --scale")
+    parser.add_argument("--managed-refresh", action="store_true", help="add the local-link and source-change checks to --scale")
     parser.add_argument("--managed-refresh-smoke", action="store_true",
                         help="use a 2,000-root corpus with --scale --managed-refresh")
     parser.add_argument("--postgres-plan-log", type=Path, help="dedicated PostgreSQL auto_explain log for --scale")

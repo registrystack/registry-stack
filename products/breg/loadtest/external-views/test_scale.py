@@ -4,18 +4,16 @@
 """Deterministic checks for the native scale fixture and independent oracle."""
 
 import unittest
-from unittest.mock import patch
 
 import fixture_path
 fixture_path.ensure_importable()
 from scale_exercise import (
     ABSENT_KEYS, BATCH_KEYS, DENIED_ROOTS, ELIGIBLE_ROOTS, HOLDER_KEYS,
     MATCH_KEYS, PERSON_REQUEST_BUDGET, REFRESH_PAGE_SIZE, ScaleFixture, SMOKE_CORPUS,
-    exact_oracle, holding_oracle, managed_sweep, native_plans, ordered_oracle, root_id, seed_sql,
-    step_counts,
+    exact_oracle, holding_oracle, managed_runtime, native_plans, ordered_oracle, root_id, seed_sql,
 )
 from synthetic_source import FixtureFault
-from journey import JourneyError
+from journey import JourneyError, poll_until
 
 
 class ScaleFixtureTests(unittest.TestCase):
@@ -42,21 +40,43 @@ class ScaleFixtureTests(unittest.TestCase):
         with self.assertRaises(FixtureFault):
             source.acquire("person-batch", {**query, "keys": ["scale-person-000102"]})
 
-    def test_managed_driver_requests_one_sweep_and_stops_on_completion(self):
-        def report(processed, finished):
-            return (200, {**dict.fromkeys(("processed", "published", "reused", "unavailable",
-                                            "retried", "settled", "sweepAcquisitionFailures"), 0),
-                          "processed": processed, "sweepCompleted": finished, "moreWork": not finished})
-        with patch("scale_exercise.request", side_effect=[report(100, False), report(20, True)]) as call:
-            measured = step_counts()
-            managed_sweep("http://localhost:1", "holders", {}, measured, 2, force=True)
-        self.assertEqual(measured["processed"], 120)
-        self.assertEqual(measured["httpRequests"], 2)
-        self.assertEqual([c.kwargs["body"] for c in call.call_args_list], [{"startSweep": True}, {}])
-        self.assertEqual(call.call_args.args[1], "/v1/external-refresh-plans/holders/step")
-        with patch("scale_exercise.request", return_value=report(100, False)):
-            with self.assertRaisesRegex(JourneyError, "step budget"):
-                managed_sweep("http://localhost:1", "holders", {}, step_counts(), 1)
+    def test_managed_runtime_names_an_inline_worker_for_both_indexed_plans(self):
+        runtime = managed_runtime()
+        self.assertEqual(set(runtime), {"plans"})
+        self.assertEqual({plan["target"]["view"] for plan in runtime["plans"].values()},
+                         {"licence-holder-indexed", "business-holdings-indexed"})
+        for plan in runtime["plans"].values():
+            self.assertEqual(set(plan["worker"]),
+                             {"accessProfile", "requesterClient", "principal", "rowClaims"})
+            self.assertNotIn("refreshLabels", plan)
+        notifier = runtime["plans"]["holders"]["sourceChanges"]["person-indexed"]
+        self.assertEqual(notifier["requesterClient"], "population-change-notifier")
+
+
+class PollTests(unittest.TestCase):
+    def clock(self):
+        now = [0.0]
+        return now, (lambda: now[0]), (lambda seconds: now.__setitem__(0, now[0] + seconds))
+
+    def test_poll_returns_the_first_truthy_result_after_sleeping_between_checks(self):
+        now, clock, sleep = self.clock()
+        results = iter([None, False, "filled"])
+        self.assertEqual(poll_until(lambda: next(results), "the fill", timeout=10, interval=2,
+                                    clock=clock, sleep=sleep), "filled")
+        self.assertEqual(now[0], 4)
+
+    def test_poll_fails_visibly_once_the_deadline_passes(self):
+        now, clock, sleep = self.clock()
+        calls = []
+        with self.assertRaisesRegex(JourneyError, "timed out waiting for the fill"):
+            poll_until(lambda: calls.append(now[0]), "the fill", timeout=5, interval=2, clock=clock, sleep=sleep)
+        self.assertEqual(calls, [0, 2, 4, 6])
+        self.assertLess(now[0], 8)
+
+    def test_poll_checks_once_even_with_no_time_left(self):
+        _, clock, sleep = self.clock()
+        self.assertEqual(poll_until(lambda: "ready", "the fill", timeout=0, interval=1,
+                                    clock=clock, sleep=sleep), "ready")
 
     def test_oracle_orders_by_source_value_then_immutable_local_id(self):
         ascending = ordered_oracle(roots=500)

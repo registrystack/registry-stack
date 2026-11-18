@@ -20,11 +20,11 @@ clients:
       registry_actor_kind: human
       registry_purpose: licensing
       jurisdiction: zone-a
-  - id: licensing-refresh
-    accessProfiles: [projection-refresh]
-    scopes: [registry:licensing:refresh]
+  - id: staff-app
+    accessProfiles: [staff-refresh]
+    scopes: [registry:licensing:staff-refresh]
     claims:
-      registry_principal: synthetic-licensing-refresh
+      registry_principal: synthetic-licensing-staff-app
       registry_purpose: licensing
       jurisdiction: zone-a
   - id: fixture-editor
