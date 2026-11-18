@@ -55,6 +55,25 @@
   `requiresPostgis`. A consumer that pins the earlier versions must accept the
   new `apiVersion` values. See the [explain contract
   policy](https://docs.registrystack.org/reference/bregctl-explain/#schemas-and-compatibility).
+- A statistical dataset can declare a `distinct-count` measure,
+  `{type: distinct-count, id, field}`, that reports how many different values
+  a `reference` field takes among a cell's records, such as the number of
+  distinct owners of a dataset of parcels. Records with no value for the field
+  are left out. The field must have type `reference`
+  (`breg.statistical-dataset.measure-field-type`), and two distinct counts over
+  the same field are refused
+  (`breg.statistical-dataset.measure-distinct-count-duplicate`). The value is a
+  JSON integer, like a count, and an empty cell is 0. A distinct count is not
+  additive, so a total is counted over the records and a reader must not add
+  the cells; a dataset that declares one declares at most 4 dimensions
+  (`breg.statistical-dataset.non-additive-dimensions`). The field must be
+  readable by every live reader, the publisher, and the `exactReads` profile,
+  as for a sum or a mean, and classified `public` under `exact-public-values`.
+  A distinct count may appear in a `minimum-count-and-rounding` release, where
+  the minimum count and rounding apply to each distinct-count cell on its own
+  value, independently of the record count of the same cell; sums and means
+  stay refused there. Adding a distinct count changes the definition digest and
+  starts a new release series.
 - A statistical dataset has a fourth operation, `read-exact`, beside
   `read-live`, `publish`, and `read-releases`. It serves exact statistics
   (counts, sums, means, and cells of one) to a named machine consumer, such as

@@ -32,10 +32,10 @@ The facility template declares none; add one under the root `statisticalDatasets
 - `period`, either `type: flow` with a date `field` that places each record in one period, or `type: stock` with a `validity` (`temporal`, or `from` and an optional `until` date field) that counts the records valid on the period's reference date
 - `granularity` (`day`, `month`, `quarter`, or `year`) and `firstPeriod`, both inside `period`
 - `dimensions`, boolean or vocabulary-code fields of the unit Record type
-- `measures`, optional, a list tagged by `type`: `count`; `sum` with a `field`; `mean` with a `field` and a `scale` from 0 to 38. Omitting the list gives one count measure with the id `count`
+- `measures`, optional, a list tagged by `type`: `count`; `sum` with a `field`; `mean` with a `field` and a `scale` from 0 to 38; `distinct-count` with a `reference` `field`. Omitting the list gives one count measure with the id `count`
 - `disclosure`, tagged by a required `type`: `minimum-count-and-rounding` with `minimumCount` and `roundingBase`, each at least 2; or `exact-public-values` with no other member
 
-One period, with every dimension code, every total, and every measure, must fit in 10,000 cells. A dataset declares at most 12 dimensions. A dimension cannot be named `measure`, which is a reserved column name. A sum or a mean needs an unencrypted `int64` or `decimal` field of the unit, readable by every `read-live` profile. Under `minimum-count-and-rounding` the dataset then cannot be released, and sums and means are read live; under `exact-public-values` a release carries them:
+One period, with every dimension code, every total, and every measure, must fit in 10,000 cells. A dataset declares at most 12 dimensions. A dimension cannot be named `measure`, which is a reserved column name. A sum or a mean needs an unencrypted `int64` or `decimal` field of the unit, and a distinct count an unencrypted `reference` field, each readable by every `read-live` profile. Under `minimum-count-and-rounding` a dataset with a sum or a mean cannot be released, and sums and means are read live; under `exact-public-values` a release carries them:
 
 ```yaml
 measures:
@@ -49,6 +49,19 @@ measures:
     field: amount
     scale: 2
 ```
+
+A distinct count reports how many different values a `reference` field takes among a cell's records. On a parcel register, a count of parcels and the number of distinct owners:
+
+```yaml
+measures:
+  - id: count
+    type: count
+  - id: owner_count
+    type: distinct-count
+    field: owner
+```
+
+Its `value` is a JSON integer, and an empty cell is 0. Records with no owner are left out. A field of any other type is refused with `breg.statistical-dataset.measure-field-type`, and two distinct counts over the same field with `breg.statistical-dataset.measure-distinct-count-duplicate`. A distinct count is not additive: one owner can hold parcels in two districts, so the distinct owners of two districts are not the sum of each district's distinct owners. A total is counted over the records, and a reader must not add distinct-count cells. Because totals are computed over the records, a dataset that declares a distinct count declares at most 4 dimensions (`breg.statistical-dataset.non-additive-dimensions`).
 
 A dataset's disclosure block names how its releases are protected:
 
@@ -99,9 +112,9 @@ and CSV representation, so a dimension cannot use one of them.
 
 ## Live counts and releases
 
-A live value is computed on request from current data. It is exact, and filtered by the same rules as the profile's ordinary list query, so a live count is one the profile could already obtain by listing records. A live sum or mean is exact and can reveal one record's value in a small cell, so it is granted only to a profile that can read the records and the field, and it is not disclosure-controlled. Under `minimum-count-and-rounding`, releases carry counts only.
+A live value is computed on request from current data. It is exact, and filtered by the same rules as the profile's ordinary list query, so a live count is one the profile could already obtain by listing records. A live sum, mean, or distinct count is exact and can reveal one record's value in a small cell, so it is granted only to a profile that can read the records and the field, and it is not disclosure-controlled. Under `minimum-count-and-rounding`, releases carry counts and distinct counts only.
 
-A release is a stored, numbered version of one ended period, computed against one snapshot and transformed for disclosure. A final release can be corrected by a later final release, and a provisional release is refused once a final exists. Each release carries a definition digest of the population, sources, publisher visibility, dimensions, measures, and the disclosure method and its parameters. Changing who may read a dataset keeps the series; changing what it counts starts another one, and so does changing the disclosure method.
+A release is a stored, numbered version of one ended period, computed against one snapshot and transformed for disclosure. A final release can be corrected by a later final release, and a provisional release is refused once a final exists. Each release carries a definition digest of the population, sources, publisher visibility, dimensions, measures, and the disclosure method and its parameters. Changing who may read a dataset keeps the series; changing what it counts, adding a distinct count included, starts another one, and so does changing the disclosure method.
 
 {/* Evidence: crates/registry-breg/src/postgres/statistics.rs;
     crates/registry-breg/src/compiler/statistics.rs, definition_digest. */}
@@ -296,7 +309,7 @@ reconstruct what the registry held on that past date.
 
 ## Serve exact values to a named consumer
 
-A policy-simulation or costing service sometimes needs exact statistics over records it cannot read. `read-exact` serves counts, sums, means, and cells of one for ended periods to a profile that holds the grant, and the profile needs no record access. The dataset declares the visibility the read computes under with `exactReads`, and the consumer's profile holds only `read-exact`:
+A policy-simulation or costing service sometimes needs exact statistics over records it cannot read. `read-exact` serves counts, sums, means, distinct counts, and cells of one for ended periods to a profile that holds the grant, and the profile needs no record access. The dataset declares the visibility the read computes under with `exactReads`, and the consumer's profile holds only `read-exact`:
 
 ```yaml
 statisticalDatasets:
@@ -331,7 +344,7 @@ accessProfiles:
             - read-exact
 ```
 
-The `statistics-scope` profile must see the same records whoever calls. `bregctl check` refuses it if its visibility depends on the caller (row or membership boundaries, required purposes or consent, or no read access to a record type the dataset depends on), if its `list` grant does not cover what the dataset filters and groups by, or if it cannot read a sum or mean field. A `read-exact` grant without `exactReads` is refused with `breg.statistical-dataset.exact-reads-missing`, `exactReads` without a `read-exact` grant with `breg.statistical-dataset.exact-reads-unused`, and an unknown profile with `breg.statistical-dataset.exact-reads-profile-unknown`. A standing agent profile cannot hold `read-exact` or be the `exactReads` profile. The grant works under either disclosure method and needs no publisher, so the sum above, which cannot be released under `minimum-count-and-rounding`, is still served exactly.
+The `statistics-scope` profile must see the same records whoever calls. `bregctl check` refuses it if its visibility depends on the caller (row or membership boundaries, required purposes or consent, or no read access to a record type the dataset depends on), if its `list` grant does not cover what the dataset filters and groups by, or if it cannot read a sum, mean, or distinct-count field. A `read-exact` grant without `exactReads` is refused with `breg.statistical-dataset.exact-reads-missing`, `exactReads` without a `read-exact` grant with `breg.statistical-dataset.exact-reads-unused`, and an unknown profile with `breg.statistical-dataset.exact-reads-profile-unknown`. A standing agent profile cannot hold `read-exact` or be the `exactReads` profile. The grant works under either disclosure method and needs no publisher, so the sum above, which cannot be released under `minimum-count-and-rounding`, is still served exactly.
 
 The consumer reads one range of ended periods. Both `from` and `to` are required, because the current period has not ended. A dataset that depends on the evaluation date accepts one period per request:
 
@@ -355,7 +368,7 @@ A release is disclosed under the method the dataset's `disclosure.type` names.
 
 ### Minimum count and rounding
 
-A release under `minimum-count-and-rounding` suppresses positive counts below `minimumCount` and rounds the rest to the nearest multiple of `roundingBase`, halves up. Exact zeros stay zero, and each total is transformed on its own, so totals need not equal the sum of visible cells.
+A release under `minimum-count-and-rounding` suppresses positive counts below `minimumCount` and rounds the rest to the nearest multiple of `roundingBase`, halves up. Exact zeros stay zero, and each total is transformed on its own, so totals need not equal the sum of visible cells. A distinct-count cell is transformed on its own value, independently of the record count of the same cell, so a cell can show 10 parcels and a suppressed number of owners.
 
 Suppression does not keep a cell unknown. With minimum five and base five, two suppressed cells under a published total of ten must each be four. The minimum counts records, not people, so a cell can describe fewer subjects than the minimum. A suppressed cell at minimum two holds exactly one. A count below half the rounding base publishes as zero with status `rounded`. BReg applies no privacy budget across versions; dimensions, cadence, and readers remain your institution's disclosure decision.
 
@@ -393,7 +406,7 @@ grant readers access.
     crates/registry-breg/src/statistics.rs minimum-count-and-rounding. */}
 ### Exact public values
 
-A register of public facts, such as licensed facilities or registered cooperatives, has nothing to protect, and suppression only makes its figures wrong. Declare `type: exact-public-values` and a release carries the exact value of every measure (counts, sums, and means), with no suppression and no rounding:
+A register of public facts, such as licensed facilities or registered cooperatives, has nothing to protect, and suppression only makes its figures wrong. Declare `type: exact-public-values` and a release carries the exact value of every measure (counts, sums, means, and distinct counts), with no suppression and no rounding:
 
 ```yaml
 disclosure:
@@ -402,7 +415,7 @@ disclosure:
 
 The dataset compiles only when the unit Record type, every field the dataset reads (population, period, dimension, and measure fields), and every source Record type of a derived field it reads are classified `public`. Otherwise `bregctl check` refuses with `breg.statistical-dataset.exact-release-not-public`, one diagnostic per item to reclassify. The Record type's own classification counts because membership of a register is itself disclosed: an exact count of one says a record exists. A derived field's source Record types count because a derived field labelled `public` can read restricted inputs. Reclassifying is a visible, reviewable act; there is deliberately no switch that turns protection off without it.
 
-The publisher rules do not change. Under `exact-public-values` the publisher must also be able to read each sum or mean field.
+The publisher rules do not change. Under `exact-public-values` the publisher must also be able to read each sum, mean, or distinct-count field.
 
 BReg checks the classification labels, not whether the data is in fact public. A Record type or field wrongly classified `public` is released exactly, including cells of one, and readers can copy the immutable release; withdrawal erases only the engine's stored content. Review a classification change as a disclosure decision, and keep `minimum-count-and-rounding` for any register whose membership is not public.
 

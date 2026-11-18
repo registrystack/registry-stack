@@ -24,7 +24,9 @@ use registry_breg::{
         PostgresRecordReadService, PostgresStatisticsService, RegistryLockKey,
         RegistryStateTestIdentity,
     },
-    statistics::{apply_disclosure, canonical_document, DisclosureMethod, StatisticsDocument},
+    statistics::{
+        apply_disclosure, canonical_document, CellValue, DisclosureMethod, StatisticsDocument,
+    },
 };
 use registry_platform_audit::AuditProfile;
 use serde_json::json;
@@ -178,7 +180,7 @@ async fn million_unit_three_dimension_statistics_measurement() {
         .iter()
         .find(|cell| cell.dimensions.values().all(|code| code == "_T"))
         .unwrap();
-    assert_eq!(total.value, Some(1_000_000));
+    assert_eq!(total.value, Some(CellValue::Count(1_000_000)));
     assert_eq!(live.cells.len(), 75);
     let mut disclosed = live.clone();
     let start = Instant::now();

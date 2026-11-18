@@ -872,6 +872,14 @@ pub enum StatisticalMeasureSource {
         )]
         scale: u8,
     },
+    /// The number of distinct values of a `reference` field among the
+    /// population's records. Records with no value for the field are left out.
+    DistinctCount {
+        /// Names the measure on every cell that reports it.
+        id: LocalId,
+        /// The unit Record `reference` field whose distinct values are counted.
+        field: String,
+    },
 }
 registry_platform_yaml::tagged_union!(StatisticalMeasureSource, tag = "type");
 serialize_tagged_union!(StatisticalMeasureSource, tag = "type");
@@ -879,7 +887,10 @@ serialize_tagged_union!(StatisticalMeasureSource, tag = "type");
 impl StatisticalMeasureSource {
     pub fn id(&self) -> &LocalId {
         match self {
-            Self::Count { id } | Self::Sum { id, .. } | Self::Mean { id, .. } => id,
+            Self::Count { id }
+            | Self::Sum { id, .. }
+            | Self::Mean { id, .. }
+            | Self::DistinctCount { id, .. } => id,
         }
     }
 }

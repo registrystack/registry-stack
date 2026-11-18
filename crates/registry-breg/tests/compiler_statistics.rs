@@ -2840,3 +2840,288 @@ fn a_standing_agent_cannot_read_exact_or_anchor_exact_reads() {
         &format!("{ROOT}.exactReads.accessProfile"),
     );
 }
+
+/// `live_measure_source` plus an `owner` reference field on the unit, which the
+/// analyst reads but cannot filter on, to a second record type.
+fn distinct_source(measures: Value) -> Value {
+    let mut value = live_measure_source(measures);
+    value["recordTypes"].as_array_mut().unwrap().push(json!({
+        "id":"owner","primaryDataset":"statistics-test","route":"owners","mutationMode":"mutable",
+        "fields":[{"id":"name","type":"string","maximumLength":80,"classification":"internal"}]
+    }));
+    value["recordTypes"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"id":"owner","type":"reference","target":"owner","classification":"internal"}),
+        );
+    value["accessProfiles"][ANALYST]["permissions"]["records"][0]["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("owner"));
+    value
+}
+
+fn distinct_measures() -> Value {
+    json!([
+        {"id":"parcels","type":"count"},
+        {"id":"owners","type":"distinct-count","field":"owner"}
+    ])
+}
+
+fn assert_distinct_refused(value: &Value, code: &str, path: &str) {
+    let failure = compile(value).expect_err("the dataset is refused");
+    assert!(
+        failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == code && diagnostic.path.ends_with(path)),
+        "missing {code} at {path}: {:?}",
+        failure.diagnostics()
+    );
+}
+
+#[test]
+fn a_distinct_count_over_a_reference_field_compiles() {
+    let compiled = compile(&distinct_source(distinct_measures()))
+        .expect("a distinct count over a reference field compiles");
+    assert_eq!(
+        measures_of(&compiled),
+        json!([
+            {"id":"parcels","type":"count"},
+            {"id":"owners","type":"distinct-count","field":"owner"}
+        ])
+    );
+    let metadata = artifact_json(&compiled, "generated/metadata/registry.json");
+    assert_eq!(
+        metadata["statisticalDatasets"][0]["measures"],
+        measures_of(&compiled)
+    );
+    assert!(compiled.statistical_datasets()["records-by-category"]
+        .referenced_fields
+        .contains("owner"));
+}
+
+#[test]
+fn a_distinct_count_field_must_be_a_known_reference_field() {
+    for field in ["category", "amount", "quantity", "active", "event-date"] {
+        assert_distinct_refused(
+            &distinct_source(json!([{"id":"owners","type":"distinct-count","field":field}])),
+            "breg.statistical-dataset.measure-field-type",
+            "measures[0].field",
+        );
+    }
+    let failure = compile(&distinct_source(
+        json!([{"id":"owners","type":"distinct-count","field":"category"}]),
+    ))
+    .unwrap_err();
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("reference")));
+    assert_distinct_refused(
+        &distinct_source(json!([{"id":"owners","type":"distinct-count","field":"missing"}])),
+        "breg.statistical-dataset.field-unknown",
+        "",
+    );
+}
+
+#[test]
+fn two_distinct_counts_over_one_field_are_refused_and_over_two_fields_are_not() {
+    let mut value = distinct_source(json!([
+        {"id":"owners","type":"distinct-count","field":"owner"},
+        {"id":"holders","type":"distinct-count","field":"owner"}
+    ]));
+    assert_distinct_refused(
+        &value,
+        "breg.statistical-dataset.measure-distinct-count-duplicate",
+        "measures[1].field",
+    );
+    value["recordTypes"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"id":"agent","type":"reference","target":"owner","classification":"internal"}),
+        );
+    value["accessProfiles"][ANALYST]["permissions"]["records"][0]["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("agent"));
+    value["statisticalDatasets"][0]["measures"] = json!([
+        {"id":"owners","type":"distinct-count","field":"owner"},
+        {"id":"agents","type":"distinct-count","field":"agent"}
+    ]);
+    compile(&value).expect("distinct counts over different fields compile");
+}
+
+#[test]
+fn a_distinct_count_limits_the_dataset_to_four_dimensions() {
+    let with_dimensions = |measures: Value, count: usize| {
+        let mut value = distinct_source(measures);
+        let fields = value["recordTypes"][0]["fields"].as_array_mut().unwrap();
+        let mut names = vec![json!("category")];
+        for index in 1..count {
+            let id = format!("flag-{index}");
+            fields.push(
+                json!({"id":id,"type":"boolean","required":true,"classification":"internal"}),
+            );
+            names.push(json!(id));
+        }
+        for member in ["readableFields", "filterableFields"] {
+            let granted = value["accessProfiles"][ANALYST]["permissions"]["records"][0][member]
+                .as_array_mut()
+                .unwrap();
+            granted.extend(names.iter().skip(1).cloned());
+        }
+        value["statisticalDatasets"][0]["dimensions"] = json!(names);
+        value
+    };
+    compile(&with_dimensions(distinct_measures(), 4)).expect("four dimensions are accepted");
+    let failure = compile(&with_dimensions(distinct_measures(), 5)).expect_err("five are refused");
+    let refusal = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.statistical-dataset.non-additive-dimensions")
+        .unwrap_or_else(|| panic!("missing refusal: {:?}", failure.diagnostics()));
+    assert!(refusal
+        .path
+        .ends_with("statisticalDatasets[id=records-by-category].dimensions"));
+    assert!(refusal.message.contains(
+        "a dataset with a distinct count declares at most 4 dimensions, because its totals are computed over the records, not the base cells"
+    ));
+    compile(&with_dimensions(
+        json!([{"id":"parcels","type":"count"},{"id":"total","type":"sum","field":"amount"}]),
+        5,
+    ))
+    .expect("five dimensions without a distinct count are accepted");
+}
+
+#[test]
+fn every_live_reader_publisher_and_exact_profile_must_read_a_distinct_count_field() {
+    let unreadable = json!(["active", "category", "event-date", "valid-from", "valid-to"]);
+    // The live reader.
+    let mut live = distinct_source(distinct_measures());
+    live["accessProfiles"][ANALYST]["permissions"]["records"][0]["readableFields"] =
+        unreadable.clone();
+    let failure = compile(&live).expect_err("the analyst cannot read the field");
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "breg.statistical-dataset.measure-field-not-readable"
+            && diagnostic.message.contains("owner")
+            && diagnostic.message.contains("analyst")
+    }));
+    // The publisher of an exact release.
+    let mut published = distinct_source(distinct_measures());
+    published["recordTypes"][0]["classification"] = json!("public");
+    for field in published["recordTypes"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+    {
+        field["classification"] = json!("public");
+    }
+    grant(&mut published, PUBLISHER, &["publish", "read-releases"]);
+    published["statisticalDatasets"][0]["disclosure"] = json!({"type":"exact-public-values"});
+    published["accessProfiles"][PUBLISHER]["permissions"]["records"][0]["readableFields"] =
+        unreadable.clone();
+    let failure = compile(&published).expect_err("the publisher cannot read the field");
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "breg.statistical-dataset.measure-field-not-readable"
+            && diagnostic.message.contains("owner")
+            && diagnostic.message.contains("publisher")
+    }));
+    // The exactReads profile.
+    let mut exact = distinct_source(distinct_measures());
+    grant(&mut exact, ANALYST, &[]);
+    exact["accessProfiles"].as_array_mut().unwrap().push(json!({
+        "id":"statistician","principalClaim":"principal","requiredScopes":"unrestricted",
+        "permissions":{"datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]}
+    }));
+    exact["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"analyst"});
+    compile(&exact).expect("the exactReads profile reads the field");
+    exact["accessProfiles"][ANALYST]["permissions"]["records"][0]["readableFields"] = unreadable;
+    assert_distinct_refused(
+        &exact,
+        "breg.statistical-dataset.exact-reads-measure-field-not-readable",
+        "exactReads.accessProfile",
+    );
+}
+
+#[test]
+fn a_distinct_count_is_released_with_rounding_but_a_sum_beside_it_is_not() {
+    let mut value = distinct_source(distinct_measures());
+    grant(&mut value, ANALYST, &["read-live", "read-releases"]);
+    grant(&mut value, PUBLISHER, &["publish", "read-releases"]);
+    value["accessProfiles"][PUBLISHER]["permissions"]["records"][0]["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("owner"));
+    compile(&value).expect("a count and a distinct count release with rounding");
+
+    value["statisticalDatasets"][0]["measures"] = json!([
+        {"id":"parcels","type":"count"},
+        {"id":"owners","type":"distinct-count","field":"owner"},
+        {"id":"total","type":"sum","field":"amount"}
+    ]);
+    let failure = compile(&value).expect_err("a sum cannot be released with rounding");
+    let refusal = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code == "breg.statistical-dataset.measure-release-unsupported"
+        })
+        .unwrap_or_else(|| panic!("missing refusal: {:?}", failure.diagnostics()));
+    assert!(refusal.message.contains("counts and distinct counts"));
+}
+
+#[test]
+fn exact_values_name_a_distinct_count_field_that_is_not_public() {
+    let mut value = public_register_source(json!([
+        {"id":"facilities","type":"count"},
+        {"id":"owners","type":"distinct-count","field":"owner"}
+    ]));
+    value["recordTypes"].as_array_mut().unwrap().push(json!({
+        "id":"owner","classification":"public","primaryDataset":"statistics-test",
+        "route":"owners","mutationMode":"mutable",
+        "fields":[{"id":"name","type":"string","maximumLength":80,"classification":"public"}]
+    }));
+    value["recordTypes"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"owner","type":"reference","target":"owner","classification":"public"}));
+    for profile in [ANALYST, PUBLISHER] {
+        value["accessProfiles"][profile]["permissions"]["records"][0]["readableFields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("owner"));
+    }
+    compile(&value).expect("a public reference field is released exactly");
+    let owner = value["recordTypes"][0]["fields"].as_array().unwrap().len() - 1;
+    value["recordTypes"][0]["fields"][owner]["classification"] = json!("internal");
+    assert_exact_refusal_names(&value, "owner", "internal");
+}
+
+#[test]
+fn a_distinct_count_changes_the_definition_digest_and_its_absence_keeps_it() {
+    let without = live_measure_digest(json!([{"id":"parcels","type":"count"}]));
+    let with = compile(&distinct_source(distinct_measures()))
+        .unwrap()
+        .statistical_datasets()["records-by-category"]
+        .definition_digest
+        .clone();
+    let other_id = compile(&distinct_source(json!([
+        {"id":"parcels","type":"count"},
+        {"id":"holders","type":"distinct-count","field":"owner"}
+    ])))
+    .unwrap()
+    .statistical_datasets()["records-by-category"]
+        .definition_digest
+        .clone();
+    assert_eq!(BTreeSet::from([without.clone(), with, other_id]).len(), 3);
+    assert_eq!(
+        without,
+        compile(&distinct_source(json!([{"id":"parcels","type":"count"}])))
+            .unwrap()
+            .statistical_datasets()["records-by-category"]
+            .definition_digest,
+        "an unused reference field and record type do not enter a dataset's digest"
+    );
+}

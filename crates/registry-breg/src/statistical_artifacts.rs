@@ -593,6 +593,15 @@ fn document_schema() -> Value {
                                     "field":{"type":"string"},
                                     "scale":{"type":"integer","minimum":0,"maximum":38}
                                 }
+                            },
+                            {
+                                "type":"object","additionalProperties":false,
+                                "required":["id","type","field"],
+                                "properties":{
+                                    "id":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},
+                                    "type":{"const":"distinct-count"},
+                                    "field":{"type":"string"}
+                                }
                             }
                         ]}
                     },

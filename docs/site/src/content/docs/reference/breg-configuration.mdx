@@ -99,16 +99,23 @@ with; they fail a check only under `--deny-warnings`.
 
 `statisticalDatasets[].unit` names the Record type a dataset aggregates. `measures` is an optional list
 whose items are tagged by `type`: `{id, type: count}`, `{id, type: sum, field}`, and
-`{id, type: mean, field, scale}`, where `scale` is required and an integer from 0 to 38. Omitting the list
+`{id, type: mean, field, scale}`, and `{id, type: distinct-count, field}`, where `scale` is required and an integer from 0 to 38. Omitting the list
 declares one count measure with the id `count`. `bregctl check` refuses an empty list
 (`breg.statistical-dataset.measures-empty`), a repeated id (`breg.statistical-dataset.measure-duplicate`),
-and more than one `count` measure (`breg.statistical-dataset.measure-count-duplicate`). The `field` of a sum
-or a mean must be a declared, unencrypted field of the unit
+and more than one `count` measure (`breg.statistical-dataset.measure-count-duplicate`). The `field` of a sum,
+a mean, or a distinct count must be a declared, unencrypted field of the unit
 (`breg.statistical-dataset.field-unknown`, `breg.statistical-dataset.field-encrypted`) of type `int64` or
-`decimal` (`breg.statistical-dataset.measure-field-type`). Every profile with `read-live` on the dataset must
+`decimal` for a sum or a mean, and `reference` for a distinct count
+(`breg.statistical-dataset.measure-field-type`). Two distinct counts over the same field are refused
+(`breg.statistical-dataset.measure-distinct-count-duplicate`). A distinct count's `value` is a JSON integer,
+0 for an empty cell, and it is not additive: a total is counted over the records, so a reader must not add its
+cells. A dataset that declares one declares at most 4 dimensions
+(`breg.statistical-dataset.non-additive-dimensions`). Every profile with `read-live` on the dataset must
 be able to read that field (`breg.statistical-dataset.measure-field-not-readable`), and a dataset with a sum
 or a mean cannot have a `publish` or `read-releases` grant under `minimum-count-and-rounding`
-(`breg.statistical-dataset.measure-release-unsupported`), because that method releases counts only.
+(`breg.statistical-dataset.measure-release-unsupported`), because that method releases counts and distinct
+counts only. A distinct count in such a release is thresholded and rounded on its own value, independently of
+the record count of the same cell.
 `disclosure` is a union tagged by a required `type`. `type: minimum-count-and-rounding` takes
 `minimumCount` and `roundingBase`, both required, with no value below 2. `type: exact-public-values`
 takes no other member and releases exact values for every measure type. It compiles only when the unit
@@ -124,7 +131,7 @@ dataset with a `read-exact` grant needs it (`breg.statistical-dataset.exact-read
 needs a `read-exact` grant (`breg.statistical-dataset.exact-reads-unused`) and a known profile
 (`breg.statistical-dataset.exact-reads-profile-unknown`). The compiler checks the profile as it checks a
 publisher: its visibility must not depend on the caller, its `list` grant must cover what the dataset filters
-and groups by, and it must be able to read each sum or mean field; those checks report codes beginning
+and groups by, and it must be able to read each sum, mean, or distinct-count field; those checks report codes beginning
 `breg.statistical-dataset.exact-reads-`. A standing agent cannot hold `read-exact`, and a standing-agent or
 task-grant profile cannot be the `exactReads` profile. `read-exact` works under either disclosure method and
 needs no publisher. `exactReads` and `read-exact` grants do not change the definition digest. See [Publish a statistical

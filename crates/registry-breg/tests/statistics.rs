@@ -1531,7 +1531,7 @@ fn a_release_document_whose_cells_disagree_with_its_method_is_refused() {
     summed.dimensions.clear();
     assert_eq!(
         canonical(&summed),
-        invalid("a minimum-count-and-rounding release carries count measures only")
+        invalid("a minimum-count-and-rounding release carries counts and distinct counts only")
     );
 
     let mut not_applicable = release_document();
@@ -1607,4 +1607,123 @@ fn exact_document_refuses_a_second_metadata_member_a_disclosure_or_a_withheld_ce
     ] {
         assert!(canonical_document_and_digest(&document).is_err(), "{case}");
     }
+}
+
+fn distinct_count_measure() -> Measure {
+    Measure::DistinctCount {
+        id: "owners".to_owned(),
+        field: "owner".to_owned(),
+    }
+}
+
+#[test]
+fn a_distinct_count_serializes_with_its_type_and_field() {
+    assert_eq!(
+        serde_json::to_value(distinct_count_measure()).unwrap(),
+        serde_json::json!({"type":"distinct-count","id":"owners","field":"owner"})
+    );
+}
+
+#[test]
+fn an_empty_distinct_count_cell_is_zero_and_the_measure_is_not_additive() {
+    let (periods, dimensions) = one_year_one_region();
+    let measures = vec![distinct_count_measure()];
+    let cells = build_exact_cells("parcels", &periods, &dimensions, &measures, &[])
+        .expect("a cell with no row takes the empty value");
+    assert!(cells
+        .iter()
+        .all(|cell| cell.value == count(0) && cell.status == CellStatus::Exact));
+    assert!(!distinct_count_measure().is_additive());
+    assert!(Measure::Count { id: "c".to_owned() }.is_additive());
+}
+
+#[test]
+fn a_distinct_count_total_may_be_below_the_sum_of_its_cells() {
+    // One owner holds parcels in both regions: 1 + 1 distinct owners per region,
+    // 1 distinct owner in all.
+    let (periods, dimensions) = one_year_one_region();
+    let code = dimensions[0].codes[0].clone();
+    let rows = vec![
+        GroupedCell {
+            period: periods[0].code.clone(),
+            codes: vec![code],
+            values: vec![count(2)],
+        },
+        GroupedCell {
+            period: periods[0].code.clone(),
+            codes: vec![TOTAL_CODE.to_owned()],
+            values: vec![count(1)],
+        },
+    ];
+    build_exact_cells(
+        "parcels",
+        &periods,
+        &dimensions,
+        &[distinct_count_measure()],
+        &rows,
+    )
+    .expect("a distinct count total is not the sum of its cells");
+}
+
+#[test]
+fn a_release_document_with_a_distinct_count_validates() {
+    let mut document = release_document();
+    document.dataset.measures = vec![
+        Measure::Count {
+            id: "count".to_owned(),
+        },
+        distinct_count_measure(),
+    ];
+    document.cells.push(Cell {
+        period: "2025-01".to_owned(),
+        dimensions: BTreeMap::from([("region".to_owned(), "north".to_owned())]),
+        measure: "owners".to_owned(),
+        value: count(10),
+        status: CellStatus::Rounded,
+    });
+    canonical_document_and_digest(&document)
+        .expect("a minimum-count-and-rounding release carries counts and distinct counts");
+    document.dataset.measures.push(Measure::Sum {
+        id: "total".to_owned(),
+        field: "amount".to_owned(),
+        scale: 2,
+    });
+    let error = canonical_document_and_digest(&document).expect_err("a sum is not released");
+    assert!(
+        error.to_string().contains("counts and distinct counts"),
+        "{error}"
+    );
+}
+
+#[test]
+fn disclosure_suppresses_and_rounds_a_distinct_count_on_its_own_value() {
+    let cell = |measure: &str, value: u64| Cell {
+        period: "2025-01".to_owned(),
+        dimensions: BTreeMap::new(),
+        measure: measure.to_owned(),
+        value: count(value),
+        status: CellStatus::Exact,
+    };
+    // Eight records but two distinct owners: the count rounds, the distinct
+    // count is suppressed.
+    let mut cells = vec![cell("count", 8), cell("owners", 2), cell("owners", 7)];
+    apply_disclosure(
+        &mut cells,
+        DisclosureMethod::MinimumCountAndRounding {
+            minimum_count: 5,
+            rounding_base: 5,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        cells
+            .iter()
+            .map(|cell| (cell.value.clone(), cell.status))
+            .collect::<Vec<_>>(),
+        vec![
+            (count(10), CellStatus::Rounded),
+            (None, CellStatus::Suppressed),
+            (count(5), CellStatus::Rounded),
+        ]
+    );
 }

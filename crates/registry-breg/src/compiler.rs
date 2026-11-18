@@ -68,7 +68,7 @@ pub(crate) mod attachments;
 pub mod review_context;
 mod statistics;
 #[cfg(feature = "runtime")]
-pub(crate) use statistics::MAX_STATISTICAL_DIMENSIONS;
+pub(crate) use statistics::{MAX_NON_ADDITIVE_DIMENSIONS, MAX_STATISTICAL_DIMENSIONS};
 mod timezone;
 
 pub const AUTHORING_API_VERSION: &str = "id.registrystack.org/formats/breg/project/v1alpha1";
