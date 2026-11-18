@@ -24,10 +24,33 @@ const CLIENT_ID: &str = "breg-write-client";
 const CURSOR_KEY: &str = "breg-write-cursor-key-0123456789";
 static NEXT_SCHEMA: AtomicUsize = AtomicUsize::new(0);
 
-pub struct BregDev {
+/// The `rstack dev` tool and the uninstalled binaries it resolves.
+#[derive(Clone)]
+struct Rstack {
+    bin: PathBuf,
+    install_root: PathBuf,
+    state_dir: PathBuf,
     bregctl: PathBuf,
-    docker: PathBuf,
-    project: PathBuf,
+    breg: PathBuf,
+}
+
+impl Rstack {
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.bin);
+        command
+            .arg("--install-root")
+            .arg(&self.install_root)
+            .args(["--format", "json", "dev"])
+            .env("RSTACK_DEV_STATE_DIR", &self.state_dir)
+            .env("RSTACK_BREGCTL_BIN", &self.bregctl)
+            .env("RSTACK_BREG_BIN", &self.breg);
+        command
+    }
+}
+
+pub struct BregDev {
+    rstack: Rstack,
+    run_id: String,
     _root: tempfile::TempDir,
     pub source_token: String,
     pub origin: String,
@@ -35,16 +58,18 @@ pub struct BregDev {
 
 impl Drop for BregDev {
     fn drop(&mut self) {
-        let status = Command::new(&self.bregctl)
-            .args(["--format", "json", "dev", "stop"])
-            .arg("--docker-bin")
-            .arg(&self.docker)
-            .arg(&self.project)
+        let status = self
+            .rstack
+            .command()
+            .args(["stop", &self.run_id])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
         if !matches!(status, Ok(status) if status.success()) {
-            eprintln!("the owned BReg development fixture did not stop cleanly");
+            eprintln!(
+                "the owned rstack dev fixture did not stop cleanly; run rstack dev stop {}",
+                self.run_id
+            );
         }
     }
 }
@@ -53,9 +78,19 @@ impl BregDev {
     pub fn start() -> Self {
         let breg = required_executable("BREG_TEST_BREG_BINARY");
         let bregctl = required_executable("BREG_TEST_BREGCTL_BINARY");
-        let docker = required_executable("BREG_TEST_DOCKER_BINARY");
+        let install_root = bregctl
+            .parent()
+            .expect("bregctl sits in a directory")
+            .to_path_buf();
         let root = tempfile::tempdir().expect("create BReg scratch directory");
         let project = root.path().join("breg-project");
+        let rstack = Rstack {
+            bin: required_executable("BREG_TEST_RSTACK_BINARY"),
+            install_root,
+            state_dir: root.path().join("state"),
+            bregctl: bregctl.clone(),
+            breg,
+        };
 
         let init = Command::new(&bregctl)
             .args(["--format", "json", "init"])
@@ -68,59 +103,59 @@ impl BregDev {
             String::from_utf8_lossy(&init.stderr)
         );
         extend_generated_contact_project(&project);
+        add_minimal_dev_plan(&project);
 
-        let database_port = free_port();
-        let issuer_port = free_port();
-        let breg_port = free_port();
-        let started = Command::new(&bregctl)
-            .args(["--format", "json", "dev", "start", "--breg-bin"])
-            .arg(&breg)
-            .arg("--docker-bin")
-            .arg(&docker)
-            .arg("--breg-port")
-            .arg(breg_port.to_string())
-            .arg("--issuer-port")
-            .arg(issuer_port.to_string())
-            .arg("--database-port")
-            .arg(database_port.to_string())
+        let started = rstack
+            .command()
+            .arg("start")
             .arg(&project)
             .output()
-            .expect("run bregctl dev start");
-        if !started.status.success() {
+            .expect("run rstack dev start");
+        let report: Value = serde_json::from_slice(&started.stdout).unwrap_or_else(|error| {
             panic!(
-                "bregctl dev start failed: {}\n{}\n{}",
+                "rstack dev start wrote no JSON report ({error}): {}\n{}",
                 String::from_utf8_lossy(&started.stdout),
-                String::from_utf8_lossy(&started.stderr),
-                dev_log_excerpt(&project, "inspect-list")
-            );
-        }
-        let report: Value =
-            serde_json::from_slice(&started.stdout).expect("dev start report is JSON");
-        assert_eq!(report["ok"], true, "{report}");
-        assert_eq!(report["status"], "complete", "{report}");
-        assert_eq!(report["outcome"], "ready", "{report}");
-        let origin = report["bregUrl"]
+                String::from_utf8_lossy(&started.stderr)
+            )
+        });
+        // A failed scenario leaves the run live, so the run id is kept before
+        // any assertion and the guard stops the run on every path.
+        let run_id = report["run_id"].as_str().map(str::to_owned);
+        let guard = run_id.map(|run_id| Self {
+            rstack: rstack.clone(),
+            run_id,
+            _root: tempfile::tempdir().expect("create BReg guard directory"),
+            source_token: String::new(),
+            origin: String::new(),
+        });
+        assert!(
+            started.status.success(),
+            "rstack dev start failed: {report}\n{}",
+            String::from_utf8_lossy(&started.stderr)
+        );
+        let mut guard = guard.expect("the start report carries run_id");
+        let origin = report["products"]["breg"]
             .as_str()
-            .expect("dev report carries bregUrl")
+            .expect("dev report carries the breg origin")
             .trim_end_matches('/')
             .to_owned();
 
-        let token = Command::new(&bregctl)
-            .args(["--format", "json", "dev", "token", "editor"])
-            .arg(&project)
+        let token = rstack
+            .command()
+            .args(["token", &guard.run_id, "--as", "editor"])
             .output()
-            .expect("run bregctl dev token");
+            .expect("run rstack dev token");
         assert!(
             token.status.success(),
-            "bregctl dev token failed: {}\n{}",
+            "rstack dev token failed: {}\n{}",
             String::from_utf8_lossy(&token.stdout),
             String::from_utf8_lossy(&token.stderr)
         );
         let report: Value =
             serde_json::from_slice(&token.stdout).expect("dev token report is JSON");
-        let header_file = report["headerFile"]
+        let header_file = report["credentials"][0]["header_file"]
             .as_str()
-            .expect("token report carries headerFile");
+            .expect("token report carries a header file");
         let header = std::fs::read_to_string(header_file).expect("read private token header");
         let source_token = header
             .trim()
@@ -129,40 +164,25 @@ impl BregDev {
             .to_owned();
         assert_eq!(source_token.split('.').count(), 3, "compact source token");
 
-        Self {
-            bregctl,
-            docker,
-            project,
-            _root: root,
-            source_token,
-            origin,
-        }
+        guard._root = root;
+        guard.source_token = source_token;
+        guard.origin = origin;
+        guard
     }
 }
 
-fn dev_log_excerpt(project: &Path, stem: &str) -> String {
-    let directory = project.join(".breg/dev/logs");
-    let Ok(entries) = std::fs::read_dir(&directory) else {
-        return "the private development log directory is unavailable".to_owned();
-    };
-    let mut excerpt = String::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.contains(stem) {
-            continue;
-        }
-        let Ok(bytes) = std::fs::read(entry.path()) else {
-            continue;
-        };
-        let bytes = &bytes[..bytes.len().min(16 * 1024)];
-        excerpt.push_str(&format!("{name}: {}\n", String::from_utf8_lossy(bytes)));
-    }
-    if excerpt.is_empty() {
-        format!("no {stem} development log was retained")
-    } else {
-        excerpt
-    }
+/// Adds the minimal example's `rstack dev` plan and scenarios, which name the
+/// `editor` person the generated contact project's profile expects.
+fn add_minimal_dev_plan(project: &Path) {
+    let example =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/minimal");
+    std::fs::copy(example.join("dev.yaml"), project.join("dev.yaml")).expect("copy dev plan");
+    std::fs::create_dir(project.join("dev")).expect("create dev directory");
+    std::fs::copy(
+        example.join("dev/scenarios.yaml"),
+        project.join("dev/scenarios.yaml"),
+    )
+    .expect("copy dev scenarios");
 }
 
 fn required_executable(name: &str) -> PathBuf {
@@ -172,14 +192,6 @@ fn required_executable(name: &str) -> PathBuf {
     assert!(path.is_absolute(), "{name} must be absolute");
     assert!(path.is_file(), "{name} must be an executable file");
     path
-}
-
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("reserve loopback port")
-        .local_addr()
-        .expect("reserved address")
-        .port()
 }
 
 fn replace_once(text: &mut String, from: &str, to: &str) {

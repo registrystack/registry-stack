@@ -284,7 +284,8 @@
       "enum": [
         "breg",
         "casework",
-        "evidence"
+        "evidence",
+        "messaging"
       ],
       "type": "string"
     },

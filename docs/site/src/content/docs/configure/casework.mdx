@@ -822,11 +822,11 @@ A failure to write the owner-only output receipt fails the command, and an exist
 
 <ConfigurationFormatChecks product="casework" />
 
-{/* Generated from products/casework/generated/project/project.schema.json and the fixture,
-    dev-clients, and holiday-set schemas beside it, through src/data/generated/casework-configuration.json,
+{/* Generated from products/casework/generated/project/project.schema.json and the fixture
+    and holiday-set schemas beside it, through src/data/generated/casework-configuration.json,
     by docs/site/scripts/generate-casework-configuration.mjs. Run npm run generate from docs/site. */}
 
-<ConfigurationReference contracts={reference.contracts.filter((contract) => ['project', 'fixture', 'dev-clients', 'holiday-set'].includes(contract.id))} prefix="casework" />
+<ConfigurationReference contracts={reference.contracts.filter((contract) => ['project', 'fixture', 'holiday-set'].includes(contract.id))} prefix="casework" />
 
 ## Next
 

@@ -1,18 +1,41 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, json, shutil, socket, stat, sys, urllib.error, urllib.parse, urllib.request, uuid
+import argparse, json, shutil, stat, sys, urllib.error, urllib.parse, urllib.request, uuid
 from pathlib import Path
 
 class QuickstartError(RuntimeError): pass
 
-def ports():
-    sockets=[]; values=[]
-    try:
-        for _ in range(3):
-            s=socket.socket(); s.bind(('127.0.0.1',0)); sockets.append(s); values.append(s.getsockname()[1])
-    finally:
-        for s in sockets: s.close()
-    print(*values)
+def load_report(path: Path):
+    try: report=json.loads(path.read_text(encoding='utf-8'))
+    except (OSError,ValueError) as e: raise QuickstartError(f'rstack dev wrote no JSON report: {e}')
+    if not isinstance(report,dict): raise QuickstartError('rstack dev report must be a JSON object')
+    return report
+
+def run_id(report_path: Path):
+    """The live run ID, or nothing when start failed before a run existed."""
+    value=load_report(report_path).get('run_id')
+    if value is not None: print(value)
+
+def ready(report_path: Path):
+    """The Base Registry Engine origin of a ready run with passing scenarios."""
+    report=load_report(report_path)
+    if 'error' in report: raise QuickstartError(report['error'].get('message','rstack dev start failed'))
+    failed=[item for item in report.get('scenarios',[]) if item.get('result')!='passed']
+    if failed: raise QuickstartError('scenario failed: '+json.dumps(failed[0],sort_keys=True))
+    origin=report.get('products',{}).get('breg')
+    if report.get('status')!='ready' or not isinstance(origin,str): raise QuickstartError('rstack dev did not report a ready Base Registry Engine')
+    print(origin)
+
+def copy_header(report_path: Path, destination: Path):
+    """Copy the one header file a token report names to an owner-only file."""
+    credentials=load_report(report_path).get('credentials',[])
+    if len(credentials)!=1: raise QuickstartError('token report must name exactly one credential')
+    shutil.copyfile(credentials[0]['header_file'],destination); destination.chmod(0o600)
+
+def add_dev_plan(example: Path, project: Path):
+    """Add the example's `rstack dev` plan and scenarios to an initialized project."""
+    if (project/'dev.yaml').exists(): raise QuickstartError('project already has a dev.yaml')
+    shutil.copyfile(example/'dev.yaml',project/'dev.yaml'); shutil.copytree(example/'dev',project/'dev')
 
 def prepare_spatial(fixture: Path, project: Path):
     if fixture.is_symlink() or not fixture.is_dir() or project.exists():
@@ -76,12 +99,18 @@ def spatial_smoke(root: Path, seed: Path):
 
 def main():
     p=argparse.ArgumentParser(); s=p.add_subparsers(dest='cmd',required=True)
-    s.add_parser('ports')
+    for name in ('run-id','ready'):
+        q=s.add_parser(name); q.add_argument('--report',type=Path,required=True)
+    q=s.add_parser('copy-header'); q.add_argument('--report',type=Path,required=True); q.add_argument('--to',type=Path,required=True)
+    q=s.add_parser('add-dev-plan'); q.add_argument('--example',type=Path,required=True); q.add_argument('--project',type=Path,required=True)
     q=s.add_parser('prepare-spatial-project'); q.add_argument('--fixture',type=Path,required=True); q.add_argument('--project',type=Path,required=True)
     q=s.add_parser('request'); q.add_argument('--root',type=Path,required=True); q.add_argument('--action',choices=['create','get','list','refusal'],required=True); q.add_argument('--name'); q.add_argument('--email'); q.add_argument('--record-id')
     q=s.add_parser('spatial-smoke'); q.add_argument('--root',type=Path,required=True); q.add_argument('--seed',type=Path,required=True)
     a=p.parse_args()
-    if a.cmd=='ports': ports()
+    if a.cmd=='run-id': run_id(a.report)
+    elif a.cmd=='ready': ready(a.report)
+    elif a.cmd=='copy-header': copy_header(a.report,a.to)
+    elif a.cmd=='add-dev-plan': add_dev_plan(a.example,a.project)
     elif a.cmd=='prepare-spatial-project': prepare_spatial(a.fixture,a.project)
     elif a.cmd=='request': directory(a.root,a.action,a.name,a.email,a.record_id)
     else: spatial_smoke(a.root,a.seed)

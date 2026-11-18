@@ -1,0 +1,70 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+# The run executes tests/journeys.yaml before serving, so this plan has no
+# scenario file. The people differ only in the allowed_jurisdictions claim, so
+# each refusal step names its person.
+issuer: https://identity.permits.example.test
+products:
+  - {product: breg, project: ., audience: "urn:example:permit-registry"}
+people:
+  reference-loader:
+    subject: synthetic-reference-loader
+    client: reference-loader
+    grants:
+      breg:
+        profile: reference-loader
+        scopes: ["registry:authority:load"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: permit-administration
+  transfer-clerk:
+    subject: synthetic-transfer-clerk
+    client: transfer-clerk
+    grants:
+      breg:
+        profile: transfer-clerk
+        scopes: ["registry:permit:transfer"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: permit-administration
+          allowed_jurisdictions: [north-district, south-district]
+  north-only-transfer-clerk:
+    subject: synthetic-transfer-clerk
+    client: north-only-transfer-clerk
+    grants:
+      breg:
+        profile: transfer-clerk
+        scopes: ["registry:permit:transfer"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: permit-administration
+          allowed_jurisdictions: [north-district]
+  south-only-transfer-clerk:
+    subject: synthetic-transfer-clerk
+    client: south-only-transfer-clerk
+    grants:
+      breg:
+        profile: transfer-clerk
+        scopes: ["registry:permit:transfer"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: permit-administration
+          allowed_jurisdictions: [south-district]
+  transfer-clerk-without-claim:
+    subject: synthetic-transfer-clerk
+    client: transfer-clerk-without-claim
+    grants:
+      breg:
+        profile: transfer-clerk
+        scopes: ["registry:permit:transfer"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: permit-administration
+schemaTestPeople:
+  every-reference-needs-authority:
+    register-transfer-with-both-authorities-allowed: transfer-clerk
+    refuse-one-reference-outside-claim: north-only-transfer-clerk
+    refuse-source-reference-outside-claim: south-only-transfer-clerk
+    refuse-missing-array-claim: transfer-clerk-without-claim
+scenarioFile: dev/scenarios.yaml

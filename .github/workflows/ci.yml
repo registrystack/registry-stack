@@ -981,9 +981,8 @@ jobs:
           set -euo pipefail
           cargo test --locked -p registry-caseworkctl --features postgres-test,schema --lib \
             -- --exact operator_tests::apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal \
-            dev::tests::a_retained_split_session_start_leaves_the_ledgers_read_only_to_the_runtime \
             | tee "${RUNNER_TEMP}/caseworkctl-apply.log"
-          grep -q 'test result: ok\. 2 passed' "${RUNNER_TEMP}/caseworkctl-apply.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/caseworkctl-apply.log"
       - name: Create isolated task approval database
         if: matrix.part == 'runtime'
         env:
@@ -1008,13 +1007,6 @@ jobs:
               task_grants::native_exchange_tests::approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid \
               | tee "${RUNNER_TEMP}/casework-task-approval.log"
           grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/casework-task-approval.log" || { echo "::error::expected exactly one passing test for approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid"; exit 1; }
-          cargo build --locked -p registry-casework -p registry-caseworkctl
-          cargo test --locked -p registry-casework \
-            --features postgres-test --lib \
-            -- --ignored --exact \
-              task_grants::local_session_tests::submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer \
-            | tee "${RUNNER_TEMP}/casework-local-session.log"
-          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/casework-local-session.log" || { echo "::error::expected exactly one passing test for submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer"; exit 1; }
 
   scheduling-contracts:
     name: Scheduling product contracts
@@ -1412,22 +1404,6 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: products/adapter/scripts/test-job-postgres.sh
 
-      # The GovStack BReg suite starts `bregctl dev`, which pulls the pinned
-      # ThunderID image on first use. Pulling it here, with retries, makes a
-      # registry hiccup fail as this step instead of as a test.
-      - name: Pull the pinned ThunderID image
-        run: |
-          image=$(jq -r .image crates/registry-thunderid-tooling/thunderid-version.json)
-          for attempt in 1 2 3; do
-            if docker pull --quiet "$image"; then
-              exit 0
-            fi
-            echo "::warning::ThunderID image pull attempt ${attempt} failed"
-            sleep $((attempt * 15))
-          done
-          echo "::error::the pinned ThunderID image could not be pulled after 3 attempts"
-          exit 1
-
       - name: Registry Adapter live PostgreSQL suites
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
@@ -1690,10 +1666,9 @@ jobs:
         if: matrix.lane == 'contracts-journeys'
         run: products/breg/scripts/test-adopter-workflow.sh
 
+      # The script builds rstack beside bregctl and breg, so it does not skip the build.
       - name: Base Registry Engine statistical dataset workflow
         if: matrix.lane == 'contracts-journeys'
-        env:
-          BREG_SKIP_BUILD: "1"
         run: products/breg/scripts/test-statistics-workflow.sh
 
       - name: Base Registry Engine staging-to-production promotion
@@ -2641,7 +2616,7 @@ jobs:
         run: |
           set -euo pipefail
           # This replay does not run in a clean read-only container the way the
-          # Evidence one does: `bregctl dev` runs PostgreSQL in a disposable
+          # Evidence one does: `rstack dev` runs PostgreSQL in a disposable
           # container of its own, which the runner stops when the journey ends.
           node docs/site/scripts/run-tutorial.mjs --gate breg --shard "$BREG_TUTORIAL_SHARD"
 

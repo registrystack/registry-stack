@@ -147,6 +147,8 @@ enum Command {
         #[command(subcommand)]
         command: registry_cli_api::ConnectionCommand,
     },
+    #[command(name = "rstack-dev", hide = true)]
+    RstackDev(registry_rstack_dev::Args),
 }
 
 #[derive(Debug, Subcommand)]
@@ -741,6 +743,7 @@ where
     let outcome = match cli.command {
         Command::Serve(args) => return serve(args, cli.format, format_requested, stdout, stderr),
         Command::Dev(args) => return dev::run(args, cli.format, stdout, stderr),
+        Command::RstackDev(args) => return registry_rstack_dev::run(args, stdout, stderr),
         Command::Api(args) => return api(*args, format_requested, stderr),
         Command::Connection { command } => {
             return connection(command, cli.format, format_requested, stderr);
@@ -782,6 +785,7 @@ fn command_path(command: &Command) -> &'static str {
         Command::Dev(args) => dev::command_path(args),
         Command::Api(_) => "api",
         Command::Connection { .. } => "connection",
+        Command::RstackDev(_) => "rstack-dev",
     }
 }
 

@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+# Messaging alone. The issuer is a logical name: a run signs its test tokens
+# with a throwaway local key under it, and Messaging verifies them against the
+# run's static key set. Each person holds the access profile their client
+# appears in. The case-notices profile requires a service actor, so its token
+# carries registry_actor_kind.
+issuer: https://identity.starter.example.test
+products:
+  - {product: messaging, project: ., audience: "urn:example:messaging"}
+people:
+  case-system:
+    subject: case-system
+    client: case-system
+    grants:
+      messaging:
+        profile: case-notices
+        scopes: ["messaging:send"]
+        claims: {registry_actor_kind: service}
+  operator:
+    subject: operator
+    client: operations-console
+    grants:
+      messaging:
+        profile: operations
+        scopes: ["messaging:operate"]
+scenarioFile: tests/scenarios.yaml

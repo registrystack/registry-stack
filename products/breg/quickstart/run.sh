@@ -7,39 +7,47 @@ support="$quickstart_dir/support/quickstart.py"
 spatial=false; smoke=false; installed=false
 for arg in "$@"; do case "$arg" in --spatial) spatial=true;; --smoke) smoke=true;; --installed) installed=true;; *) echo 'usage: products/breg/quickstart/run.sh [--installed] [--spatial] [--smoke]' >&2; exit 2;; esac; done
 if [[ -L "$run_dir" || -e "$run_dir" ]]; then
-  printf '%s\n' "quickstart state path already exists: $run_dir. Stop its owned dev session before removing it." >&2
+  printf '%s\n' "quickstart state path already exists: $run_dir. Run `rstack dev stop` for any run it started, then remove it." >&2
   exit 2
 fi
 for cmd in docker python3; do command -v "$cmd" >/dev/null || { echo "$cmd is required." >&2; exit 2; }; done
 if [[ "$installed" == true ]]; then
-  breg=$(command -v breg) || { echo 'breg is required in --installed mode.' >&2; exit 2; }
+  rstack=$(command -v rstack) || { echo 'rstack is required in --installed mode.' >&2; exit 2; }
+  command -v breg >/dev/null || { echo 'breg is required in --installed mode.' >&2; exit 2; }
   bregctl=$(command -v bregctl) || { echo 'bregctl is required in --installed mode.' >&2; exit 2; }
+  rstack_args=()
 else
   command -v cargo >/dev/null || { echo 'cargo is required.' >&2; exit 2; }
   export RUSTC_WRAPPER=
   export CARGO_INCREMENTAL=0
   source "$repository_root/scripts/cargo-runtime-library-path.sh"
-  registry_cargo_build "$repository_root" --manifest-path "$repository_root/Cargo.toml" --locked -p registry-breg --features registry-breg/runtime -p registry-bregctl --bins >/dev/null
+  registry_cargo_build "$repository_root" --manifest-path "$repository_root/Cargo.toml" --locked -p registry-breg --features registry-breg/runtime -p registry-bregctl -p registry-rstack --bins >/dev/null
   cargo_target_dir="${CARGO_TARGET_DIR:-$repository_root/target}"
   if [[ "$cargo_target_dir" != /* ]]; then
     cargo_target_dir="$repository_root/$cargo_target_dir"
   fi
-  breg="$cargo_target_dir/debug/breg"; bregctl="$cargo_target_dir/debug/bregctl"
+  rstack="$cargo_target_dir/debug/rstack"; bregctl="$cargo_target_dir/debug/bregctl"
+  export RSTACK_BREGCTL_BIN="$bregctl" RSTACK_BREG_BIN="$cargo_target_dir/debug/breg"
+  # A source run uses no managed installation: the two variables above name the products.
+  rstack_args=(--install-root "$run_dir/install")
 fi
 umask 077
-mkdir -m 700 "$run_dir" "$run_dir/headers"
+mkdir -m 700 "$run_dir" "$run_dir/headers" "$run_dir/state"
 printf '%s\n' 'registry-stack-breg-quickstart-v1' >"$run_dir/.launcher-owned"
-read -r database_port issuer_port breg_port < <(python3 "$support" ports)
+export RSTACK_DEV_STATE_DIR="$run_dir/state"
 if [[ "$spatial" == true ]]; then
   python3 "$support" prepare-spatial-project --fixture "$repository_root/products/breg/acceptance/spatial-service-sites" --project "$run_dir/project"
 else
   "$bregctl" --format json init "$run_dir/project" >"$run_dir/init-report.json"
+  python3 "$support" add-dev-plan --example "$repository_root/products/breg/examples/minimal" --project "$run_dir/project"
 fi
+run_id=""
 cleanup() {
   local exit_code=$?
-  local remove=()
-  [[ "$exit_code" -eq 0 ]] && remove=(--remove)
-  "$bregctl" dev stop "${remove[@]}" --docker-bin "$(command -v docker)" "$run_dir/project" >/dev/null 2>&1 || true
+  # Stopping a run removes its services and database. A failed start keeps its logs under the state directory.
+  if [[ -n "$run_id" ]]; then
+    "$rstack" "${rstack_args[@]}" dev stop "$run_id" >/dev/null 2>&1 || true
+  fi
   if [[ "$exit_code" -eq 0 ]] && [[ -f "$run_dir/.launcher-owned" ]] && [[ "$(cat "$run_dir/.launcher-owned")" == registry-stack-breg-quickstart-v1 ]]; then
     rm -rf -- "$run_dir"
   fi
@@ -49,40 +57,36 @@ trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-if ! "$bregctl" --format json dev start --breg-bin "$breg" --docker-bin "$(command -v docker)" \
-  --breg-port "$breg_port" --issuer-port "$issuer_port" --database-port "$database_port" \
-  "$run_dir/project" >"$run_dir/dev-report.json"; then
-  python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["diagnostics"][0]["message"], file=sys.stderr)' "$run_dir/dev-report.json"
+# A failed scenario still leaves a live run, so the run ID is read before the exit status is judged.
+start_status=0
+"$rstack" "${rstack_args[@]}" --format json dev start "$run_dir/project" >"$run_dir/dev-report.json" || start_status=$?
+run_id=$(python3 "$support" run-id --report "$run_dir/dev-report.json")
+if [[ "$start_status" -ne 0 ]]; then
+  python3 "$support" ready --report "$run_dir/dev-report.json" >/dev/null || true
   exit 1
 fi
-printf 'http://127.0.0.1:%s\n' "$breg_port" >"$run_dir/breg-origin"
+breg_origin=$(python3 "$support" ready --report "$run_dir/dev-report.json")
+printf '%s\n' "$breg_origin" >"$run_dir/breg-origin"
+person_header() {
+  local person=$1 name=$2
+  "$rstack" "${rstack_args[@]}" --format json dev token "$run_id" --as "$person" >"$run_dir/$name-token-report.json"
+  python3 "$support" copy-header --report "$run_dir/$name-token-report.json" --to "$run_dir/headers/$name.header"
+}
 client=editor
 [[ "$spatial" == true ]] && client=operator
-"$bregctl" --format json dev token "$client" "$run_dir/project" >"$run_dir/token-report.json"
-python3 - "$run_dir/token-report.json" "$run_dir/headers/$client.header" <<'PY'
-import json,os,shutil,sys
-source=json.load(open(sys.argv[1]))['headerFile']; shutil.copyfile(source,sys.argv[2]); os.chmod(sys.argv[2],0o600)
-PY
+person="$client"; person_header "$person" "$client"
 if [[ "$spatial" == true ]]; then
-  "$bregctl" --format json dev token installation-map-reader "$run_dir/project" >"$run_dir/map-token-report.json"
-  python3 - "$run_dir/map-token-report.json" "$run_dir/headers/installation-map-reader.header" <<'PY'
-import json,os,shutil,sys
-source=json.load(open(sys.argv[1]))['headerFile']; shutil.copyfile(source,sys.argv[2]); os.chmod(sys.argv[2],0o600)
-PY
+  person=installation-map-reader; person_header "$person" installation-map-reader
   python3 "$support" spatial-smoke --root "$run_dir" --seed "$repository_root/products/breg/acceptance/spatial-service-sites/fixtures/seed-service-sites.jsonl"
 else
-  "$bregctl" --format json dev token foreign-editor "$run_dir/project" >"$run_dir/foreign-token-report.json"
-  python3 - "$run_dir/foreign-token-report.json" "$run_dir/headers/foreign-editor.header" <<'PY'
-import json,os,shutil,sys
-source=json.load(open(sys.argv[1]))['headerFile']; shutil.copyfile(source,sys.argv[2]); os.chmod(sys.argv[2],0o600)
-PY
+  person=foreign-editor; person_header "$person" foreign-editor
   id=$(python3 "$support" request --root "$run_dir" --action create --name 'Quickstart contact' --email contact@example.test)
   python3 "$support" request --root "$run_dir" --action get --record-id "$id" >/dev/null
   python3 "$support" request --root "$run_dir" --action refusal --record-id "$id"
   echo "  Contact ID: $id"
 fi
 echo 'Base Registry Engine quickstart is ready.'
-echo "  Base Registry Engine: http://127.0.0.1:$breg_port"
+echo "  Base Registry Engine: $breg_origin"
 echo "  Client header: $run_dir/headers/$client.header"
 [[ "$smoke" == true ]] && exit 0
 while :; do sleep 1; done

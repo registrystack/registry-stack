@@ -3,10 +3,8 @@
 //! stated once from its own configuration.
 //!
 //! `caseworkctl generate identity-facts` derives them from the authored
-//! project and the runtime configuration. `caseworkctl dev` derives the same
-//! facts from the session it builds, then renders its local issuer from them,
-//! so a deployment and a development session agree on the clients admitted,
-//! the task authority and the clients that exchange its assertions.
+//! project and the runtime configuration, so the issuer is configured to admit
+//! the clients, the task authority and the exchange clients the deployment uses.
 //!
 //! The facts name no path and no secret. The runtime file is read for its
 //! `authentication.oidc` and `taskAuthority` members only; no secret
@@ -188,47 +186,6 @@ pub(crate) fn facts(inputs: &Inputs<'_>) -> IdentityFacts {
     facts
 }
 
-/// The task authority's assertion issuer and the one exchange binding that
-/// presents its assertions, when the facts declare them.
-pub(crate) fn task_exchange(facts: &IdentityFacts) -> Option<(&AssertionIssuer, &AccessProfile)> {
-    let profile = facts
-        .access_profiles
-        .iter()
-        .find(|profile| profile.exchange.is_some())?;
-    let binding = profile.exchange.as_ref()?;
-    let issuer = facts
-        .assertion_issuers
-        .iter()
-        .find(|issuer| issuer.id == binding.assertion_issuer_id)?;
-    Some((issuer, profile))
-}
-
-/// For each client that exchanges an assertion, the assertion issuers it may
-/// present, as the runtime's `authentication.oidc.assertionIssuers` writes
-/// them.
-pub(crate) fn assertion_issuers(facts: &IdentityFacts) -> BTreeMap<String, Vec<String>> {
-    let mut paired: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for profile in &facts.access_profiles {
-        let Some(binding) = &profile.exchange else {
-            continue;
-        };
-        let Some(issuer) = facts
-            .assertion_issuers
-            .iter()
-            .find(|issuer| issuer.id == binding.assertion_issuer_id)
-        else {
-            continue;
-        };
-        for client in profile.requester_clients.iter().flatten() {
-            paired
-                .entry(client.clone())
-                .or_default()
-                .push(issuer.issuer.clone());
-        }
-    }
-    paired
-}
-
 /// The admission with each client listed once, in first-seen order; the facts
 /// refuse a client listed twice.
 fn unique(admission: Admission) -> Admission {
@@ -385,23 +342,27 @@ mod tests {
         let (facts, _) = run("tests/fixtures/identity/runtime-task-authority.yaml");
         golden("facts-task-authority.yaml", &facts);
         let read = identity_facts::read("facts", facts.as_bytes()).unwrap();
-        let (issuer, profile) = task_exchange(&read).unwrap();
-        // The values the local development issuer registers for its task
-        // authority and the clients that exchange its assertions.
+        let profile = read
+            .access_profiles
+            .iter()
+            .find(|profile| profile.exchange.is_some())
+            .unwrap();
+        let binding = profile.exchange.as_ref().unwrap();
+        let issuer = read
+            .assertion_issuers
+            .iter()
+            .find(|issuer| issuer.id == binding.assertion_issuer_id)
+            .unwrap();
         assert_eq!(issuer.id, "casework-example-test");
         assert_eq!(
             assertion_issuer_id("https://Casework.example.test/a/b/"),
             "casework-example-test-a-b"
         );
         assert_eq!(issuer.mapping, AssertionMapping::InstitutionalGrant);
-        let binding = profile.exchange.as_ref().unwrap();
         assert_eq!(binding.bootstrap_scope, "casework:grants:assert");
         assert_eq!(
-            assertion_issuers(&read),
-            BTreeMap::from([(
-                "task-agent".to_owned(),
-                vec!["https://casework.example.test".to_owned()]
-            )])
+            profile.requester_clients,
+            Some(vec!["task-agent".to_owned()])
         );
     }
 

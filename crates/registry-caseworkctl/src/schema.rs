@@ -1,31 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Generated JSON Schema for the local development clients file a Casework
-//! project holds, `dev-clients.yaml`.
+//! Generated JSON Schema for the Casework command reports.
 
 use serde_json::Value;
 use std::collections::BTreeMap;
-
-use crate::dev::config::{Clients, DEV_CLIENTS_API_VERSION, DEV_CLIENTS_KIND};
-
-pub const DEV_CLIENTS_SCHEMA_FILE: &str = "dev-clients/dev-clients.schema.json";
-pub const DEV_CLIENTS_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/casework/dev-clients/dev-clients.v1alpha1.schema.json";
-
-/// The committed schema documents, by path below
-/// `products/casework/generated`.
-pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
-    Ok([(
-        DEV_CLIENTS_SCHEMA_FILE,
-        registry_casework_core::schema::render(
-            schemars::schema_for!(Clients),
-            DEV_CLIENTS_API_VERSION,
-            DEV_CLIENTS_KIND,
-            DEV_CLIENTS_SCHEMA_ID,
-            "Registry Casework development clients",
-        )?,
-    )]
-    .into())
-}
 
 /// The one command-tagged report schema derives from the owning output DTOs.
 pub fn report_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
@@ -208,15 +185,6 @@ mod tests {
     use jsonschema::{Draft, JSONSchema};
     use serde_json::Value;
 
-    fn schema() -> JSONSchema {
-        let document: Value = serde_json::from_str(&documents().unwrap()[DEV_CLIENTS_SCHEMA_FILE])
-            .expect("the dev-clients schema is JSON");
-        JSONSchema::options()
-            .with_draft(Draft::Draft202012)
-            .compile(&document)
-            .expect("the dev-clients schema compiles as Draft 2020-12")
-    }
-
     fn assert_native_integer_bounds(value: &Value, path: &str) {
         match value {
             Value::Object(object) => {
@@ -244,80 +212,6 @@ mod tests {
                 }
             }
             _ => {}
-        }
-    }
-
-    fn example() -> Value {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/casework/examples/standalone-decision/dev-clients.yaml");
-        let bytes = std::fs::read(path).expect("read the example");
-        crate::dev::config::read("dev-clients.yaml", &bytes)
-            .expect("the example is accepted")
-            .document
-            .to_json_value()
-    }
-
-    #[test]
-    fn the_maintained_example_and_templates_validate_against_the_schema() {
-        let schema = schema();
-        assert!(schema.is_valid(&example()));
-        let document = crate::dev::config::read(
-            "dev-clients.yaml",
-            crate::project::STANDALONE_DEV_CLIENTS.as_bytes(),
-        )
-        .unwrap()
-        .document
-        .to_json_value();
-        assert!(schema.is_valid(&document));
-    }
-
-    #[test]
-    fn the_schema_refuses_what_the_reader_refuses() {
-        let schema = schema();
-        let valid = example();
-        let mut unknown = valid.clone();
-        unknown["client"] = Value::Array(Vec::new());
-        assert!(!schema.is_valid(&unknown));
-        let mut retired = valid.clone();
-        retired["version"] = Value::from(1);
-        assert!(!schema.is_valid(&retired));
-        let mut null = valid.clone();
-        null["directory"] = Value::Null;
-        assert!(!schema.is_valid(&null));
-        let mut port = valid.clone();
-        port["integrations"] = serde_json::json!({
-            "resource": "https://casework.example.test",
-            "taskAuthority": {"issuer": "https://issuer.example.test", "jwksPort": 0, "statusClients": {}}
-        });
-        assert!(!schema.is_valid(&port));
-        let mut kind = valid;
-        kind["kind"] = Value::from("BregDevClients");
-        assert!(!schema.is_valid(&kind));
-    }
-
-    #[test]
-    fn the_schema_is_deterministic_and_versioned() {
-        let first = documents().unwrap();
-        assert_eq!(first, documents().unwrap());
-        let document: Value = serde_json::from_str(&first[DEV_CLIENTS_SCHEMA_FILE]).unwrap();
-        assert_eq!(document["$id"], DEV_CLIENTS_SCHEMA_ID);
-        assert_eq!(
-            document["properties"]["apiVersion"]["const"],
-            DEV_CLIENTS_API_VERSION
-        );
-        assert_eq!(document["properties"]["kind"]["const"], DEV_CLIENTS_KIND);
-    }
-
-    #[test]
-    fn committed_schema_matches_generated_bytes() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/casework/generated");
-        for (file, generated) in documents().unwrap() {
-            assert_eq!(
-                std::fs::read_to_string(root.join(file)).unwrap_or_default(),
-                generated,
-                "products/casework/generated/{file} differs from its generator; run cargo run -p registry-caseworkctl --features schema --example dev-clients-schema -- --output products/casework/generated"
-            );
         }
     }
 
@@ -404,14 +298,6 @@ mod tests {
             i64::MAX
         );
         assert_eq!(
-            variant("dev-grant")["properties"]["grantExpiresAt"]["minimum"],
-            0
-        );
-        assert_eq!(
-            variant("dev-grant")["properties"]["grantExpiresAt"]["maximum"],
-            u64::MAX
-        );
-        assert_eq!(
             variant("check")["properties"]["filesChecked"]["maximum"],
             usize::MAX as u64
         );
@@ -441,31 +327,15 @@ mod tests {
             .expect("the report schema compiles as Draft 2020-12");
 
         let success = crate::report::CliReport::from_value(
-            "dev",
-            serde_json::json!({
-                "ok": true,
-                "status": "ready",
-                "project": "review",
-                "stateFile": "state.json",
-                "operatorConfig": "operator.yaml",
-                "caseworkUrl": "http://127.0.0.1:8092",
-                "tokenEndpoint": "http://127.0.0.1:8093/oauth2/token",
-                "issuer": "http://127.0.0.1:8093",
-                "clientAssertionAudience": "http://127.0.0.1:8093",
-                "resource": "urn:casework:dev:review",
-                "audience": "urn:casework:dev:review",
-                "journal": "casework.ndjson",
-                "contextProviders": [],
-                "clients": [],
-                "directory": {"revision": 1, "teams": 1}
-            }),
+            "types",
+            serde_json::json!({"ok": true, "output": "types", "files": []}),
         )
         .unwrap();
         let success = serde_json::to_value(success).unwrap();
         assert!(success.get("data").is_none());
         if let Err(errors) = validator.validate(&success) {
             panic!(
-                "flat dev success violates the report schema: {}",
+                "flat success violates the report schema: {}",
                 errors
                     .map(|error| format!("{error} at {}", error.instance_path))
                     .collect::<Vec<_>>()
@@ -493,10 +363,7 @@ mod tests {
         }
 
         let mut incomplete_success = success;
-        incomplete_success
-            .as_object_mut()
-            .unwrap()
-            .remove("outcome");
+        incomplete_success.as_object_mut().unwrap().remove("files");
         assert!(!validator.is_valid(&incomplete_success));
 
         let payload_failure = crate::report::CliReport::from_value(

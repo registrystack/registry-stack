@@ -643,17 +643,6 @@ const CASEWORK_DOCUMENTS: &[DocumentRules] = &[
         files: &[],
     },
     DocumentRules {
-        pattern: "dev-clients.yaml",
-        declarations: &[N::global("clients/*/id", "Casework development client")],
-        references: &[
-            N::global("clients/*/accessProfile", "Casework access profile"),
-            N::global("directory/*/queue", "Casework queue"),
-            N::global("directory/*/staff/*", "Casework development client"),
-            N::global("directory/*/supervisors/*", "Casework development client"),
-        ],
-        files: &[],
-    },
-    DocumentRules {
         pattern: "fixtures/*.yaml",
         declarations: &[N::global("id", "Casework fixture")],
         references: &[

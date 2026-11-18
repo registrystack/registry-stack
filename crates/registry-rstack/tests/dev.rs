@@ -79,7 +79,7 @@ fn versioned_tool(binary: &str, body: &str) -> String {
 /// its name, its arguments, and the environment the launcher passed it.
 fn host_body(name: &str) -> String {
     format!(
-        "printf 'host:{name}\\n'\nprintf 'arg:%s\\n' \"$@\"\nif [[ -n \"${{EXPECTED_DATABASE_URL:-}}\" ]]; then\n  [[ \"${{RSTACK_DEV_DATABASE_URL:-}}\" == \"$EXPECTED_DATABASE_URL\" ]]\n  printf 'database:matched\\n'\nelse\n  printf 'database:%s\\n' \"${{RSTACK_DEV_DATABASE_URL:+set}}\"\nfi\nprintf 'generation:%s\\n' \"${{RSTACK_GENERATION_DIR:-}}\"\nprintf 'release:%s\\n' \"${{RSTACK_RELEASE_TAG:-}}\"\nprintf 'bregctl:%s\\n' \"${{RSTACK_BREGCTL_BIN:-}}\"\nprintf 'breg:%s\\n' \"${{RSTACK_BREG_BIN:-}}\"\nprintf 'caseworkctl:%s\\n' \"${{RSTACK_CASEWORKCTL_BIN:-}}\"\nprintf 'casework:%s\\n' \"${{RSTACK_CASEWORK_BIN:-}}\"\nprintf 'evidencectl:%s\\n' \"${{RSTACK_EVIDENCECTL_BIN:-}}\"\nprintf 'evidence:%s\\n' \"${{RSTACK_EVIDENCE_BIN:-}}\"\n"
+        "printf 'host:{name}\\n'\nprintf 'arg:%s\\n' \"$@\"\nif [[ -n \"${{EXPECTED_DATABASE_URL:-}}\" ]]; then\n  [[ \"${{RSTACK_DEV_DATABASE_URL:-}}\" == \"$EXPECTED_DATABASE_URL\" ]]\n  printf 'database:matched\\n'\nelse\n  printf 'database:%s\\n' \"${{RSTACK_DEV_DATABASE_URL:+set}}\"\nfi\nprintf 'generation:%s\\n' \"${{RSTACK_GENERATION_DIR:-}}\"\nprintf 'release:%s\\n' \"${{RSTACK_RELEASE_TAG:-}}\"\nprintf 'bregctl:%s\\n' \"${{RSTACK_BREGCTL_BIN:-}}\"\nprintf 'breg:%s\\n' \"${{RSTACK_BREG_BIN:-}}\"\nprintf 'caseworkctl:%s\\n' \"${{RSTACK_CASEWORKCTL_BIN:-}}\"\nprintf 'casework:%s\\n' \"${{RSTACK_CASEWORK_BIN:-}}\"\nprintf 'evidencectl:%s\\n' \"${{RSTACK_EVIDENCECTL_BIN:-}}\"\nprintf 'evidence:%s\\n' \"${{RSTACK_EVIDENCE_BIN:-}}\"\nprintf 'messagingctl:%s\\n' \"${{RSTACK_MESSAGINGCTL_BIN:-}}\"\nprintf 'messaging:%s\\n' \"${{RSTACK_MESSAGING_BIN:-}}\"\n"
     )
 }
 
@@ -229,6 +229,8 @@ struct SourceTools {
     casework: PathBuf,
     evidencectl: PathBuf,
     evidence: PathBuf,
+    messagingctl: PathBuf,
+    messaging: PathBuf,
 }
 
 impl SourceTools {
@@ -241,10 +243,12 @@ impl SourceTools {
         let bregctl = scratch.path().join("bregctl");
         let caseworkctl = scratch.path().join("caseworkctl");
         let evidencectl = scratch.path().join("evidencectl");
+        let messagingctl = scratch.path().join("messagingctl");
         for (path, name) in [
             (&bregctl, "bregctl"),
             (&caseworkctl, "caseworkctl"),
             (&evidencectl, "evidencectl"),
+            (&messagingctl, "messagingctl"),
         ] {
             executable(
                 path,
@@ -257,7 +261,8 @@ impl SourceTools {
         let breg = scratch.path().join("breg");
         let casework = scratch.path().join("casework");
         let evidence = scratch.path().join("evidence");
-        for path in [&breg, &casework, &evidence] {
+        let messaging = scratch.path().join("messaging");
+        for path in [&breg, &casework, &evidence, &messaging] {
             executable(path, "#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n");
         }
         Self {
@@ -271,6 +276,8 @@ impl SourceTools {
             casework,
             evidencectl,
             evidence,
+            messagingctl,
+            messaging,
         }
     }
 
@@ -285,7 +292,9 @@ impl SourceTools {
             .env_remove("RSTACK_CASEWORKCTL_BIN")
             .env_remove("RSTACK_CASEWORK_BIN")
             .env_remove("RSTACK_EVIDENCECTL_BIN")
-            .env_remove("RSTACK_EVIDENCE_BIN");
+            .env_remove("RSTACK_EVIDENCE_BIN")
+            .env_remove("RSTACK_MESSAGINGCTL_BIN")
+            .env_remove("RSTACK_MESSAGING_BIN");
         command
     }
 
@@ -297,7 +306,9 @@ impl SourceTools {
             .env("RSTACK_CASEWORKCTL_BIN", &self.caseworkctl)
             .env("RSTACK_CASEWORK_BIN", &self.casework)
             .env("RSTACK_EVIDENCECTL_BIN", &self.evidencectl)
-            .env("RSTACK_EVIDENCE_BIN", &self.evidence);
+            .env("RSTACK_EVIDENCE_BIN", &self.evidence)
+            .env("RSTACK_MESSAGINGCTL_BIN", &self.messagingctl)
+            .env("RSTACK_MESSAGING_BIN", &self.messaging);
         command
     }
 }
@@ -855,6 +866,78 @@ fn evidence_only_plan_needs_only_evidence_binaries() {
         output_field(&stdout, "evidence"),
         tools.evidence.display().to_string()
     );
+}
+
+#[test]
+fn messaging_only_plan_needs_only_messaging_binaries() {
+    let tools = SourceTools::new();
+    write_plan(&tools.project, &["messaging"]);
+    let missing = tools._scratch.path().join("not-installed");
+    let launch = |arguments: &[&str]| {
+        tools
+            .empty_command()
+            .args(arguments)
+            .arg(&tools.project)
+            .env("RSTACK_BREGCTL_BIN", missing.join("bregctl"))
+            .env("RSTACK_BREG_BIN", missing.join("breg"))
+            .env("RSTACK_CASEWORKCTL_BIN", missing.join("caseworkctl"))
+            .env("RSTACK_CASEWORK_BIN", missing.join("casework"))
+            .env("RSTACK_EVIDENCECTL_BIN", missing.join("evidencectl"))
+            .env("RSTACK_EVIDENCE_BIN", missing.join("evidence"))
+            .env("RSTACK_MESSAGINGCTL_BIN", &tools.messagingctl)
+            .env("RSTACK_MESSAGING_BIN", &tools.messaging)
+            .output()
+            .unwrap()
+    };
+
+    let checked = launch(&["dev", "check"]);
+    assert!(checked.status.success(), "{checked:?}");
+    assert_eq!(
+        hosted(&checked),
+        (
+            "messagingctl".to_owned(),
+            runner_arguments("check", &[], &tools.project)
+        )
+    );
+
+    let started = launch(&["dev", "start"]);
+    assert!(started.status.success(), "{started:?}");
+    assert_eq!(
+        hosted(&started),
+        (
+            "messagingctl".to_owned(),
+            runner_arguments("start", &[], &tools.project)
+        )
+    );
+    let stdout = String::from_utf8(started.stdout.clone()).unwrap();
+    assert_eq!(
+        output_field(&stdout, "messagingctl"),
+        tools.messagingctl.display().to_string()
+    );
+    assert_eq!(
+        output_field(&stdout, "messaging"),
+        tools.messaging.display().to_string()
+    );
+}
+
+#[test]
+fn messaging_only_check_names_the_messaging_install_and_override() {
+    let tools = SourceTools::new();
+    write_plan(&tools.project, &["messaging"]);
+    let output = tools
+        .empty_command()
+        .args(["dev", "check"])
+        .arg(&tools.project)
+        .env("RSTACK_BREGCTL_BIN", &tools.bregctl)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("rstack install messaging"), "{stderr}");
+    assert!(stderr.contains("RSTACK_MESSAGINGCTL_BIN"), "{stderr}");
+    assert!(!stderr.contains("RSTACK_BREGCTL_BIN"), "{stderr}");
+    assert!(!stderr.contains("RSTACK_MESSAGING_BIN"), "{stderr}");
 }
 
 #[test]

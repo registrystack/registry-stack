@@ -1,31 +1,28 @@
-//! Governed target access profiles and local client credentials.
+//! Governed target access profiles and the local client documents a dev session reads.
 //!
 //! Complete access profiles live in the target authority document. Public client
-//! membership lives under `access/clients/`. The only private client artifact is the locally generated key
-//! under `.evidence/clients/<id>/private.jwk`; revoking a client removes that
-//! directory so no private state outlives the client it authenticated.
+//! membership lives under `access/clients/`. The only private client artifact is
+//! the key under `.evidence/clients/<id>/private.jwk`.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io::{Read as _, Write as _},
-    os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _},
+    io::Read as _,
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     process::ExitCode,
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use clap::{Args, Subcommand};
-use registry_evidence_authoring::formats::{
-    decode_authored, envelope_lines, ACCESS_CLIENT, ACCESS_CLIENT_API_VERSION, ACCESS_CLIENT_KIND,
-};
+use registry_evidence_authoring::formats::{decode_authored, ACCESS_CLIENT};
 use registry_evidence_authoring::{project::ActorKind, target::AccessProfile};
 use registry_platform_crypto::{PrivateJwk, PublicJwk};
 use registry_platform_yaml::{Decoded, Report, Severity, MAXIMUM_DOCUMENT_BYTES};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::{authoring, dev, keygen, OutputFormat};
+use crate::{authoring, OutputFormat};
 
 const ACCESS_DIRECTORY: &str = "access";
 const CLIENTS_DIRECTORY: &str = "clients";
@@ -44,9 +41,6 @@ pub enum AccessCommand {
     /// Inspect complete access profiles from the target authority.
     #[command(subcommand)]
     Profile(ProfileCommand),
-    /// Register and revoke local Registry Evidence clients.
-    #[command(subcommand)]
-    Client(Box<ClientCommand>),
 }
 
 #[derive(Debug, Subcommand)]
@@ -55,67 +49,8 @@ pub enum ProfileCommand {
     List(ProjectArgs),
 }
 
-#[derive(Debug, Subcommand)]
-pub enum ClientCommand {
-    /// Add one local client and generate its private key.
-    Add(ClientAddArgs),
-    /// List local clients and their access-profile membership.
-    List(ProjectArgs),
-    /// Revoke one local client.
-    Revoke(ClientRevokeArgs),
-}
-
 #[derive(Debug, Args)]
 pub struct ProjectArgs {
-    /// Project root. Defaults to the current directory.
-    #[arg(long, default_value = ".", hide = true)]
-    project: PathBuf,
-}
-
-#[derive(Debug, Args)]
-pub struct ClientAddArgs {
-    /// Lowercase client identifier.
-    client: String,
-    /// Existing target access profile assigned to this client. Repeat for disjoint grants.
-    #[arg(long, required = true)]
-    access_profile: Vec<String>,
-    /// Audience inside every selected definition ceiling. Inferred when exactly one fits.
-    #[arg(long)]
-    evidence_audience: Option<String>,
-    /// Actor permitted by the selected profiles. Inferred when exactly one fits.
-    #[arg(long, value_parser = ["human", "agent", "service"])]
-    actor_kind: Option<String>,
-    /// Generate an owner-only P-256 key for local client authentication.
-    #[arg(long, required = true)]
-    generate_local_key: bool,
-    /// Use institutional task exchange with this one bootstrap scope.
-    #[arg(long)]
-    grant_bootstrap_scope: Option<String>,
-    /// Bootstrap resource audience. Omit to use the shared issuer owner's default.
-    #[arg(long, requires = "grant_bootstrap_scope")]
-    grant_bootstrap_resource: Option<String>,
-    /// Use a signed first-party context with this one bootstrap scope.
-    #[arg(
-        long,
-        conflicts_with = "grant_bootstrap_scope",
-        requires_all = ["first_party_bootstrap_resource", "first_party_issuer"]
-    )]
-    first_party_bootstrap_scope: Option<String>,
-    /// Exact resource for the first-party bootstrap credential.
-    #[arg(long, requires = "first_party_bootstrap_scope")]
-    first_party_bootstrap_resource: Option<String>,
-    /// Exact trusted issuer of the signed first-party context.
-    #[arg(long, requires = "first_party_bootstrap_scope")]
-    first_party_issuer: Option<String>,
-    /// Project root. Defaults to the current directory.
-    #[arg(long, default_value = ".", hide = true)]
-    project: PathBuf,
-}
-
-#[derive(Debug, Args)]
-pub struct ClientRevokeArgs {
-    /// Lowercase client identifier.
-    client: String,
     /// Project root. Defaults to the current directory.
     #[arg(long, default_value = ".", hide = true)]
     project: PathBuf,
@@ -249,17 +184,7 @@ pub fn run(command: AccessCommand, format: OutputFormat) -> Result<ExitCode> {
         AccessCommand::Profile(ProfileCommand::List(args)) => {
             list_access_profiles(&args.project, format)
         }
-        AccessCommand::Client(command) => match *command {
-            ClientCommand::Add(args) => add_client(&args, format),
-            ClientCommand::List(args) => list_clients(&args.project, format),
-            ClientCommand::Revoke(args) => revoke_client(&args, format),
-        },
     }
-}
-
-/// The project-relative spelling of one client's private state directory.
-fn private_client_directory(client_id: &str) -> String {
-    format!("{PRIVATE_STATE_DIRECTORY}/{CLIENTS_DIRECTORY}/{client_id}")
 }
 
 fn list_access_profiles(project: &Path, format: OutputFormat) -> Result<ExitCode> {
@@ -298,295 +223,6 @@ fn list_access_profiles(project: &Path, format: OutputFormat) -> Result<ExitCode
     Ok(ExitCode::SUCCESS)
 }
 
-fn add_client(args: &ClientAddArgs, format: OutputFormat) -> Result<ExitCode> {
-    let actor_kind: Option<ActorKind> = args
-        .actor_kind
-        .as_ref()
-        .map(|actor| serde_json::from_value(json!(actor)))
-        .transpose()
-        .context("client actor kind must be human, agent or service")?;
-    let project = canonical_project(&args.project)?;
-    validate_identifier(&args.client, "client")?;
-    if !args.generate_local_key {
-        bail!("local client creation requires --generate-local-key");
-    }
-    let exchange = if let Some(scope) = &args.grant_bootstrap_scope {
-        Some(ActiveClientExchange {
-            kind: ActiveClientExchangeKind::InstitutionalGrant,
-            bootstrap_scope: scope.clone(),
-            bootstrap_resource: args.grant_bootstrap_resource.clone(),
-            source_issuer: None,
-        })
-    } else {
-        args.first_party_bootstrap_scope
-            .as_ref()
-            .map(|scope| {
-                let source_issuer = args
-                    .first_party_issuer
-                    .as_ref()
-                    .map(|issuer| registry_platform_yaml::Url::new(issuer.clone()))
-                    .transpose()
-                    .map_err(|_| {
-                        anyhow!("first-party issuer must be an absolute http or https URL")
-                    })?;
-                Ok::<_, anyhow::Error>(ActiveClientExchange {
-                    kind: ActiveClientExchangeKind::FirstParty,
-                    bootstrap_scope: scope.clone(),
-                    bootstrap_resource: args.first_party_bootstrap_resource.clone(),
-                    source_issuer,
-                })
-            })
-            .transpose()?
-    };
-    if let Some(exchange) = &exchange {
-        exchange.validate()?;
-    }
-    let profile_ids = sorted_unique(
-        &args.access_profile,
-        "access profiles",
-        MAX_PROFILES_PER_CLIENT,
-    )?;
-    for profile_id in &profile_ids {
-        validate_identifier(profile_id, "access profile")?;
-    }
-    let _lifecycle = dev::lock_project_lifecycle(&project)?;
-    require_stopped_or_absent_session(&project)?;
-    let access_profiles = load_access_profiles(&project)?;
-    validate_client_profiles(&profile_ids, &access_profiles)?;
-    let allowed_audiences = profile_audiences(&profile_ids, &access_profiles)?;
-    let evidence_audience = match &args.evidence_audience {
-        Some(audience) if allowed_audiences.contains(audience) => audience.clone(),
-        Some(_) => bail!("--evidence-audience must be inside every selected definition ceiling"),
-        None if allowed_audiences.len() == 1 => {
-            allowed_audiences.first().expect("one audience").clone()
-        }
-        None => bail!(
-            "choose --evidence-audience from the selected definitions' common audience ceiling"
-        ),
-    };
-    validate_client_identity(
-        &ClientDocument {
-            client_id: args.client.clone(),
-            status: ClientStatus::Active,
-            access_profiles: profile_ids.clone(),
-            principal: local_client_uri(&args.client),
-            evidence_audience: evidence_audience.clone(),
-            actor_kind,
-            keys: Vec::new(),
-            exchange: exchange.clone(),
-        },
-        &access_profiles,
-    )?;
-    let existing_clients = load_client_documents_if_present(&project)?;
-    for existing in existing_clients.values() {
-        validate_client_profiles(&existing.access_profiles, &access_profiles)?;
-    }
-    if existing_clients.len() >= MAX_CLIENTS {
-        bail!("a project may define at most {MAX_CLIENTS} clients");
-    }
-
-    let public_directory = project.join(ACCESS_DIRECTORY).join(CLIENTS_DIRECTORY);
-    let private_directory = project
-        .join(PRIVATE_STATE_DIRECTORY)
-        .join(CLIENTS_DIRECTORY);
-    ensure_public_directory(&project.join(ACCESS_DIRECTORY))?;
-    ensure_public_directory(&public_directory)?;
-    ensure_private_directory(&project.join(PRIVATE_STATE_DIRECTORY))?;
-    ensure_private_directory(&private_directory)?;
-
-    let public_path = public_directory.join(format!("{}.yaml", args.client));
-    let private_client_path = private_directory.join(&args.client);
-    reject_existing(&public_path)?;
-    reject_existing(&private_client_path)?;
-
-    let staging = tempfile::Builder::new()
-        .prefix(".client-stage-")
-        .tempdir_in(&private_directory)
-        .context("creating private client staging directory")?;
-    fs::set_permissions(
-        staging.path(),
-        fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE),
-    )?;
-    let public_key_path = staging.path().join("public.jwk");
-    let (_, generated_public) =
-        keygen::generate_dev_keypair(staging.path(), PRIVATE_KEY_FILENAME, "public.jwk")?;
-    debug_assert_eq!(generated_public, public_key_path);
-    let public_key = read_public_jwk(&public_key_path)?;
-    fs::remove_file(&public_key_path).context("removing staged public-key copy")?;
-
-    let document = ClientDocument {
-        client_id: args.client.clone(),
-        status: ClientStatus::Active,
-        access_profiles: profile_ids,
-        principal: format!("urn:registrystack:evidence:local:client:{}", args.client),
-        evidence_audience,
-        actor_kind,
-        keys: vec![public_key],
-        exchange,
-    };
-
-    // Publish the private directory first. The public document is the marker
-    // that makes the client discoverable, and an unexpected public collision
-    // rolls the newly published private directory back.
-    fs::rename(staging.path(), &private_client_path)
-        .context("publishing private local client key")?;
-    if let Err(error) = write_new_yaml_atomic(
-        &public_path,
-        &envelope_lines(ACCESS_CLIENT_API_VERSION, ACCESS_CLIENT_KIND),
-        &document,
-        PUBLIC_FILE_MODE,
-    ) {
-        let _ = fs::remove_dir_all(&private_client_path);
-        return Err(error);
-    }
-
-    match format {
-        OutputFormat::Human => println!(
-            "Added client {} with {}.",
-            document.client_id,
-            joined_profiles(&document.access_profiles)
-        ),
-        OutputFormat::Json => {
-            let kid = document.keys[0]
-                .get("kid")
-                .and_then(Value::as_str)
-                .context("generated client public key carries no kid")?;
-            crate::print_report(&crate::command_report(
-                "access client add",
-                json!({
-                    "client": document.client_id,
-                    "accessProfiles": document.access_profiles,
-                    "kid": kid,
-                    "files": [
-                        private_client_path.join(PRIVATE_KEY_FILENAME).display().to_string(),
-                        public_path.display().to_string(),
-                    ],
-                }),
-            ));
-        }
-    }
-    Ok(ExitCode::SUCCESS)
-}
-
-fn list_clients(project: &Path, format: OutputFormat) -> Result<ExitCode> {
-    let project = canonical_project(project)?;
-    let clients = load_client_documents_if_present(&project)?;
-    if clients.is_empty() {
-        match format {
-            OutputFormat::Human => println!("No clients configured."),
-            OutputFormat::Json => crate::print_report(&crate::command_report(
-                "access client list",
-                json!({"entries": []}),
-            )),
-        }
-        return Ok(ExitCode::SUCCESS);
-    }
-    let access_profiles = load_access_profiles(&project)?;
-    if format == OutputFormat::Human {
-        println!("CLIENT\tSTATUS\tACCESS PROFILES");
-        for client in clients.values() {
-            validate_client_profiles(&client.access_profiles, &access_profiles)?;
-            let status = match client.status {
-                ClientStatus::Active => "active",
-                ClientStatus::Revoked => "revoked",
-            };
-            println!(
-                "{}\t{}\t{}",
-                client.client_id,
-                status,
-                client.access_profiles.join(", ")
-            );
-        }
-        return Ok(ExitCode::SUCCESS);
-    }
-    let mut entries = Vec::with_capacity(clients.len());
-    for client in clients.values() {
-        validate_client_profiles(&client.access_profiles, &access_profiles)?;
-        let status = match client.status {
-            ClientStatus::Active => "active",
-            ClientStatus::Revoked => "revoked",
-        };
-        entries.push(json!({
-            "id": client.client_id,
-            "status": status,
-            "accessProfiles": client.access_profiles,
-        }));
-    }
-    crate::print_report(&crate::command_report(
-        "access client list",
-        json!({"entries": entries}),
-    ));
-    Ok(ExitCode::SUCCESS)
-}
-
-fn revoke_client(args: &ClientRevokeArgs, format: OutputFormat) -> Result<ExitCode> {
-    let project = canonical_project(&args.project)?;
-    validate_identifier(&args.client, "client")?;
-    let _lifecycle = dev::lock_project_lifecycle(&project)?;
-    require_stopped_or_absent_session(&project)?;
-    let path = client_document_path(&project, &args.client);
-    let mut document = read_client_document(&path)?;
-    if document.status == ClientStatus::Revoked {
-        bail!("client {} is already revoked", args.client);
-    }
-    // Nothing consumes a revoked client's private state, and re-adding the
-    // same id is refused while its directory exists, so revocation removes
-    // the directory rather than retaining key material no client can use.
-    // A client admitted without a local key has no directory to remove. The
-    // directory is removed before the record is marked revoked: if removal
-    // fails, the record is left untouched and a rerun retries the removal.
-    let private_directory = project
-        .join(PRIVATE_STATE_DIRECTORY)
-        .join(CLIENTS_DIRECTORY)
-        .join(&args.client);
-    let removed = match fs::symlink_metadata(&private_directory) {
-        Ok(_) => {
-            fs::remove_dir_all(&private_directory).with_context(|| {
-                format!(
-                    "removing revoked client state {}",
-                    private_directory.display()
-                )
-            })?;
-            Some(private_client_directory(&args.client))
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!(
-                    "inspecting revoked client state {}",
-                    private_directory.display()
-                )
-            })
-        }
-    };
-    document.status = ClientStatus::Revoked;
-    replace_yaml_atomic(
-        &path,
-        &envelope_lines(ACCESS_CLIENT_API_VERSION, ACCESS_CLIENT_KIND),
-        &document,
-        PUBLIC_FILE_MODE,
-    )?;
-    match format {
-        OutputFormat::Human => match &removed {
-            Some(removed) => println!(
-                "Revoked client {} (removed local private key {removed}).",
-                document.client_id
-            ),
-            None => println!("Revoked client {}.", document.client_id),
-        },
-        OutputFormat::Json => crate::print_report(&crate::command_report(
-            "access client revoke",
-            json!({
-                "client": document.client_id,
-                "removed": removed,
-            }),
-        )),
-    }
-    Ok(ExitCode::SUCCESS)
-}
-
-/// Resolve one client against the exact access-profile generation currently
-/// active in local development.
 pub(crate) fn resolve_ready_client(
     project: &Path,
     client_id: &str,
@@ -707,13 +343,6 @@ pub(crate) fn generated_caller_audience(project: &Path, profile: &str) -> Result
         bail!("profile {profile} has multiple audiences; register an access client with --evidence-audience before dev start");
     }
     Ok(allowed.first().expect("one audience").clone())
-}
-
-fn require_stopped_or_absent_session(project: &Path) -> Result<()> {
-    if dev::try_load_ready_state(project)?.is_some() {
-        bail!("stop the local development session before changing clients; the next start reprovisions the complete issuer registration");
-    }
-    Ok(())
 }
 
 fn validate_client_profiles(
@@ -1115,16 +744,6 @@ fn validate_private_client_key(project: &Path, document: &ClientDocument) -> Res
     Ok(path)
 }
 
-fn read_public_jwk(path: &Path) -> Result<Value> {
-    let text = read_bounded_file(path, MAX_DOCUMENT_BYTES, Some(PRIVATE_FILE_MODE))?;
-    PublicJwk::parse(&text).context("generated public JWK is invalid")?;
-    let value: Value = serde_json::from_str(&text).context("parsing generated public JWK")?;
-    if value.get("d").is_some() {
-        bail!("generated public JWK unexpectedly contains private material");
-    }
-    Ok(value)
-}
-
 fn yaml_paths_if_present(directory: &Path, maximum: usize, label: &str) -> Result<Vec<PathBuf>> {
     match fs::symlink_metadata(directory) {
         Ok(metadata) => metadata,
@@ -1193,122 +812,6 @@ fn read_bounded_file(path: &Path, maximum: u64, required_mode: Option<u32>) -> R
     Ok(text)
 }
 
-/// Write one access document: its envelope lines, then its members.
-fn write_new_yaml_atomic<T: Serialize>(
-    path: &Path,
-    envelope: &str,
-    value: &T,
-    mode: u32,
-) -> Result<()> {
-    reject_existing(path)?;
-    let bytes = format!(
-        "{envelope}{}",
-        crate::authored::to_indented_yaml(value).context("rendering access document")?
-    );
-    let parent = path.parent().context("access document has no parent")?;
-    let mut temporary = tempfile::Builder::new()
-        .prefix(".access-write-")
-        .tempfile_in(parent)
-        .context("creating temporary access document")?;
-    temporary
-        .as_file_mut()
-        .set_permissions(fs::Permissions::from_mode(mode))?;
-    temporary.write_all(bytes.as_bytes())?;
-    temporary.as_file_mut().sync_all()?;
-    temporary
-        .persist_noclobber(path)
-        .map_err(|error| error.error)
-        .with_context(|| format!("publishing {} without overwrite", path.display()))?;
-    sync_directory(parent)?;
-    Ok(())
-}
-
-fn replace_yaml_atomic<T: Serialize>(
-    path: &Path,
-    envelope: &str,
-    value: &T,
-    mode: u32,
-) -> Result<()> {
-    validate_path_mode(path, false, mode)?;
-    let bytes = format!(
-        "{envelope}{}",
-        crate::authored::to_indented_yaml(value).context("rendering access document")?
-    );
-    let parent = path.parent().context("access document has no parent")?;
-    let mut temporary = tempfile::Builder::new()
-        .prefix(".access-write-")
-        .tempfile_in(parent)
-        .context("creating temporary access document")?;
-    temporary
-        .as_file_mut()
-        .set_permissions(fs::Permissions::from_mode(mode))?;
-    temporary.write_all(bytes.as_bytes())?;
-    temporary.as_file_mut().sync_all()?;
-    temporary
-        .persist(path)
-        .map_err(|error| error.error)
-        .with_context(|| format!("atomically replacing {}", path.display()))?;
-    sync_directory(parent)?;
-    Ok(())
-}
-
-fn sync_directory(path: &Path) -> Result<()> {
-    File::open(path)
-        .with_context(|| format!("opening directory {}", path.display()))?
-        .sync_all()
-        .with_context(|| format!("syncing directory {}", path.display()))
-}
-
-fn ensure_public_directory(path: &Path) -> Result<()> {
-    ensure_directory(path, PUBLIC_DIRECTORY_MODE)
-}
-
-fn ensure_private_directory(path: &Path) -> Result<()> {
-    ensure_directory(path, PRIVATE_DIRECTORY_MODE)
-}
-
-fn ensure_directory(path: &Path, mode: u32) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => validate_path_mode(path, true, mode),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::DirBuilder::new()
-                .mode(mode)
-                .create(path)
-                .with_context(|| format!("creating {}", path.display()))?;
-            // The kernel masks the requested mode with the process umask, so
-            // an operator under `umask 077` gets a 0700 public directory. Set
-            // the intended mode explicitly on the directory this call created,
-            // then prove it, rather than refusing a directory we just made.
-            set_directory_mode_without_following(path, mode)?;
-            validate_path_mode(path, true, mode)
-        }
-        Err(error) => Err(error.into()),
-    }
-}
-
-/// Set `mode` on the directory at `path` through a descriptor opened without
-/// following a final symlink.
-///
-/// A path-based chmod follows a symlink, so a directory swapped for one
-/// between its creation and the chmod would lend this process's authority to
-/// whatever the link names. Opening with `NOFOLLOW` and `DIRECTORY` refuses
-/// anything but the plain directory, and the mode is applied to that very
-/// directory rather than to a name resolved a second time.
-fn set_directory_mode_without_following(path: &Path, mode: u32) -> Result<()> {
-    let descriptor = rustix::fs::open(
-        path,
-        rustix::fs::OFlags::RDONLY
-            | rustix::fs::OFlags::CLOEXEC
-            | rustix::fs::OFlags::NOFOLLOW
-            | rustix::fs::OFlags::DIRECTORY,
-        rustix::fs::Mode::empty(),
-    )
-    .with_context(|| format!("opening {} as a plain directory", path.display()))?;
-    File::from(descriptor)
-        .set_permissions(fs::Permissions::from_mode(mode))
-        .with_context(|| format!("setting the mode of {}", path.display()))
-}
-
 fn validate_path_mode(path: &Path, directory: bool, mode: u32) -> Result<()> {
     let metadata =
         fs::symlink_metadata(path).with_context(|| format!("inspecting {}", path.display()))?;
@@ -1328,14 +831,6 @@ fn validate_path_mode(path: &Path, directory: bool, mode: u32) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn reject_existing(path: &Path) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Ok(_) => bail!("refusing to overwrite existing {}", path.display()),
-        Err(error) => Err(error.into()),
-    }
 }
 
 fn validate_filename_id(path: &Path, id: &str, label: &str) -> Result<()> {
@@ -1398,55 +893,4 @@ fn client_document_path(project: &Path, client_id: &str) -> PathBuf {
 
 fn local_client_uri(client_id: &str) -> String {
     format!("urn:registrystack:evidence:local:client:{client_id}")
-}
-
-fn joined_profiles(access_profiles: &[String]) -> String {
-    if access_profiles.len() == 1 {
-        format!("access profile {}", access_profiles[0])
-    } else {
-        format!("access profiles {}", access_profiles.join(", "))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::os::unix::fs::symlink;
-
-    use super::*;
-
-    /// A directory swapped for a symlink before its mode is set must not lend
-    /// the chmod to the link's target.
-    #[test]
-    fn setting_a_directory_mode_refuses_a_symlink_and_leaves_its_target_alone() {
-        let fixture = tempfile::tempdir().expect("tempdir");
-        let target = fixture.path().join("private-target");
-        fs::create_dir(&target).expect("target directory");
-        fs::set_permissions(&target, fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE))
-            .expect("private target mode");
-        let swapped = fixture.path().join("public");
-        symlink(&target, &swapped).expect("swapped symlink");
-
-        assert!(set_directory_mode_without_following(&swapped, PUBLIC_DIRECTORY_MODE).is_err());
-        assert_eq!(
-            fs::metadata(&target)
-                .expect("target metadata")
-                .permissions()
-                .mode()
-                & 0o7777,
-            PRIVATE_DIRECTORY_MODE
-        );
-
-        let plain = fixture.path().join("plain");
-        fs::create_dir(&plain).expect("plain directory");
-        set_directory_mode_without_following(&plain, PUBLIC_DIRECTORY_MODE)
-            .expect("a plain directory takes the mode");
-        assert_eq!(
-            fs::metadata(&plain)
-                .expect("plain metadata")
-                .permissions()
-                .mode()
-                & 0o7777,
-            PUBLIC_DIRECTORY_MODE
-        );
-    }
 }

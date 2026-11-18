@@ -55,7 +55,7 @@ class BaseRegistryEngineHarnessTests(unittest.TestCase):
         self.assertIn("checks: ['rate>0.99']", sweep)
         self.assertNotIn("token-soak", runner)
         self.assertNotIn("herd", runner)
-        self.assertIn("dev token", runner)
+        self.assertIn("rstack dev token", runner)
         self.assertIn("--http-debug|--http-debug=*|--system-tags|--system-tags=*", runner)
         for profile in (sweep, burst):
             self.assertNotIn("sleep(", profile)
@@ -159,9 +159,13 @@ class BaseRegistryEngineHarnessTests(unittest.TestCase):
                 json.loads((project / "registry.yaml").read_text(encoding="utf-8")),
                 expected_registry,
             )
-            clients = (project / "dev-clients.yaml").read_text(encoding="utf-8")
-            self.assertIn("id: loadtest-driver", clients)
-            self.assertIn("accessProfiles: [business-operator]", clients)
+            self.assertFalse((project / "dev-clients.yaml").exists())
+            plan = (project / "dev.yaml").read_text(encoding="utf-8")
+            self.assertIn("kind: RStackDev", plan)
+            self.assertIn("loadtest-driver:", plan)
+            self.assertIn("profile: business-operator", plan)
+            self.assertIn("scenarioFile: dev/scenarios.yaml", plan)
+            self.assertIn("kind: RStackScenarios", (project / "dev/scenarios.yaml").read_text(encoding="utf-8"))
             self.assertNotIn(
                 "operator-without-purpose-is-concealed",
                 (project / "tests/journeys.yaml").read_text(encoding="utf-8"),
@@ -197,58 +201,69 @@ class BaseRegistryEngineHarnessTests(unittest.TestCase):
             self.assertFalse((root / "project").exists())
             self.assertTrue(linked_output.is_symlink())
 
-    def test_dev_header_must_be_the_owned_private_session_file(self) -> None:
+    def test_dev_header_must_be_the_owned_private_run_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            project = Path(directory) / "project"
-            header = project / ".breg/dev/secrets/loadtest-driver.header"
+            root = Path(directory).resolve()
+            header = root / "state/tokens/loadtest-driver.header"
             header.parent.mkdir(parents=True)
             header.write_text("Authorization: Bearer header.payload.signature\n", encoding="ascii")
             header.chmod(0o600)
-            fake = Path(directory) / "bregctl"
-            fake.write_text(f"#!/bin/sh\nprintf '%s\\n' '{{\"headerFile\":\"{header}\"}}'\n", encoding="utf-8")
+            calls = root / "calls.txt"
+            report = {"credentials": [{"product": "breg", "profile": "business-operator", "header_file": str(header)}]}
+            fake = root / "rstack"
+            fake.write_text(
+                f"#!/bin/sh\nprintf '%s %s\\n' \"$RSTACK_DEV_STATE_DIR\" \"$*\" >>'{calls}'\n"
+                f"printf '%s\\n' '{json.dumps(report)}'\n",
+                encoding="utf-8",
+            )
             fake.chmod(0o700)
-            self.assertEqual(loadenv.fresh_header(fake, project, "loadtest-driver"), header.resolve())
+            run_id = "a" * 32
+            state = root / "state"
+            self.assertEqual(loadenv.fresh_header(fake, run_id, state, "loadtest-driver"), header.resolve())
+            self.assertEqual(
+                calls.read_text(encoding="utf-8").strip(),
+                f"{state} --install-root {root} --format json dev token {run_id} --as loadtest-driver",
+            )
             header.chmod(0o644)
             with self.assertRaises(loadenv.LoadtestError):
-                loadenv.fresh_header(fake, project, "loadtest-driver")
+                loadenv.fresh_header(fake, run_id, state, "loadtest-driver")
+            with self.assertRaises(loadenv.LoadtestError):
+                loadenv.fresh_header(fake, run_id, state, "someone-else")
 
-    def test_environment_records_only_the_owned_ready_session(self) -> None:
+    def test_environment_records_only_the_owned_ready_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve() / ".run"
-            project = root / "project"
-            state = project / ".breg/dev/state.json"
-            state.parent.mkdir(parents=True)
+            (root / "project").mkdir(parents=True)
             (root / ".launcher-owned").write_text("registry-stack-breg-loadtest-v2\n", encoding="ascii")
-            state.write_text(json.dumps({"containerId": "a" * 64}), encoding="utf-8")
-            state.chmod(0o600)
-            bregctl = Path(directory) / "bregctl"
-            bregctl.write_text("", encoding="utf-8")
+            rstack = Path(directory) / "rstack"
+            rstack.write_text("", encoding="utf-8")
+            run_id = "b" * 32
             report = {
-                "ok": True,
-                "status": "complete",
-                "outcome": "ready",
-                "project": str(project),
-                "stateFile": str(state),
-                "bregUrl": "http://127.0.0.1:4321",
+                "schema_version": "registry.rstack.dev.v1",
+                "run_id": run_id,
+                "products": {"breg": "http://127.0.0.1:4321"},
+                "scenarios": [],
             }
             report_path = root / "dev-report.json"
             for stale in (
-                {
-                    **{key: value for key, value in report.items() if key != "outcome"},
-                    "status": "ready",
-                },
-                {key: value for key, value in report.items() if key != "outcome"},
-                {**report, "outcome": "starting"},
-                {**report, "ok": False},
+                {**report, "schema_version": "registry.rstack.error.v1"},
+                {key: value for key, value in report.items() if key != "run_id"},
+                {**report, "run_id": "not-a-run-id"},
+                {**report, "products": {}},
+                {**report, "products": {"breg": "http://example.test:4321"}},
+                {**report, "scenarios": [{"id": "x", "result": "failed"}]},
             ):
                 report_path.write_text(json.dumps(stale), encoding="utf-8")
                 with self.assertRaises(loadenv.LoadtestError):
-                    loadenv.write_environment(root, report_path, bregctl, "release", "")
+                    loadenv.write_environment(root, report_path, rstack, "release", "", "c" * 64)
             report_path.write_text(json.dumps(report), encoding="utf-8")
-            loadenv.write_environment(root, report_path, bregctl, "release", "")
+            with self.assertRaises(loadenv.LoadtestError):
+                loadenv.write_environment(root, report_path, rstack, "release", "", "not-a-container")
+            loadenv.write_environment(root, report_path, rstack, "release", "", "c" * 64)
             environment = json.loads((root / "env.json").read_text(encoding="utf-8"))
             self.assertEqual(environment["breg_url"], "http://127.0.0.1:4321")
-            self.assertEqual(environment["database"], {"container": "a" * 64, "database": "breg_dev"})
+            self.assertEqual(environment["run_id"], run_id)
+            self.assertEqual(environment["database"], {"container": "c" * 64, "database": f"rstack_{run_id}_breg"})
 
     def test_describe_accepts_only_the_recorded_build_of_this_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -256,14 +271,16 @@ class BaseRegistryEngineHarnessTests(unittest.TestCase):
             root = repository / "products/breg/loadtest/.run"
             (root / "project").mkdir(parents=True)
             (root / ".launcher-owned").write_text("registry-stack-breg-loadtest-v2\n", encoding="ascii")
-            bregctl = repository / "target/release/bregctl"
-            bregctl.parent.mkdir(parents=True)
-            bregctl.write_text("", encoding="utf-8")
+            rstack = repository / "target/release/rstack"
+            rstack.parent.mkdir(parents=True)
+            rstack.write_text("", encoding="utf-8")
             library = repository / "fips"
             library.mkdir()
+            run_id = "d" * 32
             environment = {
                 "breg_url": "http://127.0.0.1:1234",
-                "bregctl": str(bregctl),
+                "rstack": str(rstack),
+                "run_id": run_id,
                 "build_profile": "release",
                 "project": str(root / "project"),
                 "runtime_library_path": str(library),
@@ -271,7 +288,7 @@ class BaseRegistryEngineHarnessTests(unittest.TestCase):
             (root / "env.json").write_text(json.dumps(environment), encoding="utf-8")
             self.assertEqual(
                 loadenv.describe(root, repository),
-                ("http://127.0.0.1:1234", str(bregctl), str(root / "project"), str(library)),
+                ("http://127.0.0.1:1234", str(rstack), run_id, str(root / "state"), str(library)),
             )
             environment["build_profile"] = "debug"
             (root / "env.json").write_text(json.dumps(environment), encoding="utf-8")
@@ -283,7 +300,7 @@ class BaseRegistryEngineHarnessTests(unittest.TestCase):
             run_dir = Path(directory) / ".run"
             run_dir.mkdir()
             (run_dir / "env.json").write_text("{}", encoding="utf-8")
-            described = subprocess.CompletedProcess([], 0, stdout="http://127.0.0.1:4321 /opt/bregctl /opt/project\n", stderr="")
+            described = subprocess.CompletedProcess([], 0, stdout="http://127.0.0.1:4321 /opt/rstack aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa /opt/state\n", stderr="")
             attempts: list[str] = []
 
             def seed_entity(_url, _route, records, _tokens, _workers, label):  # type: ignore[no-untyped-def]
@@ -500,8 +517,11 @@ done
         self.assertIn("trap cleanup_failed_start EXIT", up)
         self.assertIn("registry_cargo_build", up)
         self.assertIn("--runtime-library-path", up)
-        self.assertIn("bregctl\" --format json dev start", up)
-        self.assertIn("dev stop --remove", down)
+        self.assertIn('rstack_dev start', up)
+        self.assertIn('dev stop "$run_id"', up)
+        self.assertIn('dev stop "$run_id"', down)
+        self.assertNotIn("bregctl dev", up + down)
+        self.assertNotIn("--breg-port", up)
         self.assertNotIn("rm -rf", up + down)
 
     def test_database_samples_are_one_json_object_per_line(self) -> None:

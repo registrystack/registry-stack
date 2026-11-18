@@ -33,11 +33,12 @@ root=Path(sys.argv[1]).resolve().parent
 if (root/'.launcher-owned').read_text().strip()!='registry-stack-breg-loadtest-v2': raise SystemExit(2)
 project=(root/'project').resolve()
 if Path(environment['project']).resolve()!=project: raise SystemExit(2)
-state=json.load(open(project/'.breg/dev/state.json', encoding='utf-8'))
+run_id=environment['run_id']
 container=environment["database"]["container"]
-if container!=state.get('containerId') or len(container)!=64 or any(c not in '0123456789abcdefABCDEF' for c in container): raise SystemExit(2)
-if environment["database"]["database"]!='breg_dev': raise SystemExit(2)
-print(container, 'breg_dev')
+if len(run_id)!=32 or len(container)!=64 or any(c not in '0123456789abcdefABCDEF' for c in container): raise SystemExit(2)
+database=f'rstack_{run_id}_breg'
+if environment["database"]["database"]!=database: raise SystemExit(2)
+print(container, database)
 PY
 )
 

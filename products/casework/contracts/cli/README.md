@@ -29,10 +29,9 @@ the common envelope and diagnostics, and may either omit command-specific
 members or carry one complete typed command payload. Partial payloads are
 invalid. The commands are
 `init`, `check`, `explain`, `test`, `types`, `provider-add`, `provider-pair`, `lifecycle`,
-`package`, `doctor`, `plan`, `apply`, `status`, `dev`, `dev-events`, `dev-token`,
-`dev-grant`, `dev-identity`, and `usage`; `internal` is the closed failure-only
-variant used when a hidden command or panic stops unexpectedly. Dev and
-provider-add reports expose their command result as `outcome`; the envelope
+`package`, `doctor`, `plan`, `apply`, `status`, and `usage`; `internal` is the closed failure-only
+variant used when a hidden command or panic stops unexpectedly. Provider-add
+reports expose their command result as `outcome`; the envelope
 `status` remains the process result class.
 
 Policy, context, stage, outcome, routing, clock, staffing and activation shapes

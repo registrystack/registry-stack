@@ -11,7 +11,7 @@ if [[ $# -ne 0 ]]; then
   exit 2
 fi
 if ! command -v docker >/dev/null 2>&1; then
-  printf '%s\n' 'docker is required to stop the owned bregctl development session.' >&2
+  printf '%s\n' 'docker is required to stop the owned rstack dev run.' >&2
   exit 2
 fi
 if [[ -L "$run_dir" || ! -d "$run_dir" || ! -f "$marker" ]] ||
@@ -25,11 +25,13 @@ if [[ -L "$run_dir/project" || ! -d "$run_dir/project" || ! -f "$run_dir/env.jso
 fi
 
 environment_fields=$(python3 "$loadtest_dir/support/loadenv.py" describe --root "$run_dir" --repository "$repository_root") || exit 2
-read -r _ bregctl _ runtime_library_path <<<"$environment_fields"
+read -r _ rstack run_id state_dir runtime_library_path <<<"$environment_fields"
 if [[ -n "$runtime_library_path" ]]; then
   export DYLD_FALLBACK_LIBRARY_PATH="$runtime_library_path${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
 fi
 
-"$bregctl" --format json dev stop --remove --docker-bin "$(command -v docker)" "$run_dir/project" >"$run_dir/stop-report.json"
-printf '%s\n' 'Load-test services and their owned database were removed through bregctl dev.'
+build_dir=$(dirname -- "$rstack")
+export RSTACK_DEV_STATE_DIR="$state_dir" RSTACK_BREG_BIN="$build_dir/breg" RSTACK_BREGCTL_BIN="$build_dir/bregctl"
+"$rstack" --install-root "$build_dir" --format json dev stop "$run_id" >"$run_dir/stop-report.json"
+printf '%s\n' 'Load-test services and their managed database were removed through rstack dev.'
 printf '%s\n' "Evidence and synthetic seeds remain at $run_dir; move that directory aside before another start."

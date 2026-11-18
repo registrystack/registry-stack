@@ -9,7 +9,11 @@ use std::io;
 use std::path::Path;
 
 /// Every file of the starter, by its path relative to the new directory.
-pub(crate) const FILES: [(&str, &str); 19] = [
+pub(crate) const FILES: [(&str, &str); 21] = [
+    (
+        "dev.yaml",
+        include_str!("../../../products/messaging/examples/starter/dev.yaml"),
+    ),
     (
         "messaging.yaml",
         include_str!("../../../products/messaging/examples/starter/messaging.yaml"),
@@ -85,6 +89,10 @@ pub(crate) const FILES: [(&str, &str); 19] = [
     (
         "templates/appointment-reminder/1/template.yaml",
         include_str!("../../../products/messaging/examples/starter/templates/appointment-reminder/1/template.yaml"),
+    ),
+    (
+        "tests/scenarios.yaml",
+        include_str!("../../../products/messaging/examples/starter/tests/scenarios.yaml"),
     ),
 ];
 

@@ -370,13 +370,6 @@ fn refusals_name_the_command_that_refused() {
     );
 
     let output = evidencectl()
-        .args(["--format", "json", "audit", "show", "--last-operation"])
-        .current_dir(workspace.path())
-        .output()
-        .expect("run audit show");
-    conforming(&output, "audit show", DOMAIN_REFUSAL, "domain-refusal");
-
-    let output = evidencectl()
         .args(["--format", "json", "jwks", "--output"])
         .arg(workspace.path().join("jwks.json"))
         .arg(&missing)

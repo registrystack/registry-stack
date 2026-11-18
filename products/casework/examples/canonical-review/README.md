@@ -4,8 +4,7 @@ This project combines a submitted-context decision with a BReg Proposal review. 
 
 Create this project with `caseworkctl init ./review --template canonical-review`,
 then run `caseworkctl check ./review` offline. The installed template includes
-the owner-authored policy, vendored context schema, local teaching clients,
-and offline editor schemas.
+the owner-authored policy, vendored context schema, and offline editor schemas.
 
 For a connected runtime, build the matching BReg package and pair it before
 packaging Casework.
@@ -38,9 +37,8 @@ The source schema is vendored for offline policy compilation. BReg remains the a
 
 Run `bregctl --format json examples review ./reviewed-session` to start the
 connected demonstration and leave the Proposal pending. Set `CASEWORK_URL`
-and `CASEWORK_PROJECT` to `caseworkUrl` and `caseworkProject` from its JSON
-report. Run `caseworkctl --format json dev token staff "$CASEWORK_PROJECT"`
-to refresh the reviewer's owner-only header file, and set `STAFF_HEADER` to
+to `caseworkUrl` from its JSON report. Run `rstack dev token RUN --as staff`
+to write the reviewer's owner-only header file, and set `STAFF_HEADER` to
 the returned `headerFile` path. The file carries the bearer and Casework profile.
 
 With that header file and `Registry-Source-Profile: proposal-reviewer`, read

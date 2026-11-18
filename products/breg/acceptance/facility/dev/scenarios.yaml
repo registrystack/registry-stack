@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: facility-bounded-read
+    steps:
+      - id: create-facility
+        product: breg
+        as: facility-operator
+        method: POST
+        path: /v1/records/facilities
+        headers: {Idempotency-Key: scenario-create-facility}
+        body:
+          data:
+            facilityCode: FACILITY-SCENARIO-001
+            displayName: Scenario facility
+            administrativeBoundary: north-district
+        expect: {status: 201}
+        capture: {facility: {type: pointer, pointer: /data/recordIdentifier}}
+      - id: south-operator-cannot-read
+        product: breg
+        as: facility-south-operator
+        method: GET
+        path: "/v1/records/facilities/{{facility}}"
+        expect: {status: 404, code: resource.not_found}

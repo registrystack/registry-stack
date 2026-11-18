@@ -6,7 +6,7 @@
   "kind": "CaseworkReport",
   "version": "0.46.1-dev",
   "databaseAccess": false,
-  "filesChecked": 2,
+  "filesChecked": 1,
   "networkAccess": false,
   "policyBindings": [
     {

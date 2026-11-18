@@ -16,7 +16,6 @@ const runtimeReference = 'docs/site/src/content/docs/reference/casework-configur
 export const CONTRACTS = [
   { id: 'project', title: 'casework.yaml', file: 'project/project.schema.json', reference: configureReference },
   { id: 'fixture', title: 'fixtures/*.yaml', file: 'fixture/fixture.schema.json', reference: configureReference },
-  { id: 'dev-clients', title: 'dev-clients.yaml', file: 'dev-clients/dev-clients.schema.json', reference: configureReference },
   { id: 'holiday-set', title: 'holiday-sets/*.yaml', file: 'holiday-set/holiday-set.schema.json', reference: configureReference },
   { id: 'runtime', title: 'runtime.yaml', file: 'runtime/runtime.schema.json', reference: runtimeReference },
 ].map((contract) => ({

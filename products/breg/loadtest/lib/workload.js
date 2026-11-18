@@ -15,7 +15,7 @@ export const cursorPagesFollowed = new Counter('cursor_pages_followed');
 
 const authorization = open(__ENV.AUTHORIZATION_HEADER_FILE, 'r').trim();
 if (!authorization.startsWith('Authorization: Bearer ') || authorization.split('.').length !== 3) {
-  throw new Error('AUTHORIZATION_HEADER_FILE must contain one bregctl dev Authorization header');
+  throw new Error('AUTHORIZATION_HEADER_FILE must contain one rstack dev Authorization header');
 }
 const authorizationValue = authorization.slice('Authorization: '.length);
 

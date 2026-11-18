@@ -223,6 +223,7 @@ pub(super) enum Product {
     Breg,
     Casework,
     Evidence,
+    Messaging,
 }
 
 impl Product {
@@ -231,6 +232,7 @@ impl Product {
             Self::Breg => "breg",
             Self::Casework => "casework",
             Self::Evidence => "evidence",
+            Self::Messaging => "messaging",
         }
     }
 }
@@ -312,7 +314,7 @@ pub(super) struct ApplicationPlan {
 pub(super) struct ProductPlan {
     /// Which product to start.
     pub product: Product,
-    /// Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg, casework.yaml for Casework or evidence.yaml for Evidence.
+    /// Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg, casework.yaml for Casework, evidence.yaml for Evidence or messaging.yaml for Messaging.
     pub project: PathBuf,
     /// Token audience this product accepts: 1 to 256 characters without whitespace or control characters, distinct from the other products' audiences.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
@@ -338,7 +340,7 @@ pub(super) struct TestPerson {
     /// Client identifier of this person's tokens: 1 to 256 characters without whitespace or control characters.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub client: String,
-    /// The authority this person holds in each product, keyed by `breg`, `casework` or `evidence`. An Evidence grant's profile is the requester tag the token carries. Give at least one grant, only for products listed in `products`.
+    /// The authority this person holds in each product, keyed by `breg`, `casework`, `evidence` or `messaging`. An Evidence grant's profile is the requester tag the token carries. Give at least one grant, only for products listed in `products`.
     #[serde(deserialize_with = "deserialize_grants")]
     pub grants: BTreeMap<Product, Grant>,
     /// Forward the same authority to both products. Both grants must declare the same scopes and additional claims.
@@ -370,6 +372,7 @@ struct GrantsDocument {
     breg: Option<Grant>,
     casework: Option<Grant>,
     evidence: Option<Grant>,
+    messaging: Option<Grant>,
 }
 
 fn deserialize_grants<'de, D>(
@@ -383,6 +386,7 @@ where
         grants.breg.map(|grant| (Product::Breg, grant)),
         grants.casework.map(|grant| (Product::Casework, grant)),
         grants.evidence.map(|grant| (Product::Evidence, grant)),
+        grants.messaging.map(|grant| (Product::Messaging, grant)),
     ]
     .into_iter()
     .flatten()
@@ -1113,7 +1117,7 @@ impl Plan {
             !self.products.is_empty(),
             "/products",
             "The plan must name at least one product.",
-            "Add a BReg, Casework or Evidence product to products.",
+            "Add a BReg, Casework, Evidence or Messaging product to products.",
         )?;
         let mut products = BTreeSet::new();
         let mut audiences = BTreeSet::new();
@@ -1146,6 +1150,7 @@ impl Plan {
                 Product::Breg => "registry.yaml",
                 Product::Casework => "casework.yaml",
                 Product::Evidence => "evidence.yaml",
+                Product::Messaging => "messaging.yaml",
             };
             require_file_inside(
                 root,
@@ -1202,7 +1207,7 @@ impl Plan {
                 !person.grants.is_empty(),
                 &format!("{field}/grants"),
                 "The test person must have at least one product grant.",
-                "Add a BReg, Casework or Evidence grant for this test person.",
+                "Add a BReg, Casework, Evidence or Messaging grant for this test person.",
             )?;
             for (product, grant) in &person.grants {
                 let field = format!("{field}/grants/{}", product.name());
@@ -2637,6 +2642,63 @@ mod tests {
         fs::write(
             root.path().join("dev.yaml"),
             plan("{scopes: [\"evidence:request\"]}"),
+        )
+        .unwrap();
+        let error = read_plan(root.path()).err().unwrap().to_string();
+        assert!(error.contains("profile"), "{error}");
+    }
+
+    /// A Messaging-only plan: the project holds `messaging.yaml`, the run issuer
+    /// is an HTTPS name (Messaging verifies tokens against the run's static key
+    /// set), and the grant is the Messaging access profile with its scopes.
+    #[test]
+    fn messaging_plan_and_grant_decode_and_validate() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("messaging.yaml"), "fixture").unwrap();
+        write_scenarios(
+            root.path(),
+            json!({"id": "send", "steps": [{
+                "id": "list", "product": "messaging", "as": "operator",
+                "method": "GET", "path": "/v1/messages",
+                "expect": {"status": 200}
+            }]}),
+        );
+        let plan = |issuer: &str, grant: &str| {
+            format!(
+                "apiVersion: {API_VERSION}\nkind: {KIND}\nissuer: {issuer}\nproducts:\n  - {{product: messaging, project: ., audience: urn:example:messaging}}\npeople:\n  operator:\n    subject: operator\n    client: operations-console\n    grants:\n      messaging: {grant}\nscenarioFile: tests/scenarios.yaml\n"
+            )
+        };
+
+        fs::write(
+            root.path().join("dev.yaml"),
+            plan(
+                "https://issuer.example.invalid",
+                "{profile: operations, scopes: [\"messaging:operate\"]}",
+            ),
+        )
+        .unwrap();
+        let decoded = read_plan(root.path()).unwrap();
+        validate_plan(root.path(), &decoded).unwrap();
+        assert_eq!(decoded.value.products[0].product, Product::Messaging);
+        assert_eq!(Product::Messaging.name(), "messaging");
+        assert_eq!(
+            decoded.value.people["operator"].grants[&Product::Messaging].profile,
+            "operations"
+        );
+
+        // Messaging verifies a static key set, so it does not own the run issuer.
+        fs::write(
+            root.path().join("dev.yaml"),
+            plan("run", "{profile: operations, scopes: []}"),
+        )
+        .unwrap();
+        let decoded = read_plan(root.path()).unwrap();
+        let refusal = validate_plan(root.path(), &decoded).err().unwrap();
+        assert!(format!("{refusal:#}").contains("/issuer"), "{refusal:#}");
+
+        fs::write(
+            root.path().join("dev.yaml"),
+            plan("https://issuer.example.invalid", "{scopes: []}"),
         )
         .unwrap();
         let error = read_plan(root.path()).err().unwrap().to_string();

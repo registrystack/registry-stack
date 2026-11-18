@@ -97,7 +97,7 @@ if [[ ! -f "$run_dir/seed/establishment-ids.txt" || ! -f "$run_dir/seed/seed-sum
 fi
 
 environment_fields=$(python3 "$loadtest_dir/support/loadenv.py" describe --root "$run_dir" --repository "$repository_root") || exit 2
-read -r breg_url bregctl project runtime_library_path <<<"$environment_fields"
+read -r breg_url rstack run_id state_dir runtime_library_path <<<"$environment_fields"
 if [[ -n "$runtime_library_path" ]]; then
   export DYLD_FALLBACK_LIBRARY_PATH="$runtime_library_path${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
 fi
@@ -126,7 +126,7 @@ require_token_window() {
     total=$(python3 -c 'import sys; print(float(sys.argv[1])+float(sys.argv[2]))' "$total" "$seconds")
   done
   python3 -c 'import sys; raise SystemExit(0 if float(sys.argv[1]) <= 240 else 1)' "$total" || {
-    printf '%s\n' "$label must finish within 4 minutes so one fresh bregctl dev token remains valid." >&2
+    printf '%s\n' "$label must finish within 4 minutes so one fresh rstack dev token remains valid." >&2
     exit 2
   }
 }
@@ -191,7 +191,7 @@ run_one() {
   export K6_SUMMARY_PATH="$result_dir/k6-summary.json"
 
   AUTHORIZATION_HEADER_FILE=$(python3 "$loadtest_dir/support/loadenv.py" header \
-    --bregctl "$bregctl" --project "$project" --client loadtest-driver)
+    --rstack "$rstack" --run-id "$run_id" --state-dir "$state_dir" --client loadtest-driver)
   export AUTHORIZATION_HEADER_FILE
 
   "$dbstats" sample 1 >"$result_dir/db-waits.jsonl" &
@@ -270,7 +270,7 @@ if [[ "$profile" == sweep ]]; then
   printf '%s\n' "== read-only warmup: $warmup_ops ops/s for $warmup_duration (excluded from evidence)"
   export OPS="$warmup_ops" DURATION="$warmup_duration" K6_SUMMARY_PATH=""
   AUTHORIZATION_HEADER_FILE=$(python3 "$loadtest_dir/support/loadenv.py" header \
-    --bregctl "$bregctl" --project "$project" --client loadtest-driver)
+    --rstack "$rstack" --run-id "$run_id" --state-dir "$state_dir" --client loadtest-driver)
   export AUTHORIZATION_HEADER_FILE
   k6 run --quiet --no-thresholds --summary-mode disabled "${pass_through[@]}" "$script"
 

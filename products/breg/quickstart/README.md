@@ -1,9 +1,8 @@
 # Base Registry Engine quickstart
 
-This launcher starts a local Registry project with the maintained `bregctl dev`
-lifecycle. It uses the pinned stock ThunderID issuer, private-key JWT clients,
-a retained PostgreSQL database, and Base Registry Engine on loopback. Credentials
-stay in owner-only files.
+This launcher starts a local Registry project with `rstack dev`. The run has
+its own local issuer, a managed PostgreSQL container, and Base Registry Engine
+on loopback. Credentials stay in owner-only files.
 
 Prerequisites are Docker and Python 3, plus Cargo unless released `breg` and
 `bregctl` binaries are already installed.
@@ -12,9 +11,11 @@ Prerequisites are Docker and Python 3, plus Cargo unless released `breg` and
 products/breg/quickstart/run.sh
 ```
 
-The source run builds `breg` and `bregctl`. Use `--installed` to select the two
-commands from `PATH`. The launcher initializes the canonical local directory,
-starts its retained dev session, and obtains short-lived client tokens. It
+The source run builds `rstack`, `breg` and `bregctl`. Use `--installed` to select
+the three commands from `PATH`. The launcher initializes the canonical local
+directory, adds the minimal example's `dev.yaml` and scenarios, starts the run
+with `rstack dev start`, and obtains short-lived client tokens with
+`rstack dev token`. It
 creates and reads a contact, then verifies that a client from another
 jurisdiction receives a concealed refusal for the same record.
 
@@ -28,7 +29,7 @@ products/breg/quickstart/query.sh create "Example contact" contact@example.test
 
 The helper reads `.run/headers/editor.header`. It does not put the bearer token
 on the command line or print it. A non-interactive check starts the same services,
-exercises the API, and removes the owned dev session:
+exercises the API, and stops the run:
 
 ```bash
 products/breg/quickstart/run.sh --smoke
@@ -58,8 +59,8 @@ Run the offline structural check with:
 products/breg/quickstart/self-test.sh
 ```
 
-All disposable files are under `quickstart/.run/`. The launcher removes its
-owned dev session after a successful run. It retains failed or interrupted state
-for diagnosis; stop that owned session before removing `.run/` and retrying.
+All disposable files are under `quickstart/.run/`. The launcher stops its run
+with `rstack dev stop` on every exit and removes `.run/` after a successful run.
+A failed or interrupted run keeps `.run/` and its logs for diagnosis.
 Production deployments require an operated issuer, reviewed packages, and an
 operated PostgreSQL service.

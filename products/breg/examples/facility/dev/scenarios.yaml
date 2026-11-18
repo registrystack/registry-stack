@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: register-facility
+    steps:
+      - id: create-operator
+        product: breg
+        as: operator-editor
+        method: POST
+        path: /v1/records/operators
+        headers: {Idempotency-Key: create-operator}
+        body: {data: {operatorCode: OP-EXAMPLE, status: active, jurisdiction: zone-a}}
+        expect: {status: 201}
+        capture: {operator: {type: pointer, pointer: /data/recordIdentifier}}
+      - id: register
+        product: breg
+        as: registrar
+        method: POST
+        path: /v1/actions/register-facility
+        headers: {Idempotency-Key: register-facility}
+        body:
+          input:
+            facilityCode: FAC-EXAMPLE
+            name: Example facility
+            addressLine: 1 Example Road
+            city: Example city
+            postalCode: "10200"
+            operatorId: "{{operator}}"
+            jurisdiction: zone-a
+        expect: {status: 200}
+        capture:
+          facility: {type: pointer, pointer: /results/facility/recordId}
+          assignment: {type: pointer, pointer: /results/assignment/recordId}
+      - id: read-facility
+        product: breg
+        as: reader
+        method: GET
+        path: "/v1/records/facilities/{{facility}}"
+        expect:
+          status: 200
+          json: {/data/domainData/facilityCode: FAC-EXAMPLE}
+      - id: read-assignment
+        product: breg
+        as: reader
+        method: GET
+        path: "/v1/records/facility-assignments/{{assignment}}"
+        expect: {status: 200}
+      - id: conceal-foreign-facility
+        product: breg
+        as: foreign-reader
+        method: GET
+        path: "/v1/records/facilities/{{facility}}"
+        expect: {status: 404}

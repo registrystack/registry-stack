@@ -29,7 +29,7 @@ for command in cargo docker python3; do
   }
 done
 if [[ -L "$run_dir" || -e "$run_dir" ]]; then
-  printf '%s\n' "load-test state path already exists: $run_dir. Preserve it, or move it aside after stopping its owned dev session." >&2
+  printf '%s\n' "load-test state path already exists: $run_dir. Preserve it, or move it aside after stopping its owned dev run." >&2
   exit 2
 fi
 
@@ -49,16 +49,26 @@ printf '%s\n' "== Building Base Registry Engine and bregctl ($build_profile prof
 registry_cargo_build "$repository_root" --manifest-path "$repository_root/Cargo.toml" --locked \
   "${cargo_profile_arguments[@]}" \
   -p registry-breg --features registry-breg/runtime \
-  -p registry-bregctl --bins >/dev/null
-breg="$repository_root/target/$build_profile/breg"
-bregctl="$repository_root/target/$build_profile/bregctl"
+  -p registry-bregctl --bins \
+  -p registry-rstack >/dev/null
+rstack="$repository_root/target/$build_profile/rstack"
+# A source build resolves the sibling tools through these overrides, on every
+# rstack dev call.
+export RSTACK_BREG_BIN="$repository_root/target/$build_profile/breg"
+export RSTACK_BREGCTL_BIN="$repository_root/target/$build_profile/bregctl"
+export RSTACK_DEV_STATE_DIR="$run_dir/state"
+bregctl="$RSTACK_BREGCTL_BIN"
+rstack_dev() {
+  "$rstack" --install-root "$repository_root/target/$build_profile" --format json dev "$@"
+}
+run_id=""
 
 cleanup_failed_start() {
   local status=$?
-  if [[ "$status" -ne 0 && -d "$run_dir/project/.breg/dev" ]]; then
-    printf '%s\n' 'Load-test startup failed; stopping only the project-owned dev session.' >&2
-    "$bregctl" dev stop --remove --docker-bin "$(command -v docker)" "$run_dir/project" >/dev/null 2>&1 ||
-      printf '%s\n' "Automatic owned-session cleanup failed; inspect $run_dir/project/.breg/dev." >&2
+  if [[ "$status" -ne 0 && -n "$run_id" ]]; then
+    printf '%s\n' 'Load-test startup failed; stopping only the run this script started.' >&2
+    rstack_dev stop "$run_id" >/dev/null 2>&1 ||
+      printf '%s\n' "Automatic cleanup failed; run: rstack dev stop $run_id" >&2
   fi
   exit "$status"
 }
@@ -68,28 +78,28 @@ printf '%s\n' '== Preparing the local business-establishments project'
 python3 "$support" local-project --fixture "$fixture" --project "$run_dir/project"
 "$bregctl" --format json check "$run_dir/project" >"$run_dir/check-report.json"
 
-read -r database_port issuer_port breg_port < <(python3 "$support" ports)
-printf '%s\n' '== Starting the stock retained BReg development lifecycle'
-"$bregctl" --format json dev start \
-  --breg-bin "$breg" \
-  --docker-bin "$(command -v docker)" \
-  --database-port "$database_port" \
-  --issuer-port "$issuer_port" \
-  --breg-port "$breg_port" \
-  "$run_dir/project" >"$run_dir/dev-report.json"
+printf '%s\n' '== Starting the BReg development run'
+# A failed run keeps its logs, so a start that exits non-zero is still stopped
+# once its run id is known.
+rstack_dev start "$run_dir/project" >"$run_dir/dev-report.json" || {
+  run_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("run_id",""))' "$run_dir/dev-report.json" 2>/dev/null || true)
+  exit 1
+}
+run_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$run_dir/dev-report.json")
 python3 "$support" environment \
   --root "$run_dir" \
   --dev-report "$run_dir/dev-report.json" \
-  --bregctl "$bregctl" \
+  --rstack "$rstack" \
   --build-profile "$build_profile" \
   --runtime-library-path "${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH-}"
+breg_url=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["products"]["breg"])' "$run_dir/dev-report.json")
 
 printf '\n%s\n' 'Base Registry Engine load-test environment is ready.'
-printf '  Base Registry Engine:  http://127.0.0.1:%s\n' "$breg_port"
-printf '  Identity provider:     stock ThunderID 1.0.1 through bregctl dev\n'
-printf '  Database:              owned bregctl dev PostgreSQL on 127.0.0.1:%s\n' "$database_port"
+printf '  Base Registry Engine:  %s\n' "$breg_url"
+printf '  Identity provider:     the rstack dev run issuer\n'
+printf '  Database:              managed PostgreSQL container of run %s\n' "$run_id"
 printf '  BReg build profile:    %s\n' "$build_profile"
-printf '  BReg pool max size:    4 (the stock development lifecycle default)\n'
+printf '  BReg pool max size:    4 (the rstack dev default)\n'
 printf '  Environment:           %s\n' "$run_dir/env.json"
 printf '  Seed next:             products/breg/loadtest/seed.py --count 100000\n'
 printf '  Then run:              products/breg/loadtest/run.sh --profile steady\n'

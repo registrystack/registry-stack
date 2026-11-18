@@ -2,9 +2,8 @@
 set -euo pipefail
 
 # Proves the native adopter path for one declared statistical dataset. The
-# local issuer issues each credential through its real token endpoint with the
-# retained private-key-JWT client key. Records and statistics then use only the
-# public HTTP and bregctl surfaces.
+# `rstack dev` run issues each person's credential through its local issuer.
+# Records and statistics then use only the public HTTP and bregctl surfaces.
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repository_root=$(cd -- "$script_dir/../../.." && pwd)
@@ -13,6 +12,8 @@ repository_root=$(cd -- "$script_dir/../../.." && pwd)
 temporary_root=""
 temporary_base=$(cd -- "${TMPDIR:-/tmp}" && pwd -P)
 project=""
+run_id=""
+rstack=${RSTACK_BIN:-"$repository_root/target/debug/rstack"}
 bregctl=${BREGCTL_BIN:-"$repository_root/target/debug/bregctl"}
 breg=${BREG_BIN:-"$repository_root/target/debug/breg"}
 
@@ -31,9 +32,9 @@ require_command() {
 
 cleanup() {
   local exit_code=$?
-  if [[ -n "$project" && -d "$project" && -x "$bregctl" ]]; then
-    "$bregctl" dev stop --remove --docker-bin "$(command -v docker 2>/dev/null || true)" \
-      "$project" >/dev/null 2>&1 || true
+  if [[ -n "$run_id" ]]; then
+    "$rstack" "${rstack_args[@]}" dev stop "$run_id" >/dev/null ||
+      printf 'statistics workflow could not stop run %s; run rstack dev stop %s\n' "$run_id" "$run_id" >&2
   fi
   case "$temporary_root" in
     "$temporary_base"/breg-statistics-workflow.*)
@@ -46,6 +47,7 @@ cleanup() {
   esac
   return "$exit_code"
 }
+rstack_args=(--install-root "$repository_root/target/debug")
 trap cleanup EXIT HUP INT TERM
 
 if [[ "$#" -ne 0 ]]; then
@@ -68,64 +70,54 @@ checkpoint "building the native binaries"
 if [[ "${BREG_SKIP_BUILD:-0}" != "1" ]]; then
   registry_cargo_build "$repository_root" \
     --manifest-path "$repository_root/Cargo.toml" --locked \
-    -p registry-bregctl -p registry-breg --features registry-breg/runtime
+    -p registry-bregctl -p registry-breg --features registry-breg/runtime -p registry-rstack
 else
   registry_prepare_cargo_runtime "$repository_root" \
     --manifest-path "$repository_root/Cargo.toml" --locked \
-    -p registry-bregctl -p registry-breg --features registry-breg/runtime
+    -p registry-bregctl -p registry-breg --features registry-breg/runtime -p registry-rstack
 fi
-[[ -x "$bregctl" && -x "$breg" ]] || fail "the native binaries are not executable"
-
-read -r database_port issuer_port breg_port < <(
-  python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-for _ in range(3):
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    sockets.append(sock)
-    ports.append(sock.getsockname()[1])
-print(*ports)
-for sock in sockets:
-    sock.close()
-PY
-)
+[[ -x "$bregctl" && -x "$breg" && -x "$rstack" ]] || fail "the native binaries are not executable"
 
 checkpoint "starting the facility project and its local issuer"
-if ! "$bregctl" --format json dev start \
-  --breg-bin "$breg" --docker-bin "$(command -v docker)" \
-  --breg-port "$breg_port" --issuer-port "$issuer_port" --database-port "$database_port" \
-  "$project" >"$temporary_root/dev.json"; then
+export RSTACK_DEV_STATE_DIR="$temporary_root/state"
+export RSTACK_BREGCTL_BIN="$bregctl"
+export RSTACK_BREG_BIN="$breg"
+start_status=0
+"$rstack" "${rstack_args[@]}" --format json dev start "$project" >"$temporary_root/dev.json" ||
+  start_status=$?
+run_id=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("run_id") or "")' \
+  "$temporary_root/dev.json" 2>/dev/null || true)
+if [[ "$start_status" -ne 0 ]]; then
   cat "$temporary_root/dev.json" >&2
-  fail "bregctl dev start did not reach ready"
+  fail "rstack dev start did not reach ready"
 fi
 breg_url=$(
   python3 - "$temporary_root/dev.json" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
+origin = report.get("products", {}).get("breg")
 if (
-    report.get("ok") is not True
-    or report.get("status") != "complete"
-    or report.get("outcome") != "ready"
+    report.get("schema_version") != "registry.rstack.dev.v1"
+    or not report.get("run_id")
+    or not isinstance(origin, str)
+    or any(item.get("result") != "passed" for item in report.get("scenarios", []))
 ):
-    raise SystemExit("bregctl dev did not reach ready")
-for member in ("bregUrl", "tokenEndpoint", "clientAssertionAudience", "resource"):
-    if not isinstance(report.get(member), str) or not report[member]:
-        raise SystemExit(f"bregctl dev omitted {member}")
-print(report["bregUrl"])
+    raise SystemExit("rstack dev did not reach ready")
+print(origin)
 PY
 )
 
-checkpoint "acquiring private-key-JWT client credentials from the token endpoint"
-for client in facility-operator statistics-publisher statistics-reader; do
-  "$bregctl" --format json dev token "$client" "$project" >"$temporary_root/$client-token.json"
-  python3 - "$temporary_root/$client-token.json" "$temporary_root/$client-token" <<'PY'
+checkpoint "acquiring client credentials from the run's local issuer"
+for person in facility-operator statistics-publisher statistics-reader; do
+  "$rstack" "${rstack_args[@]}" --format json dev token "$run_id" --as "$person" \
+    >"$temporary_root/$person-token.json"
+  python3 - "$temporary_root/$person-token.json" "$temporary_root/$person-token" <<'PY'
 import json, os, sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
-if report.get("ok") is not True or report.get("command") != "dev token":
+credentials = report.get("credentials", [])
+if len(credentials) != 1:
     raise SystemExit("the dev issuer token request failed")
-line = open(report["headerFile"], encoding="ascii").read().strip()
+line = open(credentials[0]["header_file"], encoding="ascii").read().strip()
 prefix = "Authorization: Bearer "
 if not line.startswith(prefix) or len(line[len(prefix):].split(".")) != 3:
     raise SystemExit("the dev issuer did not return a compact bearer token")

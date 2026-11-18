@@ -434,19 +434,6 @@ fn casework_current_policy_directory_and_fixture_relationships_resolve() {
             "    reviewPolicies: [<|producer-policy|>decision]",
             1,
         );
-    let clients = fixture("products/casework/examples/standalone-decision/dev-clients.yaml")
-        .replacen(
-            "    accessProfile: staff",
-            "    accessProfile: <|profile-use|>staff",
-            1,
-        )
-        .replacen(
-            "    queue: decisions",
-            "    queue: <|queue-use|>decisions",
-            1,
-        )
-        .replacen("    staff: [staff]", "    staff: [<|client-use|>staff]", 1)
-        .replacen("  - id: staff", "  - id: <|client|>staff", 1);
     let fixture_source =
         fixture("products/casework/examples/standalone-decision/fixtures/standalone-decision.yaml")
             .replacen("  policy: decision", "  policy: <|policy-use|>decision", 1)
@@ -462,7 +449,6 @@ fn casework_current_policy_directory_and_fixture_relationships_resolve() {
             );
     let project = Project::new(&[
         file("casework.yaml", &casework),
-        file("dev-clients.yaml", &clients),
         file("fixtures/standalone-decision.yaml", &fixture_source),
     ]);
     let index = ProjectIndex::load_product(project.root(), ProductKind::Casework).unwrap();
@@ -497,19 +483,6 @@ fn casework_current_policy_directory_and_fixture_relationships_resolve() {
             "outcome-use",
             "casework.yaml",
             "outcome",
-        ),
-        (
-            "dev-clients.yaml",
-            "profile-use",
-            "casework.yaml",
-            "profile",
-        ),
-        ("dev-clients.yaml", "queue-use", "casework.yaml", "queue"),
-        (
-            "dev-clients.yaml",
-            "client-use",
-            "dev-clients.yaml",
-            "client",
         ),
     ] {
         let definitions =

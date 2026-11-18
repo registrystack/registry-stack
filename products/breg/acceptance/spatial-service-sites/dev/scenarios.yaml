@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: spatial-smoke
+    steps:
+      - id: list-central-sites
+        product: breg
+        as: installation-map-reader
+        method: GET
+        path: /v1/records/service-sites?bbox=100.45,13.60,100.60,13.80
+        expect:
+          status: 200
+          checks: [{pointer: /items, length: 0}]

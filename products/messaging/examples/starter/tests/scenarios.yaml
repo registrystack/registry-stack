@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: unknown-message-is-not-visible
+    steps:
+      - id: operator-looks-up-a-message
+        product: messaging
+        as: operator
+        method: GET
+        path: /v1/messages/missing
+        expect: {status: 404}

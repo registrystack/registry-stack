@@ -10,7 +10,5 @@ name: Registry Stack CodeQL
 paths-ignore:
   - "crates/*/tests/**"
   - "crates/registry-breg/src/tests/**"
-  - crates/registry-casework/src/task_grants/dev_session_logs.rs
   - crates/registry-casework/src/task_grants/native_resource.rs
-  - crates/registry-caseworkctl/src/dev/tests.rs
   - crates/registry-platform-config/src/blocks_tests.rs

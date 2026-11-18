@@ -59,12 +59,13 @@ class SeedError(RuntimeError):
 
 
 class DevTokenSource:
-    """Fresh owner-only headers acquired through the stock dev lifecycle."""
+    """Fresh owner-only headers acquired through rstack dev."""
 
-    def __init__(self, helper: Path, bregctl: Path, project: Path, client_id: str) -> None:
+    def __init__(self, helper: Path, rstack: Path, run_id: str, state_dir: Path, client_id: str) -> None:
         self._helper = helper
-        self._bregctl = bregctl
-        self._project = project
+        self._rstack = rstack
+        self._run_id = run_id
+        self._state_dir = state_dir
         self._client_id = client_id
         self._lock = threading.Lock()
         self._authorization = ""
@@ -83,10 +84,12 @@ class DevTokenSource:
                     sys.executable,
                     str(self._helper),
                     "header",
-                    "--bregctl",
-                    str(self._bregctl),
-                    "--project",
-                    str(self._project),
+                    "--rstack",
+                    str(self._rstack),
+                    "--run-id",
+                    self._run_id,
+                    "--state-dir",
+                    str(self._state_dir),
                     "--client",
                     self._client_id,
                 ],
@@ -97,12 +100,12 @@ class DevTokenSource:
             )
             path = Path(result.stdout.strip())
             if path.is_symlink() or not path.is_file() or stat.S_IMODE(path.stat().st_mode) & 0o077:
-                raise SeedError("bregctl dev token header is not an owner-only regular file")
+                raise SeedError("rstack dev token header is not an owner-only regular file")
             value = path.read_text(encoding="ascii").strip()
         except (OSError, subprocess.SubprocessError, UnicodeError) as error:
-            raise SeedError("could not acquire a fresh bregctl dev token") from error
+            raise SeedError("could not acquire a fresh rstack dev token") from error
         if not value.startswith("Authorization: Bearer ") or value.count(".") != 2:
-            raise SeedError("bregctl dev token header is malformed")
+            raise SeedError("rstack dev token header is malformed")
         self._authorization = value.split(": ", 1)[1]
         self._expires_at = time.monotonic() + HEADER_REFRESH_SECONDS
 
@@ -307,15 +310,15 @@ def main() -> int:
     except subprocess.CalledProcessError as error:
         print(error.stderr.strip() or "load-test environment is not usable", file=sys.stderr)
         return 2
-    breg_url, bregctl, project = described[:3]
-    runtime_library_path = described[3] if len(described) > 3 else ""
+    breg_url, rstack, run_id, state_dir = described[:4]
+    runtime_library_path = described[4] if len(described) > 4 else ""
     if runtime_library_path:
         existing = os.environ.get("DYLD_FALLBACK_LIBRARY_PATH")
         os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = (
             f"{runtime_library_path}:{existing}" if existing else runtime_library_path
         )
     environment = {"breg_url": breg_url}
-    tokens = DevTokenSource(helper, Path(bregctl), Path(project), "loadtest-driver")
+    tokens = DevTokenSource(helper, Path(rstack), run_id, Path(state_dir), "loadtest-driver")
     seed_dir = arguments.run_dir / "seed"
     try:
         begin_seed(seed_dir, {"establishments": arguments.count, "seed": arguments.seed})
