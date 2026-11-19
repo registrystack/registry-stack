@@ -154,6 +154,31 @@ fn funcref_tables_and_indirect_calls_are_admitted() {
 }
 
 #[test]
+fn indirect_call_through_a_non_final_function_type_returns() {
+    // Without the `gc` feature, a runtime check against a non-final function
+    // type that the callee only matches as a subtype once called a Wasmtime
+    // builtin those builds lacked, aborting the host process
+    // (RUSTSEC-2026-0570). The guest must run to completion.
+    let handle = "(call_indirect (type $sub) (i32.const 0)) (i32.const 0)";
+    let text = guest_wat(handle, "(i32.const 0)").replacen(
+        "(module",
+        "(module (type $sub (sub (func))) (type $leaf (sub $sub (func))) \
+         (table 1 funcref) (func $n (type $leaf)) (elem (i32.const 0) func $n)",
+        1,
+    );
+    for backend in backends() {
+        let exec = executor(backend);
+        let prepared = exec
+            .prepare(&wasm(&text))
+            .unwrap_or_else(|err| panic!("{backend:?}: {err}"));
+        let ok = exec
+            .invoke(&prepared, b"")
+            .unwrap_or_else(|err| panic!("{backend:?}: {err}"));
+        assert!(ok.output.is_empty(), "{backend:?}");
+    }
+}
+
+#[test]
 fn happy_path_roundtrip_and_stats() {
     for backend in backends() {
         let exec = executor(backend);

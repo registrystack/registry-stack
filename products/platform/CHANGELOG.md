@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Update Wasmtime LTS to 48.0.9 for RUSTSEC-2026-0566 to RUSTSEC-2026-0573.
 - `rstack dev check|start|status|token|stop` runs a checkout's BReg, Casework,
   Evidence and Messaging projects, one alone or several together, from a
   `rstack/dev` plan in `dev.yaml`. Each run starts its own PostgreSQL in Docker
