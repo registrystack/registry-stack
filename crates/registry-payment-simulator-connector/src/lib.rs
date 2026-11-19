@@ -272,7 +272,10 @@ impl ProviderCommand {
             }
             ("RJC", "FAILED")
                 if response.reference.is_none()
-                    && response.failure_reason.as_deref() == Some("payer-rejected") =>
+                    && matches!(
+                        response.failure_reason.as_deref(),
+                        Some("payer-rejected" | "payer-cancelled")
+                    ) =>
             {
                 CollectionState::Failed
             }
