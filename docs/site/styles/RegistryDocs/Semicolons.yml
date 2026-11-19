@@ -1,0 +1,9 @@
+extends: existence
+message: "Avoid the semicolon. Use a period and a new sentence, or a comma, colon, or parentheses."
+level: warning
+scope: text
+nonword: true
+# Report-only. A semicolon that ends an HTML entity such as &amp; is not
+# prose punctuation.
+tokens:
+  - '(?<!&#?\w{1,8});'

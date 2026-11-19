@@ -1,0 +1,9 @@
+extends: substitution
+message: "Use '%s' instead of '%s'. See the preferred-terms table in docs/style-guide.md."
+level: warning
+ignorecase: false
+# Report-only. Short and lowercase variants of product names that the glossary
+# and the preferred-terms table do not allow.
+swap:
+  '[Tt]he Store': the Document Store
+  'registry casework': Registry Casework

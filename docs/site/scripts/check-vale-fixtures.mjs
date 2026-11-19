@@ -8,6 +8,9 @@ const rootDir = resolve(import.meta.dirname, '..');
 const fixturesDir = join(rootDir, 'fixtures', 'vale');
 const fixturePattern = /\.mdx?$/;
 const directivePattern = /<!--\s*ValeFixture\s+expect:\s*([\s\S]*?)-->/i;
+// Rules scoped to sentences need Vale's markup parsing, so a fixture for one
+// opts out of --ignore-syntax with <!-- ValeFixture parsed -->.
+const parsedPattern = /<!--\s*ValeFixture\s+parsed\s*-->/i;
 
 async function collectFixtures(dir) {
   let entries;
@@ -56,7 +59,7 @@ function parseExpectedChecks(source, filePath) {
   return [...new Set(checks)].sort();
 }
 
-function runVale(valeBin, files) {
+function runVale(valeBin, files, { ignoreSyntax = true } = {}) {
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(
       valeBin,
@@ -64,7 +67,7 @@ function runVale(valeBin, files) {
         '--output=JSON',
         '--config=.vale.ini',
         '--no-global',
-        '--ignore-syntax',
+        ...(ignoreSyntax ? ['--ignore-syntax'] : []),
         ...files.map((file) => relative(rootDir, file)),
       ],
       {
@@ -140,14 +143,32 @@ if (fixtureFiles.length === 0) {
 }
 
 const expectations = new Map();
+const rawFiles = [];
+const parsedFiles = [];
 
 for (const file of fixtureFiles) {
-  expectations.set(file, parseExpectedChecks(await readFile(file, 'utf8'), file));
+  const source = await readFile(file, 'utf8');
+
+  expectations.set(file, parseExpectedChecks(source, file));
+  (parsedPattern.test(source) ? parsedFiles : rawFiles).push(file);
 }
 
 const valeBin = await resolveVale();
-const result = await runVale(valeBin, fixtureFiles);
-const alertsByPath = parseValeOutput(result.stdout);
+const results = [];
+
+if (rawFiles.length > 0) {
+  results.push(await runVale(valeBin, rawFiles));
+}
+
+if (parsedFiles.length > 0) {
+  results.push(await runVale(valeBin, parsedFiles, { ignoreSyntax: false }));
+}
+
+const alertsByPath = Object.assign({}, ...results.map((run) => parseValeOutput(run.stdout)));
+const result = {
+  code: results.find((run) => run.code !== 0)?.code ?? 0,
+  stderr: results.map((run) => run.stderr).join('\n'),
+};
 const failures = [];
 
 for (const file of fixtureFiles) {

@@ -1,7 +1,7 @@
 # Registry Docs writing style guide
 
 **Status:** current
-**Last reviewed:** 2026-09-05
+**Last reviewed:** 2026-11-19
 **Applies to:** every page under `src/content/docs/` and every contributor or agent that writes them.
 
 This guide tells you how to write for Registry Docs. It is short on purpose. When in doubt, prefer clarity over cleverness, evidence over assertion, and the reader's task over the writer's voice. Borrowed from GitLab's documentation style guide, then trimmed and adapted to a 20-page institutional docs site.
@@ -40,6 +40,28 @@ The principles above pull against each other on real pages. These are the tie-br
 - Say what a thing does before what it does not. A negation closes a door the reader would otherwise walk through, so use one where a door is open. A run of sentences that all open with a negation tells the reader everything except what to do.
 - Let the tool introduce a term. The reader meets a noun first in output they have seen or a response they have read; the next sentence names it in one clause and links the glossary. A term defined before the reader has seen it is a glossary paragraph, and the glossary already exists.
 - Do not promise future features. If a capability is unbuilt, link to the issue or say `not yet supported`.
+
+## Plain English
+
+Registry Docs follows the plain-English approach of the GOV.UK technical documentation. Models to read: the GOV.UK [Notify](https://docs.notifications.service.gov.uk/), [Pay](https://docs.payments.service.gov.uk/) and [One Login](https://docs.sign-in.service.gov.uk/) technical documentation.
+
+Six targets for every page:
+
+1. No semicolons.
+2. About one comma per sentence. Put lists of three or more items in bullets.
+3. Address the reader as "you".
+4. Use verbs over abstract nouns: "configure the issuer", not "perform the configuration of the issuer".
+5. One idea per sentence, and no sentence over 25 words.
+6. Explain or link each product name at first use.
+
+Rules specific to the docs:
+
+- One term per concept, taken from the glossary. Do not introduce a second name for something the glossary already names.
+- Write procedure steps in the imperative, with one action each. Put the reason and the sign of failure after the action.
+- Do not put multi-sentence prose in table cells.
+- Use British spelling in prose. Keep the original spelling in code, identifiers, URLs, standards names, and quoted output, for example the `Authorization` header and the OAuth term "authorization server".
+
+`npm run check:style` reports each target it can detect as a warning, and `npm run report:readability` counts them per page. Neither blocks a build.
 
 ## Page structure
 
@@ -114,7 +136,7 @@ Banned. Rewrite if you find these in a draft.
 | `above`, `below`          | Breaks when page reflows or on screen readers        | Link to the section by name                          |
 | `here` (as link text)     | Loses meaning out of context                         | Use the linked page's title                          |
 | `please`                  | Marketing tone, not docs tone                        | Delete                                               |
-| em dashes                 | Project preference                                   | Commas, colons, semicolons, parentheses, periods     |
+| em dashes, semicolons     | Project preference                                   | A period and a new sentence, or a comma, colon, or parentheses |
 | typographer's quotes      | Breaks copy-paste                                    | Straight quotes                                      |
 | `we`, `our`               | Hides the actor                                      | The project name, or `you`                           |
 | ambiguous `it`            | Confuses non-native readers                          | Repeat the noun                                      |
@@ -147,9 +169,9 @@ do not relabel an existing integration as a different domain.
 - Ordered list for steps that must run in sequence. Unordered list for items with no order.
 - All items start with a capital letter.
 - Parallel structure for a list of like things: options, fields, products, sources. All items are noun phrases, or all are imperative verbs. Do not mix.
-- Steps in a procedure are not a list of like things. Write them as sentences and let them differ in shape. Forcing every step into one frame is how a page ends up repeating an opener nobody chose.
+- Steps in a procedure are not a list of like things. Write each step as an imperative sentence with one action, then the reason and the failure sign after it. Beyond that, let the sentences differ in shape. Forcing every step into one frame is how a page ends up repeating an opener nobody chose.
 - No period if every item is a fragment. Period on every item if any item is a complete sentence. The fragment preference does not apply to procedure steps.
-- Use the Oxford comma in prose: `Manifest, BReg, and Registry Evidence`.
+- Put lists of three or more items in bullets. A short list that stays inside a sentence takes the Oxford comma: `Manifest, BReg, and Registry Evidence`.
 - Do not use bold inside list items for keywords. Reserve bold for UI labels.
 
 ## Code, commands, paths
@@ -212,7 +234,8 @@ This applies to `tutorial` and `how-to` pages, and to any page that asks the rea
 ## Tables
 
 - Use tables for matrix data: two or more dimensions per row. For one-dimensional data, use a list.
-- Sentence case for headers. No empty cells; write `None` or `n/a`.
+- Sentence case for headers. No empty cells. Write `None` or `n/a`.
+- A cell holds a word, a phrase, or one sentence. Multi-sentence prose goes under the table or in a list.
 - Tables in `reference/` and `map/` are generated from `src/data/*.yaml`. Do not hand-edit those tables in MDX.
 - For a generated table, include an author-facing note naming the source data file and the generation command: `<!-- generated from src/data/standards.yaml. Run npm run generate. -->`
 - A hand-written table fits in fewer than 10 rows and fewer than 5 columns. Larger tables move to data files.
@@ -326,7 +349,11 @@ This applies to every page that touches a standard or a contract.
   stylistic rules. Config at `.vale.ini`; vocabulary at
   `styles/config/vocabularies/RegistryDocs/`. Spelling is staged through that vocabulary,
   but remains disabled until frontmatter and technical terms are fully covered. Vale
-  suggestions and warnings run in CI so style drift is visible before v0 ships.
+  suggestions and warnings run in CI so style drift is visible before v0 ships. The
+  plain-English rules `Semicolons`, `SentenceLength`, `BritishSpelling`, and
+  `ProductNounVariants` are warnings only.
+- **Readability report.** `npm run report:readability` prints sentences, sentences over 25
+  words, semicolons, and commas per sentence for each page, and a corpus total. It never fails.
 - **Link check** runs in CI.
 - **Tutorial checks** separate dry-run extraction or classification from execution.
   `npm run check` runs the tutorial dry runs; these do not execute the documented journeys.
