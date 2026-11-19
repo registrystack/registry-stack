@@ -485,6 +485,8 @@
           "type": "integer"
         },
         "simulation": {
+          "const": true,
+          "description": "Collections are simulation-only; a live collection provider is refused.",
           "type": "boolean"
         }
       },
