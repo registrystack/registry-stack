@@ -4868,13 +4868,74 @@ fn replica_loopback_addresses(
     Ok((address, metrics.map(|(_, address)| address)))
 }
 
+/// Ports this test process has already handed to a replica or operator.
+static HANDED_OUT_LOOPBACK_PORTS: std::sync::Mutex<std::collections::BTreeSet<u16>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// Lowest port a reservation may use; below it sit well-known and commonly
+/// configured service ports.
+const RESERVED_PORT_FLOOR: u16 = 20_000;
+/// Used when the kernel range cannot be read, as off Linux: it covers both
+/// the Linux default and the IANA dynamic range.
+const FALLBACK_EPHEMERAL_PORT_RANGE: (u16, u16) = (32_768, u16::MAX);
+const PORT_RESERVATION_ATTEMPTS: usize = 256;
+
+/// Reserve a loopback port the replica binds seconds later. A port from
+/// `bind(0)` lies in the kernel's ephemeral range, where another reservation
+/// or an outgoing PostgreSQL connection's source port can take it before the
+/// replica binds. Choosing outside that range leaves only explicit binds as
+/// competitors, and the process-wide record keeps this binary from handing the
+/// same port out twice.
 fn reserve_loopback_port() -> Result<(TcpListener, SocketAddr), String> {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .map_err(|_| "native timer loopback port reservation failed".to_owned())?;
-    let address = listener
-        .local_addr()
-        .map_err(|_| "native timer loopback address could not be read".to_owned())?;
-    Ok((listener, address))
+    let (ephemeral_low, ephemeral_high) = ephemeral_port_range();
+    // Candidates are the ports from the floor up, less the ephemeral range:
+    // a band below it and a band above it, either of which may be empty.
+    let below = u32::from(ephemeral_low).saturating_sub(u32::from(RESERVED_PORT_FLOOR));
+    let above_start = (u32::from(ephemeral_high) + 1).max(u32::from(RESERVED_PORT_FLOOR));
+    let above = u32::from(u16::MAX) + 1 - above_start;
+    let candidates = below + above;
+    if candidates == 0 {
+        return Err("native timer loopback ports leave no room outside the ephemeral range".into());
+    }
+    let mut handed_out = HANDED_OUT_LOOPBACK_PORTS
+        .lock()
+        .map_err(|_| "native timer loopback port record was poisoned".to_owned())?;
+    for _ in 0..PORT_RESERVATION_ATTEMPTS {
+        let pick = (Uuid::new_v4().as_u128() % u128::from(candidates)) as u32;
+        let port = if pick < below {
+            u32::from(RESERVED_PORT_FLOOR) + pick
+        } else {
+            above_start + (pick - below)
+        };
+        let port = u16::try_from(port)
+            .map_err(|_| "native timer loopback port fell outside the port space".to_owned())?;
+        if handed_out.contains(&port) {
+            continue;
+        }
+        let Ok(listener) = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))) else {
+            continue;
+        };
+        let address = listener
+            .local_addr()
+            .map_err(|_| "native timer loopback address could not be read".to_owned())?;
+        handed_out.insert(port);
+        return Ok((listener, address));
+    }
+    Err("native timer loopback port reservation failed".to_owned())
+}
+
+/// The kernel's ephemeral port range, inclusive.
+fn ephemeral_port_range() -> (u16, u16) {
+    fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        .ok()
+        .and_then(|range| {
+            let mut bounds = range.split_whitespace().map(str::parse::<u16>);
+            match (bounds.next(), bounds.next()) {
+                (Some(Ok(low)), Some(Ok(high))) if low <= high => Some((low, high)),
+                _ => None,
+            }
+        })
+        .unwrap_or(FALLBACK_EPHEMERAL_PORT_RANGE)
 }
 
 /// The held sample was taken while the worker was parked at a barrier, so
@@ -5068,4 +5129,31 @@ fn replica_listener_and_metrics_addresses_never_share_a_port() {
     }
     let (_, metrics) = replica_loopback_addresses(false).expect("address reserves");
     assert_eq!(metrics, None);
+}
+
+#[test]
+fn replica_ports_avoid_the_ephemeral_range_and_never_repeat() {
+    // A port inside the kernel's ephemeral range can be taken between the
+    // reservation and the replica's bind by another `bind(0)` or by the
+    // source port of an outgoing PostgreSQL connection. Read the range
+    // independently of the allocator so the check cannot share its mistake.
+    let (low, high) = fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        .ok()
+        .and_then(|range| {
+            let mut bounds = range.split_whitespace().map(str::parse::<u16>);
+            Some((bounds.next()?.ok()?, bounds.next()?.ok()?))
+        })
+        .unwrap_or((32_768, u16::MAX));
+    let mut handed_out = std::collections::BTreeSet::new();
+    for _ in 0..1_000 {
+        let (address, metrics) = replica_loopback_addresses(true).expect("addresses reserve");
+        let metrics = metrics.expect("metrics address reserves");
+        for port in [address.port(), metrics.port()] {
+            assert!(
+                !(low..=high).contains(&port),
+                "port {port} lies inside the ephemeral range {low}-{high}"
+            );
+            assert!(handed_out.insert(port), "port {port} was handed out twice");
+        }
+    }
 }
