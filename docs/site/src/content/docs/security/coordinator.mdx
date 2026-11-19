@@ -21,14 +21,15 @@ Deployment steps are in [Deploy Registry Coordinator](../../operate/coordinator/
 ## Scope and trust boundaries
 
 - The operator owns the runtime configuration: connection base URLs, the external command path,
-  credentials, issuer settings and the Base Registry Engine (BReg) connection profile.
+  credentials, issuer settings, the Base Registry Engine (BReg) connection profile and the Registry
+  Adapter payment connection.
   Operator configuration is trusted; workflow data is not.
 - A workflow author writes a project that Coordinator freezes into a definition.
   The author supplies bodies, mappings and pure Functions.
   The author does not choose destinations, headers, credentials or recovery behaviour; the closed
   operation catalogue does.
-- Providers decide every effect a run requests: Registry Casework, Registry Scheduling, BReg and
-  external HTTP providers.
+- Providers decide every effect a run requests: Registry Casework, Registry Scheduling, BReg, the
+  Registry Adapter payment host and external HTTP providers.
   Coordinator holds workload identity, not decision authority, and each receiving product still
   authorises the call.
 - A caller authenticates with an access token verified against the configured OIDC issuer.
@@ -710,6 +711,71 @@ normal serving or apply while a live Run's retained binding differs from the con
     crates/registry-coordinator/tests/deployment_postgres.rs
     split_activation_and_real_router_enforce_owned_progress_and_operator_recovery. */}
 
+### COORDINATOR-INV-16: payment completion requires exact authoritative evidence
+
+Threat: a workflow could supply an amount, provider route, header, receipt or registry destination;
+reuse an acceptance for another bill, collection, instruction or disbursement; treat pending,
+unknown or a timed-out wait as payment; or start a fresh provider effect after an ambiguous
+response or unresolved receipt.
+
+Enforcement: the native payment catalogue accepts only `billId` and positive `billVersion` when
+requesting a collection, and only `collectionId` when reading a collection or recording its receipt.
+The disbursement catalogue accepts only `instructionRecordId` and positive `instructionVersion`
+when requesting a disbursement, and only `disbursementId` when reading it or reporting provider
+confirmation.
+`PaymentConnectionConfig` fixes the Adapter origin, the Adapter payment connection and ordinary
+service authorisation.
+The maintained payment client validates strict typed responses against the exact bill, collection,
+instruction or disbursement identity before returning them.
+A request is durably keyed, and reconciliation uses only the Adapter's read-only original-request
+endpoint with that saved key and body under current connection authorisation.
+Provider-protocol failures, malformed or mismatched success documents, broken exchanges after
+dispatch, `recovery-held` and `outcome-unknown` remain uncertain.
+An unresolved or expired receipt proves no absence and grants no fresh effect.
+
+Disbursement request recovery is deliberately narrower than collection recovery.
+The request declares `hold-after-dispatch`, so an uncertain submission cannot use `retry-same`, and
+the worker, the recovery store and the offline scenario runner refuse a later command retry.
+A later synthetic success is eligible only under `reconcile`, where it represents the
+original-command lookup.
+Only the separate provider-confirmation report is recovered by the same command, under its own
+durable key.
+
+The host-owned `collection` completion retains the accepted collection, bill, binding revision and
+simulation marker, and each observation performs a fresh authorised read through the same logical
+payment connection.
+`accepted`, `pending` and `unknown` keep the wait pending; `confirmed` and `failed` settle only the
+collection attempt, and only Adapter-verified `confirmed` state can satisfy the separate, keyed
+`payments.record-receipt/v1` call.
+The `disbursement` completion likewise settles only on `provider-confirmed` or `failed`, and only
+verified `provider-confirmed` state can satisfy `payments.record-provider-confirmation/v1`.
+That confirmation does not claim credit to the recipient or final settlement.
+Coordinator carries no BReg bill-binding, receipt, instruction read or reporting grant, and a
+timeout changes none of these facts.
+
+Refused: a workflow-selected amount, paid state, provider destination, header, receipt or registry
+destination; another command's acceptance; another collection or disbursement observation; receipt
+or provider-confirmation recording for anything the Adapter has not verified in the required
+terminal state; replay of an uncertain disbursement submission; any inference that pending,
+unknown, a timeout or a missing receipt authorises release or replacement.
+
+{/* Evidence: crates/registry-payment-client/tests/http_boundary.rs
+    collection_request_sends_only_authoritative_bill_identity,
+    original_request_receipt_is_a_read_with_the_exact_key_and_body,
+    a_response_for_another_command_or_collection_is_a_protocol_failure,
+    malformed_or_duplicate_payment_evidence_fails_visibly,
+    typed_problem_codes_preserve_authentication_and_uncertainty_semantics,
+    record_receipt_requires_confirmed_exactly_correlated_evidence;
+    crates/registry-coordinator/tests/payment_adapter.rs
+    collection_request_and_recovery_use_the_exact_original_command,
+    ambiguous_mutation_response_holds_until_read_only_recovery_resolves,
+    payment_authentication_failure_is_a_value_free_refusal,
+    payment_completion_settles_only_terminal_exactly_bound_state,
+    disbursement_request_and_recovery_use_the_exact_original_command,
+    uncertain_disbursement_submission_never_becomes_a_fresh_send,
+    provider_confirmation_report_is_one_exact_keyed_command,
+    disbursement_completion_settles_only_terminal_exactly_bound_state. */}
+
 ## Operator obligations
 
 The guarantees hold only when you meet these obligations.
@@ -759,6 +825,11 @@ The residuals refer to them by number.
     Run admitted without it no longer matches its binding, so `deployment-status` reports
     `live-binding-conflict` and normal serving refuses while it remains.
     `coordinator --recovery-only` inspects it (COORDINATOR-INV-15).
+14. Give Coordinator only the Adapter payment capability.
+    Keep the BReg bill and instruction binding and reporting grants with the authorised Adapter
+    identities.
+    Investigate an unresolved original-request receipt before any same-command recovery or
+    cancellation decision (COORDINATOR-INV-16).
 
 {/* Evidence: crates/registry-coordinator/tests/external_command_postgres.rs
     a_lost_acknowledgement_holds_and_retry_same_sends_the_same_command;
