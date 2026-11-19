@@ -25,6 +25,15 @@ instruction and key. An uncertain `record-provider-confirmation` may use
 `retry-same`, which resends only the saved reporting command under its saved
 key. Neither recovery path permits a fresh provider submission.
 
+A run that ended `disbursement-unresolved` is resumed by starting this workflow
+again with the same `instructionRecordId` and `instructionVersion`. The Adapter
+reattaches the new run to that instruction version's existing attempt; it never
+submits a second disbursement for it.
+
+A failed disbursement leaves the instruction bound to that attempt: the Adapter
+permits one attempt per instruction version. A new attempt needs a new
+approved instruction version.
+
 ## Check and package
 
 From the repository root, use binaries built from this checkout:

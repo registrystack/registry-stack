@@ -23,6 +23,16 @@ read-only original-request lookup. Recover `record-receipt` with
 or send a fresh command. This also applies to an ambiguous
 `adapter.payment.provider-protocol` response after dispatch.
 
+A run that ended `collection-unresolved` is resumed by starting this workflow
+again with the same `billId` and `billVersion`. The Adapter reattaches the new
+run to the bill version's existing attempt instead of creating a second one,
+and a later `record-receipt` returns the receipt already recorded for it.
+
+A declined, cancelled or expired collection (`collection-failed`) leaves the
+bill bound to that attempt: the Adapter permits one attempt per bill version.
+To let the payer try again, the service issues a new bill version and starts a
+run for it.
+
 ## Check and package
 
 From the repository root, use binaries built from this checkout:

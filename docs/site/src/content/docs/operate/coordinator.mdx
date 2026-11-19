@@ -1036,9 +1036,16 @@ An uncertain `payments.request-disbursement/v1` stays held.
 The separate `payments.record-receipt/v1` and `payments.record-provider-confirmation/v1` reporting commands may use `retry-same` with their frozen body and key.
 Investigate an unresolved original-request receipt with the Adapter operator before any same-command recovery or cancellation decision.
 
+A run that ended without a settled payment, such as one whose wait timed out, is resumed by starting the same workflow again with the same bill or instruction identity and version.
+The Adapter reattaches the new run to that version's existing attempt instead of creating a second one, and `payments.record-receipt/v1` returns a receipt already recorded for it.
+A declined, cancelled or expired collection, or a failed disbursement, leaves the bill or instruction bound to its attempt, because the Adapter permits one attempt per version.
+Issue a new bill or instruction version to try again.
+
 {/* Evidence: crates/registry-coordinator/tests/payment_adapter.rs
     collection_request_and_recovery_use_the_exact_original_command,
-    uncertain_disbursement_submission_never_becomes_a_fresh_send. */}
+    uncertain_disbursement_submission_never_becomes_a_fresh_send;
+    crates/registry-adapter/src/payments/service.rs find_bill;
+    crates/registry-adapter/src/payments/g2p_service.rs find_instruction. */}
 
 ### Waits
 
