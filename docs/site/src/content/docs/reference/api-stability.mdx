@@ -290,7 +290,7 @@ cutover. `v0.43.0` continued this forward path from `v0.42.0`. `v0.45.0` retired
 Source form (`http-json`, `sqlite-extract`) for Adapter packs: it refuses a `v0.44.0` project with
 `evidence.project.source-acquisition-retired`, and the project moves forward only by the
 [retired Source project steps](https://github.com/registrystack/registry-stack/blob/main/products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project).
-The current predecessor rehearsal starts at `v0.45.0`, so bring older retained state through each
+The current predecessor rehearsal starts at `v0.46.0`, so bring older retained state through each
 intervening release first.
 
 Casework's review-only replacement requires a fresh database. It refuses the retired
@@ -370,10 +370,12 @@ The promise is machine-checked where a checker exists:
   Messaging, upgrades with the binaries built from the pull request, and fails when captured
   views differ, retained tables lose rows, or an audit file loses entries. It starts from the newest
   published release at or below the workspace version, so it rehearses the immediate predecessor,
-  and it refuses to start from a release before `v0.45.0`, the predecessor current source reads.
+  and it refuses to start from a release before `v0.46.0`, the predecessor current source reads.
   `v0.43.0` continued the path from the `v0.42.0` Evidence, Messaging, and Scheduling baselines;
   `v0.44.0` retained Evidence and Messaging state while starting the product baselines above;
   `v0.45.0` retained Messaging state and moved Evidence projects to Adapter packs.
+  `v0.46.0` retained Evidence and Messaging state and renamed Messaging's `role` to `actsAs`, so
+  Messaging projects from `v0.45.0` are re-authored as the Messaging changelog describes.
   While no release from that floor onward is published, the rehearsal uses the binaries under test
   on both sides and reports that it has no published predecessor. This exercises the scenarios with
   the same build; it does not demonstrate compatibility between releases. Once a release on the
@@ -381,7 +383,7 @@ The promise is machine-checked where a checker exists:
   Default omissions record the unsupported transition; a focused unsupported product request
   refuses. BReg, Casework, and Scheduling state are not rehearsed. BReg and Casework have separate current-schema operator checks.
 
-{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, main(), fetch_release(), view_differences(), row_count_losses(), audit_stream_losses(), select_from_tag(), and check_forward_path(). */}
+{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, main(), fetch_release(), view_differences(), row_count_losses(), audit_stream_losses(), select_from_tag(), and check_forward_path(); products/messaging/CHANGELOG.md, 0.46.0 (`role` renamed to `actsAs`). */}
 
 A change that a gate flags as breaking lands only in a release whose version permits it, with the
 deprecation and migration steps this page requires.

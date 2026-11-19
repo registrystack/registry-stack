@@ -1672,5 +1672,5 @@
   "profile": "authoring",
   "revision": "sha256:8046b7f87154e692dd2cf48a14d1d1e24ce2acef697b4029074d9bfb886fc16a",
   "status": "complete",
-  "version": "0.46.1-dev"
+  "version": "0.47.0-dev"
 }

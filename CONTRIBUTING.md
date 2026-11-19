@@ -237,8 +237,8 @@ Every pull request should make the review path clear:
   in [`CONFIG-CONVENTIONS.md`](products/platform/CONFIG-CONVENTIONS.md) keeps
   each refusal until its format's next stable version.
   `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
-  earliest shared predecessor, v0.43.0, the release before the v0.44.0
-  Casework, Scheduling, and BReg fresh baselines, and
+  earliest release current source reads retained state from, v0.46.0, its
+  immediate predecessor, and
   [`api-stability.mdx`](docs/site/src/content/docs/reference/api-stability.mdx)
   states the promise for operators.
 

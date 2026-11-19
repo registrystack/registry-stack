@@ -1767,7 +1767,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.46.1"
+version = "0.47.0"
 dependencies = [
  "base64 0.23.1",
  "futures",
@@ -1783,7 +1783,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.46.1"
+version = "0.47.0"
 dependencies = [
  "ryu-js",
  "serde",
@@ -1793,7 +1793,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.46.1"
+version = "0.47.0"
 dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-yaml",
@@ -1808,7 +1808,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.46.1"
+version = "0.47.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1850,7 +1850,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.46.1"
+version = "0.47.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1878,7 +1878,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oidc"
-version = "0.46.1"
+version = "0.47.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -1898,7 +1898,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.46.1"
+version = "0.47.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1914,7 +1914,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sqlite"
-version = "0.46.1"
+version = "0.47.0"
 dependencies = [
  "rusqlite",
  "rustix",
@@ -1926,7 +1926,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-text"
-version = "0.46.1"
+version = "0.47.0"
 dependencies = [
  "hex",
  "icu_casemap",
@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-x509"
-version = "0.46.1"
+version = "0.47.0"
 dependencies = [
  "base64 0.23.1",
  "der 0.8.2",
@@ -1952,7 +1952,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-yaml"
-version = "0.46.1"
+version = "0.47.0"
 dependencies = [
  "registry-platform-text",
  "saphyr-parser",

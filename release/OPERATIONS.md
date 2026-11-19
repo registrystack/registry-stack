@@ -958,7 +958,7 @@ not compatibility with an earlier release.
 project by hand, following the
 [migration steps](../products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project),
 and verify a fresh synthetic assertion before cutover. The floor is now
-`v0.45.0`, so no rehearsal crosses that boundary and every leg runs from the
+`v0.46.0`, so no rehearsal crosses that boundary and every leg runs from the
 floor.
 
 For retained Evidence and Messaging contracts before 1.0, a release reads only
@@ -979,9 +979,7 @@ each asset against it as `release/VERIFY.md` describes. Eligible legs write an
 Evidence audit stream or a Messaging package ledger with scheduled and cancelled
 messages using the old binaries, with a disposable loopback PostgreSQL container
 for Messaging. It then points the PR's binaries at
-that state and the same files, re-authoring a Messaging package the new release
-no longer reads as the Messaging CHANGELOG documents, runs the upgrade an
-operator runs, and fails
+that state and the same files, runs the upgrade an operator runs, and fails
 when any captured view is served differently or any retained table holds fewer
 rows. Require that run to succeed before merging the release PR. To rehearse
 without a release PR, dispatch it by hand:
@@ -993,20 +991,16 @@ gh workflow run release-upgrade-rehearsal.yml \
 ```
 
 `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
-earliest release this source reads retained state from, `v0.45.0`, and the script
+earliest release this source reads retained state from, `v0.46.0`, and the script
 refuses to start from any earlier release rather than skipping the check.
 `v0.43.0` continued the forward state path from `v0.42.0`; `v0.44.0` retained
 Evidence and Messaging state while starting the product baselines described
 below; `v0.45.0` retained Messaging state and moved Evidence projects to Adapter
-packs, described above. Current source reads the retained database state
-`v0.45.0` wrote, so older state must first move through each intervening
-release. It does not read the Messaging package `v0.45.0` wrote: `v0.46.0`
-renames an access profile's `role` to `actsAs`, so the rehearsal re-authors the
-retained Messaging project as the Messaging changelog documents, repackages it
-with the binaries under test, activates that package, and keeps the database
-state, which must still serve every captured view. Once `FORWARD_PATH_FLOOR`
-reaches `v0.46.0`, delete `ACTS_AS_BOUNDARY` and its step from
-`rehearse-upgrade.py`; a unit test fails until then.
+packs, described above. `v0.46.0` retained Evidence and Messaging state and
+renamed Messaging's `role` to `actsAs`, so Messaging projects from `v0.45.0` are
+re-authored as the Messaging changelog describes. Current source reads the
+retained state `v0.46.0` wrote, so older state must first move through each
+intervening release.
 The retained path started at `v0.42.0` because no product reads `v0.41.0` state:
 BReg and Casework start on a fresh database, Evidence starts at its normalized
 `v0.42.0` baseline, and Messaging and Scheduling each install a fresh schema

@@ -6,10 +6,9 @@ The rehearsal downloads the previous release's published Evidence and Messaging
 binaries, authenticates them the way release/VERIFY.md describes, and uses them
 to write real state: an Evidence audit stream with a signed response and a
 Messaging package ledger with scheduled and cancelled messages. It then points
-the binaries built from this source at that exact state and those files (a
-Messaging package the new release no longer reads is re-authored first, as
-described below), runs the upgrade an operator runs, and fails unless the state
-is still served unchanged and no table lost a row.
+the binaries built from this source at that exact state and those exact files,
+runs the upgrade an operator runs, and fails unless the state is still served
+unchanged and no table lost a row.
 A product the previous release did not ship, or whose contract starts at a
 new baseline, has no supported state to carry forward. Its leg is omitted and
 the report says why. The forward state path started at 0.42.0 with Evidence's
@@ -18,13 +17,11 @@ Release 0.43.0 continued that path from 0.42.0. Release 0.44.0 starts Casework
 and Scheduling at a fresh version 200 baseline and has BReg refuse the 0.43.0
 attachment verification state, so those legs remain omitted. Release 0.45.0
 retired the tagged Evidence Source form for Adapter packs; a 0.44.0 Evidence
-project moves forward only by hand migration. This source reads the Evidence
-and Messaging database state 0.45.0 retained, its immediate predecessor, but not
-the Messaging package 0.45.0 wrote: 0.46.0 renames an access profile's `role` to
-`actsAs`, so the Messaging leg re-authors the project and repackages it with
-this source, as the Messaging CHANGELOG documents, and keeps the database
-state. The Messaging leg also checks the corrected dispatch job shape after the
-upgrade.
+project moves forward only by hand migration. Release 0.46.0 renamed a
+Messaging access profile's `role` to `actsAs`, so a 0.45.0 Messaging project is
+re-authored as the Messaging CHANGELOG documents. This source reads the retained
+Evidence and Messaging state 0.46.0 wrote, its immediate predecessor; the
+Messaging leg also checks the corrected dispatch job shape after the upgrade.
 
 While no release on the forward state path is published, there is no
 predecessor to download: the rehearsal then runs every leg with this source's
@@ -104,12 +101,12 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # three are RETIRED_PRODUCTS. Release 0.45.0 retired the tagged Evidence Source
 # form for Adapter packs, so a 0.44.0 Evidence project moves forward only by the
 # hand migration products/evidence/reference/authoring-projects/CONFIG.md
-# describes. This source reads the Evidence and Messaging database state 0.45.0
-# retained, its immediate predecessor; the Messaging package 0.45.0 wrote is
-# re-authored for `actsAs` and repackaged (ACTS_AS_BOUNDARY), and the
-# database state is kept. Messaging keeps its version 100 baseline and migrates
-# forward through version 101.
-FORWARD_PATH_FLOOR = (0, 45, 0)
+# describes. Release 0.46.0 renamed a Messaging access profile's `role` to
+# `actsAs`, so a 0.45.0 Messaging project is re-authored as the Messaging
+# CHANGELOG documents. This source reads the retained Evidence and Messaging
+# state 0.46.0 wrote, its immediate predecessor. Messaging keeps its version 100
+# baseline and migrates forward through version 101.
+FORWARD_PATH_FLOOR = (0, 46, 0)
 
 STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
 STACK_RELEASED = re.compile(r"\Astack:\n(?:  .*\n)*?  status: released\n")
@@ -151,15 +148,6 @@ RETIRED_PRODUCTS = {
     "casework": CASEWORK_NO_IN_PLACE_UPGRADE,
     "scheduling": SCHEDULING_NO_IN_PLACE_UPGRADE,
 }
-# 0.46.0 renames a Messaging access profile's `role` to `actsAs`, and its
-# messagingctl refuses a package that still writes `role`. A rehearsal that
-# crosses this boundary performs the adopter migration the Messaging CHANGELOG
-# documents: re-author the retained project, repackage it with this source, and
-# activate that package over the database state the previous release wrote. It
-# is dead code, and a unit test fails, once FORWARD_PATH_FLOOR reaches it. It is
-# a package format boundary, not a gate on whether a release ships Messaging, so
-# it does not live in release_roster.py.
-ACTS_AS_BOUNDARY = (0, 46, 0)
 # A product joins the rehearsal from the first release that published it, and
 # is downloaded only for the platforms that release publishes it for.
 # release_roster.MESSAGING_FIRST_RELEASE names Messaging's first release; while
@@ -527,50 +515,6 @@ def ledger_digest_differences(activated: str | None, planned: dict[str, Any]) ->
             differences.append(f"the ledger {member} is not the package the previous "
                                "release activated")
     if planned.get("change") != "none":
-        differences.append("the package ledger still names a change to apply")
-    return differences
-
-
-def crosses_messaging_acts_as_boundary(start: tuple[int, int, int]) -> bool:
-    """Whether a rehearsal from `start` must migrate Messaging's `role` to `actsAs`."""
-
-    return start < ACTS_AS_BOUNDARY
-
-
-def acts_as_project(project: dict[str, Any]) -> dict[str, Any]:
-    """The documented migration: each access profile writes `actsAs: VALUE`
-    where it wrote `role: VALUE`, in place. Refuses a project with no `role`
-    to migrate, since then the boundary was not where the rehearsal expects."""
-
-    profiles = project.get("accessProfiles") or []
-    if not any("role" in profile for profile in profiles):
-        raise RehearsalError("the retained Messaging project has no access profile "
-                             "role to migrate to actsAs")
-    project["accessProfiles"] = [
-        {("actsAs" if key == "role" else key): value for key, value in profile.items()}
-        for profile in profiles]
-    return project
-
-
-def repackaged_ledger_differences(activated: str | None, before: dict[str, Any],
-                                  after: dict[str, Any]) -> list[str]:
-    """Name what keeps the re-authored package from replacing the previous
-    release's activation. `before` is this source's plan over the retained
-    ledger and the re-authored package; `after` is its plan once applied."""
-
-    if not activated:
-        return ["the previous release's ledger recorded no active package"]
-    differences = []
-    if before.get("activeDigest") != activated:
-        differences.append("the ledger no longer names the package the previous "
-                           "release activated")
-    replacement = before.get("packageDigest")
-    if not replacement or replacement == activated:
-        differences.append("the plan names no re-authored package")
-    for member in ("activeDigest", "packageDigest"):
-        if after.get(member) != replacement:
-            differences.append(f"the ledger {member} is not the re-authored package")
-    if after.get("change") != "none":
         differences.append("the package ledger still names a change to apply")
     return differences
 
@@ -1252,29 +1196,6 @@ class Messaging:
             planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
         return ledger_digest_differences(activated, planned)
 
-    def migrate_acts_as(self, side: Side) -> None:
-        """Re-author the retained project for `actsAs`, repackage it with
-        `side`, and point the runtime file at that package."""
-        project = self.project / "messaging.yaml"
-        dump_yaml(project, acts_as_project(load_yaml(project)))
-        package = self.work / "package-acts-as"
-        side.run("messagingctl", "check", "--project", str(self.project))
-        side.run("messagingctl", "package", str(self.project), "--output", str(package))
-        side.run("messagingctl", "check", "--package", str(package))
-        runtime = load_yaml(self.runtime)
-        runtime["package"]["root"] = str(package)
-        dump_yaml(self.runtime, runtime)
-
-    def activate_repackaged(self, side: Side, activated: str | None) -> list[str]:
-        """Check, plan, and apply the re-authored package with `side`, which
-        also applies any pending schema versions, then plan again."""
-        config = ["--runtime-config", str(self.runtime)]
-        side.run("messagingctl", "check", *config)
-        before = side.run_json("messagingctl", "--format", "json", "plan", *config)
-        side.run("messagingctl", "apply", *config)
-        after = side.run_json("messagingctl", "--format", "json", "plan", *config)
-        return repackaged_ledger_differences(activated, before, after)
-
 
 def dispatch_shape_differences(definition: str | None) -> list[str]:
     """Name a dispatch job shape that still accepts a lease without an expiry.
@@ -1292,7 +1213,7 @@ def dispatch_shape_differences(definition: str | None) -> list[str]:
 
 
 def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Side,
-                       report: dict[str, Any], *, start: tuple[int, int, int]) -> None:
+                       report: dict[str, Any]) -> None:
     messaging = Messaging(work, keys, postgres)
     messaging.provision()
     messaging.author(old)
@@ -1321,14 +1242,8 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     # The new binaries read the runtime file and the package the previous
     # release wrote. The ledger must still name that package as active: a plan
     # that reports a change once any pending schema versions are applied means
-    # the upgrade lost the activation. Across ACTS_AS_BOUNDARY the
-    # project is re-authored and repackaged instead, and that package must
-    # replace the previous activation over the same database state.
-    if crosses_messaging_acts_as_boundary(start):
-        messaging.migrate_acts_as(new)
-        differences = messaging.activate_repackaged(new, activated)
-    else:
-        differences = messaging.upgrade(new, activated)
+    # the upgrade lost the activation.
+    differences = messaging.upgrade(new, activated)
     differences += dispatch_shape_differences(postgres.sql("messaging", """
         SELECT pg_get_constraintdef(oid) FROM pg_constraint
         WHERE conname = 'messaging_dispatch_jobs_shape';
@@ -1788,8 +1703,7 @@ def main(argv: list[str]) -> int:
                 print(f"rehearsing {product}: {from_tag} -> workspace {version}", flush=True)
                 leg_work = work / product
                 if product == "messaging":
-                    rehearse_messaging(leg_work, keys, postgres, old, new, report,
-                                       start=parse_tag(from_tag))
+                    rehearse_messaging(leg_work, keys, postgres, old, new, report)
                 else:
                     rehearse_evidence(leg_work, keys, tls, old, new, report)
                 print(f"{product}: state served and no rows dropped", flush=True)
