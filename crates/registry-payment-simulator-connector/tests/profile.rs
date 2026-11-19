@@ -81,6 +81,78 @@ fn confirmation_requires_synthetic_reference_and_exact_valid_pair() {
     }
 }
 
+// Captured from the payment simulator for a payer whose outcome rule is
+// `cancelled`: the rule settles the request at creation.
+const CANCELLED_TRANSFER: &str = "97b18987-d833-413d-80cb-ce8f83e5468d";
+const CANCELLED_ACCEPTANCE: &str = r#"{"responseCode":"00","responseDescription":"Accepted","requestID":"request1","rtpId":1,"transferRequestId":"97b18987-d833-413d-80cb-ce8f83e5468d"}"#;
+const CANCELLED_STATUS: &str = r#"{"transferRequestId":"97b18987-d833-413d-80cb-ce8f83e5468d","RequestId":"request1","rtpId":1,"billId":"bill1","amount":25.50,"currency":"USD","requestStatus":"RJC","paymentStatus":"FAILED","lastUpdateDate":1795128182,"failureReason":"payer-cancelled"}"#;
+
+#[test]
+fn payer_cancellation_is_a_failed_collection() {
+    let observation = command()
+        .decode_status(CANCELLED_TRANSFER, CANCELLED_STATUS.as_bytes())
+        .unwrap();
+    assert_eq!(observation.state, CollectionState::Failed);
+    assert_eq!(
+        observation.failure_reason.as_deref(),
+        Some("payer-cancelled")
+    );
+    assert_eq!(observation.provider_reference, None);
+    for (from, to) in [
+        ("payer-cancelled", "payer-unsure"),
+        ("\"RJC\"", "\"EXP\""),
+        (
+            "\"failureReason\"",
+            "\"PaymentReferenceID\":\"SIM-1\",\"failureReason\"",
+        ),
+    ] {
+        let changed = CANCELLED_STATUS.replace(from, to);
+        assert!(command()
+            .decode_status(CANCELLED_TRANSFER, changed.as_bytes())
+            .is_err());
+    }
+}
+
+#[tokio::test]
+async fn a_cancelled_payer_rule_reaches_the_connector_as_a_failed_collection() {
+    use registry_payment_simulator_connector::SimulatorClient;
+    use registry_platform_httputil::client::BearerToken;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        for (route, body) in [
+            ("POST /rtpRequest ".to_owned(), CANCELLED_ACCEPTANCE),
+            (
+                format!("GET /transferRequests/{CANCELLED_TRANSFER} "),
+                CANCELLED_STATUS,
+            ),
+        ] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0; 4096];
+            let count = socket.read(&mut request).await.unwrap();
+            assert!(std::str::from_utf8(&request[..count])
+                .unwrap()
+                .starts_with(&route));
+            let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Payment-Simulator: synthetic\r\nX-CorrelationID: request1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            socket.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    let mut config = connection();
+    config.base_url = format!("http://{address}/");
+    let client = SimulatorClient::new(config).unwrap();
+    let token = BearerToken::new("canary-synthetic-provider-token").unwrap();
+    let transfer = client.submit(&command(), &token).await.unwrap();
+    assert_eq!(transfer, CANCELLED_TRANSFER);
+    let observation = client.observe(&command(), &transfer, &token).await.unwrap();
+    assert_eq!(observation.state, CollectionState::Failed);
+    assert_eq!(
+        observation.failure_reason.as_deref(),
+        Some("payer-cancelled")
+    );
+    server.await.unwrap();
+}
+
 #[tokio::test]
 async fn an_invalid_acknowledgement_after_dispatch_is_an_unknown_outcome() {
     use registry_payment_simulator_connector::{ConnectorError, SimulatorClient};
