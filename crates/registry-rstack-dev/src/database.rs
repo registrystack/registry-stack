@@ -3,6 +3,7 @@
 use std::{
     future::Future,
     str::FromStr,
+    thread,
     time::{Duration, Instant},
 };
 
@@ -14,6 +15,7 @@ use sha2::{Digest as _, Sha256};
 use tokio::runtime::{Builder, Runtime};
 use tokio_postgres::{
     config::{Host, SslMode},
+    error::SqlState,
     Client, Config,
 };
 use tokio_postgres_rustls::MakeRustlsConnect;
@@ -31,6 +33,22 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
 const STATEMENT_TIMEOUT: Duration = Duration::from_secs(10);
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 const CLEANUP_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
+/// The first and longest pauses before a refused database drop is retried.
+const DROP_RETRY_FIRST_PAUSE: Duration = Duration::from_millis(100);
+const DROP_RETRY_MAX_PAUSE: Duration = Duration::from_secs(1);
+/// Bounds the diagnostic read after the cleanup deadline has passed.
+const BACKEND_REPORT_TIMEOUT: Duration = Duration::from_secs(2);
+/// Counts the other backends in a database by type, without names. Without
+/// `pg_read_all_stats` the administrator cannot read the type of a backend
+/// whose role it does not hold, so such a backend is counted by whether it
+/// has a role at all: an autovacuum worker has none.
+const CONNECTED_BACKENDS_QUERY: &str = "SELECT coalesce(backend_type, \
+         CASE WHEN usesysid IS NULL THEN 'background process without a role' \
+              ELSE 'session of a role this administrator does not hold' END), \
+       count(*) \
+  FROM pg_catalog.pg_stat_activity \
+ WHERE datname = $1 AND pid <> pg_catalog.pg_backend_pid() \
+ GROUP BY 1 ORDER BY 1";
 const KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
 const RECOVERY_IDENTITY_QUERY: &str = "SELECT system_identifier, \
        pg_catalog.current_database()::text \
@@ -80,6 +98,11 @@ impl OperationFailure {
         }
     }
 
+    fn lacks_privilege(&self) -> bool {
+        matches!(self, Self::PostgreSql { source, .. }
+            if source.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE))
+    }
+
     fn effect_is_unconfirmed(&self) -> bool {
         matches!(self, Self::IoDeadline { .. })
             || matches!(self, Self::PostgreSql { source, .. } if source.as_db_error().is_none())
@@ -96,6 +119,13 @@ async fn bounded_operation<T>(
         Ok(Err(error)) => Err(OperationFailure::postgres(operation, error)),
         Err(_) => Err(OperationFailure::IoDeadline { operation }),
     }
+}
+
+fn lacks_privilege(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<OperationFailure>())
+        .any(OperationFailure::lacks_privilege)
 }
 
 fn retain_create_acquisition<T>(
@@ -426,19 +456,16 @@ impl Database {
     }
 
     pub(super) fn cleanup(&mut self) -> Result<()> {
-        let deadline = Instant::now() + CLEANUP_ATTEMPT_TIMEOUT;
+        self.cleanup_until(Instant::now() + CLEANUP_ATTEMPT_TIMEOUT)
+    }
+
+    fn cleanup_until(&mut self, deadline: Instant) -> Result<()> {
         let mut failures = Vec::new();
         let mut retained = Vec::new();
         let acquisitions = self.acquisitions.clone();
         for acquisition in acquisitions.into_iter().rev() {
             let result = match &acquisition {
-                Acquisition::Database(name) => self.execute_cleanup(
-                    &format!(
-                        "DROP DATABASE IF EXISTS {} WITH (FORCE)",
-                        quote_identifier(name)
-                    ),
-                    deadline,
-                ),
+                Acquisition::Database(name) => self.drop_database(name, deadline),
                 Acquisition::Role(name) => self.execute_cleanup(
                     &format!("DROP ROLE IF EXISTS {}", quote_identifier(name)),
                     deadline,
@@ -463,6 +490,64 @@ impl Database {
                 failures.join("; ")
             )
         }
+    }
+
+    /// `WITH (FORCE)` terminates the database's other sessions, but
+    /// PostgreSQL refuses the whole drop when one of them belongs to a role
+    /// this administrator does not hold, or to no role, as a background
+    /// worker does. Such a backend is normally about to exit, so the drop is
+    /// retried until the cleanup deadline. A final refusal says what still
+    /// holds the database.
+    fn drop_database(&mut self, name: &str, deadline: Instant) -> Result<()> {
+        let statement = format!(
+            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+            quote_identifier(name)
+        );
+        let mut pause = DROP_RETRY_FIRST_PAUSE;
+        loop {
+            let error = match self.execute_cleanup(&statement, deadline) {
+                Err(error) if lacks_privilege(&error) => error,
+                other => return other,
+            };
+            if deadline.saturating_duration_since(Instant::now()) <= pause {
+                return Err(match self.connected_backends(name) {
+                    Some(backends) => error.context(format!(
+                        "backends still using the database, by type: {backends}"
+                    )),
+                    None => error,
+                });
+            }
+            thread::sleep(pause);
+            pause = (pause * 2).min(DROP_RETRY_MAX_PAUSE);
+        }
+    }
+
+    fn connected_backends(&mut self, database: &str) -> Option<String> {
+        let queried = self.runtime.block_on(bounded_operation(
+            "connected backend count",
+            self.client.query(CONNECTED_BACKENDS_QUERY, &[&database]),
+            BACKEND_REPORT_TIMEOUT,
+        ));
+        if queried
+            .as_ref()
+            .is_err_and(OperationFailure::effect_is_unconfirmed)
+        {
+            self.retire_admin_session();
+        }
+        let counts = queried
+            .ok()?
+            .iter()
+            .map(|row| {
+                let kind: String = row.try_get(0).ok()?;
+                let count: i64 = row.try_get(1).ok()?;
+                Some(format!("{kind} ({count})"))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(if counts.is_empty() {
+            "none".to_owned()
+        } else {
+            counts.join(", ")
+        })
     }
 
     fn reconnect_admin(&mut self, deadline: Instant) -> Result<()> {
@@ -1628,5 +1713,263 @@ mod tests {
     fn empty_or_malformed_custom_root_sets_are_refused() {
         assert!(tls_connector(Some(b"")).is_err());
         assert!(tls_connector(Some(b"not a certificate")).is_err());
+    }
+}
+
+/// Cleanup against a real server. `RSTACK_DEV_TEST_DATABASE_URL` names a
+/// disposable PostgreSQL superuser over TLS and `RSTACK_DEV_TEST_DATABASE_CA`
+/// its CA PEM file. Each test creates its own least-privilege owner, which
+/// holds only CREATEROLE and CREATEDB, like the administrator a developer
+/// gives `rstack dev`.
+#[cfg(all(test, feature = "postgres-test"))]
+mod postgres_tests {
+    use super::*;
+    use std::{sync::mpsc, thread};
+
+    struct Server {
+        runtime: Runtime,
+        client: Client,
+        _connection: AdminConnectionTask,
+        url: Url,
+        ca: Vec<u8>,
+        suffix: String,
+        owner_password: Zeroizing<String>,
+        foreign_password: Zeroizing<String>,
+    }
+
+    impl Server {
+        fn start() -> Self {
+            let url = std::env::var("RSTACK_DEV_TEST_DATABASE_URL")
+                .expect("the postgres-test feature needs RSTACK_DEV_TEST_DATABASE_URL");
+            let ca_file = std::env::var_os("RSTACK_DEV_TEST_DATABASE_CA")
+                .expect("the postgres-test feature needs RSTACK_DEV_TEST_DATABASE_CA");
+            let ca = std::fs::read(ca_file).unwrap();
+            let (mut config, _) = admin_config(&url).unwrap();
+            config.ssl_mode(SslMode::Require);
+            let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+            let (client, connection) = runtime
+                .block_on(config.connect(tls_connector(Some(&ca)).unwrap()))
+                .unwrap();
+            let connection = runtime.spawn(connection);
+            let mut suffix = [0_u8; 6];
+            getrandom::fill(&mut suffix).unwrap();
+            let server = Self {
+                runtime,
+                client,
+                _connection: connection,
+                url: Url::parse(&url).unwrap(),
+                ca,
+                suffix: suffix.iter().map(|byte| format!("{byte:02x}")).collect(),
+                owner_password: random_password().unwrap(),
+                foreign_password: random_password().unwrap(),
+            };
+            server.execute(&format!(
+                "CREATE ROLE {} LOGIN CREATEROLE CREATEDB PASSWORD {}; \
+                 CREATE ROLE {} LOGIN PASSWORD {}",
+                quote_identifier(&server.owner()),
+                quote_literal(&server.owner_password),
+                quote_identifier(&server.foreign()),
+                quote_literal(&server.foreign_password),
+            ));
+            server
+        }
+
+        fn owner(&self) -> String {
+            format!("rstack_test_owner_{}", self.suffix)
+        }
+
+        /// A login role the owner neither created nor holds, so the owner
+        /// may not signal its sessions.
+        fn foreign(&self) -> String {
+            format!("rstack_test_foreign_{}", self.suffix)
+        }
+
+        fn execute(&self, statement: &str) {
+            self.runtime
+                .block_on(self.client.batch_execute(statement))
+                .unwrap();
+        }
+
+        fn exists(&self, catalog_query: &str, name: &str) -> bool {
+            self.runtime
+                .block_on(self.client.query_opt(catalog_query, &[&name]))
+                .unwrap()
+                .is_some()
+        }
+
+        fn url_as(&self, user: &str, password: &str, database: &str) -> String {
+            let mut url = self.url.clone();
+            url.set_username(user).unwrap();
+            url.set_password(Some(password)).unwrap();
+            url.set_path(&format!("/{database}"));
+            url.into()
+        }
+
+        /// Connects the owner as `rstack dev` does and provisions one
+        /// database the foreign role may also enter.
+        fn provision(&self, run_id: &str) -> (Database, String) {
+            let owner_url = self.url_as(&self.owner(), &self.owner_password, "postgres");
+            let mut database = Database::connect(&owner_url, Some(&self.ca), run_id).unwrap();
+            database.provision("breg_test", false, false).unwrap();
+            let name = Names::new(run_id, "breg_test").database;
+            self.execute(&format!(
+                "GRANT CONNECT ON DATABASE {} TO {}",
+                quote_identifier(&name),
+                quote_identifier(&self.foreign()),
+            ));
+            (database, name)
+        }
+
+        /// Opens a session to `database` as the foreign role on its own
+        /// thread, and closes it when `release` fires or is dropped.
+        fn foreign_session(&self, database: &str) -> (mpsc::Sender<()>, thread::JoinHandle<()>) {
+            let (mut config, _) =
+                admin_config(&self.url_as(&self.foreign(), &self.foreign_password, database))
+                    .unwrap();
+            config.ssl_mode(SslMode::Require);
+            let tls = tls_connector(Some(&self.ca)).unwrap();
+            let (opened, ready) = mpsc::channel();
+            let (release, released) = mpsc::channel::<()>();
+            let session = thread::spawn(move || {
+                let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+                runtime.block_on(async {
+                    let (client, connection) = config.connect(tls).await.unwrap();
+                    let connection = tokio::spawn(connection);
+                    client.batch_execute("SELECT 1").await.unwrap();
+                    opened.send(()).unwrap();
+                    tokio::task::spawn_blocking(move || {
+                        let _ = released.recv();
+                    })
+                    .await
+                    .unwrap();
+                    drop(client);
+                    let _ = connection.await;
+                });
+            });
+            ready.recv().expect("the foreign session opened");
+            (release, session)
+        }
+
+        fn run_id() -> String {
+            let mut bytes = [0_u8; 16];
+            getrandom::fill(&mut bytes).unwrap();
+            bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+        }
+    }
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let leftovers = self.runtime.block_on(self.client.query(
+                "SELECT datname FROM pg_database WHERE datname LIKE 'rstack\\_%' \
+                 AND has_database_privilege($1, oid, 'CONNECT')",
+                &[&self.foreign()],
+            ));
+            let mut statements = Vec::new();
+            for row in leftovers.into_iter().flatten() {
+                let name: String = row.get(0);
+                statements.push(format!(
+                    "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+                    quote_identifier(&name)
+                ));
+            }
+            let created = self.runtime.block_on(self.client.query(
+                "SELECT r.rolname FROM pg_auth_members m \
+                   JOIN pg_roles r ON r.oid = m.roleid \
+                   JOIN pg_roles o ON o.oid = m.member \
+                  WHERE o.rolname = $1 AND r.rolname LIKE 'rstack\\_%'",
+                &[&self.owner()],
+            ));
+            for row in created.into_iter().flatten() {
+                let name: String = row.get(0);
+                statements.push(format!("DROP ROLE IF EXISTS {}", quote_identifier(&name)));
+            }
+            for role in [self.owner(), self.foreign()] {
+                statements.push(format!("DROP ROLE IF EXISTS {}", quote_identifier(&role)));
+            }
+            // One statement at a time: DROP DATABASE refuses to run inside
+            // the implicit transaction of a multi-statement batch.
+            for statement in statements {
+                let _ = self.runtime.block_on(self.client.batch_execute(&statement));
+            }
+        }
+    }
+
+    const DATABASE_EXISTS: &str = "SELECT 1 FROM pg_database WHERE datname = $1";
+    const ROLE_EXISTS: &str = "SELECT 1 FROM pg_roles WHERE rolname = $1";
+
+    #[test]
+    fn cleanup_outlasts_a_session_it_may_not_signal() {
+        let server = Server::start();
+        let run_id = Server::run_id();
+        let (mut database, name) = server.provision(&run_id);
+        let (release, session) = server.foreign_session(&name);
+        let releaser = thread::spawn(move || {
+            thread::sleep(Duration::from_secs(1));
+            drop(release);
+        });
+
+        database
+            .cleanup()
+            .expect("cleanup waits out the foreign session");
+
+        releaser.join().unwrap();
+        session.join().unwrap();
+        assert!(database.pending_names().is_empty());
+        assert!(!server.exists(DATABASE_EXISTS, &name));
+        let names = Names::new(&run_id, "breg_test");
+        for role in [names.migration_role, names.runtime_role] {
+            assert!(!server.exists(ROLE_EXISTS, &role), "{role} was dropped");
+        }
+    }
+
+    #[test]
+    fn cleanup_names_the_backends_it_could_not_outlast() {
+        let server = Server::start();
+        let run_id = Server::run_id();
+        let (mut database, name) = server.provision(&run_id);
+        let (release, session) = server.foreign_session(&name);
+        let started = Instant::now();
+
+        let error = database
+            .cleanup_until(Instant::now() + Duration::from_secs(3))
+            .unwrap_err();
+
+        let elapsed = started.elapsed();
+        let message = format!("{error:#}");
+        assert!(
+            elapsed >= Duration::from_secs(2),
+            "cleanup retried until its deadline, not {elapsed:?}: {message}"
+        );
+        assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+        assert!(
+            message.starts_with("PostgreSQL cleanup is incomplete for 3 resource(s): database: "),
+            "{message}"
+        );
+        assert!(
+            message.contains("permission denied to terminate process"),
+            "{message}"
+        );
+        assert!(
+            message.contains(
+                "backends still using the database, by type: \
+                 session of a role this administrator does not hold (1): "
+            ),
+            "{message}"
+        );
+        assert!(!message.contains(&server.foreign()), "{message}");
+        assert_eq!(
+            database.pending_names(),
+            run_object_names(&run_id, "breg_test", false).unwrap(),
+            "the run keeps every resource it could not release"
+        );
+        assert!(server.exists(DATABASE_EXISTS, &name));
+
+        drop(release);
+        session.join().unwrap();
+        database
+            .cleanup()
+            .expect("a later attempt releases the retained resources");
+        assert!(database.pending_names().is_empty());
+        assert!(!server.exists(DATABASE_EXISTS, &name));
     }
 }

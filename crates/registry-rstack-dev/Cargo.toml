@@ -17,6 +17,10 @@ workspace = true
 
 [features]
 default = []
+# Runs the cleanup tests against the disposable PostgreSQL superuser named by
+# RSTACK_DEV_TEST_DATABASE_URL, over TLS verified with
+# RSTACK_DEV_TEST_DATABASE_CA.
+postgres-test = []
 # Derives the JSON Schemas of the development plan and scenario files, for
 # the `dev-schema` generator and its drift check.
 schema = [
