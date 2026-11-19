@@ -103,7 +103,7 @@ Expressions are refused in or under members whose names end in `Ref` and in secr
 
 The runtime reads and checks every key in the schema.
 It acts on `identity`, `package`, `listener`, `secretProviders`, `database`, `authentication`, `audit`, `storage`, `contentVerification`, `transfers`, `cleanup`, and `retention.receiptRetentionDays`.
-The other blocks are checked, so a deployment written now keeps its meaning when the behavior behind them arrives.
+The other blocks are checked, so a deployment written now keeps its meaning when the behaviour behind them arrives.
 
 - `identity.databaseId` is the logical identity of the one database this deployment owns, independent of the connection URL.
   It is required.
@@ -184,21 +184,21 @@ It then does these steps in order:
    Serving never applies the schema: `documentsctl apply --runtime-config FILE` does, over the migration credential.
 4. It opens the audit journal.
 5. It activates content storage and refuses a storage binding other than the one pinned at the first upload.
-6. It activates the content verifier, then suspends and re-queues every finalized version verified or queued under another verifier binding.
+6. It activates the content verifier, then suspends and re-queues every finalised version verified or queued under another verifier binding.
 7. It binds the listener, serves `GET /health`, `GET /ready`, and the document routes, and runs the content verification worker until shutdown.
 
-An upload that finalizes a version wakes the verification worker of its own process, which claims the job at once.
+An upload that finalises a version wakes the verification worker of its own process, which claims the job at once.
 The worker also looks for due jobs every five seconds while idle, which picks up a job enqueued by another instance or by an operator command, and one due again after a backoff.
 
 The runtime checks the active package identity on each authenticated request and each worker transaction.
 A successor activation or unreadable ledger stops new protected requests with `503 service.unavailable` and stops new verification, erasure, and cleanup work.
-An admitted download may finish within its transfer deadline; an upload still receiving bytes must pass a fresh activation check before finalization.
+An admitted download may finish within its transfer deadline; an upload still receiving bytes must pass a fresh activation check before finalisation.
 Apply waits at most five seconds for each lock held by a bounded verification attempt or object-storage write or deletion.
 Drain or stop busy old workers before you retry a refused apply.
 Already-materialized hook deliveries may finish their bounded attempt.
 
 Set both database credentials' `search_path` to the schema that contains the activation ledger.
-A ledger resolved through a later schema is refused, so runtime effects and activation always synchronize on the same schema.
+A ledger resolved through a later schema is refused, so runtime effects and activation always synchronise on the same schema.
 
 Every document route verifies a bearer access token against `authentication.oidc` before it reads a request body.
 A token the verifier refuses answers `authentication.refused` with a `Bearer` challenge; a verifier that cannot be reached answers `service.unavailable`.

@@ -17,7 +17,7 @@ Whether a party may hold a service remains with the source system that owns the 
 
 The route-specific authorities are disjoint.
 A token carrying a product scope does not gain a commitment path, and a task grant does not grant a catalogue read.
-Scopes authorize reads, and the separately configured explain scope authorizes the diagnostic read.
+Scopes authorise reads, and the separately configured explain scope authorises the diagnostic read.
 Every commitment takes its authority from the grant alone.
 One access token may carry both profiles, but each operation checks only its own authority.
 
@@ -35,7 +35,7 @@ The grant is the six `registry_grant_*` members plus `registry_purpose` and `reg
 - `registry_grant_bounds`
 
 A token carrying none of them is an ordinary standing token.
-A token carrying some of them is refused as a malformed credential rather than honored partially.
+A token carrying some of them is refused as a malformed credential rather than honoured partially.
 
 Before the caller reaches the service, the runtime binds the grant to two facts it verified itself.
 The grant's client must equal the client the deployment verified (`azp` or `client_id`).
@@ -128,7 +128,7 @@ The answer is a fresh observation, not a distributed transaction with the author
 `taskGrantStatus: unchecked-final-fifteen-minutes` selects the offline path.
 No authority is asked, no revocation is observed, and Registry Scheduling accepts a grant only while it is unexpired with no more than 900 seconds remaining at request entry.
 A list of authorities disables that path for every source, including an unlisted one, which is refused even with less than 15 minutes left.
-The token does not name its authorization mode, so the final 15 minutes of an originally deferred grant can use the offline path on a deployment that writes the keyword.
+The token does not name its authorisation mode, so the final 15 minutes of an originally deferred grant can use the offline path on a deployment that writes the keyword.
 List the task authorities for every deployment that accepts deferred grants.
 
 {/* Evidence: crates/registry-scheduling/src/service.rs
@@ -148,7 +148,7 @@ An explicit `manager: schedulingManager` selects the fixed `schedulingManager` s
 The request carries no manager identifier.
 Registry Scheduling binds that value to the grant's source issuer and retains it separately from the actor that submitted the command.
 The source issuer must guarantee that its manager identifiers are stable and never reassigned.
-Beneficiary and organization references are booking data and never substitute for this verified binding.
+Beneficiary and organisation references are booking data and never substitute for this verified binding.
 
 Grant `subjects` are compared only for the task-grant status check and for the `schedulingManager` selector.
 External references, party references, and `duplicateKey` values are caller booking data and are never compared with them, so a grant for one person does not stop its holder from booking with another person's references.
@@ -157,7 +157,7 @@ Creating an assisted hold requires `hold.create-for`.
 Direct creation and confirmation of an assisted hold require `appointment.create-for`.
 Release, reschedule, and cancellation use their existing actions.
 Every assisted operation requires an online configured status authority, a fresh exact grant status match, and the same source-manager binding as the claim.
-The offline final-fifteen-minutes path cannot authorize it.
+The offline final-fifteen-minutes path cannot authorise it.
 A hold's manager is retained through confirmation, and rescheduling cannot transfer management authority.
 
 The appointment detail route accepts `appointment.read` under the appointment's actual service and location bounds.
@@ -180,7 +180,7 @@ Identity retention erases the raw source-manager binding alongside the ordinary 
 ## What the audit records
 
 Every commitment writes a `request` entry before its capacity transaction opens.
-It writes a `response` entry carrying its authorization decision, under `authorization.allowed` or `authorization.refused`, once the transaction commits or rolls back.
+It writes a `response` entry carrying its authorisation decision, under `authorization.allowed` or `authorization.refused`, once the transaction commits or rolls back.
 A permission the service refuses before any commitment is reached writes one `response` entry.
 The principal, client, grant, and approver are keyed pseudonyms scoped to the request's reference class, and the purpose is recorded as presence only, never as a value.
 The record adds the grant's source issuer and its deadline.
@@ -196,7 +196,7 @@ No bound value, service, location, or action appears in the audit.
 Registry Scheduling verifies grants; it does not approve them.
 The token-exchange issuer mints a grant from a template a current human holder approved, and the approver's identity travels in the claim.
 Registry Casework's task authority accepts Scheduling bounds directly, and stock ThunderID's institutional grant exchange copies those verified bounds into the access token.
-Registry Scheduling is a relying party of that authority and inherits no Casework authorization.
+Registry Scheduling is a relying party of that authority and inherits no Casework authorisation.
 
 The Casework project declares the exact destination in a governed template:
 

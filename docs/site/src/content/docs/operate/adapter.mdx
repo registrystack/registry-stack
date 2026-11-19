@@ -15,7 +15,7 @@ standards_referenced: []
 
 If you run the Registry Adapter for an institution, this page covers what you do after the
 configuration is reviewed: install the binaries, give the facade's database role its grants, and
-run an ingestion job through initialization, preview, bounded passes, upgrade, and held items.
+run an ingestion job through initialisation, preview, bounded passes, upgrade, and held items.
 The Adapter has two runtime shapes.
 The facade (`adapter serve`) serves a declared API over an existing source.
 The ingestion job host (`adapter-job`) reads bounded source pages and delivers each reviewed
@@ -223,16 +223,16 @@ The commands that follow use these placeholders:
 
 {/* Evidence: crates/registry-adapter-job/tests/cli.rs pass_and_rescan_accept_explicit_workspace_artifacts. */}
 
-### Initialize the store
+### Initialise the store
 
-Initialize the existing PostgreSQL database before a preview or an observational command:
+Initialise the existing PostgreSQL database before a preview or an observational command:
 
 ```sh
 adapter-job init-store --runtime "<runtime-file>"
 ```
 
 `init-store` requires only `--runtime`; it needs no job, pack, profile, or project.
-CLI-wide flags remain accepted, but initialization output stays value-free.
+CLI-wide flags remain accepted, but initialisation output stays value-free.
 The command parses the complete runtime document, resolves only the store connection and the
 optional store trust reference, and applies the embedded schema versions `100` through the highest
 this release supports, under the migration lock.
@@ -275,7 +275,7 @@ Read the fresh store before any pass:
 adapter-job status "<job-file>" --runtime "<runtime-file>"
 ```
 
-A fresh initialized store reports zero item counts and is not overdue.
+A fresh initialised store reports zero item counts and is not overdue.
 The read creates no job row.
 
 {/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs
@@ -424,7 +424,7 @@ The new `init-store` moves the store to schema 104, which the previous binary re
 recovery is the same: restore that backup, settle the item with the previous binary, and upgrade
 again.
 Run the new binary's `init-store` once before you restart passes.
-Compatible embedded transitions serialize under the migration lock and can be repeated safely.
+Compatible embedded transitions serialise under the migration lock and can be repeated safely.
 An older binary refuses a store whose schema is newer than that binary supports.
 
 Pre-1.0 formats can change without a compatible transition.
@@ -493,7 +493,7 @@ A new process reloads secret material behind the same environment reference.
 Restoring trusted material behind the same reference is corrected-material recovery: a later pass
 retains the pending item's identity.
 This mechanism does not establish valid-to-valid issuer key rotation, overlap, old-key revocation, or
-provider token lifetime behavior.
+provider token lifetime behaviour.
 Plan those rotations with the source or destination provider, and verify them in the controlled
 pilot before you retire the predecessor credential.
 
@@ -539,10 +539,10 @@ expire.
 ## Operate an SFTP job source
 
 The `job-sftp` feature of the job host is read-only.
-Give it a dedicated source account whose server-side authorization confines that account to the
+Give it a dedicated source account whose server-side authorisation confines that account to the
 configured `baseDirectory`, using a chroot or an equivalent SFTP-server policy.
 SFTP v3 has no portable atomic `open-beneath` or no-follow operation: client symlink and
-canonical-path checks are defense in depth, not the confinement boundary.
+canonical-path checks are defence in depth, not the confinement boundary.
 
 Choose exactly one completed-file protocol:
 
@@ -586,7 +586,7 @@ option.
 Publish immutable events with a unique, stable AMQP `message-id`.
 The job key combines the configured namespace with that identity.
 Its stored digest domain-separates the raw-message revision from the declared projection digest, so
-neither a changed body nor a reviewed normalization change can silently skip.
+neither a changed body nor a reviewed normalisation change can silently skip.
 Reuse of one identity for changed event bytes or projection is retained as
 `adapter.job.rabbitmq-event-changed` and held for an operator; the job neither delivers nor
 acknowledges it automatically.

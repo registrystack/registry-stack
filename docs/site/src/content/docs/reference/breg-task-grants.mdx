@@ -77,14 +77,14 @@ Such a token is admitted only by an access profile, or an immediate-action permi
 A token without `act` is unaffected: a profile without `actorKind` still accepts every kind of direct token.
 Custom contextual claim names, when an existing issuer needs them, are configured together in the closed `contextual` object.
 
-A standing agent without a task grant can read, start an authorized Proposal, edit its own draft, and use `get-review-context`, when an explicit agent profile independently grants that bounded disclosure.
+A standing agent without a task grant can read, start an authorised Proposal, edit its own draft, and use `get-review-context`, when an explicit agent profile independently grants that bounded disclosure.
 This is agent disclosure, not human viewing or approval.
 BReg requires an exact nonempty requester-client ceiling and a verified trusted actor.
 The profile independently determines readable fields, Record rows, Proposal targets, scopes, and purposes where configured.
 Missing or unrestricted constraints do not become an intersection with the represented person's own BReg permissions.
 This read can disclose a submitted Proposal; it grants no submitted lifecycle decision or mutation.
 Approve the profile's reviewer population and disclosure ceiling before enabling it.
-The agent still cannot commit immediate effects, and a separately authorized human confirms the draft.
+The agent still cannot commit immediate effects, and a separately authorised human confirms the draft.
 Start, Proposal draft management, disclosure, and committed transitions remain separate grants.
 `permissions.actions` and `permissions.proposals` never confer direct Record CRUD.
 Modules remain subject to the same ceiling.
@@ -104,11 +104,11 @@ Modules remain subject to the same ceiling.
 ### Statistical publication
 
 Publishing or withdrawing a statistical release commits at once in the same way, so the compiler refuses a standing agent profile that holds `publish` on a statistical dataset, with `breg.access-profile.standing-agent-publish-forbidden`.
-Both operations are authorized through the publisher's profile on the dataset's unit Record type, so that profile meets the ceiling too, including one a module contributes under the publisher's ID.
+Both operations are authorised through the publisher's profile on the dataset's unit Record type, so that profile meets the ceiling too, including one a module contributes under the publisher's ID.
 A standing agent keeps `read-live` and `read-releases`.
 Give `publish` to a profile a person or a service uses directly.
 
-A task grant authorizes no publication either.
+A task grant authorises no publication either.
 A task-grant profile always declares `requiredPurposes`, and a publisher's access to the dataset's Record types admits none, so the compiler refuses one that grants any of those Record types, with `breg.statistical-dataset.publisher-caller-dependent`.
 One that grants none leaves a module to contribute the Record-type profiles under its ID.
 A module profile carries no task grant, and the runtime refuses a task-grant token on a profile without one.
@@ -159,7 +159,7 @@ Production endpoints use HTTPS; loopback HTTP is available for local development
 
 Startup refuses a task profile without its configured source-issuer mapping.
 A failed status request refuses the mutation, and BReg caches no positive status result.
-BReg compares all retained authorization fields, including the original principal, client, resource, purpose, bounds, subjects, and deadline.
+BReg compares all retained authorisation fields, including the original principal, client, resource, purpose, bounds, subjects, and deadline.
 
 {/* Evidence: crates/registry-breg/src/task_grant/config.rs "casework:grants:status", "/v1/task-grants/{grantId}/status";
     crates/registry-breg/src/task_grant/tests.rs binding;
@@ -170,7 +170,7 @@ BReg compares all retained authorization fields, including the original principa
 
 Submission freezes the original task authority alongside the Proposal version and its immutable effects.
 A later human reviewer remains a separate actor.
-Before applying a submitted Proposal, BReg checks the original grant in addition to the current executor's authority, including for automatic application and separately authorized manual Apply.
+Before applying a submitted Proposal, BReg checks the original grant in addition to the current executor's authority, including for automatic application and separately authorised manual Apply.
 Every new application attempt makes a fresh status check.
 
 An exact completed retry recovers the existing receipt under current disclosure authority.
@@ -178,7 +178,7 @@ It does not perform a new mutation or require a new positive status check.
 BReg holds the receipt for `retention.receiptRetentionDays` after the commit (7 days by default).
 Past that horizon the exact retry answers `410 idempotency.expired`, still performs no new mutation, and the caller reads the Proposal or Record to learn the outcome.
 Reusing the idempotency key with a different grant conflicts.
-An expired or revoked task requires an explicit new authorized submission; refreshing an access token cannot extend the original grant deadline.
+An expired or revoked task requires an explicit new authorised submission; refreshing an access token cannot extend the original grant deadline.
 
 Status refusal returns a failed precondition; status service failure returns unavailable.
 HTTP 401 or 403 from the status endpoint means its service credential was rejected and therefore returns unavailable; it does not establish that the task grant is inactive.
@@ -213,7 +213,7 @@ It uses the same pseudonym as `authorization.clientPseudonym` and distinguishes 
 An unrestricted verifier has no matched client to record.
 Client identifiers and tokens stay out of the journal.
 
-Terminal and refusal records for a request carrying a verified task grant include an `authorization` object using the shared authorization audit fields.
+Terminal and refusal records for a request carrying a verified task grant include an `authorization` object using the shared authorisation audit fields.
 Grant, principal, client, and approver identifiers are keyed pseudonyms, scoped to the activation that serves the request.
 The object also records the source issuer and grant deadline.
 It contains no subjects, bounds values, or purpose value, and BReg continues to record purpose presence separately.

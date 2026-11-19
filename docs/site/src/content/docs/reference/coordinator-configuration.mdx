@@ -133,7 +133,7 @@ A missing `start` or `submit` grant shows as BReg's refusal of that step.
 
 An `external-http` connection serves `external.get/v1` and `external.command/v1`.
 For reads, set `baseUrl`, exact `paths`, optional `queryParameters`, optional ordinary service `authorization`, and the required `responseSchema` for `{status, body}`.
-Omitted authorization means a public read.
+Omitted authorisation means a public read.
 The attempt timeout defaults to 2000 milliseconds and the response size to 65,536 bytes, and you can reduce both.
 Use HTTPS for institutional endpoints; HTTP requires numeric loopback.
 `authorization.taskAuthority` is refused on this connection type.
@@ -198,7 +198,7 @@ OpenAI Decisions must supply its documented nonnegative token counts; malformed 
 
 If evaluation completion becomes unknown, inspection reports `hold-after-dispatch` and refuses `retry-same` and reconciliation.
 Cancellation sets `cancelRequested` while preserving `uncertain` and the attention state; it cannot undo provider processing.
-A separately authorized new start can evaluate again, with possible additional cost and a different answer.
+A separately authorised new start can evaluate again, with possible additional cost and a different answer.
 The same conservative hold applies to HTTP 429, including temporary rate limits with `Retry-After`: these bindings do not automatically resend an evaluation.
 Terminal `needs-review` returns control to the caller and creates no resumable approval task.
 The [decision follow-up example](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/decision-follow-up) includes refusal and unknown-result cases.
@@ -215,7 +215,7 @@ The [decision follow-up example](https://github.com/registrystack/registry-stack
 The ordinary service `authorization` obtains a token whose issuer and subject are the ones that producer declares.
 Do not set `authorization.taskAuthority`: a review producer acts under its own identity, and `check` refuses a task authority on a Casework connection.
 Configure one connection for each producer.
-A `wait-for` step reads the result through the same connection, with the same producer authorization.
+A `wait-for` step reads the result through the same connection, with the same producer authorisation.
 
 Add a `completion` block to let Casework wake a waiting run as soon as a review completes:
 
@@ -304,7 +304,7 @@ The [reviewed notice example](https://github.com/registrystack/registry-stack/tr
     crates/registry-coordinator/src/runtime.rs recipient_binding, bearer_token_ref;
     crates/registry-coordinator/tests/casework_adapter.rs. */}
 
-### Observation authorization
+### Observation authorisation
 
 Configure `observationAuthorization` only on task-bound Scheduling connections.
 Other adapters do not consume that identity, and offline validation refuses it there instead of presenting an unused credential as part of recovery authority.

@@ -143,10 +143,10 @@ rather than restarting, which can lose queued entries.
 
 ## Read what an entry establishes
 
-Each entry is one JSON line. New authorized operations use
+Each entry is one JSON line. New authorised operations use
 `registry.evidence.audit/v3` or `registry.evidence.audit.request-batch/v3`;
-authorization refusals keep `registry.evidence.audit.authorization-refusal/v2`.
-Retained authorized `/v2` entries remain readable history. Entries are not chained. The
+authorisation refusals keep `registry.evidence.audit.authorization-refusal/v2`.
+Retained authorised `/v2` entries remain readable history. Entries are not chained. The
 [`audit-event.schema.yaml`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/audit-event.schema.yaml)
 and
 [`request-batch-audit-event.schema.yaml`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/request-batch-audit-event.schema.yaml)
@@ -156,8 +156,8 @@ what the entry establishes:
 | Record phase | What it establishes | What it does not establish |
 |---|---|---|
 | `access-attempt` | Authentication and the complete authority path were accepted before source credentials or data were touched. In a current `/v3` record, `executionBounds` captures the positive operation, deadline, and response-byte limits that govern the acquisition. | That the source returned a record or that anything was released. The bounds carry no endpoint, credential, secret, or source value. |
-| `disclosure-release` | The named concepts were serialized and durably recorded before the response bytes left the service. | That the source fact was true or that the caller used it correctly. |
-| `denial` | The operation was refused, either as an authenticated authorization refusal or as an evaluation that decided no answer. | The rejected requirement, selector, or source value behind it. |
+| `disclosure-release` | The named concepts were serialised and durably recorded before the response bytes left the service. | That the source fact was true or that the caller used it correctly. |
+| `denial` | The operation was refused, either as an authenticated authorisation refusal or as an evaluation that decided no answer. | The rejected requirement, selector, or source value behind it. |
 | `transient-failure` | An admitted operation failed in one closed, value-free class a retry may clear. | The selector, source value, or credential that triggered it. |
 
 Requester and subject handles are keyed pseudonyms prefixed `hmac-sha256:v<version>:`, derived
@@ -359,7 +359,7 @@ phase is `request` for the access attempt and `response` for every other phase, 
 | Record phase | Decision | What it establishes |
 |---|---|---|
 | `access-attempt` | `authorized` | The subject resolved and the record was durably accepted before the Source was read. `executionBounds` carries the effective acquisition budget. |
-| `disclosure-release` | `released` | The exact answer bytes were serialized and durably recorded before they were returned. `disclosedConcepts` names exactly the status and fields concepts. |
+| `disclosure-release` | `released` | The exact answer bytes were serialised and durably recorded before they were returned. `disclosedConcepts` names exactly the status and fields concepts. |
 | `denial` | `no-match`, `ambiguous`, `unresolved`, `fact-missing`, or `code-mismatch` | The check ended in a miss, with a `safeErrorCategory`. |
 | `transient-failure` | `dependency-failure` or `evaluation-failure` | An admitted check failed in a value-free class a retry may clear, with a `safeErrorCategory`. |
 

@@ -51,7 +51,7 @@ Without a real API at hand, you connect a FHIR R4 `Coverage` read on a synthetic
 Each step applies to your own API.
 
 For an existing DHIS2 Tracker or OpenCRVS integration, download the
-[source recipe catalog](../../examples/evidence-source-recipes.tar.gz).
+[source recipe catalogue](../../examples/evidence-source-recipes.tar.gz).
 It includes reviewed exports and synthetic fixture projects. Follow its README
 to validate the recipe with matching binaries, then import it through the existing source
 lifecycle. Its contract notes identify the provider shapes you need to check against your deployment.
@@ -210,7 +210,7 @@ Its reviewed script projects `resourceType`, `id`, `status`, and `beneficiary.re
 lookup step checks the returned record's identity and returns only `status` and
 `beneficiary-reference` as private Facts. The posture
 `record-transformed` records that the API returns a broader record than the answer needs, so the
-integration claims disclosure minimization only.
+integration claims disclosure minimisation only.
 
 The endpoint details live in `local-target.yaml`, under the connection the Source names:
 

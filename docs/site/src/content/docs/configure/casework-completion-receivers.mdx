@@ -13,7 +13,7 @@ standards_referenced: []
 
 A Registry Casework completion wakes your producer so it can read the immutable result under its own authority.
 Authenticate and durably enqueue the wake before you acknowledge it.
-A wake never authorizes a source mutation.
+A wake never authorises a source mutation.
 
 {/* Evidence: crates/registry-casework/src/runtime.rs deliver_review_completion;
     crates/registry-casework/tests/review_postgres.rs at_least_once_completion_durably_deduplicates_after_lost_ack_and_exhausts_bounded_retries */}
@@ -91,7 +91,7 @@ CREATE TABLE completion_inbox (
 );
 ```
 
-These framework-neutral handlers assume your HTTP adapter has bounded the JSON body, rejected duplicate members, checked the five fields and their UUID and time types, and normalized header names to lowercase.
+These framework-neutral handlers assume your HTTP adapter has bounded the JSON body, rejected duplicate members, checked the five fields and their UUID and time types, and normalised header names to lowercase.
 Pass an operator-resolved secret and recipient; never use event fields to select credentials or authority.
 Return 503 when the database cannot commit.
 Keep inbox entries until your own reconciliation is complete and your replay policy permits erasure.
@@ -154,7 +154,7 @@ Node uses `client.reviewResult(resourceToken, requesterProfile, persistedAccepte
 Persisted acceptance has `requestId`, `policy`, `subject` and `submissionDigest`.
 Validate that the event belongs to a known accepted request, then let the maintained client correlate the fetched result to that binding.
 You may retain an unmatched authenticated wake until your request acceptance is durably recorded.
-Neither the notification's `resultId` nor an approved result replaces the source's current authorization, revision guards or transaction checks.
+Neither the notification's `resultId` nor an approved result replaces the source's current authorisation, revision guards or transaction checks.
 
 {/* Evidence: crates/registry-casework-client-py/src/lib.rs review_result;
     crates/registry-casework-client-node/src/lib.rs review_result */}

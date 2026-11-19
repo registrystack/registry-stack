@@ -36,12 +36,12 @@ It is the anchor the other specifications cite. Where another document says "the
 The registry stack documentation has three layers. Each document belongs to exactly one of them.
 
 1. **Practical docs.** Task-oriented, developer-facing pages: Get started, Tutorials, Explanation, Reference. They teach and orient.
-2. **Formal docs.** The specifications in this `/spec/` section. They define required behavior, data shapes, and boundaries precisely enough to implement, audit, or govern against. This document governs them.
+2. **Formal docs.** The specifications in this `/spec/` section. They define required behaviour, data shapes, and boundaries precisely enough to implement, audit, or govern against. This document governs them.
 3. **Internal evidence.** Release records, security review notes, deployment specifics, working plans, and retrospectives. These stay in the internal repository. Base Registry Engine (BReg), Casework, Coordinator, Documents, Messaging, and Scheduling each publish their security model in the [Security](../../security/) section of this site: trust boundaries, operator obligations, and accepted residuals. Other products record security invariants in their `contracts/security-invariant-matrix.yaml` or a security page in the same section.
 
 REQ-DOC-001: A formal specification MUST be a distilled public contract. It MUST NOT be a copy of an internal-evidence document. Authors derive a specification from internal material and from shipped code; they do not publish internal material as a specification.
 
-REQ-DOC-002: Where a practical doc and a current normative specification disagree on required behavior, the specification governs. The practical doc MUST be corrected.
+REQ-DOC-002: Where a practical doc and a current normative specification disagree on required behaviour, the specification governs. The practical doc MUST be corrected.
 
 This document does not govern the practical docs. Their conventions are maintained outside this layer.
 
@@ -65,7 +65,7 @@ An identifier is `RS-` followed by a prefix that names the subject area, optiona
 | `RS-TERMS` | Terms and abbreviations |
 | `RS-ARC-*` | Architecture |
 | `RS-SEC-*` | Security model |
-| `RS-PR-*` | Protocols and API behavior |
+| `RS-PR-*` | Protocols and API behaviour |
 | `RS-DM-*` | Data models |
 | `RS-OP-*` | Operations and trust |
 | `RS-TEST-*` | Conformance and testing |
@@ -87,22 +87,22 @@ A specification's canonical metadata is its frontmatter. The register surfaces i
 
 **Category** is the document's role:
 
-- `normative` defines required behavior. Its MUST and SHOULD statements bind.
+- `normative` defines required behaviour. Its MUST and SHOULD statements bind.
 - `informative` explains, motivates, or illustrates. It binds nothing.
 
 **Registry Evidence** is how true the document is against shipped code:
 
 - `verified` is backed by code, tests, fixtures, generated artifacts, or released machine-readable contracts that a reader can inspect. A `verified` document carries evidence references to those artifacts (REQ-DOC-014); a claim a reader cannot trace to one is not `verified`.
-- `partial` mixes shipped behavior with target behavior. The document marks which sections are which.
+- `partial` mixes shipped behaviour with target behaviour. The document marks which sections are which.
 - `aspirational` describes a target state that is not built yet.
 
-Category and evidence are orthogonal on purpose. The combination that matters most is `normative` plus `aspirational`: a document that defines required behavior for something that does not exist yet. That combination is legitimate (it is how a specification leads implementation) but dangerous if mistaken for current fact.
+Category and evidence are orthogonal on purpose. The combination that matters most is `normative` plus `aspirational`: a document that defines required behaviour for something that does not exist yet. That combination is legitimate (it is how a specification leads implementation) but dangerous if mistaken for current fact.
 
 REQ-DOC-006: A specification MUST declare `doc_id`, `category`, and `evidence` in frontmatter, in addition to the fields every doc carries. The frontmatter check enforces their presence and values for `doc_type: specification`.
 
 REQ-DOC-007: A document whose `evidence` is `aspirational` or `partial` MUST say so in its opening, and a `partial` document MUST mark which requirements are not yet met by shipped code. A reader MUST NOT have to read the code to learn that a requirement is unbuilt.
 
-REQ-DOC-014: A specification whose `evidence` is `verified` MUST carry evidence references: an Evidence section, per-requirement references, or evidence anchors in the page source. Each load-bearing claim MUST trace to at least one inspectable artifact of the stack itself: source code, a test, a fixture, a generated artifact, or a released machine-readable contract. A published site page, another specification, or a register entry MAY corroborate such an artifact, and MUST NOT be the only evidence a claim carries, because a document that proves itself by citing another document says nothing about shipped behavior. A `verified` specification MUST therefore carry at least one evidence anchor naming an artifact outside the documentation site's own content; the evidence-anchor check enforces that much and resolves every path and symbol an anchor names. A specification that cannot meet this bar MUST declare `partial` or `aspirational` and mark the claims shipped code does not back (REQ-DOC-007).
+REQ-DOC-014: A specification whose `evidence` is `verified` MUST carry evidence references: an Evidence section, per-requirement references, or evidence anchors in the page source. Each load-bearing claim MUST trace to at least one inspectable artifact of the stack itself: source code, a test, a fixture, a generated artifact, or a released machine-readable contract. A published site page, another specification, or a register entry MAY corroborate such an artifact, and MUST NOT be the only evidence a claim carries, because a document that proves itself by citing another document says nothing about shipped behaviour. A `verified` specification MUST therefore carry at least one evidence anchor naming an artifact outside the documentation site's own content; the evidence-anchor check enforces that much and resolves every path and symbol an anchor names. A specification that cannot meet this bar MUST declare `partial` or `aspirational` and mark the claims shipped code does not back (REQ-DOC-007).
 
 Two optional frontmatter keys declare further facets outside the three axes. **Layer** names the stack layer or layers a page documents: `metadata`, `consultation`, `evaluation`, `credential`, `federation`, `administration`, or `operations`. **Audience** names the reader role or roles a page serves: `integrator`, `operator`, `maintainer`, `specification editor`, or `tooling`. Both take a list, because a specification is frequently cross-cutting; a specification that spans every layer omits `layer` rather than list all of them.
 
@@ -114,7 +114,7 @@ A normative specification follows this structure. An informative document in the
 2. A **version history** table (Section 8).
 3. Numbered sections. The first SHOULD introduce scope, references to other specifications, and any local conventions beyond Section 2.
 4. Normative statements carried by tagged requirements (REQ-DOC-008 defines the identifier format).
-5. A **conformance** section that summarizes what an implementation MUST do to conform, where the document defines an external surface.
+5. A **conformance** section that summarises what an implementation MUST do to conform, where the document defines an external surface.
 
 Diagrams use Mermaid so they render in light and dark themes and remain in version control. Per the site's accessibility rule, anything a reader needs from a diagram MUST also appear in text.
 

@@ -60,10 +60,10 @@ Keep the document ID and version ID separately: a grant and a download name the 
 Send the complete raw bytes with `PUT` to the returned upload path,
 `/v1/uploads/{uploadId}/content`, using the reserving principal's token and the exact reserved
 `Content-Type`.
-The Store checks length and digest before finalizing the version.
-An incomplete or mismatched upload keeps no finalized content; send the reserved bytes again
+The Store checks length and digest before finalising the version.
+An incomplete or mismatched upload keeps no finalised content; send the reserved bytes again
 within the upload window.
-Sending identical bytes again to a finalized upload returns its document view; different bytes
+Sending identical bytes again to a finalised upload returns its document view; different bytes
 return `409 upload.finalized`.
 An expired reservation returns `410 upload.expired` and requires a new reservation.
 
@@ -73,7 +73,7 @@ An expired reservation returns `410 upload.expired` and requires a new reservati
     crates/registry-documents/tests/postgres_documents.rs,
     an_expired_or_unknown_upload_is_refused. */}
 
-Upload success records the bytes and schedules content verification; it does not authorize a
+Upload success records the bytes and schedules content verification; it does not authorise a
 download.
 Read `GET /v1/documents/{documentId}` to observe the version's status.
 Only `ready` content approved under the current verifier binding can be released.
@@ -113,7 +113,7 @@ Issuing a grant does not check which profile a recipient's future token will sel
 `GET /v1/documents/{documentId}/grants` gives the custodian the document's grant history, including
 revoked and expired grants. The reserving system that is not the custodian gets
 `403 profile.not-authorized`, so it never learns whom the custodian shared with.
-An authorized `DELETE /v1/document-grants/{grantId}` revokes a grant; repeating it returns its
+An authorised `DELETE /v1/document-grants/{grantId}` revokes a grant; repeating it returns its
 current view without another change.
 Revocation and expiry stop new downloads, while a download already admitted can finish within
 its transfer deadline.

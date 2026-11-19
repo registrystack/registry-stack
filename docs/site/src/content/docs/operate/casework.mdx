@@ -48,12 +48,12 @@ route, token, scope, and profile requirements; a scope does not replace an autho
 
 For a producer completion destination, follow
 [completion destinations](../casework-retention/#completion-destinations), then read the result
-through the producer's independently authorized client. The wake carries no decision and cannot
+through the producer's independently authorised client. The wake carries no decision and cannot
 approve or apply a source operation. Acknowledge only after accepting the wake under the
 [delivery contract](../../configure/module-conventions/#receive-signed-delivery); authentication,
-binding, and acknowledgement failures must remain visible to the dispatcher. For released 0.43 behavior, return exactly
+binding, and acknowledgement failures must remain visible to the dispatcher. For released 0.43 behaviour, return exactly
 `204 No Content` with an empty body after acceptance. The shared delivery contract governs the
-next release's acknowledgement behavior; returning an empty `204` remains compatible with both.
+next release's acknowledgement behaviour; returning an empty `204` remains compatible with both.
 
 {/* Evidence: products/casework/README.md; crates/registry-casework/src/auth.rs;
     crates/registry-casework/src/runtime.rs, review_completion_worker, completion_acknowledged. */}
@@ -188,7 +188,7 @@ contextProviders:
 
 This Base Registry Engine (BReg) status reader checks reviewability only; its `statusProfile`
 must match the authored service-status profile. Human display uses the reviewer's own bearer, so
-source authorization and disclosure still apply. A Casework approval never applies a BReg
+source authorisation and disclosure still apply. A Casework approval never applies a BReg
 Proposal.
 
 {/* Evidence: products/casework/examples/canonical-review/{casework.yaml,runtime.example.yaml};

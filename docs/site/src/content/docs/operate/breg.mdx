@@ -25,7 +25,7 @@ facility template that `bregctl init --template facility-registry facility` crea
 Two roles take part. The author prepares a package from the project. The operator, holding the
 migration credential, activates the package and runs the server. One person may hold both in a
 small deployment; the commands stay the same. A package carries no signature: the migration credential is
-what authorizes an activation, and the database records every activation in its own ledger.
+what authorises an activation, and the database records every activation in its own ledger.
 
 Deployment commands take absolute paths with no `..` component and no symbolic link anywhere in
 them. That covers `--runtime-config`, `--credentials`, `--test-receipt`, `--package`, the test
@@ -372,7 +372,7 @@ select it, and the server never falls back to another claim when the selected on
 issuer's `sub` usually belongs to that issuer alone, so if you may ever change issuer, prefer an
 institutional identifier both issuers carry in a custom claim, and name who guarantees it is unique
 and never reassigned. The registry treats the value as opaque and links no accounts across issuers;
-changing it changes who is recognized as a submitter or a previous reviewer.
+changing it changes who is recognised as a submitter or a previous reviewer.
 
 Use the same principal claim in an ownership row boundary when a record's owner field stores that
 identifier, and separate claims for district, tenant, or team membership. Have the issuer derive
@@ -624,7 +624,7 @@ on.
 Each activation, the initial one included, is one row in `registry_internal.registry_migrations`, keyed by a UUID activation id and ordered by apply order.
 A row names the package digest, the predecessor package digest, the registry revision, the plan kind (`initial` or `successor`), the role mode, any backups a destructive migration was bound to, and the keyed hash of `--operator-reference`.
 `apply` accepts a successor only when its predecessor digest is the active package, and refuses the active package again and any older package.
-The migration credential authorizes an activation, and every activation is audited as `breg-activation-audit/v1`.
+The migration credential authorises an activation, and every activation is audited as `breg-activation-audit/v1`.
 With separate migration and runtime roles, the runtime role cannot write the ledger, so it cannot change which package the runtime serves.
 With one role for both, the ledger check catches mistakes but not someone holding that credential.
 
@@ -701,7 +701,7 @@ Create and patch, including batch and import writes, refuse a missing or tombsto
 Tombstoning a target refuses while another active Record references it, even when that referencing Record is outside the caller's read permissions.
 These refusals use the generic `409 mutation.conflict` response and disclose no referencing Record IDs or values.
 Action and Proposal target admission continues to require its independently granted current authority.
-A writer authorized to submit a known target ID can still infer whether that target is lifecycle-eligible from success versus conflict, even without target read authority.
+A writer authorised to submit a known target ID can still infer whether that target is lifecycle-eligible from success versus conflict, even without target read authority.
 The conflict does not distinguish a missing target from a tombstoned one or disclose target fields.
 
 Clear an optional reference, point it at an active replacement, or tombstone the referencing Record before you tombstone its target.

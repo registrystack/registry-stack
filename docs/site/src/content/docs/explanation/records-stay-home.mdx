@@ -19,7 +19,7 @@ derive a bounded answer and does not become another record store.
 ## Registry Evidence boundary
 
 A caller supplies a request matching a predefined requirement. Registry Evidence authenticates and
-authorizes the caller before source access, executes only the reviewed source request, derives the
+authorises the caller before source access, executes only the reviewed source request, derives the
 declared concepts, signs the assertion, and writes keyed audit records. It does not persist the
 selector, source response, or assertion as an application database.
 
@@ -29,13 +29,13 @@ legally or substantively correct.
 
 ## Base Registry Engine boundary
 
-BReg is different because it is the registry. It owns its PostgreSQL records, model, authorization,
+BReg is different because it is the registry. It owns its PostgreSQL records, model, authorisation,
 history, audit, changes, and events. Applications read and write them through BReg's governed API.
 Another Registry Stack product does not automatically publish or copy those records.
 
 ## What crosses a boundary
 
-Only the documented product contract crosses a boundary: an authorized BReg response, a signed
+Only the documented product contract crosses a boundary: an authorised BReg response, a signed
 Evidence assertion, or static Manifest metadata. Credentials, source diagnostics, undeclared fields,
 and internal storage do not become portable outputs.
 
@@ -45,5 +45,5 @@ and internal storage do not become portable outputs.
 ## Related
 
 - [How Evidence works](../how-evidence-works/)
-- [Data minimization and purpose limitation](../data-minimization-and-purpose-limitation/)
+- [Data minimisation and purpose limitation](../data-minimization-and-purpose-limitation/)
 - [Base Registry Engine overview](../../start/breg-quickstart/)

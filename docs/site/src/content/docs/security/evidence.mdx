@@ -27,13 +27,13 @@ protected value.
 
 A caller cannot splice permissions. Principals and attributes come only from
 configured, validated authentication sources, and missing data denies rather
-than falling back to another claim. One authorization decision binds the
+than falling back to another claim. One authorisation decision binds the
 requester, client, requirement revision, purpose, every subject role and
 selector profile, authority, and audience, so partial matches across grants
 never add up to access. Selector values are lookup inputs, never proof of
-authority. Every authorization refusal is durably audited before the generic
+authority. Every authorisation refusal is durably audited before the generic
 `403`; if that audit fails, the caller receives the generic `503`. Refusals
-decided before authorization, for a failed authentication, a malformed
+decided before authorisation, for a failed authentication, a malformed
 request, an invalid selector, or a rate limit, write no native audit entry, so
 watch for them in operational logs and metrics instead.
 

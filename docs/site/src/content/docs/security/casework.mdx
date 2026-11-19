@@ -120,9 +120,9 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
       retired_schema_refusal_preserves_data_before_any_ledger_write. */}
 - Local tooling: `caseworkctl api PATH --url URL --header @FILE` sends the bearer and profile
   headers that `rstack dev token RUN --as PERSON` wrote to the header file and adds no authority;
-  Casework still authenticates and authorizes every route.
+  Casework still authenticates and authorises every route.
   Remote connections follow the same boundary: selecting a connection creates no product
-  authority, and the receiving product still authenticates and authorizes every protected request
+  authority, and the receiving product still authenticates and authorises every protected request
   ([Call an API with rstack](../../configure/api-connections/)).
   `rstack dev` uses a loopback listener and a private static key pin for each development run.
   The shared issuer gives a named synthetic person only the scopes and additional claims declared
@@ -137,16 +137,16 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
   including empty pages; missing or ambiguous providers and invalid pairs fail the invocation.
   A single submitted-context task or request reads no source, so Casework ignores a well-formed
   pair from a staff caller there: it neither verifies nor forwards the source bearer, and the call
-  is decided as without the pair, by the primary bearer, profile and ordinary authorization.
+  is decided as without the pair, by the primary bearer, profile and ordinary authorisation.
   Admission still refuses before the policy lookup, on a submitted-context target as on any other:
-  a source bearer that is not a well-formed compact token, a duplicated source authorization,
-  primary authorization, Casework profile or source profile header, a source bearer without a valid
+  a source bearer that is not a well-formed compact token, a duplicated source authorisation,
+  primary authorisation, Casework profile or source profile header, a source bearer without a valid
   `Registry-Source-Profile`, and a Requester caller.
   Source-free routes still reject the source header.
   Source authentication refusal on a single current-source task or request, and an unknown task or
   request id, use the same not-found response body as an absent or concealed row; normal header and
   primary admission and collection-wide failures retain their own classes.
-  Response timing is not equalized, and an authenticated caller who knows a task or request id can
+  Response timing is not equalised, and an authenticated caller who knows a task or request id can
   still tell an existing target from a missing one through refusals that run before row access,
   such as request-shape checks on a target that admission let through.
   For a submitted-context target this needs no valid source credential: a staff caller who sends a
@@ -156,9 +156,9 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
   This is accepted: the caller is authenticated staff, ids are random UUIDs, and the response
   reveals the context mode only.
   Only the source bearer is forwarded, never the Casework or unattended status credential.
-  Credentials are redacted, zeroized and dropped with the request, with no cross-call cache or
+  Credentials are redacted, zeroised and dropped with the request, with no cross-call cache or
   durable recovery capture.
-  This is two independently authorized credentials for one existing human, not delegation,
+  This is two independently authorised credentials for one existing human, not delegation,
   authority transfer or a grant union
   ([separate source credential](../../reference/casework-configuration/#separate-source-credential)).
   {/* Evidence: crates/registry-casework/tests/review_http.rs,
@@ -366,7 +366,7 @@ identifiers.
   another `kid` is accepted until that `kid` is listed too.
   The list refuses keys in Casework only and revokes nothing at the issuer, so every other relying
   party must be changed separately.
-  The list is runtime configuration read at startup, so a running process keeps authorizing a
+  The list is runtime configuration read at startup, so a running process keeps authorising a
   listed key until it restarts.
   The lifetime bound compares the token's own `exp` and `iat`, so it limits the lifetime the issuer
   declared, not how long ago the token was minted.

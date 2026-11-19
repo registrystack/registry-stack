@@ -49,7 +49,7 @@ Authentication and scope denial precede any source effect, and a required audit 
 protected result.
 
 Evidence consumes the same source pack through its listener-free engine binding and keeps its own
-facts contract, assertion evaluation, authorization, signing, and release audit.
+facts contract, assertion evaluation, authorisation, signing, and release audit.
 It does not need to construct a GovStack Record.
 An Evidence Source can select a package-owned projection of matched native facts and its own
 versioned facts schema without changing its pack.
@@ -97,7 +97,7 @@ Every Create and Update entry carries `write.idempotencyReplayWindow` (integer s
 also identifies its companion Retrieve operation and view.
 A deployment with no Write entries publishes no replay window.
 The contract supplies input and output schemas and the selected features.
-Discovery does not grant access to any Record or replace authorization at invocation.
+Discovery does not grant access to any Record or replace authorisation at invocation.
 No credentials, source addresses, private configuration, or unsupported pack operations enter this
 response.
 
@@ -141,7 +141,7 @@ The token instance is not bound, so a refreshed token for the same subject and c
 traversal.
 No purpose is bound, because Consultation carries none.
 A malformed, expired, or mismatched cursor is refused before source execution.
-Every page applies current authorization.
+Every page applies current authorisation.
 An empty advancing page is permitted; an unavailable source guarantee is never reported as completion.
 
 The maintained DHIS2 example exercises the selected baseline reads with an explicit unique order.
@@ -169,7 +169,7 @@ meanings.
 
 ## Writes
 
-The GovStack Write path through the Adapter is experimental: its behavior and configuration may change
+The GovStack Write path through the Adapter is experimental: its behaviour and configuration may change
 before release.
 The maintained write source is the Base Registry Engine (BReg).
 
@@ -207,7 +207,7 @@ A retry of an Update that already has a stored answer under the same key and fin
 answer even when its guard can no longer be opened, after a redeploy changed the guard's closure or
 its sealing key was rotated out.
 A retry while the first attempt still runs gets 409 `idempotency-in-flight` with `Retry-After`.
-Authentication and authorization are still checked first, and a changed fingerprint under a stale
+Authentication and authorisation are still checked first, and a changed fingerprint under a stale
 guard still returns 412.
 
 An Update does not negotiate `Accept`: its success has no body and its Problems are always
@@ -287,7 +287,7 @@ This explicit declaration is a source-author obligation; parsing the pack does n
 
 The initial execution plan admits deterministic preparation and one source-idempotent HTTP POST inside
 an idempotent consumer.
-A source pack can normalize a known native rejection through a pure, terminal `onException` predicate
+A source pack can normalise a known native rejection through a pure, terminal `onException` predicate
 and a typed outcome:
 
 - Not found maps to 404.
@@ -305,7 +305,7 @@ as a new request under a new native key.
 
 The host retains status, exact body, optional `Content-Type`, `Location`, and `ETag` together with the
 terminal audit transaction.
-A retry rechecks current facade authorization; canonical JSON, method, URI, media type, and `If-Match`
+A retry rechecks current facade authorisation; canonical JSON, method, URI, media type, and `If-Match`
 determine request equality.
 It preserves the original Problem body while generating per-attempt trace headers.
 A matching in-flight request returns 409 and a changed fingerprint returns 422.

@@ -90,11 +90,11 @@ not caught by CI.
 ### Applicant review progress
 
 A current caller-owned status grant can opt in to a provider-authored code (`BREG-SEC-208`).
-BReg authorizes and audits the read before using the configured Review producer credential for a
+BReg authorises and audits the read before using the configured Review producer credential for a
 single bounded lookup.
 It compares the whole accepted review binding, then rechecks Proposal visibility and the live
 round before the response audit and release.
-Failure to observe the exact round yields the authorized local status with progress omitted.
+Failure to observe the exact round yields the authorised local status with progress omitted.
 A code is display data.
 It grants no approval or application authority.
 
@@ -341,7 +341,7 @@ The residuals refer to these obligations by number.
     Its proofs cover worker and notifier separation, identical admission for an eligible and a
     protected selector, current-scope reconciliation, and row policy before a targeted lookup can
     settle no match.
-    The plan lease is the only worker serializer; work rows carry no lease of their own.
+    The plan lease is the only worker serialiser; work rows carry no lease of their own.
     The queue proofs check that settlement fences on the plan lease and the work row's enqueue
     generation, so a newer capture wins over the one a worker holds, and that an authority change
     fences queued work, beside the per-key publication proofs.
@@ -411,7 +411,7 @@ Each lists the condition, the consequence, the mitigation, and the related matri
     crates/registry-breg/tests/postgres_startup.rs,
     split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writes_nothing. */}
 
-### `BREG-RES-03`: the migration credential authorizes any valid successor
+### `BREG-RES-03`: the migration credential authorises any valid successor
 
 - Condition: a holder of the migration credential applies a package whose
   `migrationPlan.fromPackageDigest` names the active digest.
@@ -592,7 +592,7 @@ Each lists the condition, the consequence, the mitigation, and the related matri
   The same-engine fingerprint comparison when rehearsing over a predecessor does not stop `test`;
   the strict final check still catches any effect on the candidate.
   The deployment identity check guards against accident, not against an operator who means to
-  bypass it: a database initialized for `local` accepts the reserved identity.
+  bypass it: a database initialised for `local` accepts the reserved identity.
 - Mitigation: treat availability as a form hint and handle Invoke refusal.
 - Related: `BREG-SEC-186`.
 

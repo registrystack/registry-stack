@@ -61,7 +61,7 @@ owned generated inputs from the docset's source ref. Historical refs supply
 committed outputs; refs with `generate:source` rebuild them in a clean source
 export using that ref's dependency lock. The fresh checkout also excludes
 unrelated ignored `public` assets. Pagefind's platform packages can
-contain different WebAssembly payloads, so normalized gzip metadata does not
+contain different WebAssembly payloads, so normalised gzip metadata does not
 establish identical archive bytes across macOS and Linux.
 
 The rehearsal verifies the prepared lock on Ubuntu. The candidate builds and
@@ -97,7 +97,7 @@ not depend on unreleased `/dev/` content.
 Canonical released pages and the public `/dev/` tree offer optional tracking shared
 with the main website.
 The hidden main-origin bridge owns the version-2 consent choice and native Mautic
-identity. Documentation sends minimized public page views and cannot request an
+identity. Documentation sends minimised public page views and cannot request an
 identifier. Rejection, expiry, privacy signals, or a blocked bridge keep optional
 tracking off. Ordinary local builds, versioned archives, and error pages do not take
 part. Aggregate Umami analytics remains limited to canonical released pages.
@@ -137,7 +137,7 @@ value, or secret.
 Commit the source definitions, authored pages, and generators. The CLI pages in
 `src/content/docs/reference/cli/` and JSON in `src/data/generated/` are ignored
 build artifacts, like fetched OpenAPI files and synced product docs. A change to
-one command can change the whole CLI catalog digest; those rendered copies no
+one command can change the whole CLI catalogue digest; those rendered copies no
 longer enter PR diffs or Git merges.
 
 `npm run dev`, `npm run build`, `npm test`, and `npm run check` generate their
@@ -146,14 +146,14 @@ inputs automatically. To inspect just the generated references, run
 `npm run check:cli-reference` compares existing local output with what the
 generator renders now.
 
-The CLI pages render the committed command catalog
+The CLI pages render the committed command catalogue
 `crates/registry-cli-docs/catalog.json` and the workspace version from the root
-`Cargo.toml`, so generation needs no Rust toolchain. The catalog omits that
-version: a version-only bump changes the version and catalog SHA-256 the pages
-state, not the catalog. The `registry-cli-docs` snapshot test holds the catalog
+`Cargo.toml`, so generation needs no Rust toolchain. The catalogue omits that
+version: a version-only bump changes the version and catalogue SHA-256 the pages
+state, not the catalogue. The `registry-cli-docs` snapshot test holds the catalogue
 to the public Clap trees. When a command, its help, defaults, environment
 bindings, or constraints change, that test fails until
-`cargo run --locked -p registry-cli-docs -- --write` regenerates the catalog,
+`cargo run --locked -p registry-cli-docs -- --write` regenerates the catalogue,
 and its diff is what review reads. `src/data/cli-reference.yaml` records the
 publication status, review date, and binary availability metadata; use the
 actual review date, never the release date merely because it changed. A

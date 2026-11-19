@@ -13,7 +13,7 @@ standards_referenced: []
 
 Use `derive/3` to turn a completed, schema-validated Source lookup into the concept values of the
 selected requirement.
-Registry Evidence supplies the private facts, the separately minimized authorized selectors and a
+Registry Evidence supplies the private facts, the separately minimised authorised selectors and a
 deterministic evaluation context.
 Rust validates the result before subject binding, signing and release.
 
@@ -76,9 +76,9 @@ Provider identifiers outside that range must be strings.
 
 `selectors` contains only the roles, profiles and fields declared by the requirement's derivation
 selector-input contract.
-Rust resolves them from the already authorized requirement subjects.
+Rust resolves them from the already authorised requirement subjects.
 Omission yields an empty map.
-A relationship derivation can compare a returned parent reference with the separately authorized
+A relationship derivation can compare a returned parent reference with the separately authorised
 candidate-parent selector without receiving the complete request, credentials, grant or unrelated
 lookup selectors.
 One declared role is represented as:
@@ -99,7 +99,7 @@ One declared role is represented as:
 time, the closed requirement parameters and the read-only codelist handles described in
 [Evidence primitives](#evidence-primitives).
 The caller cannot supply a clock.
-Parameters carry reviewed non-secret requirement data, not requester identity, authorization
+Parameters carry reviewed non-secret requirement data, not requester identity, authorisation
 objects, credentials or runtime handles.
 
 {/* Evidence: crates/registry-evidence/src/rhai_runtime.rs derive;
@@ -130,12 +130,12 @@ cardinality, size, range and precision constraints.
 Three protected result forms require host constructors:
 
 - `Decimal` is created only by `decimal(canonical_text)` or `parse_decimal(canonical_text)`.
-  It has at most 28 significant digits and 9 fractional digits, and Rust serializes it as its exact
+  It has at most 28 significant digits and 9 fractional digits, and Rust serialises it as its exact
   canonical JSON string.
   Rhai floats cannot satisfy a bounded-decimal concept.
 - `EntityReferenceSeed` is created only by `entity_reference_seed(protected_string)`, whose input is
   1 through 512 UTF-8 bytes.
-  The seed cannot be serialized, logged, compared or used directly as a public identifier.
+  The seed cannot be serialised, logged, compared or used directly as a public identifier.
   Rust projects it to an audience-scoped reference after validation.
 - `EntityReferenceSeedList` is an array containing only `EntityReferenceSeed` values, with at most 64
   items.
@@ -149,14 +149,14 @@ Three protected result forms require host constructors:
 ## Selector-aware derivation and relationship decisions
 
 Selector-aware derivation exists for relational assertions whose truth is defined by both an
-authoritative source record and an independently authorized subject role.
+authoritative source record and an independently authorised subject role.
 It does not turn Evidence into a general identity resolver.
 
 Permitted reviewed rules include:
 
 - exact membership of an authoritative opaque identifier in a complete source relationship set;
 - exact comparison of a closed tuple of authoritative attributes after a deterministic,
-  jurisdiction-governed canonicalization implemented in the derivation script; and
+  jurisdiction-governed canonicalisation implemented in the derivation script; and
 - direct mapping of an explicit source-owned relationship decision.
 
 The default reference rule is exact opaque-identifier membership.
@@ -169,7 +169,7 @@ stay outside this ABI.
 A derivation may return `false` only after the pack lookup established one uniquely resolved
 authoritative record and emitted a schema-required returned-record identifier, relationship-set
 contract identifier, reference namespace and `relationship_set_complete: true` fact.
-When the provider returns the lookup identifier, the derivation declares that authorized lookup
+When the provider returns the lookup identifier, the derivation declares that authorised lookup
 selector and requires exact equality before using the record.
 The derivation must require and validate those facts before comparing the candidate.
 No match, ambiguity, returned-record mismatch, partial relationship data, namespace mismatch or
@@ -238,7 +238,7 @@ The following are forbidden:
 - `Fn(...)`, function pointers, `.call`, `.curry` and data-derived dispatch;
 - anonymous functions and closures;
 - interpolated backtick strings and their implicit value-to-string conversion;
-- raw string literals such as `#"..."#`, so the source review and the Rhai tokenizer can never
+- raw string literals such as `#"..."#`, so the source review and the Rhai tokeniser can never
   disagree about where a string ends (`#{` remains the map literal);
 - a block or an `if` chain used in operand position, because the source review could not then
   classify a following `[` and the index guard would be lost (assign the intermediate result to a
@@ -289,7 +289,7 @@ Some helpers require handles that only Rust can supply through derivation contex
 
 - `parse_date`: `string -> Date`; strict canonical proleptic-Gregorian `YYYY-MM-DD`.
 - `parse_instant`: `string -> Instant`; uppercase `T` and `Z`, explicit offset, no leap second,
-  optional 1 to 9 fractional digits, normalized to UTC.
+  optional 1 to 9 fractional digits, normalised to UTC.
 - `parse_integer`: `string -> i64`; optional ASCII `-` and one or more ASCII digits.
   Leading zeroes are allowed.
   It rejects `+`, whitespace, non-ASCII digits, fractions, exponents, empty input and overflow.
@@ -320,7 +320,7 @@ Some helpers require handles that only Rust can supply through derivation contex
 - `array.push(value)`: appends one value to the invocation-local array within the 256-item bound and
   returns unit.
 - `string.replace(from, to)`: replaces every exact non-overlapping literal occurrence in the
-  invocation-local string within the 16,384-byte bound and returns unit; no regex or normalization.
+  invocation-local string within the 16,384-byte bound and returns unit; no regex or normalisation.
 - `required`: `(value, safe_error_code) -> value`; unit becomes the closed unavailable outcome.
   The code must match `[a-z][a-z0-9_]*` and be at most 64 ASCII bytes.
 - `required` code handling: the bundle-owned code is validated for shape and then discarded.
@@ -371,10 +371,10 @@ It is supplied only as `evaluation_context.legal_local_time`; there is no script
 For context, Rust supplies derivation with exactly `observed_at: Instant`,
 `legal_local_date: Date`, `legal_local_time: LegalLocalTime`, validated `parameters: map` and
 `codelists: map<CodelistHandle>`.
-The authorized selectors are a distinct explicit derivation argument, not ambient context.
+The authorised selectors are a distinct explicit derivation argument, not ambient context.
 Acquisition scripts use the separate Adapter exchange contract.
 
-`observed_at` is always a runtime-supplied instant normalized to UTC.
+`observed_at` is always a runtime-supplied instant normalised to UTC.
 `legal_local_date` and `legal_local_time` use the requirement's validated IANA `observationTimezone`;
 when that optional field is omitted, they use UTC.
 Declare the legal timezone of a time-dependent definition explicitly and pin boundary fixtures
@@ -391,12 +391,12 @@ The function can also return the registered names `"Date"`, `"Instant"`, `"Legal
 `"Decimal"`, `"EntityReferenceSeed"` and `"CodelistHandle"`.
 This limited type-name inspection is part of the reviewed surface.
 
-No implicit conversion to string, JSON parsing, JSON serialization, regular expression, sorting,
-object merge, string splitting or joining, Unicode normalization, case folding, URL encoding, Base64,
+No implicit conversion to string, JSON parsing, JSON serialisation, regular expression, sorting,
+object merge, string splitting or joining, Unicode normalisation, case folding, URL encoding, Base64,
 hashing or cryptographic helper is available.
 Rhai does perform its existing mixed integer and float numeric operations.
 Exact legal or financial arithmetic must use the `Decimal` helpers.
-Rust performs serialization, URL encoding, authentication, signing and hashing outside the script.
+Rust performs serialisation, URL encoding, authentication, signing and hashing outside the script.
 
 Finite ordinary floats inside the signed 64-bit magnitude may occur in private facts or local
 computation.
@@ -437,7 +437,7 @@ These engine ceilings apply independently of script logic:
 - String value: 16,384 bytes.
 - Array: 256 items.
 - Map: 256 entries.
-- Facts, parameters or result: 65,536 normalized bytes.
+- Facts, parameters or result: 65,536 normalised bytes.
 - Input fact entries: 64.
 - Derived concept values: 16.
 - Configured codelists: 256.

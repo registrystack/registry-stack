@@ -29,7 +29,7 @@ Delivery is not approval, and approval is not application: a job reports what it
   It holds no other product's client or credential, and it has no steps, branches, waits or business timers.
 - Coordinator, when used, owns admission, one Run per item, lookup, choice, waits, recovery of its own commands and reaching a person.
   No product depends on it.
-- BReg owns Record type and Action contracts, authorization, Proposals, application, receipts and bulk runs.
+- BReg owns Record type and Action contracts, authorisation, Proposals, application, receipts and bulk runs.
   It rechecks every operation under its own policy, and an ingestion grant is never an approval grant.
 - A review provider, such as Casework, owns review policy, assessment and decisions.
   It does not bypass BReg's application checks.
@@ -78,7 +78,7 @@ Source kinds:
 {/* Evidence: crates/registry-adapter-job/tests/postgres_source_host.rs */}
 {/* TODO[evidence]: the parameterOrder binding rules and the offset-paging caveat have no test located by symbol; postgres_source_host.rs is the nearest file */}
 
-A PostgreSQL source uses a read-only identity, reviewed parameterized queries, statement timeouts and bounded fetches.
+A PostgreSQL source uses a read-only identity, reviewed parameterised queries, statement timeouts and bounded fetches.
 `keyColumn` supplies stable item identity, and the whole row supplies its revision.
 An endpoint's `parameterOrder` maps reviewed names exactly to the query's contiguous native `$1`-onward positions, and you omit it only for a query with no positions.
 Text binds to PostgreSQL text-like types.
@@ -511,12 +511,12 @@ When port `0` is selected, the host writes one startup line to standard error as
 Standard output remains reserved for command reports.
 
 The generated authoring schema accepts canonical loopback socket text: any canonical `127.0.0.0/8` IPv4 address or `[::1]`, followed by an unpadded decimal port from `0` through `65535`.
-The shared typed reader can normalize equivalent noncanonical IPv6 loopback or padded port text, but the Adapter schema does not duplicate that broader grammar.
+The shared typed reader can normalise equivalent noncanonical IPv6 loopback or padded port text, but the Adapter schema does not duplicate that broader grammar.
 Use `[::1]` and an unpadded port when you author a listener.
 
 Hook paths are slash-separated, nonempty ASCII segments.
 Each segment uses only letters, digits, `-`, `.`, `_` or `~`, and `.` and `..` segments are refused.
-This keeps the authored path identical through ordinary HTTP clients and reverse proxies, without percent-decoding or Unicode normalization.
+This keeps the authored path identical through ordinary HTTP clients and reverse proxies, without percent-decoding or Unicode normalisation.
 
 ### Run the loop
 
@@ -531,7 +531,7 @@ adapter-job pass <example-dir>/job.hook.yaml \
   --loop
 ```
 
-### Behavior
+### Behaviour
 
 - An authenticated request starts one pass early when the host is idle.
 - Further requests join the pending pass.

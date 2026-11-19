@@ -197,8 +197,8 @@ removal.
 
 ## Clients and servers
 
-A client must ignore response members it does not recognize, and must not fail on a problem `code`
-it does not recognize; it handles that problem by its HTTP status. That rule is what lets a minor
+A client must ignore response members it does not recognise, and must not fail on a problem `code`
+it does not recognise; it handles that problem by its HTTP status. That rule is what lets a minor
 release add members and codes.
 
 Signed payloads and governed, digest-verified artifacts keep their own closed formats. Casework clients
@@ -216,7 +216,7 @@ keep review policy closures and their dependencies intact for digest verificatio
 For Base Registry Engine metadata, `requiredCapabilities` is the must-understand gate. An engine
 addition that changes how an existing member must be interpreted or executed must add a new
 `requiredCapabilities` value; every other additive member is ignorable. A client disables only the
-operation that names a capability it does not understand. The engine still authorizes every request
+operation that names a capability it does not understand. The engine still authorises every request
 at execution time.
 
 {/* Evidence: crates/registry-breg-client/src/metadata.rs,
@@ -282,7 +282,7 @@ baselines below are such replacements, so a product's state carries forward only
 baseline, and the predecessor rehearsal starts from the release that [Enforcement](#enforcement)
 names, not from `v0.40.0`.
 
-Evidence's normalized `v0.42.0` model starts a new baseline. Retired split
+Evidence's normalised `v0.42.0` model starts a new baseline. Retired split
 question/source projects and targets with bundled authority have no in-place conversion.
 Retain the previous deployment and audit, author `evidence.yaml`, a target, and complete target
 authority with the current tooling, then package and verify a fresh synthetic assertion before

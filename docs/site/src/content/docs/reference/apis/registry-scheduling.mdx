@@ -99,7 +99,7 @@ path, and a task grant does not thereby gain a catalogue read.
 {/* Evidence: crates/registry-scheduling/src/auth.rs, authenticate_read(), authenticate_explain(), and
     authenticate_mutate(); crates/registry-scheduling/src/http.rs, router(). */}
 
-The explain path is separately authorized because it can name the member-level cause
+The explain path is separately authorised because it can name the member-level cause
 `resource.unavailable`. The public availability path answers the same state as `capacity.exhausted`
 and names no member.
 
@@ -130,7 +130,7 @@ A commitment carries no product scope. Its authority is a task grant inside the 
 `registry_grant_*` members that make a grant detectable, plus `registry_purpose` and
 `registry_approver`, bound to the verified client and to this deployment's audience before the caller
 reaches the service. An incomplete grant set is refused as a credentials problem
-(`authentication.refused`), never honored partially.
+(`authentication.refused`), never honoured partially.
 
 {/* Evidence: crates/registry-platform-oidc/src/authorization_claims.rs, grant_claims(), core_grant_names(),
     and verify_context(); crates/registry-scheduling/src/auth.rs, verified_caller(). */}
@@ -169,7 +169,7 @@ not make revocation atomic across products. A runtime that writes
 `taskGrantStatus: unchecked-final-fifteen-minutes` takes the bounded offline path instead: it asks no
 authority, performs no revocation check, and accepts only grants with no more than 900 seconds remaining.
 A list of authorities disables that path for every source, so a grant from an unlisted source is refused
-even with less than 15 minutes left. Because the token does not name the original authorization mode, the
+even with less than 15 minutes left. Because the token does not name the original authorisation mode, the
 final 15 minutes of a deferred grant can use the offline path on a deployment that writes the keyword,
 so a deployment that accepts deferred grants lists its task authorities.
 

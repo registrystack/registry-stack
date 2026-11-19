@@ -169,7 +169,7 @@ File mode uses `audit.path`, `audit.rotateBytes`, and `audit.retentionDays` for 
 File acceptance includes fsync; stdout is best-effort and requires the deployment's log pipeline for durable retention.
 Each process uses its own destination: applied operator commands write a sibling `messagingctl` file, or stderr when the runtime uses stdout, which keeps command stdout machine-readable.
 
-`audit.hashKeyRef` supplies the key for minimized identifier references.
+`audit.hashKeyRef` supplies the key for minimised identifier references.
 It does not sign or chain the journal.
 Rotating it changes the caller and recipient pseudonyms that later audit records carry, so records written before and after the rotation no longer join on them.
 It frees no idempotency key, because that key is scoped to the caller's issuer and subject.
@@ -213,7 +213,7 @@ A sweep erases in batches of at most 1,000 of each kind, each batch its own tran
 It previews by default and erases with `--apply`.
 It journals every applied batch through its process audit writer (the first one even when it erased nothing), and refuses a cutoff later than the database's clock.
 Batches committed before a failure stay erased and journaled.
-One advisory lock, taken by each batch, serializes the runtime's sweep and the command.
+One advisory lock, taken by each batch, serialises the runtime's sweep and the command.
 
 {/* Evidence: crates/registry-messaging/src/config.rs, payload_retention_days and RetentionConfig;
     crates/registry-messagingctl/src/lib.rs, erase-expired. */}
@@ -277,7 +277,7 @@ AWS access key identifiers and secret access keys have a tighter 128-byte limit;
 For `aws-sigv4`, `baseUrl` must name the JSON API root, ending in `/` with no other path.
 The provider must declare POST and exactly the `x-amz-target` request header.
 Its prepare script uses an empty relative target, `bodyFormat: json`, and the AWS action in `x-amz-target`.
-Registry Messaging supplies the JSON 1.0 content type and signs the actual destination host, action, timestamp, session token when present, and exact serialized body.
+Registry Messaging supplies the JSON 1.0 content type and signs the actual destination host, action, timestamp, session token when present, and exact serialised body.
 Signing credentials never enter scripts.
 The signing profile supports root JSON RPC requests, not AWS Query APIs such as Amazon SNS Publish, S3, or arbitrary AWS REST paths.
 

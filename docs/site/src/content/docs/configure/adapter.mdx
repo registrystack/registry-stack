@@ -1,6 +1,6 @@
 ---
 title: Configure an Adapter project
-description: Write the artifacts that make an Adapter project, the facade contract and exchange contract between routes and profile, writes, authorization, audit, mapping and external projection acquisition.
+description: Write the artifacts that make an Adapter project, the facade contract and exchange contract between routes and profile, writes, authorisation, audit, mapping and external projection acquisition.
 status: current
 owner: registry-docs
 source_repos:
@@ -16,7 +16,7 @@ import ConfigurationFormatChecks from '../../../components/ConfigurationFormatCh
 The Registry Adapter runs reviewed integration routes over a source system.
 Its live facade serves a declared API by translating each request.
 Its ingestion jobs read bounded source pages and deliver a reviewed projection to a destination.
-This page covers the artifacts you write, the contract between a route and a facade profile, writes, authorization, audit, field mapping and external projection acquisition.
+This page covers the artifacts you write, the contract between a route and a facade profile, writes, authorisation, audit, field mapping and external projection acquisition.
 
 [Adapter route language](../adapter-routes/) covers the routes themselves.
 [Adapter ingestion jobs](../adapter-jobs/) covers jobs and the webhook trigger.
@@ -31,7 +31,7 @@ This page covers the artifacts you write, the contract between a route and a fac
 
 An Adapter deployment is made of these artifacts, each in a registered `v1alpha1` platform YAML format:
 
-- `AdapterProfile` is authored, versioned and maintained with the product. It holds the operation set by id, methods and paths, request and response envelope templates, pagination parameters, the problem envelope, and the `problems` list that maps error classes to problems. It also names the parts the deployment parameterizes. The first profile is `breg-records` v1.
+- `AdapterProfile` is authored, versioned and maintained with the product. It holds the operation set by id, methods and paths, request and response envelope templates, pagination parameters, the problem envelope, and the `problems` list that maps error classes to problems. It also names the parts the deployment parameterises. The first profile is `breg-records` v1.
 - `AdapterPack` is authored, versioned and reviewed, one per source system, in the Kamelet style. It holds endpoint declarations (component, authentication kind, tested upstream versions), route templates with typed template parameters, internal `direct:` routes, code maps, script references (own files, digest-pinned) and the required engine capabilities.
 - `AdapterProject` is the top-level authored artifact. It holds a `project` block (identity `id` and `version`), declared record types and fields, profile and pack references pinned by version and digest, `templatedRoutes` that instantiate pack templates, bindings of concrete contract operations to route ids, and access profiles.
 - `AdapterRuntimeConfig` belongs to the operator. It holds environment bindings: endpoint base URLs and TLS, secret references (credentials and the cursor key `cursorKeyRef`), optional explicit `secretProviders` (environment only when omitted), `allowedPrivateCidrs`, the listener, the database, OIDC and audit retention.
@@ -70,8 +70,8 @@ describes.
 ## Facade contract
 
 An authored profile declares an operation set with paths, methods, request and response envelopes, pagination parameters and problem codes.
-It also declares which parts the deployment parameterizes.
-The built-in Consultation target is the exception: the product owns its standard wire behavior, while project artifacts own its source bindings and public data views.
+It also declares which parts the deployment parameterises.
+The built-in Consultation target is the exception: the product owns its standard wire behaviour, while project artifacts own its source bindings and public data views.
 See [Adapter Consultation](../adapter-consultation/).
 
 The first profile, `breg-records` v1, is a starting target, not the only one.
@@ -152,7 +152,7 @@ The same source pack can serve the facade and Evidence without a GovStack Record
 Payload content is dynamic.
 Request and response schemas and search parameters are computed per deployment from the declared model, the same way BReg computes its per-package OpenAPI from a registry project.
 The compiled contract is concrete per record type: one concrete operation per (profile operation, record type) pair that the project binds, with `operationId` `<operation>.<recordType>`.
-A parameterized part is a deployment value the contract cannot know, so the schema types it as a string, never as the stand-in literal.
+A parameterised part is a deployment value the contract cannot know, so the schema types it as a string, never as the stand-in literal.
 
 Serving follows Camel's contract-first REST DSL.
 The generated OpenAPI document is the specification the consumer reads at startup.
@@ -221,7 +221,7 @@ These headers and properties are read-only.
 The route owns the upstream position, and the engine owns the caller's cursor.
 
 A search route that can return more sets the property `AdapterNextContinuation` to a JSON value: an upstream cursor, an offset, an origin-pinned next link, or an object of these.
-The value is at most 2 KiB serialized.
+The value is at most 2 KiB serialised.
 Absent or `null` at the end of the route means the last page.
 
 The engine encodes the value as the opaque `nextCursor` slot, using authenticated encryption under the runtime secret `cursorKeyRef`.
@@ -242,7 +242,7 @@ An optional `previousCursorKeyRef` keeps cursors valid across one key rotation, 
 On the next request the engine verifies and decrypts the cursor and places the value as `AdapterContinuation`.
 A cursor that fails authentication, has expired, or was minted for another operation, caller, client or filter set raises `facade.invalid-cursor` before any route step runs.
 An oversize cursor raises `facade.invalid-cursor` too.
-The cursor is verified after authentication and authorization, so an unauthenticated caller with a forged cursor gets `facade.unauthenticated`.
+The cursor is verified after authentication and authorisation, so an unauthenticated caller with a forged cursor gets `facade.unauthenticated`.
 
 The cursor uses XChaCha20-Poly1305 with a random 192-bit nonce.
 The key is derived from `cursorKeyRef` by HKDF-Expand under a domain label.
@@ -360,7 +360,7 @@ The Adapter uses the `httpUri` parameter on an `http` send: exactly one of `path
 At send time the engine parses the value as an absolute URL and refuses it with the uncatchable `egress.refused` unless all of these hold:
 
 - its scheme, host and port equal the endpoint's configured origin,
-- its path stays under the endpoint's base path after normalization,
+- its path stays under the endpoint's base path after normalisation,
 - it carries no userinfo or fragment,
 - it fits the URL length bound.
 
@@ -390,7 +390,7 @@ Raised inside a route, it is handled by the route's clauses like any error.
 Raised inside an `onException` clause, it is the exchange's final failure.
 
 Optional `data` is an expression that supplies only the resolved profile problem's declared `dataFields`.
-The data is a closed object of at most 16 required scalar fields and at most 2048 serialized JSON bytes.
+The data is a closed object of at most 16 required scalar fields and at most 2048 serialised JSON bytes.
 It fills the optional whole-value `{{?problemData}}` member.
 Unknown, missing, mistyped, undeclared or oversized data becomes a value-free `disclosure.violation`.
 It never falls back into `problemDetail`.
@@ -533,7 +533,7 @@ A cleanly returned failed attempt releases its exact lease for immediate repair 
 Cancellation or process loss retains the lease until its finite expiry.
 
 Leases and expiries are compared against the clock of the replica that asks, not the database's.
-Replicas that share one store must keep their clocks synchronized (NTP).
+Replicas that share one store must keep their clocks synchronised (NTP).
 A replica running fast sees another's lease expire early by its skew, and the required reviewed `idempotentUpstream` assumption is what absorbs the overlapping resend.
 
 Authentication, credential, TLS, transport, HTTP, protocol, validation and checkpoint failures all keep resumable progress and answer the facade's bounded 409.
@@ -662,7 +662,7 @@ Fresh problems receive their effective trace before terminal storage.
 Replay keeps their body unchanged while per-attempt trace headers are regenerated.
 Response custody and terminal audit remain one PostgreSQL transaction.
 
-## Authorization and secrets
+## Authorisation and secrets
 
 ### Facade callers
 
@@ -672,9 +672,9 @@ Response custody and terminal audit remain one PostgreSQL transaction.
 {/* TODO[evidence]: allowedClients admission and the required non-empty list have no test located by symbol in the files searched */}
 
 Every facade call is authenticated with an OIDC bearer token through the platform block, as in every Registry Stack product.
-It is authorized by the Adapter's own access profiles: named bindings of scopes to concrete facade operations and record types, declared in the project.
+It is authorised by the Adapter's own access profiles: named bindings of scopes to concrete facade operations and record types, declared in the project.
 The facade accepts no API keys, no Basic authentication and no anonymous calls.
-The Adapter inherits no authorization from any product and grants none to any source.
+The Adapter inherits no authorisation from any product and grants none to any source.
 
 The caller's token is never forwarded upstream.
 Upstream calls run under the deployment's own credential for that source, or without a source credential only under the explicit anonymous HTTPS admission described below.
@@ -683,10 +683,10 @@ The journal records which caller asked.
 The runtime config's required, non-empty `allowedClients` list names the OAuth clients the deployment admits.
 A token from any other client is refused even when its scopes match an access profile.
 
-Client admission is not record-level authorization.
+Client admission is not record-level authorisation.
 The facade serves trusted machine clients only.
 Any admitted client with a matching scope sees every record that the deployment's configured source access reaches, because scopes gate operations and record types, not individual records.
-Record-level authorization is not built.
+Record-level authorisation is not built.
 Admitting a client means trusting it with the full reach of the deployment credential.
 
 ### Upstream authentication
@@ -745,12 +745,12 @@ The rules for credentials are:
 - Token responses require `token_type` `Bearer` in any case. A missing `expires_in` takes the operator's `assumedLifetimeSeconds` and, without one, fails as a credential error. The lifetime is anchored when the request is sent, not when the reply arrives. The cache is clamped to `maximumCacheSeconds`, unknown members are ignored, and refresh is single-flight.
 - Under the `basic-header` placement, the client id and secret are base64 encoded as written, without the form-encoding step of RFC 6749 section 2.3.1. A strict server mis-decodes a secret that contains `%`, `+` or non-ASCII bytes, and such a client uses the `form-body` placement.
 - For an OAuth2 kind, an upstream 401 invalidates the cached token and the send is repeated once with a fresh one. This is safe for writes too, because a 401 means the request was not processed. A 401 after that, or any 401 under a static kind, raises the uncatchable `credential.rejected`. A route cannot repair a credential, and a fallback must not mask one. A 403 stays `upstream.http`, because it answers about the request, not the credential. The 401 rule holds whatever `okStatusCodeRange` and `throwExceptionOnFailure` say, and `adapterctl check` refuses an `okStatusCodeRange` that covers 401 on an endpoint whose kind is not `none`.
-- Tokens and secrets live in zeroizing buffers inside the `http` and `graphql` components only. The exchange, scripts, packs, fixtures, diagnostics and the audit journal never see them. The journal records the endpoint's kind and token-request outcomes, never a value.
+- Tokens and secrets live in zeroising buffers inside the `http` and `graphql` components only. The exchange, scripts, packs, fixtures, diagnostics and the audit journal never see them. The journal records the endpoint's kind and token-request outcomes, never a value.
 - Fixture replay intercepts the token endpoint like any other send, so packs are replayable without a credential.
 
 Camel's NTLM and Digest methods, API keys in the query string (they leak into upstream and proxy access logs), and caller token exchange are not ported.
 
-## Audit and data minimization
+## Audit and data minimisation
 
 {/* Evidence: crates/registry-adapter/tests/postgres_journal.rs the_journal_refuses_unknown_kinds_and_oversized_details */}
 {/* Evidence: crates/registry-adapter/tests/postgres_journal.rs retention_deletes_expired_rows_in_bounded_oldest_first_batches */}
@@ -863,7 +863,7 @@ A quoted key or filter value holds 1 to 128 characters.
 It may not contain a control character, a text-direction control (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) or a line or paragraph separator (U+2028, U+2029).
 `'"prénom"'` and `'places[name = "Saint-Étienne"].code'` are valid.
 `\"` and `\\` are the only escapes, and any other backslash is refused.
-Keys and values are compared byte for byte with no Unicode normalization, so a letter written as one character and the same letter written as a base letter plus a combining accent are different keys.
+Keys and values are compared byte for byte with no Unicode normalisation, so a letter written as one character and the same letter written as a base letter plus a combining accent are different keys.
 
 The `AdapterMapping` example for the KoboToolbox job has these shapes:
 
@@ -1002,7 +1002,7 @@ A recorded token exchange carries no credential header or body.
 `fixtures replay` runs the route interpreter through an offline transcript transport and shares the facade's disclosure and response rendering.
 It reports `drive: completed` only after the ordered sends and the expected facade result match, with no unexpected or leftover exchanges.
 No live credential, source, listener, database or journal is used.
-Writes report `writesSimulated` and `journalDurability: not-run`, so a passing replay does not establish durable write behavior.
+Writes report `writesSimulated` and `journalDurability: not-run`, so a passing replay does not establish durable write behaviour.
 Replay cursors use a fixed synthetic context with the production codec; live cursor sealing continues to use fresh randomness.
 
 {/* Evidence: crates/registry-adapter-core/src/fixture.rs FixtureProvenance */}
@@ -1010,7 +1010,7 @@ Replay cursors use a fixed synthetic context with the production codec; live cur
 
 Provenance is mandatory.
 Each fixture records a `type`, the upstream version (`upstreamVersion`) and a `reference`.
-The `type` is `captured` (recorded from a running instance, with the instance version string as the reference) or `documented` (synthesized from the source's published API documentation, with the documentation URL as the reference).
+The `type` is `captured` (recorded from a running instance, with the instance version string as the reference) or `documented` (synthesised from the source's published API documentation, with the documentation URL as the reference).
 A pack declares its tested versions.
 A fixture without provenance fails check, and a `documented` fixture never claims capture.
 

@@ -47,8 +47,8 @@ identifier. All responses use `Cache-Control: no-store`.
 | `service.unavailable` | 503 | Service is unavailable | the request could not be served | Retry with backoff, or contact the Evidence operator. |
 
 `evidence.denied` never appears without its audit record: when Evidence cannot append the
-authorization-refusal audit event, it returns `service.unavailable` instead. A requirement that does
-not exist and one you are not authorized for are indistinguishable to you, and so are the reasons
+authorisation-refusal audit event, it returns `service.unavailable` instead. A requirement that does
+not exist and one you are not authorised for are indistinguishable to you, and so are the reasons
 behind `evidence.unavailable`.
 
 {/* Evidence: products/evidence/contracts/problem-contract.yaml, codes, authorization_refusal_audit,

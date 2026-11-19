@@ -120,7 +120,7 @@ Generated JSON Schema and OpenAPI value schemas do not publish a standard `patte
 
 ## Know how a violation is refused
 
-A named database CHECK enforces the rule for every current-row writer, including direct CRUD, atomic batches, Actions, reviewed application, and authorized SQL.
+A named database CHECK enforces the rule for every current-row writer, including direct CRUD, atomic batches, Actions, reviewed application, and authorised SQL.
 Ordinary CRUD does not invoke an Action handler.
 A rejected SQL mutation rolls back with its transaction.
 Direct writes and immediate Actions return HTTP 409 with `code: mutation.conflict` and the authored Record type and field admitted by their write contract.
@@ -183,7 +183,7 @@ No orphan constraint remains after removal.
 Record field patterns also bind Action and Proposal fingerprints.
 Unchanged patterns preserve their existing contracts.
 A relevant changed pattern makes a pending frozen Proposal incompatible.
-Use the existing authorized rebase, resubmission, and configured review process; activation does not silently rewrite Proposal values or rerun their computation.
+Use the existing authorised rebase, resubmission, and configured review process; activation does not silently rewrite Proposal values or rerun their computation.
 
 Governed request-detail clearing can null eligible retained intake fields even when their normal create contract requires a value and declares a pattern.
 This remains separate from retained-history erasure, which does not rewrite the current row.
@@ -197,7 +197,7 @@ Give the profile that patches the Record `writableFields` that omit the field.
 No access profile then holds both the patch operation and that field, so a request that tries to replace it is refused before the write.
 This is an HTTP authority boundary for the configured profiles only.
 It does not make the field physically immutable to package evolution or to an operator holding migration authority, so review those powers separately.
-If the identity itself must change, model that as a new Record, a normalized dated observation, a separate Record type, or a narrow typed Action with the required review semantics.
+If the identity itself must change, model that as a new Record, a normalised dated observation, a separate Record type, or a narrow typed Action with the required review semantics.
 
 {/* Evidence: crates/registry-breg/tests/postgres_client_capabilities.rs (writableFields bound the accepted fields);
     crates/registry-breg/tests/access_configuration.rs */}

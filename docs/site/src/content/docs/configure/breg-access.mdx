@@ -189,7 +189,7 @@ warning[breg.access.profile-related-disclosure] <project-dir>/registry.yaml:237:
 0 errors, 1 warning in 3 files
 ```
 
-Listing a facility's operators is authorized by `facility-reader`'s grant
+Listing a facility's operators is authorised by `facility-reader`'s grant
 on the facility, the root of the path. The row boundaries of `facility-reader`'s own grant on
 `operator` do not apply to the operators that come back. A reader who may see a facility sees
 every operator assigned to it, with the path's readable fields, whatever that operator's
@@ -228,7 +228,7 @@ The key gives no profile any access.
 
 A row boundary works when the Record carries the claim value it is compared with. Sometimes the
 right to read follows an affiliation that changes over time: a facility belongs to an
-organization, and whoever is currently a member of that organization may read it. Copying members
+organisation, and whoever is currently a member of that organisation may read it. Copying members
 into tokens would leave access in place until each token expired.
 
 `membershipBoundaries` on a record permission puts that rule into the registry. Each entry names
@@ -281,7 +281,7 @@ accessProfiles:
 ```
 
 The `label` lookup selector must already be declared on the facility Record type.
-The two organization fields must be stored references to the same Record type.
+The two organisation fields must be stored references to the same Record type.
 `principalField` must be a stored string or text field and `activeField` a stored Boolean.
 Only active-lifecycle membership rows with `active: true` and an exact match to the profile's verified principal grant access.
 A missing membership, null value, inactive membership, or other principal does not.
@@ -290,11 +290,11 @@ Configure a stable identity claim from a trusted issuer, and do not accept calle
 Every listed membership boundary and ordinary `rowBoundaries` predicate must hold.
 Declare `rowBoundaries` explicitly even when membership is the only row restriction; `rowBoundaries: unrestricted` adds no direct claim predicate and leaves the membership checks in force.
 Up to eight membership boundaries are supported.
-The declared fields are authorization inputs, not an additional readable-field grant.
+The declared fields are authorisation inputs, not an additional readable-field grant.
 The root profile must satisfy the membership Record type's mandatory scopes and purposes.
 The current boundary does not carry additional direct row requirements from that source, so the compiler rejects a membership Record type with mandatory `rowBoundaries`.
 
-The organization membership access example project in the repository (at your release tag) holds the complete authored model, including separate steward grants and an index on principal, organization, and active status.
+The organisation membership access example project in the repository (at your release tag) holds the complete authored model, including separate steward grants and an index on principal, organisation, and active status.
 Run `bregctl check` against that directory to compile it.
 The same boundary compiles for facility and document registries without new server code.
 
@@ -308,8 +308,8 @@ The same boundary compiles for facility and document registries without new serv
 Membership boundaries apply to reads only: get, lookup, list, count, snapshot, and revisions.
 A record grant with a membership boundary cannot also grant writes.
 Action and Proposal grants do not accept `membershipBoundaries` and do not inherit membership checks from read grants.
-Give record mutations and membership administration to a separate, explicitly authorized steward profile.
-Cursor replay on a read re-evaluates live membership, and a read grant never authorizes a mutation or its replay.
+Give record mutations and membership administration to a separate, explicitly authorised steward profile.
+Cursor replay on a read re-evaluates live membership, and a read grant never authorises a mutation or its replay.
 Spatial bbox permissions use a separate authority role and cannot currently be combined with membership boundaries; ordinary reads of facilities remain available under the membership profile.
 
 Membership profiles can protect the root of a relationship read path.
@@ -323,14 +323,14 @@ Membership sources must remain leaf Record types without their own membership bo
 
 ### Revocation and history
 
-Authorization queries read current membership Records in PostgreSQL.
-A new request issued after a membership deactivation commits is denied or returns an empty authorized collection, including counts, lookups, and cursor continuations.
+Authorisation queries read current membership Records in PostgreSQL.
+A new request issued after a membership deactivation commits is denied or returns an empty authorised collection, including counts, lookups, and cursor continuations.
 An already running read can finish from the statement snapshot that preceded revocation.
-There is no token membership cache, external authorization service, or registry-wide authorization lock.
+There is no token membership cache, external authorisation service, or registry-wide authorisation lock.
 
-Snapshots and revisions compare the retained Record's organization with current memberships.
+Snapshots and revisions compare the retained Record's organisation with current memberships.
 The historical membership state cannot restore access, and deactivation removes access to those historical Records as well.
-Moving a facility to another organization does not by itself remove access to its older revisions from members of the previous organization.
+Moving a facility to another organisation does not by itself remove access to its older revisions from members of the previous organisation.
 This preserves the ordinary historical row-boundary contract, and current-owner-only history is a different policy that this feature does not imply.
 Erased history remains unavailable.
 
@@ -341,7 +341,7 @@ Erased history remains unavailable.
 ### How PostgreSQL enforces it
 
 PostgreSQL enforces the predicate through generated `SECURITY INVOKER` functions and forced row-level security.
-Each generated PL/pgSQL function saves the prior authorization context, enables only its matching membership probe, and restores the context before returning.
+Each generated PL/pgSQL function saves the prior authorisation context, enables only its matching membership probe, and restores the context before returning.
 Its exception block rolls back the local context on errors.
 It does not grant direct membership endpoints or derived views access to private membership Records.
 The logical source views keep `security_invoker`, so the caller's row-level security policies decide every read through them; they are not barrier views.
@@ -362,7 +362,7 @@ subject decided: that this recipient may read their Record, for this purpose, un
 
 `requireConsent` on a record permission lists checks, each naming a consent `record` type and
 `on`, the field that identifies the subject (`id` for the row itself). The project declares
-`recipients`, the organizations that read and the clients each one reads through. BReg derives the
+`recipients`, the organisations that read and the clients each one reads through. BReg derives the
 caller's recipient from the verified client, never from a token claim, so a gated profile must
 list its `requesterClients`. A row is disclosed only while a current consent covers it; a
 withdrawal takes effect for every request that starts after it commits, with no token change or

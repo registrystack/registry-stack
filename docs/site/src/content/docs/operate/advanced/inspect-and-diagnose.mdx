@@ -32,7 +32,7 @@ bounded and value-free.
 | `GET /health` | Process liveness | Does not check dependencies or data freshness; Registry Evidence stays healthy when a source credential is unavailable |
 | `GET /ready` | Traffic admission | Evidence checks signing, audit, subject binding, and source credentials; it does not request evidence data |
 | Product audit records | Security and request evidence | Local entries are not chained or signed; use copies shipped to append-only storage and join request phases by `correlation` |
-| `GET /openapi.json` | Released API shape | Evidence serves the release artifact; it does not describe deployment-specific grants or source behavior |
+| `GET /openapi.json` | Released API shape | Evidence serves the release artifact; it does not describe deployment-specific grants or source behaviour |
 | Evidence `GET /metrics` | Bounded operational counts and latency | Exists only on a configured separate listener and uses closed labels without request content |
 
 Query health and readiness through the same network path used for traffic admission:
@@ -42,9 +42,9 @@ rstack evidence api /health --url 'https://<evidence-host>'
 rstack evidence api /ready --url 'https://<evidence-host>'
 ```
 
-Registry Evidence's closed problem-code catalog is the
+Registry Evidence's closed problem-code catalogue is the
 [Evidence problems reference](../../../reference/evidence-problems/). It needs no separate CLI
-catalog because the codes are fixed by the public contract.
+catalogue because the codes are fixed by the public contract.
 
 ## Diagnose the failure class
 
@@ -56,14 +56,14 @@ catalog because the codes are fixed by the public contract.
 5. Reproduce the request with the smallest supported client call.
 6. Test the external dependency separately using its operator-owned diagnostic path.
 
-### Source access and authorization
+### Source access and authorisation
 
 Evidence collapses an unreachable source, timeout, wrong credential, wrong media type, oversized
 response, malformed JSON, and source error envelope into the single `source.unavailable` public
 problem. Confirm the fixed destination, trust profile, credential, timeout, and response limit from
 trusted local configuration. Do not widen a source binding to clear the failure.
 
-Authorization denials similarly disclose no internal decision. `evidence.denied` does not say
+Authorisation denials similarly disclose no internal decision. `evidence.denied` does not say
 whether audience, grant, authority, purpose, subject role, or response-format permission failed.
 Use the value-free refusal phase in audit and inspect those inputs locally.
 
@@ -142,7 +142,7 @@ Use `BREG_LOG` or `CASEWORK_LOG` at `info`, `warn`, or `error`; neither accepts 
 | --- | --- |
 | Startup refusal | Package integrity, closed configuration, secret references, and listener binding |
 | Authentication refusal | Issuer, audience, algorithm, key set, token time, and required scope |
-| Authorization refusal | Complete entitlement or access-profile match |
+| Authorisation refusal | Complete entitlement or access-profile match |
 | Source unavailable | Fixed destination, transport trust, credentials, timeout, and response limit |
 | Audit unavailable | Durable storage, permissions, replacement detection, and capacity |
 | Response rejected by a client | Media type, schema version, trace identifier, and product-specific problem contract |

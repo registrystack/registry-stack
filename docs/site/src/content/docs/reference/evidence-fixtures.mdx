@@ -11,8 +11,8 @@ locale: en
 standards_referenced: []
 ---
 
-Project fixtures are sanitized inputs to the production bundle loader, script runtime, request
-materializer, source projection, output gate, evidence construction, signer, verifier and privacy
+Project fixtures are sanitised inputs to the production bundle loader, script runtime, request
+materialiser, source projection, output gate, evidence construction, signer, verifier and privacy
 checks.
 Evaluation does not start the HTTP server, authenticate a JWT, write audit, resolve source
 credentials or contact a provider.
@@ -33,7 +33,7 @@ A requirement may omit its fixture reference only while its immutable bundle dec
 A local bundle may also reference a focused synthetic suite that covers only the cases its project
 declares.
 A successful local fixture run proves those cases, not readiness for production promotion.
-Local serving still uses the ordinary authenticated, authorized, source-bounded, minimum-disclosure,
+Local serving still uses the ordinary authenticated, authorised, source-bounded, minimum-disclosure,
 signed and fail-closed audit path.
 Production and evidence-grade bundles require complete fixture coverage and fail to load when a
 reference is absent or its captured suite is incomplete.
@@ -124,8 +124,8 @@ configured IANA timezone exactly as it does in production.
 A fixture cannot inject those derived values.
 A boundary case chooses an observation instant that produces the required local date or time.
 
-`selectors` contains the complete authorized role map for the requirement.
-`derivationSelectorInputs`, when present, states the exact minimized role map the harness expects
+`selectors` contains the complete authorised role map for the requirement.
+`derivationSelectorInputs`, when present, states the exact minimised role map the harness expects
 Rust to supply to `derive/3`.
 It must equal the bundle's closed derivation selector-input declaration.
 Omit it when derivation receives an empty map.
@@ -136,8 +136,8 @@ Omit it when derivation receives an empty map.
 You can state it in `common`, in a case, or in both.
 A requirement that declares exactly one purpose may omit it.
 A requirement that declares more than one must state it, so offline evaluation reaches every
-authorized purpose and none is silently skipped.
-An omitted declaration is a fixture contract failure, not an authorization denial.
+authorised purpose and none is silently skipped.
+An omitted declaration is a fixture contract failure, not an authorisation denial.
 A declared purpose the requirement does not list is denied exactly as the served path denies it.
 
 {/* Evidence: crates/registry-evidence/src/main.rs resolve_offline_fixture_authorization. */}
@@ -148,7 +148,7 @@ A declared purpose the requirement does not list is denied exactly as the served
 source answers over a network.
 It states the world the cases run against as the SQL that builds it, not as a database file, so it
 is reviewable in a diff.
-The harness materializes it into a temporary read-only file and binds that file in place of the
+The harness materialises it into a temporary read-only file and binds that file in place of the
 operator's path before the project's own runtime document loads.
 It carries the reserved `evidence_extract` metadata row that any extract must carry, because the
 fixture builds a real one and startup refuses a file without it.
@@ -194,10 +194,10 @@ offline while executing the statement for real.
 
 ### Expected request parts and transport
 
-`common.expectedRequestParts` is compared structurally after ABI normalization.
+`common.expectedRequestParts` is compared structurally after ABI normalisation.
 Query-pair order is significant; JSON object order and source whitespace are not.
-The harness passes those parts and the resolved authorized selectors through the production request
-materializer and compares the path, the encoded query and the JSON body.
+The harness passes those parts and the resolved authorised selectors through the production request
+materialiser and compares the path, the encoded query and the JSON body.
 There is no case-level `expectedRequestParts` override.
 
 `query` and `body` are the channels an HTTP request is prepared into.
@@ -216,7 +216,7 @@ exact FactSet as the fetch adapter context and the declared prior-fact path inpu
 non-secret headers.
 Dedicated redacted transport assertions check authentication and Rust-owned framing headers; they
 are never copied into fixture YAML.
-A case-level `expected.expectedTransport` may add an exact encoded query and normalized body for an
+A case-level `expected.expectedTransport` may add an exact encoded query and normalised body for an
 encoding-focused case.
 
 A statement source crosses its boundary as a statement and the values bound into it, so its
@@ -239,10 +239,10 @@ The forms are:
 - `acquisition`: the exact transcript the Adapter pack would send, as recorded pack `intercepts` and
   ordered `exchanges`.
   Rust replays it through the pack's real route, so the fixture never pre-projects a response or
-  synthesizes an envelope.
+  synthesises an envelope.
   A case `source` that still holds a provider response, the retired Source form, is refused with a
   message naming the replacement.
-- `selectors`: the authorized role map this case picks out of the fixture's own extract, replacing
+- `selectors`: the authorised role map this case picks out of the fixture's own extract, replacing
   `common.selectors` for the case.
   The statement runs, so the case states which record it is about rather than what the source
   returned.
@@ -254,18 +254,18 @@ The forms are:
 - `bundleMutation`: one named startup mutation.
 - `statementMutation`: one named mutation of a disposable copy of the reviewed statement, checked
   while the source compiles.
-- `requestMutation`: one named authorization or request mutation.
+- `requestMutation`: one named authorisation or request mutation.
 - `derivationMutation`: one named script-output mutation.
 - `derivationParameterMutation`: one closed mutation of a disposable copy of the requirement's
   derivation parameters before startup validation.
 - `selectorOverrides`: one closed selector-input replacement that exercises preparation rejection or
-  exact transport materialization.
+  exact transport materialisation.
 
 A form belongs to the transport its source has.
 `selectors` and `statementMutation` describe an extract and the statement that reads it, and are
 refused for a source that answers over a network.
 `declaredUnresolved` belongs only to an HTTP source that declares the tuple.
-The remaining forms describe the bundle or the authorized request and read the same on either
+The remaining forms describe the bundle or the authorised request and read the same on either
 transport.
 
 {/* Evidence: crates/registry-evidence/src/fixture.rs ReferenceCase;
@@ -307,7 +307,7 @@ The closed mutation names are:
 - `bundleMutation: duplicate-disclosure-family`: gives two enabled requirements the same unsafe
   disclosure family and requires startup rejection.
 - `statementMutation: attach-external-database`: compiles a disposable statement that attaches a
-  second database and requires the authorizer to refuse it.
+  second database and requires the authoriser to refuse it.
 - `requestMutation: swap-subject-roles`: exchanges the child and candidate-parent role assignments
   without changing their profiles or origins.
 - `requestMutation: supply-grant-derived-candidate`: adds caller material for a role whose
@@ -398,8 +398,8 @@ Omission is not a wildcard.
   budget.
   Runtime deployments keep their separately configured limits, and this expectation does not
   configure them.
-  For an injected `sourceFailure`, the count is modeled and does not prove source execution.
-- `expectedTransport`: an object; the exact expanded path, encoded query string and normalized body
+  For an injected `sourceFailure`, the count is modelled and does not prove source execution.
+- `expectedTransport`: an object; the exact expanded path, encoded query string and normalised body
   bytes for a transport-focused case, or the exact statement artifact and bound parameters where the
   source reads an extract.
 
@@ -494,7 +494,7 @@ Do not choose a public code based only on the stage where a value was noticed.
 - Source transport failure: `source.unavailable`, HTTP 503.
   A credential, concurrency, timeout, redirect, status, media type, size, JSON, projection or source
   transport failure stopped the lookup.
-  An unopenable or too-old extract, and a statement the authorizer refused, that lacked a parameter,
+  An unopenable or too-old extract, and a statement the authoriser refused, that lacked a parameter,
   that exceeded a budget or whose result exceeded a declared bound, are this class.
 - Audit, signing, output-gate or other script failure: `service.unavailable`, HTTP 503.
   Evidence failed closed within the Evidence service or one of its required release dependencies.
@@ -516,7 +516,7 @@ it must not convert malformed or incomplete provider data into `no_match`.
 
 The harness applies these assertions to every case whether or not they appear under `expected`:
 
-- preparation happens after authorization and durable access audit, and before credential
+- preparation happens after authorisation and durable access audit, and before credential
   acquisition;
 - no request-parts failure acquires credentials or reaches the source;
 - zero or multiple provider results never run derivation or sign evidence;
@@ -553,7 +553,7 @@ It changes no outcome, exit code or message, and without the flag the command's 
 
 The line that ends a case is the one to read first.
 An unresolved lookup lists the response members the extraction script saw, which is the whole
-diagnosis when a script recognized nothing in a response it was given.
+diagnosis when a script recognised nothing in a response it was given.
 An output-gate rejection lists each declared concept, its form and whether it is required, which is
 what the gate checked the derived values against.
 

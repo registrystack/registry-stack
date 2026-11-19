@@ -169,7 +169,7 @@ rstack evidence oid4vci inspect --runtime-config runtime.yaml
 It prints one JSON document: the profile marker `registry.evidence.oid4vci-profile/v1`, the
 credential issuer and authorization server metadata, and a `deployment` block stating one replica,
 that a restart invalidates outstanding exchanges, and whether metrics are enabled. If the gateway
-cannot be reached, it exits 1 and logs that the credential source is unavailable. The wire behavior
+cannot be reached, it exits 1 and logs that the credential source is unavailable. The wire behaviour
 follows the
 [frozen OID4VCI profile](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/oid4vci-profile.yaml),
 which also lists what the front end does not support.
@@ -203,7 +203,7 @@ invalidates every outstanding exchange. An independent process has a different t
 matching live state, so it refuses another process's codes and tokens as unknown. One replica keeps
 every later request routed to the process that created the exchange. A change to the gateway's
 bundle or batch ceiling needs a coordinated restart: stop `evidence-oid4vci`, change or restart the
-gateway, then start `evidence-oid4vci` again so its first catalog comes from the new gateway.
+gateway, then start `evidence-oid4vci` again so its first catalogue comes from the new gateway.
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/main.rs, openapi;
     crates/registry-evidence-oid4vci/src/authorizer.rs;
@@ -225,7 +225,7 @@ header and `{"error": "temporarily_unavailable"}`.
 
 | Key | Default | What it budgets |
 | --- | --- | --- |
-| `offersPerPrincipalPerMinute` | 600 | Offers one authorized principal (the token's client, else its subject) may create per minute |
+| `offersPerPrincipalPerMinute` | 600 | Offers one authorised principal (the token's client, else its subject) may create per minute |
 | `offerBurst` | 60 | The most offers one principal may create in a burst |
 | `walletRequestsPerMinute` | 3000 | Requests per minute each of the token, nonce, and credential endpoints takes from all wallets together |
 | `walletRequestBurst` | 300 | The most requests each of those endpoints admits in a burst |

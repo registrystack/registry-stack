@@ -14,7 +14,7 @@ standards_referenced: []
 Use this contract when you consume the explanations that `bregctl` produces for a Base Registry
 Engine (BReg) project. `bregctl --format json explain <subject> <project>` writes a `BRegCtlReport` whose `explanation`
 member is a separately versioned document. `bregctl` inserts the subject's `apiVersion` and `kind`
-after it serializes the explanation. The report keeps its own `breg/ctl-report/v1alpha1` version.
+after it serialises the explanation. The report keeps its own `breg/ctl-report/v1alpha1` version.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, explain_envelope;
     crates/registry-bregctl/tests/explain_contract.rs. */}
@@ -151,12 +151,12 @@ The local development runner (`rstack dev`) reads Model `requiresPostgis` and Ac
 ### Actions and Proposals
 
 - Actions `v1alpha7` and Proposals `v1alpha3` add `migrationReviewRevision`, the digest of the
-  Action behavior contract used to decide whether an activation change requires migration review.
+  Action behaviour contract used to decide whether an activation change requires migration review.
 - Actions `v1alpha6` and Proposals `v1alpha2` retain optional authored input `display` separately
   from the existing `label`, whose fallback remains `apiName`. Display text is presentation metadata
   and never changes identity, matching or authority. Keep the id alongside any label in selection
   and approval interfaces.
-- At `v1alpha5`, Action inspection uses the same normalized definitions as Model inspection,
+- At `v1alpha5`, Action inspection uses the same normalised definitions as Model inspection,
   including execution policy, Plan, commit guards, dependencies and bounds.
 - `ProposalsExplanation` started at `v1alpha1`.
 

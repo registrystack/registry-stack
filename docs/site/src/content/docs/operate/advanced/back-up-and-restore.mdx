@@ -46,7 +46,7 @@ up these alongside every database backup, on the same schedule:
   ```
 
   A restore then starts with an empty projection cache and no queued refresh work, as a fresh
-  install does. BReg registers the plans from the runtime file at startup, and authorized refresh
+  install does. BReg registers the plans from the runtime file at startup, and authorised refresh
   rebuilds the cache under the current binding and source grant; nothing is restored from the backup. See
   [Back up logically](../../../configure/breg-external-projections/#back-up-logically)
   in the external projections guide.
@@ -92,7 +92,7 @@ up these alongside every database backup, on the same schedule:
 - When `evidence-oid4vci` delivers to wallets, its separate audit journal and
   `audit.hashKeyRef`. The adapter records the authenticated offer origin and credential-release
   outcome under one opaque exchange identifier; Evidence's journal records its separate
-  authorization and signed-response release.
+  authorisation and signed-response release.
 
 ### Registry Messaging state
 
@@ -297,7 +297,7 @@ A logical restore returns review requests, task holdings, private drafts, decisi
 4. Recover missing producer submissions through that producer's supported recovery mechanism. Casework's own replay state is also at the backup point. Do not substitute a new idempotency key or edit database rows to manufacture a prior decision. If the supported interfaces cannot represent a known post-backup effect, keep the restore stopped and record the recovery limit.
 5. Once reconciliation permits service, run `caseworkctl doctor --runtime-config FILE`, start the matching runtime, and require `/ready` to succeed. Authenticate reviewers again, verify the restored task revision and holding, and use normal revision-fenced operations. Let maintenance repeat erasures whose deadlines the backup restored.
 
-The external audit archive still records the original post-backup operations. Append the restored service's entries after that history, keep both decision records when an authorized decision is repeated, and record backup and recovery times in your change record. Never overwrite the journal with its older backup.
+The external audit archive still records the original post-backup operations. Append the restored service's entries after that history, keep both decision records when an authorised decision is repeated, and record backup and recovery times in your change record. Never overwrite the journal with its older backup.
 
 {/* Evidence: crates/registry-casework/src/review.rs;
     crates/registry-casework/src/review/maintenance.rs;
@@ -311,14 +311,14 @@ The maintained Casework logical backup/restore drill in the matching release sou
 
 If you run the drill from a matching source checkout, provide a running Docker daemon, Bash, Curl, jq, Python, and `sha256sum`, plus the documented native build prerequisites. The script builds the matching binaries, owns its local session and database, and removes them when it finishes. It is not a command for a retained operator database. Review the script before executing it, and isolate all drill identities and endpoints from production.
 
-That submitted-context drill does not prove recovery of a producer's business mutation, current-source authorization, or an external task grant. Add those checks when your deployment uses them, and define how you will represent or refuse effects that happened after the backup.
+That submitted-context drill does not prove recovery of a producer's business mutation, current-source authorisation, or an external task grant. Add those checks when your deployment uses them, and define how you will represent or refuse effects that happened after the backup.
 
 {/* Evidence: products/casework/scripts/test-backup-restore.sh;
     crates/registry-casework/tests/support/commit_audit_regressions.rs. */}
 
 ### Hand over the Casework audit key
 
-The audit key pseudonymizes identifiers; entries are not chained or signed and carry no key version. To rotate it:
+The audit key pseudonymises identifiers; entries are not chained or signed and carry no key version. To rotate it:
 
 1. Provision a new owner-only secret file and update `audit.hashKeyRef`.
 2. Select a fresh `audit.path` in the same change, so the file boundary identifies the key boundary. After stopping the old process, ship its remaining active and sealed files.

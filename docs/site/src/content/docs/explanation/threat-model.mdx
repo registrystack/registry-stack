@@ -15,8 +15,8 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-This page summarizes the cross-product threat model. Product specifications and source-owned
-security tests remain authoritative for exact behavior. Base Registry Engine (BReg) owns the
+This page summarises the cross-product threat model. Product specifications and source-owned
+security tests remain authoritative for exact behaviour. Base Registry Engine (BReg) owns the
 governed record boundary described below.
 
 ## Assets
@@ -39,12 +39,12 @@ production boundary and do not establish a production freshness or replay-protec
 
 | Boundary | Main control |
 | --- | --- |
-| Caller to product | OIDC authentication, explicit authorization, bounded request parsing |
+| Caller to product | OIDC authentication, explicit authorisation, bounded request parsing |
 | BReg to PostgreSQL | Compiled schema and operations, least-privilege database identity |
 | Evidence to source | Fixed destination and request, credential isolation, transport and response bounds |
 | Evidence to verifier | Signed assertion, published verification material, audience and expiry checks |
 | Public checker to Evidence through the operator proxy | Operator proxy limits the path and the request rate and keeps no client address; holder-held 120-bit check code; identical not-found answer; fixed answer fields; request headers ignored except `Content-Type` |
-| Product to audit storage | Value-free records, durable append path, fail-closed behavior where required |
+| Product to audit storage | Value-free records, durable append path, fail-closed behaviour where required |
 | Operator to package | Closed schemas, digest verification, reviewed activation and rollback |
 
 ## Evidence authentication and source boundaries
@@ -58,9 +58,9 @@ exists only when an operator activates it. Evidence does not enforce the path re
 exposing the route only through a path-restricted proxy is the operator's duty.
 
 The caller names a predefined requirement revision, purpose, and bounded subject selectors. One
-authorization decision binds the requester, requirement, purpose, roles, selector profiles,
+authorisation decision binds the requester, requirement, purpose, roles, selector profiles,
 authority, origin tuple, and audience. Partial grants cannot be combined. Possession of a selector
-or a caller-supplied consent reference is lookup input, not authority. Evidence authorizes before
+or a caller-supplied consent reference is lookup input, not authority. Evidence authorises before
 credential resolution or source access and constructs the released assertion from validated,
 declared concept values.
 
@@ -94,10 +94,10 @@ candidates, or expose counts. Raw source responses are neither persisted nor log
   claims are trusted. Route scopes and grants remain governed even when a token is valid.
 - Sender-constrained token replay as bearer: Evidence denies an access token with a
   proof-of-possession confirmation claim because it validates no sender proof.
-- Privilege escalation: authorization is deny-by-default and requires exactly one complete grant
+- Privilege escalation: authorisation is deny-by-default and requires exactly one complete grant
   and authority-path match before source access. Reach is never widened by request input.
-- Membership and authorization oracles: no-match, ambiguous, missing-fact, and inconsistent results
-  collapse to one public shape. Authorization refusals collapse to `evidence.denied`. Detailed
+- Membership and authorisation oracles: no-match, ambiguous, missing-fact, and inconsistent results
+  collapse to one public shape. Authorisation refusals collapse to `evidence.denied`. Detailed
   categories stay in value-free audit.
 - Cross-purpose tracking: subject bindings use a keyed, domain-separated derivation over audience,
   purpose, role, selector profile, key version, and the complete canonical selector bundle.
@@ -179,7 +179,7 @@ does not claim certification of itself.
 - Startup does not detect overlapping authority paths. Ambiguity denies at request time but appears
   as an unexplained refusal.
 - Rate limits are per process and in memory. Replicas multiply budgets and restart resets them,
-  including the failed-selector enumeration defense.
+  including the failed-selector enumeration defence.
 - Released assertions have no recall, revocation, status list, or presentation-time check. Validity
   windows and key publication determine how long they verify.
 - A wallet presentation passes through the OpenID4VP verifier, which holds it in memory until
@@ -236,7 +236,7 @@ Suppression and deterministic rounding accept inference through totals, interval
 These are non-goals for this version. None of them should be read into a Registry Stack
 conformance claim:
 
-- A credential lifecycle: Registry Evidence's SD-JWT VC output is a second serialization of the same
+- A credential lifecycle: Registry Evidence's SD-JWT VC output is a second serialisation of the same
   stateless assertion. There is no issuance session, credential offer, status list, revocation,
   reissuance, persisted credential state, or OID4VCI endpoint of any kind, in either subject
   binding mode. Under the default audience-scoped mode there is no holder binding ceremony either,
@@ -293,7 +293,7 @@ conformance claim:
 ## Verification
 
 Use product-owned tests and production checks, then verify one realistic authenticated request,
-denial behavior, audit failure, dependency failure, backup, and recovery.
+denial behaviour, audit failure, dependency failure, backup, and recovery.
 
 {/* Evidence: crates/registry-breg/src/access.rs; crates/registry-breg/src/postgres/mutation.rs;
     crates/registry-evidence/src/auth.rs; crates/registry-evidence/src/server.rs;

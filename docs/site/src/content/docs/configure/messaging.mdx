@@ -97,7 +97,7 @@ accessProfiles:
 
 A token resolves to one profile by its client, its scopes, and its actor kind. A `sender` may
 submit and preview with the sender profiles and templates listed; an `operator` reads and cancels
-every message and may not submit. Messaging inherits no authorization from a calling product: a
+every message and may not submit. Messaging inherits no authorisation from a calling product: a
 service allowed to act on a case is not thereby allowed to send. `requestsPerMinute` and `burst`
 are counted per caller in each runtime process; `maximumMessagesPerDay`, when set, is counted for
 the whole profile from accepted messages, so it holds across replicas and restarts.

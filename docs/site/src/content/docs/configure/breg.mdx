@@ -254,7 +254,7 @@ Registration then accepts this body through `POST /v1/actions/register-facility`
 }
 ```
 
-Use an existing authorized operator identifier in place of the synthetic UUID.
+Use an existing authorised operator identifier in place of the synthetic UUID.
 Send the registrar token and a stable `Idempotency-Key` for the submission.
 Registration returns identifiers for `facility` and `initial-assignment`.
 Recover a lost response by repeating the identical Action with the same key.
@@ -275,7 +275,7 @@ The fixture compares the claim with the stored owner directly, so access is not 
 History access is granted separately, and the fixture grants none.
 
 The fixture does not implement a general cross-Record invariant, arbitrary SQL or Rhai reads during a mutation, or a process engine.
-Live relational membership authorization is a separate policy capability that needs its own declared model and tests.
+Live relational membership authorisation is a separate policy capability that needs its own declared model and tests.
 Use a Proposal when accepting a change requires review.
 
 {/* Evidence: products/breg/fixtures/facility-registry-actions/registry.yaml;
@@ -296,7 +296,7 @@ Generated Manifest and DCAT bytes are one classified publication slice.
 A dataset appears only when its effective access profile matches the governed project publication profile and its effective classification ceiling does not exceed the governed project ceiling.
 Services, distributions, public-service references, Record types, fields, and relationship edges are pruned with that slice, so a public artifact cannot disclose a protected dataset by reference.
 
-The projection can also declare localized catalogue and resource text, Record type concept URIs, identifiers, field concepts, relationship roles, and codelist schemes.
+The projection can also declare localised catalogue and resource text, Record type concept URIs, identifiers, field concepts, relationship roles, and codelist schemes.
 Registry Manifest remains the only portable metadata compiler and DCAT renderer.
 BReg does not infer or hardcode a domain model.
 Operational references may cross datasets, but Registry Manifest v1 accepts portable relationship targets only within the same dataset.
@@ -342,7 +342,7 @@ BReg refuses the query atomically when reviewed SQL violates either rule.
 
 The generated view checks derived values before casting them to their declared types.
 String length bounds, text maximum length, exact decimal scale and precision, integer integrality and range, and vocabulary membership are enforced without truncation or rounding.
-Null values retain their existing nullable behavior.
+Null values retain their existing nullable behaviour.
 A violating value raises a stable database error identifying the field without including its value; an API read fails through the ordinary value-free source-unavailable response.
 Only derived relations reached by a read are evaluated.
 
@@ -365,7 +365,7 @@ pair. [Schedule Actions with Record timers](../breg-record-timers/) covers the a
 
 ## Next
 
-- [Modeling patterns](../../explanation/registry-modeling-patterns/)
+- [Modelling patterns](../../explanation/registry-modeling-patterns/)
 - [Control access and reads](../breg-access/)
 - [Actions and Proposals](../breg-actions/)
 - [Schedule Actions with Record timers](../breg-record-timers/)

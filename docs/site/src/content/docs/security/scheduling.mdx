@@ -28,7 +28,7 @@ callers holding bearer tokens from a configured issuer.
 
 - Callers are untrusted until the token verifies against the configured key source and carries a
   complete scheduling task grant (service, location, actions).
-  A partial grant is refused, never honored partially (SCHEDULING-SEC-04, SCHEDULING-SEC-05).
+  A partial grant is refused, never honoured partially (SCHEDULING-SEC-04, SCHEDULING-SEC-05).
 - The issuer and task-grant authorities are trusted to say who a caller is and whether a grant is
   still live.
   A declared issuer or key address is trusted on the operator's word, and with
@@ -86,7 +86,7 @@ The guarantees hold only when you meet these obligations.
 1. Run PostgreSQL 17 or newer.
    Activation and startup refuse older servers.
 2. Reach PostgreSQL over TLS.
-   The runtime requires it; `database.testOnlyPlaintext` is honored only in `postgres-test` builds,
+   The runtime requires it; `database.testOnlyPlaintext` is honoured only in `postgres-test` builds,
    and the shipped runtime refuses it with `scheduling.runtime.plaintext-database`.
 3. Bind the listener to a loopback or private address, or declare
    `networkExposure: container-private`.
@@ -158,7 +158,7 @@ it is listed with them.
 - Consequence: the caller can read any appointment it names by id at that service and location.
   The grant does not bind an appointment id.
   For source-managed appointments the exact retained manager and source issuer are also required.
-  The grant opens no list, history, catalog or operational route.
+  The grant opens no list, history, catalogue or operational route.
 - Operator mitigation: issue the action only to services whose workflow already selects the
   appointment.
 - Related: SCHEDULING-SEC-05, SCHEDULING-SEC-08, SCHEDULING-SEC-36.
@@ -340,7 +340,7 @@ The duplicate guard reads active bookings across the offering inside the same ca
 as the claim it protects.
 The supporting index is partial and not unique, so the guard rests on the transaction and not on a
 database constraint.
-The offering's supply lock serializes the guard and the claim, so a concurrent pair cannot straddle
+The offering's supply lock serialises the guard and the claim, so a concurrent pair cannot straddle
 it, even when their intervals lie under different published opening revisions.
 
 {/* Evidence: products/scheduling/contracts/security-invariant-matrix.yaml SCHEDULING-DEF-05;

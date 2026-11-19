@@ -12,7 +12,7 @@ standards_referenced: []
 ---
 
 Base Registry Engine (BReg) exports an explicitly selected compiled lookup as a reviewed Source contract.
-Import merges that Source, its selector profiles, and named preparation and extraction Functions into an existing normalized EvidenceProject.
+Import merges that Source, its selector profiles, and named preparation and extraction Functions into an existing normalised EvidenceProject.
 Evidence owns the AssertionDefinitions those facts answer, caller grants, minimum disclosure, signing, and deployment configuration.
 Live acquisition uses BReg's ordinary HTTP lookup API.
 
@@ -68,8 +68,8 @@ It deliberately supplies no Evidence lookup grant, source client, or unique busi
 The composition inputs shipped with the BReg product (in the repository at your release tag) include an explicit BReg registry with `code` and `registration-number` selectors and a lookup-only `evidence-source` profile.
 Its readable status is separate from its private label.
 
-The complete `offline-starter` in those inputs is an independent normalized EvidenceProject.
-Initialize a new editable project, then check its 13 synthetic SQLite cases without starting a registry or service:
+The complete `offline-starter` in those inputs is an independent normalised EvidenceProject.
+Initialise a new editable project, then check its 13 synthetic SQLite cases without starting a registry or service:
 
 ```sh
 evidencectl init ./evidence --starter /path/to/offline-starter --profile local
@@ -79,7 +79,7 @@ evidencectl test ./evidence --target ./evidence/local-target.yaml
 
 Its `evidence.yaml` owns Sources, selector profiles, named Functions, and AssertionDefinitions.
 `local-target.yaml` binds local resources, and `dev-authority.yaml` supplies complete disposable caller authority.
-The tracked inputs contain secret references, and initialization creates owner-only local keys.
+The tracked inputs contain secret references, and initialisation creates owner-only local keys.
 
 After exporting your selected BReg lookup, import it into that existing project:
 
@@ -110,7 +110,7 @@ evidencectl package ./evidence --target ./configured-target --output ./candidate
 
 Packaging writes an immutable `bundle/` and a separate target handoff; it deploys neither product.
 Recorded-source fixtures establish bounded calculation, identity checks, and refusals.
-They do not establish live HTTP authorization, signing, or retained-session operation.
+They do not establish live HTTP authorisation, signing, or retained-session operation.
 
 {/* Evidence: products/breg/evidence/tests/verify-composition.py;
     products/breg/evidence/starter/README.md;
@@ -132,7 +132,7 @@ The [development command reference](../../reference/bregctl-dev/#prepare-a-sourc
 ## Configure the connection in Evidence
 
 The export records a logical connection name, `registry` in this example.
-The Evidence operator supplies its fixed base URL, authentication, and optional TLS trust profile in the normalized target's `connections` map.
+The Evidence operator supplies its fixed base URL, authentication, and optional TLS trust profile in the normalised target's `connections` map.
 Credentials remain logical secret references resolved by that deployment.
 A BReg package or metadata response never supplies Evidence caller authority.
 
@@ -148,7 +148,7 @@ Existing inline source configuration remains available.
 
 The exporter intentionally refuses a `verified-claim` lookup.
 Such a lookup uses claims of the source workload's token, which do not identify the Evidence caller.
-Select a reviewed `request` lookup when the caller's authorized selector values must identify the Record.
+Select a reviewed `request` lookup when the caller's authorised selector values must identify the Record.
 
 {/* Evidence: crates/registry-breg/src/evidence_source.rs verified-claim;
     crates/registry-breg/src/evidence_source/tests.rs. */}
@@ -163,7 +163,7 @@ No AssertionDefinition can skip that check by replacing its derive Function.
 
 Only the explicit fact fields enter the fact set.
 An absent or null required fact produces no match and cannot become an authoritative negative answer.
-BReg recognizes a genuine unresolved lookup only by its exact declared Problem Details status, type, and code.
+BReg recognises a genuine unresolved lookup only by its exact declared Problem Details status, type, and code.
 Other HTTP failures remain failures.
 
 Selectors support bounded nonempty strings, dates, booleans, and UUID or reference fields using Evidence's `uuid` type.
@@ -172,7 +172,7 @@ Both require exactly 36 ASCII characters in the hyphenated 8-4-4-4-12 lowercase 
 The adapter refuses uppercase and other same-length malformed values before source access or signing.
 Composite profiles must fit Evidence's aggregate selector bound.
 String maxima allow four UTF-8 bytes per BReg character.
-The adapter never normalizes identity values, so use the spelling the provider returns.
+The adapter never normalises identity values, so use the spelling the provider returns.
 Vocabulary facts retain their enum; vocabulary selectors require a reviewed codelist artifact, so this exporter refuses them with adapter guidance.
 
 BReg's unrestricted `int64` selector range exceeds Evidence's exact safe-integer selector range, so the exporter refuses it instead of silently narrowing its advertised identity contract.
@@ -198,16 +198,16 @@ evidencectl source diff ./exports/registry-status-next --project ./evidence
 evidencectl source update ./exports/registry-status-next --project ./evidence
 ```
 
-The optional source export contract in the Evidence authoring projects reference (in the repository at your release tag) defines checksums, explicit customization resolutions, shared artifact ownership, and interrupted-update recovery.
+The optional source export contract in the Evidence authoring projects reference (in the repository at your release tag) defines checksums, explicit customisation resolutions, shared artifact ownership, and interrupted-update recovery.
 Imported files remain ordinary authored files.
 Use `evidencectl source detach registry-status ./evidence` to retain them under your own maintenance.
 
-The consumed `behaviorRevision` covers selected fields, selectors, authority, and reached derived behavior.
+The consumed `behaviorRevision` covers selected fields, selectors, authority, and reached derived behaviour.
 A reached derived SQL file is fingerprinted as one implementation, together with its referenced source schemas and row visibility.
 An unused derived computation or unrelated field on a simple stored-field lookup does not change that consumed identity.
 The complete `registryRevision` is separate export provenance.
 
-Changing a Record's values does not require another export, but changing consumed lookup behavior does.
+Changing a Record's values does not require another export, but changing consumed lookup behaviour does.
 Build and test the Evidence candidate against the exact provider candidate before a coordinated deployment.
 The export is an offline contract, not a request-time attestation of the currently running provider.
 Independently evolving providers require a paused, coordinated cutover when their consumed meaning changes.
@@ -219,7 +219,7 @@ Independently evolving providers require a paused, coordinated cutover when thei
 
 ## Consume Evidence during an action
 
-A governed Rhai Action can acquire verified assertions before finalizing its writes.
+A governed Rhai Action can acquire verified assertions before finalising its writes.
 [Actions and Proposals](../breg-actions/) covers that Action plan and Evidence path.
 The farmer landholding example project in the repository shows preprocessing, early refusal, conditional disclosure, and exact offline mocks.
 Imported client contracts define the signed processing ceiling, and operator configuration supplies fixed endpoints, credentials, and trust.

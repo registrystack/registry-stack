@@ -55,7 +55,7 @@ A resolved caller refused an action answers `403 operation.not-authorized`. Run 
 idempotency scope come from the token's exact verified `iss` and `sub`, never from input fields;
 input identifiers and grant references manufacture no caller authority. Coordinator does not
 compare input identifiers with the caller's subject, so the calling backend must already have
-authorized them for the person the run concerns. A caller allowed to start
+authorised them for the person the run concerns. A caller allowed to start
 a run gains no authority over the products its workflow calls: each call uses the identity the operator
 configured for that connection, and the receiving product decides it.
 
@@ -195,7 +195,7 @@ Every recovery and operator `POST` carries a JSON body:
 
 The attestations are audited operator statements, not automated proof. A cancel answers the run's
 status, a reconcile its inspection, and a retry-same the run ID and its scheduled status.
-An authorized cancellation of a parked completion wait with `onCancel` takes that authored path
+An authorised cancellation of a parked completion wait with `onCancel` takes that authored path
 durably. A leased result read settles or expires before the path advances. Repeating cancellation
 preserves the cleanup, which can withdraw the original Casework request under current producer
 authority and the original deadline. Without that edge, or after the wait advanced, ordinary
@@ -204,9 +204,9 @@ cancellation stops future calls where possible. It never reverses a product effe
 {/* Evidence: products/coordinator/generated/openapi/coordinator.openapi.json, Reason, Retention,
     AdmissionRelease, ExecutionRecovery; crates/registry-coordinator/src/store/recovery.rs. */}
 
-These routes authenticate and authorize before they report a malformed body. A body is
+These routes authenticate and authorise before they report a malformed body. A body is
 `application/json` or another application media type ending in `+json`; any other media type
-answers `415 request.unsupported-media-type`, after authorization. Bodies are bounded to 65,536
+answers `415 request.unsupported-media-type`, after authorisation. Bodies are bounded to 65,536
 bytes, and duplicate or unknown members are refused. An empty, overlong, or control-character
 reason answers `400 request.reason-invalid`, and an out-of-bounds cutoff or limit
 `400 request.retention-invalid`. State and recovery conflicts answer `409`.

@@ -25,14 +25,14 @@ file and the scripts it names, kept in version control. It declares four things.
   roles a caller names, the source it reads, the outputs it may return, and the grant ceiling no
   caller can exceed.
 - **Sources.** Each entry under `sources` binds a reviewed Adapter pack route to a named
-  connection and only the authorized selector fields it needs. The route acquires and normalizes
+  connection and only the authorised selector fields it needs. The route acquires and normalises
   facts, using HTTP reads or a reviewed statement over a read-only SQLite extract.
 - **Selector profiles.** A [selector profile](../../reference/glossary/#selector-profile) bounds what a caller may send to identify a subject.
   `record-by-id` admits one string field of 1 to 64 bytes, and a route input takes its value
   only from that field.
 - **Functions.** A [Function](../../reference/glossary/#function) is a small
   [Rhai](../../reference/glossary/#rhai) script with the `assertion-derive/v1` interface. It turns
-  the route's validated facts into declared outputs. Provider response normalization belongs to
+  the route's validated facts into declared outputs. Provider response normalisation belongs to
   the pack. Functions run under fixed operation and size limits and cannot import code.
 
 Evidence has no built-in domain: adult status exists only because a project declares it.
@@ -73,7 +73,7 @@ not reveal whether a record exists; the audit keeps the outcomes distinct for th
 subject appears in the answer only as an opaque [subject binding](../../reference/glossary/#subject-binding) scoped to the audience that asked, so two
 relying parties asking about the same person cannot join their answers.
 
-Minimization is modelled, not automatic: two definitions each defensible alone can reconstruct
+Minimisation is modelled, not automatic: two definitions each defensible alone can reconstruct
 a protected value between them, so the operator reviews the enabled definitions together.
 
 Every assertion also states how its facts were obtained, in a signed `channel` member. `source`

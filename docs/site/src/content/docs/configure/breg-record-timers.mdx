@@ -92,7 +92,7 @@ The timer's plan may Patch only the exact anchor Record and may Create bounded n
 A timer Action cannot Tombstone a Record.
 Its declared guards and linked reads stay bounded by the compiled system grant; that read scope
 does not grant mutation of another existing Record.
-Ordinary authorized tombstoning of the anchor cancels its timer work.
+Ordinary authorised tombstoning of the anchor cancels its timer work.
 
 {/* Evidence: crates/registry-breg/tests/timer_authoring.rs
     timer_system_authority_is_anchor_and_create_bounded;
@@ -406,7 +406,7 @@ bregctl --format json timer retry --runtime-config "$runtime_config" \
     operator_retry_after_actual_exhaustion_fails_again_and_preserves_history. */}
 
 An expired valid `notAfter` window makes retry ineligible.
-The worker eventually materializes unfinished work as missed; status does not promise that this
+The worker eventually materialises unfinished work as missed; status does not promise that this
 asynchronous transition is visible at the exact deadline.
 An invalid or unknown current window remains a configuration block until a corrective governed
 Record write or a reviewed successor timer configuration makes the window valid.

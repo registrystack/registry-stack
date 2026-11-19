@@ -795,7 +795,7 @@ Missing roles, mismatches, and unsupported native client capability refuse confi
 Omission preserves the previous run-input bytes and grant mode.
 
 The paired application's selected Casework provider receives `humanSourceAuthentication.audience` from the already declared BReg resource.
-This enables independent verification of the separate source bearer; it does not change packages, issuer and key trust, principal, scope, or source authorization.
+This enables independent verification of the separate source bearer; it does not change packages, issuer and key trust, principal, scope, or source authorisation.
 Browser tokens keep one audience and only that product's narrowed grant.
 The shared-audience CLI `caseworkContext` compatibility path is unchanged.
 Review and save the authored source and declaration through normal tooling before using a new generated host configuration; post-generation JSON injection is unsupported.
@@ -876,7 +876,7 @@ A successful recovery reports `status` `stopped` and a `recovered` object with `
 If you need to finish cleanup by hand, do it in this order:
 
 1. Verify which product processes still belong to the run and stop those groups.
-   Use the run's configuration paths and process details to establish ownership before signaling a group.
+   Use the run's configuration paths and process details to establish ownership before signalling a group.
 2. Connect to the original PostgreSQL cluster as the administrator.
    Run `DROP DATABASE IF EXISTS "NAME" WITH (FORCE)` for each listed database.
 3. Run `DROP ROLE IF EXISTS "NAME"` for each listed role, including a `breg_bbox_*` role from a spatial run.

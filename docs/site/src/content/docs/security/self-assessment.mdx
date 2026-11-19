@@ -37,24 +37,24 @@ requirements are documented in [RS-SEC-G](../../spec/rs-sec-g/).
 
 This assessment helps reviewers find public evidence quickly. It is not a
 certification, penetration test, production deployment proof, or CNCF review.
-The hosted lab is a synthetic-data behavior demo and does not prove production
+The hosted lab is a synthetic-data behaviour demo and does not prove production
 operational assurance.
 
 ## Security functions and features
 
-Registry Stack security behavior is split between software guarantees and
+Registry Stack security behaviour is split between software guarantees and
 operator responsibilities.
 
 Software guarantees include:
 
 - OIDC token validation through shared platform primitives.
-- Request-scope authorization and policy checks before protected reads or
+- Request-scope authorisation and policy checks before protected reads or
   governed evidence evaluation.
 - Disclosure controls that can return narrower evidence instead of source
   records.
-- Signed, stateless Registry Evidence assertions, serialized as a flattened JWS or, under
+- Signed, stateless Registry Evidence assertions, serialised as a flattened JWS or, under
   Registry Evidence's frozen profile, as an SD-JWT VC response.
-- Minimized, fail-closed audit records emitted by runtime services, for the operator to ship to
+- Minimised, fail-closed audit records emitted by runtime services, for the operator to ship to
   append-only storage.
 - Release workflow support for an authenticated checksum chain, exact image
   digests, a consolidated SPDX SBOM, image-specific SBOM and Grype evidence,

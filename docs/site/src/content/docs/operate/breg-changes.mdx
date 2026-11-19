@@ -37,9 +37,9 @@ bregctl project lock ./normalized-registry
 bregctl check ./normalized-registry --production
 ```
 
-Review the normalized source to confirm that requiredness, classification, grants, identifiers,
+Review the normalised source to confirm that requiredness, classification, grants, identifiers,
 and constraints are unchanged. Then use the current, matching `bregctl` and `breg` release to
-[check, test, and package](../breg/#check-test-package) the normalized project as an initial
+[check, test, and package](../breg/#check-test-package) the normalised project as an initial
 package.
 
 This release does not upgrade the previous database or package in place. Provision a fresh
@@ -106,7 +106,7 @@ the package the database has activated. For an access change the diff also marks
 
 Removing a field or a Record type is not erasure. The successor drops the live column or table, but
 every earlier revision snapshot and every backup still holds the removed values, and the diff warns
-with `diff.history.removed-values-retained`. When the removal is for data minimization, also
+with `diff.history.removed-values-retained`. When the removal is for data minimisation, also
 [erase the retained history](../breg-retention/#erase-retained-history) of each affected Record.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, DiffArgs and removed_value_findings();
@@ -447,7 +447,7 @@ for fresh Review. A database restore does not restore cross-service Review autho
 :::caution
 When activation reports `package-changed`, its withdrawn Review and closed application stay
 closed after rollback. The requester must Cancel, or Rebase and Submit for fresh Review.
-Operator Resubmit and Retry cannot reopen that round, and a late approval cannot authorize Apply.
+Operator Resubmit and Retry cannot reopen that round, and a late approval cannot authorise Apply.
 :::
 
 You can still read and list these submitted Proposals. An automatic application reports

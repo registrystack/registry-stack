@@ -1,5 +1,5 @@
 ---
-title: Modeling patterns for registries
+title: Modelling patterns for registries
 description: Choose field kinds, identifiers, references, dates, and record boundaries for a Base Registry Engine project without adopting another institution's policy by accident.
 status: current
 owner: registry-docs
@@ -123,7 +123,7 @@ and a Proposal Action.
 Use a separate identifier Record type when one holder can have several identifiers, or assignments
 have their own issuer, validity, or replacement history. Derive uniqueness from the scheme's rules: two authorities may both issue `0017`, while a
 shared namespace may forbid the duplicate. A `unique` constraint can span several fields, such as
-issuer and number, and can apply only when a condition holds. Normalization is not proof that two
+issuer and number, and can apply only when a condition holds. Normalisation is not proof that two
 records describe the same real-world object.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, FieldGenerationSource and ConstraintSource::Unique;
@@ -178,7 +178,7 @@ correction to an earlier period.
 
 ## Choose how changes reach records
 
-Generated record routes suit directory maintenance where authorized callers patch each record
+Generated record routes suit directory maintenance where authorised callers patch each record
 directly. An immediate Action commits several effects atomically, such as a facility and its
 first assignment, and a Proposal Action keeps a durable draft for review and later application.
 [Actions and Proposals](../../configure/breg-actions/) explains how to choose.
@@ -276,7 +276,7 @@ received" differs from "declared quantity is zero". A known year is not a known 
 Modules share definitions across projects. An extension adds fields and constraints; it cannot
 remove an inherited constraint or replace a field, so change the owning definition when its policy
 does not fit. Review access separately from structure: record reads, Action invocation, and
-Proposal transitions have separate grants, and a classification label is not an authorization
+Proposal transitions have separate grants, and a classification label is not an authorisation
 boundary. Test the model with allowed and refused operations, including a case your policy permits that a
 stricter model might reject.
 

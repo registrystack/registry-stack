@@ -71,11 +71,11 @@ This export is neither an Eclipse EDC Management API `PolicyDefinition` nor a Da
 It has not been imported into or evaluated by EDC.
 Do not import it by wrapping a generated policy in `PolicyDefinition`.
 The reviewed EDC parser reads permission actions, constraints, and duties but drops rule-level targets.
-That loses the BReg projection identifier, Record type, and readable-field list, which define the permission's scope, and a successful parse would not establish equivalent behavior.
+That loses the BReg projection identifier, Record type, and readable-field list, which define the permission's scope, and a successful parse would not establish equivalent behaviour.
 
-An EDC adapter would need to preserve every projection and its exact operation, normalize JSON-LD list operands, bind `odrl:read` in each applicable evaluation scope, and register functions for every BReg constraint.
+An EDC adapter would need to preserve every projection and its exact operation, normalise JSON-LD list operands, bind `odrl:read` in each applicable evaluation scope, and register functions for every BReg constraint.
 Those functions must use BReg's verified caller context and refuse absent, unsupported, or unverifiable conditions.
-BReg would still authorize the actual request.
+BReg would still authorise the actual request.
 The exporter includes no such adapter or EDC extension.
 
 These limits were checked against EDC's [policy-definition schema](https://github.com/eclipse-edc/Connector/blob/cd7e556d365cd3e7195e5728cb9bf695c483599d/extensions/common/api/management-api-schema-validator/src/main/resources/schema/management/v4/policy-definition-schema.json), [permission transformer](https://github.com/eclipse-edc/Connector/blob/cd7e556d365cd3e7195e5728cb9bf695c483599d/core/control-plane/control-plane-transform/src/main/java/org/eclipse/edc/connector/controlplane/transform/odrl/to/JsonObjectToPermissionTransformer.java), and [policy-engine contract](https://github.com/eclipse-edc/Connector/blob/cd7e556d365cd3e7195e5728cb9bf695c483599d/spi/control-plane-spi/src/main/java/org/eclipse/edc/policy/engine/spi/PolicyEngine.java).
@@ -92,7 +92,7 @@ Their absence is not a prohibition and does not mean BReg lacks them.
 `coverage.json` counts Record-operation grants, after any profile selection.
 A profile granting `get`, `list`, and `patch` contributes three candidates.
 The report identifies each exported or omitted candidate and gives reasons for omissions.
-Its totals are not a percentage of the registry's entire authorization model.
+Its totals are not a percentage of the registry's entire authorisation model.
 Reasons can overlap when one grant has several unsupported restrictions.
 
 Zero supported grants is a successful, explicit empty export.
@@ -109,7 +109,7 @@ Invalid source, an unknown selected profile, or a failed write remains an error.
 
 Treat the policies as a partial description of source configuration.
 The source revision identifies what was inspected; it does not prove that the package is active.
-BReg continues to authenticate and authorize every request using its current package and state.
+BReg continues to authenticate and authorise every request using its current package and state.
 The export does not describe downstream usage obligations that were never present in the access profiles.
 
 For application discovery, use the caller-filtered [registry metadata](../breg-api/#registry-metadata) endpoint.

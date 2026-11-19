@@ -55,7 +55,7 @@ method or destination, and no automatic compensation or rollback.
 ## What exists once a run is admitted?
 
 A run is one admitted execution of the active workflow revision. It is admitted in one of two
-ways: an authorized caller posts to `POST /v1/runs` with the expected revision, its input, and an
+ways: an authorised caller posts to `POST /v1/runs` with the expected revision, its input, and an
 idempotency key, or an authored event trigger accepts a signed product event at
 `POST /v1/events/{workflow}/{trigger}`. The same key with the same revision and input returns the
 same run; a different revision or input gets `409 idempotency.key-reused`. Coordinator is not a
