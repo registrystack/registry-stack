@@ -26,7 +26,7 @@ const TRACE: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
 fn status() -> Value {
-    json!({"runId":RUN,"workflow":"nursing-notice","workflowRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","bindingDigest":"sha256:binding","step":"notify","state":"running","outcome":null,"output":null,"failureCode":null,"failurePath":null,"admittedAt":"2026-10-10T12:00:00Z","deadlineAt":"2026-10-10T12:05:00Z","nextDueAt":null,"uncertain":false,"restoreReviewRequired":false,"cancelRequested":false,"authoredCancelRequested":false})
+    json!({"runId":RUN,"workflow":"nursing-notice","workflowRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","bindingDigest":"sha256:binding","step":"notify","stepLabel":"Notify the applicant","state":"running","outcome":null,"output":null,"failureCode":null,"failurePath":null,"admittedAt":"2026-10-10T12:00:00Z","deadlineAt":"2026-10-10T12:05:00Z","nextDueAt":null,"uncertain":false,"restoreReviewRequired":false,"cancelRequested":false,"authoredCancelRequested":false})
 }
 fn inspection() -> Value {
     json!({"run":status(),"effects":[],"waits":[],"steps":[{"step":"notify","state":"unknown","generation":1,"attempt":1,"nextDueAt":null,"leaseExpiresAt":null,"commandPrepared":true,"uncertain":true,"receiptExpired":false,"failureCode":"response-lost","failurePath":null}],"recovery":{"retryAllowed":true,"reason":null,"operation":{"id":"submit-message","version":1,"product":"messaging","effect":"mutation","keyRequirement":"required","requiresPreparation":false,"recovery":"same-command-and-receipt","readReceipt":true}}})
@@ -1988,6 +1988,34 @@ fn run_and_step_status_carry_the_failure_path_a_refused_call_input_names() {
         assert_eq!(run.failure_path.as_deref(), expected);
         assert_eq!(step.failure_path.as_deref(), expected);
     }
+}
+
+#[test]
+fn run_status_carries_the_current_step_label_and_accepts_a_server_without_it() {
+    for (member, expected) in [
+        (
+            Some(json!("Notify the applicant")),
+            Some("Notify the applicant"),
+        ),
+        (Some(json!("")), Some("")),
+        (Some(Value::Null), None),
+        (None, None),
+    ] {
+        let mut run = status();
+        run.as_object_mut().unwrap().remove("stepLabel");
+        if let Some(member) = member {
+            run["stepLabel"] = member;
+        }
+        let run: registry_coordinator_client::RunStatus = serde_json::from_value(run).unwrap();
+        assert_eq!(run.step_label.as_deref(), expected);
+        assert_eq!(
+            serde_json::to_value(&run).unwrap()["stepLabel"],
+            expected.map_or(Value::Null, |label| json!(label))
+        );
+    }
+    let mut run = status();
+    run["stepLabel"] = json!(7);
+    assert!(serde_json::from_value::<registry_coordinator_client::RunStatus>(run).is_err());
 }
 
 #[tokio::test]

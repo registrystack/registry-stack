@@ -1253,6 +1253,10 @@ async fn authored_wait_cancellation_refuses_a_corrupted_snapshot_without_stoppin
     assert_eq!(failure.code, "store-unavailable");
     let status = h.store.status(run).await.unwrap();
     assert_eq!(status.step, "await-review");
+    assert_eq!(
+        status.step_label, None,
+        "a snapshot that cannot be read has no label"
+    );
     assert_eq!(status.state, "running");
     assert!(!status.cancel_requested);
     assert!(!status.authored_cancel_requested);

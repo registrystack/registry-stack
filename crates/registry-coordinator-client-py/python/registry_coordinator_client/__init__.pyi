@@ -29,6 +29,9 @@ class RunStatus(TypedDict):
 
     bindingDigest: str
     step: str
+    # The authored label of the current step in the workflow definition the
+    # run was admitted on; None when the step has none.
+    stepLabel: str | None
     state: str
     outcome: str | None
     output: JsonValue | None

@@ -897,6 +897,13 @@
           "step": {
             "type": "string"
           },
+          "stepLabel": {
+            "description": "The authored label of the current step, as packaged in the workflow definition this run was admitted on; a later package that relabels the step does not change it. Null when the step has no label or retention erased the run payload.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "uncertain": {
             "type": "boolean"
           },

@@ -141,6 +141,10 @@ pub struct RunStatus {
     pub workflow_revision: String,
     pub binding_digest: String,
     pub step: String,
+    /// The authored label of `step` in the workflow snapshot this run was
+    /// admitted on. `None` when the step has no label, after retention erased
+    /// the run's payload with its snapshot, or when the snapshot cannot be read.
+    pub step_label: Option<String>,
     pub state: String,
     pub outcome: Option<String>,
     pub output: Option<Value>,
@@ -1697,7 +1701,7 @@ impl Store {
 
     fn status_select(&self) -> String {
         format!(
-            "SELECT r.workflow_id,r.workflow_version,r.definition_digest,r.binding_digest,r.step,{},r.outcome,r.failure_code,r.admitted_at,r.deadline_at,j.next_attempt_at,j.uncertain,r.terminal_output,r.run_id,r.restore_review_required,r.cancel_requested,r.failure_path,r.authored_cancel_requested FROM {}.runs r JOIN {}.jobs j ON j.run_id=r.run_id AND j.step=r.step",
+            "SELECT r.workflow_id,r.workflow_version,r.definition_digest,r.binding_digest,r.step,{},r.outcome,r.failure_code,r.admitted_at,r.deadline_at,j.next_attempt_at,j.uncertain,r.terminal_output,r.run_id,r.restore_review_required,r.cancel_requested,r.failure_path,r.authored_cancel_requested,r.snapshot FROM {}.runs r JOIN {}.jobs j ON j.run_id=r.run_id AND j.step=r.step",
             Self::status_state(), self.namespace, self.namespace
         )
     }
@@ -2698,12 +2702,37 @@ impl Store {
 
 impl Store {
     fn status_from_row(&self, row: &Row) -> Result<RunStatus> {
+        let run_id: Uuid = row.get(13);
+        let step: String = row.get(4);
+        // The label is presentation only. Status stays the recovery view of a
+        // run whose snapshot cannot be opened, so that failure is logged and the
+        // label is omitted; the paths that act on the snapshot still refuse it.
+        let step_label = match row
+            .get::<_, Option<Value>>(18)
+            .as_ref()
+            .map(|sealed| {
+                let snapshot: String = self.open_value(run_id, "snapshot", "", sealed)?;
+                crate::definition::snapshot_step_label(&snapshot, &step)
+            })
+            .transpose()
+        {
+            Ok(label) => label.flatten(),
+            Err(error) => {
+                tracing::warn!(
+                    run = %run_id,
+                    code = %error.code,
+                    "the run's workflow snapshot could not be read, so its status carries no step label"
+                );
+                None
+            }
+        };
         Ok(RunStatus {
-            run_id: row.get(13),
+            run_id,
             workflow: row.get(0),
             workflow_revision: row.get(2),
             binding_digest: row.get(3),
-            step: row.get(4),
+            step,
+            step_label,
             state: row.get(5),
             outcome: row.get(6),
             failure_code: row.get(7),

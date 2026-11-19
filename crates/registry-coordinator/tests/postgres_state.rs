@@ -5778,6 +5778,198 @@ async fn metrics_count_committed_admissions_attempts_and_terminal_runs_by_closed
     );
 }
 
+const LABELLED_WORKFLOW: &str = r#"apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project: {id: labelled-steps, version: '1'}
+workflow:
+  input:
+    type: object
+    additionalProperties: false
+    properties:
+      hectares: {}
+  deadlineSeconds: 86400
+  start: size
+  steps:
+    size:
+      label: Check the holding size
+      description: Compares the declared holding with the threshold.
+      type: choose
+      choose:
+        type: compare
+        all:
+          - {value: {type: input, path: /hectares}, greater: 2}
+      cases: {matched: large, unmatched: small}
+    large: {type: finish, outcome: large, label: Large holding}
+    small: {type: finish, outcome: small}
+  outcomes:
+    large: {type: 'null'}
+    small: {type: 'null'}
+"#;
+
+/// The same step identities under a later revision: the start step is
+/// relabelled, `large` loses its label, and the deadline changes so the
+/// revision differs.
+fn relabelled_workflow() -> String {
+    LABELLED_WORKFLOW
+        .replace("version: '1'", "version: '2'")
+        .replace("deadlineSeconds: 86400", "deadlineSeconds: 43200")
+        .replace("label: Check the holding size", "label: Size the holding")
+        .replace(", label: Large holding", "")
+}
+
+#[tokio::test]
+async fn run_status_carries_the_current_step_label_from_the_package_it_was_admitted_on() {
+    let mut h = harness().await;
+    std::fs::write(h.project.path().join("workflow.yaml"), LABELLED_WORKFLOW).unwrap();
+    h.definition = Definition::load(h.project.path()).expect("labelled workflow");
+    let first = h.definition.clone();
+    std::fs::write(
+        h.project.path().join("workflow.yaml"),
+        relabelled_workflow(),
+    )
+    .unwrap();
+    let second = Definition::load(h.project.path()).expect("relabelled workflow");
+    assert_ne!(first.digest, second.digest);
+    let owner = actor("institution-a", false);
+    let flows = [first.workflow.id.clone()];
+
+    let old_large = h
+        .store
+        .admit_owned(
+            &first,
+            json!({"hectares": 5}),
+            &owner,
+            "old-large",
+            "binding-a",
+        )
+        .await
+        .unwrap();
+    let new_small = h
+        .store
+        .admit_owned(
+            &second,
+            json!({"hectares": 1}),
+            &owner,
+            "new-small",
+            "binding-a",
+        )
+        .await
+        .unwrap();
+    let new_large = h
+        .store
+        .admit_owned(
+            &second,
+            json!({"hectares": 5}),
+            &owner,
+            "new-large",
+            "binding-a",
+        )
+        .await
+        .unwrap();
+
+    // Admitted runs sit on the start step; each reads its own revision's label
+    // even after a later revision relabels that step.
+    let status = h.store.status_owned(old_large, &owner).await.unwrap();
+    assert_eq!(status.step, "size");
+    assert_eq!(status.workflow_revision, first.digest);
+    assert_eq!(status.step_label.as_deref(), Some("Check the holding size"));
+    let status = h.store.status(new_small).await.unwrap();
+    assert_eq!(status.workflow_revision, second.digest);
+    assert_eq!(status.step_label.as_deref(), Some("Size the holding"));
+
+    // A label is not part of the revision: a relabel-only package keeps the
+    // revision, and a run admitted before it keeps the label it was admitted on.
+    std::fs::write(
+        h.project.path().join("workflow.yaml"),
+        LABELLED_WORKFLOW.replace("label: Check the holding size", "label: Weigh the holding"),
+    )
+    .unwrap();
+    let relabelled = Definition::load(h.project.path()).expect("relabel-only workflow");
+    assert_eq!(relabelled.digest, first.digest);
+    let relabelled_run = h
+        .store
+        .admit_owned(
+            &relabelled,
+            json!({"hectares": 1}),
+            &owner,
+            "relabelled",
+            "binding-a",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        h.store
+            .status(relabelled_run)
+            .await
+            .unwrap()
+            .step_label
+            .as_deref(),
+        Some("Weigh the holding")
+    );
+    assert_eq!(
+        h.store
+            .status(old_large)
+            .await
+            .unwrap()
+            .step_label
+            .as_deref(),
+        Some("Check the holding size")
+    );
+
+    let worker = Worker::new(h.store.clone(), Arc::new(NoCalls));
+    while worker.tick().await.expect("tick") {}
+
+    let labels = |runs: Vec<registry_coordinator::store::RunStatus>| {
+        runs.into_iter()
+            .map(|run| (run.run_id, (run.step, run.step_label)))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let expected = std::collections::BTreeMap::from([
+        (
+            old_large,
+            ("large".to_owned(), Some("Large holding".to_owned())),
+        ),
+        (new_small, ("small".to_owned(), None)),
+        (new_large, ("large".to_owned(), None)),
+        (relabelled_run, ("small".to_owned(), None)),
+    ]);
+    assert_eq!(labels(h.store.list_runs(10).await.unwrap()), expected);
+    assert_eq!(
+        labels(h.store.list_owned(10, &owner, &flows).await.unwrap()),
+        expected
+    );
+
+    // An unlabelled step serializes the member as null, like the other
+    // optional status members.
+    let unlabelled = serde_json::to_value(h.store.status(new_large).await.unwrap()).unwrap();
+    assert_eq!(unlabelled["step"], "large");
+    assert_eq!(unlabelled["stepLabel"], Value::Null);
+    let labelled = serde_json::to_value(h.store.status(old_large).await.unwrap()).unwrap();
+    assert_eq!(labelled["stepLabel"], "Large holding");
+
+    // Retention erases the frozen definition with the payload; the label goes
+    // with it while the rest of the status remains readable.
+    h.sql(&format!(
+        "UPDATE {{schema}}.runs SET snapshot=NULL,input=NULL,outputs=NULL,terminal_output=NULL,payload_erased_at=transaction_timestamp() WHERE run_id='{old_large}'"
+    ))
+    .await;
+    let erased = h.store.status_owned(old_large, &owner).await.unwrap();
+    assert_eq!(erased.state, "finished");
+    assert_eq!(erased.step, "large");
+    assert_eq!(erased.step_label, None);
+}
+
+struct NoCalls;
+#[async_trait]
+impl AdapterSet for NoCalls {
+    fn binding_digest(&self) -> &str {
+        "binding-a"
+    }
+    async fn call(&self, _request: &CallRequest) -> CallOutcome {
+        panic!("a compare workflow makes no call")
+    }
+}
+
 #[path = "support/state_schema.rs"]
 mod state_schema;
 

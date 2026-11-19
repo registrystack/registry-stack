@@ -41,6 +41,8 @@ export interface RunStatus {
 
   bindingDigest: string
   step: string
+  /** The authored label of the current step in the workflow definition the run was admitted on; null when the step has none. */
+  stepLabel?: string | null
   state: string
   outcome?: string | null
   output?: JsonValue | null
