@@ -3851,7 +3851,7 @@ formats:
     files: [workflow.yaml]
     syntax: yaml
     audience: authored
-    stability: unpromised
+    stability: promised
     topLevel: project
     current:
       apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
@@ -3890,7 +3890,7 @@ formats:
     files: [runtime.yaml, runtime.example.yaml, "*-runtime.yaml"]
     syntax: yaml
     audience: operator
-    stability: unpromised
+    stability: promised
     current:
       apiVersion: id.registrystack.org/formats/coordinator/runtime/v1alpha1
       kind: CoordinatorRuntimeConfig
@@ -3947,7 +3947,7 @@ formats:
     files: [scenarios.yaml]
     syntax: yaml
     audience: authored
-    stability: unpromised
+    stability: promised
     current:
       apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
       kind: CoordinatorScenarios

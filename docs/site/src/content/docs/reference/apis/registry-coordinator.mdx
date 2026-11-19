@@ -19,8 +19,8 @@ recovering that run, operating the deployment, and taking Casework completion wa
 Every route except `/health`, `/ready`, `/v1/review-completions`, and
 `/v1/events/{workflow}/{trigger}` takes a caller access token, and the caller policy that token
 resolves to decides what the caller may do. A Casework completion authenticates with its
-completion token, and a product event with its source's delivery signature. The contract is
-pre-1.0 and carries no frozen compatibility promise.
+completion token, and a product event with its source's delivery signature.
+[API stability](../../api-stability/) states the versioning contract.
 
 [Open the Registry Coordinator API operations](../coordinator/) for every route, parameter, schema,
 and reachable problem code.

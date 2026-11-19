@@ -8,8 +8,10 @@ retain authority and ownership of every effect.
 The [Coordinator guides](https://docs.registrystack.org/explanation/how-coordinator-works/) define the
 boundary; [Deploy Registry Coordinator](https://docs.registrystack.org/operate/coordinator/) covers
 installation, custody, activation, and recovery.
-Coordinator is pre-1.0. Use one source version's binaries, packages, configuration, and state
-layout together. The current protected state schema is version 6, with no in-place migration
+Coordinator is one of the six products the Registry Stack 1.0 compatibility promise covers: the
+workflow model, run API, `coordinatorctl`, and `coordinator` client namespace. Later procedure
+features arrive additively within 1.x. Before 1.0, use one source version's binaries, packages,
+configuration, and state layout together. The current protected state schema is version 6, with no in-place migration
 from earlier layouts.
 
 Build the Coordinator service, operator CLI, client, and client bindings from source using
