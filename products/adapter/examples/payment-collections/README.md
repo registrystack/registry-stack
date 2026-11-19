@@ -105,6 +105,15 @@ GRANT USAGE, SELECT ON SEQUENCE adapter_payment_events_sequence_seq
   TO payment_adapter_runtime;
 ```
 
+When the payments configuration also declares `disbursements`, startup checks
+the disbursement tables too. Grant these as well:
+
+```sql
+GRANT SELECT, INSERT, UPDATE ON adapter_g2p_attempts TO payment_adapter_runtime;
+GRANT SELECT, INSERT ON adapter_g2p_commands, adapter_g2p_events TO payment_adapter_runtime;
+GRANT USAGE ON SEQUENCE adapter_g2p_events_sequence_seq TO payment_adapter_runtime;
+```
+
 Production builds retain the shared Adapter PostgreSQL TLS requirement. The
 `postgres-test` feature permits explicitly configured plaintext only for
 isolated test databases.
