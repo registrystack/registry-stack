@@ -4,10 +4,9 @@
 
 - Promise Registry Coordinator at Registry Stack 1.0, as the sixth promised product, instead of
   an experimental surface. The promise covers the `workflow.yaml`, `runtime.yaml` and
-  `scenarios.yaml` formats, the HTTP API, `coordinatorctl`, and the `coordinator` client
-  namespace. The operations that call Registry Scheduling or Registry Messaging stay experimental
-  with those products. Later procedure features arrive additively within 1.x. The state baseline
-  and the `v1alpha1` version strings are unchanged.
+  `scenarios.yaml` formats, the HTTP API, and the `coordinator` client namespace. The operations
+  that call Registry Scheduling or Registry Messaging stay experimental with those products. The
+  state baseline and the `v1alpha1` version strings are unchanged.
 
 ## 0.47.0 - 2026-11-20
 

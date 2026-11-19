@@ -20,8 +20,8 @@ Stack `1.0.0`, when all six promised products reach 1.0 together.
 
 Registry Stack 1.0 is one release with one Stack version and the tag `vMAJOR.MINOR.PATCH`.
 Base Registry Engine, Registry Evidence, Registry Casework, Registry Coordinator, Registry
-Discovery and Registry Manifest reach 1.0 together. Discovery remains on the Stack release train through 1.0;
-independent product releases are deferred until after that cut.
+Discovery and Registry Manifest reach 1.0 together. Discovery remains on the Stack release train
+through 1.0; independent product releases are deferred until after that cut.
 
 Across Stack 1.x, patches do not break covered surface. A minor may remove HTTP or configuration
 surface deprecated in an earlier minor; removing deprecated SDK methods requires a major.
@@ -38,9 +38,9 @@ package, even if other namespaces are unchanged.
 ## Promised products
 
 The promise covers six products: Base Registry Engine, Registry Evidence, Registry Casework,
-Registry Coordinator, Registry Discovery, and Registry Manifest. For each, it covers the configuration files, identified
-by their `apiVersion` or schema version, and the HTTP API with its OpenAPI document and its problem
-`code` values. The linked references define each surface; if this page and a reference disagree,
+Registry Coordinator, Registry Discovery, and Registry Manifest. For each, it covers the
+configuration files, identified by their `apiVersion` or schema version, and the HTTP API with its
+OpenAPI document and its problem `code` values. The linked references define each surface; if this page and a reference disagree,
 the reference wins.
 
 | Product | Configuration | HTTP API |
@@ -58,9 +58,8 @@ Registry Evidence's versioned routes are `POST /v1/evidence`, `POST /v1/evidence
 `POST /v1/public-check`, is a versioned route that stays outside the promise: see
 [experimental surfaces](#experimental-surfaces).
 
-Registry Coordinator's promised model is the one it ships: a workflow of five step types, the run
-API, the `coordinatorctl` operator commands, and the `coordinator` SDK namespace. Later procedure
-features arrive additively within 1.x. Its versioned routes are `GET /v1/workflows/{workflow}`,
+Registry Coordinator's promise covers its workflow model of five step types, its run API, and
+the `coordinator` SDK namespace. Its versioned routes are `GET /v1/workflows/{workflow}`,
 `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{run}`, `GET /v1/runs/{run}/inspect`,
 `POST /v1/runs/{run}/retry-same`, `POST /v1/runs/{run}/cancel`, `POST /v1/runs/{run}/reconcile`,
 `POST /v1/runs/{run}/check`, `POST /v1/events/{workflow}/{trigger}`, and
@@ -69,9 +68,10 @@ features arrive additively within 1.x. Its versioned routes are `GET /v1/workflo
 `POST /v1/complete-execution-recovery`, and `POST /v1/retention`. Its operational routes are
 `/health` and `/ready`. The runtime serves no OpenAPI document: the promised document is the
 generated file the API reference renders. Its configuration formats carry `v1alpha1` version strings
-today. As a promised product, it moves to stable versions in the breaking release described under
-[experimental surfaces](#experimental-surfaces). The Coordinator operations that call Registry Scheduling or Registry
-Messaging are experimental with those products: see the same section. The Coordinator binaries and
+today. As a promised product, it moves to stable versions in the breaking release described
+under [experimental surfaces](#experimental-surfaces). The Coordinator operations that call
+Registry Scheduling or Registry Messaging are experimental with those products: see the same
+section. The Coordinator binaries and
 installer enter the Stack release roster from `v0.44.0`, and its container image is not
 published yet.
 
@@ -97,8 +97,8 @@ published yet.
 
 The promise also covers the client SDKs: the Node.js package `@registrystack/client`, the Python
 package `registry-stack-client`, and the Rust crate `registry-stack-client` taken from the release
-tag. In each, the `breg`, `evidence`, `casework`, `coordinator`, and `discovery` namespaces are promised. The SDKs
-are additive-only across 1.x, because a version range on a published package, such as npm `^1.2.0`
+tag. In each, the `breg`, `evidence`, `casework`, `coordinator`, and `discovery` namespaces are
+promised. The SDKs are additive-only across 1.x, because a version range on a published package, such as npm `^1.2.0`
 or pip `~=1.2`, picks up minor releases automatically: a minor release may deprecate an SDK method,
 and its removal waits for `2.0`. A member of a promised namespace that reaches an
 [experimental surface](#experimental-surfaces) is experimental with that surface: for example, the
@@ -128,8 +128,8 @@ release without deprecation:
 - calling Evidence from a Base Registry Engine governed action handler: the action's `evidence`
   declaration, and `evidence::resolve` inside the handler
 - the `scheduling` variant of a Casework task grant's bounds
-- the Registry Coordinator operations that call an experimental product: `messaging.submit-message/v1`,
-  and the Scheduling operations `scheduling.read-service/v1`, `scheduling.read-availability/v1`,
+- the Registry Coordinator operations that call an experimental product:
+  `messaging.submit-message/v1`, and the Scheduling operations `scheduling.read-service/v1`, `scheduling.read-availability/v1`,
   `scheduling.preview-availability/v1`, `scheduling.create-hold/v1`, `scheduling.confirm-hold/v1`,
   `scheduling.release-hold/v1`, `scheduling.create-appointment/v1`,
   `scheduling.read-appointment/v1`, `scheduling.reschedule-appointment/v1`, and
@@ -427,7 +427,8 @@ The promise is machine-checked where a checker exists:
   the same build; it does not demonstrate compatibility between releases. Once a release on the
   forward state path is published, the default run downloads eligible product binaries from it.
   Default omissions record the unsupported transition; a focused unsupported product request
-  refuses. BReg, Casework, Scheduling, and Coordinator state are not rehearsed. BReg and Casework have separate current-schema operator checks.
+  refuses. BReg, Casework, Scheduling, and Coordinator state are not rehearsed. BReg and Casework
+  have separate current-schema operator checks.
 
 {/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, main(), fetch_release(), view_differences(), row_count_losses(), audit_stream_losses(), select_from_tag(), and check_forward_path(); products/messaging/CHANGELOG.md, 0.46.0 (`role` renamed to `actsAs`). */}
 
