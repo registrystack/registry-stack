@@ -68,6 +68,8 @@ pub struct PaymentBinding {
     /// original binding unchanged across an upgrade.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_pack: Option<ProviderPackPin>,
+    /// Collections are simulation-only; a live collection provider is refused.
+    #[cfg_attr(feature = "schema", schemars(extend("const" = true)))]
     pub simulation: bool,
     #[cfg_attr(feature = "schema", schemars(pattern("^[A-Z]{3}$")))]
     pub currency: String,
@@ -222,9 +224,20 @@ pub struct RegistryBinding {
     pub credential_identity: String,
 }
 
-#[derive(Clone, Copy, Debug, thiserror::Error)]
-#[error("adapter.payment.configuration")]
-pub struct ConfigError;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct ConfigError(&'static str);
+
+impl ConfigError {
+    pub const INVALID: Self = Self("adapter.payment.configuration");
+    /// Collections run only against the synthetic simulator until a live
+    /// collection provider is verified end to end.
+    pub const COLLECTION_SIMULATION_ONLY: Self = Self("adapter.payment.collection-simulation-only");
+
+    pub const fn code(self) -> &'static str {
+        self.0
+    }
+}
 
 fn unique_clients<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -249,7 +262,7 @@ impl PaymentsConfig {
             || self.connections.len() > 64
             || self.disbursements.len() > 64
         {
-            return Err(ConfigError);
+            return Err(ConfigError::INVALID);
         }
         let mut ids = BTreeSet::new();
         for connection in &self.connections {
@@ -268,13 +281,13 @@ impl PaymentsConfig {
                     != connection.allowed_clients.len()
                 || !text(&connection.required_scope, 128)
             {
-                return Err(ConfigError);
+                return Err(ConfigError::INVALID);
             }
             connection.binding.validate()?;
         }
         for connection in &self.disbursements {
             if !ids.insert(&connection.id) {
-                return Err(ConfigError);
+                return Err(ConfigError::INVALID);
             }
             connection.validate()?;
         }
@@ -287,39 +300,19 @@ impl PaymentBinding {
         if !text(&self.provider_credential_identity, 128)
             || !(1..=86_400).contains(&self.replay_window_seconds)
         {
-            return Err(ConfigError);
+            return Err(ConfigError::INVALID);
         }
+        // Collections are simulation-only: the Mifos and mapped HTTP arms
+        // remain parseable for retained attempts but cannot back a new
+        // connection until a live collection provider is verified.
         match &self.provider {
             CollectionProvider::Simulator { connection } if self.simulation => {
-                connection.validate().map_err(|_| ConfigError)?;
-            }
-            CollectionProvider::Mifos {
-                connection,
-                payer,
-                transaction_type,
-            } if !self.simulation => {
-                validate_mifos(connection, payer, transaction_type)?;
-            }
-            CollectionProvider::Http {
-                submit_base_url,
-                status_base_url,
-                settings,
-            } if !self.simulation && self.provider_pack.is_some() => {
-                for origin in [submit_base_url, status_base_url] {
-                    registry_platform_yaml::Url::new(origin.clone()).map_err(|_| ConfigError)?;
-                    ServiceBaseUrl::new(url::Url::parse(origin).map_err(|_| ConfigError)?)
-                        .map_err(|_| ConfigError)?;
-                }
-                if !settings.is_object()
-                    || serde_json::to_vec(settings).map_err(|_| ConfigError)?.len() > 16_384
-                {
-                    return Err(ConfigError);
-                }
+                connection.validate().map_err(|_| ConfigError::INVALID)?;
             }
             CollectionProvider::Simulator { .. }
             | CollectionProvider::Mifos { .. }
             | CollectionProvider::Http { .. } => {
-                return Err(ConfigError);
+                return Err(ConfigError::COLLECTION_SIMULATION_ONLY);
             }
         }
         if self.provider_pack.as_ref().is_some_and(|pin| {
@@ -329,7 +322,7 @@ impl PaymentBinding {
                 || !pin.digest.starts_with("sha256:")
                 || !pin.digest[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
         }) {
-            return Err(ConfigError);
+            return Err(ConfigError::INVALID);
         }
         Money {
             value: "1".into(),
@@ -337,11 +330,12 @@ impl PaymentBinding {
             scale: self.currency_scale,
         }
         .minor_units()
-        .map_err(|_| ConfigError)?;
+        .map_err(|_| ConfigError::INVALID)?;
         let registry = &self.registry;
-        registry_platform_yaml::Url::new(registry.base_url.clone()).map_err(|_| ConfigError)?;
-        ServiceBaseUrl::new(url::Url::parse(&registry.base_url).map_err(|_| ConfigError)?)
-            .map_err(|_| ConfigError)?;
+        registry_platform_yaml::Url::new(registry.base_url.clone())
+            .map_err(|_| ConfigError::INVALID)?;
+        ServiceBaseUrl::new(url::Url::parse(&registry.base_url).map_err(|_| ConfigError::INVALID)?)
+            .map_err(|_| ConfigError::INVALID)?;
         if !text(&registry.read_profile, 128)
             || !text(&registry.bind_profile, 128)
             || !text(&registry.receipt_profile, 128)
@@ -352,7 +346,7 @@ impl PaymentBinding {
             || !local_id(&registry.receipt_action)
             || registry.bind_action == registry.receipt_action
         {
-            return Err(ConfigError);
+            return Err(ConfigError::INVALID);
         }
         Ok(())
     }
@@ -369,8 +363,8 @@ impl PaymentBinding {
             "connector": connector,
             "billContract": BILL_CONTRACT, "binding": self,
         });
-        let canonical =
-            registry_platform_canonical_json::canonicalize_json(&value).map_err(|_| ConfigError)?;
+        let canonical = registry_platform_canonical_json::canonicalize_json(&value)
+            .map_err(|_| ConfigError::INVALID)?;
         Ok(registry_platform_config::sha256_uri(&canonical))
     }
 
@@ -401,29 +395,8 @@ impl PaymentBinding {
     }
 }
 
-fn validate_mifos(
-    connection: &MifosConnection,
-    payer: &MifosPayerMapping,
-    transaction_type: &MifosTransactionType,
-) -> Result<(), ConfigError> {
-    connection.validate().map_err(|_| ConfigError)?;
-    if !header_text(&payer.financial_address_key, 32)
-        || !header_text(&payer.payer_id_key, 32)
-        || !header_text(&transaction_type.scenario, 32)
-        || !header_text(&transaction_type.sub_scenario, 32)
-        || !header_text(&transaction_type.initiator, 32)
-        || !header_text(&transaction_type.initiator_type, 32)
-    {
-        return Err(ConfigError);
-    }
-    Ok(())
-}
-
 pub(crate) fn text(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && value.bytes().all(|b| (0x21..=0x7e).contains(&b))
-}
-fn header_text(value: &str, max: usize) -> bool {
-    !value.is_empty() && value.len() <= max && value.bytes().all(|byte| byte.is_ascii_graphic())
 }
 fn local_id(value: &str) -> bool {
     text(value, 128)

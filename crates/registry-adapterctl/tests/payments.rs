@@ -5,61 +5,16 @@ use std::{
     process::ExitCode,
 };
 
-const MAPPED_PROVIDER_SCRIPT: &str = r#"
-fn submit_request(intent, settings, acceptance) {
-    if settings == () || acceptance != () { throw "invalid submit context"; }
-    #{pathParameters: #{}, query: #{}, headers: #{}, body: #{correlation: intent.correlationId}}
-}
-fn submit_response(intent, settings, acceptance, response) {
-    if settings == () || acceptance != () || response == () { throw "invalid submit context"; }
-    #{correlationId: intent.correlationId, references: #{transaction: "accepted"}}
-}
-fn status_request(intent, settings, acceptance) {
-    if intent == () || settings == () || acceptance == () { throw "status needs context"; }
-    #{pathParameters: #{}, query: #{}, headers: #{}, body: ()}
-}
-fn status_response(intent, settings, acceptance, response) {
-    if settings == () || acceptance == () || response == () { throw "status needs context"; }
-    #{
-        correlationId: intent.correlationId,
-        providerReference: "accepted",
-        state: "pending",
-        money: intent.money,
-        parties: [#{role: "payer", key: intent.source.scheme, value: intent.source.value}]
-    }
-}
-"#;
-
-fn mapped_provider_pack(id: &str) -> String {
+fn simulator_provider_pack(id: &str) -> String {
     format!(
-        r#"apiVersion: id.registrystack.org/formats/adapter/payment-provider-pack/v1alpha1
-kind: AdapterPaymentProviderPack
-id: {id}
-version: '1'
-connector: adapter-payment-http/v1
-capabilities: [collection]
-mapping:
-  collection:
-    auth: bearer
-    submit:
-      path: /collections
-      request: {{file: mapping.rhai, entrypoint: submit_request}}
-      response: {{file: mapping.rhai, entrypoint: submit_response}}
-    status:
-      path: /collections/status
-      request: {{file: mapping.rhai, entrypoint: status_request}}
-      response: {{file: mapping.rhai, entrypoint: status_response}}
-  scripts:
-    - path: mapping.rhai
-      digest: {}
-"#,
-        registry_platform_config::sha256_uri(MAPPED_PROVIDER_SCRIPT.as_bytes())
+        "apiVersion: id.registrystack.org/formats/adapter/payment-provider-pack/v1alpha1\n\
+kind: AdapterPaymentProviderPack\nid: {id}\nversion: '1'\nconnector: simulator-p2g/v1\n\
+capabilities: [collection]\n"
     )
 }
 
-fn write_mapped_provider_pack(directory: &Path, id: &str) -> (PathBuf, String) {
-    std::fs::write(directory.join("mapping.rhai"), MAPPED_PROVIDER_SCRIPT).unwrap();
-    let bytes = mapped_provider_pack(id);
+fn write_simulator_provider_pack(directory: &Path, id: &str) -> (PathBuf, String) {
+    let bytes = simulator_provider_pack(id);
     let path = directory.join(format!("{id}.yaml"));
     std::fs::write(&path, &bytes).unwrap();
     let digest = registry_platform_config::sha256_uri(bytes.as_bytes());
@@ -105,6 +60,23 @@ fn mapped_collection(id: &str, pack_id: &str, digest: &str) -> Value {
             "registry": registry_binding()
         }
     })
+}
+
+fn pinned_simulator_collection(id: &str, pack_id: &str, digest: &str) -> Value {
+    let mut connection = mapped_collection(id, pack_id, digest);
+    connection["binding"]["simulation"] = json!(true);
+    connection["binding"]["provider"] = json!({
+        "type": "simulator",
+        "connection": {
+            "baseUrl": "http://127.0.0.1:8099/",
+            "tenant": "pilot",
+            "biller": "ministry",
+            "billerName": "Ministry",
+            "callbackUrl": "https://programme.example.test/callback",
+            "payerFiBic": "SIMBANK"
+        }
+    });
+    connection
 }
 
 fn write_payments(directory: &Path, connections: Vec<Value>) -> PathBuf {
@@ -344,13 +316,14 @@ fn payment_check_consumes_the_exact_pinned_provider_pack() {
 #[test]
 fn payment_check_and_contract_accept_distinct_active_provider_pins() {
     let directory = tempfile::tempdir().unwrap();
-    let (alpha_path, alpha_digest) = write_mapped_provider_pack(directory.path(), "provider-alpha");
-    let (beta_path, beta_digest) = write_mapped_provider_pack(directory.path(), "provider-beta");
+    let (alpha_path, alpha_digest) =
+        write_simulator_provider_pack(directory.path(), "provider-alpha");
+    let (beta_path, beta_digest) = write_simulator_provider_pack(directory.path(), "provider-beta");
     let file = write_payments(
         directory.path(),
         vec![
-            mapped_collection("alpha-fees", "provider-alpha", &alpha_digest),
-            mapped_collection("beta-fees", "provider-beta", &beta_digest),
+            pinned_simulator_collection("alpha-fees", "provider-alpha", &alpha_digest),
+            pinned_simulator_collection("beta-fees", "provider-beta", &beta_digest),
         ],
     );
 
@@ -378,13 +351,14 @@ fn payment_check_and_contract_accept_distinct_active_provider_pins() {
 #[test]
 fn payment_check_fails_closed_for_a_missing_or_mismatched_active_pack() {
     let directory = tempfile::tempdir().unwrap();
-    let (alpha_path, alpha_digest) = write_mapped_provider_pack(directory.path(), "provider-alpha");
-    let (beta_path, beta_digest) = write_mapped_provider_pack(directory.path(), "provider-beta");
+    let (alpha_path, alpha_digest) =
+        write_simulator_provider_pack(directory.path(), "provider-alpha");
+    let (beta_path, beta_digest) = write_simulator_provider_pack(directory.path(), "provider-beta");
     let file = write_payments(
         directory.path(),
         vec![
-            mapped_collection("alpha-fees", "provider-alpha", &alpha_digest),
-            mapped_collection("beta-fees", "provider-beta", &beta_digest),
+            pinned_simulator_collection("alpha-fees", "provider-alpha", &alpha_digest),
+            pinned_simulator_collection("beta-fees", "provider-beta", &beta_digest),
         ],
     );
 
@@ -411,7 +385,7 @@ fn payment_check_fails_closed_for_a_missing_or_mismatched_active_pack() {
 
     std::fs::write(
         &beta_path,
-        mapped_provider_pack("provider-beta").replace(
+        simulator_provider_pack("provider-beta").replace(
             "capabilities: [collection]",
             "capabilities: [collection]\ntestedVersions: [tampered]",
         ),
@@ -434,10 +408,14 @@ fn payment_check_fails_closed_for_a_missing_or_mismatched_active_pack() {
 #[test]
 fn payment_check_bounds_the_provider_pack_registry() {
     let directory = tempfile::tempdir().unwrap();
-    let (pack_path, digest) = write_mapped_provider_pack(directory.path(), "provider-alpha");
+    let (pack_path, digest) = write_simulator_provider_pack(directory.path(), "provider-alpha");
     let file = write_payments(
         directory.path(),
-        vec![mapped_collection("alpha-fees", "provider-alpha", &digest)],
+        vec![pinned_simulator_collection(
+            "alpha-fees",
+            "provider-alpha",
+            &digest,
+        )],
     );
     let mut args = vec![
         "adapterctl".into(),
@@ -460,15 +438,39 @@ fn payment_check_bounds_the_provider_pack_registry() {
 }
 
 #[test]
+fn payment_check_refuses_a_live_collection_as_simulation_only() {
+    let directory = tempfile::tempdir().unwrap();
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let file = write_payments(
+        directory.path(),
+        vec![mapped_collection("alpha-fees", "provider-alpha", &digest)],
+    );
+    let (code, report) = run_json(vec![
+        "adapterctl".into(),
+        "--format".into(),
+        "json".into(),
+        "payments".into(),
+        "check".into(),
+        file.display().to_string(),
+    ]);
+    assert_eq!(code, ExitCode::from(1), "{report}");
+    assert_eq!(
+        report["diagnostics"][0]["code"], "adapter.payment.collection-simulation-only",
+        "{report}"
+    );
+}
+
+#[test]
 fn payment_check_refuses_ambiguous_multi_pack_fixture_replay() {
     let directory = tempfile::tempdir().unwrap();
-    let (alpha_path, alpha_digest) = write_mapped_provider_pack(directory.path(), "provider-alpha");
-    let (beta_path, beta_digest) = write_mapped_provider_pack(directory.path(), "provider-beta");
+    let (alpha_path, alpha_digest) =
+        write_simulator_provider_pack(directory.path(), "provider-alpha");
+    let (beta_path, beta_digest) = write_simulator_provider_pack(directory.path(), "provider-beta");
     let file = write_payments(
         directory.path(),
         vec![
-            mapped_collection("alpha-fees", "provider-alpha", &alpha_digest),
-            mapped_collection("beta-fees", "provider-beta", &beta_digest),
+            pinned_simulator_collection("alpha-fees", "provider-alpha", &alpha_digest),
+            pinned_simulator_collection("beta-fees", "provider-beta", &beta_digest),
         ],
     );
     let fixture = directory.path().join("fixture.yaml");

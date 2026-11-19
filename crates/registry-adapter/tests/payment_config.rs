@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-use registry_adapter::payments::config::PaymentsConfig;
+use registry_adapter::payments::config::{ConfigError, PaymentsConfig};
 use serde_json::{json, Value};
+
+fn refusal(value: Value) -> ConfigError {
+    serde_json::from_value::<PaymentsConfig>(value)
+        .unwrap()
+        .validate()
+        .unwrap_err()
+}
 
 fn config() -> Value {
     json!({ "connections": [{ "id":"fees", "institutionId":"ministry", "serviceId":"permit",
@@ -60,36 +67,17 @@ fn http_config() -> Value {
 }
 
 #[test]
-fn mapped_http_provider_requires_a_pin_and_bounded_separate_origins() {
-    let valid: PaymentsConfig = serde_json::from_value(http_config()).unwrap();
-    assert!(valid.validate().is_ok());
-    let mut missing_pin = http_config();
-    missing_pin["connections"][0]["binding"]
-        .as_object_mut()
-        .unwrap()
-        .remove("providerPack");
-    assert!(serde_json::from_value::<PaymentsConfig>(missing_pin)
-        .unwrap()
-        .validate()
-        .is_err());
-    for pointer in [
-        "/connections/0/binding/provider/submitBaseUrl",
-        "/connections/0/binding/provider/statusBaseUrl",
-    ] {
-        let mut invalid = http_config();
-        *invalid.pointer_mut(pointer).unwrap() = json!("http://example.test/path");
-        assert!(serde_json::from_value::<PaymentsConfig>(invalid)
-            .unwrap()
-            .validate()
-            .is_err());
-    }
-    let mut oversized = http_config();
-    oversized["connections"][0]["binding"]["provider"]["settings"]["tenant"] =
-        json!("x".repeat(20_000));
-    assert!(serde_json::from_value::<PaymentsConfig>(oversized)
-        .unwrap()
-        .validate()
-        .is_err());
+fn mapped_http_collection_providers_are_refused_as_simulation_only() {
+    assert_eq!(
+        refusal(http_config()).code(),
+        "adapter.payment.collection-simulation-only"
+    );
+    let mut simulated = http_config();
+    simulated["connections"][0]["binding"]["simulation"] = json!(true);
+    assert_eq!(
+        refusal(simulated).code(),
+        "adapter.payment.collection-simulation-only"
+    );
 }
 #[test]
 fn connections_are_explicit_scoped_and_synthetic() {
@@ -105,29 +93,28 @@ fn connections_are_explicit_scoped_and_synthetic() {
     }
     let mut live = config();
     live["connections"][0]["binding"]["simulation"] = json!(false);
-    assert!(serde_json::from_value::<PaymentsConfig>(live)
-        .unwrap()
-        .validate()
-        .is_err());
+    assert_eq!(
+        refusal(live).code(),
+        "adapter.payment.collection-simulation-only"
+    );
     let mut unusable = config();
     unusable["connections"][0]["id"] = json!("MixedCase");
-    assert!(serde_json::from_value::<PaymentsConfig>(unusable)
-        .unwrap()
-        .validate()
-        .is_err());
+    assert_eq!(refusal(unusable).code(), "adapter.payment.configuration");
 }
 
 #[test]
-fn only_mifos_can_back_a_non_simulation_collection() {
-    let live: PaymentsConfig = serde_json::from_value(mifos_config()).unwrap();
-    assert!(live.validate().is_ok());
+fn live_mifos_collections_are_refused_as_simulation_only() {
+    assert_eq!(
+        refusal(mifos_config()).code(),
+        "adapter.payment.collection-simulation-only"
+    );
 
     let mut simulated_mifos = mifos_config();
     simulated_mifos["connections"][0]["binding"]["simulation"] = json!(true);
-    assert!(serde_json::from_value::<PaymentsConfig>(simulated_mifos)
-        .unwrap()
-        .validate()
-        .is_err());
+    assert_eq!(
+        refusal(simulated_mifos).code(),
+        "adapter.payment.collection-simulation-only"
+    );
 
     let mut unknown = mifos_config();
     unknown["connections"][0]["binding"]["provider"]["connection"]["extra"] = json!(true);
@@ -481,15 +468,15 @@ fn persisted_command_cannot_be_borrowed_by_another_bill_or_provider_namespace() 
 
 #[cfg(feature = "schema")]
 #[test]
-fn authored_connections_allow_the_strict_mifos_shape_and_require_scope() {
+fn authored_connections_are_simulation_only_and_require_scope() {
     let schema = serde_json::to_value(schemars::schema_for!(PaymentsConfig)).unwrap();
     let compiled = jsonschema::JSONSchema::options()
         .with_draft(jsonschema::Draft::Draft202012)
         .compile(&schema)
         .unwrap();
     assert!(compiled.is_valid(&config()));
-    assert!(compiled.is_valid(&mifos_config()));
-    assert!(compiled.is_valid(&http_config()));
+    assert!(!compiled.is_valid(&mifos_config()));
+    assert!(!compiled.is_valid(&http_config()));
     let mut value = config();
     value["connections"][0]
         .as_object_mut()

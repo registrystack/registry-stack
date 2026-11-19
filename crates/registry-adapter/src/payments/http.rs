@@ -113,9 +113,12 @@ pub fn load_config(path: &Path) -> Result<PaymentsConfig, ServeError> {
     .load::<PaymentsConfig>(&absolute)
     .map_err(|_| refused("payment configuration was refused"))?
     .config;
-    config
-        .validate()
-        .map_err(|_| refused("payment connections were refused"))?;
+    config.validate().map_err(|error| {
+        ServeError::Configuration(format!(
+            "{}: payment connections were refused",
+            error.code()
+        ))
+    })?;
     Ok(config)
 }
 
