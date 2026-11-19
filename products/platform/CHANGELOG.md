@@ -26,7 +26,10 @@
 - `rstack dev stop RUN_ID --recover` releases a run whose supervisor is gone.
   It waits for the process guards to finish, drops the run's databases and roles,
   removes the run's containers, and removes the run directory. You can
-  retry after a partial failure.
+  retry after a partial failure. A database drop that PostgreSQL refuses
+  because a backend this administrator may not signal still uses the database
+  is retried until the cleanup deadline, and a final refusal counts the
+  remaining backends by type.
 - With `--json`, refusals and startup failures from `rstack dev` print a
   `registry.rstack.error.v1` object, published as
   `schemas/rstack-dev-error.v1.schema.json`. Its `error.class` is `domain`
