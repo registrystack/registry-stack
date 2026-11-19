@@ -835,7 +835,8 @@ The request and read operations expose the completion `disbursement`, which keep
 Only a verified `provider-confirmed` disbursement lets `payments.record-provider-confirmation/v1` succeed.
 Provider confirmation records what the provider reported; it does not claim credit to the recipient or final settlement, and a timeout establishes none of those facts.
 
-The [payment collection](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/payment-collections) and [disbursement](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/g2p-disbursements) examples show both workflows against the synthetic payment simulator.
+The [payment collection example](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/payment-collections) runs against the synthetic payment simulator through the Adapter payment host.
+The [disbursement example](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/g2p-disbursements) is checked and tested offline with `coordinatorctl` scenarios only: the simulator has no disbursement pack, and no Adapter example defines its `g2p-disbursements` connection.
 
 {/* Evidence: crates/registry-coordinator/src/operations.rs payments.request-collection/v1,
     payments.request-disbursement/v1;
