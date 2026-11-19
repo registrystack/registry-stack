@@ -39,7 +39,7 @@ The facility template declares none; add one under the root `statisticalDatasets
 - `disclosure`, tagged by a required `type`, either `minimum-count-and-rounding` with `minimumCount` and `roundingBase`, each at least 2, or `exact-public-values` with no other member
 
 One period, with every dimension code, every total, and every measure, must fit in 10,000 cells.
-A dataset declares at most 12 dimensions, because PostgreSQL computes the totals with one `CUBE` that accepts no more.
+A dataset declares at most 12 dimensions (`breg.statistical-dataset.dimensions-exceeded`), because PostgreSQL computes the totals with one `CUBE` that accepts no more.
 
 ### Choose the measures
 
@@ -56,6 +56,8 @@ A dataset may declare these measure types:
 A sum, a mean, or a percentile needs an unencrypted `int64` or `decimal` field of the unit.
 A distinct count needs an unencrypted `reference` field.
 Every `read-live` profile must be able to read that field, because the measure reveals its values.
+The publisher and the `exactReads` profile must be able to read it too, under either disclosure method.
+The field need not be filterable, and being filterable is not enough.
 
 Every measure type is available on the exact paths: `read-live`, `read-exact`, and a release under `exact-public-values`.
 A release under `minimum-count-and-rounding` carries counts, distinct counts, and sums.
@@ -160,12 +162,13 @@ A dimension cell carries a code, not a label.
 Boolean codes are `true` and `false`.
 `_T` denotes a total, and `_U` denotes a null value when the field can be null; derived fields are
 nullable for this purpose.
-A vocabulary code beginning with `_` is reserved and refused.
+A vocabulary code beginning with `_` is reserved and refused (`breg.statistical-dataset.dimension-code-reserved`).
 A non-null value outside the declared vocabulary refuses the whole computation without disclosing
 that value.
 
 The names `period`, `periodStart`, `periodEnd`, `measure`, `value`, and `status` are reserved for the
-document and CSV representation, so a dimension cannot use one of them.
+document and CSV representation, so a dimension cannot use one of them
+(`breg.statistical-dataset.dimension-reserved`).
 
 {/* Evidence: crates/registry-breg/src/statistics.rs TOTAL_CODE, UNKNOWN_CODE,
     unknown_code_error_names_dataset_and_dimension_but_not_value (tests/statistics.rs);
@@ -248,7 +251,7 @@ There are no defaults.
 
 In brief, the rules apply in this order:
 
-1. Every measure of a cell with at least one and fewer than `minimumCount` contributors is suppressed. Five parcels owned by one farmer are a cell of one. A sum is also suppressed when at least one and fewer than `minimumCount` contributors have a value for the summed field, so a zero sum never reveals that a small group left the field unset. A suppressed count does not blank its totals, so for counts the contributor minimum is only as strong as rounding.
+1. Every measure of a cell with at least one and fewer than `minimumCount` contributors is suppressed. Five parcels owned by one farmer are a cell of one. A sum is also suppressed when at least one and fewer than `minimumCount` contributors have a value for the summed field, so a zero sum never reveals that a small group left the field unset. A count keeps its own minimum on records as well. A suppressed count does not blank its totals, so for counts the contributor minimum is only as strong as rounding.
 2. A sum is suppressed when the cell without its two largest contributors is smaller than `dominancePercent` percent of the largest (the p% rule). With T the cell's sum and x1 and x2 the two largest contributor totals, the sum is suppressed when T - x1 - x2 < (p / 100) x1. The second-largest contributor can estimate the largest by subtracting its own value from the total, and the rule bounds how close that estimate gets. BReg uses the p% rule rather than the older (n,k) dominance rule, because the p% rule measures the actual risk and suppresses less.
 3. A suppressed sum suppresses the same measure in every total that contains it, so one small district can blank a national total. BReg does not choose extra cells to suppress.
 4. A sum over an `int64` field is rounded to `roundingBase`, with status `rounded`. A sum over a `decimal` field is exact to its scale, with status `exact`.
@@ -273,7 +276,7 @@ The response is the release document a publication made at that moment would sto
 A dry run takes no publication lock, so a publication made in between takes that number.
 The response also carries `suppressions`, which gives each suppressed cell's index in `document.cells` and the reason.
 The reasons are `minimum-count`, `minimum-contributors`, `dominance`, and `contains-suppressed-sum`, and the list may grow.
-The `suppressions` list adds about 50 bytes per suppressed cell to a document of at most 8 MiB.
+The `suppressions` list adds about 50 bytes per suppressed cell, at most about 500 KB, to a document of at most 8 MiB.
 A client reading the dry run of a dataset near that bound needs a response limit above its 8 MiB default.
 A dry run stores nothing and reserves no version, and it writes an audit attempt and one terminal entry.
 The clients offer `statistics_release_dry_run` (Rust and Python) and `statisticsReleaseDryRun` (Node.js).
@@ -488,7 +491,7 @@ accessProfiles:
             - read-exact
 ```
 
-The `statistics-scope` profile must see the same records whoever calls. `bregctl check` refuses it if its visibility depends on the caller (row or membership boundaries, required purposes or consent, or no read access to a record type the dataset depends on), if its `list` grant does not cover what the dataset filters and groups by, or if it cannot read a sum, mean, percentile, or distinct-count field. A `read-exact` grant without `exactReads` is refused with `breg.statistical-dataset.exact-reads-missing`, `exactReads` without a `read-exact` grant with `breg.statistical-dataset.exact-reads-unused`, and an unknown profile with `breg.statistical-dataset.exact-reads-profile-unknown`. A standing agent profile cannot hold `read-exact` (`breg.access-profile.standing-agent-read-exact-forbidden`), and a standing agent or task-grant profile cannot be the `exactReads` profile (`breg.statistical-dataset.exact-reads-profile-agent`). The grant works under either disclosure method and needs no publisher, so the sum above, whose release under `minimum-count-and-rounding` is held for review, is still served exactly.
+The `statistics-scope` profile must see the same records whoever calls. `bregctl check` refuses it if its visibility depends on the caller (row or membership boundaries, required purposes or consent, or no read access to a record type the dataset depends on), if its `list` grant does not cover what the dataset filters and groups by, or if it cannot read a sum, mean, percentile, or distinct-count field. A `read-exact` grant without `exactReads` is refused with `breg.statistical-dataset.exact-reads-missing`, `exactReads` without a `read-exact` grant with `breg.statistical-dataset.exact-reads-unused`, and an unknown profile with `breg.statistical-dataset.exact-reads-profile-unknown`. A standing agent profile cannot hold `read-exact` (`breg.access-profile.standing-agent-read-exact-forbidden`, reported at the project profile, or at `recordTypes[id=..].accessProfiles[id=..]` when the unit profile of that id is the standing agent), and a standing agent or task-grant profile cannot be the `exactReads` profile (`breg.statistical-dataset.exact-reads-profile-agent`). The grant works under either disclosure method and needs no publisher, so the sum above, whose release under `minimum-count-and-rounding` is held for review, is still served exactly.
 
 The `exactReads` profile is one the project declares or a module contributes to the unit Record type.
 `exactReads` and `read-exact` grants do not change the definition digest.
@@ -510,7 +513,9 @@ bregctl api \
 The document carries `exact`, with `evaluatedAt` and the caller's `accessProfile`, in place of `live`.
 It has no `release` and no `disclosure`, and its statuses are `exact` and `not-applicable` only.
 Each read is audited with the operation `read-exact`, the caller's profile, and the requested range in clear (`periodFrom`, `periodTo`).
-The Rust and Python clients offer `statistics_exact`, with `from_period` and `to_period`, and the Node.js client offers `statisticsExact`.
+The Rust client offers `statistics_exact` and the Node.js client offers `statisticsExact`, each taking the range as `from` and `to`.
+The Python client offers `statistics_exact`, taking the range as `from_period` and `to_period`.
+Each also takes the access profile and format options of the live read.
 
 The output is as sensitive as the records. It discloses cells of one and exact sums, and BReg cannot control what the consumer does with it. Grant `read-exact` to one named service under a data-sharing agreement that names the legal basis, the purpose, no onward disclosure, what the consumer may publish from its results, retention, and breach notice. Widening the `exactReads` profile's `list` grant widens every exact read, so review a change to that profile as a disclosure decision.
 
@@ -585,7 +590,7 @@ The Record type's own classification counts because membership of a register is 
 A derived field's source Record types count because a derived field labelled `public` can read restricted inputs.
 Reclassifying is a visible, reviewable act. There is deliberately no switch that turns protection off without it.
 
-The publisher rules do not change. Under `exact-public-values` the publisher must also be able to read each sum, mean, percentile, or distinct-count field.
+The publisher rules do not change: under either method, the publisher must be able to read each sum, mean, percentile, or distinct-count field.
 
 BReg checks the classification labels, not whether the data is in fact public.
 A Record type or field wrongly classified `public` is released exactly, including cells of one.
@@ -746,6 +751,7 @@ A sum, a mean, a ratio, and a percentile are decimal strings such as `"1234.50"`
 is an integer.
 A sum is a string because it can pass 2^53, where a JSON number stops being exact.
 The string matches `^-?(0|[1-9][0-9]*)(\.[0-9]+)?$` and has exactly `scale` digits after the point.
+A sum of an `int64` field has scale 0, so its string has no decimal point.
 `value` is null when a count or a sum is suppressed, when a mean or a percentile has no values, or
 when a ratio's denominator is zero.
 
