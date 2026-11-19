@@ -692,7 +692,7 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
         for (product, path) in configs {
             writeln!(
                 output,
-                "  {product} runtime config {}",
+                "  Runtime config {product} {}",
                 path.as_str().expect("runtime config path")
             )?;
         }
@@ -1934,6 +1934,33 @@ mod tests {
     }
 
     #[test]
+    fn human_run_report_gives_each_product_one_line_that_starts_with_its_name() {
+        // The tutorials read a product's address with
+        // `awk '$1 == "breg" {print $2}'`, so no other line may start with it.
+        let mut output = Vec::new();
+        emit(
+            &mut output,
+            &json!({
+                "run_id": RUN_ID, "status": "ready",
+                "products": {"breg": "http://127.0.0.1:43883"},
+                "runtimeConfigs": {"breg": "/run/breg-runtime.yaml"}
+            }),
+            false,
+        )
+        .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        let breg_lines: Vec<&str> = text
+            .lines()
+            .filter(|line| line.split_whitespace().next() == Some("breg"))
+            .collect();
+        assert_eq!(breg_lines, ["  breg http://127.0.0.1:43883"], "{text}");
+        assert!(
+            text.contains("Runtime config breg /run/breg-runtime.yaml"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn human_run_report_names_runtime_configs_and_sinks() {
         let mut output = Vec::new();
         emit(
@@ -1951,7 +1978,7 @@ mod tests {
         .unwrap();
         let text = String::from_utf8(output).unwrap();
         assert!(
-            text.contains("evidence runtime config /run/evidence-candidate/runtime.yaml"),
+            text.contains("Runtime config evidence /run/evidence-candidate/runtime.yaml"),
             "{text}"
         );
         assert!(
