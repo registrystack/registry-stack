@@ -166,12 +166,14 @@ run_sharded_targets() {
   # $1: the feature set; remaining arguments: the owned target list.
   local features=$1
   shift
-  local flags=() position=0 selected=0 serial_record_timers=0 target
+  local flags=() two_thread_flags=() position=0 selected=0 serial_record_timers=0 target
   for target in "$@"; do
     if ((position % shard_count + 1 == shard_index)); then
       selected=1
       if [[ "$target" == postgres_record_timers ]]; then
         serial_record_timers=1
+      elif [[ "$target" == postgres_record_timer_native || "$target" == postgres_record_timer_metrics ]]; then
+        two_thread_flags+=("--test" "$target")
       else
         flags+=("--test" "$target")
       fi
@@ -190,6 +192,12 @@ run_sharded_targets() {
     # database. Native replica contention remains in its separate target.
     cargo test --locked -p registry-breg --features "$features" \
       --test postgres_record_timers -- --test-threads=1
+  fi
+  if ((${#two_thread_flags[@]} != 0)); then
+    # Each native timer journey runs up to three breg processes against one
+    # shared PostgreSQL server; two at a time keeps them clear of the CI
+    # runner's CPU, storage, and connection limits.
+    cargo test --locked -p registry-breg --features "$features" "${two_thread_flags[@]}" -- --test-threads=2
   fi
 }
 

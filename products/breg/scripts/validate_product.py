@@ -517,6 +517,12 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
         "immediate_action_targets": "cargo test --locked -p registry-breg --features postgres-test,tooling,schema",
     }
     shared_invocation = 'cargo test --locked -p registry-breg --features "$features" "${flags[@]}"'
+    # The native timer targets stay in the owned list and run through this
+    # one two-thread invocation of whichever shard selects them.
+    two_thread_invocation = (
+        'cargo test --locked -p registry-breg --features "$features" '
+        '"${two_thread_flags[@]}" -- --test-threads=2'
+    )
     serial_record_timers_arguments = [
         "cargo",
         "test",
@@ -535,6 +541,7 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
     seen_lists: set[str] = set()
     sharded_calls: list[str] = []
     serial_record_timers_invocations = 0
+    two_thread_invocations = 0
     lines = source.replace("\\\n", " ").splitlines()
     index = 0
     while index < len(lines):
@@ -544,6 +551,9 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
         if name is None:
             if line.startswith("run_sharded_targets "):
                 sharded_calls.append(line)
+                continue
+            if line == two_thread_invocation:
+                two_thread_invocations += 1
                 continue
             if line == shared_invocation or line.startswith("#") or not re.search(r"\bcargo test\b", line):
                 continue
@@ -604,6 +614,10 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
     if serial_record_timers_invocations != 1:
         errors.append(
             "PostgreSQL entrypoint: postgres_record_timers must run once with one test thread"
+        )
+    if two_thread_invocations != 1:
+        errors.append(
+            "PostgreSQL entrypoint: the native record timer targets must run once with two test threads"
         )
     if Counter(cargo_commands) != Counter(POSTGRES_TEST_COMMANDS):
         errors.append(
