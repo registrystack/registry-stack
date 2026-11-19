@@ -507,6 +507,7 @@ await-review:
 
 `timeoutSeconds` is required and shorter than the run deadline.
 Casework submission exposes `result`, and the BReg Proposal operations expose `proposal`.
+The payment collection operations expose `collection` and the disbursement operations expose `disbursement`, as [Collect and disburse payments](#collect-and-disburse-payments) describes.
 An external GET operation can declare a named `bounded-poll` completion with a typed pure `interpret` Function and `intervalSeconds`.
 The Function receives the saved command and the latest validated response and returns `pending`, `complete` with a typed result, or a declared `refused` code.
 The host owns transport, credentials, permitted destinations, scheduling, correlation, and the durable read budget, and the workflow graph stays acyclic.
@@ -798,6 +799,49 @@ When a BReg Action uses a strict Casework policy pin, adding or changing stage c
     crates/registry-coordinator/tests/casework_adapter.rs;
     crates/registry-coordinator/src/definition.rs definition.review-request-not-run-owned. */}
 
+## Collect and disburse payments
+
+Six native operations use the typed payment capability of the Registry Adapter through one operator-selected [`payments` connection](../../reference/coordinator-configuration/#payment-connections).
+The workflow never supplies an amount, provider reference, provider destination, recipient destination, funding account, HTTP header, receipt value, or registry destination.
+The connection fixes the Adapter origin, the Adapter payment connection, the credential, resource, and scopes.
+The Adapter resolves the authoritative bill or instruction, the provider binding, and the reporting authority.
+Its reporter identity, not Coordinator, holds any BReg grant to bind a bill, record a receipt, read an instruction, or report a provider confirmation.
+
+| Operation | Effect | Input |
+|---|---|---|
+| `payments.request-collection/v1` | Mutation, recovered by the same command and a receipt | `billId` and positive `billVersion` |
+| `payments.read-collection/v1` | Read | `collectionId` |
+| `payments.record-receipt/v1` | Mutation, recovered by the same command | `collectionId` of a confirmed collection |
+| `payments.request-disbursement/v1` | Mutation, held after dispatch and reconciled by receipt | `instructionRecordId` and positive `instructionVersion` |
+| `payments.read-disbursement/v1` | Read | `disbursementId` |
+| `payments.record-provider-confirmation/v1` | Mutation, recovered by the same command | `disbursementId` of a provider-confirmed disbursement |
+
+A collection request is sent under the durable step key.
+Its accepted output fixes `collectionId`, the exact bill identity, `bindingRevision`, and `simulation`.
+Recovery calls the Adapter's read-only original-request lookup with the saved request and key under the current connection authorisation, and settles only when the retained acceptance matches the saved bill identity and version.
+`receipt-unresolved`, `receipt-expired`, `recovery-held`, `outcome-unknown`, an invalid response, or a correlation mismatch never proves absence and never authorises a new effect.
+A malformed success, a provider-protocol failure, a lost exchange, or another ambiguous answer after dispatch stays uncertain.
+
+The request and read operations expose the host-owned completion `collection`.
+It retains the accepted collection, bill identity, binding revision, and simulation marker, then reads the collection through the current payment connection.
+`accepted`, `pending`, and `unknown` keep the wait pending, and `confirmed` and `failed` settle the collection attempt.
+Only a verified `confirmed` collection lets `payments.record-receipt/v1` succeed, and receipt recording stays a separate idempotent call so recovery cannot turn an observation into a registry change.
+A wait timeout does not change provider state, establish failure, or release a service that requires confirmed payment.
+
+A disbursement request sends only the approved instruction's identity and version.
+Its accepted output fixes the disbursement, instruction, binding revision, and simulation marker.
+Because the provider profile does not establish safe replay of a submission, `retry-same` is refused after an uncertain request: only the read-only original-request lookup with the exact saved instruction and key can settle it.
+The request and read operations expose the completion `disbursement`, which keeps `accepted`, `pending`, and `unknown` pending and settles on `provider-confirmed` or `failed`.
+Only a verified `provider-confirmed` disbursement lets `payments.record-provider-confirmation/v1` succeed.
+Provider confirmation records what the provider reported; it does not claim credit to the recipient or final settlement, and a timeout establishes none of those facts.
+
+The [payment collection](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/payment-collections) and [disbursement](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/g2p-disbursements) examples show both workflows against the synthetic payment simulator.
+
+{/* Evidence: crates/registry-coordinator/src/operations.rs payments.request-collection/v1,
+    payments.request-disbursement/v1;
+    crates/registry-coordinator/tests/payment_adapter.rs;
+    crates/registry-payment-client/tests/http_boundary.rs. */}
+
 ## Call an external provider
 
 An `external.get/v1` alias can specialise its validated response and declare a bounded-poll completion, as [Wait for a result](#wait-for-a-result) describes.
@@ -841,7 +885,7 @@ functions:
 operations:
   create-bill:
     uses: external.command/v1
-    connection: payments
+    connection: external-billing
     responseSchema: {typeRef: bill-response}
     interpret: bill-outcome
 ```
