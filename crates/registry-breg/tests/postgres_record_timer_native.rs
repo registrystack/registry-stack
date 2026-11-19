@@ -18,10 +18,23 @@ use record_timer_native::{
 };
 use registry_breg::timer_operator::{TimerControlState, TimerOperatorService};
 
+/// How long a writer released from its checkpoint may take to finish. Its
+/// latency is not under test; the bound outlasts a multi-second PostgreSQL
+/// commit stall on a shared CI runner, which 5 s did not.
+const RELEASED_WRITER_BOUND: Duration = Duration::from_secs(30);
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn one_native_process_activates_one_future_record_exactly_once() {
     let mut harness = NativeTimerHarness::start().await;
     let result = future_activation(&mut harness).await;
+    report_identity(&harness.run_identity());
+    finish_result(harness, result).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_exchange_outlasts_a_stall_longer_than_five_seconds() {
+    let mut harness = NativeTimerHarness::start().await;
+    let result = exchange_outlasts_a_stall(&mut harness).await;
     report_identity(&harness.run_identity());
     finish_result(harness, result).await;
 }
@@ -706,6 +719,42 @@ async fn future_activation(harness: &mut NativeTimerHarness) -> Result<(), Strin
         return Err("unrelated Record edit did not survive process replacement".to_owned());
     }
     assert_restart_processes(&harness.run_identity().processes, 2, 1)
+}
+
+/// An exchange that takes longer than the old 5 s harness budget still
+/// completes. Suspending the replica after the request is sent stands in for
+/// the multi-second commit stalls a shared CI runner produces; a held lock
+/// cannot, because the replica's record lock timeout ends that wait at 2 s.
+async fn exchange_outlasts_a_stall(harness: &mut NativeTimerHarness) -> Result<(), String> {
+    const STALL: Duration = Duration::from_secs(6);
+    harness.start_replicas(1).await?;
+    let client = harness.client(0)?;
+    let create = harness.create_binding(&client).await?;
+    let due_at = harness.database_now().await? + chrono::Duration::hours(1);
+    let created = harness
+        .create_scheduled_service(&client, &create, due_at)
+        .await?;
+    let record_id = created.value.data.record_identifier.clone();
+
+    harness.suspend_replica(0)?;
+    let started = std::time::Instant::now();
+    let reader_record_id = record_id.clone();
+    let reader = tokio::spawn(async move {
+        NativeTimerHarness::get_service_with(&client, &reader_record_id).await
+    });
+    tokio::time::sleep(STALL).await;
+    harness.resume_replica(0)?;
+    let fetched = tokio::time::timeout(RELEASED_WRITER_BOUND, reader)
+        .await
+        .map_err(|_| "stalled scheduled service Get did not finish after resume".to_owned())?
+        .map_err(|error| format!("stalled scheduled service Get task failed: {error}"))??;
+    if started.elapsed() < STALL {
+        return Err("scheduled service Get finished while the replica was suspended".to_owned());
+    }
+    if fetched.value.data.record_identifier != record_id {
+        return Err("stalled scheduled service Get returned a different Record".to_owned());
+    }
+    Ok(())
 }
 
 async fn terminal_refused_restart(harness: &mut NativeTimerHarness) -> Result<(), String> {
@@ -1872,7 +1921,7 @@ async fn writer_first_race(harness: &mut NativeTimerHarness) -> Result<(), Strin
     }
 
     harness.release_mutation_checkpoint(0)?;
-    let patched = tokio::time::timeout(Duration::from_secs(5), writer)
+    let patched = tokio::time::timeout(RELEASED_WRITER_BOUND, writer)
         .await
         .map_err(|_| "writer-first Record patch did not finish after release".to_owned())?
         .map_err(|error| format!("writer-first Record patch task failed: {error}"))??;
@@ -1980,7 +2029,7 @@ async fn writer_first_lifecycle(
     }
 
     harness.release_mutation_checkpoint(0)?;
-    tokio::time::timeout(Duration::from_secs(5), writer)
+    tokio::time::timeout(RELEASED_WRITER_BOUND, writer)
         .await
         .map_err(|_| format!("writer-first {mutation:?} did not finish after release"))?
         .map_err(|error| format!("writer-first {mutation:?} task failed: {error}"))??;
@@ -2074,7 +2123,7 @@ async fn predicate_release(harness: &mut NativeTimerHarness) -> Result<(), Strin
     }
 
     harness.release_mutation_checkpoint(0)?;
-    tokio::time::timeout(Duration::from_secs(5), writer)
+    tokio::time::timeout(RELEASED_WRITER_BOUND, writer)
         .await
         .map_err(|_| "predicate release patch did not finish".to_owned())?
         .map_err(|error| format!("predicate release task failed: {error}"))??;
@@ -2326,7 +2375,7 @@ async fn timer_first_lifecycle(
     assert_business_unchanged(&armed, &staged, "timer-first lifecycle staged transaction")?;
 
     harness.release_checkpoint(owner)?;
-    tokio::time::timeout(Duration::from_secs(5), writer)
+    tokio::time::timeout(RELEASED_WRITER_BOUND, writer)
         .await
         .map_err(|_| format!("timer-first {mutation:?} did not finish after release"))?
         .map_err(|error| format!("timer-first {mutation:?} task failed: {error}"))??;
@@ -2403,7 +2452,7 @@ async fn timer_first_race(harness: &mut NativeTimerHarness) -> Result<(), String
     assert_business_unchanged(&armed, &staged, "timer-first staged transaction")?;
 
     harness.release_checkpoint(owner)?;
-    tokio::time::timeout(Duration::from_secs(5), writer)
+    tokio::time::timeout(RELEASED_WRITER_BOUND, writer)
         .await
         .map_err(|_| "timer-first stale writer did not finish after release".to_owned())?
         .map_err(|error| format!("timer-first stale writer task failed: {error}"))??;
@@ -2476,7 +2525,7 @@ async fn batch_writer_first(harness: &mut NativeTimerHarness) -> Result<(), Stri
     let staged_run = writer_process.pid;
 
     harness.release_mutation_checkpoint(0)?;
-    let receipt = tokio::time::timeout(Duration::from_secs(5), writer)
+    let receipt = tokio::time::timeout(RELEASED_WRITER_BOUND, writer)
         .await
         .map_err(|_| "writer-first Batch did not finish after release".to_owned())?
         .map_err(|error| format!("writer-first Batch task failed: {error}"))??;
@@ -2542,7 +2591,7 @@ async fn batch_timer_first(harness: &mut NativeTimerHarness) -> Result<(), Strin
 
     harness.release_checkpoint(owner)?;
     harness.release_checkpoints_except(owner)?;
-    tokio::time::timeout(Duration::from_secs(5), writer)
+    tokio::time::timeout(RELEASED_WRITER_BOUND, writer)
         .await
         .map_err(|_| "timer-first Batch did not finish after release".to_owned())?
         .map_err(|error| format!("timer-first Batch task failed: {error}"))??;
@@ -2634,7 +2683,7 @@ async fn ingestion_writer_first(harness: &mut NativeTimerHarness) -> Result<(), 
     }
 
     harness.release_mutation_checkpoint(0)?;
-    let submission = tokio::time::timeout(Duration::from_secs(5), writer)
+    let submission = tokio::time::timeout(RELEASED_WRITER_BOUND, writer)
         .await
         .map_err(|_| "writer-first ingestion did not finish after release".to_owned())?
         .map_err(|error| format!("writer-first ingestion task failed: {error}"))??;
@@ -2730,7 +2779,7 @@ async fn ingestion_timer_first(harness: &mut NativeTimerHarness) -> Result<(), S
 
     harness.release_checkpoint(owner)?;
     harness.release_checkpoints_except(owner)?;
-    tokio::time::timeout(Duration::from_secs(5), writer)
+    tokio::time::timeout(RELEASED_WRITER_BOUND, writer)
         .await
         .map_err(|_| "timer-first ingestion did not finish after release".to_owned())?
         .map_err(|error| format!("timer-first ingestion task failed: {error}"))??;

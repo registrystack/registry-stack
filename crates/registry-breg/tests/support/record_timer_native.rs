@@ -80,8 +80,13 @@ const READY_TIMEOUT: Duration = Duration::from_secs(20);
 const LOG_EXCERPT_LINES: usize = 5;
 const LOG_TAIL_LINES: usize = 8;
 const LOG_EXCERPT_LINE_CHARS: usize = 240;
-const HTTP_REQUEST_MILLISECONDS: u64 = 5_000;
-const MUTATION_CHECKPOINT_HTTP_REQUEST_MILLISECONDS: u64 = 12_000;
+/// Exchange budget, on the replica and in the harness client, for requests
+/// whose latency no journey asserts. It outlasts a multi-second PostgreSQL
+/// commit stall on a shared CI runner, which a 5 s budget did not.
+const HTTP_REQUEST_MILLISECONDS: u64 = 30_000;
+/// A replica with a mutation checkpoint also holds its writer at the barrier,
+/// so its budget adds the longest hold to the ordinary exchange budget.
+const MUTATION_CHECKPOINT_HTTP_REQUEST_MILLISECONDS: u64 = 45_000;
 
 pub struct NativeTimerHarness {
     database: Option<TestDatabase>,
@@ -1685,11 +1690,14 @@ impl NativeTimerHarness {
     }
 
     pub fn client(&self, replica: usize) -> Result<BaseRegistryClient, String> {
-        self.client_with_attempt_timeout(replica, Duration::from_secs(5))
+        self.client_with_attempt_timeout(replica, Duration::from_millis(HTTP_REQUEST_MILLISECONDS))
     }
 
     pub fn checkpoint_race_client(&self, replica: usize) -> Result<BaseRegistryClient, String> {
-        self.client_with_attempt_timeout(replica, Duration::from_secs(12))
+        self.client_with_attempt_timeout(
+            replica,
+            Duration::from_millis(MUTATION_CHECKPOINT_HTTP_REQUEST_MILLISECONDS),
+        )
     }
 
     fn client_with_attempt_timeout(
@@ -1979,6 +1987,15 @@ impl NativeTimerHarness {
 
     pub async fn get_service(
         &self,
+        client: &BaseRegistryClient,
+        record_id: &str,
+    ) -> Result<BRegComplete<RegistryRecordSingleResponse>, String> {
+        Self::get_service_with(client, record_id).await
+    }
+
+    /// The scheduled service Get without a harness borrow, for a task that
+    /// runs while the harness signals a replica.
+    pub async fn get_service_with(
         client: &BaseRegistryClient,
         record_id: &str,
     ) -> Result<BRegComplete<RegistryRecordSingleResponse>, String> {
