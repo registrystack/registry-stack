@@ -52,12 +52,14 @@ async fn assert_malformed_page_key_is_refused(key: &str) {
             "source identity leaked: {body}"
         );
         assert!(
-            !served.stderr_text().contains(key),
-            "source identity leaked to logs"
-        );
-        assert!(
             !served.journal_text().await.contains(key),
             "source identity leaked to the journal"
+        );
+        // Read the log only once the adapter has stopped and the drain
+        // thread has read the whole pipe, so a late line cannot be missed.
+        assert!(
+            !served.stop_and_read_stderr().contains(key),
+            "source identity leaked to logs"
         );
     }
     assert_eq!(upstream.request_count(), 1);

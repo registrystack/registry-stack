@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use served_harness::upstream::{Response, ScriptedResponse, UpstreamDouble};
-use served_harness::Served;
+use served_harness::{Served, STDERR_WAIT};
 
 const CREATE_PROFILE: &str = r#"    successStatus: 201
     requestEnvelope: '{"data": {"recordIdentifier": "{{recordId}}", "domainData": {{record}}}}'
@@ -1031,11 +1031,8 @@ async fn a_status_link_is_polled_only_at_the_receiver_its_write_reached() {
         0,
         "a receiver configured after the write is never consulted"
     );
-    assert!(
-        rebound.stderr_text().contains(HELD_WARNING),
-        "a held row is reported: {}",
-        rebound.stderr_text()
-    );
+    // A held row is reported.
+    rebound.wait_for_stderr(HELD_WARNING, STDERR_WAIT);
     drop(rebound);
 
     // Configuring the original receiver again lets the write settle there.
@@ -1119,11 +1116,8 @@ async fn an_uncertain_effect_is_checked_only_at_the_receiver_its_write_reached()
         2,
         "the mutation plus one safe check"
     );
-    assert!(
-        rebound.stderr_text().contains(HELD_WARNING),
-        "a held row is reported: {}",
-        rebound.stderr_text()
-    );
+    // A held row is reported.
+    rebound.wait_for_stderr(HELD_WARNING, STDERR_WAIT);
 }
 
 #[tokio::test]
@@ -1162,11 +1156,8 @@ async fn an_async_write_without_a_receiver_pin_is_never_polled_and_expires() {
         1,
         "an unpinned row is never polled, even at an unchanged receiver"
     );
-    assert!(
-        served.stderr_text().contains(HELD_WARNING),
-        "a held row is reported: {}",
-        served.stderr_text()
-    );
+    // A held row is reported.
+    served.wait_for_stderr(HELD_WARNING, STDERR_WAIT);
 
     served
         .execute_sql(

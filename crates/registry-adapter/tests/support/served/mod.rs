@@ -45,6 +45,10 @@ const BASIC_CREDENTIAL: &str = "      type: basic
       passwordRef: secret:env/TEST_UPSTREAM_PASSWORD
 ";
 
+/// How long a presence assertion waits for a line the adapter logs while
+/// answering a request.
+pub const STDERR_WAIT: Duration = Duration::from_secs(10);
+
 static NEXT_SCHEMA: AtomicU32 = AtomicU32::new(0);
 
 /// The committed fixture directory for the DHIS2 Tracker pack. A fixture is
@@ -74,7 +78,7 @@ pub fn capture(name: &str) -> (u16, String) {
 /// blocks on a full pipe. The thread also reports the port from the
 /// adapter's `listening` line: the adapter binds port 0, so the harness
 /// never hands out a port that another process can take first.
-struct StderrLog {
+pub struct StderrLog {
     text: Arc<Mutex<String>>,
     reader: Option<JoinHandle<()>>,
     // Behind a lock only so `Served` stays `Sync` for tests that share it.
@@ -82,7 +86,7 @@ struct StderrLog {
 }
 
 impl StderrLog {
-    fn drain(child: &mut Child) -> Self {
+    pub fn drain(child: &mut Child) -> Self {
         let pipe = child.stderr.take().expect("the adapter stderr is piped");
         let text = Arc::new(Mutex::new(String::new()));
         let (sender, listening) = mpsc::channel();
@@ -115,6 +119,31 @@ impl StderrLog {
             text,
             reader: Some(reader),
             listening: Mutex::new(listening),
+        }
+    }
+
+    /// A point-in-time copy of what the drain thread has read so far. A line
+    /// the child wrote may still be in the pipe, so a presence assertion
+    /// uses [`StderrLog::wait_for`] instead.
+    pub fn snapshot(&self) -> String {
+        self.text.lock().expect("the stderr log lock").clone()
+    }
+
+    /// Wait until the captured text contains `needle` and return it; panics
+    /// with the captured text once `within` passes without it.
+    pub fn wait_for(&self, needle: &str, within: Duration) -> String {
+        let deadline = Instant::now() + within;
+        loop {
+            let text = self.snapshot();
+            if text.contains(needle) {
+                return text;
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "stderr never contained {needle:?} within {within:?}; captured stderr:\n{text}"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 
@@ -672,9 +701,20 @@ idempotency:
     }
 
     /// A point-in-time copy of the adapter's captured stderr for an assertion
-    /// message. The drain thread remains active and the process keeps running.
+    /// message. The drain thread remains active and the process keeps running,
+    /// so a line the adapter just wrote may not be in it yet: assert presence
+    /// with [`Served::wait_for_stderr`], and absence after
+    /// [`Served::stop_and_read_stderr`].
     pub fn stderr_text(&self) -> String {
-        self.stderr.text.lock().expect("the stderr lock").clone()
+        self.stderr.snapshot()
+    }
+
+    /// Wait until the adapter's captured stderr contains `needle`, for a line
+    /// the adapter logs while answering a request the test just made: the
+    /// answer can reach the test before the drain thread has read the line.
+    /// Returns the captured text; panics with it after `within`.
+    pub fn wait_for_stderr(&self, needle: &str, within: Duration) -> String {
+        self.stderr.wait_for(needle, within)
     }
 
     /// Run `sql` against the adapter's journal schema.
