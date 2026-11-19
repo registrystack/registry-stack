@@ -642,11 +642,8 @@ impl NativeTimerHarness {
                 .ok_or_else(|| "native timer replica identity budget is exhausted".to_owned())?;
             active_replicas.insert(replica_id.clone());
             let launch_id = format!("{replica_id}-launch-{}", self.replicas.len() + 1);
-            let address = available_loopback_address()?;
-            let metrics_address = self
-                .metrics_for_new_replicas
-                .then(available_loopback_address)
-                .transpose()?;
+            let (address, metrics_address) =
+                replica_loopback_addresses(self.metrics_for_new_replicas)?;
             let http_request_milliseconds = if self.mutation_checkpoint_for_new_replicas {
                 MUTATION_CHECKPOINT_HTTP_REQUEST_MILLISECONDS
             } else {
@@ -4854,13 +4851,30 @@ fn read_bounded_text(path: &Path, label: &str) -> Result<String, String> {
 }
 
 fn available_loopback_address() -> Result<SocketAddr, String> {
+    let (listener, address) = reserve_loopback_port()?;
+    drop(listener);
+    Ok(address)
+}
+
+/// Reserve a replica's Registry address and, when asked, its metrics address.
+/// Both listeners stay open until both addresses are read, so the operating
+/// system cannot hand the same free port out twice.
+fn replica_loopback_addresses(
+    with_metrics: bool,
+) -> Result<(SocketAddr, Option<SocketAddr>), String> {
+    let (registry_listener, address) = reserve_loopback_port()?;
+    let metrics = with_metrics.then(reserve_loopback_port).transpose()?;
+    drop(registry_listener);
+    Ok((address, metrics.map(|(_, address)| address)))
+}
+
+fn reserve_loopback_port() -> Result<(TcpListener, SocketAddr), String> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .map_err(|_| "native timer loopback port reservation failed".to_owned())?;
     let address = listener
         .local_addr()
         .map_err(|_| "native timer loopback address could not be read".to_owned())?;
-    drop(listener);
-    Ok(address)
+    Ok((listener, address))
 }
 
 /// The held sample was taken while the worker was parked at a barrier, so
@@ -5041,4 +5055,17 @@ fn worker_progress_counts_any_success_after_the_held_sample() {
     assert!(worker_succeeded_since_hold(0.9, 0.1));
     assert!(!worker_succeeded_since_hold(0.9, 0.9));
     assert!(!worker_succeeded_since_hold(0.9, 1.4));
+}
+
+#[test]
+fn replica_listener_and_metrics_addresses_never_share_a_port() {
+    // BReg refuses a runtime whose metrics listener binds the Registry
+    // listener's socket, so a launch must never reserve the same port twice.
+    for _ in 0..200 {
+        let (address, metrics) = replica_loopback_addresses(true).expect("addresses reserve");
+        assert_ne!(Some(address), metrics);
+        assert!(metrics.is_some());
+    }
+    let (_, metrics) = replica_loopback_addresses(false).expect("address reserves");
+    assert_eq!(metrics, None);
 }
