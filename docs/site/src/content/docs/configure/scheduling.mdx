@@ -367,7 +367,7 @@ Recording `arrived`, `completed`, or `no-show` does not confirm, cancel, move, r
 
 An observation describes the appointment as a whole.
 It does not identify an individual participant and is never expanded to one row per party member.
-Optional party counts do not decide whether an authorized observation may be recorded.
+Optional party counts do not decide whether an authorised observation may be recorded.
 A resource-only reservation can therefore carry an explicit appointment-level observation.
 Registry Scheduling does not infer a person, a headcount, equipment return, condition, damage, or any source-system outcome from it.
 
@@ -427,8 +427,8 @@ The current response keeps the two revision streams explicit:
 }
 ```
 
-The exact appointment detail may include this minimized current document for the current owner, the retained source manager, or the exact appointment-detail task grant.
-Attendance corrections also appear in the authorized exact appointment history, using its existing pseudonymized actor envelope.
+The exact appointment detail may include this minimised current document for the current owner, the retained source manager, or the exact appointment-detail task grant.
+Attendance corrections also appear in the authorised exact appointment history, using its existing pseudonymised actor envelope.
 The current detail does not expose the attendance writer, and neither surface exposes the grant or task subjects.
 Operational reads omit attendance unless their selected profile explicitly projects `attendance`, which returns only the permitted current observation and never the correction history.
 
@@ -439,7 +439,7 @@ Hook delivery signs the event and delivers it after commit.
 The event carries appointment identity, booking and attendance revisions, state, effective time, and recorded time through a closed projection.
 It carries no writer, grant, party identity, participant list, resource condition, or institutional decision.
 
-A Registry Coordinator workflow can follow the event only through its own configured, authorized trigger.
+A Registry Coordinator workflow can follow the event only through its own configured, authorised trigger.
 Event admission grants no authority for the workflow's later product calls, and a receiver response cannot change the appointment or attendance observation.
 
 {/* Evidence: crates/registry-scheduling/src/service.rs record_attendance;
@@ -508,7 +508,7 @@ Changing the booking's time does not change its recorded parties or manager.
 
 Assisted booking can explicitly select `manager: schedulingManager`, using a fixed value from the source grant's signed identity rather than a caller-supplied person identifier.
 The actor and manager are then separate.
-Additional exact actions, fresh online grant status, and the retained source-manager binding authorize creation, management, and current-detail reads.
+Additional exact actions, fresh online grant status, and the retained source-manager binding authorise creation, management, and current-detail reads.
 This path grants no list or history access.
 [Registry Scheduling task grants](../../reference/scheduling-task-grants/#source-managed-assisted-bookings) describes the complete authority and recovery contract.
 
@@ -613,7 +613,7 @@ source-application / reservation-occurrence / <occurrence UUID>
 ```
 
 They contain no personal data and grant no authority.
-Supported owner and operational appointment reads can select or return these references under their own authorization.
+Supported owner and operational appointment reads can select or return these references under their own authorisation.
 An explicitly configured observer projection may include allowed references under the hook disclosure policy.
 The default iCalendar export strips external references, so the recipe makes no default calendar-correlation claim.
 
@@ -683,7 +683,7 @@ A failed reschedule leaves the old confirmed appointment and its history intact,
 
 The calendar export example writes a bounded snapshot of current appointments as an iCalendar file.
 It is an adapter over the Rust Scheduling client, not a calendar service.
-It has no calendar write credential, feed URL, subscription token, webhook receiver, recurrence model, or background synchronization authority.
+It has no calendar write credential, feed URL, subscription token, webhook receiver, recurrence model, or background synchronisation authority.
 
 Each appointment is one `VEVENT` under RFC 5545.
 `UID` is stable from the runtime-minted appointment UUID, and `SEQUENCE` is the Scheduling revision.
@@ -693,7 +693,7 @@ Output uses CRLF and folds UTF-8 content lines at 75 octets.
 A revision outside RFC 5545's signed 32-bit `INTEGER` range, a non-positive interval, or interval precision the format cannot preserve is a hard error.
 
 By default, an event contains only its stable identifier, revision, displayed interval, state, a generic `Appointment` summary, and opaque busy-time status.
-It contains no person name, contact, organizer, attendee, location, offering, resource, channel, party count, party reference, external record reference, manager selection, cancellation reason, description, or URL.
+It contains no person name, contact, organiser, attendee, location, offering, resource, channel, party count, party reference, external record reference, manager selection, cancellation reason, description, or URL.
 
 Supply the bearer token through `REGISTRY_SCHEDULING_TOKEN` using the deployment's normal secret injection.
 The command accepts no token argument and never puts a token in a URL or diagnostic.
@@ -707,7 +707,7 @@ cargo run --locked -p registry-scheduling-client --example calendar-export -- \
   > appointments.ics
 ```
 
-A staff export uses the separately authorized operational query.
+A staff export uses the separately authorised operational query.
 It requires the current configured projection profile and a service, location, and time interval:
 
 ```sh test-skip="needs a running Registry Scheduling deployment and a bearer token"

@@ -6,11 +6,11 @@
 
 This guide tells you how to write for Registry Docs. It is short on purpose. When in doubt, prefer clarity over cleverness, evidence over assertion, and the reader's task over the writer's voice. Borrowed from GitLab's documentation style guide, then trimmed and adapted to a 20-page institutional docs site.
 
-If a rule here conflicts with `design-registry-docs.md`, follow the design doc for anything visual (typography, color, components) and this guide for anything textual (voice, structure, evidence).
+If a rule here conflicts with `design-registry-docs.md`, follow the design doc for anything visual (typography, colour, components) and this guide for anything textual (voice, structure, evidence).
 
 ## Principles
 
-1. **Documentation is the source of truth** for user-visible behavior. If the docs and the code disagree, one of them is wrong, and the docs page must say which.
+1. **Documentation is the source of truth** for user-visible behaviour. If the docs and the code disagree, one of them is wrong, and the docs page must say which.
 2. **Evidence before claim.** Every factual statement points to code, fixtures, tests, OpenAPI, or an upstream standard. If you cannot point, mark the claim with a TODO and demote it to a weaker claim level. Pointing binds the writer; it does not oblige the reader to read the pointer. How much of the pointer belongs in the reader's sentence is settled in "Code, commands, paths".
 3. **Reader first.** State the page's goal in the first paragraph. Put the next action at the end. Everything in between earns its place.
 4. **Scannable beats narrative.** Short sections, descriptive headings, parallel lists, generated tables. A user landing from search should orient in 10 seconds.
@@ -33,7 +33,7 @@ The principles above pull against each other on real pages. These are the tie-br
 ## Voice and tone
 
 - Use second person (`you`) for actions the reader takes, and keep using it to the end. A procedure that addresses the reader in the prerequisites and then goes impersonal for nine steps has stopped talking to anyone.
-- Use the project name (`Registry Evidence`, not `we`) for system behavior.
+- Use the project name (`Registry Evidence`, not `we`) for system behaviour.
 - Use active voice. Exception: when the actor is unimportant or obvious from context.
 - Institutional, calm, technical. More operating manual than marketing copy, and an operating manual is written to the operator.
 - Do not manage the reader's emotions. No "don't worry", "easy", "no problem". Calm is not distance: that a step is destructive, that a mistake here cannot be undone, or that a command runs for ten minutes is information the reader needs, and withholding it is not restraint.
@@ -154,7 +154,7 @@ Preferred terms.
 | Repo slugs            | `registry-platform`, `registry-manifest`, `registry-evidence`, `registry-breg`, and `registry-discovery`; `solmara-lab` for the external adopter demo (monospace) |
 | Legacy repo paths     | `registry_relay` and `decentralized-evidence-demo` appear only in historical pages or `rename_status` fields. Never in prose on a `current` page without explicit rename context. |
 | Standards             | Use the official acronym after spelling on first use. `DCAT`, `SHACL`, `OGC API Records`, `SD-JWT VC`, `CCCEV`. Never translate. |
-| Base Registry Engine nouns | Six nouns, capitalized as the product prints them: `Record type` (`recordType` in a project file), `Record`, `Action`, `Plan`, `Proposal`, and `ActionReceipt`. Retired and refused by `check:config-vocabulary` on Base Registry Engine pages: entity and entities as registry nouns, change request, change control, lifecycle action and lifecycle authority. Manifest names and other products' own vocabulary are not affected. |
+| Base Registry Engine nouns | Six nouns, capitalised as the product prints them: `Record type` (`recordType` in a project file), `Record`, `Action`, `Plan`, `Proposal`, and `ActionReceipt`. Retired and refused by `check:config-vocabulary` on Base Registry Engine pages: entity and entities as registry nouns, change request, change control, lifecycle action and lifecycle authority. Manifest names and other products' own vocabulary are not affected. |
 
 ## Choosing examples
 
@@ -224,7 +224,7 @@ This applies to `tutorial` and `how-to` pages, and to any page that asks the rea
 - Internal links: relative paths to the `.mdx` file. `[architecture overview](../explanation/architecture/)`.
 - External links: full URL.
 - Link text describes the target page. Do not write `click [here](...)` or `see [this page](...)`.
-- Do not capitalize the target page's title inside link text unless it is a proper noun.
+- Do not capitalise the target page's title inside link text unless it is a proper noun.
 - A link earns its place when the reader would otherwise have to search for the target. A paragraph so dense with links that it cannot be read aloud is a list that has not admitted it yet.
 - Link into another page's section when the reader wants that section and not the page: a procedure they were sent to perform, a definition they were sent to check. Link to the page itself when they need its context to make sense of the part. `check-built-links` resolves every fragment against the built page, so a renamed heading fails the build rather than dropping the reader silently at the top.
 - Link to upstream standards bodies first, then to mirrors or summaries.
@@ -312,7 +312,7 @@ This applies to every page that touches a standard or a contract.
 
 - Sentence case for headings.
 - Active voice as default.
-- "You" for the reader, project name for system behavior.
+- "You" for the reader, project name for system behaviour.
 - New sentence, new line.
 - Spell out acronyms on first use.
 - Banned word list (see above).

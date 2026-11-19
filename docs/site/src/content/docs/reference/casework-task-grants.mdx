@@ -13,7 +13,7 @@ standards_referenced: []
 
 A task grant records a current human ReviewTask holder's explicit approval for one institutional agent to perform bounded work under its own principal.
 Casework grants only from a ReviewTask.
-The trusted producer remains authoritative for the subject and proposal; the resource server independently authorizes and commits the agent's operation.
+The trusted producer remains authoritative for the subject and proposal; the resource server independently authorises and commits the agent's operation.
 
 A grant subject binds a row only where the resource server's profile authors a boundary on that key.
 For Base Registry Engine (BReg), that is a row boundary on the identity key the template's `subjects` names.
@@ -79,7 +79,7 @@ Callers cannot supply subject values.
 {/* Evidence: crates/registry-caseworkctl/src/project.rs unserved-capability;
     crates/registry-caseworkctl/src/provider_pair.rs unserved-capability */}
 
-### Lifetime and authorization mode
+### Lifetime and authorisation mode
 
 `lifetimeSeconds` is an explicit approved duration.
 
@@ -97,7 +97,7 @@ Evidence checks the grant deadline and no grant status, so an Evidence grant kee
 
 ### Scopes and operations
 
-Scopes are immutable approved authorization, not inferred from product operations.
+Scopes are immutable approved authorisation, not inferred from product operations.
 The assertion includes those scopes, and stock token exchange only accepts a requested subset.
 Use exact product operation names.
 Wildcards and duplicate bounds are refused.
@@ -107,7 +107,7 @@ So `apply-request` and `apply_request` are both well formed, and the registry de
 Any other value is refused as `casework.task-template.invalid-operation` at the operation's own pointer.
 
 For BReg, bind a named Action or Proposal operation and its exact target scope.
-A task grant does not authorize an arbitrary direct record write.
+A task grant does not authorise an arbitrary direct record write.
 BReg checks its own governed operation and the current grant status before commit.
 
 Changing a template requires a new version.
@@ -181,14 +181,14 @@ Configure the matching BReg `taskGrantStatus` entry for governed writes; [Task g
 ### Client helpers
 
 The Casework clients expose `task_assertion_endpoint(grant_id)` (or `taskAssertionEndpoint(grantId)` in Node) for the exact empty-POST route.
-Pass that endpoint to a shared `exchange` authorization option with a Casework-audience bootstrap scoped only to `casework:grants:assert`.
+Pass that endpoint to a shared `exchange` authorisation option with a Casework-audience bootstrap scoped only to `casework:grants:assert`.
 The provider checks the grant, client, resource, scopes and deadline in each fresh assertion before exchanging it.
 Its cache ends by the grant deadline; renewal asks Casework again, so an inactive grant cannot issue another access token.
 
 The unified Node and Python Casework clients expose these operations.
 Credentials stay on the server.
 Exact approval retries return the original grant without extending its deadline.
-New authorization requires explicit new approval and a new grant ID.
+New authorisation requires explicit new approval and a new grant ID.
 Listings omit retained subject selectors.
 
 {/* Evidence: crates/registry-casework-client-py/src/lib.rs task_assertion_endpoint;
@@ -246,7 +246,7 @@ Keep deferred lifetimes no longer than the work needs.
 Offline reads can continue until the earlier access-token or grant deadline.
 BReg checks fresh status before new writes, later approval and application.
 Scheduling deployments using deferred work configure `taskGrantStatus` and check fresh exact status before every capacity command and receipt replay.
-A Scheduling deployment that instead writes `taskGrantStatus: unchecked-final-fifteen-minutes` permits only authorization with at most 900 seconds remaining.
+A Scheduling deployment that instead writes `taskGrantStatus: unchecked-final-fifteen-minutes` permits only authorisation with at most 900 seconds remaining.
 The final fifteen minutes of a deferred grant can also use this offline path, with that bounded stale-authority window.
 
 A configured registry never falls back when status is unavailable or inactive.
@@ -289,14 +289,14 @@ A resource server learns of the revocation only when it asks for status.
 
 Retain the grant ID, the original deadline, and the owning product's logical operation and idempotency key.
 After waiting or restarting, authenticate as the same agent and construct a fresh exchange provider using the original grant reference and deadline.
-An assertion refresh is neither a new authorization nor a new operation.
+An assertion refresh is neither a new authorisation nor a new operation.
 Expiry or cancellation requires an explicit new decision; there is no fallback to standing service authority.
 Deferred work reaches BReg or Scheduling only: deferred grants cannot carry Evidence bounds, because Evidence accepts a grant until its deadline without checking its status.
 
 This mode retains the current holder's continuing authority.
 It does not survive release, reassignment, a decision on the review task, or completion of the review task.
 A deferred grant ends when the review task is decided: the next assertion request or status check finds the task no longer claimed and invalidates the grant.
-Keep that task claimed and undecided while the approved deferred work waits, then decide it when the workflow no longer needs the authorization.
+Keep that task claimed and undecided while the approved deferred work waits, then decide it when the workflow no longer needs the authorisation.
 An institutional decision that survives the review decision requires a separately designed policy.
 
 The grant limits allowed operations, resources, principal, purpose, subject facts and deadline.

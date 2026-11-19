@@ -53,7 +53,7 @@ It is its own cargo workspace. It holds these crates and files:
 | Path | What it is |
 | --- | --- |
 | `sdk/` | `registry-breg-wasm-sdk`, imported as `breg_wasm_sdk`. It hides the byte ABI: request decoding, outcome types and the module export macros. |
-| `template/` | `breg-wasm-handler-template`, the reference handler (phone normalization), written entirely against the SDK. Copy it to start. |
+| `template/` | `breg-wasm-handler-template`, the reference handler (phone normalisation), written entirely against the SDK. Copy it to start. |
 | `preinit/` | `breg-wasm-preinit`, a build-time tool that pre-initializes a module by running its `init` once and snapshotting the warmed memory. |
 | `admission/` | `breg-wasm-admission-proof`, a harness that compiles the built module into a registry project and runs every fixture outcome. |
 | `scripts/build.sh` | Builds the module, records sizes and hashes, enforces the size ceilings and runs the proof. |
@@ -91,7 +91,7 @@ It is its own cargo workspace. It holds these crates and files:
    breg_wasm_sdk::handler!(handle);
    ```
 
-   If your handler warms lazily initialized library statics, such as metadata tables or compiled
+   If your handler warms lazily initialised library statics, such as metadata tables or compiled
    regular expressions, add a `warm()` function and use
    `breg_wasm_sdk::handler_with_init!(handle, warm);` instead. The pre-initializer runs `warm` once
    at build time and snapshots the result.
@@ -117,7 +117,7 @@ empty.
 ### What your function returns
 
 One `Outcome`: effects against the handler's declared write slots, or one declared refusal. The
-serialized document is exactly what the shared outcome validator accepts:
+serialised document is exactly what the shared outcome validator accepts:
 
 - `{"effects": [{"id": "<slot>", "set": {<field>: <value>}}]}`, with an optional
   `"clear": [<field>, ...]` for patch slots.
@@ -134,7 +134,7 @@ module and the project disagree about the inputs.
 
 ### What the SDK guarantees
 
-- Values are exact end to end: integers serialize as integers, decimal strings and reference
+- Values are exact end to end: integers serialise as integers, decimal strings and reference
   envelopes pass through untouched, and absent stays distinguishable from null on the request side.
 - Your crate holds no pointer code. Allocation, the handle boundary and the result window are
   generated, and a panic in your handler never crosses the boundary uncaught.

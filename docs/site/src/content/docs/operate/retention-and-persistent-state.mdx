@@ -42,7 +42,7 @@ This map identifies the controls; each linked product guide defines their meanin
 
 ## Operator boundary
 
-Registry Stack gives operators rotation knobs, TTL-bound protocol stores, and pseudonymized audit
+Registry Stack gives operators rotation knobs, TTL-bound protocol stores, and pseudonymised audit
 handles.
 It does not decide the legal retention period for a deployment, delete source-registry records,
 or prove that a local rotating file kept every historical audit event.
@@ -133,7 +133,7 @@ The external Transit service retains the production private key.
 An external durable audit service may own its own storage, but Registry Evidence itself does not maintain
 one.
 
-The runtime recognizes a sealed file by its `<audit.path>.<sequence>` name, with an eight-digit
+The runtime recognises a sealed file by its `<audit.path>.<sequence>` name, with an eight-digit
 sequence, and never deletes the active file. Retention deletes sealed files in sequence order,
 oldest first, and stops at the first one whose last modification is inside the audit retention period, so
 the local directory holds a rolling window, not the whole history. A deletion that fails is logged
@@ -179,7 +179,7 @@ only durable, product-owned state is the sealed bundle on the operator host and 
 described in
 [Durable state and externally retained records](#durable-state-and-externally-retained-records).
 
-The runtime recognizes a sealed file by its `<audit.path>.<sequence>` name and never deletes the
+The runtime recognises a sealed file by its `<audit.path>.<sequence>` name and never deletes the
 active file. Retention deletes only sealed files whose last modification is older than
 the audit retention period, so the local directory holds a rolling window, not the whole history. Ship
 sealed files the way

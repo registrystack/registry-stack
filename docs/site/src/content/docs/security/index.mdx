@@ -14,7 +14,7 @@ locale: en
 standards_referenced: []
 ---
 
-Registry Stack protects data through product-specific authorization, closed configuration, bounded
+Registry Stack protects data through product-specific authorisation, closed configuration, bounded
 source access, explicit disclosure, package integrity, and accountable audit.
 
 The normative cross-product security model is [RS-SEC-G](../spec/rs-sec-g/). The
@@ -28,11 +28,11 @@ review context and public evidence.
 | --- | --- |
 | Evidence authentication on every assertion or definition route | Built in; operational probes, OpenAPI, issuer metadata, and public verification keys are the exceptions |
 | Evidence inbound authentication | OIDC bearer with one governed issuer profile; no API-key or static-credential mode |
-| Deny-by-default authorization before source access | Built in |
+| Deny-by-default authorisation before source access | Built in |
 | Only public verification material is published | Built in |
 | Evidence person-level access audit | Built in and fail-closed, with no best-effort switch |
 | Evidence disclosure modes | `value`, `predicate`, and `redacted`; the requirement fixes what is permitted |
-| SD-JWT VC assertion serialization | Built in as an encoding; the assertion format itself is not a credential lifecycle |
+| SD-JWT VC assertion serialisation | Built in as an encoding; the assertion format itself is not a credential lifecycle |
 | Holder-bound presentation | Declared per requirement and verified by the relying party |
 | Replay prevention for presentation | Not provided; the relying party owns challenge issuance, retention, and consumption |
 | Hardened HTTP headers and outbound source limits | Recommended by RS-SEC-G; confirm the deployed product applies them |
@@ -44,15 +44,15 @@ review context and public evidence.
 - **Authenticate.** Evidence verifies the bearer signature, issuer, audience, token type, and
   algorithm against one governed OIDC profile. It never trusts a proxy identity header or falls
   back to an alternate principal claim.
-- **Authorize.** One complete grant and authority path must match the requester, requirement,
-  purpose, subject roles, selector profiles, origin, authority, and audience. Authorization finishes
+- **Authorise.** One complete grant and authority path must match the requester, requirement,
+  purpose, subject roles, selector profiles, origin, authority, and audience. Authorisation finishes
   before source credential resolution or source access.
 - **Serve.** The core runs only the governed fixed source stages, validates typed concepts, and
   constructs the permitted `value`, `predicate`, or `redacted` answer. Caller input cannot add a
   source request, expression, disclosure field, or output projection.
 - **Audit.** An access-attempt record is durably accepted before each acquisition stage and a
   disclosure-release record before the response leaves. Audit failure blocks the corresponding
-  action. Entries are minimized and value-free; tamper evidence depends on shipping them to
+  action. Entries are minimised and value-free; tamper evidence depends on shipping them to
   append-only storage.
 
 Every Evidence route returning an assertion or its protected definition requires a verified access
@@ -61,7 +61,7 @@ because they contain no person-level result or grant inventory. An issuer publis
 half of an assertion-signing key, so a verifier needs no source or service credential.
 
 Evidence can encode an assertion as SD-JWT VC, with digests in place of disclosable values. That is
-a serialization of the same bounded assertion. Revocation, status, presentation replay state, and a
+a serialisation of the same bounded assertion. Revocation, status, presentation replay state, and a
 general wallet lifecycle are outside that assertion format. The separate OID4VCI adapter provides
 its documented delivery profile without changing those limits.
 
@@ -94,11 +94,11 @@ Neither the model's instructions nor a tool argument can widen that decision.
   and the gateway as actor, using RFC 8693 token exchange. A call the gateway answers or refuses
   without a registry request, such as `describe_service`, makes no exchange. The chat host's token
   never reaches BReg, and BReg refuses an actor it is not configured to trust for that client.
-- The agent reads and drafts under BReg's authorization. Every registry request the gateway makes
+- The agent reads and drafts under BReg's authorisation. Every registry request the gateway makes
   carries the delegated token, and BReg admits that token only to an access profile declared for
   agents. That profile, applied to the citizen, decides what the agent sees and which drafts it
   may write.
-- The agent Starts and edits an authorized Proposal draft. A standing agent without
+- The agent Starts and edits an authorised Proposal draft. A standing agent without
   a task grant cannot submit or apply it, invoke immediate effects, mutate records
   directly, or publish a statistical release. BReg enforces the grant ceiling;
   the gateway also restricts its reachable client methods.
@@ -187,7 +187,7 @@ and which limits a deployment of it accepts.
 
 - BReg authenticates callers and applies compiled access profiles to its own records, changes,
   history, and events.
-- Registry Evidence authorizes before contacting a fixed source and signs only the concepts its
+- Registry Evidence authorises before contacting a fixed source and signs only the concepts its
   reviewed requirement declares.
 - Registry Manifest publishes static metadata and grants no runtime authority.
 - Registry Discovery returns inert public metadata. The application owns provider trust.
@@ -196,14 +196,14 @@ and which limits a deployment of it accepts.
 ## Recommended controls that require confirmation
 
 RS-SEC-G recommends sourcing security-critical authentication, OIDC, audit, HTTP policy,
-cryptography, and SD-JWT helpers from Registry Platform so behavior stays consistent and reviewable.
+cryptography, and SD-JWT helpers from Registry Platform so behaviour stays consistent and reviewable.
 Confirm each deployed service uses those primitives because the specification does not force an
 implementation choice.
 
 Security response headers and outbound HTTP limits are also recommended controls. For Evidence,
 confirm fixed-origin and hostname verification, redirect and proxy denial, TLS trust, timeouts,
 response-size bounds, and the one-request-per-stage ceiling. The governed bundle constrains source
-behavior, while the operator still owns the network path, edge controls, and certificates.
+behaviour, while the operator still owns the network path, edge controls, and certificates.
 
 ## Operator responsibilities
 

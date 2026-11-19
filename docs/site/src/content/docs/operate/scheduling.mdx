@@ -202,7 +202,7 @@ schemaVersionsApplied: [100]
 Callers send the published `policyRevision` with each booking. Applying the active package again is
 refused with `schedulingctl.activation.package-already-active`.
 
-For commitment authorization, use the existing
+For commitment authorisation, use the existing
 [task-grant contract](../../reference/scheduling-task-grants/). Resolve any `duplicateKey`
 diagnostic in the owning offering and identity configuration before retrying a commitment.
 
@@ -252,7 +252,7 @@ Removed resources and stock reductions below simultaneous commitments are includ
 absences.
 The report contains no owner identity or absence reason.
 It is a current impact read, not a promise that supply stayed unchanged after publication.
-Use scoped appointment reads to inspect further bookings and arrange an authorized reschedule or
+Use scoped appointment reads to inspect further bookings and arrange an authorised reschedule or
 cancellation; affected holds can be released or expire normally.
 Resource catalogue and ordinary availability responses do not disclose these dated facts or
 personnel information.

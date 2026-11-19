@@ -339,7 +339,7 @@ Run status records the category while the routed successor is current, and inspe
 The failure edge receives no output from the call, so a mapping cannot turn an operational diagnostic into a business result.
 
 A mutation cannot declare this edge, and `check` refuses an unknown target and any use on a mutation operation.
-Authentication, authorization, credential configuration, preparation, binding, command or response validation, and protocol refusals still stop the run.
+Authentication, authorisation, credential configuration, preparation, binding, command or response validation, and protocol refusals still stop the run.
 An uncertain outcome never routes, including a model request whose reply was lost after dispatch.
 In a scenario, one `retryable` reply stands for the step's automatic retries, all failed, so a reply in one of those categories takes `onFailure` at once unless an earlier reply was `uncertain`.
 
@@ -464,7 +464,7 @@ Calendar admission adds no HTTP API and grants no downstream product authority.
 To react to product events, declare `workflow.eventTriggers` and bind each logical source in the runtime file's `eventSources`.
 A trigger accepts a logical source, an exact event type and data-schema identity, a schema for the full event, and an ordinary typed input mapping.
 The event source owns event meaning and disclosure, and product event names and payload meanings stay in the authored project.
-The receiving workflow uses the same finite execution engine and independently authorized downstream connections as an explicit start.
+The receiving workflow uses the same finite execution engine and independently authorised downstream connections as an explicit start.
 
 The receiver is `POST /v1/events/{workflow}/{trigger}`.
 It accepts the HookEnvelope Registry Stack products share, with its v1 delivery signature, under the operator's `eventSources` key binding.
@@ -544,11 +544,11 @@ A `breg.invoke-action/v1` alias names `action.contract` and `action.id`.
 Import the owning Base Registry Engine (BReg) project's generated Action contract instead of reproducing its schema.
 The compiler pins the Action's revision, mode, inputs, output, and declared refusals.
 Metadata checks at preparation, dispatch, and observation keep a changed owner contract from silently reinterpreting work.
-A standing BReg profile and identity authorize each call independently, and BReg decides application under its current policy and commit-time conditions.
+A standing BReg profile and identity authorise each call independently, and BReg decides application under its current policy and commit-time conditions.
 
 The operation invokes immediate Actions and returns their exact application result.
 The compiler refuses a Proposal Action with `coordinator.operation.proposal-action`, and the runtime refuses one at preparation with `action-unavailable`; Proposal Actions use the operations in [Follow a BReg Proposal](#follow-a-breg-proposal).
-A notice after application is a separate `messaging.submit-message/v1` call authorized by Messaging, and a refused notice leaves the registry application intact.
+A notice after application is a separate `messaging.submit-message/v1` call authorised by Messaging, and a refused notice leaves the registry application intact.
 
 `onDeclaredRefusal` routes only a validated owner-declared no-effect refusal, and its output is `{refusalCode}`.
 Operational failures stay failures, and a later refusal cannot resolve an earlier uncertain effect.
@@ -800,11 +800,11 @@ When a BReg Action uses a strict Casework policy pin, adding or changing stage c
 
 ## Call an external provider
 
-An `external.get/v1` alias can specialize its validated response and declare a bounded-poll completion, as [Wait for a result](#wait-for-a-result) describes.
+An `external.get/v1` alias can specialise its validated response and declare a bounded-poll completion, as [Wait for a result](#wait-for-a-result) describes.
 `external.command/v1` sends one POST to a provider the operator configured.
 Workflow data supplies only the JSON body; the runtime connection fixes the origin, the exact relative `commandPath`, and the credential, and redirects are never followed.
 A connection without `commandPath` stays read-only, and `check` refuses a command alias bound to it or to a connection of another type.
-The alias names a required `interpret` Function and can specialize the provider's `{status, body}` response:
+The alias names a required `interpret` Function and can specialise the provider's `{status, body}` response:
 
 ```yaml
 types:
@@ -938,10 +938,10 @@ A token carrying an `act` claim is refused the same way whatever its subject, be
 A token exchanged without an actor keeps the client's own subject and carries no `act`, so it is admitted like the client's own token when the client's assertion issuer is declared.
 
 The verified `iss`, `sub`, and client decide run ownership and admission idempotency.
-They never authorize the start input.
+They never authorise the start input.
 Coordinator does not compare a record, subject, or recipient identifier in the input with the caller's `sub`, and no mapping can reference the caller.
-A backend that starts a run for a person must already have authorized every identifier it passes for that person.
-A run a backend starts is owned by that backend, even when its input names a citizen's record, so an application must also authorize source-record access itself, and use its own record-to-run correlation, before it displays a run's progress to a person.
+A backend that starts a run for a person must already have authorised every identifier it passes for that person.
+A run a backend starts is owned by that backend, even when its input names a citizen's record, so an application must also authorise source-record access itself, and use its own record-to-run correlation, before it displays a run's progress to a person.
 Destinations check the connection's service identity, any task grant, and their own policy; they do not know which person a run concerns.
 
 A caller allowed to start a workflow receives no credential.

@@ -12,7 +12,7 @@ standards_referenced: []
 ---
 
 An Adapter pack and an Adapter project describe routes in platform YAML.
-The route content follows the structure of Apache Camel's YAML DSL, so a Camel reader recognizes it.
+The route content follows the structure of Apache Camel's YAML DSL, so a Camel reader recognises it.
 The engine is a bounded port of Camel's route model, not a Camel runtime: there is no JVM, no Camel YAML file and no Camel library.
 Where the Adapter differs from Camel, the difference exists to keep a route bounded, and this page states it.
 Camel 4.23.0 is the reference for semantics.
@@ -106,14 +106,14 @@ The route language differs from Camel in these bounded ways:
 {/* Evidence: crates/registry-adapter-core/src/route.rs TemplateParameter */}
 {/* Evidence: crates/registry-adapter-core/src/route.rs TemplatedRoute */}
 
-A pack is a catalog of route templates, the role Kamelets play for Camel.
+A pack is a catalogue of route templates, the role Kamelets play for Camel.
 A template declares typed parameters (`name`, `type`, `required`, `defaultValue`, `description`) and a route body that references them as `{{name}}` placeholders.
 `{{?name}}` marks an optional parameter.
 Camel parameters are untyped strings; Adapter parameters are typed and checked.
 
 A project instantiates a template with Camel's `templatedRoute` shape: `routeTemplateRef`, `routeId` and `parameters`.
 Placeholders resolve at instantiation, during `adapterctl check` and at startup, never per request.
-A template parameter carries only authored values (field mappings, program identifiers, code-map names), never environment values.
+A template parameter carries only authored values (field mappings, programme identifiers, code-map names), never environment values.
 Environment values reach the engine only through endpoint ids that the runtime config resolves.
 
 A template omits `from`.
@@ -518,7 +518,7 @@ Every concrete operation dispatches to its bound route.
 `clientRequestValidation` is always on.
 Unmatched requests answer 404 or 405, as in Camel.
 A missing route fails startup; Camel's `ignore` and `mock` options for `missingOperation` are not ported.
-The engine owns authentication and authorization, using shared OIDC verification, and the envelope is the profile's template, filled by the engine.
+The engine owns authentication and authorisation, using shared OIDC verification, and the envelope is the profile's template, filled by the engine.
 
 ### http
 
@@ -546,7 +546,7 @@ The Adapter's requests are structured and encoded by the engine, and the one dyn
 No expression can change the origin or inject a path.
 
 Request headers go out only through the endpoint's `requestHeaders` allowlist.
-Upstream authentication is one of the closed kinds listed in [Authorization and secrets](../adapter/#authorization-and-secrets), declared on the endpoint and injected at send time, after the header allowlist has been applied.
+Upstream authentication is one of the closed kinds listed in [Authorisation and secrets](../adapter/#authorisation-and-secrets), declared on the endpoint and injected at send time, after the header allowlist has been applied.
 
 Every `http` and `graphql` endpoint declares two bounds, with no default:
 

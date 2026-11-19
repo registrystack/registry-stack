@@ -208,13 +208,13 @@ purpose or subject values from this feature.
 
 ## Delay a documented entry
 
-Some authorized reads cannot be disclosed immediately.
+Some authorised reads cannot be disclosed immediately.
 `exemptions` maps an existing read-capable access profile to a governed policy reason and delay.
 A Record type can declare at most 64 exemptions.
 `reason` must be trimmed printable text of at most 256 UTF-8 bytes.
 `delayDays` must be at least 1 and less than `retentionDays`.
 
-An exemption without `sourceRecordType` applies to direct reads authorized by the named profile on
+An exemption without `sourceRecordType` applies to direct reads authorised by the named profile on
 the logged Record type.
 A relationship read uses the profile and Record type at the start of its read path, so a delayed
 relationship entry names that authority Record type explicitly:
@@ -253,18 +253,18 @@ rewrite its reason.
 
 ## Reads covered
 
-BReg logs each authorized Record materialized from storage through direct get, list (including GIS
+BReg logs each authorised Record materialised from storage through direct get, list (including GIS
 collection items), lookup, relationship traversal, snapshot, revision, and attachment download
 routes.
 Paging lookahead rows are removed first, so they do not become events.
 A refusal before Record access and a query that matches no Record create no subject-log entry.
-An unresolved ambiguous lookup can materialize candidate Records before it refuses the response;
+An unresolved ambiguous lookup can materialise candidate Records before it refuses the response;
 those accesses are recorded.
-Each materialized Record gets its own entry, so a list or historical query cannot be represented as
+Each materialised Record gets its own entry, so a list or historical query cannot be represented as
 one ambiguous subject event.
 
 The access-log insert occurs before response release, and its failure refuses the read.
-Once the entry commits, a later serialization, terminal-audit, or network failure does not erase it.
+Once the entry commits, a later serialisation, terminal-audit, or network failure does not erase it.
 An entry therefore records that BReg accessed and prepared the Record under the caller's authority,
 even when the caller did not receive the response bytes.
 

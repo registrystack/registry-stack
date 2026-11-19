@@ -11,7 +11,7 @@ locale: en
 standards_referenced: []
 ---
 
-Registry Evidence derives, protects and releases a minimized assertion from one authoritative record.
+Registry Evidence derives, protects and releases a minimised assertion from one authoritative record.
 Other systems around it publish APIs, move messages or run workflows.
 This page explains how Evidence combines with them, and which choices a production deployment makes
 without changing Evidence's public schemas or runtime behaviour.
@@ -48,14 +48,14 @@ requirement, purpose, subject-authority and disclosure rules.
 
 Evidence sits behind a provider Security Server, or calls a source through X-Road.
 X-Road provides trusted exchange and transaction protections.
-Evidence remains responsible for deriving, protecting and releasing the minimized assertion.
+Evidence remains responsible for deriving, protecting and releasing the minimised assertion.
 
 {/* TODO[evidence]: no code or test in the repository exercises an X-Road deployment of Evidence;
     the responsibility split is stated from the product boundary. */}
 
 ### OpenFn
 
-An OpenFn workflow calls Evidence as one atomic step and routes the minimized result.
+An OpenFn workflow calls Evidence as one atomic step and routes the minimised result.
 Evidence does not take over workflow branching, business retries or destination writes.
 
 {/* TODO[evidence]: no code or test in the repository exercises an OpenFn workflow calling Evidence;

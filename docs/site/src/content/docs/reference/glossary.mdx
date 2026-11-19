@@ -42,13 +42,13 @@ Product names are always in English, including on future translated pages.
   <dd>A confirmed claim on Registry Scheduling capacity, made from a <a href="#hold">hold</a> or directly, that the caller may reschedule or cancel within the <a href="#offering">offering</a>'s cutoff. Each change advances its revision.</dd>
 
   <dt id="assertion">assertion</dt>
-  <dd>Registry Evidence's answer: a signed payload that carries the answer to one <a href="#requirement">requirement</a> and none of the record behind it. Signed flattened JSON Web Signature (JWS) is the default serialization; <a href="#sd-jwt-vc">SD-JWT VC</a> carries the same assertion.</dd>
+  <dd>Registry Evidence's answer: a signed payload that carries the answer to one <a href="#requirement">requirement</a> and none of the record behind it. Signed flattened JSON Web Signature (JWS) is the default serialisation; <a href="#sd-jwt-vc">SD-JWT VC</a> carries the same assertion.</dd>
 
   <dt id="assertion-definition">assertion definition</dt>
   <dd>One fixed question in an <a href="#evidence-project">Evidence project</a>, declared under `assertionDefinitions` with its Requirement URI, purpose, subject roles, source, permitted outputs, and the grant ceiling no caller can exceed.</dd>
 
   <dt id="audit-journal">audit journal</dt>
-  <dd>The minimized request and response entries Base Registry Engine writes to a per-process file or stdout stream, separately from PostgreSQL; operators ship it to append-only storage. An <a href="#erasure">erasure</a> does not remove audit entries. See <a href="../../operate/breg-retention/">Retain, erase, and audit</a>.</dd>
+  <dd>The minimised request and response entries Base Registry Engine writes to a per-process file or stdout stream, separately from PostgreSQL; operators ship it to append-only storage. An <a href="#erasure">erasure</a> does not remove audit entries. See <a href="../../operate/breg-retention/">Retain, erase, and audit</a>.</dd>
 
   <dt id="base-registry-engine">Base Registry Engine (BReg)</dt>
   <dd>The PostgreSQL system of record whose data model and REST API are compiled from a <a href="#registry-project">registry project</a>, with no built-in domain types. Binaries `breg` and `bregctl`.</dd>
@@ -105,7 +105,7 @@ Product names are always in English, including on future translated pages.
   <dd>An `evidence.yaml` file and the scripts it names, kept in version control, declaring <a href="#assertion-definition">assertion definitions</a>, sources, selector profiles, and Functions. `evidencectl` checks, tests, and packages it with a target into a <a href="#deployment-candidate">deployment candidate</a>.</dd>
 
   <dt id="function">Function</dt>
-  <dd>A project-local typed implementation asset. In BReg, an Action's <a href="#planner">Plan</a> uses one to compute effects within the Action's declared write ceiling; it cannot grant authority or invent a review decision. In an <a href="#evidence-project">Evidence project</a>, a <a href="#rhai">Rhai</a> script with the `assertion-derive/v1` interface that turns a <a href="#source">source</a> route's validated facts into declared outputs, under fixed operation and size limits. Provider response normalization belongs to the reviewed Adapter pack. In a Registry Coordinator <a href="#workflow">workflow</a>, a Rhai script that routes a `choose` step or computes a value a call's input maps with `type: function`, with no clock, file, network, database, or credentials.</dd>
+  <dd>A project-local typed implementation asset. In BReg, an Action's <a href="#planner">Plan</a> uses one to compute effects within the Action's declared write ceiling; it cannot grant authority or invent a review decision. In an <a href="#evidence-project">Evidence project</a>, a <a href="#rhai">Rhai</a> script with the `assertion-derive/v1` interface that turns a <a href="#source">source</a> route's validated facts into declared outputs, under fixed operation and size limits. Provider response normalisation belongs to the reviewed Adapter pack. In a Registry Coordinator <a href="#workflow">workflow</a>, a Rhai script that routes a `choose` step or computes a value a call's input maps with `type: function`, with no clock, file, network, database, or credentials.</dd>
 
   <dt id="grant-ceiling">grant ceiling</dt>
   <dd>The widest authority a Registry Evidence <a href="#assertion-definition">assertion definition</a> lets any grant give for it: the authorities, actor kinds, value origins, and audiences a grant may name. A <a href="#target">target</a> authority's grant may only narrow it; Registry Evidence refuses to activate one that widens it.</dd>
@@ -165,7 +165,7 @@ Product names are always in English, including on future translated pages.
   <dd>A file uploaded into one declared slot of a Base Registry Engine <a href="#proposal">Proposal</a>, held by BReg and bound by digest when the Proposal is submitted. It is separate from a Registry Document Store <a href="#document">document</a>. See the <a href="../breg-api/#proposal-attachments">BReg API reference</a>.</dd>
 
   <dt id="purpose">purpose</dt>
-  <dd>The authorized reason a caller gives for a Registry Evidence request: a configured code from the definition's declared purposes and the caller's grant, echoed into the assertion. In Base Registry Engine, an <a href="#access-profile">access profile</a>'s `requiredPurposes` lists the purposes it accepts.</dd>
+  <dd>The authorised reason a caller gives for a Registry Evidence request: a configured code from the definition's declared purposes and the caller's grant, echoed into the assertion. In Base Registry Engine, an <a href="#access-profile">access profile</a>'s `requiredPurposes` lists the purposes it accepts.</dd>
 
   <dt id="queue">queue</dt>
   <dd>A named Casework inbox that <a href="#stage">stages</a>, routing, and clock steps send tasks to. A person reaches its tasks only as a member of a <a href="#team">team</a> serving it.</dd>
@@ -183,10 +183,10 @@ Product names are always in English, including on future translated pages.
   <dd>The BReg definition of one kind of <a href="#registry-record">Record</a>: its fields, route, dataset, and `mutationPolicy`, authored under `recordTypes`.</dd>
 
   <dt id="registry-casework">Registry Casework</dt>
-  <dd>The human-review product: a <a href="#producer">producer</a> sends a <a href="#review-request">ReviewRequest</a>, authorized people decide its <a href="#review-task">ReviewTasks</a>, and the producer reads the result. The source keeps its data, its disclosure, and all authority to change it. See the <a href="../../start/casework/">Registry Casework overview</a>.</dd>
+  <dd>The human-review product: a <a href="#producer">producer</a> sends a <a href="#review-request">ReviewRequest</a>, authorised people decide its <a href="#review-task">ReviewTasks</a>, and the producer reads the result. The source keeps its data, its disclosure, and all authority to change it. See the <a href="../../start/casework/">Registry Casework overview</a>.</dd>
 
   <dt id="registry-coordinator">Registry Coordinator</dt>
-  <dd>The workflow product: it runs a reviewed <a href="#workflow">workflow</a> of product calls and <a href="#wait">waits</a>, started by an authorized caller or by a signed event from a trusted event source, and keeps each <a href="#run">run</a> going across outages and restarts. Every product it calls keeps its own authority and data, and the Coordinator is never a review provider. See the <a href="../../start/coordinator/">Registry Coordinator overview</a>.</dd>
+  <dd>The workflow product: it runs a reviewed <a href="#workflow">workflow</a> of product calls and <a href="#wait">waits</a>, started by an authorised caller or by a signed event from a trusted event source, and keeps each <a href="#run">run</a> going across outages and restarts. Every product it calls keeps its own authority and data, and the Coordinator is never a review provider. See the <a href="../../start/coordinator/">Registry Coordinator overview</a>.</dd>
 
   <dt id="registry-discovery">Registry Discovery</dt>
   <dd>A curated, read-only index that tells an application which Evidence types meet a requirement and which Registry Evidence services assert them. It holds no credentials and vouches for no provider; trust stays with the application. See the <a href="../../start/discovery/">Registry Discovery overview</a>.</dd>
@@ -198,7 +198,7 @@ Product names are always in English, including on future translated pages.
   <dd>The Rust library and `registry-manifest` command that check one portable `metadata.yaml` and render it into standards-shaped metadata, without running a service. See the <a href="../../products/registry-manifest/">Registry Manifest overview</a>; the <a href="../../products/registry-manifest/reference/">Registry Manifest reference</a> is authoritative for the current top-level keys.</dd>
 
   <dt id="registry-messaging">Registry Messaging</dt>
-  <dd>The notification product: it sends one message to one destination over one channel for an authorized caller, rendered from a reviewed template through an operator-configured provider, and reports what is known about delivery. Why and when to send, to whom, and whether the person agreed to be contacted stay with the caller. See the <a href="../../start/messaging/">Registry Messaging overview</a>.</dd>
+  <dd>The notification product: it sends one message to one destination over one channel for an authorised caller, rendered from a reviewed template through an operator-configured provider, and reports what is known about delivery. Why and when to send, to whom, and whether the person agreed to be contacted stay with the caller. See the <a href="../../start/messaging/">Registry Messaging overview</a>.</dd>
 
   <dt id="registry-project">registry project</dt>
   <dd>The directory of YAML files an adopter writes for one Base Registry Engine registry: `registry.yaml` plus optional <a href="#module">modules</a> and <a href="#journey">journeys</a>. `bregctl` checks, tests, and packages it. See <a href="../../configure/breg/">Author a registry project</a>.</dd>
@@ -207,7 +207,7 @@ Product names are always in English, including on future translated pages.
   <dd>The document rendering product: it renders PDF documents from registry data through Typst, byte for byte the same for the same inputs, as a service with an audit journal or as a command line for authoring and counter printing. See the <a href="../../start/registry-render/">Registry Render overview</a>.</dd>
 
   <dt id="registry-scheduling">Registry Scheduling</dt>
-  <dd>The booking product: it publishes bookable services over supply the operator anchored and gives authorized callers short <a href="#hold">holds</a> and confirmed <a href="#appointment">appointments</a>, with every capacity decision made in one transaction under a <a href="#task-grant">task grant</a>. See the <a href="../../start/scheduling/">Registry Scheduling overview</a>.</dd>
+  <dd>The booking product: it publishes bookable services over supply the operator anchored and gives authorised callers short <a href="#hold">holds</a> and confirmed <a href="#appointment">appointments</a>, with every capacity decision made in one transaction under a <a href="#task-grant">task grant</a>. See the <a href="../../start/scheduling/">Registry Scheduling overview</a>.</dd>
 
   <dt id="registry-source-profile">`Registry-Source-Profile`</dt>
   <dd>The header a Casework reviewer sends to select the source's access profile for work whose context comes from a <a href="#context-provider">context provider</a>, which reads under that profile and the reviewer's own credential. Producer, policy, and accountability routes refuse it.</dd>
@@ -246,13 +246,13 @@ Product names are always in English, including on future translated pages.
   <dd>An `after` URL observer for `appointment.confirmed`, `appointment.rescheduled`, or `appointment.cancelled`. It receives a closed projection of the <a href="#appointment">appointment</a> after the capacity transaction commits and cannot change the outcome.</dd>
 
   <dt id="sd-jwt-vc">SD-JWT VC</dt>
-  <dd>Selective Disclosure JWT Verifiable Credential (IETF draft), the second serialization Registry Evidence offers for the same stateless <a href="#assertion">assertion</a> under its frozen profile. It adds no credential lifecycle. Media type: `application/dc+sd-jwt`.</dd>
+  <dd>Selective Disclosure JWT Verifiable Credential (IETF draft), the second serialisation Registry Evidence offers for the same stateless <a href="#assertion">assertion</a> under its frozen profile. It adds no credential lifecycle. Media type: `application/dc+sd-jwt`.</dd>
 
   <dt id="selector-profile">selector profile</dt>
   <dd>The bound on what a caller may send to identify a subject in a Registry Evidence request, declared in the <a href="#evidence-project">Evidence project</a>: the fields, their sizes, and the aggregate limit. A <a href="#source">source</a> takes its request values only from those fields.</dd>
 
   <dt id="source">source</dt>
-  <dd>An <a href="#evidence-project">Evidence project</a> binding that selects a reviewed Adapter pack route, one named connection and explicit authorized selector inputs. The route acquires and normalizes facts within bounded read authority. Registry Evidence supplies the credential its <a href="#target">target</a> binds to the connection, never the caller's.</dd>
+  <dd>An <a href="#evidence-project">Evidence project</a> binding that selects a reviewed Adapter pack route, one named connection and explicit authorised selector inputs. The route acquires and normalises facts within bounded read authority. Registry Evidence supplies the credential its <a href="#target">target</a> binds to the connection, never the caller's.</dd>
 
   <dt id="stage">stage</dt>
   <dd>One step of a <a href="#review-policy">ReviewPolicy</a>, run in order, naming its <a href="#queue">queue</a>, the profiles that may decide, and how many independent reviewers must approve.</dd>

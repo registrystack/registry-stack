@@ -43,7 +43,7 @@ and one or more alternatives. Each alternative is a list of Evidence types that 
 together; the application satisfies the requirement by meeting any one alternative.
 
 A resolve request matches a mapping by its exact requirement and jurisdiction. Identifiers are
-compared exactly, with no normalization, so a request for another jurisdiction finds nothing
+compared exactly, with no normalisation, so a request for another jurisdiction finds nothing
 rather than a near match. Every alternative carries the `mappingId` and the `mappingAuthorityId`,
 the body that stated the mapping.
 
@@ -111,7 +111,7 @@ endpoint or a type changes the binding, and any change to what a record says cha
 `catalogRevision`. An application that
 saved a selection can renew it from a fresh search only when everything that bears on trust is
 unchanged: the service, endpoint, roles, jurisdictions, capability, mapping, and origin. Fetch
-provenance and the catalog revision may move. Any other change asks the application's policy to
+provenance and the catalogue revision may move. Any other change asks the application's policy to
 accept the selection again.
 
 {/* Evidence: crates/registry-discoveryctl/src/build.rs, fetch loop and sha256_digest();

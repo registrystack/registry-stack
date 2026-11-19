@@ -36,8 +36,8 @@ The register lists every specification, its role, how true it is against shipped
 
 Every specification carries three independent axes. [RS-DOC](rs-doc/) defines them in full; in short:
 
-- **Category** is the document's role. `normative` defines required behavior; `informative` explains it. A requirement only binds when it is in a normative document.
-- **Evidence** is how true the document is against shipped code. `verified` is backed by code, tests, fixtures, or generated artifacts; `partial` mixes shipped and target behavior; `aspirational` describes a target state that is not built yet. A `normative` plus `aspirational` document is the design for behavior that does not exist yet, and it says so at the top.
+- **Category** is the document's role. `normative` defines required behaviour; `informative` explains it. A requirement only binds when it is in a normative document.
+- **Evidence** is how true the document is against shipped code. `verified` is backed by code, tests, fixtures, or generated artifacts; `partial` mixes shipped and target behaviour; `aspirational` describes a target state that is not built yet. A `normative` plus `aspirational` document is the design for behaviour that does not exist yet, and it says so at the top.
 - **Status** is the lifecycle state: `draft`, `current`, `historical`, or `deprecated`.
 
 Start with [RS-DOC](rs-doc/) for how this layer works, then [RS-TERMS](rs-terms/) for the shared vocabulary the other specifications build on.

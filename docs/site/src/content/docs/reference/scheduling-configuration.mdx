@@ -298,7 +298,7 @@ Once a client is listed, a token it exchanged is accepted only for one of that c
 authorities, so an assertion minted by an unrelated authority the issuer happens to federate cannot
 become a booking credential here.
 
-Scopes authorize reads only.
+Scopes authorise reads only.
 Every commitment takes its authority from a task grant, described in
 [Registry Scheduling task grants](../scheduling-task-grants/).
 [Request an access token](../../configure/request-an-access-token/) covers the per-resource
@@ -317,7 +317,7 @@ policy, lifetime, and safe diagnostics.
 
 ### Operational appointment read profiles
 
-`authentication.oidc.appointmentReadProfiles` is an optional map of separately authorized
+`authentication.oidc.appointmentReadProfiles` is an optional map of separately authorised
 operational roles.
 An absent or empty map grants no cross-owner appointment access.
 Each role selects one distinct OAuth scope and explicit service and location permissions.
@@ -356,7 +356,7 @@ Restrict both projection and export storage to the operational need.
 
 `GET /v1/operational/appointments` requires service, location, start, end, and `timeBasis`
 (`displayed` or `occupied`).
-`profile` selects exactly one authorized role.
+`profile` selects exactly one authorised role.
 Optional offering, state, resource, and exact external-reference filters only narrow it.
 A continuation preserves the verified caller, role, and query; it cannot widen scope.
 Each request spans at most 62 days, and the selected profile may impose tighter past, future, and
@@ -377,7 +377,7 @@ later policy never relabels it.
 
 `authentication.oidc.busyImportProfiles` is an optional map of calendar or workforce systems that
 contribute resource availability facts.
-An absent map keeps the booking behavior unchanged.
+An absent map keeps the booking behaviour unchanged.
 Each profile binds one unique `sourceId` to a write scope and an explicit resource set.
 Busy profiles may share a write scope, but every request must select exactly one profile, and a
 busy write scope cannot reuse the read, explain, or operational appointment scope.
@@ -497,7 +497,7 @@ answer leaves open.
 
 ## Audit
 
-`audit.hashKeyRef` supplies the key that pseudonymizes principals and grants in audit entries and
+`audit.hashKeyRef` supplies the key that pseudonymises principals and grants in audit entries and
 in hold and appointment history.
 It decides no ownership: a claim is owned by the verified issuer and subject that made it, stored
 on the claim, so rotating the key leaves every existing claim with its owner, its listing, and its
@@ -537,7 +537,7 @@ A commitment nothing decided still answers its `request` entry.
 A transaction rolled back on a failure, records replaced under it, or a reused or expired
 idempotency key writes a `response` with the outcome `unfinished` and the reason
 `commitment.failed`, `commitment.facts-stale`, `idempotency.key-reused`, or `idempotency.expired`.
-A commitment that returns or is canceled before answering writes `commitment.unfinished`.
+A commitment that returns or is cancelled before answering writes `commitment.unfinished`.
 
 A capacity commit that is not acknowledged is read back by its transaction identifier on a
 separate connection that changes nothing:
@@ -570,8 +570,8 @@ envelope with `content-type: application/json` over HTTPS POST (see
 `bearerTokenRef` as the optional bearer secret.
 The independent optional `hmacSha256KeyRef` enables the shared signed CloudEvents delivery
 contract and must resolve to a key of at least 32 bytes.
-Destinations without this key keep their unsigned behavior.
-Signed destinations can also use bearer authentication; receiving an event does not authorize
+Destinations without this key keep their unsigned behaviour.
+Signed destinations can also use bearer authentication; receiving an event does not authorise
 downstream capacity changes or message delivery.
 
 `url` is the fallback endpoint.
@@ -598,7 +598,7 @@ silently point at another machine.
 Delivery runs on the shared dispatch core, with a five-second attempt timeout and a fixed back-off
 of thirty seconds doubling to 1920 seconds.
 A transport failure schedules a retry.
-An authorization or routing refusal sets the intent aside as failed for the operator.
+An authorisation or routing refusal sets the intent aside as failed for the operator.
 The eighth failed attempt sets it aside.
 An event the destination accepted but whose outcome the runtime could not record is retried on the
 same schedule, so a receiver can see it more than once and deduplicates by the envelope's stable

@@ -188,7 +188,7 @@ Listed the newest import authorities. 1 authority.
 ```
 
 A Record type holds at most one open window, and each window admits at most one `open` or
-`blocked` run. Completion or an authorized cancellation lets that still-valid window admit a
+`blocked` run. Completion or an authorised cancellation lets that still-valid window admit a
 later run. A window also ends when you close it with
 `bregctl import-authority close --authority-id <authority-id>`, when it expires, or when another
 package is activated (`superseded`). Run `bregctl import-authority close-expired` on a schedule to
@@ -275,7 +275,7 @@ checkpoint, drive its routes directly, as the
 | Lost response after a commit | Reread the run and replay the exact chunk; the original receipt returns. |
 | Transport interruption | Resubmit the chunk `nextChunkIndex` names. |
 | Invalid item or business refusal | The checkpoint stays; continue the remainder in a successor run. Rows are never skipped by default. |
-| Authorization lost | The run makes no progress. |
+| Authorisation lost | The run makes no progress. |
 | Package or schema binding changed | The run blocks; continue in a successor run. |
 | Import window closed, expired, exhausted, or superseded | The run blocks; open a new window and continue the uncommitted remainder in a successor run. |
 | Another open or blocked run holds the window | List runs with `bregctl data runs list`; the creator cancels the duplicate, then announces again. |
@@ -305,7 +305,7 @@ stays for the life of the database, so a run stays inspectable and its committed
 accountable. The raw creator values appear in no run or audit response; audit records carry a
 keyed pseudonym.
 
-A chunk receipt holds what the batch route answers the same authorized caller with. It is erased
+A chunk receipt holds what the batch route answers the same authorised caller with. It is erased
 when the record history it describes is erased, through the revision the erasure names. A receipt
 that describes only later revisions of the same record survives. A later read, or an exact replay
 of that chunk, answers `410 ingestion.receipt_erased`, and the chunk and its counts stay in the

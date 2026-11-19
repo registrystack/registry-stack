@@ -17,7 +17,7 @@ service you call instead of assuming codes or response shapes carry across produ
 
 Use the owning route contract to decide whether an operation completed, was refused, or has an
 unknown outcome.
-A shared envelope does not change a product's authorization, concealed existence, or retry semantics.
+A shared envelope does not change a product's authorisation, concealed existence, or retry semantics.
 
 ## Problem envelope
 
@@ -25,7 +25,7 @@ The common RFC 9457 response is `application/problem+json` with six fields:
 
 | Field | Contract |
 | --- | --- |
-| `type` | Absolute opaque problem URI owned by the product. Never dereference it to authorize recovery. |
+| `type` | Absolute opaque problem URI owned by the product. Never dereference it to authorise recovery. |
 | `title` | Fixed safe category text. |
 | `status` | Integer equal to the HTTP status. |
 | `detail` | Fixed safe guidance, with no submitted or source values. |
@@ -147,7 +147,7 @@ No data-endpoint probes are added to readiness.
 
 An indeterminate outage, a deterministic non-retryable failure, or a readiness contract without a known interval need not carry it.
 Clients preserve absent, invalid, and bounded interval states; waiting remains a caller decision.
-A header never authorizes a fresh-key repeat of an uncertain mutation.
+A header never authorises a fresh-key repeat of an uncertain mutation.
 Client retry rules are in the client crates' documentation.
 
 {/* TODO[evidence]: the `Retry-After` and no-source-probe readiness claims are carried from the source; no single test anchors them. */}
@@ -185,7 +185,7 @@ closed set; a refusal for a spent budget or a full presentation store is `503` o
 
 ## Retired Relay codes
 
-Registry Relay and its problem-code catalog were retired in Registry Stack 0.39.0. Existing
+Registry Relay and its problem-code catalogue were retired in Registry Stack 0.39.0. Existing
 integrations can use the immutable 0.38.0 documentation while planning a replacement. See the
 [Relay retirement decision](../../decisions/registry-relay-retirement-2026-10-03/).
 

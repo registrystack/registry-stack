@@ -52,9 +52,9 @@ its scopes or write `unrestricted`.
     crates/registry-messaging/tests/postgres_messages.rs
     a_message_is_visible_to_its_submitter_and_an_operator_only. */}
 
-### Authorization
+### Authorisation
 
-Authorization is decided against the one access profile the verified client resolves to, never
+Authorisation is decided against the one access profile the verified client resolves to, never
 against raw claims.
 A sender submits only through the sender profiles and templates its profile lists, and direct
 content only where `allowDirectContent` is set.
@@ -62,7 +62,7 @@ Operators never submit.
 A message is visible to the principal that submitted it (same issuer and subject) and to operator
 profiles; a missing message answers exactly like an invisible one, so an identifier cannot be
 probed.
-A replay is authorized and rendered again against the active package before the stored receipt is
+A replay is authorised and rendered again against the active package before the stored receipt is
 returned, so a key cannot outlive the caller's authority.
 
 {/* Evidence: crates/registry-messaging/src/http.rs
@@ -168,7 +168,7 @@ changes nothing.
 A send that may have reached the provider stops the message as `unknown` rather than retrying,
 unless the sender profile sets `onUncertain: retry`, which the package accepts only over a provider
 that declares `idempotentSubmit` or a profile that sets `acceptDuplicates`.
-A cancel and a claim serialize on the job row; a message whose current attempt may have reached the
+A cancel and a claim serialise on the job row; a message whose current attempt may have reached the
 provider is refused `409 message.dispatch-started`.
 (MESSAGING-SEC-05, MESSAGING-SEC-06)
 
@@ -198,7 +198,7 @@ per-run key.
 Every generated secret and every test token lives in the run's owner-only directory outside the
 project, so the project is never written to, and no secret is placed on a command line.
 A test token is signed with the run's own throwaway key and expires in minutes, and the runtime
-still authorizes every protected route.
+still authorises every protected route.
 The run never contacts a real provider.
 
 {/* Evidence: crates/registry-rstack-dev/src/messaging.rs;
@@ -443,10 +443,10 @@ rows.
     crates/registry-messaging/src/http_provider/mod.rs freeze_oauth, assumed_lifetime_seconds;
     products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-03. */}
 
-### MESSAGING-RES-07: SMTP credentials are not zeroized
+### MESSAGING-RES-07: SMTP credentials are not zeroised
 
 - Condition: lettre's `Credentials` holds the username and password as plain `String` values that
-  are not zeroized on drop, unlike the runtime's own protected secrets.
+  are not zeroised on drop, unlike the runtime's own protected secrets.
   They live for the life of the process.
   The EHLO name is lettre's address literal `[127.0.0.1]` and is not configurable.
 - Consequence: a process memory dump can reveal the relay credential.

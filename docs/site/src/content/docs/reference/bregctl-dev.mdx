@@ -148,7 +148,7 @@ the same authored project, ports, credentials, and package.
 It also lets the next start take edited inputs: once no records are retained, a changed package,
 clients file, or port ([what counts as changed](#retained-state-and-recovery)) replaces the session
 with a fresh one that keeps the previous ports and clients file and generates new keys.
-A successor package prepared for retained records cannot initialize an empty database after
+A successor package prepared for retained records cannot initialise an empty database after
 removal: start refuses before Docker.
 Create a fresh project at package sequence 1 for a separate empty experiment.
 
@@ -426,7 +426,7 @@ When no client is left to name in `allowedClients` (every client is profile-free
 `allowBregAccess`), the session writes `allowedClients: unrestricted`, so the runtime accepts a
 token from every client of its local issuer.
 The local issuer is the only issuer the session trusts, and governed profiles and token scopes still
-authorize each call.
+authorise each call.
 
 An integration client that must call BReg without becoming a journey or seed binding must opt in
 with `allowBregAccess: true`.
@@ -551,7 +551,7 @@ Dev settles that terminal authority, retains its checkpoint, and opens a fresh a
 Before asking to open an authority, dev records in its state that the seed is about to open one, and
 when.
 An interruption after the authority opened but before the session recorded it leaves an open
-authority no local state names; the next start recognizes the exact one-item, zero-progress
+authority no local state names; the next start recognises the exact one-item, zero-progress
 authority this seed would have opened, opened no earlier than that recorded intent, closes it, and
 opens a fresh one.
 Any other open authority on the Record type, including an identical one opened before the intent or
@@ -652,7 +652,7 @@ Plain `init` includes a dedicated `source` client for the existing lookup-only `
 profile.
 That profile permits whole-registry exact lookups by code, reads code and status, and grants no list
 or mutation operation.
-A supplied code is not a row authorization rule.
+A supplied code is not a row authorisation rule.
 Custom models, including `init --from`, can start without an Evidence lookup or client.
 Add one later through [the explicit preparation](#prepare-a-source-after-using-a-registry).
 
@@ -1009,7 +1009,7 @@ reclaimable once the container is gone.
     a_comment_in_a_handler_script_is_a_change_because_the_package_ships_its_bytes,
     a_byte_only_edit_keeps_the_session_that_holds_records. */}
 
-### Behavior by action and condition
+### Behaviour by action and condition
 
 - First start: captures the authored closure, prepares private identities, creates the owned
   database, runs the normal schema-test, package, apply, and verify commands, then seeds through
@@ -1045,7 +1045,7 @@ reclaimable once the container is gone.
   Retry the same command after correcting the prerequisite.
   The separate schema-test database may be recreated for a failed rehearsal.
 - Missing or mismatched owned container: refuses.
-  Never silently initializes an empty replacement or stops another container.
+  Never silently initialises an empty replacement or stops another container.
 - Unreachable supervisor with an occupied service port: refuses.
   Never signals a stored PID that could belong to another process.
   Inspect the process owning the port before recovery.
@@ -1114,7 +1114,7 @@ On an initial start, the pre-apply doctor may report `startup.database.unready`,
 Dev treats these expected not-yet-activated results as the cue for the initial package application,
 preserves the raw doctor report as private `evidence/doctor-before-apply.json`, and does not copy it
 into failure logs.
-A standalone doctor run and the post-apply doctor keep their ordinary success or failure behavior.
+A standalone doctor run and the post-apply doctor keep their ordinary success or failure behaviour.
 
 {/* Evidence: crates/registry-bregctl/src/dev/tests.rs a_refused_native_command_names_its_first_failing_check_within_a_bound,
     a_refused_schema_test_reports_the_check_that_failed_beside_the_report_log,

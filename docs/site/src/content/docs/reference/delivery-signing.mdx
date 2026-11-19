@@ -27,7 +27,7 @@ One JSON fixture of signed deliveries is shared by the Rust, Node, and Python te
 Pass the exact method, request target, signed headers, and body bytes.
 The signature authenticates the raw delivery-time bytes before the shared verifier parses freshness.
 Valid RFC 3339 fractions such as `.12Z`, `.120Z`, and `.000Z` are accepted.
-Never normalize the timestamp before comparison: replacing `.120Z` with `.12Z` changes the signature even though it represents the same instant.
+Never normalise the timestamp before comparison: replacing `.120Z` with `.12Z` changes the signature even though it represents the same instant.
 Invalid times, changed signatures, and stale deliveries remain refused.
 
 {/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs verify_v1_authenticity;

@@ -35,7 +35,7 @@ Use this checklist after product configuration is valid and before exposing a de
 - Supply local-assurance private JWKs, HMAC keys, and source credentials through
   `secret:file/<name>` references below `secretProviders.file.root`. The file provider accepts only
   regular, non-symlink files owned by the service identity at mode `0400` or `0600`, and checks
-  owner, mode, link count, no-follow behavior, and open-file identity. Keep the secret root
+  owner, mode, link count, no-follow behaviour, and open-file identity. Keep the secret root
   operator-only.
 - Prefer the file provider with a secret root dedicated to the deployment. Enable
   `secretProviders.environment: {}` only for a dedicated, curated process environment. Review each
@@ -87,7 +87,7 @@ Use this checklist after product configuration is valid and before exposing a de
    Archive service and operator audit streams, and test the separate database restore and payload
    retention procedures with synthetic data.
 
-Treat a failed negative test as an authorization or deployment defect.
+Treat a failed negative test as an authorisation or deployment defect.
 Correct the responsible policy, grants, or credentials and rerun it before exposing traffic.
 
 {/* Evidence: crates/registry-breg/src/startup.rs; crates/registry-breg/src/auth.rs;
@@ -169,7 +169,7 @@ Correct the responsible policy, grants, or credentials and rerun it before expos
   ignores `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`, follows no redirect, and
   has no application proxy setting.
 
-## Authorization and disclosure
+## Authorisation and disclosure
 
 - Review scopes, access profiles, source requests, and disclosure rules as governed input.
 - Exercise missing, expired, wrongly issued, and insufficiently scoped credentials.
@@ -201,7 +201,7 @@ deployments, signers, bundles, and audit boundaries.
 - Rotate a compromised source credential at the source and restart the affected process.
 - Preserve shipped audit copies and copy the entire local audit directory, including sealed files,
   before retention removes them.
-- A `403 evidence.denied` deliberately does not identify the failed authorization check. Inspect
+- A `403 evidence.denied` deliberately does not identify the failed authorisation check. Inspect
   trusted local configuration and the audit refusal phase: audience, matching grant, authority,
   purpose and subject roles, then response-format permission.
 
@@ -211,8 +211,8 @@ Before handoff, record:
 
 1. production configuration and package checks;
 2. authenticated and unauthenticated request results;
-3. audit failure behavior;
-4. source timeout and size-limit behavior;
+3. audit failure behaviour;
+4. source timeout and size-limit behaviour;
 5. backup and restore evidence; and
 6. the rollback trigger and responsible operator.
 
@@ -228,7 +228,7 @@ expectations, and confirm an audited request reaches the configured durable sink
 | Registry Evidence refuses a non-immutable input | The package, `runtime.yaml`, captured artifact, or CA bundle is writable, or the secret root is reachable by group or other | Freeze the package and target, tighten the secret root to `0700`, and restart |
 | Registry Evidence refuses an invalid bound source extract | The named extract is writable | Make the extract non-writable and restart |
 | A second Registry Evidence process reports a locked audit sink | Two processes share one `audit.path` | Use one writer per path or use distinct paths or `stdout` per replica |
-| Registry Evidence returns `403 evidence.denied` unexpectedly | Audience, grant, authority, purpose, subject, or format authorization failed | Check local configuration in the incident-response order and inspect the audit refusal phase |
+| Registry Evidence returns `403 evidence.denied` unexpectedly | Audience, grant, authority, purpose, subject, or format authorisation failed | Check local configuration in the incident-response order and inspect the audit refusal phase |
 
 ## Next
 

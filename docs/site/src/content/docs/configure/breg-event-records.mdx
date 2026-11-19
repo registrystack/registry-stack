@@ -19,7 +19,7 @@ You model an event record as an ordinary Record; the descriptor has no `event` m
 A Record type may declare that each of its Records is an event record.
 It states something that happened to one or more subjects, when it happened, when it took effect, what it rests on, and whether it corrects an earlier statement.
 The declaration is a descriptor over fields the Record type already stores.
-It adds no storage, no route, no grant and no behavior.
+It adds no storage, no route, no grant and no behaviour.
 It lets a compiler, an explanation, runtime metadata and a client read the same Record shape in one generic way.
 
 {/* Evidence: crates/registry-breg/src/event_record.rs descriptor_version;
@@ -290,7 +290,7 @@ The registry serves revision `createdAt` as RFC 3339 text ending in `Z`.
 
 Authored `timestamp` values are stored as instants and served in UTC with a `+00:00` offset: `2026-10-20T09:30:00+02:00` is read back as `2026-10-20T07:30:00+00:00`.
 The registry does not preserve the authored offset.
-The client event record view passes the served text through (only letter case is normalized: uppercase `T` separator and `Z` zone letter) and never converts a value to another zone.
+The client event record view passes the served text through (only letter case is normalised: uppercase `T` separator and `Z` zone letter) and never converts a value to another zone.
 
 {/* Evidence: crates/registry-breg/tests/postgres_event_record_reader.rs an_action_created_record_has_a_readable_creation_revision;
     crates/registry-breg-client/tests/event_record_view.rs recordedAtSource;
@@ -319,7 +319,7 @@ The view carries these members:
   `recordedAtSource` is always `creation-revision`.
 - `provenance`: one entry for each distinct item of supplied evidence that names this exact Record revision.
   An ActionReceipt entry carries `action`, `applicationId` and `effect`.
-  A Proposal application entry carries `applicationId`, `submissionVersion`, and `appliedAt` (an RFC 3339 instant, normalized like every other instant) and `appliedBy` when stated.
+  A Proposal application entry carries `applicationId`, `submissionVersion`, and `appliedAt` (an RFC 3339 instant, normalised like every other instant) and `appliedBy` when stated.
   Evidence repeated by the caller yields one entry, in first-seen order.
 - `ignoredEvidence`: evidence that does not name this exact Record revision, with `reason` `revision-mismatch` (same Record, other revision) or `no-matching-result`.
   Ignored evidence never contributes provenance.
@@ -375,7 +375,7 @@ Declare a descriptor over a mutable Record type only when its fields may change;
 ## Display purpose and grouping
 
 Record types and Actions may declare `display.purpose` and `display.group`.
-They are presentation only: they never grant, hide, order execution, gate activation or change Action, Access or Proposal behavior.
+They are presentation only: they never grant, hide, order execution, gate activation or change Action, Access or Proposal behaviour.
 A missing declaration gives an ungrouped list with no purpose claim; purpose is never inferred from a name, route or mutation mode.
 
 ```yaml
@@ -413,7 +413,7 @@ A group with one member is valid, groups may mix purposes, and a Record type and
 Grouping is excluded from Record and Action definition revisions, migration review revisions and Proposal fingerprints; it is included in the effective model, so it changes the registry revision.
 It is reported by `bregctl explain model` (`v1alpha7`) and not by runtime metadata.
 
-A consumer shows `grouping: null` as ungrouped with no badge, shows a `group` without a `purpose` as grouped with no badge, and shows an unrecognized future `purpose` as unsupported while keeping the item visible.
+A consumer shows `grouping: null` as ungrouped with no badge, shows a `group` without a `purpose` as grouped with no badge, and shows an unrecognised future `purpose` as unsupported while keeping the item visible.
 Grouping never hides an item.
 
 {/* Evidence: crates/registry-breg/tests/event_record_compiler.rs display_purpose_and_group_are_validated_on_records_and_actions_only;
@@ -423,7 +423,7 @@ Grouping never hides an item.
 ## Write event records with Actions
 
 Writing an event record is an ordinary create-only Action: one or more effects, an idempotency key, and commit guards.
-The observed behavior is:
+The observed behaviour is:
 
 - A failed guard returns `412 action.guard_failed`, with `guardReason` when the caller may read every guard fact.
 - A violated unique source-event constraint returns `409 mutation.conflict`.

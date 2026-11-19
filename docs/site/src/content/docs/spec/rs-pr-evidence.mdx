@@ -27,7 +27,7 @@ audience:
 This document defines the HTTP protocol contract that Registry Evidence exposes: how a caller authenticates,
 discovers the request shapes it may invoke, submits one closed singular request or bounded request
 batch against a predefined requirement, and receives the smallest sufficient assertions in the
-authorized response envelope, plus the problem, audit, and configuration-immutability behavior
+authorised response envelope, plus the problem, audit, and configuration-immutability behaviour
 every request carries.
 Registry Evidence is a minimum-disclosure assertion service over data institutions already hold.
 It returns the answer a requirement asks for, not the record behind it.
@@ -58,26 +58,26 @@ Defined terms are used per [RS-TERMS](../rs-terms/).
 | 0.1.0 | 2026-08-03 | draft | Initial profile derived from the frozen V1 contracts. |
 | 0.2.0 | 2026-08-04 | draft | Registry Notary is retired. Removed the RS-PR-NOTARY relationship statements and the `registry-notary*` dependency prohibition, and recorded that RS-ARC-G 0.6.0 now places Registry Evidence in the architecture. |
 | 0.3.0 | 2026-08-05 | draft | Added the governed assurance-profile boundary, corrected the evaluation pipeline and three-format response surface, and specified bounded startup verification plus complete out-of-band verification for segmented audit history. |
-| 0.4.0 | 2026-08-06 | draft | Added the fail-closed, privacy-safe audit gate for authenticated authorization refusals and distinguished its minimal event from authorized-material events. |
+| 0.4.0 | 2026-08-06 | draft | Added the fail-closed, privacy-safe audit gate for authenticated authorisation refusals and distinguished its minimal event from authorised-material events. |
 | 0.5.0 | 2026-08-07 | draft | Added the closed single and search-then-fetch acquisition kinds, the hard one-request-per-stage and two-request-per-evaluation ceilings, validated prior-fact handoff, and per-stage access audit. |
 | 0.6.0 | 2026-08-08 | draft | Added Section 7.3, the holder-bound subject binding mode, its batch release envelope, and relying-party presentation verification (REQ-PR-EVIDENCE-060 through REQ-PR-EVIDENCE-069). Scoped REQ-PR-EVIDENCE-024, REQ-PR-EVIDENCE-037, REQ-PR-EVIDENCE-038, REQ-PR-EVIDENCE-040, and REQ-PR-EVIDENCE-041 to the audience-scoped mode without renumbering them. |
-| 0.7.0 | 2026-08-09 | draft | Added Section 7.4, the bounded multi-subject request batch, ordered signed-JWS outcomes, atomic admission and release, and the optional source-batch optimization (REQ-PR-EVIDENCE-070 through REQ-PR-EVIDENCE-075). |
+| 0.7.0 | 2026-08-09 | draft | Added Section 7.4, the bounded multi-subject request batch, ordered signed-JWS outcomes, atomic admission and release, and the optional source-batch optimisation (REQ-PR-EVIDENCE-070 through REQ-PR-EVIDENCE-075). |
 | 0.8.0 | 2026-08-14 | draft | Added the exact packaged public provider advertisement, distinguished it from requester-scoped definition discovery and verifier trust, and aligned the primary and private metrics listener route inventories. |
 | 0.8.1 | 2026-09-25 | draft | Replaced the chain-head recovery and `evidence verify-audit` obligations in REQ-PR-EVIDENCE-051 with the single-writer, fail-closed audit writer and operator shipping to append-only storage. |
 
 ## 1. Scope and references
 
-This specification covers Registry Evidence's externally observable protocol behavior:
+This specification covers Registry Evidence's externally observable protocol behaviour:
 
 - The service surface, the generated OpenAPI document, public provider publication, and
   requester-scoped definition discovery.
-- Authentication of callers and the single authorization decision that gates a request.
+- Authentication of callers and the single authorisation decision that gates a request.
 - The governed assurance profile and its local-only authoring exceptions.
 - The closed request contract and the request nonce.
 - Evaluation, the four coequal acceptance definitions, and the output gate.
-- Disclosure minimization, subject binding, and the combined-bundle disclosure surface.
+- Disclosure minimisation, subject binding, and the combined-bundle disclosure surface.
 - The four response formats: the signed JSON Web Signature (JWS) assertion, the separately typed
-  unsigned envelope, the SD-JWT VC (SD-JWT-based Verifiable Credentials) serialization of the
+  unsigned envelope, the SD-JWT VC (SD-JWT-based Verifiable Credentials) serialisation of the
   same assertion, and the holder-bound issuance batch envelope that carries one credential per
   presented holder key.
 - The signed-JWS-only request-batch envelope that carries ordered outcomes for several
@@ -85,14 +85,14 @@ This specification covers Registry Evidence's externally observable protocol beh
 - The two subject binding modes, and the relying-party presentation verification the holder-bound
   mode requires.
 - The problem contract, including existence collapse.
-- The authorization-refusal gate and the two authorized-material audit gates.
+- The authorisation-refusal gate and the two authorised-material audit gates.
 - The immutability of deployment input.
 
 This specification does not define:
 
 - Exact routes and schemas: The generated OpenAPI document,
   `products/evidence/generated/registry-evidence.openapi.json`, is the authoritative route and schema
-  reference. This document states behavior a schema cannot, and does not restate request and response
+  reference. This document states behaviour a schema cannot, and does not restate request and response
   shapes that would drift from the generated source.
 - Bundle authoring: How an operator declares requirements, selector profiles, authority profiles,
   sources, and scripts belongs to `products/evidence/contracts/bundle.schema.yaml` and the trusted
@@ -110,10 +110,10 @@ Registry Evidence Version 1 has explicit non-goals, recorded in
 It stops before documents, credential issuance protocols and credential lifecycle, status lists and
 revocation, OpenID for Verifiable Credential Issuance (OID4VCI) in any part, service-held replay,
 challenge, or presentation state, server-issued challenges, federation, delegated agents, workflow,
-a public requester-entitlement or definition catalog, searchable, mutable, aggregate, or federated
-catalogs, runtime bundle mutation, source planning, multi-source fulfillment, and an application
+a public requester-entitlement or definition catalogue, searchable, mutable, aggregate, or federated
+catalogues, runtime bundle mutation, source planning, multi-source fulfilment, and an application
 database. The closed public provider advertisement is allowed because Registry Evidence serves
-package-derived facts for external indexing and implements no catalog runtime.
+package-derived facts for external indexing and implements no catalogue runtime.
 The SD-JWT VC output is a second encoding of one stateless assertion under a frozen profile; it is
 never a credential lifecycle.
 Presentation-side verification is a relying-party act, not a service surface: Section 7.3 specifies
@@ -169,7 +169,7 @@ Neither document is a trust anchor: a verifier MUST pin the provider identity an
 governed verifier configuration (`products/evidence/contracts/jws-profile.yaml`,
 `products/evidence/contracts/sd-jwt-vc-profile.yaml`).
 
-## 3. Authentication and authorization
+## 3. Authentication and authorisation
 
 Registry Evidence accepts access tokens from one OIDC issuer, `authentication.oidc`, whose issuer, single
 audience, accepted token types, algorithms, fixed JWKS URI, and claim paths are fixed in the immutable bundle
@@ -184,7 +184,7 @@ REQ-PR-EVIDENCE-006: The principal MUST derive only from the one configured prin
 A missing claim MUST deny, with no client-identifier, authorized-party, header, or request fallback
 (`products/evidence/contracts/authority-context.schema.yaml`, invariant `V1-I04`).
 
-REQ-PR-EVIDENCE-007: One authorization decision MUST cover the complete singular request.
+REQ-PR-EVIDENCE-007: One authorisation decision MUST cover the complete singular request.
 The exact inputs are the principal, the optional actor, the exact requirement revision, the purpose,
 the audience, the authority profile and kind, the optional authenticated grant identifier, and the
 complete set of role, selector-profile, and value-origin tuples.
@@ -193,7 +193,7 @@ resolution or source access (`products/evidence/contracts/authority-context.sche
 `V1-I05`).
 
 REQ-PR-EVIDENCE-008: Caller data MUST NOT create authority.
-Possession of an identifier or a demographic tuple MUST NOT authorize a lookup, and a caller-supplied
+Possession of an identifier or a demographic tuple MUST NOT authorise a lookup, and a caller-supplied
 consent, approval, or grant reference MUST NOT escalate authority; a grant identifier is accepted
 only from authenticated context and must already be bound to the matched entitlement
 (`products/evidence/contracts/selector-contract.yaml`,
@@ -213,7 +213,7 @@ REQ-PR-EVIDENCE-011: Rate controls MUST be applied per principal using the confi
 and failed-selector limits in `products/evidence/contracts/bundle.schema.yaml`.
 Request-batch admission MUST charge the complete item count atomically under
 REQ-PR-EVIDENCE-070.
-They are defense in depth: bundle-combination validation under REQ-PR-EVIDENCE-025 remains mandatory
+They are defence in depth: bundle-combination validation under REQ-PR-EVIDENCE-025 remains mandatory
 independently of any configured rate limit (invariant `V1-I20`).
 
 ## 4. Request contract
@@ -235,20 +235,20 @@ nonce in the canonical form fixed by `products/evidence/contracts/request.schema
 `products/evidence/contracts/request-batch.schema.yaml`, generated independently per evaluation by
 a cryptographically secure random source.
 Registry Evidence MUST echo it into the assertion payload and cover it by the signature, and MUST NOT store
-it, uniqueness-check it, or expose it to authorization, rate limits, scripts, source requests, logs,
+it, uniqueness-check it, or expose it to authorisation, rate limits, scripts, source requests, logs,
 metrics, traces, or native audit (invariant `V1-I27`).
 Nonce reuse is not rejected, so the nonce is transaction binding only for a relying party that
 independently retained the original request (`products/evidence/contracts/evidence.schema.yaml`).
 
 REQ-PR-EVIDENCE-015: Only a predefined requirement, at an exact enabled revision, MAY be evaluated.
-The request resolver MUST reject anything else before authorization, and unknown and unauthorized
-requirement identifiers MUST be indistinguishable to a caller lacking authorization
+The request resolver MUST reject anything else before authorisation, and unknown and unauthorised
+requirement identifiers MUST be indistinguishable to a caller lacking authorisation
 (invariant `V1-I01`, `products/evidence/contracts/problem-contract.yaml`).
 
 REQ-PR-EVIDENCE-016: Subject roles in a singular request or request-batch item MUST be resolved by
 name, not by array position.
 Duplicate, missing, unknown, or wrong-profile roles MUST fail before credential acquisition or source
-access, and accepted roles MUST be canonicalized to requirement declaration order
+access, and accepted roles MUST be canonicalised to requirement declaration order
 (`products/evidence/contracts/request.schema.yaml`,
 `products/evidence/contracts/selector-contract.yaml`).
 
@@ -271,12 +271,12 @@ flowchart LR
     request --> authz --> access --> prepare --> source --> derive --> gate --> sign --> release
 ```
 
-The diagram restates the ordering the contracts fix: authorization precedes audit, access audit and
+The diagram restates the ordering the contracts fix: authorisation precedes audit, access audit and
 validated preparation precede credential acquisition and source access, extraction precedes
 derivation, the output gate precedes evidence construction, and the disclosure-release audit
-precedes release of the exact serialized bytes.
+precedes release of the exact serialised bytes.
 
-REQ-PR-EVIDENCE-017: Rust MUST own authentication, authorization, minimized script inputs, fixed
+REQ-PR-EVIDENCE-017: Rust MUST own authentication, authorisation, minimised script inputs, fixed
 source execution, response projection, output validation, evidence construction, response protection,
 and audit.
 Scripts MUST be confined to the closed `prepare`, `extract`, `derive`, `prepare_batch`, and
@@ -287,14 +287,14 @@ Scripts MUST be confined to the closed `prepare`, `extract`, `derive`, `prepare_
 REQ-PR-EVIDENCE-018: Each requirement MUST declare exactly one closed acquisition kind: `single`,
 which executes one fixed evidence-data request, or `search-then-fetch`, which executes one fixed search
 and, only after a unique schema-valid match, one distinct fixed fetch.
-Each actual stage MUST follow successful authorization and its own durable access audit.
+Each actual stage MUST follow successful authorisation and its own durable access audit.
 Origin, method, path, fixed headers, authentication, TLS trust, redirect denial, proxy denial,
 timeout, response byte limit, concurrency, and the one-request-per-stage ceiling are fixed by trusted
 configuration and executed only by the core
 (`products/evidence/contracts/source-contract.yaml`, invariants `V1-I09` and `V1-I40`).
 Only the validated search FactSet MAY cross into fetch preparation, only final fetch facts MAY reach
 derivation, and no response or script MAY select transport or create a third request.
-The optional request-batch source optimization under REQ-PR-EVIDENCE-073 and
+The optional request-batch source optimisation under REQ-PR-EVIDENCE-073 and
 REQ-PR-EVIDENCE-074 changes only how several independent `single` evaluations share one physical
 HTTP call; it creates no additional acquisition kind or transport authority.
 
@@ -324,7 +324,7 @@ REQ-PR-EVIDENCE-022: Missing facts, undefined decisions, script failures, audit 
 evaluation failures MUST fail closed.
 Partial, stale, fabricated, or unaudited evidence MUST NOT be released (invariant `V1-I13`).
 
-## 6. Disclosure minimization
+## 6. Disclosure minimisation
 
 REQ-PR-EVIDENCE-023: The assertion MUST carry only the members declared by
 `products/evidence/contracts/evidence.schema.yaml`, which closes the payload and rejects additional
@@ -351,29 +351,29 @@ and startup bundle-combination validation MUST enforce the reviewed decision
 
 REQ-PR-EVIDENCE-026: Raw source responses MUST NOT be persisted or logged, and selector, source, and
 disclosed values MUST NOT appear in logs or native audit.
-Response ownership is bounded and in memory, with centralized structured-log redaction
+Response ownership is bounded and in memory, with centralised structured-log redaction
 (invariants `V1-I14` and `V1-I15`).
 
 REQ-PR-EVIDENCE-027: Purpose MUST NOT narrow disclosure.
-A requirement returns the same concepts and disclosure forms for every purpose authorized to invoke
+A requirement returns the same concepts and disclosure forms for every purpose authorised to invoke
 it; a purpose that justifies a coarser answer needs its own requirement and its own place in the
 combined disclosure review (`products/evidence/OPERATOR-CONTRACT.md`).
 
 ## 7. Response formats and signing
 
 Each Registry Evidence evaluation releases one stateless assertion.
-The bundle-level and grant-level `responseFormats` permission decides which serializations may carry
+The bundle-level and grant-level `responseFormats` permission decides which serialisations may carry
 it (`products/evidence/contracts/bundle.schema.yaml`).
 
 REQ-PR-EVIDENCE-028: On the singular evidence operation, the signed flattened JWS format MUST be
-available to every authorized grant and MUST be the default result.
+available to every authorised grant and MUST be the default result.
 The singular Accept matrix is closed and MUST be resolved before source access; the exact media
 types and their selection rules are fixed by `products/evidence/contracts/jws-profile.yaml`.
 Every response varies on Accept and remains no-store (invariant `V1-I21`).
 
 REQ-PR-EVIDENCE-029: A response format other than the signed default MUST be released only when both
 the immutable bundle and the one complete matched grant permit it.
-Format selection creates no permission, and a refusal MUST use the ordinary authorization problem
+Format selection creates no permission, and a refusal MUST use the ordinary authorisation problem
 without revealing which layer withheld it
 (`products/evidence/contracts/jws-profile.yaml`,
 `products/evidence/contracts/sd-jwt-vc-profile.yaml`, invariant `V1-I28`).
@@ -396,7 +396,7 @@ every response format (`products/evidence/contracts/jws-profile.yaml`, invariant
 ### 7.1 Signed flattened JWS
 
 REQ-PR-EVIDENCE-033: Every signed assertion, whether returned directly or nested in a request-batch
-item, MUST be a flattened JWS JSON serialization carrying exactly the members required by
+item, MUST be a flattened JWS JSON serialisation carrying exactly the members required by
 `products/evidence/contracts/jws-profile.yaml`, with the unprotected header prohibited.
 The protected header MUST carry exactly the allowlisted members with the allowlisted algorithm, and
 MUST NOT carry any of the key-reference or criticality members that file prohibits.
@@ -420,11 +420,11 @@ fallback from any signed-path failure.
 The strict JWS verifier MUST reject it, and Version 1 MUST NOT use an unsecured JWS, an empty
 signature, or a JWS-shaped unsigned object.
 
-### 7.2 SD-JWT VC serialization
+### 7.2 SD-JWT VC serialisation
 
-REQ-PR-EVIDENCE-037: The SD-JWT VC format MUST be a serialization of the same Version 1 assertion and
+REQ-PR-EVIDENCE-037: The SD-JWT VC format MUST be a serialisation of the same Version 1 assertion and
 MUST NOT introduce a credential lifecycle.
-Everything before serialization is the unchanged path: one authorization decision, fixed source
+Everything before serialisation is the unchanged path: one authorisation decision, fixed source
 execution, bounded derivation, output validation, subject binding under the requirement's declared
 mode, and the same durable access and disclosure-release audit ordering
 (`products/evidence/contracts/sd-jwt-vc-profile.yaml`).
@@ -438,7 +438,7 @@ onboarding and attestation, holder key generation, holding, escrow, or recovery 
 reissuance, refresh, or persistent credential identifiers.
 Under the audience-scoped mode they additionally include holder-scoped or cross-verifier subject
 identifiers, batch issuance, and presentation-side verification of any kind; Section 7.3 states
-those three as the declared, separately permitted behavior of the holder-bound mode, and
+those three as the declared, separately permitted behaviour of the holder-bound mode, and
 REQ-PR-EVIDENCE-069 keeps every other non-goal in force there.
 
 REQ-PR-EVIDENCE-039: The credential claim set MUST be closed.
@@ -447,7 +447,7 @@ configured `reviewed-structured-value`, digest ordering, fresh per-disclosure sa
 claims are fixed by
 `products/evidence/contracts/sd-jwt-vc-profile.yaml`.
 Nested field values remain atomic, and the complete structured value MUST pass its reviewed schema
-before serialization.
+before serialisation.
 The issuer MUST NOT append a key-binding JWT.
 
 REQ-PR-EVIDENCE-040: Under the audience-scoped mode a holder confirmation claim MUST be present only
@@ -500,7 +500,7 @@ declares the mode on the requirement and the one complete matched grant permits 
 explicitly.
 Permitting a response format MUST NOT imply permitting a binding mode.
 The formats such a requirement may serve MUST be the intersection of the bundle's permission, that
-grant's permission, and the mode's own allowlist, which is the SD-JWT VC serialization and the
+grant's permission, and the mode's own allowlist, which is the SD-JWT VC serialisation and the
 batch envelope.
 A request outside that intersection MUST be refused through the ordinary format denial, which MUST
 NOT reveal which layer withheld it
@@ -515,7 +515,7 @@ The count MUST be bounded by the ceiling the immutable bundle declares.
 These checks MUST run after entitlement matching and after the format gate and before selector
 resolution, so the endpoint never becomes an unauthenticated oracle for which requirements exist,
 which mode each carries, or how large a batch the deployment serves.
-The holder key thumbprint MAY reach subject-binding derivation and MUST NOT reach authorization,
+The holder key thumbprint MAY reach subject-binding derivation and MUST NOT reach authorisation,
 selectors, scripts, source requests, or audit.
 
 REQ-PR-EVIDENCE-064: A holder-bound assertion MUST carry neither the audience nor the request
@@ -527,7 +527,7 @@ A holder-bound requirement MUST NOT declare the `audience-scoped-entity-referenc
 bundle declaring either MUST refuse during runtime binding, before the listener binds, with a
 value-free cause.
 
-REQ-PR-EVIDENCE-065: A batch release MUST be one authorization decision, one source acquisition,
+REQ-PR-EVIDENCE-065: A batch release MUST be one authorisation decision, one source acquisition,
 and one derivation, then one credential member per distinct holder key.
 Each member MUST carry its own subject binding, confirmation key, identifier, and independent
 disclosure salts.
@@ -542,7 +542,7 @@ submitted the keys together.
 
 REQ-PR-EVIDENCE-066: Registry Evidence MUST NOT append a key-binding JWT under either mode.
 An issued holder-bound credential ends in the trailing tilde marking an absent key-binding JWT.
-A presentation is the compact serialization with the holder's key-binding JWT after the last tilde
+A presentation is the compact serialisation with the holder's key-binding JWT after the last tilde
 and no trailing tilde, so an issued credential and a presentation are mutually exclusive shapes,
 and a stored credential offered as a presentation MUST be refused rather than verified without
 possession.
@@ -566,7 +566,7 @@ credential's own confirmation key.
 The relying party asserts the presentation audience and nonce in its own challenge, and neither is
 issuer-signed.
 The expected issuance purpose MUST be compared as signed issuance provenance: it records why the
-assertion was produced and authorizes, limits, or licenses no downstream use.
+assertion was produced and authorises, limits, or licenses no downstream use.
 
 REQ-PR-EVIDENCE-069: A verified key-binding JWT proves that the presenter held the confirmation
 key's private key when that JWT was signed, over exactly the presented bytes, for the audience and
@@ -574,7 +574,7 @@ nonce the relying party chose, and proves nothing else.
 Comparing a nonce is not consuming it: the same presentation bytes verify again under the same
 stateless policy, and RFC 9901 Section 7.3 places the challenge lifecycle in the surrounding
 protocol.
-Adopter-facing material MUST NOT describe any behavior in this section as replay prevention, and
+Adopter-facing material MUST NOT describe any behaviour in this section as replay prevention, and
 MUST NOT claim full SD-JWT VC or OID4VCI conformance.
 Every profile non-goal in `products/evidence/contracts/holder-bound-profile.yaml` MUST NOT be
 implemented, stubbed, feature-flagged, or left as an extension seam; a holder-bound credential is
@@ -592,7 +592,7 @@ between one and sixteen ordered items, each carrying one complete subject-role s
 pairwise-distinct request nonce.
 The authenticated token MUST supply the one common audience, and the route MUST reject holder keys.
 Registry Evidence MUST authenticate once, reserve one evaluation instant, atomically charge rate cost
-equal to the complete item count, and validate and authorize every item before source credential
+equal to the complete item count, and validate and authorise every item before source credential
 resolution, access audit, or source access.
 Each item MAY resolve through its own complete matched grant or authority kind; authority MUST NOT be
 unioned between items (invariant `V1-I49`).
@@ -606,7 +606,7 @@ Only a singular `no_match`, `ambiguous`, `required_fact_missing`,
 stage MAY become `evidence-not-available`. A source-declared unresolved fetch or member and every
 other failure MUST abort the complete operation through the existing problem contract without
 releasing item material.
-The complete serialized envelope MUST remain within the response-byte ceiling fixed by that schema
+The complete serialised envelope MUST remain within the response-byte ceiling fixed by that schema
 (invariant `V1-I50`).
 
 REQ-PR-EVIDENCE-072: The request-batch route MUST accept only the exact
@@ -621,28 +621,28 @@ independently.
 
 REQ-PR-EVIDENCE-073: Sequential item evaluation in request order MUST support every existing
 audience-scoped source without additional source configuration.
-Rust MAY select one optimized physical HTTP call only before source access, and only when the
+Rust MAY select one optimised physical HTTP call only before source access, and only when the
 governed bundle and runtime independently enable `source-batch`, the requirement uses the `single`
 acquisition kind, the fixed-path HTTP source declares the closed batch block, and the complete item
 count fits the source's declared ceiling.
 An omitted block or an ineligible request MUST select ordinary sequential execution from the start
 (`products/evidence/contracts/source-contract.yaml`, invariant `V1-I51`).
 
-REQ-PR-EVIDENCE-074: An optimized source batch MUST use the closed `prepare_batch` and
+REQ-PR-EVIDENCE-074: An optimised source batch MUST use the closed `prepare_batch` and
 `extract_batch` entry points in `products/evidence/contracts/rhai-abi.yaml`.
-Batch preparation MAY receive only Rust-issued opaque slots, minimized authorized selectors, and
+Batch preparation MAY receive only Rust-issued opaque slots, minimised authorised selectors, and
 closed parameters. Batch extraction MAY receive only the bounded projected response, closed
 parameters, and exact slot list, and MUST return an exact slot-to-lookup-result bijection.
 The physical call MUST inherit the ordinary source's method, fixed origin and path, authentication,
 headers, TLS trust, redirect denial, timeout, response bounds, semaphore, and request-parts
 validation.
-After optimized execution begins, any failure MUST abort the outer request and MUST NOT retry,
+After optimised execution begins, any failure MUST abort the outer request and MUST NOT retry,
 split, or fall back to sequential fanout (invariant `V1-I51`).
 
 REQ-PR-EVIDENCE-075: A request batch MUST use the distinct closed audit schema in
 `products/evidence/contracts/request-batch-audit-event.schema.yaml`.
 Every physical source call MUST have one durably accepted access event before credential resolution
-or source access, with bounded item indices and minimized groups that preserve each complete
+or source access, with bounded item indices and minimised groups that preserve each complete
 authority and subject-set boundary.
 The complete operation MUST have exactly one terminal release or value-free failure event, and audit
 MUST record no nonce, selector, source value, fact, body, signed JWS member, or signing material.
@@ -655,19 +655,19 @@ REQ-PR-EVIDENCE-042: A failure MUST be reported as `application/problem+json`
 ([RFC 9457](https://www.rfc-editor.org/info/rfc9457)) carrying exactly the members and one of the
 codes declared by `products/evidence/contracts/problem-contract.yaml`.
 The prohibited content list in that file MUST hold: no request body or selector material, no
-principal, actor, grant, token, credential, or authorization input, no source detail, no script
+principal, actor, grant, token, credential, or authorisation input, no source detail, no script
 detail, no supported value or subject binding, and no candidate count, score, hint, or comparison.
 
 REQ-PR-EVIDENCE-043: The unresolved internal classes named in
 `products/evidence/contracts/problem-contract.yaml` MUST collapse by default to one public code with
 the same status, title, and body shape.
 Processing and response handling MUST be uniform and bounded to avoid class-dependent delay, and
-existence MAY be disclosed only as a separately authorized fixed concept, never as error detail
+existence MAY be disclosed only as a separately authorised fixed concept, never as error detail
 (invariant `V1-I16`).
 
-REQ-PR-EVIDENCE-044: A duplicate, combined, parameterized, quality-weighted, or unknown content
-negotiation MUST return the negotiation problem before source access, and a recognized but
-unpermitted format request MUST return the ordinary authorization problem
+REQ-PR-EVIDENCE-044: A duplicate, combined, parameterised, quality-weighted, or unknown content
+negotiation MUST return the negotiation problem before source access, and a recognised but
+unpermitted format request MUST return the ordinary authorisation problem
 (`products/evidence/contracts/problem-contract.yaml`).
 
 REQ-PR-EVIDENCE-045: Transient failures MUST be mapped to the public transient codes in
@@ -675,12 +675,12 @@ REQ-PR-EVIDENCE-045: Transient failures MUST be mapped to the public transient c
 A retry hint is permitted only for bounded transient failures and MUST NOT be derived from protected
 source content.
 
-## 9. Audit behavior
+## 9. Audit behaviour
 
 REQ-PR-EVIDENCE-046: Registry Evidence MUST durably accept a standalone minimal event after an
-authenticated authorization refusal and before returning its generic `403`, an access-attempt event
-after authorization and before credential acquisition or source access for every actual acquisition
-stage, and a disclosure-release event after the final immutable response bytes are serialized and
+authenticated authorisation refusal and before returning its generic `403`, an access-attempt event
+after authorisation and before credential acquisition or source access for every actual acquisition
+stage, and a disclosure-release event after the final immutable response bytes are serialised and
 before those exact bytes are released.
 A sink failure MUST block the applicable step
 (`products/evidence/contracts/audit-event.schema.yaml`, invariants `V1-I13`, `V1-I29`, and
@@ -694,13 +694,13 @@ which closes the member set, the phase and decision enumerations, and the condit
 The three request-batch event kinds MUST instead validate against the distinct closed schema named
 by REQ-PR-EVIDENCE-075.
 
-REQ-PR-EVIDENCE-048: Every authorized-material native event MUST record the closed
-response-protection mode resolved with authorization.
+REQ-PR-EVIDENCE-048: Every authorised-material native event MUST record the closed
+response-protection mode resolved with authorisation.
 A signing key identity MUST be present on a singular or holder-bound release exactly for
 cryptographically protected disclosure and MUST be absent for unsigned output.
 A request-batch release MUST carry a signing key identity exactly when at least one item contains
-evidence, as fixed by REQ-PR-EVIDENCE-075. The standalone authorization-refusal event MUST contain neither
-response protection nor a signing key identity because authorization did not resolve those fields
+evidence, as fixed by REQ-PR-EVIDENCE-075. The standalone authorisation-refusal event MUST contain neither
+response protection nor a signing key identity because authorisation did not resolve those fields
 (`products/evidence/contracts/audit-event.schema.yaml`, invariant `V1-I30`).
 
 REQ-PR-EVIDENCE-049: Audit MUST NOT record the values listed under the never-record rule in
@@ -710,7 +710,7 @@ selector, source, and supported values, the request nonce, credentials and bodie
 and comparisons, and script inputs, outputs, or signing material.
 Identity MUST travel only as domain-separated keyed pseudonyms (invariant `V1-I15`).
 
-REQ-PR-EVIDENCE-050: Every authorization refusal after successful authentication MUST durably append
+REQ-PR-EVIDENCE-050: Every authorisation refusal after successful authentication MUST durably append
 exactly one standalone minimal native event before Registry Evidence returns the generic `403`.
 That event MUST identify the event and operation, assurance profile, package digest in the frozen
 `bundleRevision` field, requester
@@ -773,7 +773,7 @@ caller token key identifiers, which decide who may call rather than what an asse
 The immutable bundle carries exactly one governed `assuranceProfile`: `local`, `production`, or
 `evidence-grade`.
 The profile describes the bundle's reviewed assurance boundary; it does not replace authentication,
-authorization, source, signing, audit, or disclosure controls.
+authorisation, source, signing, audit, or disclosure controls.
 
 REQ-PR-EVIDENCE-057: Every definition-discovery response, assertion encoding, and native audit event
 MUST carry the governed assurance profile.
@@ -788,7 +788,7 @@ REQ-PR-EVIDENCE-058: Only the `local` assurance profile MAY omit requirement fix
 during authoring.
 `production` and `evidence-grade` bundles MUST provide complete referenced fixtures and MUST fail
 bundle loading when that fixture contract is absent or incomplete.
-The `local` exception MUST NOT weaken any serving-path authentication, authorization, immutability,
+The `local` exception MUST NOT weaken any serving-path authentication, authorisation, immutability,
 source, signing, audit, or disclosure control (invariant `V1-I34`,
 `products/evidence/contracts/bundle.schema.yaml`).
 
@@ -819,9 +819,9 @@ credential format that the frozen Version 1 contracts do not provide.
 - Request-batch boundary: A request batch groups independent audience-scoped evaluations. It is not
   holder-bound issuance, does not accept holder keys, and does not serve unsigned or SD-JWT VC
   results (REQ-PR-EVIDENCE-070, REQ-PR-EVIDENCE-072).
-- Source-batch optimization: A configured source batch reduces physical calls only. It does not
-  change authorization, transport authority, result ordering, disclosure, signing, or audit, and a
-  started optimized call never falls back to sequential fanout (REQ-PR-EVIDENCE-073,
+- Source-batch optimisation: A configured source batch reduces physical calls only. It does not
+  change authorisation, transport authority, result ordering, disclosure, signing, or audit, and a
+  started optimised call never falls back to sequential fanout (REQ-PR-EVIDENCE-073,
   REQ-PR-EVIDENCE-074).
 - Possession, not freshness: A verified key-binding JWT proves possession at signing time over the
   presented bytes. Comparing a challenge nonce is not consuming it, nothing in this specification is
@@ -840,7 +840,7 @@ credential format that the frozen Version 1 contracts do not provide.
   source truth, or holder possession (REQ-PR-EVIDENCE-035).
 - Identity resolution: Lookup is match, no-match, or ambiguous. Registry Evidence is not an
   identity-resolution engine and returns no candidate material (REQ-PR-EVIDENCE-019).
-- Purpose attestation: A declared purpose is an authorized selection from the granted set, not an
+- Purpose attestation: A declared purpose is an authorised selection from the granted set, not an
   identity-provider attestation, unless the operator issues a distinct requester tag per purpose
   (`products/evidence/OPERATOR-CONTRACT.md`).
 - Rate-limit scope: Rate controls are per process and in memory, so replicas multiply every
@@ -875,11 +875,11 @@ A Registry Evidence deployment conforms to this specification when it:
   non-anchoring discovery (REQ-PR-EVIDENCE-001, REQ-PR-EVIDENCE-002, REQ-PR-EVIDENCE-003,
   REQ-PR-EVIDENCE-004);
 - authenticates every protected operation with one bearer token, derives the principal only from the
-  configured claim, and resolves one complete authorization decision for each singular request or
+  configured claim, and resolves one complete authorisation decision for each singular request or
   request-batch item without unioning entitlements
   (REQ-PR-EVIDENCE-005, REQ-PR-EVIDENCE-006, REQ-PR-EVIDENCE-007);
 - refuses authority from caller data, enforces value origins, denies sender-constrained tokens, and
-  applies rate controls as defense in depth (REQ-PR-EVIDENCE-008, REQ-PR-EVIDENCE-009,
+  applies rate controls as defence in depth (REQ-PR-EVIDENCE-008, REQ-PR-EVIDENCE-009,
   REQ-PR-EVIDENCE-010, REQ-PR-EVIDENCE-011);
 - validates the closed request, rejects caller-supplied query material, enforces the request nonce
   contract, admits only predefined requirement revisions, and resolves subject roles by name
@@ -900,10 +900,10 @@ A Registry Evidence deployment conforms to this specification when it:
   never falls back on signing failure, keeps private key material core-owned, and releases only
   pre-audited bytes (REQ-PR-EVIDENCE-028, REQ-PR-EVIDENCE-029, REQ-PR-EVIDENCE-030,
   REQ-PR-EVIDENCE-031, REQ-PR-EVIDENCE-032);
-- serializes the signed format with the closed header and payload rules, states the limited meaning
+- serialises the signed format with the closed header and payload rules, states the limited meaning
   of a signature, and keeps the unsigned envelope separately typed and never a fallback
   (REQ-PR-EVIDENCE-033, REQ-PR-EVIDENCE-034, REQ-PR-EVIDENCE-035, REQ-PR-EVIDENCE-036);
-- serializes SD-JWT VC as the same assertion under the frozen profile, implements none of its
+- serialises SD-JWT VC as the same assertion under the frozen profile, implements none of its
   non-goals, closes the claim set, embeds a holder key only when supplied, and keeps the binding
   audience-scoped unless a requirement declares otherwise (REQ-PR-EVIDENCE-037,
   REQ-PR-EVIDENCE-038, REQ-PR-EVIDENCE-039,
@@ -911,7 +911,7 @@ A Registry Evidence deployment conforms to this specification when it:
 - declares any holder-bound subject binding on the requirement from the closed two-value vocabulary,
   derives it under its own domain constant from the holder key thumbprint, requires both bundle and
   grant permission separately from format permission, bounds and deduplicates the presented keys
-  after the authorization and format gates, omits the audience and request nonce, refuses the
+  after the authorisation and format gates, omits the audience and request nonce, refuses the
   entity-reference value forms, and releases a batch as one all-or-nothing decision with one
   terminal audit event (REQ-PR-EVIDENCE-060, REQ-PR-EVIDENCE-061, REQ-PR-EVIDENCE-062,
   REQ-PR-EVIDENCE-063, REQ-PR-EVIDENCE-064, REQ-PR-EVIDENCE-065);
@@ -929,8 +929,8 @@ A Registry Evidence deployment conforms to this specification when it:
 - reports failures as closed problem documents, collapses unresolved classes, refuses unacceptable
   negotiation before source access, and bounds retry hints (REQ-PR-EVIDENCE-042,
   REQ-PR-EVIDENCE-043, REQ-PR-EVIDENCE-044, REQ-PR-EVIDENCE-045);
-- audits at the refusal and authorized-material durable gates, validates every event against its
-  closed operation schema, records response protection only for authorized material, records a minimal refusal
+- audits at the refusal and authorised-material durable gates, validates every event against its
+  closed operation schema, records response protection only for authorised material, records a minimal refusal
   before `403`, returns `503` if that append fails, records no protected value, and keeps one
   writer per audit file (REQ-PR-EVIDENCE-046,
   REQ-PR-EVIDENCE-047, REQ-PR-EVIDENCE-048, REQ-PR-EVIDENCE-049, REQ-PR-EVIDENCE-050,

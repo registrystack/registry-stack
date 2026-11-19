@@ -30,12 +30,12 @@ version. Nothing else reaches it: no host fonts, no environment, no clock, no ne
 
 ## What fixes the bytes?
 
-Render canonicalizes the envelope with RFC 8785 (JSON Canonicalization Scheme) and hands the
+Render canonicalises the envelope with RFC 8785 (JSON Canonicalization Scheme) and hands the
 template that exact string. The `dataDigest` a caller stores is the sha256 of those bytes, so the
 hash and the template's view of the request are the same thing.
 
 `issuedAt` is the document's issuance claim and its only clock: `datetime.today()` in a template
-and the PDF creation date both come from it. Render normalizes it to UTC, so `10:32Z` and
+and the PDF creation date both come from it. Render normalises it to UTC, so `10:32Z` and
 `13:32+03:00` render identically and the caller's offset is not kept. A template that prints a
 local date shifts the instant itself with `datetime.today(offset: ...)`.
 

@@ -384,7 +384,7 @@ A task-exchanged inbound token also requires the matching declared assertion iss
 
 A run belongs to its starting token's exact verified `iss` and `sub`, never to an input field, and admission idempotency comes from the same pair.
 The subject decides who owns the run, never which record the start input names.
-Coordinator does not check that a record, subject, or recipient identifier in the input belongs to anyone, so the calling backend must already have authorized every identifier it passes for the person it acts for.
+Coordinator does not check that a record, subject, or recipient identifier in the input belongs to anyone, so the calling backend must already have authorised every identifier it passes for the person it acts for.
 
 {/* Evidence: crates/registry-coordinator/src/access.rs ClientPolicy, subjects, authenticate, scope_claim, registry_scopes;
     crates/registry-coordinator/tests/deployment_surface.rs scope_claim;
@@ -492,7 +492,7 @@ The service reads its runtime file from an absolute path; `coordinatorctl` also 
 - `plan` reports, for each workflow, whether apply would `install`, `replace`, leave `unchanged`, or `remove` its package, with the configured and active package digests, the `workflowsDigest` of the listed set, and the observed activation and schema.
   It does not claim the deployment is valid.
 - `apply` is the only command that reads the migration URL.
-  It serializes activation with database locks, verifies each pinned package, migrates the dedicated schema, grants the runtime role, records the verified set of packages in the shared ledger, and records each workflow's active package in the control record.
+  It serialises activation with database locks, verifies each pinned package, migrates the dedicated schema, grants the runtime role, records the verified set of packages in the shared ledger, and records each workflow's active package in the control record.
 - `deployment-status` uses only the runtime credential and never migrates, activates, or changes recovery holds.
 - `coordinator` verifies the same things before it serves, and never migrates or activates.
 
@@ -508,7 +508,7 @@ Refused checks exit nonzero with:
 A refused package is named by its package digest and workflow.
 This report does not replace the service's audit and recovery readiness checks.
 
-Apply serializes activation, so a refused incompatible live binding is resolved by restoring the previous binding or finishing and reconciling the affected work.
+Apply serialises activation, so a refused incompatible live binding is resolved by restoring the previous binding or finishing and reconciling the affected work.
 Compatible definitions govern new admissions while old runs keep their encrypted snapshots and command identities.
 Adding an unrelated logical connection does not change a workflow binding digest.
 Reusing an idempotency key returns the original run rather than creating new work.
@@ -601,7 +601,7 @@ Any other refusal stops the service with exit status 1 and its code and fix on s
 
 SIGTERM or SIGINT stops the service gracefully.
 The listener accepts no new connection and finishes the requests it is answering, and the worker leases no further attempt and finishes the one in flight.
-Both get 15 seconds, the 10-second attempt timeout plus the 5-second lease finalization allowance; the service then logs `stopped` and exits 0.
+Both get 15 seconds, the 10-second attempt timeout plus the 5-second lease finalisation allowance; the service then logs `stopped` and exits 0.
 Give the supervisor a stop timeout of at least 15 seconds before it sends SIGKILL.
 
 An attempt still unfinished when the 15 seconds end, or when the process is killed, keeps its lease until the lease expires.
@@ -818,7 +818,7 @@ coordinatorctl list --attention true \
   --url https://coordinator.example.org --token-file /run/operator-token
 ```
 
-Status and list show authorized progress and the reviewed terminal projection.
+Status and list show authorised progress and the reviewed terminal projection.
 Inspection shows bounded durable step state, and never returns original inputs, raw product responses, or prepared command payloads; protected command and correlation values stay absent.
 
 - Inspection reports `effects` as `accepted` or `unknown`, with pinned operation revisions.
@@ -851,11 +851,11 @@ Supply a bounded investigation reference such as `incident-2026-10-09`; reasons 
 The audit request records a keyed `reasonRef`, scoped to the logical database and shared across recovery actions.
 Raw investigation references stay outside the audit stream, and you retain the external investigation record.
 
-- An authenticated, authorized request with an empty, overlong, or control-character reason, or an out-of-bounds retention cutoff or limit, returns HTTP 400 `request.reason-invalid` or `request.retention-invalid`.
+- An authenticated, authorised request with an empty, overlong, or control-character reason, or an out-of-bounds retention cutoff or limit, returns HTTP 400 `request.reason-invalid` or `request.retention-invalid`.
 - State and recovery conflicts return HTTP 409.
 - Every refusal is an RFC 9457 `application/problem+json` document whose `code` names the refusal; the generated OpenAPI document owns the full code vocabulary.
-- Recovery POSTs authenticate and authorize before releasing malformed-body errors.
-  They require `application/json` or an application media type ending in `+json`; unsupported or absent media types return 415 `request.unsupported-media-type` only after authorization.
+- Recovery POSTs authenticate and authorise before releasing malformed-body errors.
+  They require `application/json` or an application media type ending in `+json`; unsupported or absent media types return 415 `request.unsupported-media-type` only after authorisation.
 - Bodies remain bounded to 65,536 bytes, and duplicate or unknown fields are refused.
 
 {/* Evidence: crates/registry-coordinator/src/problem.rs request.reason-invalid, request.retention-invalid;
@@ -1024,10 +1024,10 @@ An optional `onCancel` takes an authored forward cleanup path.
 An active read records the intent and routes when the lease settles or expires, and repeating cancellation preserves cleanup.
 
 Scheduling connections with `authorization.taskAuthority` require `observationAuthorization` with ordinary receipt-read scopes and no `taskAuthority`.
-Configure the same token endpoint, registered client, and resource as the mutation authorization.
+Configure the same token endpoint, registered client, and resource as the mutation authorisation.
 Scheduling requires the verified issuer and subject to match the original receipt owner, and this read credential must work independently of the original grant's expiry or revocation.
 Recovery never requests a Casework assertion or exchanges a task token, so unavailable read authority leaves the effect unresolved.
-Observation credentials never authorize Coordinator dispatch.
+Observation credentials never authorise Coordinator dispatch.
 
 {/* Evidence: crates/registry-coordinator/src/operations.rs MINIMUM_OBSERVATION_INTERVAL_SECONDS;
     crates/registry-coordinator/src/runtime.rs DEFAULT_RESULT_CHECK_SECONDS, observation_authorization;
@@ -1268,7 +1268,7 @@ An older backup can omit entire admissions, so reconciling the runs it contains 
 Keep admissions held until complete PITR/WAL recovery, or separately retained authoritative admission evidence, establishes the full spent-key history.
 An incomplete backup must remain closed to new admissions.
 
-Only after the execution hold is released, complete admission history is established, and the previous deployment is externally fenced may an explicitly authorized operator run `release-admission-hold --recovery-reference REFERENCE --admission-history-complete --prior-deployment-fenced`.
+Only after the execution hold is released, complete admission history is established, and the previous deployment is externally fenced may an explicitly authorised operator run `release-admission-hold --recovery-reference REFERENCE --admission-history-complete --prior-deployment-fenced`.
 Preserve the original admission key and command identities, so a restored history gap does not become a fresh effect.
 
 {/* Evidence: crates/registry-coordinator/src/store/recovery.rs admissions_hold;
@@ -1292,7 +1292,7 @@ In that same locked transaction it can settle safe expired reads and local steps
 - A command-free hold keeps zero attempts; it never invents one.
 - Pending calls that have not prepared a command, and pending waits or local steps, also become held failed work.
   Attestation and hold release never start these steps automatically.
-- Prepared safe-read retries keep their ordinary pending behavior.
+- Prepared safe-read retries keep their ordinary pending behaviour.
 - Explicitly retry a held wait to restore its original scheduled instant atomically; a future wait does not advance early.
 - Active leases, prepared mutating leased or unknown calls, uncertain outcomes, and expired receipts remain protected.
   Recovery does not establish an external outcome for any of these calls.

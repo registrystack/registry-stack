@@ -248,7 +248,7 @@ The list refuses those keys in Casework only; it does not revoke them at the iss
 Omitting either setting preserves the existing acceptance rule.
 
 During key rotation, publish the replacement key first and confirm that Casework accepts a test token signed by it.
-Add the retiring key identifier to `revokedKeyIds` when it must stop authorizing immediately, apply the runtime configuration, and confirm that a token signed by the retired key is refused.
+Add the retiring key identifier to `revokedKeyIds` when it must stop authorising immediately, apply the runtime configuration, and confirm that a token signed by the retired key is refused.
 Remove the old public key from the issuer after all services have applied the change.
 A static `jwksSource` also requires atomically replacing its referenced document and restarting Casework.
 
@@ -288,7 +288,7 @@ A client selects the map entry with `registry-casework-delegated-reader`; it doe
 The list is always due-ordered work assigned to the represented Staff principal.
 The context route checks the current holder and revision before source I/O and again before release.
 Neither route offers a mutation, unclaimed-work, supervisor, administrator or general human operation.
-An optional `sourceProfiles` list is the complete set accepted from `registry-source-profile`; source authorization remains separate.
+An optional `sourceProfiles` list is the complete set accepted from `registry-source-profile`; source authorisation remains separate.
 
 {/* Evidence: crates/registry-casework/src/http.rs registry-casework-delegated-reader, delegated-staff/review-tasks;
     crates/registry-casework/tests/review_http.rs registry-casework-delegated-reader;
@@ -309,7 +309,7 @@ This separates OAuth policy; key material is separate only when the deployment c
 
 ## Audit
 
-`audit` selects where Casework writes its audit entries and the key that pseudonymizes the principals and identifiers they name.
+`audit` selects where Casework writes its audit entries and the key that pseudonymises the principals and identifiers they name.
 
 - `audit.hashKeyRef` is that key's secret reference and must be an exact `secret:env/NAME` or `secret:file/name` reference.
 - `audit.destination` is `file` (the default) or `stdout`.
@@ -351,7 +351,7 @@ The status profile must equal the authored `serviceProfiles.service-status` for 
 Optional `taskGrantProfile` must equal the provider's separately authored `serviceProfiles.task-grant-context` profile.
 Its absence disables current-source task-grant context; the runtime never falls back to `statusProfile` or to the human display profile.
 This selection does not require the source access profile to be a singleton permission.
-The configured service client must be authorized for each selected profile at BReg.
+The configured service client must be authorised for each selected profile at BReg.
 
 `clientAssertionAudience` is the authorization server's issuer identifier, exactly as its metadata publishes it: the client assertion's sole audience, with no default.
 Optional `resource` and `scopes` configure the token request for the service reader.
@@ -366,7 +366,7 @@ It does not supply fields shown to a human reviewer.
 
 For a current-source review, the human request selects a BReg source profile with the `Registry-Source-Profile` header.
 Casework forwards that human's bearer to BReg for the current display read.
-BReg authorizes the profile, subject and disclosure.
+BReg authorises the profile, subject and disclosure.
 
 The compiled Casework policy pins the producer's context contract and vendored schema; the verified package also includes the provider's exported description.
 `caseworkctl check --against-breg-package` compares that export with a checked native BReg package offline.
@@ -413,10 +413,10 @@ Casework neither verifies nor forwards it, and the call behaves as without it, p
 `Registry-Source-Profile` sent alone is still refused on the single task read and on request history and clocks (400 `source-profile.not-applicable`), because it is the single-bearer forwarding form and a submitted-context target has no source to forward it to.
 Source-free operations reject the header.
 Those operations are release, task-grant revocation, accountability, producer, directory and delegated-reader routes.
-An absent header preserves ordinary single-bearer and CLI forwarding behavior.
+An absent header preserves ordinary single-bearer and CLI forwarding behaviour.
 Once the header is supplied, no fallback to the Casework token or machine status token is permitted.
 
-Credentials live only in the current request's redacted, zeroizing provider handle and its bounded source calls.
+Credentials live only in the current request's redacted, zeroising provider handle and its bounded source calls.
 They never enter tasks, decisions, drafts, audit, cursors, receipts or recovery objects.
 Clients borrow an explicit `HumanSourceCredential` per call.
 Language clients expose `humanSourceCredentialContract()` (Python: `human_source_credential_contract`) from the actually loaded native addon; its supported value is `registry.casework.human-source-credential.v1`.

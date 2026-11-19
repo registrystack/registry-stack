@@ -50,7 +50,7 @@ The job profile applies its own row and byte bounds as well.
 
 The source is always `noop` in the literal sense that it does not delete, move, rename, mark, or lock
 source files.
-This differs from Camel's `noop=true` consumer behavior: the Adapter re-reads unchanged bytes and
+This differs from Camel's `noop=true` consumer behaviour: the Adapter re-reads unchanged bytes and
 relies on the job item table to suppress another delivery.
 Raw files use namespace-plus-content identity.
 Decoded rows use their declared business key.
@@ -211,7 +211,7 @@ Return exact decimals as `numeric` columns or decimal strings.
 The SFTP source is read-only and belongs to the job host; the facade does not reach it.
 The runtime requires these:
 
-- A normalized absolute `baseDirectory`.
+- A normalised absolute `baseDirectory`.
 - One pinned OpenSSH host key (`pinnedHostKey`), Ed25519 or ECDSA P-256.
 - A password or private-key credential through secret references.
 
@@ -240,8 +240,8 @@ Exactly one producer completion protocol is required:
   replacement, atomically renames complete bytes into place, and publishes the marker last.
 
 The server must be able to confine the source account to `baseDirectory`: give the source a dedicated
-read-only account whose server-side authorization does that.
-Client pathname, canonical-path, symlink, and recheck logic is defense in depth.
+read-only account whose server-side authorisation does that.
+Client pathname, canonical-path, symlink, and recheck logic is defence in depth.
 SFTP v3 provides no portable atomic open-beneath operation, so the client does not establish an atomic
 SSH jail.
 A link or an off-root candidate refuses the read; it is not followed.
@@ -285,7 +285,7 @@ Dynamic endpoint expressions, `consumerSendTo`, and streaming are not supported.
 
 The step is refused in every facade-reachable route.
 A job read starts without facade request headers and returns the closed item page body plus its source
-metadata, so Camel's header-preservation behavior after `pollEnrich` does not apply.
+metadata, so Camel's header-preservation behaviour after `pollEnrich` does not apply.
 
 {/* Evidence: crates/registry-adapter-core/src/checks.rs poll_steps_check_their_uri_timeout_and_decoder;
     crates/registry-adapter/tests/camel_csv.rs the_read_aggregates_like_an_enrich;

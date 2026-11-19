@@ -88,7 +88,7 @@ Its claims carry:
 - `jti`: a fresh identifier for every assertion, because a replay-checking issuer refuses a
   repeated one
 
-An issuer checks `iat` and `exp` against its own clock, so keep yours synchronized.
+An issuer checks `iat` and `exp` against its own clock, so keep yours synchronised.
 
 {/* Evidence: crates/registry-platform-authcommon/src/client_assertion.rs, sign_client_assertion,
     CLIENT_ASSERTION_TYP, DEFAULT_ASSERTION_LIFETIME_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS;

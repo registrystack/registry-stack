@@ -141,7 +141,7 @@ The v0.44.0 source exports `registry_stack_client::coordinator`,
 available as the Node root's `coordinator` export). Construct
 `coordinator.CoordinatorClient(base_url)` in Python or
 `new coordinator.CoordinatorClient({ baseUrl })` in Node. Each operation takes
-its own authorized bearer token. `workflow` reads the active workflow revision;
+its own authorised bearer token. `workflow` reads the active workflow revision;
 `start` admits an exact revision and input under a stable caller key; `status`
 and `inspect` read persisted progress. See the
 [Coordinator HTTP reference](../apis/registry-coordinator/) and
@@ -214,7 +214,7 @@ The Evidence client's profile-driven methods are the exception. `request`, `prep
 `contracts_candidate`, and `refresh_metadata` assemble or refresh a cached service snapshot first,
 which can cost a protected-resource metadata fetch, an authorization-server metadata fetch, and, for
 the `https-discovery` and `local-loopback-discovery` trust profiles, a service JWKS fetch. `request`,
-`prepare_progressive`, and `contracts_candidate` also fetch the published definitions catalog when
+`prepare_progressive`, and `contracts_candidate` also fetch the published definitions catalogue when
 the profile's contracts are `published` rather than a reviewed file. A cached, unexpired snapshot
 skips all of it.
 
@@ -332,8 +332,8 @@ Casework answers every 503 with `Retry-After: 5`, so a resend after one waits 5 
 ## Registry Discovery
 
 The Discovery client searches a published index, resolves a requirement to Evidence Types, and
-records an inert exact selection. It is not a trust broker: a selection carries catalog metadata and
-proves nothing about origin authenticity, catalog currentness, authorization, or adopter trust.
+records an inert exact selection. It is not a trust broker: a selection carries catalogue metadata and
+proves nothing about origin authenticity, catalogue currentness, authorisation, or adopter trust.
 Endpoint trust and the call that follows stay with the relying application.
 
 ### Construct a Discovery client
@@ -369,7 +369,7 @@ const client = new discovery.DiscoveryClient({
 ```
 
 Node also accepts the base URL as a bare string. The client sends no credentials: a Discovery index
-is public by construction, so there is no authorization option to set.
+is public by construction, so there is no authorisation option to set.
 
 `DiscoveryClientConfig` provides `with_attempt_timeout`, `with_connect_timeout`,
 `with_maximum_response_bytes`, and `with_trusted_root_certificates`.
@@ -379,7 +379,7 @@ is public by construction, so there is no authorization option to set.
 | Operation | Rust | Python | Node |
 | --- | --- | --- | --- |
 | Resolve a requirement to Evidence Types | `resolve_evidence_types` | `resolve_evidence_types` | `resolveEvidenceTypes` |
-| Search the catalog | `search_services` | `search_services` | `searchServices` |
+| Search the catalogue | `search_services` | `search_services` | `searchServices` |
 | Search Evidence services | `search_evidence_services` | `search_evidence_services` | `searchEvidenceServices` |
 
 Only those four operations reach the network. Every selection below is local and offline.
@@ -619,13 +619,13 @@ was sent:
 | `responseFormat` | Node type | Python type | Payload member |
 | --- | --- | --- | --- |
 | `signed-jws` | `ProgressiveVerifiedAssertion` | `VerifiedAssertion` | `assertion`, the signed bytes; `credential` is null |
-| `sd-jwt-vc` | `ProgressiveVerifiedAudienceScopedCredential` | `VerifiedAudienceScopedCredential` | `credential`, the serialized credential; `assertion` is null |
+| `sd-jwt-vc` | `ProgressiveVerifiedAudienceScopedCredential` | `VerifiedAudienceScopedCredential` | `credential`, the serialised credential; `assertion` is null |
 
 Both variants carry `evidence`, `values`, `value`, the trace identifier, and `subject_continuity` or
 `subjectContinuity`. Continuity has a `status` of `first_use` or `matched` (Node: `firstUse` or
 `matched`) and an opaque `receipt`. The receipt is the application's to keep: nothing in the package
 persists one. Pass a retained receipt back as `binding_receipt` or `bindingReceipt` to assert that
-the next answer describes the same subject. Python serializes one with
+the next answer describes the same subject. Python serialises one with
 `SubjectBindingReceipt.to_json` and reads it back with `SubjectBindingReceipt.from_json`.
 
 ### Trace identifiers
@@ -737,7 +737,7 @@ identifiers using an undocumented spelling.
 
 `verifyHookDelivery` in Node and `verify_hook_delivery` in Python authenticate one exact BReg
 Version 1 hook request with the shared Rust verifier. Pass the received method, request target,
-headers, body bytes, and key without normalizing them. The result carries the authenticated
+headers, body bytes, and key without normalising them. The result carries the authenticated
 CloudEvents attributes, delivery metadata, and body. It does not decide whether the delivery is
 fresh, expected by this receiver, or already applied; the receiver checks those, in this order.
 
@@ -843,7 +843,7 @@ def receive_webhook(method, path, headers, body, key, event_store):
 ```
 
 Python takes `headers` as an ordered sequence of name and value pairs. Pass the raw request pairs so
-the verifier retains header case and duplicates, and build a normalized map only after verification.
+the verifier retains header case and duplicates, and build a normalised map only after verification.
 Bound the body size before reading it. Node refuses body and key buffers backed by shared memory and
 copies the rest before verifying.
 
@@ -997,7 +997,7 @@ committed, so follow the same-key retry. `idempotency.expired` is a known code. 
 
 The Casework client covers pinned review policies, producer requests and results, human review
 tasks, and Directory operations. A `ReviewResult` records the human outcome. You independently
-authorize any later business mutation in the producer's system.
+authorise any later business mutation in the producer's system.
 
 ### Construct a Casework client
 
@@ -1061,7 +1061,7 @@ current-source context uses `mode: current-source` and a reference binding.
 The subject supplies all five immutable binding fields.
 
 These host-side functions take your complete `ReviewCreateRequest`, declared trusted-producer ID,
-and retained idempotency key. They use the shared Rust canonicalizer, including its portable JSON
+and retained idempotency key. They use the shared Rust canonicaliser, including its portable JSON
 validation and Unicode key ordering.
 
 ```ts

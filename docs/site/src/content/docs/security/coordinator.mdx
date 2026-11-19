@@ -25,14 +25,14 @@ Deployment steps are in [Deploy Registry Coordinator](../../operate/coordinator/
   Operator configuration is trusted; workflow data is not.
 - A workflow author writes a project that Coordinator freezes into a definition.
   The author supplies bodies, mappings and pure Functions.
-  The author does not choose destinations, headers, credentials or recovery behavior; the closed
-  operation catalog does.
+  The author does not choose destinations, headers, credentials or recovery behaviour; the closed
+  operation catalogue does.
 - Providers decide every effect a run requests: Registry Casework, Registry Scheduling, BReg and
   external HTTP providers.
   Coordinator holds workload identity, not decision authority, and each receiving product still
-  authorizes the call.
+  authorises the call.
 - A caller authenticates with an access token verified against the configured OIDC issuer.
-  Coordinator authenticates and authorizes every protected route and reapplies the caller's owner
+  Coordinator authenticates and authorises every protected route and reapplies the caller's owner
   and workflow scope on every list page.
   Admission accepts a token only when its caller policy lists the token's exact `sub`, and refuses
   a delegated token (COORDINATOR-INV-10).
@@ -64,7 +64,7 @@ A late completion from the original worker could race the replacement attempt.
 
 Enforcement: Coordinator opens the authenticated definition snapshot for the run and resolves the
 exact leased step.
-Only a call whose catalog recovery is `read-again` is retried.
+Only a call whose catalogue recovery is `read-again` is retried.
 Every mutation, evaluation, same-command call, wait and local step is held.
 A retried read uses the existing backoff, a ten-attempt limit and the original run deadline.
 When the attempts or the deadline run out, the job becomes `unknown`, so repeated failure reaches
@@ -89,8 +89,8 @@ Threat: Coordinator can lose the response after Scheduling committed capacity.
 A fresh command, an ordinary current-state read, or replay of an unkeyed release could duplicate or
 misstate that effect.
 
-Enforcement: each Scheduling lifecycle operation declares its recovery behavior in the operation
-catalog.
+Enforcement: each Scheduling lifecycle operation declares its recovery behaviour in the operation
+catalogue.
 Reads run again.
 Appointment creation and hold confirmation keep the exact key and request and may use Scheduling's
 original-result receipt.
@@ -101,7 +101,7 @@ Every commitment obtains fresh task-bound Scheduling authority per durable attem
 The Scheduling client performs no hidden mutation retry inside Coordinator.
 
 Refused: an unkeyed hold release is never sent twice.
-Standing reads never authorize a commitment.
+Standing reads never authorise a commitment.
 
 {/* Evidence: crates/registry-coordinator/tests/scheduling_adapter.rs
     lifecycle_operations_use_exact_public_client_routes_bodies_and_keys,
@@ -132,7 +132,7 @@ Enforcement:
 - The command and its request id are frozen and persisted before the first send.
   The id derives from the run's start identity and the step, and is sent as `Idempotency-Key` on
   every attempt.
-  The catalog declares same-command recovery, so `retry-same` and restart replay the frozen request
+  The catalogue declares same-command recovery, so `retry-same` and restart replay the frozen request
   and never mint a new id.
 - Request bodies and responses are limited to 65,536 bytes, and each attempt to the connection's
   timeout, at most 2,000 milliseconds, which also covers DNS resolution and token acquisition.
@@ -145,7 +145,7 @@ Enforcement:
   of the attempt's lease, clears the run deadline.
   Otherwise it reports the attempt uncertain without a retry, so the job is held `unknown` and
   `retry-same` can send the same command under the same id while the deadline is in the future.
-  `Retry-After` is honored only as one delta-seconds value of at most 86,400.
+  `Retry-After` is honoured only as one delta-seconds value of at most 86,400.
   Once the request may have left, a lost or broken exchange, a timeout, a redirect, any other 5xx,
   and an oversize, malformed or schema-invalid response are uncertain and hold the run.
 - Coordinator checks the response against the alias's `responseSchema`, then runs the project's
@@ -238,7 +238,7 @@ Anonymous supplies no automatic credential, though the raw command may still car
 The helper confines destination and headers, acquires any selected credential, and releases only
 the raw bounded response.
 It carries no caller policy, workflow, run ownership or downstream product authority.
-Coordinator still authenticates and authorizes each protected route, and every receiving product
+Coordinator still authenticates and authorises each protected route, and every receiving product
 still decides an effect a run requests.
 
 The two token readers differ on purpose.
@@ -312,7 +312,7 @@ the run as if a request were applied.
 
 Enforcement:
 
-- The catalog has `breg.read-proposal/v1`, `breg.start-proposal/v1`, `breg.submit-proposal/v1` and
+- The catalogue has `breg.read-proposal/v1`, `breg.start-proposal/v1`, `breg.submit-proposal/v1` and
   `breg.cancel-proposal/v1` and no operation that approves, rejects, decides or applies a Proposal.
   `breg.invoke-action/v1` refuses a Proposal Action, and the Proposal operations refuse an
   immediate Action, at check time and again at preparation against the live contract.
@@ -339,7 +339,7 @@ Enforcement:
   These columns are not encrypted: they hold no person's value and no Proposal id, and the row is
   deleted with the wait.
   Inspection adds the connection's `requestLink` with the Proposal id filled in, only for a caller
-  already authorized to inspect the run; the id grants nothing without BReg's own grant.
+  already authorised to inspect the run; the id grants nothing without BReg's own grant.
   The link must be `https` unless its host is a loopback IP address, the same rule as a connection
   endpoint; a host name such as `localhost` is refused because name resolution is outside
   Coordinator's control.
@@ -543,7 +543,7 @@ cancel, so the request is the one this run submitted.
 One structural check enforces this rule and the Proposal rule of COORDINATOR-INV-07.
 The check runs on restore as well as on check and package: the service does not start on a pinned
 package that breaks it, and a run admitted under such a definition is held (COORDINATOR-INV-12).
-Casework still authorizes each cancel under the producer's own identity; the check adds no
+Casework still authorises each cancel under the producer's own identity; the check adds no
 authority.
 
 Refused: a review cancel whose `request` is anything other than the whole output of the run's own
@@ -603,11 +603,11 @@ workflow and finding code.
 
 ### COORDINATOR-INV-13: a failure route cannot hide authority or an uncertain effect
 
-Threat: a workflow fallback intended for an unavailable read could hide an authorization refusal or
+Threat: a workflow fallback intended for an unavailable read could hide an authorisation refusal or
 continue after a mutation or model evaluation may have completed.
 It could also treat a provider error body as workflow data.
 
-Enforcement: check accepts `onFailure` only on catalog operations classified as reads or
+Enforcement: check accepts `onFailure` only on catalogue operations classified as reads or
 evaluations and includes it in the frozen acyclic graph.
 The graph propagates no call output on that edge.
 The worker takes it only on the final ordinary attempt, with no prior uncertainty, for the closed
@@ -617,7 +617,7 @@ The accepted transition carries no output and keeps only the bounded category as
 code while its successor is current; inspection retains it on the completed call job.
 Restart uses the retained attempt count, definition and edge.
 
-Refused: mutations; unknown targets; credential, configuration, authorization, preparation,
+Refused: mutations; unknown targets; credential, configuration, authorisation, preparation,
 binding, command, response and protocol failures; unknown retryable text; and every uncertain
 outcome.
 A lost or timed-out model reply stays `evaluation-uncertain` and cannot route.
@@ -726,7 +726,7 @@ The residuals refer to them by number.
 3. Resolve held Scheduling runs (hold creation, rescheduling and cancellation past idempotency
    expiry, and any ambiguous hold release) by investigating and resolving or cancelling the run.
 4. Declare only issuer and key addresses you intend Coordinator to reach.
-   A declared private address is honored; set `allowInsecureHttp: true` only where the path to the
+   A declared private address is honoured; set `allowInsecureHttp: true` only where the path to the
    issuer is trusted.
 5. For a discovery document that names a key endpoint on another private origin, declare the
    endpoint as `jwksSource.uri` or serve it from the issuer's origin.
@@ -748,7 +748,7 @@ The residuals refer to them by number.
     Update the list after the identity provider changes a client's subject, for example when the
     client or its service account is recreated.
     [Deploy Registry Coordinator](../../operate/coordinator/) says how to find it.
-11. A backend that starts runs must already have authorized, for the person it acts for, every
+11. A backend that starts runs must already have authorised, for the person it acts for, every
     record, subject and recipient identifier it passes, and any input digest it computes.
     Coordinator and the destinations cannot check this.
 12. Run workflows that must not share a Casework producer identity in separate deployments: one
@@ -787,7 +787,7 @@ Each residual names the condition under which it applies, its consequence, and t
 
 - Condition: a source that is wired as a read has side effects.
 - Consequence: it is retried after a lapsed lease.
-  Coordinator cannot prove a provider's implementation is read-only; the closed operation catalog,
+  Coordinator cannot prove a provider's implementation is read-only; the closed operation catalogue,
   fixed HTTP method and reviewed package are the boundary.
 - Mitigation: review providers before binding them as reads.
 
@@ -922,7 +922,7 @@ Each residual names the condition under which it applies, its consequence, and t
 
 - Condition: two BReg connections have Proposals that share an id.
 - Consequence: the two waits share a commitment key, which at most widens a list result the caller
-  is already authorized to see; owner and workflow scope are reapplied on every page.
+  is already authorised to see; owner and workflow scope are reapplied on every page.
 - Mitigation: none needed.
 
 {/* Evidence: crates/registry-coordinator/tests/breg_proposal_wait_postgres.rs
@@ -959,10 +959,10 @@ Each residual names the condition under which it applies, its consequence, and t
 {/* Evidence: crates/registry-coordinator/tests/helper_functions.rs
     only_math_whose_result_is_the_same_on_every_host_is_available. */}
 
-### COORDINATOR-RES-20: a trusted backend can pass an identifier it has not authorized
+### COORDINATOR-RES-20: a trusted backend can pass an identifier it has not authorised
 
 - Condition: a listed backend passes a record, subject or recipient identifier it has not
-  authorized for the person it acts for.
+  authorised for the person it acts for.
 - Consequence: Coordinator cannot tell, because the input is the backend's assertion.
   Destinations check the connection's service identity, task grant and their own policy, not the
   person a run concerns, so they do not catch it either.

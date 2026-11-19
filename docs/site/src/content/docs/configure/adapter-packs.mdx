@@ -139,7 +139,7 @@ Verify each against your own server and form before you rely on it:
   Keep `edits: rescan` and the bounded reconciliation interval.
   Deletion history is not a poll-only change feed.
 - A fixed `limit=100` returned pages of 100 and 1, followed by an empty tail.
-  A 30,000-item deployment and bulk-cap behavior were not exercised.
+  A 30,000-item deployment and bulk-cap behaviour were not exercised.
   Size the response bound and the rescan cost for each form (see
   [Wide forms](#wide-forms)).
 - `sort={"_id":1}` and the `$gt` keyset filter returned exactly the expected ascending continuation.
@@ -219,12 +219,12 @@ answer and a group.
 ## ODK Central pack
 
 No ODK Central server has been reached with this pack.
-Every upstream shape is synthesized from the published documentation, every fixture is synthetic with
+Every upstream shape is synthesised from the published documentation, every fixture is synthetic with
 `documented` provenance, and `testedVersions` is empty.
 The Central documentation names feature versions (`$orderby` since v2024.1, which this pack needs) but
 pins no server version the pack was run against.
 Treat the pack as unproved until a controlled deployment answers the questions in
-[Behavior to confirm](#behavior-to-confirm).
+[Behaviour to confirm](#behaviour-to-confirm).
 
 ### What the routes read
 
@@ -344,7 +344,7 @@ The `key` and `revision` mappings rest on documentation, not on a probe.
     odk_central_repeat_rows_key_on_their_own_id;
     products/adapter/packs/odk-central/scripts/shape-repeats.rhai. */}
 
-### Behavior to confirm
+### Behaviour to confirm
 
 Confirm each of these against a controlled deployment before you rely on the pack:
 

@@ -109,17 +109,17 @@ It is unavailable on historical reads, lookups, and relationship read paths.
 `Accept: application/json` retains the native JSON representation.
 GeoJSON `get` returns a Feature.
 A direct list returns a FeatureCollection.
-A feature's `id` is the native Record ID, `geometry` is the selected primary geometry, and `properties` contains the other selected logical fields, including authorized derived fields.
+A feature's `id` is the native Record ID, `geometry` is the selected primary geometry, and `properties` contains the other selected logical fields, including authorised derived fields.
 Revision metadata is in `registry.revision`.
 
 If `$select` omits the readable primary geometry, GeoJSON emits `geometry: null`.
 A profile that cannot read the primary geometry cannot request this representation or use bbox.
 A GeoJSON get does not supply a mutation ETag.
 
-Follow `registry.pageInfo.nextCursor` with the native `$skiptoken` option and normal authorization on every request.
+Follow `registry.pageInfo.nextCursor` with the native `$skiptoken` option and normal authorisation on every request.
 A cursor binds the effective query, selection, page size, profile, authority, package, and representation, so do not change those options on continuation.
 Pages read live data, not a frozen snapshot, so concurrent writes can affect traversal.
-Count remains separately authorized and opt-in.
+Count remains separately authorised and opt-in.
 
 GeoJSON responses and bbox query responses are limited to 2 MiB of canonical JSON bytes.
 A response over that limit fails atomically through the read service's `source.unavailable` refusal, without a partial feature collection.
@@ -158,7 +158,7 @@ QGIS requires absolute links to retain authentication and follow every page.
 
 The adapter accepts `bbox`, `limit`, `cursor`, and `f=json`.
 An oversized `limit` is clamped to the compiled page maximum, with an opaque cursor-only next link when more rows remain.
-It returns flat authorized attributes and `numberReturned`.
+It returns flat authorised attributes and `numberReturned`.
 It does not compute hidden extents or counts.
 
 The stock issuer in the quickstart accepts private-key JWT clients only, so it has no QGIS authentication recipe.
@@ -192,7 +192,7 @@ Runtime and migration roles cannot install or upgrade the extension.
 The bbox role owns only generated views that return matching Record IDs.
 It cannot write data, own tables, or bypass row security.
 The ordinary runtime has no membership in that role.
-It joins the ID views to compute authorized attributes, derived values, filters, and pages through the normal read path.
+It joins the ID views to compute authorised attributes, derived values, filters, and pages through the normal read path.
 
 Run `bregctl doctor --runtime-config /absolute/path/to/runtime.yaml` to check the configured package and startup dependencies without opening a listener.
 If a GIS package reports `startup.database.unready`, have the database administrator verify the supported PostGIS version, extension schema, schema `USAGE` grants, and bbox-role privileges, as well as the package's maintenance and schema state.

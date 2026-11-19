@@ -191,7 +191,7 @@ Related rows are the neighbouring enforced behaviour, not the residual itself.
 ### DOCUMENTS-RES-05: a verifier rollout leaves an older instance releasing
 
 - Condition: instances run different verifier bindings during a rollout.
-- Consequence: an older instance can finalize a version after a newer one swept, and release it
+- Consequence: an older instance can finalise a version after a newer one swept, and release it
   under the older binding until the next restart sweeps it.
   A worker under the newer binding only retries its job.
 - Mitigation: obligation 4.

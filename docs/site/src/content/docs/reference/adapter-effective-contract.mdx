@@ -159,8 +159,8 @@ A successful response is the export envelope plus:
 The endpoint returns `adapter.contract.unavailable` when it cannot query the journal or when the live
 migration set differs from the set the binary supports.
 A gateway pins the expected `digest` and reads the protected runtime document when it establishes
-catalog readiness.
-A mismatch or unavailable readiness prevents the catalog from being served.
+catalogue readiness.
+A mismatch or unavailable readiness prevents the catalogue from being served.
 A separate metadata read before every invocation is not required.
 Readiness does not probe the upstream source, so do not present it as a source-health or end-to-end
 facade check.

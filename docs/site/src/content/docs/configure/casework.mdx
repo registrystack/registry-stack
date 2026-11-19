@@ -110,13 +110,13 @@ single-reviewer-approval`, `two-peer-approval`, or
 `technical-check-then-authorization`. The two-peer pattern supplies two local people on one
 Staff profile. The technical pattern gives its first stage `negativeDecisions: advise`:
 each completed decision counts toward its threshold, including a rejection or request for
-changes, then a separate authorizer decides. The default, `settle`, retains the immediate
+changes, then a separate authoriser decides. The default, `settle`, retains the immediate
 negative veto. An advisory stage must have a later stage; `check` refuses an advisory final
 stage. `explain` reports the effective mode.
 
-Earlier advisory reasons remain available to authorized reviewers in decision history.
+Earlier advisory reasons remain available to authorised reviewers in decision history.
 The producer receives only the settling outcome and its public reason. All three patterns
-exclude the initiator; the technical pattern also excludes earlier reviewers from authorization.
+exclude the initiator; the technical pattern also excludes earlier reviewers from authorisation.
 
 {/* Evidence: crates/registry-caseworkctl/src/templates.rs, approval_project;
     crates/registry-casework-core/src/review.rs, ReviewNegativeDecisionMode and record_review_decision;
@@ -129,7 +129,7 @@ must see the source's current record sets `mode: current-source` and names a
 `trustedProducers` names each calling system: its access profile, issuer, subject, source
 namespaces, and the policies it may request.
 
-The digest covers the policy's behavior and everything it depends on: stages, context, outcomes,
+The digest covers the policy's behaviour and everything it depends on: stages, context, outcomes,
 access profiles, queues, teams, producers, and the clocks and calendars it uses. A producer that
 names only the policy ID is bound to the active version and digest when Casework accepts its
 request. A producer that pins `version` and `digest` is refused with `review.policy-mismatch` once
@@ -189,7 +189,7 @@ revision: 7
 dates: [2026-09-07]
 ```
 
-Check the project and prove its fixture again. The clock changed the policy's behavior, so its
+Check the project and prove its fixture again. The clock changed the policy's behaviour, so its
 digest changes:
 
 ```sh
@@ -316,7 +316,7 @@ exchange support before enabling the policy.
 
 Policy, stage, routing-rule, queue, team and outcome labels are presentation text for people.
 They are single-line values: tabs, line feeds, carriage returns and other control characters are refused.
-Stable references use ids, and labels do not change a policy's behavioral binding digest.
+Stable references use ids, and labels do not change a policy's behavioural binding digest.
 
 A policy binding closes over every access profile, queue, team and the project inbox, even when one policy does not currently name them.
 It also closes over that policy's referenced clocks and calendars, context provider, task templates and trusted producers.
@@ -409,14 +409,14 @@ A decided result names its `outcome` and any `publicReason`; a cancelled or supe
 
 A completion destination, when configured, receives an authenticated wake with event, request and result identifiers.
 Delivery is at-least-once.
-A wake carries no decision payload; the producer fetches the result and authorizes any later mutation independently.
+A wake carries no decision payload; the producer fetches the result and authorises any later mutation independently.
 [Receive Casework completion wakes](../casework-completion-receivers/) defines the wake.
 
 ## Record decisions
 
 Human reviewers read `GET /v1/review-tasks`, then claim, assign, delegate, release, draft privately, or decide a task under its current revision.
 Send `If-Match` and `Idempotency-Key` on the documented mutations.
-Decisions and task holdings are revision-fenced; an old response cannot authorize a later state.
+Decisions and task holdings are revision-fenced; an old response cannot authorise a later state.
 
 The decision vocabulary belongs to the policy: `approve`, `reject`, `changes-requested` or `answer`, each naming one of the policy's declared outcomes.
 A reason or structured result is required when the selected outcome requires one.
@@ -560,7 +560,7 @@ A changes projection needs ordinary Record read authority over those fields and 
 Bypass writes are warnings for an operator to assess, and documents are never added to the proposed context.
 If the Action writes encrypted fields, BReg cannot export their before and after values.
 The command then asks you to author a supported context explicitly, such as an inputs-only context, and rerun; it never silently drops changed fields.
-An automatic context exceeding 64 context fields or 64 selected fields in one changes projection also requires an explicitly authored, minimized context.
+An automatic context exceeding 64 context fields or 64 selected fields in one changes projection also requires an explicitly authored, minimised context.
 
 {/* Evidence: crates/registry-caseworkctl/src/provider_add.rs breg-changes-needed;
     crates/registry-caseworkctl/src/report.rs breg-changes-needed */}
@@ -638,8 +638,8 @@ Casework does not start BReg or modify its access profiles.
 
 ### How a human read reaches the source
 
-The reviewer sends the current human bearer and selects an authorized BReg source profile with `Registry-Source-Profile` for open Casework work, source context, lists, decisions and new notes.
-BReg must trust that issuer and audience, authorize the selected profile and subject, and grant `get-review-context` with the intended field disclosure.
+The reviewer sends the current human bearer and selects an authorised BReg source profile with `Registry-Source-Profile` for open Casework work, source context, lists, decisions and new notes.
+BReg must trust that issuer and audience, authorise the selected profile and subject, and grant `get-review-context` with the intended field disclosure.
 It applies that profile's disclosure and checks the exact Proposal binding.
 Casework never substitutes its service credential for a human display read.
 
@@ -652,7 +652,7 @@ The service credential uses only its separate status and optional task-grant pro
 A task-grant read sends Casework's request and task correlation plus the frozen Proposal identity, contract, accepted policy, purpose and exact requested fields.
 Those values bind the read; they do not grant authority or prove BReg verified a Casework task exists.
 BReg can match the request ID and exact policy against its accepted review binding; the task ID and purpose remain Casework correlation.
-There is no generic Proposal read or source synchronization in this integration.
+There is no generic Proposal read or source synchronisation in this integration.
 
 {/* Evidence: crates/registry-casework-breg/tests/context_provider.rs;
     crates/registry-casework-core/src/http.rs registry-source-authorization */}
@@ -666,7 +666,7 @@ New notes still require current source disclosure.
 Once the request has left review (it is terminal) and the exact source binding remains disclosed but is no longer reviewable, the reviewer who recorded a task's retained decision can read that task's context, and only that task's.
 Other eligible reviewers, including the authors of other tasks on the same request, receive not found.
 An earlier stage's author receives not found while the request is still in review.
-The author reads the source's current projection, still authorized by the source with the caller's own token and source profile, until the result's retention ends.
+The author reads the source's current projection, still authorised by the source with the caller's own token and source profile, until the result's retention ends.
 Casework checks authorship and the reviewer's current membership, profile and retention before the provider read, and checks them again after it.
 
 {/* TODO[evidence]: name the test that proves the retained-decision author context read and the not-found cases for other reviewers */}
@@ -674,7 +674,7 @@ Casework checks authorship and the reviewer's current membership, profile and re
 ### Read the operator summary
 
 An inbox page that omits current-source work emits one value-free operator summary.
-Expected concealment, source authorization filtering or binding movement is `INFO`.
+Expected concealment, source authorisation filtering or binding movement is `INFO`.
 An explicit provider denial, contract mismatch or missing source-profile selection is `WARN`.
 The summary carries refusal classes but no task count, profile value, subject, reference or credential.
 
@@ -688,9 +688,9 @@ A `WARN` summary identifies a refusal that Casework can prove is a provider or c
 ### Who does what
 
 The trusted BReg producer creates or recovers the ReviewRequest and later fetches the immutable ReviewResult.
-An apply principal authorized by BReg independently rechecks and applies the Proposal, with a separate BReg principal and BReg's own fresh authority check.
-Casework neither synchronizes source records nor executes a source action.
-Use submitted context when the producer is authorized to give Casework a stable minimized snapshot and source availability or revocable disclosure is unnecessary.
+An apply principal authorised by BReg independently rechecks and applies the Proposal, with a separate BReg principal and BReg's own fresh authority check.
+Casework neither synchronises source records nor executes a source action.
+Use submitted context when the producer is authorised to give Casework a stable minimised snapshot and source availability or revocable disclosure is unnecessary.
 
 ## Staff and account for review work
 
@@ -714,12 +714,12 @@ The reference filter and sort match the exact reference the producer or provider
 A BReg producer supplies its machine string `breg:{registry}:{action}:{proposal}:{version}`, so staff cannot find a BReg review by a business number such as a licence number.
 
 A subject clock covers one request, and a resubmission starts a new budget.
-Submitted routing reads the admitted snapshot; current-source routing uses the provider's minimized routing capability and retains derived metadata.
+Submitted routing reads the admitted snapshot; current-source routing uses the provider's minimised routing capability and retains derived metadata.
 
 ### Recover and supervise
 
 `GET /v1/review-tasks/own-decisions` lets an eligible reviewer recover their own retained decision receipts.
-Supervisors can inspect their serving queues through `/v1/review-tasks/supervision` and the independently authorized, audited `/v1/review-accountability/{eventId}`.
+Supervisors can inspect their serving queues through `/v1/review-tasks/supervision` and the independently authorised, audited `/v1/review-accountability/{eventId}`.
 Own receipts omit private reasons and producer results; accountability does not release review context.
 
 Directory teams, absence cover, membership and queue service remain current authority.
@@ -733,7 +733,7 @@ Adding a new note also retains the current source-visibility check.
 
 Supervisory discovery deliberately omits holder identities and due dates.
 It is an accountability view, not a team holdings board.
-Use the Directory to choose the source officer and an authorized caseload preview to inspect the proposed move.
+Use the Directory to choose the source officer and an authorised caseload preview to inspect the proposed move.
 Reviewer eligibility is not a substitute for supervisor authority.
 
 {/* Evidence: crates/registry-casework/src/http.rs own-decisions, review-tasks/supervision, review-accountability */}
@@ -764,14 +764,14 @@ These three reads do not return partial budget-exhausted pages.
 Caseload preview selects all of the source officer's claimed tasks, optionally restricted to one queue, with a maximum of 100 tasks.
 It has no subset, limit or continuation parameter.
 Apply moves that exact revision-fenced set atomically.
-Use individual authorized task assignments for a selected subset; those assignments are independent transactions.
+Use individual authorised task assignments for a selected subset; those assignments are independent transactions.
 
 Apply a caseload or clock recompute preview within 15 minutes.
 Once applied, a retry with the same preview answers the same result for 24 hours, even if the Directory changed since, so a lost response can be recovered.
 
 ### Staffing notices
 
-An authorized ReviewTask read or supervisory row can include `staffingDiagnostic: no-cover-available` when assignment or absence recompute finds no eligible cover.
+An authorised ReviewTask read or supervisory row can include `staffingDiagnostic: no-cover-available` when assignment or absence recompute finds no eligible cover.
 This notice reveals no holder or source context.
 Successful assignment, claim, caseload transfer, release or task closure clears it; a closed task does not display an old staffing notice.
 

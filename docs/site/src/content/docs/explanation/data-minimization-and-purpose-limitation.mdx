@@ -1,6 +1,6 @@
 ---
-title: Data minimization and purpose limitation by design
-description: How the Registry Stack architecture supports data minimization and purpose limitation, where those supports depend on operator configuration, and which data-subject-rights obligations it does not address.
+title: Data minimisation and purpose limitation by design
+description: How the Registry Stack architecture supports data minimisation and purpose limitation, where those supports depend on operator configuration, and which data-subject-rights obligations it does not address.
 status: draft
 owner: registry-docs
 source_repos:
@@ -15,13 +15,13 @@ standards_referenced:
 
 ## How the requirement model limits collection at the source
 
-The first place minimization appears is in the unit of data the system is built around.
+The first place minimisation appears is in the unit of data the system is built around.
 A requirement describes one reviewed question and the exact values its answer may carry, not a
 whole record, so returning a full record would over-collect relative to the question actually
 asked.
 The design treats the narrow question, not the record, as the thing to be answered.
 
-The project author still decides which source fields the answer needs. Minimization therefore
+The project author still decides which source fields the answer needs. Minimisation therefore
 depends on a reviewed contract and its fixtures, not on a runtime deriving a source projection
 from the question it was asked.
 
@@ -37,9 +37,9 @@ for access rather than an after-the-fact annotation.
 Several of these protections apply only when configured; the operator-responsibilities section
 lists them.
 
-## Minimization at the output: closed value forms
+## Minimisation at the output: closed value forms
 
-Minimization also applies to what leaves the boundary. Registry Evidence has no caller-selectable
+Minimisation also applies to what leaves the boundary. Registry Evidence has no caller-selectable
 disclosure at all, so there is no request-time negotiation to review.
 
 Instead, a requirement declares one to sixteen *concepts*, and each concept fixes the exact *value
@@ -59,7 +59,7 @@ There is no equivalent of the retired redacted mode, and this is structural rath
 omission: an assertion must carry at least one supported value, so an assertion with nothing in it
 cannot be produced. A request that cannot be answered returns a problem document and no assertion.
 
-Minimization can continue past the response boundary when the operator enables the SD-JWT VC
+Minimisation can continue past the response boundary when the operator enables the SD-JWT VC
 format. That format is a second encoding of the same assertion, never a credential lifecycle: the
 signed body carries a SHA-256 digest of each selectively disclosable value, so a holder can later
 present a subset. A value uses one disclosure by default. A governed structured value can instead
@@ -82,7 +82,7 @@ A requirement may instead declare the holder-bound subject binding mode, which c
 credential is bound to and moves the audience check from issuance to presentation. The service
 still issues no key-binding JWT and holds no presentation state; verification is a relying-party
 act, performed by the portable verifier or the `evidence verify-presentation` operator command.
-For minimization the mode is a trade rather than a gain: the same holder key, trust domain,
+For minimisation the mode is a trade rather than a gain: the same holder key, trust domain,
 purpose, subject role, selector profile, and selector values yield the same binding for every
 verifier, so a holder who reuses one key is correlatable across the verifiers it presents to.
 Holder-bound issuance also refuses the two entity-reference value forms, and a holder-bound
@@ -91,11 +91,11 @@ echo them to.
 
 Purpose behaves the same way on both sides of the boundary. A relying party compares the issuance
 purpose as signed provenance: it records why the assertion was produced and licenses, limits, or
-authorizes nothing about what the relying party may now do with it. Under the holder-bound mode
+authorises nothing about what the relying party may now do with it. Under the holder-bound mode
 that record is also disclosed to every verifier the credential reaches, and it is a
 low-cardinality attribute, so treat it as visible rather than internal.
 
-A further minimization detail guards against a subtler leak.
+A further minimisation detail guards against a subtler leak.
 No match, ambiguity, a missing required fact, and an unresolved derivation input all collapse into
 one problem response with the same title and body shape, so a caller cannot use a refusal to learn
 whether a record exists. The outcomes stay distinct in the audit record; collapsing is a property
@@ -111,7 +111,7 @@ only when it cannot do the job. In plain words, from weakest to strongest:
 3. Counts, rates, or other totals.
 4. A match, mismatch, or "cannot tell" on facts the caller already holds.
 5. A computed fact, such as "is registered" or "is eligible", without the record behind it.
-6. A fact the person states, labeled as self-stated.
+6. A fact the person states, labelled as self-stated.
 7. A rendered document filtered to what is allowed.
 8. A signed credential or receipt for a named purpose and validity period.
 9. Selected fields of the record, only when the law allows a record-level look and the access is
@@ -130,7 +130,7 @@ to stop.
 
 ## Data stays at source: distributed custody
 
-Underneath all of this is an architectural choice that matters for minimization at the system
+Underneath all of this is an architectural choice that matters for minimisation at the system
 level: data stays at source.
 The design premise is distributed custody: the stack provides an API surface for lawful exchange
 between authorities and does not aggregate data into a central system.
@@ -148,7 +148,7 @@ describes this as a limit, not a feature.
 One related boundary is positive rather than cautionary.
 The portable metadata the stack publishes must not carry person-level data or runtime secrets and
 bindings, which is precisely why those artifacts are safe to share: they hold no personal data.
-But publishing metadata only describes; it does not authorize access, enforce a policy, or assert
+But publishing metadata only describes; it does not authorise access, enforce a policy, or assert
 that any record exists, so a published manifest carries no data-protection guarantee about live
 data.
 
@@ -186,13 +186,13 @@ The full, canonical inventory is in [Known limitations and non-guarantees](../kn
 There is also no revocation, suspension, status list, or credential-status endpoint of any kind: an
 assertion carries a validity window and is otherwise final once released. Cross-authority
 federation, aggregate-analytics privacy budgeting, and the general compliance disclaimer are
-likewise stack-wide absences rather than specifics of data minimization or purpose limitation, but
+likewise stack-wide absences rather than specifics of data minimisation or purpose limitation, but
 a data-protection assessment should weigh them too.
 See the [known limitations hub](../known-limitations/) for the full inventory.
 
 ## Operator responsibilities: what the design leaves to you
 
-The minimization and purpose-limitation posture this page describes is the design default, but the
+The minimisation and purpose-limitation posture this page describes is the design default, but the
 operator owns the configuration.
 Several of the protections are conditional, and a reviewer should test the deployment, not the
 design, for each one.
@@ -212,8 +212,8 @@ edge rate limiting, deployment configuration, and incident response are not defi
 they are responsibilities you provision and verify in a deployment.
 For the concrete stores and product expiry points, see
 [Retention and persistent state](../../operate/retention-and-persistent-state/).
-Registry Stack offers minimization, purpose limitation, and
-accountability as enforceable design primitives, but whether a given deployment realizes them (and
+Registry Stack offers minimisation, purpose limitation, and
+accountability as enforceable design primitives, but whether a given deployment realises them (and
 whether it meets any legal obligation) depends on how the operator configures and runs it.
 
 ## Related

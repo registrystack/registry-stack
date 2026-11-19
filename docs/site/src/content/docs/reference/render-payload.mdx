@@ -13,7 +13,7 @@ standards_referenced:
 ---
 
 Registry Render injects exactly one input into a template, `sys.inputs.data`, as a JSON string.
-Those bytes are the RFC 8785 canonicalization of the envelope below. The sha256 of those exact
+Those bytes are the RFC 8785 canonicalisation of the envelope below. The sha256 of those exact
 bytes is the `dataDigest` the caller stores on the record.
 
 ```typst
@@ -97,7 +97,7 @@ sits at the bundle root. Hashing covers the exact bytes.
 all derive from it. A re-render with the same `issuedAt` and data is byte-identical; changing it
 changes bytes.
 
-The instant is normalized to UTC: `2026-09-16T13:32:00+03:00` and `2026-09-16T10:32:00Z` are the
+The instant is normalised to UTC: `2026-09-16T13:32:00+03:00` and `2026-09-16T10:32:00Z` are the
 same render. The caller's UTC offset is deliberately not preserved, and the envelope carries the
 `Z` form only.
 
@@ -140,7 +140,7 @@ inputs, so a golden can cover a template's sealed variant.
 Read the member with `payload.at("signing", default: none)` so one template serves both routes.
 
 - `mode` is always `"seal"`.
-- `signerName` is the seal certificate's display name (its organization, else its common name). It
+- `signerName` is the seal certificate's display name (its organisation, else its common name). It
   is absent when the certificate names neither.
 - `testOnly` is `true` when the runtime declares `assuranceProfile: local`. Print a visible test
   marking then, because a test seal is not an official document. The `registry-render init`

@@ -15,7 +15,7 @@ A read permission in Base Registry Engine (BReg) can require the subject's recor
 Consent decisions are ordinary create-only Records written by governed Actions.
 PostgreSQL checks them on every read, so a withdrawal takes effect for the next request without a token change, cache flush, or restart.
 
-Consent here gates disclosure to a recipient organization that reads through its own client.
+Consent here gates disclosure to a recipient organisation that reads through its own client.
 It is not a lawful-basis engine, a consent-request workflow, or a credential: the registry records what the subject decided and refuses a gated read that the recorded decisions do not cover.
 
 The examples on this page come from the `consent-person-registry` and `consent-land-registry` example projects, so their values are those fixtures' values.
@@ -49,23 +49,23 @@ recipients:
         - health-ngo
 ```
 
-Organization and group ids share one namespace and use the lowercase identifier grammar.
-A client acts for at most one organization.
-Group members are distinct declared organizations, groups do not nest, and an organization belongs to at most 63 groups.
-An organization with no clients is retired: it keeps its code so stored decisions stay valid, and no client acts for it.
+Organisation and group ids share one namespace and use the lowercase identifier grammar.
+A client acts for at most one organisation.
+Group members are distinct declared organisations, groups do not nest, and an organisation belongs to at most 63 groups.
+An organisation with no clients is retired: it keeps its code so stored decisions stay valid, and no client acts for it.
 
-The compiler synthesizes two vocabularies from this block and the gated profiles.
+The compiler synthesises two vocabularies from this block and the gated profiles.
 You cannot declare them by hand.
 
 | Vocabulary | Values |
 |---|---|
-| `registry-recipients` | every organization and group id |
+| `registry-recipients` | every organisation and group id |
 | `registry-consent-scopes` | every profile id that carries `requireConsent`, plus each id in `retiredConsentScopes` |
 
-A synthesized vocabulary exists only once it has values, so a project whose consent Record uses `registry-consent-scopes` compiles only after some permission requires consent.
+A synthesised vocabulary exists only once it has values, so a project whose consent Record uses `registry-consent-scopes` compiles only after some permission requires consent.
 Until then the compiler reports `breg.consent.require-unused` and names the `requireConsent` line to add, or the `retiredConsentScopes` entry that keeps a former scope.
 
-At startup, every client that a recipient organization lists must also be in the issuer's `allowedClients`.
+At startup, every client that a recipient organisation lists must also be in the issuer's `allowedClients`.
 The runtime refuses to start otherwise, so a recipient client can never be one the verifier would reject.
 
 {/* Evidence: crates/registry-breg/tests/consent_access.rs recipient_ids_are_unique_codes;
@@ -205,7 +205,7 @@ Any other `on` value names a plaintext stored reference to the consent subject's
 A row whose reference is empty is never disclosed.
 Every listed check must hold.
 
-A gated profile needs `actorKind`, `requesterClients` that a declared recipient organization lists, and `requiredPurposes` drawn from the consent Record type's purpose vocabulary.
+A gated profile needs `actorKind`, `requesterClients` that a declared recipient organisation lists, and `requiredPurposes` drawn from the consent Record type's purpose vocabulary.
 
 {/* Evidence: crates/registry-breg/tests/consent_access.rs gated_profiles_declare_purposes_from_the_record_vocabulary;
     crates/registry-breg/tests/consent_access.rs gated_profiles_declare_mapped_requester_clients;
@@ -293,12 +293,12 @@ A gated row is disclosed while, for every `requireConsent` check, a live give ex
 - effective end is after the transaction start;
 - and no later revoke supersedes it.
 
-The caller's recipients come from the verified requester client (`azp` or `client_id`): the organization that lists the client, plus every group that organization belongs to.
+The caller's recipients come from the verified requester client (`azp` or `client_id`): the organisation that lists the client, plus every group that organisation belongs to.
 A token cannot supply them.
-A client no organization lists has an empty recipient set, so every check it reaches fails closed.
+A client no organisation lists has an empty recipient set, so every check it reaches fails closed.
 
-A group give and an organization give are separate keys.
-A food agency that received both keeps reading while either is live; withdrawing the group give ends it for every member organization that had no give of its own.
+A group give and an organisation give are separate keys.
+A food agency that received both keeps reading while either is live; withdrawing the group give ends it for every member organisation that had no give of its own.
 
 {/* Evidence: crates/registry-breg/tests/postgres_consent_access.rs real_postgres_consent_matches_recipient_sets_purpose_and_scope_exactly;
     crates/registry-breg/tests/postgres_consent_access.rs real_postgres_consent_gates_every_read_operation_on_id_and_on_reference;
@@ -355,7 +355,7 @@ Not enforced:
   A recipient learns of every non-refusal decision addressed to it, including a withdrawal for a subject it never received a give for.
 - Assisted capture and link provisioning rely on staff integrity plus the audit journal.
   The engine cannot tell a real assisted decision from an invented one.
-- List response timing is not equalized.
+- List response timing is not equalised.
   A caller that can measure latency across many requests may infer the size of a gated population.
 - The engine has no consent-request or pending state.
   A request for consent is outside the registry; only the subject's decision is recorded.
@@ -402,7 +402,7 @@ Consent codes are append-only.
 Stored decisions carry recipient and scope codes, so a migration that removes one fails against existing rows and `bregctl diff` flags it.
 Retire instead:
 
-- A recipient organization is retired by removing its clients; its code stays.
+- A recipient organisation is retired by removing its clients; its code stays.
 - A gated scope is retired by renaming the profile and listing the old id in `retiredConsentScopes`.
   The gated profile id is the scope subjects consented to, so removing `requireConsent` in place, or widening the profile's fields, operations, lookups, or read paths, would read under a scope the subjects never saw.
   A new profile id is a new scope and asks again.
@@ -420,7 +420,7 @@ A package built before the engine recorded each input's vocabulary cannot show a
 
 - A gated profile widens, including added lookups or read paths: the profile is the scope, and a new profile id asks again.
 - `requireConsent` is removed: rename the profile and retire the scope instead.
-- A client is added to an organization: every existing give to the organization and its groups extends to the client.
+- A client is added to an organisation: every existing give to the organisation and its groups extends to the client.
 - A group's members change: every existing group give changes holders, so prefer a new group id and clause.
 - `maximumDurationDays` is raised: existing gives last longer than the notice said.
 - A consent vocabulary code is removed: codes are append-only, so retire the code.
@@ -432,7 +432,7 @@ Removing a client or lowering `maximumDurationDays` narrows access and carries n
 The `reason` is a review aid in tooling output, not a runtime guarantee: the registry enforces what the new package declares.
 
 A consent Record type change replaces its probe function, so it is an access change and never metadata-only.
-Recipient organization and group changes are metadata-only access changes.
+Recipient organisation and group changes are metadata-only access changes.
 A successor replaces or drops each probe and index so the result matches a fresh install.
 A changed key or revoke set drops the prior consent index and builds the new one with a plain `CREATE INDEX` in the migration's transaction, because `CREATE INDEX CONCURRENTLY` cannot run inside one; the diff lists the dropped and built indexes under `consentIndexes`.
 
@@ -451,7 +451,7 @@ A changed key or revoke set drops the prior consent index and builds the new one
 
 ## Explain and preview
 
-`bregctl explain access` reports a `consent` section: the disclosure condition, how unmapped clients fail closed, the trust model of the probe markers, the rule for ungating, every recipient organization and group, and, for each gated permission, its record, key, indexes, readable fields, client recipients, and issuing Actions with their issuer kind.
+`bregctl explain access` reports a `consent` section: the disclosure condition, how unmapped clients fail closed, the trust model of the probe markers, the rule for ungating, every recipient organisation and group, and, for each gated permission, its record, key, indexes, readable fields, client recipients, and issuing Actions with their issuer kind.
 
 An access preview scenario takes `actorKind` and `requesterClient`.
 The preview derives the recipient set from the client the way the runtime does and reports it as `recipients`; an unmapped or absent client yields an empty set.

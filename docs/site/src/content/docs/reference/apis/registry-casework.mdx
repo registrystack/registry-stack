@@ -107,7 +107,7 @@ history, clocks, and notes. Every response carries `Cache-Control: no-store`.
 ReviewPolicy active at admission, or send both to require the `identity` that
 `GET /v1/review-policies/{policy_id}` returned; a differing pin is `review.policy-mismatch`. The
 ReviewResult repeats the accepted binding with the subject and `submissionDigest`; the consumer
-checks that correlation and authorizes any business change itself.
+checks that correlation and authorises any business change itself.
 
 After a lost response, resend the same `Idempotency-Key` and the same body: the first submission
 answered `201`, the resend `200` with the same `requestId`. A changed body under that key is
@@ -129,7 +129,7 @@ the accepted values in `registry-casework-validation-allowed` when the field tak
 requester routes spell the first two `registry-review-validation-path` and
 `registry-review-validation-reason`. Give your operator the `traceId`, never a token or a body.
 
-The table lists every code the Rust, Node.js, and Python clients recognize. A code outside it comes
+The table lists every code the Rust, Node.js, and Python clients recognise. A code outside it comes
 from a newer service; treat it by its status.
 
 <ApiReferenceTable id="problem-codes" source="casework-api" />
