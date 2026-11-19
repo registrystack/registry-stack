@@ -1125,6 +1125,18 @@ An uncertain submission stays held, and Coordinator can reconcile the original a
 The `mifos-legacy-signature` host profile signs the exact Bulk request and verifies the raw acknowledgement and the expected tenant before interpreting it.
 Request signing and response verification use separate pinned Transit keys, and Operations status reads use a separate bearer credential.
 
+A disbursement connection pins its provider pack by id, version and digest.
+Pass that pack to the host with `--payment-provider-pack`, and repeat the option for every pack an active connection or a retained attempt still pins:
+
+```sh
+adapter serve --runtime-config /absolute/path/runtime.yaml \
+  --payments-config /absolute/path/payments.yaml \
+  --payment-provider-pack /absolute/path/mifos-payment-hub/pack.yaml
+```
+
+Registry Stack does not publish a Mifos Payment Hub EE pack yet, so the operator supplies a reviewed pack whose bytes match the pin.
+`adapterctl payments check` takes the same pack with `--provider-pack` and checks the pin offline.
+
 The separate confirmation operation accepts only a disbursement identifier.
 The Adapter reports verified provider completion through its restricted BReg Action, using the original instruction facts and a separately keyed exact command.
 The resulting confirmation records what the provider reported; credit to the recipient and settlement require separate authoritative evidence.
