@@ -108,7 +108,7 @@
     },
     "RhaiExpression": {
       "additionalProperties": false,
-      "description": "A Rhai expression reference: the digest-pinned file from the pack's\nscript inventory and the precompiled entrypoint to call\n(`products/adapter/CONCEPT.md` sections 5.6 and 8.5). Inline code is\nrefused (CFG-EMBED-1).",
+      "description": "A Rhai expression reference: the digest-pinned file from the pack's\nscript inventory and the precompiled entrypoint to call. Inline code is\nrefused (CFG-EMBED-1).",
       "properties": {
         "entrypoint": {
           "description": "The precompiled entrypoint the engine calls.",
@@ -127,7 +127,7 @@
     },
     "ScriptReference": {
       "additionalProperties": false,
-      "description": "A script seam: code in its own file beside the pack, referenced by a\nrelative path and pinned by digest (CFG-EMBED-1). Scripts never carry\ncredentials and never construct URLs; the `http` component builds every\nrequest from its declared template\n(`products/adapter/CONCEPT.md` section 5.6).",
+      "description": "A script seam: code in its own file beside the pack, referenced by a\nrelative path and pinned by digest (CFG-EMBED-1). Scripts never carry\ncredentials and never construct URLs; the `http` component builds every\nrequest from its declared template.",
       "properties": {
         "digest": {
           "$ref": "#/$defs/Digest",
