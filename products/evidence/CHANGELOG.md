@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- A `requestNonce` that is not 32 random bytes in unpadded base64url (43
+  characters), or that repeats within a batch, is now refused as
+  `request.nonce-invalid` (400) instead of `evidence.invalid-request`. The
+  static problem detail states the expected format; it never carries the value
+  sent. Clients that branch on `evidence.invalid-request` for this case must
+  also accept the new code; the Evidence clients already classify it as
+  `invalid-request`.
+- A synthetic consumer verification vector under
+  `fixtures/conformance/consumer-verification/` gives a relying party's own
+  test suite a signed response, the key to pin, the expectations, and the
+  cases it must accept or refuse. See
+  [Verify an Evidence answer](https://docs.registrystack.org/configure/verify-an-evidence-answer/).
+
 ## 0.47.0 - 2026-11-20
 
 - `rstack dev` runs Evidence projects, alone or with BReg. An Evidence project

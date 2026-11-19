@@ -1,0 +1,57 @@
+{
+  "fixture": "registry.evidence.consumer-verification/v1",
+  "syntheticOnly": true,
+  "request": "../golden/adult-request.json",
+  "response": "response.json",
+  "trustedJwks": "jwks.json",
+  "policy": "policy.json",
+  "cases": [
+    {
+      "id": "accepted",
+      "verifyAt": "2026-08-02T12:00:00Z",
+      "result": "accept"
+    },
+    {
+      "id": "last-second-before-valid-until",
+      "verifyAt": "2026-08-02T23:59:59Z",
+      "result": "accept"
+    },
+    {
+      "id": "at-valid-until",
+      "verifyAt": "2026-08-03T00:00:00Z",
+      "result": "refuse",
+      "verifierKind": "time"
+    },
+    {
+      "id": "before-issued-at",
+      "verifyAt": "2026-08-01T23:59:59Z",
+      "result": "refuse",
+      "verifierKind": "time"
+    },
+    {
+      "id": "nonce-of-another-request",
+      "verifyAt": "2026-08-02T12:00:00Z",
+      "policyChanges": {
+        "requestNonce": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI"
+      },
+      "result": "refuse",
+      "verifierKind": "policy"
+    },
+    {
+      "id": "another-audience",
+      "verifyAt": "2026-08-02T12:00:00Z",
+      "policyChanges": {
+        "audience": "urn:example:fixture:audience:requester-b"
+      },
+      "result": "refuse",
+      "verifierKind": "policy"
+    },
+    {
+      "id": "payload-changed",
+      "verifyAt": "2026-08-02T12:00:00Z",
+      "responseChange": "replace-first-payload-character",
+      "result": "refuse",
+      "verifierKind": "signature"
+    }
+  ]
+}
