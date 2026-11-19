@@ -2,7 +2,7 @@
 //! Offline payment configuration checks; neither command resolves credentials.
 use crate::payment_fixtures::{self, FixtureError};
 use clap::{Args, Subcommand};
-use registry_adapter::payments::config::{PaymentsConfig, API_VERSION, KIND};
+use registry_adapter::payments::config::{ConfigError, PaymentsConfig, API_VERSION, KIND};
 use registry_adapter::payments::pack::{
     ConnectorKind, PaymentCapability, PaymentProviderAuth, PaymentProviderPack, ProviderPackPin,
 };
@@ -263,10 +263,16 @@ pub fn run(command: &PaymentsCommand) -> PaymentCheck {
     let mut companion_diagnostics = Vec::new();
     let mut value = json!({});
     if let Some(loaded) = &check.loaded {
-        if loaded.config.validate().is_err() {
-            additional.push(check.error_at(KIND, "adapter.payment.configuration", "/connections",
-                "The payment connections were refused.",
-                "Check connection scopes, unique caller identities, currency and synthetic provider bindings; then retry."));
+        if let Err(error) = loaded.config.validate() {
+            additional.push(if error == ConfigError::COLLECTION_SIMULATION_ONLY {
+                check.error_at(KIND, error.code(), "/connections",
+                    "A collection connection names a live provider; collections run only against the synthetic simulator.",
+                    "Bind each collection to the simulator provider with simulation: true; then retry.")
+            } else {
+                check.error_at(KIND, error.code(), "/connections",
+                    "The payment connections were refused.",
+                    "Check connection scopes, unique caller identities, currency and synthetic provider bindings; then retry.")
+            });
         } else {
             match ProviderPackRegistry::load(provider_packs) {
                 Ok(registry) => {

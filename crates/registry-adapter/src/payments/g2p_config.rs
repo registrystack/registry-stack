@@ -30,8 +30,8 @@ impl G2pConnection {
                 != self.allowed_clients.len()
             || !super::config::text(&self.required_scope, 128)
         {
-            return Err(ConfigError);
+            return Err(ConfigError::INVALID);
         }
-        self.binding.validate().map_err(|_| ConfigError)
+        self.binding.validate().map_err(|_| ConfigError::INVALID)
     }
 }

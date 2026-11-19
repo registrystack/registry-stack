@@ -1093,11 +1093,14 @@ The Adapter core and the shared engine keep their source-neutral dependency boun
 
 ### Collection
 
+Collections run only against the synthetic payment simulator.
+A collection connection must use the `simulator` provider with `simulation: true`; any other collection provider is refused at load with `adapter.payment.collection-simulation-only`, by both `adapter serve` and `adapterctl payments check`.
+
 Before any provider send, PostgreSQL reserves one attempt per institution, service, bill and bill version across workflow command keys.
 The host persists the exact bind Action and key, invokes that restricted Action, and verifies the frozen authoritative bill binding.
 It then persists the first dispatch time before sending the original exact provider command.
 An accepted response means the provider accepted the request, not merely that a local row exists, and an unknown outcome stays unresolved.
-The simulator allows an exact same-command resend inside the original connection's declared replay window, and an unknown HTTP provider submission stays held after dispatch.
+The simulator allows an exact same-command resend inside the original connection's declared replay window.
 
 Provider identifiers derive from a domain-separated digest of the full immutable bill and the provider origin, producer identity, tenant and biller, so independent Adapter databases do not allocate overlapping identities.
 Disjoint digest portions fit the provider's request, request-to-pay and bill fields, and the provider must reject a reused request identifier with a different body.
@@ -1105,13 +1108,12 @@ Stored commands are checked against that derivation and replayed exactly.
 
 The original-command receipt lookup is a database read.
 Collection reads may observe the provider but never bind, dispatch or record a receipt.
-A confirmed provider observation must match the complete saved request, transfer, bill, amount and currency tuple, and a pending state, including a provider `COM/PENDING`, never authorises a receipt.
+A confirmed provider observation must match the complete saved request, transfer, bill, amount and currency tuple, and a pending state, including the simulator's `COM/PENDING`, never authorises a receipt.
 
 The receipt step accepts only a collection identifier.
 The host derives the receipt from its confirmed observation and frozen bill, persists the exact restricted BReg report Action and key, and verifies the authoritative readback.
 A lost bind or report acknowledgement recovers from the saved command or exact readback.
 The numeric-loopback simulator preserves exact decimal JSON and requires synthetic response provenance before it authorises a synthetic fee receipt.
-Generic provider-pack observations are available as correlated status.
 
 ### Disbursement
 
@@ -1141,7 +1143,9 @@ They include the restricted bill and instruction facts needed for recovery, so p
 Generic facade response-retention sweeps do not delete payment attempts.
 Payment audit events carry no values and commit before an effect or a response is released.
 
-{/* Evidence: crates/registry-adapter/src/payments/service.rs;
+{/* Evidence: crates/registry-adapter/src/payments/config.rs COLLECTION_SIMULATION_ONLY;
+    crates/registry-adapter/tests/payment_config.rs live_mifos_collections_are_refused_as_simulation_only;
+    crates/registry-adapter/src/payments/service.rs;
     crates/registry-adapter/src/payments/g2p_model.rs mifos-legacy-signature;
     crates/registry-adapter/tests/payment_service.rs;
     crates/registry-adapter/tests/payment_store.rs;
