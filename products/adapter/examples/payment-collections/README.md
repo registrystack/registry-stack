@@ -7,8 +7,10 @@ It does not accept real payments or claim general GovStack Payments conformance.
 The [contract and capability comparison](CONTRACT.md) names the exact HTTP
 surface, ownership and differences from the earlier composition capability.
 The separate `payments.mifos.example.yaml` adds an authoritative G2P
-disbursement connection pinned to the public `mifos-payment-hub` pack. It is
-an operator configuration example, not evidence of a live Mifos deployment.
+disbursement connection pinned to a `mifos-payment-hub` provider pack. That
+pack is not in this repository and is not published yet: the operator supplies
+a reviewed pack whose id, version and digest match the pin. The file is an
+operator configuration example, not evidence of a live Mifos deployment.
 
 A service creates the authoritative bill. The Coordinator workflow then uses
 native payment operations:
@@ -69,7 +71,8 @@ Build matching `adapter` and `adapterctl` binaries from this checkout, using
 the repository's external Cargo target directory. Check the configuration
 against the exact pack pinned in `providerPack`, without resolving credentials
 or contacting a provider. The pack path must contain bytes whose id, version
-and digest match that pin:
+and digest match that pin; for the Mifos example, that is the operator-supplied
+`mifos-payment-hub` pack:
 
 ```sh
 adapterctl payments check /absolute/path/payments.mifos.yaml \
@@ -83,6 +86,16 @@ Start the payment-only host with the configured PostgreSQL and OIDC service:
 ```sh
 adapter serve --runtime-config /absolute/path/runtime.yaml \
   --payments-config /absolute/path/payments.yaml
+```
+
+A configuration that pins a provider pack, such as the Mifos disbursement
+example, also names that pack. Repeat `--payment-provider-pack` for every
+pack an active connection or a retained attempt still pins:
+
+```sh
+adapter serve --runtime-config /absolute/path/runtime.yaml \
+  --payments-config /absolute/path/payments.mifos.yaml \
+  --payment-provider-pack /absolute/path/mifos-payment-hub/pack.yaml
 ```
 
 Pass the same `--payments-config` beside an existing `--project` to share a
