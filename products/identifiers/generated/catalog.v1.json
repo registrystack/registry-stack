@@ -4654,7 +4654,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/payment-provider-pack.v1alpha1.schema.json",
-        "sha256": "1a5b6c0ae4299742e40a9f5ebe03a732c2ddd25a83b314ea25dd02cb2f56250f",
+        "sha256": "b2da0ab508173724798f91e1aab0ffe28348f237d3965595e039cae061e0f0b0",
         "mediaType": "application/schema+json"
       }
     },
