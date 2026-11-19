@@ -286,7 +286,7 @@ accessProfiles:
       records:
         - recordType: service-fee-bill
           operations: [get]
-          readableFields: [institution-id, service-id, request-id, payer-id, payer-financial-address, tariff-id, tariff-version, tariff-digest, bill-version, bill-digest, amount-minor, currency, currency-scale, simulation, payment-state, payment-attempt-id, provider-binding-revision, payment-receipt-id, provider-reference, receipt-digest, issuance-id]
+          readableFields: [institution-id, service-id, request-id, tariff-id, tariff-version, tariff-digest, bill-version, amount-minor, currency, currency-scale, simulation, payment-state, payment-receipt-id, issuance-id]
           rowBoundaries: unrestricted
       actions:
         - action: issue-paid-service
