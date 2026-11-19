@@ -5,6 +5,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
+// Response documents ignore members this client does not recognise, so a
+// minor release can add them. The request body the client sends stays closed.
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartRunRequest {
@@ -16,7 +19,7 @@ pub struct StartRunRequest {
 
 /// The active compiled contract visible to a caller allowed to start it.
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkflowContract {
     pub workflow: String,
     #[serde(deserialize_with = "revision")]
@@ -56,7 +59,7 @@ pub struct RunStatus {
 
 // Admissions add a positive authored duration; retained status keeps that deadline.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct RunStatusDocument {
     #[serde(deserialize_with = "run_id")]
     run_id: Uuid,
@@ -124,7 +127,7 @@ impl TryFrom<RunStatusDocument> for RunStatus {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StepStatus {
     pub step: String,
     pub state: String,
@@ -148,7 +151,7 @@ pub struct StepStatus {
 
 /// The records and date behind a held step.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct HoldDetail {
     pub date: String,
     pub record_identifiers: Vec<String>,
@@ -192,7 +195,7 @@ pub enum RecoverySemantics {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct OperationIdentity {
     pub id: String,
     #[serde(deserialize_with = "operation_version")]
@@ -212,9 +215,9 @@ pub struct RecoveryStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation: Option<OperationIdentity>,
 }
-// Keep the wire shape strict while validating the runtime's one recovery decision.
+// Validate the runtime's one recovery decision before exposing it.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct RecoveryStatusDocument {
     retry_allowed: bool,
     reason: Option<RetryBlockReason>,
@@ -244,7 +247,7 @@ pub enum EffectState {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct EffectStatus {
     pub step: String,
     pub operation: OperationIdentity,
@@ -280,7 +283,7 @@ pub struct WaitStatus {
 /// Proposal input and names no person. `state_since` is when Coordinator
 /// first saw the current state and turn, not when BReg entered it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct LastObservation {
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -294,7 +297,7 @@ pub struct LastObservation {
 
 // The runtime owns the polling fence; inspection must preserve its valid budget.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct WaitStatusDocument {
     step: String,
     accepted_step: String,
@@ -353,7 +356,7 @@ pub struct RunInspection {
 // The runtime reads one step row per run step and builds each effect and wait
 // from those rows in the same transaction, so evidence names this run's steps.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct RunInspectionDocument {
     run: RunStatus,
     steps: Vec<StepStatus>,
@@ -534,7 +537,7 @@ impl RunListQuery {
 
 /// One stable page of runs the caller may read, newest admission first.
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct RunList {
     pub runs: Vec<RunStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -543,7 +546,7 @@ pub struct RunList {
 
 /// The runtime accepted a same-command retry; the worker has not run it yet.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct RetryScheduled {
     #[serde(deserialize_with = "run_id")]
     pub run_id: Uuid,

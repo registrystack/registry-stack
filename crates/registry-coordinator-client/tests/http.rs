@@ -803,6 +803,8 @@ async fn an_inspection_carries_what_the_last_proposal_read_showed_and_the_reques
     refused["handoffRefusal"] = json!("verification-failed");
     let mut unknown = observation.clone();
     unknown["applicant"] = json!("protected-canary");
+    let mut outside = observation.clone();
+    outside["submissionVersion"] = json!("protected-canary");
     let followed = |observation: Option<&Value>, link: Option<&str>| {
         let mut waiting = wait("notify");
         if let Some(observation) = observation {
@@ -838,8 +840,8 @@ async fn an_inspection_carries_what_the_last_proposal_read_showed_and_the_reques
             true,
         ),
         (
-            "an observation member the client does not know",
-            followed(Some(&unknown), None),
+            "a submission version that is not a number",
+            followed(Some(&outside), None),
             false,
         ),
     ] {
@@ -879,6 +881,20 @@ async fn an_inspection_carries_what_the_last_proposal_read_showed_and_the_reques
             assert!(!format!("{error:?}").contains("protected-canary"));
         }
     }
+    server.answer(
+        200,
+        "application/json",
+        &followed(Some(&unknown), None).to_string(),
+    );
+    let inspection = client
+        .inspect(&token(), id)
+        .await
+        .expect("an observation member the client does not know is ignored");
+    assert_eq!(
+        serde_json::to_value(&inspection.value).unwrap(),
+        followed(Some(&observation), None),
+        "the unknown member is dropped, not kept"
+    );
 }
 
 #[tokio::test]
@@ -1381,7 +1397,6 @@ async fn listing_retry_or_cancellation_answers_outside_the_request_are_refused()
     for answer in [
         json!({"runId":Uuid::nil(),"status":"retry-scheduled"}),
         json!({"runId":RUN,"status":"scheduled"}),
-        json!({"runId":RUN,"status":"retry-scheduled","extra":true}),
     ] {
         server.answer(200, "application/json", &answer.to_string());
         assert!(matches!(
@@ -1803,6 +1818,7 @@ fn recovery_deserialization_preserves_optional_operation_and_rejects_missing_blo
     for document in [
         json!({"retryAllowed": true, "reason": null}),
         json!({"retryAllowed": false, "reason": "not-recoverable", "operation": null}),
+        json!({"retryAllowed": true, "reason": null, "extra": 1}),
     ] {
         assert!(serde_json::from_value::<RecoveryStatus>(document).is_ok());
     }
@@ -1810,7 +1826,6 @@ fn recovery_deserialization_preserves_optional_operation_and_rejects_missing_blo
         json!({"retryAllowed": false}),
         json!({"retryAllowed": false, "reason": null}),
         json!({"retryAllowed": true, "reason": "not-recoverable"}),
-        json!({"retryAllowed": true, "reason": null, "extra": 1}),
         json!({"retryAllowed": false, "reason": "unknown-reason"}),
     ] {
         assert!(serde_json::from_value::<RecoveryStatus>(document).is_err());
@@ -1850,8 +1865,8 @@ fn dto_contract_tracks_the_runtime_generated_schema() {
             );
         }
     }
-    // The DTOs refuse unknown fields, so a property the runtime adds must
-    // reach the client in the same change.
+    // The DTOs ignore unknown members, so this check is what makes a property
+    // the runtime adds reach the client in the same change.
     let properties = |schema: &Value| -> Vec<String> {
         let mut names: Vec<_> = schema["properties"]
             .as_object()
@@ -1955,7 +1970,8 @@ fn a_held_step_names_the_records_in_force_and_the_date() {
         .is_none());
     let mut extra = held_step();
     extra["holdDetail"]["value"] = json!("x");
-    assert!(serde_json::from_value::<registry_coordinator_client::StepStatus>(extra).is_err());
+    let extra: registry_coordinator_client::StepStatus = serde_json::from_value(extra).unwrap();
+    assert_eq!(serde_json::to_value(&extra).unwrap(), held_step());
 }
 
 #[test]
@@ -2050,17 +2066,110 @@ async fn workflow_contract_discovery_is_one_confined_read_with_a_revision_pin() 
     }
 }
 
+/// A minor release may add response members, so the client ignores every
+/// member it does not recognise, at any depth, and keeps none of it.
 #[tokio::test]
-async fn workflow_contract_with_a_review_policy_member_is_refused() {
-    let contract = json!({"workflow":"nursing-notice", "workflowRevision":request().workflow_revision,
-        "input":{"type":"object"}, "outcomes":{"sent":{"type":"object"}},
-        "reviewPolicy":{"id":"nursing-notice","version":"pilot-1","digest":request().workflow_revision}});
-    let server = Server::new(contract).await;
+async fn responses_ignore_members_the_client_does_not_recognise() {
+    use registry_coordinator_client::StepStatus;
+
+    const CANARY: &str = "unrecognised-canary";
+    let added = |mut value: Value| {
+        value["addedLater"] = json!(CANARY);
+        value
+    };
+    let run = Uuid::parse_str(RUN).unwrap();
+    let server = Server::new(added(status())).await;
     let client = server.client();
-    assert!(matches!(
-        client.workflow(&token(), "nursing-notice").await,
-        Err(CoordinatorClientError::Protocol { .. })
-    ));
+
+    let started = client.start(&token(), "pin-key", &request()).await.unwrap();
+    assert_eq!(serde_json::to_value(&started.value).unwrap(), status());
+    let read = client.status(&token(), run).await.unwrap();
+    assert_eq!(serde_json::to_value(&read.value).unwrap(), status());
+
+    let mut cancelled = status();
+    cancelled["cancelRequested"] = json!(true);
+    server.answer(
+        200,
+        "application/json",
+        &added(cancelled.clone()).to_string(),
+    );
+    let receipt = client
+        .cancel(&token(), run, "caller-withdrew-request")
+        .await
+        .unwrap();
+    assert_eq!(serde_json::to_value(&receipt.value).unwrap(), cancelled);
+
+    let page = json!({"runs":[status()],"nextCursor":"opaque-next"});
+    let mut extended = added(page.clone());
+    extended["runs"][0] = added(status());
+    server.answer(200, "application/json", &extended.to_string());
+    let listed = client.list(&token(), 1).await.unwrap();
+    assert_eq!(serde_json::to_value(&listed.value).unwrap(), page);
+
+    let observation = json!({"state":"submitted","turn":"official","submissionVersion":2,"observedAt":"2026-10-10T12:02:00Z","stateSince":"2026-10-10T12:01:00Z"});
+    let mut waiting = wait("notify");
+    waiting["lastObservation"] = observation;
+    let mut document = inspection();
+    document["steps"] = json!([
+        step("send", "delivered", false),
+        step("notify", "pending", false)
+    ]);
+    document["effects"] = json!([effect("send", "accepted")]);
+    document["waits"] = json!([waiting]);
+    let mut extended = added(document.clone());
+    extended["run"] = added(document["run"].clone());
+    extended["steps"][0] = added(document["steps"][0].clone());
+    extended["effects"][0] = added(document["effects"][0].clone());
+    extended["effects"][0]["operation"] = added(document["effects"][0]["operation"].clone());
+    extended["waits"][0] = added(document["waits"][0].clone());
+    extended["waits"][0]["lastObservation"]["applicant"] = json!(CANARY);
+    extended["recovery"] = added(document["recovery"].clone());
+    extended["recovery"]["operation"] = added(document["recovery"]["operation"].clone());
+    server.answer(200, "application/json", &extended.to_string());
+    let inspected = client.inspect(&token(), run).await.unwrap();
+    assert_eq!(serde_json::to_value(&inspected.value).unwrap(), document);
+
+    let mut held = added(held_step());
+    held["holdDetail"]["addedLater"] = json!(CANARY);
+    let held = serde_json::from_value::<StepStatus>(held).unwrap();
+    assert_eq!(serde_json::to_value(&held).unwrap(), held_step());
+
+    server.answer(
+        200,
+        "application/json",
+        &added(retry_scheduled()).to_string(),
+    );
+    let scheduled = client
+        .retry_same(&token(), run, "operator-ticket-4821")
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&scheduled.value).unwrap(),
+        retry_scheduled()
+    );
+
+    let contract = json!({"workflow":"nursing-notice", "workflowRevision":request().workflow_revision,
+        "input":{"type":"object"}, "outcomes":{"sent":{"type":"object"}}});
+    server.answer(
+        200,
+        "application/json",
+        &added(contract.clone()).to_string(),
+    );
+    let discovered = client.workflow(&token(), "nursing-notice").await.unwrap();
+    assert_eq!(serde_json::to_value(&discovered.value).unwrap(), contract);
+}
+
+#[tokio::test]
+async fn workflow_contract_never_surfaces_a_review_policy_member() {
+    let contract = json!({"workflow":"nursing-notice", "workflowRevision":request().workflow_revision,
+        "input":{"type":"object"}, "outcomes":{"sent":{"type":"object"}}});
+    let mut answered = contract.clone();
+    answered["reviewPolicy"] =
+        json!({"id":"nursing-notice","version":"pilot-1","digest":request().workflow_revision});
+    let server = Server::new(answered).await;
+    let client = server.client();
+    let discovered = client.workflow(&token(), "nursing-notice").await.unwrap();
+    assert_eq!(serde_json::to_value(&discovered.value).unwrap(), contract);
 }
 
 #[tokio::test]
@@ -2096,7 +2205,7 @@ async fn admission_revision_is_required_before_io_and_bound_to_the_answer() {
 }
 
 #[tokio::test]
-async fn inspection_preserves_minimized_effects_and_waits_without_accepting_correlation_payloads() {
+async fn inspection_preserves_minimized_effects_and_waits_without_keeping_correlation_payloads() {
     const CANARY: &str = "protected-correlation-canary";
     let mut document = inspection();
     document["steps"].as_array_mut().unwrap().extend([
@@ -2119,16 +2228,20 @@ async fn inspection_preserves_minimized_effects_and_waits_without_accepting_corr
     assert_eq!(value.waits[0].accepted_step, "submit");
     assert_eq!(value.waits[0].observation_limit, 10);
     assert!(value.waits[0].next_observation_at.is_none());
-    document["waits"][0]["correlation"] = json!(CANARY);
-    server.answer(200, "application/json", &document.to_string());
-    let error = server
+    let minimized = serde_json::to_value(&value).unwrap();
+    assert_eq!(minimized, document);
+    let mut correlated = document.clone();
+    correlated["waits"][0]["correlation"] = json!(CANARY);
+    server.answer(200, "application/json", &correlated.to_string());
+    let value = server
         .client()
         .inspect(&token(), RUN.parse().unwrap())
         .await
-        .err()
-        .unwrap();
-    assert!(matches!(error, CoordinatorClientError::Protocol { .. }));
-    assert!(!error.to_string().contains(CANARY));
+        .unwrap()
+        .value;
+    let kept = serde_json::to_value(&value).unwrap();
+    assert_eq!(kept, document, "the correlation payload is dropped");
+    assert!(!kept.to_string().contains(CANARY));
 }
 
 #[tokio::test]

@@ -13,11 +13,14 @@
   package that only relabels the step does not change it. It is `null` when
   the step has no label, and after retention erases the run's stored payload.
   The protected state schema does not change.
-- BREAKING: upgrade the Coordinator clients with the server. The 0.46.0 and
-  earlier Rust, Python and Node clients refuse unknown fields, so they refuse
-  every run status that carries `stepLabel`, even when it is `null`. The
-  clients in this release accept a server that omits it. Rust callers that
-  build the client `RunStatus` as a struct literal must set `step_label`.
+- BREAKING: upgrade the Coordinator clients with the server, once. The Rust,
+  Python and Node clients from before this release refuse response members
+  they do not recognise, so they refuse every run status that carries
+  `stepLabel`, even when it is `null`. From this release the clients ignore
+  response members they do not recognise, as the API stability rules require,
+  so a later minor release can add members without another client upgrade.
+  They also accept a server that omits `stepLabel`. Rust callers that build
+  the client `RunStatus` as a struct literal must set `step_label`.
 
 ## 0.47.0 - 2026-11-20
 
