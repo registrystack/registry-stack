@@ -411,7 +411,7 @@ impl ProblemCode {
                 "The start input does not satisfy the workflow's declared input schema and value bounds."
             }
             Self::MutationUncertain => {
-                "An unkeyed mutation may have completed at its provider, so the run never sends it again."
+                "A mutation may have completed at its provider, so the run never sends it again. Reconcile it when its operation offers a read-only receipt lookup; otherwise inspect or cancel the run."
             }
             Self::OperationNotAuthorized => {
                 "The caller's policy does not allow this operation."

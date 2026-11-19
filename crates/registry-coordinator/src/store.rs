@@ -613,6 +613,21 @@ fn refused(code: &'static str, message: &'static str) -> CoordinatorError {
     CoordinatorError::new(code, message)
 }
 
+/// The refusal for `retry-same` on held work whose operation must never be
+/// sent again after an unknown outcome, or `None` when a retry is allowed.
+fn unknown_retry_refusal(operation: crate::protocol::Operation) -> Option<CoordinatorError> {
+    if operation.can_retry_after_unknown() {
+        return None;
+    }
+    Some(if operation.is_evaluation() {
+        refused("evaluation-uncertain", "the evaluation may have completed remotely; preserve its original request and inspect or cancel the held run without reevaluating")
+    } else if operation.supports_read_receipt() {
+        refused("mutation-uncertain", "the mutation may have completed remotely; reconcile the held run through its read-only original-request lookup without replaying the effect")
+    } else {
+        refused("mutation-uncertain", "the unkeyed mutation may have completed remotely; preserve the held run and inspect or cancel it without replaying the effect")
+    })
+}
+
 fn restore_held() -> CoordinatorError {
     refused("restore-hold", "execution is held until the prior deployment is externally fenced and recovery is reviewed")
 }
@@ -2172,12 +2187,8 @@ impl Store {
             .map_err(|finding| Definition::run_refused(&finding, run, &status.workflow))?;
         if row.get::<_, bool>(3) {
             if let Some(Step::Call { call, .. }) = definition.workflow.steps.get(&status.step) {
-                if !call.operation.can_retry_after_unknown() {
-                    return Err(if call.operation.is_evaluation() {
-                        refused("evaluation-uncertain", "the evaluation may have completed remotely; preserve its original request and inspect or cancel the held run without reevaluating")
-                    } else {
-                        refused("mutation-uncertain", "the unkeyed mutation may have completed remotely; preserve the held run and inspect or cancel it without replaying the effect")
-                    });
+                if let Some(refusal) = unknown_retry_refusal(call.operation) {
+                    return Err(refusal);
                 }
             }
         }
@@ -3380,6 +3391,26 @@ mod tests {
     use super::*;
     use registry_platform_testing::MIGRATION_PIN_RULE;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn an_uncertain_mutation_with_a_read_receipt_is_sent_to_reconcile() {
+        use crate::protocol::Operation;
+        let held = unknown_retry_refusal(Operation::RequestDisbursement)
+            .expect("a held disbursement cannot replay its command");
+        assert_eq!(held.code, "mutation-uncertain");
+        assert!(held.message.contains("reconcile"), "{held:?}");
+        assert!(!held.message.contains("inspect or cancel"), "{held:?}");
+        let unkeyed =
+            unknown_retry_refusal(Operation::ReleaseHold).expect("an unkeyed release is held");
+        assert!(unkeyed.message.contains("inspect or cancel"), "{unkeyed:?}");
+        assert_eq!(
+            unknown_retry_refusal(Operation::EvaluateDecision)
+                .expect("an evaluation is held")
+                .code,
+            "evaluation-uncertain"
+        );
+        assert!(unknown_retry_refusal(Operation::RecordProviderConfirmation).is_none());
+    }
 
     /// The protected state schema a version creates is fixed once a release
     /// ships it: existing databases are never altered, so an edit would give
