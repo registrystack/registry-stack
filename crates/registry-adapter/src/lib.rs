@@ -43,5 +43,6 @@ pub mod govstack;
 pub mod idempotent;
 pub mod journal;
 pub mod notifier;
+pub mod payments;
 pub mod replay_serve;
 pub mod serve;

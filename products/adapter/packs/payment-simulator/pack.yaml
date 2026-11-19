@@ -1,0 +1,7 @@
+apiVersion: id.registrystack.org/formats/adapter/payment-provider-pack/v1alpha1
+kind: AdapterPaymentProviderPack
+id: payment-simulator
+version: '1'
+connector: simulator-p2g/v1
+capabilities: [collection]
+testedVersions: [payment-simulator-p2g-0.1]

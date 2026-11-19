@@ -8,8 +8,8 @@ This profile adds two biller-facing operations to the existing G2P simulator:
 | Observe collection status | `GET /transferRequests/{transferRequestId}` | `200`, current RTP and payment status |
 
 It supports one full payment request per bill, with a known payer financial
-address. It does not create bills, collect real money, or implement a citizen
-checkout. A programme or registry remains responsible for the bill and what
+address. It does not create bills, collect real money, or implement a real citizen
+checkout. A synthetic hosted payment page is described below. A programme or registry remains responsible for the bill and what
 confirmed payment permits. Coordinator integration is a separate change.
 
 ## GovStack review and source decisions
@@ -50,7 +50,9 @@ These are deliberate profile decisions, not full GovStack conformance:
 | Status correlation | Response `RequestId` identifies the original create command. The GET's fresh `X-CorrelationID` is echoed in the response header. |
 | Payment evidence | Add `paymentStatus`, original bill/amount/currency, and polling ID. `PaymentReferenceID` exists only for confirmed `PAID`. |
 | Expiry | Simulate an unpaid request expiring; there is no authored TTL or wall-clock expiry scheduler in this increment. |
-| Reissue | One request per bill within producer/tenant/biller scope, including failed/expired requests. Reissue, cancellation, partial payments and refunds need a later explicit policy. |
+| Reissue | One request per bill within producer/tenant/biller scope, including failed, expired and cancelled requests. Reissue, partial payments and refunds need a later explicit policy. |
+| Return URL | An optional `X-Return-URL` header on create, outside the GovStack body, so the body schema is unchanged. See the hosted payment page below. |
+| Cancellation | A payer cancelling at the hosted page, or a `cancelled` fixture outcome, is `RJC/FAILED` with `failureReason: payer-cancelled`. No new status value is added. |
 
 The bank-to-Payments payment notification and Payments-to-biller mark-paid
 advice are not exposed as caller writes. Neither a registry workflow nor a
@@ -80,7 +82,11 @@ at most `9007199254740991` minor units. Quote neither amounts nor integer IDs.
 Require `Content-Type: application/json`, `X-CorrelationID` (1–12 characters,
 equal to `requestId`), and `X-Callback-URL` (1–100 characters, approved in
 server configuration). The callback value is retained for wire compatibility;
-the mock makes no outbound request.
+the mock makes no outbound request. `X-Return-URL` (1–200 characters) is
+optional. It must exactly match a value configured with `serve --return-url`,
+and none is configured by default. Otherwise the request is refused with `403
+auth.forbidden` and `field: X-Return-URL`, and no request or command identity
+is created.
 
 All body fields below are required:
 
@@ -127,7 +133,7 @@ before dispatch. After a timeout or lost response, replay the unchanged command
 to recover its acknowledgement and polling ID.
 
 Command identity is `(producer, tenant, collection, requestId)`. Its fingerprint
-includes the body, biller and callback URL. Equivalent decimal notation and
+includes the body, biller, callback URL and return URL (when present). Equivalent decimal notation and
 object ordering replay identically; changed content returns `409
 request.id-reused`. The acknowledgement, immutable request snapshot, exact
 amount/scale and selected outcome commit in one SQLite transaction.
@@ -169,7 +175,7 @@ All shown fields except `PaymentReferenceID` are always present.
 `billId`, amount and currency must match the accepted intent. The payment
 reference is 1–20 characters and is required only when `paymentStatus` is
 `PAID`; it is absent otherwise. `lastUpdateDate` is an integer Unix timestamp
-in seconds. Failed/expired results include the bounded `failureReason` below.
+in seconds. Failed, cancelled and expired results include the bounded `failureReason` below.
 
 | RTP status | Payment status | Meaning |
 |---|---|---|
@@ -177,13 +183,53 @@ in seconds. Failed/expired results include the bounded `failureReason` below.
 | `COM` | `PENDING` | RTP exchange completed; payment is still unconfirmed |
 | `COM` | `PAID` | Full payment confirmed; stable payment reference present |
 | `RJC` | `FAILED` | Payer rejected this request; `failureReason: payer-rejected` |
+| `RJC` | `FAILED` | Payer cancelled this request; `failureReason: payer-cancelled` |
 | `EXP` | `EXPIRED` | Request expired unpaid; `failureReason: request-expired` |
 
-Only the last three rows are terminal. Terminal results and payment references
+Only the last four rows are terminal. Terminal results and payment references
 remain stable across polls, replays and restarts. A consumer must validate the
 IDs, amount, currency and status pairing. Unknown or contradictory results
 remain unresolved, never treated as paid. A future real-provider adapter must
 map actual payment evidence, not RTP delivery/acceptance, to `PAID`.
+
+## Hosted payment page
+
+`GET /pay/{transferRequestId}` and `POST /pay/{transferRequestId}` are a
+synthetic checkout for a citizen-facing front end. They are not part of the
+GovStack profile or the generated OpenAPI, and they need no bearer token.
+
+- **Capability.** The transfer ID is a UUIDv4, which carries 122 random bits from
+  the operating system, so it cannot be guessed. Unknown or over-long IDs return
+  `404`. The page sends `Cache-Control: no-store`, `Referrer-Policy:
+  no-referrer` and a Content-Security-Policy that allows nothing to load or run.
+- **Page.** Server-rendered HTML with inline CSS only: no JavaScript, no external
+  assets. It shows the banner "Synthetic payment simulator, no real money", the
+  biller name, bill ID and the amount with the currency's configured scale
+  (`25.50 USD`, `1200 JPY`), and a form with Pay, Decline and Cancel.
+- **CSRF.** Each request has a random form token stored with it and rendered in
+  the form. A submission must carry it (`application/x-www-form-urlencoded`
+  fields `token` and `decision`, at most 4 KiB), or the simulator returns `403
+  auth.forbidden` and changes nothing. A page on another site cannot read the
+  token, so it cannot forge a choice. This avoids depending on `Origin` or
+  `Referer` headers, which browsers and proxies do not always send. Other
+  malformed submissions return `400`, `413` or `415`.
+- **Decisions.** `pay` settles to `COM/PAID` with a payment reference. `decline`
+  settles to `RJC/FAILED` with `payer-rejected`. `cancel` settles to `RJC/FAILED`
+  with `payer-cancelled`. The decision settles the request at once, without the
+  intermediate `COM/PENDING`, so the redirect and the next poll agree.
+- **Return.** With a return URL, the first accepted decision answers `303` to
+  that URL with `transferRequestId` and `status` (`paid`, `failed`, `cancelled`)
+  appended to any existing query. Without one, a result page is shown. The
+  parameters are a hint for the front end, not evidence of payment.
+- **Finished transfers.** A request is final once it has a terminal state. A
+  later submit with the right token returns the result page with a link back to
+  the return URL and changes nothing, so a double click or a replayed POST never
+  creates a second payment reference. A wrong token is still `403`.
+- **Waiting.** A request created with a return URL is not advanced by the worker
+  or `advance`: it stays `PND/PENDING` until the payer decides, unless a payer rule
+  settled it at creation. A request without
+  a return URL advances as before and can also be decided at the page until it
+  is final.
 
 ## Deterministic local outcomes and verification
 
@@ -194,11 +240,29 @@ uv run payment-simulator collection-scenario --database .state/payments.sqlite \
   --producer registry --tenant pilot --biller ministry --outcome paid
 ```
 
-Outcomes are `paid` (default), `failed`, or `expired`. Automatic mode advances
-them in two worker steps. With `serve --manual`, `advance --steps 1` exposes
+Outcomes are `paid` (default), `failed`, `expired` or `cancelled`. Automatic
+mode advances them in two worker steps. With `serve --manual`, `advance --steps 1` exposes
 the intermediate state, and a second step produces the terminal result. The
 paid scenario deliberately exposes `COM/PENDING` before `COM/PAID`. Expiry is
 an injected fixture outcome, not proof that a configured real-time TTL passed.
+
+Map one payer to an outcome with `payer-outcome` (`--remove` deletes the rule):
+
+```sh
+uv run payment-simulator payer-outcome --database .state/payments.sqlite \
+  --producer registry --tenant pilot --biller ministry \
+  --address citizen-decline --outcome failed
+```
+
+The rule matches `payerFiDetails.financialAddress` exactly and applies to new
+requests. A matching request is settled to its terminal state when it is
+created, so the first `GET /transferRequests/{id}` is already final, with a
+payment reference for `paid`. Nothing can decide it first: the hosted page then
+shows the result (and the return link), and a `POST /pay/{id}` is answered with
+that result page and changes nothing. An outcome is therefore chosen in this
+order: the payer rule, then, for requests without one, the payer's decision at
+the hosted page, then the biller's scenario. Changing or removing a rule does
+not affect requests already created.
 
 The payment receipt and terminal transition commit together, with one receipt
 per accepted request. `inspect-collections --database ...` provides separate
@@ -209,8 +273,8 @@ target driver for outcome, replay, conflict, scope and lost-response recovery
 checks. Missing external outcome/restart/witness capabilities remain explicit
 not-verified skips. Implementation tests additionally cover malformed input,
 concurrent replay, currency changes, and preservation of G2P state through the
-single additive database upgrade from version 1 to version 2.
+additive database upgrades from versions 1 and 2 to version 3. The upgrade adds
+the hosted-page and payer-rule tables and gives earlier requests a form token.
 
-No programme funding, checkout UI, alias resolution, bill inquiry forwarding,
-bank notification ingress, callback delivery, refunds, cancellation, expiry
-scheduler, or Coordinator operation is added by this profile.
+No programme funding, real checkout, alias resolution, bill inquiry forwarding,
+bank notification ingress, callback delivery, refunds, expiry scheduler, or Coordinator operation is added by this profile.

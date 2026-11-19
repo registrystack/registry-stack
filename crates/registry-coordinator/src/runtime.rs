@@ -31,6 +31,7 @@ pub enum Product {
     Breg,
     Casework,
     Messaging,
+    Payments,
     Scheduling,
 }
 
@@ -184,6 +185,7 @@ pub enum ConnectionConfig {
     Breg(BregConnectionConfig),
     CaseworkReviewProducer(CaseworkConnectionConfig),
     Messaging(MessagingConnectionConfig),
+    Payments(PaymentConnectionConfig),
     Scheduling(Box<SchedulingConnectionConfig>),
     ExternalHttp(crate::external_http::ExternalHttpConfig),
     Evaluation(crate::decision::DecisionConfig),
@@ -236,6 +238,24 @@ pub struct MessagingConnectionConfig {
 #[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PaymentConnectionConfig {
+    #[serde(deserialize_with = "endpoint")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    pub base_url: Url,
+    /// The Adapter payment connection selected by this Coordinator binding.
+    #[serde(deserialize_with = "local")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub payment_connection: String,
+    pub authorization: AuthorizationConfig,
+    /// Spacing between authoritative payment status observations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(extend("default" = DEFAULT_RESULT_CHECK_SECONDS)))]
+    pub result_check_seconds: Option<registry_platform_yaml::BoundedU32<60, 86_400>>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SchedulingConnectionConfig {
     #[serde(deserialize_with = "endpoint")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
@@ -280,6 +300,7 @@ pub struct ProductBinding<'a> {
     pub authorization: &'a AuthorizationConfig,
     pub observation_authorization: Option<&'a AuthorizationConfig>,
     pub profile: Option<&'a String>,
+    pub payment_connection: Option<&'a String>,
     pub producer: Option<&'a String>,
     pub completion: Option<&'a ReviewCompletionConfig>,
     pub result_check_seconds: Option<registry_platform_yaml::BoundedU32<60, 86_400>>,
@@ -293,6 +314,7 @@ impl ConnectionConfig {
             authorization,
             observation_authorization,
             profile,
+            payment_connection,
             producer,
             completion,
             result_check_seconds,
@@ -305,12 +327,14 @@ impl ConnectionConfig {
                 Some(&c.profile),
                 None,
                 None,
+                None,
                 c.result_check_seconds,
             ),
             Self::Messaging(c) => (
                 Product::Messaging,
                 &c.base_url,
                 &c.authorization,
+                None,
                 None,
                 None,
                 None,
@@ -326,6 +350,7 @@ impl ConnectionConfig {
                 None,
                 None,
                 None,
+                None,
             ),
             Self::CaseworkReviewProducer(c) => (
                 Product::Casework,
@@ -333,8 +358,20 @@ impl ConnectionConfig {
                 &c.authorization,
                 None,
                 Some(&c.profile),
+                None,
                 Some(&c.producer),
                 c.completion.as_ref(),
+                c.result_check_seconds,
+            ),
+            Self::Payments(c) => (
+                Product::Payments,
+                &c.base_url,
+                &c.authorization,
+                None,
+                None,
+                Some(&c.payment_connection),
+                None,
+                None,
                 c.result_check_seconds,
             ),
             Self::ExternalHttp(_) | Self::Evaluation(_) => return None,
@@ -345,6 +382,7 @@ impl ConnectionConfig {
             authorization,
             observation_authorization,
             profile,
+            payment_connection,
             producer,
             completion,
             result_check_seconds,
@@ -373,6 +411,7 @@ impl ConnectionConfig {
         match self {
             Self::Breg(c) => Some(&mut c.authorization),
             Self::Messaging(c) => Some(&mut c.authorization),
+            Self::Payments(c) => Some(&mut c.authorization),
             Self::Scheduling(c) => Some(&mut c.authorization),
             Self::CaseworkReviewProducer(c) => Some(&mut c.authorization),
             Self::ExternalHttp(_) | Self::Evaluation(_) => None,
@@ -405,6 +444,7 @@ impl ConnectionConfig {
             Self::Breg(_) => "breg",
             Self::CaseworkReviewProducer(_) => "casework",
             Self::Messaging(_) => "messaging",
+            Self::Payments(_) => "payments",
             Self::Scheduling(_) => "scheduling",
             Self::ExternalHttp(_) => "external-http",
             Self::Evaluation(_) => "evaluation",
@@ -423,6 +463,7 @@ impl Serialize for ConnectionConfig {
                 ("casework-review-producer", serde_json::to_value(c))
             }
             Self::Messaging(c) => ("messaging", serde_json::to_value(c)),
+            Self::Payments(c) => ("payments", serde_json::to_value(c)),
             Self::Scheduling(c) => ("scheduling", serde_json::to_value(c)),
             Self::ExternalHttp(c) => ("external-http", serde_json::to_value(c)),
             Self::Evaluation(c) => ("evaluation", serde_json::to_value(c)),
@@ -1022,6 +1063,9 @@ impl RuntimeConfig {
             // never strands an admitted run.
             if binding.product == Product::Casework {
                 identity["producer"] = json!(binding.producer);
+            }
+            if binding.product == Product::Payments {
+                identity["paymentConnection"] = json!(binding.payment_connection);
             }
             identities.insert(name, identity);
         }

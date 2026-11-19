@@ -47,7 +47,7 @@ The generated outputs are build artifacts.
 {/* Evidence: crates/registry-adapter-core/src/runtime.rs AdapterRuntimeConfig */}
 {/* Evidence: crates/registry-adapter-core/src/fixture.rs AdapterFixture */}
 {/* Evidence: crates/registry-adapter-core/src/mapping.rs AdapterMapping */}
-{/* Evidence: crates/registry-adapterctl/tests/check.rs schemas_writes_ten_files_into_the_given_directory */}
+{/* Evidence: crates/registry-adapterctl/tests/check.rs schemas_writes_thirteen_files_into_the_given_directory */}
 
 Projects reference packs and profiles as plain identifiers, resolved and digest-checked by `adapterctl check`.
 A pack declares the engine capabilities it requires (components, languages and EIPs).
@@ -1074,6 +1074,101 @@ The engine also checks the raw `Cache-Control` header on every data response bef
 A `no-store` response leaves the acquisition usable for live reads and unavailable for retention.
 That restriction survives mapping and paging.
 Consultation's protected response headers stay unchanged.
+
+## Typed payment hosting
+
+The optional payment module in `registry-adapter` mounts dedicated collection, disbursement, observation and reporting operations on the Adapter listener, outside the generic record routes.
+Registry Coordinator exposes them as native typed steps.
+A workflow supplies the bill or instruction record identity and version, then uses the accepted attempt identifier for observation and reporting.
+Tenant, biller, provider origins, credentials, currency policy and the restricted BReg Actions are operator-owned connection configuration, and a payment-only deployment needs no record project.
+
+Base Registry Engine (BReg) owns the authoritative bills and fee policy, the approved disbursement instructions, the recorded receipts and provider confirmations, and the service's paid or unused issuance guard.
+The payment host owns durable attempts, the original provider and registry binding snapshots, the exact prepared commands, correlation and verified observations.
+Coordinator owns workflow progress and waits, and the provider owns the financial transaction.
+
+The payment host is a scoped exception to two facade rules.
+It retains exact bill snapshots, original connection bindings, prepared restricted BReg commands and verified provider observations for recovery, which the record facade never does, and those bounded payment facts never enter the generic route engine.
+It also links the public BReg client for restricted bill-binding and receipt Actions, a payment protocol crate and its provider connectors.
+The Adapter core and the shared engine keep their source-neutral dependency boundary, and the dependency gate enforces that split.
+
+### Collection
+
+Collections run only against the synthetic payment simulator.
+A collection connection must use the `simulator` provider with `simulation: true`; any other collection provider is refused at load with `adapter.payment.collection-simulation-only`, by both `adapter serve` and `adapterctl payments check`.
+
+Before any provider send, PostgreSQL reserves one attempt per institution, service, bill and bill version across workflow command keys.
+The host persists the exact bind Action and key, invokes that restricted Action, and verifies the frozen authoritative bill binding.
+It then persists the first dispatch time before sending the original exact provider command.
+An accepted response means the provider accepted the request, not merely that a local row exists, and an unknown outcome stays unresolved.
+The simulator allows an exact same-command resend inside the original connection's declared replay window.
+
+Provider identifiers derive from a domain-separated digest of the full immutable bill and the provider origin, producer identity, tenant and biller, so independent Adapter databases do not allocate overlapping identities.
+Disjoint digest portions fit the provider's request, request-to-pay and bill fields, and the provider must reject a reused request identifier with a different body.
+Stored commands are checked against that derivation and replayed exactly.
+
+The original-command receipt lookup is a database read.
+Collection reads may observe the provider but never bind, dispatch or record a receipt.
+A confirmed provider observation must match the complete saved request, transfer, bill, amount and currency tuple, and a pending state, including the simulator's `COM/PENDING`, never authorises a receipt.
+
+The receipt step accepts only a collection identifier.
+The host derives the receipt from its confirmed observation and frozen bill, persists the exact restricted BReg report Action and key, and verifies the authoritative readback.
+A lost bind or report acknowledgement recovers from the saved command or exact readback.
+The numeric-loopback simulator preserves exact decimal JSON and requires synthetic response provenance before it authorises a synthetic fee receipt.
+
+### Disbursement
+
+The Adapter reads the approved instruction from BReg, including the exact money, the recipient destination and the funding account.
+It prepares the exact provider command under the pinned binding and reserves one attempt for the authoritative source, instruction identity and version.
+It commits the restricted BReg binding Action and records the first dispatch before sending.
+An uncertain submission stays held, and Coordinator can reconcile the original acceptance only through a read-only lookup for the saved key and instruction.
+
+The `mifos-legacy-signature` host profile signs the exact Bulk request and verifies the raw acknowledgement and the expected tenant before interpreting it.
+Request signing and response verification use separate pinned Transit keys, and Operations status reads use a separate bearer credential.
+
+A disbursement connection pins its provider pack by id, version and digest.
+Pass that pack to the host with `--payment-provider-pack`, and repeat the option for every pack an active connection or a retained attempt still pins:
+
+```sh
+adapter serve --runtime-config /absolute/path/runtime.yaml \
+  --payments-config /absolute/path/payments.yaml \
+  --payment-provider-pack /absolute/path/mifos-payment-hub/pack.yaml
+```
+
+Registry Stack does not publish a Mifos Payment Hub EE pack yet, so the operator supplies a reviewed pack whose bytes match the pin.
+`adapterctl payments check` takes the same pack with `--provider-pack` and checks the pin offline.
+
+Before a Mifos disbursement connection goes live, set up its signing and the provider's access control.
+Create the request-signing key inside Transit, so it is non-exportable and service-created, and import only the provider's public key as the separate response-verification key; the Adapter pins each key's SPKI digest and version and refuses other custody.
+The released Payment Hub EE channel and operations apps ship with authorisation turned off, so enable bearer authorisation on them, or enforce it at a trusted gateway, before the Adapter's Operations credential means anything.
+An attempt reaches `Bound` before it is signed and sent, so let every `Bound` disbursement attempt dispatch before you raise the signing key's `min_encryption_version`; a raised minimum otherwise holds those attempts.
+The [Mifos connector README](https://github.com/registrystack/registry-stack/blob/main/crates/registry-payment-mifos-connector/README.md) and the [platform crypto README](https://github.com/registrystack/registry-stack/blob/main/crates/registry-platform-crypto/README.md) carry the exact profile and Transit details.
+Live signing through a real Transit engine is not verified yet, so do not let a live disbursement move real money until it is.
+
+The separate confirmation operation accepts only a disbursement identifier.
+The Adapter reports verified provider completion through its restricted BReg Action, using the original instruction facts and a separately keyed exact command.
+The resulting confirmation records what the provider reported; credit to the recipient and settlement require separate authoritative evidence.
+
+### Authorisation and retained attempts
+
+Every lookup rechecks the current caller, connection and service scope.
+The Adapter identity holds the restricted BReg grants that bind and report attempts.
+A connection configuration change affects new attempts only.
+A retained attempt uses its original provider origins, tenant and party bindings, credential identities, exact pack pin and registry binding.
+Load the original provider pack alongside the active pack to resume retained work; a missing pack holds the attempt before provider I/O.
+Bearer credentials can rotate at the same configured reference.
+
+Payment attempts and command receipts stay durable without automatic expiry.
+They include the restricted bill and instruction facts needed for recovery, so protect their PostgreSQL storage and backups.
+Generic facade response-retention sweeps do not delete payment attempts.
+Payment audit events carry no values and commit before an effect or a response is released.
+
+{/* Evidence: crates/registry-adapter/src/payments/config.rs COLLECTION_SIMULATION_ONLY;
+    crates/registry-adapter/tests/payment_config.rs live_mifos_collections_are_refused_as_simulation_only;
+    crates/registry-adapter/src/payments/service.rs;
+    crates/registry-adapter/src/payments/g2p_model.rs mifos-legacy-signature;
+    crates/registry-adapter/tests/payment_service.rs;
+    crates/registry-adapter/tests/payment_store.rs;
+    products/adapter/scripts/check_dependency_direction.py. */}
 
 ## Next
 

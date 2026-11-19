@@ -1429,7 +1429,7 @@
       "description": "Starts stay held after a restore until an operator releases the admission hold.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "admission.held",
@@ -1448,7 +1448,7 @@
       "description": "This instance runs in recovery-only mode and admits no runs. Send starts to the ordinary service.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "admission.recovery-only",
@@ -1467,7 +1467,7 @@
       "description": "The operation may have completed, but its audited result could not be released. Inspect the run before repeating the operation.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "audit.response-unavailable",
@@ -1486,7 +1486,7 @@
       "description": "The bearer credential is missing, invalid, or expired.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "authentication.refused",
@@ -1505,7 +1505,7 @@
       "description": "The run's original connection settings differ from this service's runtime configuration.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "binding.conflict",
@@ -1524,7 +1524,7 @@
       "description": "Connection settings that runs in progress use differ from this service's runtime configuration.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "binding.live-conflict",
@@ -1543,7 +1543,7 @@
       "description": "That step is not waiting.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "check.not-waiting",
@@ -1562,7 +1562,7 @@
       "description": "The workflow's workflow definition, one of its mappings or one of its functions refused the request.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "definition.refused",
@@ -1581,7 +1581,7 @@
       "description": "An apply changed the active packages after this service started. Restart it with the runtime file that apply used.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "deployment.activation-changed",
@@ -1600,7 +1600,7 @@
       "description": "The deployment's activation, runtime configuration or state key custody check failed.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "deployment.refused",
@@ -1619,7 +1619,7 @@
       "description": "An evaluation may have completed at its provider, so the run is never evaluated again.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "evaluation.uncertain",
@@ -1638,7 +1638,7 @@
       "description": "The signed event must satisfy the accepted canonical envelope and typed event contract.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "event.invalid",
@@ -1657,7 +1657,7 @@
       "description": "Restore the configured event source signing key and its enabled secret provider before retrying delivery.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "event.source-unavailable",
@@ -1676,7 +1676,7 @@
       "description": "The signed event exceeds the event value profile: 131072 canonical bytes, 32 levels of nesting, 4096 values, 256 items per array, 256 members per object, and 16384 bytes per string. Have the producer project fewer or smaller fields into the event.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "event.too-large",
@@ -1695,7 +1695,7 @@
       "description": "Send a fresh signed delivery from the exact configured source to its accepted trigger.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "event.unauthenticated",
@@ -1714,7 +1714,7 @@
       "description": "Execution is under restore hold until an operator releases it.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "execution.held",
@@ -1733,7 +1733,7 @@
       "description": "Supply an Idempotency-Key header of 1 to 256 bytes.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "idempotency.key-invalid",
@@ -1752,7 +1752,7 @@
       "description": "This idempotency key already started a run with different input.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "idempotency.key-reused",
@@ -1771,7 +1771,7 @@
       "description": "The start input does not satisfy the workflow's declared input schema and value bounds.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "input.invalid",
@@ -1787,10 +1787,10 @@
       "compatibilityLine": "v1alpha1",
       "owner": "coordinator",
       "title": "Mutation outcome uncertain",
-      "description": "An unkeyed mutation may have completed at its provider, so the run never sends it again.",
+      "description": "A mutation may have completed at its provider, so the run never sends it again. Reconcile it when its operation offers a read-only receipt lookup; otherwise inspect or cancel the run.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "mutation.uncertain",
@@ -1809,7 +1809,7 @@
       "description": "The caller's policy does not allow this operation.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "operation.not-authorized",
@@ -1828,7 +1828,7 @@
       "description": "The original command's receipt can no longer be recovered. This is not evidence that the command was not sent.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "receipt.expired",
@@ -1847,7 +1847,7 @@
       "description": "The run's progress changed while it was being reconciled. Inspect it again.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "reconcile.raced",
@@ -1866,7 +1866,7 @@
       "description": "Reconcile applies only to a held mutation with a prepared command, its original binding and no active lease.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "reconcile.refused",
@@ -1885,7 +1885,7 @@
       "description": "The held operation has no original-result lookup.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "reconcile.unsupported",
@@ -1904,7 +1904,7 @@
       "description": "The request body exceeds the accepted size: 65536 bytes for a JSON request, or 1048576 bytes for a signed event delivery.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "request.body-too-large",
@@ -1923,7 +1923,7 @@
       "description": "The request could not be read as a Coordinator request.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "request.invalid",
@@ -1942,7 +1942,7 @@
       "description": "The list limit must be between 1 and 100.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "request.limit-out-of-range",
@@ -1961,7 +1961,7 @@
       "description": "The route exists but not for this method.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "request.method-not-allowed",
@@ -1980,7 +1980,7 @@
       "description": "The requested route does not exist.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "request.not-found",
@@ -1999,7 +1999,7 @@
       "description": "The reason or recovery reference must be a bounded reference without personal data or control characters.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "request.reason-invalid",
@@ -2018,7 +2018,7 @@
       "description": "The retention cutoff must be in the past and the limit between 1 and 100.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "request.retention-invalid",
@@ -2037,7 +2037,7 @@
       "description": "The request body could not be processed.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "request.unprocessable",
@@ -2056,7 +2056,7 @@
       "description": "The request body is not JSON.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "request.unsupported-media-type",
@@ -2075,7 +2075,7 @@
       "description": "This recovery action requires execution to be under restore hold.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "restore.hold-required",
@@ -2094,7 +2094,7 @@
       "description": "Held work no longer matches its protected definition or prepared command.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "restore.lease-incompatible",
@@ -2113,7 +2113,7 @@
       "description": "Execution history must be complete and the prior deployment fenced before recovery is reviewed.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "restore.review-required",
@@ -2132,7 +2132,7 @@
       "description": "Held work remains unresolved, so the restore hold cannot be released.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "restore.unresolved",
@@ -2151,7 +2151,7 @@
       "description": "Retry-same applies only to held work before its original deadline.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "retry.refused",
@@ -2170,7 +2170,7 @@
       "description": "This service's Coordinator version cannot interpret the run's pinned definition.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "run.definition-incompatible",
@@ -2189,7 +2189,7 @@
       "description": "No run with this identifier is visible to the caller.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "run.not-visible",
@@ -2208,7 +2208,7 @@
       "description": "Retention erased this run's payloads, so it can no longer be retried or reconciled.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "run.payload-erased",
@@ -2227,7 +2227,7 @@
       "description": "Coordinator could not complete the request.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "runtime.failure",
@@ -2246,7 +2246,7 @@
       "description": "A dependency of the Coordinator, such as its database, audit stream or token verifier, is unavailable. Try again after the service recovers.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "service.unavailable",
@@ -2265,7 +2265,7 @@
       "description": "This deployment does not serve the named workflow.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "workflow.not-served",
@@ -2284,7 +2284,7 @@
       "description": "The expected workflow revision differs from the active revision or the original admission.",
       "source": {
         "path": "crates/registry-coordinator/src/problem.rs",
-        "sha256": "5dcf42811a37fccaa9cd975c4845c0b3c2d695a66db26fb58fd2a828b41d55e7"
+        "sha256": "b6fdc242c2c238e6831f070d28284ec937ff079617a8c486e033376745a2864a"
       },
       "problem": {
         "code": "workflow.revision-mismatch",
@@ -4521,10 +4521,10 @@
       "compatibilityLine": "v1alpha1",
       "owner": "adapter",
       "title": "Registry Adapter effective contract",
-      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, payment connections, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "f922ce5b87701c57598a05db64d3a905bcaabe7e186b7437c90d64134b1a7279"
+        "sha256": "d3ae2236da999886ec80d3c8e18e2e0c6cb71eda7fbcdd2e134089cf51199cc0"
       },
       "artifact": {
         "path": "products/adapter/schemas/effective-contract.v1alpha1.schema.json",
@@ -4539,10 +4539,10 @@
       "compatibilityLine": "v1alpha1",
       "owner": "adapter",
       "title": "Registry Adapter fixture suite",
-      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, payment connections, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "f922ce5b87701c57598a05db64d3a905bcaabe7e186b7437c90d64134b1a7279"
+        "sha256": "d3ae2236da999886ec80d3c8e18e2e0c6cb71eda7fbcdd2e134089cf51199cc0"
       },
       "artifact": {
         "path": "products/adapter/schemas/fixture.v1alpha1.schema.json",
@@ -4557,10 +4557,10 @@
       "compatibilityLine": "v1alpha1",
       "owner": "adapter",
       "title": "Registry Adapter ingestion job runtime configuration",
-      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, payment connections, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "f922ce5b87701c57598a05db64d3a905bcaabe7e186b7437c90d64134b1a7279"
+        "sha256": "d3ae2236da999886ec80d3c8e18e2e0c6cb71eda7fbcdd2e134089cf51199cc0"
       },
       "artifact": {
         "path": "products/adapter/schemas/job-runtime.v1alpha1.schema.json",
@@ -4575,10 +4575,10 @@
       "compatibilityLine": "v1alpha1",
       "owner": "adapter",
       "title": "Registry Adapter ingestion job",
-      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, payment connections, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "f922ce5b87701c57598a05db64d3a905bcaabe7e186b7437c90d64134b1a7279"
+        "sha256": "d3ae2236da999886ec80d3c8e18e2e0c6cb71eda7fbcdd2e134089cf51199cc0"
       },
       "artifact": {
         "path": "products/adapter/schemas/job.v1alpha1.schema.json",
@@ -4593,10 +4593,10 @@
       "compatibilityLine": "v1alpha1",
       "owner": "adapter",
       "title": "Registry Adapter mapping model",
-      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, payment connections, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "f922ce5b87701c57598a05db64d3a905bcaabe7e186b7437c90d64134b1a7279"
+        "sha256": "d3ae2236da999886ec80d3c8e18e2e0c6cb71eda7fbcdd2e134089cf51199cc0"
       },
       "artifact": {
         "path": "products/adapter/schemas/mapping.v1alpha1.schema.json",
@@ -4611,14 +4611,68 @@
       "compatibilityLine": "v1alpha1",
       "owner": "adapter",
       "title": "Registry Adapter pack",
-      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, payment connections, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "f922ce5b87701c57598a05db64d3a905bcaabe7e186b7437c90d64134b1a7279"
+        "sha256": "d3ae2236da999886ec80d3c8e18e2e0c6cb71eda7fbcdd2e134089cf51199cc0"
       },
       "artifact": {
         "path": "products/adapter/schemas/pack.v1alpha1.schema.json",
         "sha256": "1a2b6fc1af37461379e31dc93a35237eb5a758de8c0d3520709db57668c2622a",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/adapter/payment-provider-fixture/payment-provider-fixture.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "adapter",
+      "title": "Registry Adapter payment provider fixture",
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, payment connections, ingestion job, job runtime configuration, and effective contract JSON Schema.",
+      "source": {
+        "path": "crates/registry-adapterctl/src/schemas.rs",
+        "sha256": "d3ae2236da999886ec80d3c8e18e2e0c6cb71eda7fbcdd2e134089cf51199cc0"
+      },
+      "artifact": {
+        "path": "products/adapter/schemas/payment-provider-fixture.v1alpha1.schema.json",
+        "sha256": "4d448ef29aed27d9fc2d1ef251fcf66256d6c0f02d55594582105136a732a034",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/adapter/payment-provider-pack/payment-provider-pack.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "adapter",
+      "title": "Registry Adapter payment provider pack",
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, payment connections, ingestion job, job runtime configuration, and effective contract JSON Schema.",
+      "source": {
+        "path": "crates/registry-adapterctl/src/schemas.rs",
+        "sha256": "d3ae2236da999886ec80d3c8e18e2e0c6cb71eda7fbcdd2e134089cf51199cc0"
+      },
+      "artifact": {
+        "path": "products/adapter/schemas/payment-provider-pack.v1alpha1.schema.json",
+        "sha256": "b2da0ab508173724798f91e1aab0ffe28348f237d3965595e039cae061e0f0b0",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/adapter/payments/payments.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "adapter",
+      "title": "Registry Adapter payment connections",
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, payment connections, ingestion job, job runtime configuration, and effective contract JSON Schema.",
+      "source": {
+        "path": "crates/registry-adapterctl/src/schemas.rs",
+        "sha256": "d3ae2236da999886ec80d3c8e18e2e0c6cb71eda7fbcdd2e134089cf51199cc0"
+      },
+      "artifact": {
+        "path": "products/adapter/schemas/payments.v1alpha1.schema.json",
+        "sha256": "573d4746769720f23b417674c77e1915c007baf502d88637cc0a38b75daaa205",
         "mediaType": "application/schema+json"
       }
     },
@@ -4629,10 +4683,10 @@
       "compatibilityLine": "v1alpha1",
       "owner": "adapter",
       "title": "Registry Adapter preview expectations",
-      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, payment connections, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "f922ce5b87701c57598a05db64d3a905bcaabe7e186b7437c90d64134b1a7279"
+        "sha256": "d3ae2236da999886ec80d3c8e18e2e0c6cb71eda7fbcdd2e134089cf51199cc0"
       },
       "artifact": {
         "path": "products/adapter/schemas/preview-expectations.v1alpha1.schema.json",
@@ -4647,10 +4701,10 @@
       "compatibilityLine": "v1alpha1",
       "owner": "adapter",
       "title": "Registry Adapter facade profile",
-      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, payment connections, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "f922ce5b87701c57598a05db64d3a905bcaabe7e186b7437c90d64134b1a7279"
+        "sha256": "d3ae2236da999886ec80d3c8e18e2e0c6cb71eda7fbcdd2e134089cf51199cc0"
       },
       "artifact": {
         "path": "products/adapter/schemas/profile.v1alpha1.schema.json",
@@ -4665,10 +4719,10 @@
       "compatibilityLine": "v1alpha1",
       "owner": "adapter",
       "title": "Registry Adapter project",
-      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, payment connections, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "f922ce5b87701c57598a05db64d3a905bcaabe7e186b7437c90d64134b1a7279"
+        "sha256": "d3ae2236da999886ec80d3c8e18e2e0c6cb71eda7fbcdd2e134089cf51199cc0"
       },
       "artifact": {
         "path": "products/adapter/schemas/project.v1alpha1.schema.json",
@@ -4683,10 +4737,10 @@
       "compatibilityLine": "v1alpha1",
       "owner": "adapter",
       "title": "Registry Adapter runtime configuration",
-      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema.",
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, payment connections, ingestion job, job runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "f922ce5b87701c57598a05db64d3a905bcaabe7e186b7437c90d64134b1a7279"
+        "sha256": "d3ae2236da999886ec80d3c8e18e2e0c6cb71eda7fbcdd2e134089cf51199cc0"
       },
       "artifact": {
         "path": "products/adapter/schemas/runtime.v1alpha1.schema.json",
@@ -5208,11 +5262,11 @@
       "description": "Registry Coordinator portable project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/authoring.rs",
-        "sha256": "8aff778324c1f05ca2615121980be6e3212d3e80f1bc99104b7256dfe18445a5"
+        "sha256": "9a3c99e66daf32e6a1eaea31aeac7ddbb897749dce640a73b5272604c12a6eea"
       },
       "artifact": {
         "path": "products/coordinator/generated/project/project.schema.json",
-        "sha256": "c4bc1e7a160804ec03dc958eed753e6cc59fb3132b702bf6bd43638f0c6829a1",
+        "sha256": "24de466b2ca28010a475bed4e5c4ab7a1a02b0732236bbffa86e89a995715138",
         "mediaType": "application/schema+json"
       }
     },
@@ -5226,11 +5280,11 @@
       "description": "Registry Coordinator runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/runtime.rs",
-        "sha256": "557622b966f74f4543e943fb828d7accbe5fc0e5a0248933b0794aa5f53c0a6e"
+        "sha256": "005d8a5339c6e398e892f2b53ee856a79f5c6fc8f6e48e221af6ce43b7497a0c"
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "264c95638a427789585a112891e85cdc0d73db142ce72fac622e7eb0e9c0c0b4",
+        "sha256": "61ebfcc6f807308fb7f723b75deee8f777b31a486d92052b46e80c36d05823b4",
         "mediaType": "application/schema+json"
       }
     },
@@ -5244,7 +5298,7 @@
       "description": "Registry Coordinator deterministic scenario authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/scenarios.rs",
-        "sha256": "5e5de3c3a4ca9d36a2286b0abd1d3f551acb28691ae4a16439ee3fafcb83d4ef"
+        "sha256": "d15a452b05c77a398cf957e0f955fb0d7faa2b478df6ee1780f10606d21366b3"
       },
       "artifact": {
         "path": "products/coordinator/generated/scenarios/scenarios.schema.json",

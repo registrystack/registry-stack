@@ -233,8 +233,6 @@ pub use schema::install_compiled_schema;
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 pub use schema::reconcile_compiled_runtime_acl_for_test;
-#[cfg(all(feature = "runtime", feature = "tooling"))]
-pub(crate) use schema::rehearse_schema_fingerprint_with_connection;
 pub(crate) use schema::verify_postgres_17_or_newer;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub(crate) use schema::PreparedSchemaTestCatalogVerifier;
@@ -243,6 +241,8 @@ pub use schema::{
     prepare_schema_test_database_with_connections, PreparedSchemaTestDatabase,
     SchemaTestDatabaseIdentity,
 };
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+pub(crate) use schema::{rehearse_schema_fingerprint_with_connection, SchemaRehearsalError};
 pub use statistics::{
     PostgresStatisticsService, StatisticsLiveRequest, StatisticsMutationOutcome,
     StatisticsPublishRequest, StatisticsReleaseListCursor, StatisticsReleaseListRequest,

@@ -1,0 +1,221 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: exact-g2p-disbursement-instruction
+    steps:
+      - id: create-authoritative-instruction
+        action: create-disbursement-instruction
+        accessProfile: disbursement-authority
+        claims: {principal: synthetic-benefit-service, scopes: [registry:disbursement:create], purpose: benefit-disbursement, actorKind: service, requesterClient: benefit-service}
+        request:
+          type: invoke
+          idempotencyKey: create-authoritative-instruction
+          input: {instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2}
+        expect: {outcome: success, status: 200}
+        captureResults: {instruction: instruction}
+
+      - id: read-frozen-instruction
+        recordType: disbursement-instruction
+        accessProfile: disbursement-authority
+        claims: {principal: synthetic-benefit-service, scopes: [registry:disbursement:create], purpose: benefit-disbursement, actorKind: service, requesterClient: benefit-service}
+        request: {type: get, recordCapture: instruction}
+        expect:
+          outcome: success
+          status: 200
+          fields: {instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2, disbursementState: instruction-ready}
+
+      - id: changed-version-cannot-replace-instruction
+        action: create-disbursement-instruction
+        accessProfile: disbursement-authority
+        claims: {principal: synthetic-benefit-service, scopes: [registry:disbursement:create], purpose: benefit-disbursement, actorKind: service, requesterClient: benefit-service}
+        request:
+          type: invoke
+          idempotencyKey: replace-instruction-version
+          input: {instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 2, instructionDigest: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2}
+        expect: {outcome: refusal, status: 409, problemCode: mutation.conflict}
+
+      - id: capture-bind-condition-after-create
+        action: bind-payout-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request: {type: target-conditions, input: {instructionRecordId: {recordCapture: instruction}}}
+        expect: {outcome: success, status: 200}
+        capture: bind-condition-after-create
+
+      - id: unauthorized-service-cannot-bind
+        action: bind-payout-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-unauthorized-adapter, scopes: [], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: unauthorized-bind
+          preconditions: {instructionRecordId: {conditionCapture: bind-condition-after-create}}
+          input: {instructionRecordId: {recordCapture: instruction}, instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2, payoutAttemptId: 00000000-0000-4000-8000-000000000201, providerBindingRevision: mifos-synthetic-v1}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+
+      - id: changed-version-cannot-bind
+        action: bind-payout-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: changed-version-bind
+          preconditions: {instructionRecordId: {conditionCapture: bind-condition-after-create}}
+          input: {instructionRecordId: {recordCapture: instruction}, instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 2, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2, payoutAttemptId: 00000000-0000-4000-8000-000000000201, providerBindingRevision: mifos-synthetic-v1}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: changed-destination-cannot-bind
+        action: bind-payout-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: changed-destination-bind
+          preconditions: {instructionRecordId: {conditionCapture: bind-condition-after-create}}
+          input: {instructionRecordId: {recordCapture: instruction}, instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000099", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2, payoutAttemptId: 00000000-0000-4000-8000-000000000201, providerBindingRevision: mifos-synthetic-v1}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: changed-funding-or-money-cannot-bind
+        action: bind-payout-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: changed-funding-bind
+          preconditions: {instructionRecordId: {conditionCapture: bind-condition-after-create}}
+          input: {instructionRecordId: {recordCapture: instruction}, instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: other-account, amountMinor: 100001, currency: KES, currencyScale: 2, payoutAttemptId: 00000000-0000-4000-8000-000000000201, providerBindingRevision: mifos-synthetic-v1}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: bind-exact-payout-attempt
+        action: bind-payout-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: bind-exact-payout-attempt
+          preconditions: {instructionRecordId: {conditionCapture: bind-condition-after-create}}
+          input: {instructionRecordId: {recordCapture: instruction}, instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2, payoutAttemptId: 00000000-0000-4000-8000-000000000201, providerBindingRevision: mifos-synthetic-v1}
+        expect: {outcome: success, status: 200}
+
+      - id: recover-exact-binding
+        action: bind-payout-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: bind-exact-payout-attempt
+          preconditions: {instructionRecordId: {conditionCapture: bind-condition-after-create}}
+          input: {instructionRecordId: {recordCapture: instruction}, instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2, payoutAttemptId: 00000000-0000-4000-8000-000000000201, providerBindingRevision: mifos-synthetic-v1}
+        expect: {outcome: success, status: 200}
+
+      - id: capture-bind-condition-after-binding
+        action: bind-payout-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request: {type: target-conditions, input: {instructionRecordId: {recordCapture: instruction}}}
+        expect: {outcome: success, status: 200}
+        capture: bind-condition-after-binding
+
+      - id: capture-confirm-condition-after-binding
+        action: record-provider-confirmation
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-result:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request: {type: target-conditions, input: {instructionRecordId: {recordCapture: instruction}}}
+        expect: {outcome: success, status: 200}
+        capture: confirm-condition-after-binding
+
+      - id: pending-or-unknown-cannot-create-second-attempt
+        action: bind-payout-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: second-payout-attempt
+          preconditions: {instructionRecordId: {conditionCapture: bind-condition-after-binding}}
+          input: {instructionRecordId: {recordCapture: instruction}, instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2, payoutAttemptId: 00000000-0000-4000-8000-000000000202, providerBindingRevision: mifos-synthetic-v1}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: pending-cannot-mark-provider-confirmed
+        action: record-provider-confirmation
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-result:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: pending-result
+          preconditions: {instructionRecordId: {conditionCapture: confirm-condition-after-binding}}
+          input: {instructionRecordId: {recordCapture: instruction}, instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2, payoutAttemptId: 00000000-0000-4000-8000-000000000201, providerBindingRevision: mifos-synthetic-v1, providerStatus: PENDING, providerReference: synthetic-batch-001, providerResultDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}
+        expect: {outcome: refusal, status: 400, problemCode: request.invalid}
+
+      - id: unknown-cannot-mark-provider-confirmed
+        action: record-provider-confirmation
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-result:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: unknown-result
+          preconditions: {instructionRecordId: {conditionCapture: confirm-condition-after-binding}}
+          input: {instructionRecordId: {recordCapture: instruction}, instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2, payoutAttemptId: 00000000-0000-4000-8000-000000000201, providerBindingRevision: mifos-synthetic-v1, providerStatus: UNKNOWN, providerReference: synthetic-batch-001, providerResultDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}
+        expect: {outcome: refusal, status: 400, problemCode: request.invalid}
+
+      - id: changed-instruction-fact-cannot-confirm
+        action: record-provider-confirmation
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-result:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: changed-fact-confirmation
+          preconditions: {instructionRecordId: {conditionCapture: confirm-condition-after-binding}}
+          input: {instructionRecordId: {recordCapture: instruction}, instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100001, currency: KES, currencyScale: 2, payoutAttemptId: 00000000-0000-4000-8000-000000000201, providerBindingRevision: mifos-synthetic-v1, providerStatus: COMPLETED, providerReference: synthetic-batch-001, providerResultDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: unauthorized-service-cannot-confirm
+        action: record-provider-confirmation
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-unauthorized-adapter, scopes: [], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: unauthorized-confirmation
+          preconditions: {instructionRecordId: {conditionCapture: confirm-condition-after-binding}}
+          input: {instructionRecordId: {recordCapture: instruction}, instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2, payoutAttemptId: 00000000-0000-4000-8000-000000000201, providerBindingRevision: mifos-synthetic-v1, providerStatus: COMPLETED, providerReference: synthetic-batch-001, providerResultDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+
+      - id: record-exact-provider-confirmation
+        action: record-provider-confirmation
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-result:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: record-exact-provider-confirmation
+          preconditions: {instructionRecordId: {conditionCapture: confirm-condition-after-binding}}
+          input: {instructionRecordId: {recordCapture: instruction}, instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2, payoutAttemptId: 00000000-0000-4000-8000-000000000201, providerBindingRevision: mifos-synthetic-v1, providerStatus: COMPLETED, providerReference: synthetic-batch-001, providerResultDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}
+        expect: {outcome: success, status: 200}
+
+      - id: read-exact-provider-confirmation
+        recordType: disbursement-instruction
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-result:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request: {type: get, recordCapture: instruction}
+        expect:
+          outcome: success
+          status: 200
+          fields: {instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2, disbursementState: provider-confirmed, payoutAttemptId: 00000000-0000-4000-8000-000000000201, providerBindingRevision: mifos-synthetic-v1, providerStatus: COMPLETED, providerReference: synthetic-batch-001, providerResultDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}
+
+      - id: capture-confirm-condition-after-confirmation
+        action: record-provider-confirmation
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-result:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request: {type: target-conditions, input: {instructionRecordId: {recordCapture: instruction}}}
+        expect: {outcome: success, status: 200}
+        capture: confirm-condition-after-confirmation
+
+      - id: confirmation-cannot-be-replaced
+        action: record-provider-confirmation
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payout-result:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: replacement-confirmation
+          preconditions: {instructionRecordId: {conditionCapture: confirm-condition-after-confirmation}}
+          input: {instructionRecordId: {recordCapture: instruction}, instructionId: 00000000-0000-4000-8000-000000000101, instructionVersion: 1, instructionDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: ministry-social, serviceId: cash-transfer, programmeId: cash-programme, cycleId: cycle-2026-11, beneficiaryId: beneficiary-001, beneficiaryDestination: "254700000002", fundingAccountId: programme-account, amountMinor: 100000, currency: KES, currencyScale: 2, payoutAttemptId: 00000000-0000-4000-8000-000000000201, providerBindingRevision: mifos-synthetic-v1, providerStatus: COMPLETED, providerReference: synthetic-batch-002, providerResultDigest: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}

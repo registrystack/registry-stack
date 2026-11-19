@@ -64,6 +64,10 @@ project, its mappings, waits, and checks.
 - [External directory](examples/external-directory/README.md) performs a configured HTTP GET.
 - [External job](examples/external-job/README.md) uses a bounded completion poll and pure
   interpreter for one previously selected external job.
+- [Payment collection](examples/payment-collections/README.md) requests one Adapter-owned
+  collection, waits for its named completion, and records only a confirmed receipt.
+- [Disbursement](examples/g2p-disbursements/README.md) submits one approved instruction,
+  waits for the correlated provider observation, and reports verified provider completion.
 
 ## Package and deploy
 

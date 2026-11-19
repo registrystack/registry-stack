@@ -824,6 +824,49 @@ pub fn casework_completion_schema() -> &'static Value {
     })
 }
 
+/// Authoritative state observed for the exact payment collection a call
+/// accepted. Pending and unknown values remain observations, not completion.
+pub fn payment_completion_schema() -> &'static Value {
+    static SCHEMA: OnceLock<Value> = OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        #[cfg(feature = "schema")]
+        {
+            let mut schema = derived::output::<registry_payment_client::CollectionStatus>();
+            derived::finish(&mut schema, "Payment collection completion");
+            schema
+        }
+        #[cfg(not(feature = "schema"))]
+        {
+            serde_json::from_str(include_str!(
+                "../../../products/coordinator/generated/operations/payments.collection.completion.schema.json"
+            ))
+            .expect("generated payment completion schema")
+        }
+    })
+}
+
+/// Authoritative state observed for the exact disbursement instruction a
+/// call accepted. Pending and unknown values remain observations, not proof
+/// that a replacement submission is safe.
+pub fn payment_disbursement_completion_schema() -> &'static Value {
+    static SCHEMA: OnceLock<Value> = OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        #[cfg(feature = "schema")]
+        {
+            let mut schema = derived::output::<registry_payment_client::DisbursementStatus>();
+            derived::finish(&mut schema, "Payment disbursement completion");
+            schema
+        }
+        #[cfg(not(feature = "schema"))]
+        {
+            serde_json::from_str(include_str!(
+                "../../../products/coordinator/generated/operations/payments.disbursement.completion.schema.json"
+            ))
+            .expect("generated payment disbursement completion schema")
+        }
+    })
+}
+
 /// Shared Review and event wire schemas, generated from their owning types.
 pub fn admission_schemas() -> &'static Value {
     static SCHEMAS: OnceLock<Value> = OnceLock::new();
@@ -982,6 +1025,16 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
         "casework.submit-review-request.v1.result.completion.schema.json".into(),
         text,
     );
+    let mut payment = derived::output::<registry_payment_client::CollectionStatus>();
+    derived::finish(&mut payment, "Payment collection completion");
+    let mut text = serde_json::to_string_pretty(&payment)?;
+    text.push('\n');
+    files.insert("payments.collection.completion.schema.json".into(), text);
+    let mut disbursement = derived::output::<registry_payment_client::DisbursementStatus>();
+    derived::finish(&mut disbursement, "Payment disbursement completion");
+    let mut text = serde_json::to_string_pretty(&disbursement)?;
+    text.push('\n');
+    files.insert("payments.disbursement.completion.schema.json".into(), text);
     for descriptor in crate::operations::descriptors() {
         let Some(refusal) = derived_declared_refusal(descriptor) else {
             continue;
@@ -1238,6 +1291,48 @@ mod derived {
         (
             input::<CancelReviewInput>(),
             output::<ReviewCancelResponse>(),
+        )
+    }
+
+    pub(super) fn request_collection() -> (Value, Value) {
+        (
+            input::<registry_payment_client::RequestCollection>(),
+            output::<registry_payment_client::CollectionAccepted>(),
+        )
+    }
+
+    pub(super) fn read_collection() -> (Value, Value) {
+        (
+            input::<registry_payment_client::ReadCollection>(),
+            output::<registry_payment_client::CollectionStatus>(),
+        )
+    }
+
+    pub(super) fn record_receipt() -> (Value, Value) {
+        (
+            input::<registry_payment_client::RecordReceipt>(),
+            output::<registry_payment_client::RegistryReceipt>(),
+        )
+    }
+
+    pub(super) fn request_disbursement() -> (Value, Value) {
+        (
+            input::<registry_payment_client::RequestDisbursement>(),
+            output::<registry_payment_client::DisbursementAccepted>(),
+        )
+    }
+
+    pub(super) fn read_disbursement() -> (Value, Value) {
+        (
+            input::<registry_payment_client::ReadDisbursement>(),
+            output::<registry_payment_client::DisbursementStatus>(),
+        )
+    }
+
+    pub(super) fn record_provider_confirmation() -> (Value, Value) {
+        (
+            input::<registry_payment_client::RecordProviderConfirmation>(),
+            output::<registry_payment_client::ProviderConfirmation>(),
         )
     }
 

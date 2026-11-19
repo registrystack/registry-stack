@@ -101,6 +101,28 @@ impl OperationDescriptor {
                 "authenticatedWake":false,
                 "defaultIntervalSeconds":crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
             }),
+            id if Operation::parse(id).is_some_and(Operation::follows_collection) => json!({
+                "name":"collection", "profile":"payment-collection",
+                "acceptedBinding":["collectionId","billId","billVersion","bindingRevision","simulation"],
+                "authority":"current-bound-payment-connection",
+                "terminalEvidence":"validated-authoritative-collection-read",
+                "pendingStates":["accepted","pending","unknown"],
+                "settledStates":["confirmed","failed"],
+                "paymentSuccessState":"confirmed",
+                "authenticatedWake":false,
+                "defaultIntervalSeconds":crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
+            }),
+            id if Operation::parse(id).is_some_and(Operation::follows_disbursement) => json!({
+                "name":"disbursement", "profile":"payment-disbursement",
+                "acceptedBinding":["disbursementId","instructionRecordId","instructionId","instructionVersion","bindingRevision","simulation"],
+                "authority":"current-bound-payment-connection",
+                "terminalEvidence":"validated-authoritative-disbursement-read",
+                "pendingStates":["accepted","pending","unknown"],
+                "settledStates":["provider-confirmed","failed"],
+                "paymentSuccessState":"provider-confirmed",
+                "authenticatedWake":false,
+                "defaultIntervalSeconds":crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
+            }),
             _ => serde_json::Value::Null,
         };
         if let Some(fields) = observation.as_object_mut() {
@@ -225,6 +247,25 @@ const fn mutation(
     }
 }
 
+/// A provider submission that can be reconciled through an authoritative
+/// original-command read, but must never be sent again after uncertainty.
+const fn receipt_reconciled_mutation(
+    id: &'static str,
+    product: &'static str,
+) -> OperationDescriptor {
+    OperationDescriptor {
+        id,
+        version: 1,
+        product,
+        effect: EffectKind::Mutation,
+        key_requirement: KeyRequirement::Required,
+        requires_preparation: false,
+        recovery: RecoverySemantics::HoldAfterDispatch,
+        read_receipt: true,
+        declared_refusal: false,
+    }
+}
+
 const fn declared_read(id: &'static str, product: &'static str) -> OperationDescriptor {
     OperationDescriptor {
         declared_refusal: true,
@@ -311,6 +352,12 @@ macro_rules! operation_catalog {
             CancelProposal => "breg.cancel-proposal/v1", mutation("breg", false, true), cancel_proposal;
             LookupRecord => "breg.lookup-record/v1", declared_read("breg"), lookup_record;
             ReadRecordV2 => "breg.read-record/v2", read_v2("breg"), read_record_v2;
+            RequestCollection => "payments.request-collection/v1", mutation("payments", true, false), request_collection;
+            ReadCollection => "payments.read-collection/v1", read("payments"), read_collection;
+            RecordReceipt => "payments.record-receipt/v1", mutation("payments", false, false), record_receipt;
+            RequestDisbursement => "payments.request-disbursement/v1", receipt_reconciled_mutation("payments"), request_disbursement;
+            ReadDisbursement => "payments.read-disbursement/v1", read("payments"), read_disbursement;
+            RecordProviderConfirmation => "payments.record-provider-confirmation/v1", mutation("payments", false, false), record_provider_confirmation;
         }
     };
 }
@@ -370,6 +417,9 @@ pub fn failure_code(code: &str) -> Option<&'static str> {
         "in-force-ambiguous" => Some("in-force-ambiguous"),
         "proposal-unreadable" => Some("proposal-unreadable"),
         "proposal-handoff-refused" => Some("proposal-handoff-refused"),
+        "payment-invalid-response" => Some("payment-invalid-response"),
+        "payment-correlation-mismatch" => Some("payment-correlation-mismatch"),
+        "payment-unknown" => Some("payment-unknown"),
         _ => None,
     }
 }
@@ -429,6 +479,21 @@ mod tests {
             (Operation::CancelProposal, "breg.cancel-proposal/v1"),
             (Operation::LookupRecord, "breg.lookup-record/v1"),
             (Operation::ReadRecordV2, "breg.read-record/v2"),
+            (
+                Operation::RequestCollection,
+                "payments.request-collection/v1",
+            ),
+            (Operation::ReadCollection, "payments.read-collection/v1"),
+            (Operation::RecordReceipt, "payments.record-receipt/v1"),
+            (
+                Operation::RequestDisbursement,
+                "payments.request-disbursement/v1",
+            ),
+            (Operation::ReadDisbursement, "payments.read-disbursement/v1"),
+            (
+                Operation::RecordProviderConfirmation,
+                "payments.record-provider-confirmation/v1",
+            ),
         ];
         assert_eq!(
             descriptors()
@@ -578,6 +643,10 @@ mod tests {
             Operation::StartProposal,
             Operation::SubmitProposal,
             Operation::ExternalCommand,
+            Operation::RequestCollection,
+            Operation::RecordReceipt,
+            Operation::RequestDisbursement,
+            Operation::RecordProviderConfirmation,
         ];
         let allowed_mutations = [
             Operation::SubmitMessage,
@@ -634,6 +703,62 @@ mod tests {
             assert!(!review.supports_read_receipt());
             assert_eq!(review.recovery(), RecoverySemantics::SameCommand);
         }
+        assert_eq!(Operation::RequestCollection.product(), "payments");
+        assert!(Operation::RequestCollection.requires_key());
+        assert!(Operation::RequestCollection.supports_read_receipt());
+        assert_eq!(
+            Operation::RequestCollection.recovery(),
+            RecoverySemantics::SameCommandAndReceipt
+        );
+        assert!(Operation::RequestCollection.follows_collection());
+        let completion =
+            &Operation::RequestCollection.descriptor().host_contract()["completionObservation"];
+        assert_eq!(
+            completion["pendingStates"],
+            serde_json::json!(["accepted", "pending", "unknown"])
+        );
+        assert_eq!(
+            completion["settledStates"],
+            serde_json::json!(["confirmed", "failed"])
+        );
+        assert_eq!(completion["paymentSuccessState"], "confirmed");
+        assert!(Operation::ReadCollection.is_read());
+        assert!(Operation::ReadCollection.follows_collection());
+        assert!(Operation::RecordReceipt.requires_key());
+        assert_eq!(
+            Operation::RecordReceipt.recovery(),
+            RecoverySemantics::SameCommand
+        );
+        assert!(!Operation::RecordReceipt.follows_collection());
+        assert_eq!(Operation::RequestDisbursement.product(), "payments");
+        assert!(Operation::RequestDisbursement.requires_key());
+        assert!(Operation::RequestDisbursement.supports_read_receipt());
+        assert_eq!(
+            Operation::RequestDisbursement.recovery(),
+            RecoverySemantics::HoldAfterDispatch
+        );
+        assert!(!Operation::RequestDisbursement.can_retry_after_unknown());
+        assert!(Operation::RequestDisbursement.follows_disbursement());
+        let completion =
+            &Operation::RequestDisbursement.descriptor().host_contract()["completionObservation"];
+        assert_eq!(
+            completion["pendingStates"],
+            serde_json::json!(["accepted", "pending", "unknown"])
+        );
+        assert_eq!(
+            completion["settledStates"],
+            serde_json::json!(["provider-confirmed", "failed"])
+        );
+        assert_eq!(completion["paymentSuccessState"], "provider-confirmed");
+        assert!(Operation::ReadDisbursement.is_read());
+        assert!(Operation::ReadDisbursement.follows_disbursement());
+        assert!(Operation::RecordProviderConfirmation.requires_key());
+        assert_eq!(
+            Operation::RecordProviderConfirmation.recovery(),
+            RecoverySemantics::SameCommand
+        );
+        assert!(Operation::RecordProviderConfirmation.can_retry_after_unknown());
+        assert!(!Operation::RecordProviderConfirmation.follows_disbursement());
     }
 
     #[test]

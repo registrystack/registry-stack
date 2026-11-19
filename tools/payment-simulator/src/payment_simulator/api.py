@@ -8,12 +8,14 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, Request
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, Response
 from pydantic import ValidationError
 
+from .hosted_page import CONTENT_SECURITY_POLICY, outcome_url, render
 from .models import (
     Acknowledgement,
     ApiError,
@@ -25,11 +27,13 @@ from .models import (
     Transaction,
     UpdateRequest,
     invalid,
+    not_found,
 )
 from .p2g_models import CollectionAccepted, CollectionRequest, CollectionStatus
-from .store import Scope, dumps
+from .store import DECISIONS, Scope, dumps
 
 BODY_LIMIT = 65536
+FORM_LIMIT = 4096
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,7 @@ class Settings:
         "https://programme.example.test/callback",
         "https://programme.example.test/api/v1/batch",
     )
+    return_urls: tuple[str, ...] = ()
     currencies: dict[str, int] = field(default_factory=lambda: {"USD": 2})
     modes: tuple[str, ...] = ("00",)
     manual: bool = False
@@ -258,6 +263,7 @@ def create_app(settings=None, store=None):
     }
     institution = parameter("X-Registering-Institution-ID", maximum=12)
     callback = parameter("X-Callback-URL", maximum=100)
+    return_url = parameter("X-Return-URL", required=False, maximum=200)
 
     @app.exception_handler(ApiError)
     async def api_error(_, exc):
@@ -403,14 +409,28 @@ def create_app(settings=None, store=None):
             )
         )
 
-    def collection_scope(request, *, callback=False):
+    def collection_scope(request, *, callback=False, return_url=False):
         scope = authenticated(
             request, settings, tenant_header="X-Platform-TenantId", callback=callback
         )
         biller = header(request, "X-billerId", 20)
         if biller not in settings.billers:
             raise ApiError(403, "auth.forbidden", "Biller is not permitted")
-        return Scope(scope.producer, scope.tenant, institution=biller, callback=scope.callback)
+        target = header(request, "X-Return-URL", 200, required=False) if return_url else None
+        if target is not None and target not in settings.return_urls:
+            raise ApiError(
+                403,
+                "auth.forbidden",
+                "Return URL is not allowed; add it with serve --return-url",
+                "X-Return-URL",
+            )
+        return Scope(
+            scope.producer,
+            scope.tenant,
+            institution=biller,
+            callback=scope.callback,
+            return_url=target or "",
+        )
 
     @app.post(
         "/rtpRequest",
@@ -420,12 +440,13 @@ def create_app(settings=None, store=None):
             parameter("X-billerId"),
             parameter("X-CorrelationID", maximum=12),
             callback,
+            return_url,
             model=CollectionRequest,
             tenant_header="X-Platform-TenantId",
         ),
     )
     async def request_collection(request: Request):
-        scope = collection_scope(request, callback=True)
+        scope = collection_scope(request, callback=True, return_url=True)
         correlation = header(request, "X-CorrelationID", 12)
         queries(request, set())
         value = await body(request, CollectionRequest)
@@ -457,6 +478,53 @@ def create_app(settings=None, store=None):
         response = json_response(store.collection_status(scope, transfer_id))
         response.headers["X-CorrelationID"] = correlation
         return response
+
+    def hosted_response(view, *, status=200):
+        response = HTMLResponse(render(view), status_code=status)
+        # The page URL is a capability: keep it out of caches and Referer headers.
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
+        return response
+
+    def hosted_id(request):
+        transfer_id = request.path_params["transferRequestId"]
+        if not 1 <= len(transfer_id) <= 50:
+            raise not_found()
+        return transfer_id
+
+    @app.get("/pay/{transferRequestId}", include_in_schema=False)
+    async def pay_page(request: Request):
+        return hosted_response(store.hosted_page(hosted_id(request)))
+
+    @app.post("/pay/{transferRequestId}", include_in_schema=False)
+    async def pay_decision(request: Request):
+        transfer_id = hosted_id(request)
+        media = request.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if media != "application/x-www-form-urlencoded":
+            raise ApiError(415, "request.media-type", "Use application/x-www-form-urlencoded")
+        raw = bytearray()
+        async for chunk in request.stream():
+            if len(raw) + len(chunk) > FORM_LIMIT:
+                raise ApiError(413, "request.too-large", "Request exceeds profile limit")
+            raw.extend(chunk)
+        try:
+            pairs = parse_qsl(raw.decode(), keep_blank_values=True, strict_parsing=bool(raw))
+        except (UnicodeError, ValueError):
+            raise invalid() from None
+        fields = dict(pairs)
+        if len(fields) != len(pairs) or not set(fields) <= {"token", "decision"}:
+            raise invalid()
+        # Check the token before the decision so a stranger learns nothing about the request.
+        store.hosted_page(transfer_id)
+        if fields.get("token") is None:
+            raise ApiError(403, "auth.forbidden", "Form token is not valid")
+        if fields.get("decision") not in DECISIONS:
+            raise invalid("decision")
+        view = store.hosted_page(transfer_id, fields["token"], fields["decision"])
+        if view["decided"] and view["return_url"]:
+            return Response(status_code=303, headers={"Location": outcome_url(view)})
+        return hosted_response(view)
 
     def openapi():
         if app.openapi_schema:

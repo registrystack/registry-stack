@@ -1,8 +1,10 @@
 """One SQLite transaction owns each command, state advance, and simulated credit."""
 
 import hashlib
+import hmac
 import json
 import os
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -16,7 +18,7 @@ import simplejson
 from .models import ApiError, invalid, not_found
 
 MAX_MINOR = 9007199254740991
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SCHEMA = """
 CREATE TABLE mappings (
     tenant TEXT, institution TEXT, payee TEXT, mode TEXT, address TEXT NOT NULL, bank TEXT,
@@ -69,6 +71,28 @@ CREATE TABLE collection_payments (
 );
 """
 
+# Hosted payment page state. Every collection request has one row: a form token for the
+# page, the optional return URL, whether the request waits for the payer, and the decision.
+HOSTED_SCHEMA = """
+CREATE TABLE IF NOT EXISTS collection_hosted (
+    transfer_id TEXT PRIMARY KEY REFERENCES collection_requests(transfer_id),
+    form_token TEXT NOT NULL, return_url TEXT, hold INTEGER NOT NULL, decision TEXT
+);
+CREATE TABLE IF NOT EXISTS payer_outcomes (
+    producer TEXT, tenant TEXT, biller TEXT, address TEXT, outcome TEXT NOT NULL,
+    PRIMARY KEY (producer, tenant, biller, address)
+)
+"""
+
+# Each outcome maps to its terminal (requestStatus, paymentStatus, failureReason).
+TERMINAL = {
+    "paid": ("COM", "PAID", None),
+    "failed": ("RJC", "FAILED", "payer-rejected"),
+    "expired": ("EXP", "EXPIRED", "request-expired"),
+    "cancelled": ("RJC", "FAILED", "payer-cancelled"),
+}
+DECISIONS = {"pay": "paid", "decline": "failed", "cancel": "cancelled"}
+
 
 def dumps(value, **kwargs):
     return simplejson.dumps(value, use_decimal=True, allow_nan=False, ensure_ascii=False, **kwargs)
@@ -120,6 +144,7 @@ class Scope:
     institution: str = ""
     program: str = ""
     callback: str = ""
+    return_url: str = ""
 
 
 class Store:
@@ -140,22 +165,33 @@ class Store:
             if version == 0 and create:
                 if db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone():
                     raise ValueError("unrecognized database; choose a fresh state file")
-                for statement in (SCHEMA + COLLECTION_SCHEMA).split(";"):
-                    if statement.strip():
-                        db.execute(statement)
+                self.create_tables(db, SCHEMA + COLLECTION_SCHEMA + HOSTED_SCHEMA)
                 db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            elif version == 1 and create:
-                # A single additive upgrade preserves the original G2P demo state.
-                # Keep it in this transaction; no reset or migration framework.
-                for statement in COLLECTION_SCHEMA.split(";"):
-                    if statement.strip():
-                        db.execute(statement)
+            elif version in (1, 2) and create:
+                # Additive upgrades preserve the original G2P demo state and earlier
+                # collection requests. Keep them in this transaction; no migration framework.
+                self.create_tables(db, (COLLECTION_SCHEMA if version == 1 else "") + HOSTED_SCHEMA)
+                # Requests accepted before the hosted page existed get a form token too.
+                for row in db.execute(
+                    "SELECT transfer_id FROM collection_requests WHERE transfer_id NOT IN "
+                    "(SELECT transfer_id FROM collection_hosted)"
+                ).fetchall():
+                    db.execute(
+                        "INSERT INTO collection_hosted VALUES (?, ?, NULL, 0, NULL)",
+                        (row["transfer_id"], secrets.token_urlsafe(32)),
+                    )
                 db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             elif version != SCHEMA_VERSION:
                 raise ValueError(
                     "incompatible database version; start serve to upgrade v1, "
                     "or choose a fresh state file"
                 )
+
+    @staticmethod
+    def create_tables(db, script):
+        for statement in script.split(";"):
+            if statement.strip():
+                db.execute(statement)
 
     @contextmanager
     def connection(self, *, write=False):
@@ -173,14 +209,16 @@ class Store:
             db.close()
 
     def receipt(self, db, scope, operation, command_id, body):
-        digest = fingerprint(
-            {
-                "body": body,
-                "institution": scope.institution,
-                "program": scope.program,
-                "callback": scope.callback,
-            }
-        )
+        identity = {
+            "body": body,
+            "institution": scope.institution,
+            "program": scope.program,
+            "callback": scope.callback,
+        }
+        if scope.return_url:
+            # Absent when unset, so receipts that predate the return URL keep their fingerprint.
+            identity["returnUrl"] = scope.return_url
+        digest = fingerprint(identity)
         row = db.execute(
             "SELECT fingerprint, response FROM commands WHERE producer=? AND tenant=? "
             "AND operation=? AND command_id=?",
@@ -448,11 +486,27 @@ class Store:
                 (scope.producer, scope.tenant, scope.institution, request.billID),
             ).fetchone():
                 raise ApiError(409, "collection.bill-in-use", "Bill already has a payment request")
-            scenario = db.execute(
-                "SELECT outcome FROM collection_scenarios WHERE producer=? AND tenant=? AND biller=?",
-                (scope.producer, scope.tenant, scope.institution),
+            # A payer rule settles the request at creation, so nothing, including a fast
+            # click on the hosted page, can decide it first. Without one, the biller's
+            # scenario applies and a hosted decision overrides it.
+            rule = db.execute(
+                "SELECT outcome FROM payer_outcomes WHERE producer=? AND tenant=? AND biller=? "
+                "AND address=?",
+                (
+                    scope.producer,
+                    scope.tenant,
+                    scope.institution,
+                    request.payerFiDetails.financialAddress,
+                ),
             ).fetchone()
-            transfer_id = str(uuid4())
+            scenario = (
+                rule
+                or db.execute(
+                    "SELECT outcome FROM collection_scenarios WHERE producer=? AND tenant=? AND biller=?",
+                    (scope.producer, scope.tenant, scope.institution),
+                ).fetchone()
+            )
+            transfer_id = str(uuid4())  # 122 random bits: the ID is the page's capability.
             db.execute(
                 "INSERT INTO collection_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
                 (
@@ -471,6 +525,21 @@ class Store:
                     int(datetime.now(timezone.utc).timestamp()),
                 ),
             )
+            db.execute(
+                "INSERT INTO collection_hosted VALUES (?, ?, ?, ?, NULL)",
+                (
+                    transfer_id,
+                    secrets.token_urlsafe(32),
+                    scope.return_url or None,
+                    # A request with a return URL waits for the payer unless a payer rule
+                    # already decides it.
+                    int(bool(scope.return_url) and rule is None),
+                ),
+            )
+            if rule is not None:
+                self.settle(
+                    db, {"transfer_id": transfer_id, "reference": None}, rule["outcome"], None
+                )
             response = {
                 "responseCode": "00",
                 "responseDescription": "Accepted",
@@ -490,15 +559,16 @@ class Store:
             ).fetchone()
         if row is None:
             raise not_found()
+        return self.status_response(row)
+
+    @staticmethod
+    def status_response(row):
+        transfer_id = row["transfer_id"]
         request_status, payment_status = "PND", "PENDING"
         if row["stage"] > 0 and row["outcome"] == "paid":
             request_status = "COM"  # RTP completed is still not evidence of payment.
         if row["stage"] == 2:
-            request_status, payment_status = {
-                "paid": ("COM", "PAID"),
-                "failed": ("RJC", "FAILED"),
-                "expired": ("EXP", "EXPIRED"),
-            }[row["outcome"]]
+            request_status, payment_status, _ = TERMINAL[row["outcome"]]
         response = {
             "transferRequestId": transfer_id,
             "RequestId": row["request_id"],
@@ -512,11 +582,79 @@ class Store:
         }
         if payment_status == "PAID":
             response["PaymentReferenceID"] = row["reference"]
-        elif payment_status == "FAILED":
-            response["failureReason"] = "payer-rejected"
-        elif payment_status == "EXPIRED":
-            response["failureReason"] = "request-expired"
+        elif row["stage"] == 2:
+            response["failureReason"] = TERMINAL[row["outcome"]][2]
         return response
+
+    def payer_outcome(self, producer, tenant, biller, address, outcome):
+        """Map a payer financial address to an outcome; None removes the rule."""
+        with self.connection(write=True) as db:
+            if outcome is None:
+                db.execute(
+                    "DELETE FROM payer_outcomes WHERE producer=? AND tenant=? AND biller=? "
+                    "AND address=?",
+                    (producer, tenant, biller, address),
+                )
+                return
+            db.execute(
+                "INSERT INTO payer_outcomes VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(producer, tenant, biller, address) DO UPDATE SET "
+                "outcome=excluded.outcome",
+                (producer, tenant, biller, address, outcome),
+            )
+
+    def hosted_page(self, transfer_id, token=None, decision=None):
+        """Read the hosted page state, optionally applying one payer decision.
+
+        The unguessable transfer ID is the capability. A decision needs the form token
+        stored with the request and is ignored once the request is final.
+        """
+        with self.connection(write=decision is not None) as db:
+            row = db.execute(
+                "SELECT * FROM collection_requests JOIN collection_hosted USING(transfer_id) "
+                "LEFT JOIN collection_payments USING(transfer_id) WHERE transfer_id=?",
+                (transfer_id,),
+            ).fetchone()
+            if row is None:
+                raise not_found()
+            decided = False
+            if decision is not None:
+                if token is None or not hmac.compare_digest(
+                    token.encode(), row["form_token"].encode()
+                ):
+                    raise ApiError(403, "auth.forbidden", "Form token is not valid")
+                if row["stage"] < 2:
+                    self.settle(db, row, DECISIONS[decision], decision)
+                    decided = True
+                    row = db.execute(
+                        "SELECT * FROM collection_requests JOIN collection_hosted "
+                        "USING(transfer_id) LEFT JOIN collection_payments USING(transfer_id) "
+                        "WHERE transfer_id=?",
+                        (transfer_id,),
+                    ).fetchone()
+        view = dict(row)
+        view["payload"] = json.loads(row["payload"])
+        view["final"] = row["stage"] == 2
+        view["decided"] = decided
+        view["amount"] = Decimal(row["amount_minor"]).scaleb(-row["scale"])
+        return view
+
+    @staticmethod
+    def settle(db, row, outcome, decision):
+        updated = int(datetime.now(timezone.utc).timestamp())
+        if outcome == "paid" and row["reference"] is None:
+            db.execute(
+                "INSERT INTO collection_payments VALUES (?, ?, ?)",
+                (row["transfer_id"], "SIM-" + uuid4().hex[:16], updated),
+            )
+        db.execute(
+            "UPDATE collection_requests SET outcome=?, stage=2, last_update=? WHERE transfer_id=?",
+            (outcome, updated, row["transfer_id"]),
+        )
+        db.execute(
+            "UPDATE collection_hosted SET hold=0, decision=? WHERE transfer_id=?",
+            (decision, row["transfer_id"]),
+        )
 
     def collection_scenario(self, producer, tenant, biller, outcome):
         with self.connection(write=True) as db:
@@ -527,7 +665,10 @@ class Store:
             )
 
     def advance_collections(self, db):
-        rows = db.execute("SELECT * FROM collection_requests WHERE stage < 2").fetchall()
+        rows = db.execute(
+            "SELECT * FROM collection_requests WHERE stage < 2 AND transfer_id NOT IN "
+            "(SELECT transfer_id FROM collection_hosted WHERE hold=1)"
+        ).fetchall()
         for row in rows:
             updated = int(datetime.now(timezone.utc).timestamp())
             if row["stage"] == 1 and row["outcome"] == "paid":
