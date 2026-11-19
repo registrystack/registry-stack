@@ -11,9 +11,17 @@ locale: en
 standards_referenced: []
 ---
 
-Choose the parts that fit your institution's systems and team. Configure a Base Registry Engine
-(BReg) project, add a small extension, write an application, or run a separate module. These paths
-combine; none is a prerequisite for another.
+There are four ways to adopt Registry Stack.
+You can:
+
+- Configure a Base Registry Engine (BReg) project
+- Add a small extension
+- Write an application
+- Run a separate module
+
+Choose the ones that fit your institution's systems and team.
+You can combine them.
+None of them is a prerequisite for another.
 
 ## Choose an adoption path
 
@@ -26,61 +34,122 @@ combine; none is a prerequisite for another.
 
 ## Build an application in your language
 
-Use released clients or the public HTTP contracts. You own the journey, credentials, correlation,
-and recovery; each selected product keeps its own authorization and effects. The
-[access-token guide](../../configure/request-an-access-token/) covers issuer integration.
+Build on the released clients or on the public HTTP contracts.
+You own:
 
-The starter collection and App Kit are private; request maintainer access for their instructions.
-The [reviewed licensing starter guide](https://github.com/registrystack/breg-registry-starters/blob/main/docs/reviewed-licensing.md)
-and App Kit's private `project/docs/customization.md` guide require that access. For a public first
-run, use the [first registry tutorial](../../tutorials/first-breg/). An extension, application, or
-module still needs authority the receiving product accepts. Casework review does not write a BReg
-Record; BReg applies the reviewed Proposal under its own authority. Add Coordinator for a durable
-sequence or Messaging for reviewed delivery only when the journey needs them.
+- The journey
+- The credentials
+- Correlation
+- Recovery
 
-A module may publish a static
-[Manifest description](../../products/registry-manifest/reference/#adopter-owned-modules);
-metadata neither enables nor certifies it.
+Each product you select keeps its own authorisation and effects.
+The [access-token guide](../../configure/request-an-access-token/) explains how to integrate with
+your token issuer.
+
+The starter collection and App Kit are private.
+To read their instructions, ask a maintainer for access.
+You need that access to open the
+[reviewed licensing starter guide](https://github.com/registrystack/breg-registry-starters/blob/main/docs/reviewed-licensing.md)
+and App Kit's private guide, `project/docs/customization.md`.
+For a public first run, use the [first registry tutorial](../../tutorials/first-breg/).
+
+An extension, application, or module still needs authority that the receiving product accepts.
+A review in [Registry Casework](../../reference/glossary/#registry-casework) does not write a BReg
+Record.
+BReg applies the reviewed Proposal under its own authority.
+
+Add [Registry Coordinator](../../reference/glossary/#registry-coordinator) only when the journey
+needs a durable sequence.
+Add [Registry Messaging](../../reference/glossary/#registry-messaging) only when the journey needs
+reviewed delivery.
+
+A module can publish a static
+[Registry Manifest description](../../products/registry-manifest/reference/#adopter-owned-modules).
+Publishing that metadata does not enable the module or certify it.
 
 ## Choose what goes in the registry
 
-Hold the facts your law makes you the source of and the decisions you are accountable for. Leave
-payroll, documents, and generic workflow in their owning systems. Review rules, tables, formulas,
-and deadlines with programme and legal colleagues; record an unstated legal basis as "not stated"
-rather than guessing. [Modeling patterns](../../explanation/registry-modeling-patterns/) covers the
-record and authority choices.
+Hold the facts your law makes you the source of and the decisions you are accountable for.
+Leave these in the systems that own them:
 
-## Working with other institutions
+- Payroll
+- Documents
+- Generic workflow
 
-Start from the partner and the situation, then pick the product. "Do not integrate" is always a
-valid answer.
+Review these with your programme and legal colleagues:
+
+- Rules
+- Tables
+- Formulas
+- Deadlines
+
+Write "not stated" where nobody has stated the legal basis.
+Do not guess it.
+[Modelling patterns for registries](../../explanation/registry-modeling-patterns/) covers the record
+and authority choices.
+
+Work that spans any of these is a process and not only a register:
+
+- More than one record
+- Weeks
+- Money
+- A legal clock
+- Agreement between parties
+
+Before you add custom workflow, check [where each rule lives](../../explanation/where-each-rule-lives/).
+
+## Work with other institutions
+
+Start from the partner and the situation.
+Then pick the product.
+"Do not integrate" is always a valid answer.
 
 | Situation | What you do | Product |
 | --- | --- | --- |
-| Others need a fact about your records | Publish a narrow answer, not the record | [Evidence](../../explanation/how-evidence-works/) |
+| Others need a fact about your records | Publish a narrow answer, not the record | [Registry Evidence](../../explanation/how-evidence-works/) |
 | A partner needs to read or change your records | Publish a governed record API | [BReg](../../explanation/configuration-defined-registry/) |
 | You need a fact held by someone else | Ask for the narrowest answer that does the job | [Evidence, as the consumer](../../tutorials/verify-an-assertion-as-a-consumer/) |
-| You must load another system's data | Copy it in through a reviewed translator | [Adapter](https://github.com/registrystack/registry-stack/blob/e05a43a55ba5a9a178e088d6b8c686b0f89b659f/products/adapter/README.md) packs; its ingestion job is not yet released |
+| You must load another system's data | Copy it in through a reviewed translator | [Registry Adapter](https://github.com/registrystack/registry-stack/blob/e05a43a55ba5a9a178e088d6b8c686b0f89b659f/products/adapter/README.md) packs (the ingestion job is not yet released) |
 | A standard or national system fixes the wire contract | Serve it at the edge | Adapter facade profile |
 | The person can carry the proof | Let them bring it as a credential | Evidence with [OID4VCI delivery](../../configure/evidence-oid4vci/) |
 | Integration is not justified | Do not integrate, and write down why | None |
 
-For each partner, record the legal basis, who defines the question, what crosses, the serving
-product, and who owns changes. Write "not stated" for a gap. Promise Read first; promise Write only
-when the source can refuse a stale update, retry a create safely, and return a version. See
-`If-Match` and `Idempotency-Key` in the [BReg API](../../reference/breg-api/).
+For each partner, write down:
 
-Point to records another office keeps; do not copy them. Store their identifier with its scheme,
-and ask through Evidence when a decision needs the fact. In BReg an event record's subject or
-source can hold an identifier another system owns, declared with `external: {namespace}`; see the
-[event records guide](../../configure/breg-event-records/#declare-the-descriptor).
+- The legal basis
+- Who defines the question
+- What crosses between you
+- The serving product
+- Who owns changes
 
-Payment policy and provider contracts remain adopter-owned. An application or module can implement
-them directly, or Coordinator can dispatch a configured payment-provider POST through its generic
-`external.command/v1`. The maintained product and operation rosters define no payment product or
-payment-specific operation.
+Write "not stated" for any gap.
 
-For how much to share, see [the disclosure ladder](../../explanation/data-minimization-and-purpose-limitation/#ask-for-the-weakest-answer-that-does-the-job).
+Promise Read first.
+Promise Write only when the source can:
+
+- Refuse a stale update
+- Retry a create safely
+- Return a version
+
+See `If-Match` and `Idempotency-Key` in the [BReg API](../../reference/breg-api/).
+
+Point to records that another office keeps.
+Do not copy them.
+Store each record's identifier with its scheme.
+When a decision needs the fact, ask for it through Evidence.
+
+In BReg, the subject or source of an event record can hold an identifier that another system owns.
+Declare that subject or source with `external: {namespace}`.
+See the [event records guide](../../configure/breg-event-records/#declare-the-descriptor).
+
+You own your payment policy and your contracts with payment providers.
+You can implement them directly in an application or module.
+Or Coordinator can send a configured POST to the payment provider through its generic
+`external.command/v1` operation.
+None of the maintained products is a payment product.
+None of the maintained operations is specific to payments.
+
+To decide how much to share, see [the disclosure ladder](../../explanation/data-minimization-and-purpose-limitation/#ask-for-the-weakest-answer-that-does-the-job).
 
 {/* Evidence: AGENTS.md, maintained runtime products;
     crates/registry-coordinator/src/operations.rs, operation_catalog;
@@ -91,14 +160,16 @@ For how much to share, see [the disclosure ladder](../../explanation/data-minimi
     docs/site/src/content/docs/reference/breg-api.mdx, If-Match and Idempotency-Key;
     docs/site/src/content/docs/configure/evidence-oid4vci.mdx, OID4VCI. */}
 
-Work that spans records, weeks, money, a legal clock, or agreement between parties is a process,
-not only a register. Check [where each rule lives](../../explanation/where-each-rule-lives/) before
-adding custom workflow.
-
 ## Choose the next step
 
-Combine the smallest set of paths that meets the job. A configured register can have one custom
-route and an independently deployed reminder worker. Add
-[Coordinator](../coordinator/) only when a durable, reviewed sequence across waits is useful.
-Before deployment, use the [operator handoff](../../operate/) to assign credentials, backups,
-retention, and recovery to named operators.
+Combine the smallest set of paths that meets the job.
+For example, a configured register can have one custom route and a reminder worker that you
+deploy separately.
+Add [Coordinator](../coordinator/) only when a durable, reviewed sequence across waits is useful.
+Before you deploy, use the [operator handoff](../../operate/) to assign each of these to a named
+operator:
+
+- Credentials
+- Backups
+- Retention
+- Recovery
