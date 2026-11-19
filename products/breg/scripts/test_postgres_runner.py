@@ -168,7 +168,7 @@ class PostgresRunnerTests(unittest.TestCase):
             self.assertIn(call[3], VALIDATOR.POSTGRES_TEST_PACKAGES)
             self.assertEqual("--features", call[4])
             targets = call[6:]
-            if targets[-2:] == ["--", "--test-threads=1"]:
+            if targets[-2:] in (["--", "--test-threads=1"], ["--", "--test-threads=2"]):
                 targets = targets[:-2]
             self.assertTrue(targets)
             self.assertEqual(0, len(targets) % 2)
@@ -189,6 +189,36 @@ class PostgresRunnerTests(unittest.TestCase):
             timer_calls[0][6:],
         )
 
+    def test_native_record_timer_targets_run_with_two_threads_in_their_shard(self):
+        native = ("postgres_record_timer_native", "postgres_record_timer_metrics")
+        result, calls = self.run_lane("--lane", "postgres")
+        self.assertEqual(0, result.returncode, result.stderr)
+        timer_calls = [
+            call for call in calls
+            if call[0] == "test" and any(target in call for target in native)
+        ]
+        self.assertEqual(
+            [[
+                "--test", "postgres_record_timer_native",
+                "--test", "postgres_record_timer_metrics",
+                "--", "--test-threads=2",
+            ]],
+            [call[6:] for call in timer_calls],
+        )
+        ci_changes = self.load_ci_changes()
+        selected = Counter()
+        for lane in (
+            lane for lane in ci_changes.BREG_CONTRACTS_LANES if lane.startswith("postgres:")
+        ):
+            result, calls = self.run_lane("--lane", lane)
+            self.assertEqual(0, result.returncode, result.stderr)
+            for call in calls:
+                for target in native:
+                    if call[0] == "test" and target in call:
+                        self.assertEqual(["--", "--test-threads=2"], call[-2:])
+                        selected[target] += 1
+        self.assertEqual(Counter(dict.fromkeys(native, 1)), selected)
+
     def test_default_and_partition_preserve_every_owned_target_and_feature_set(self):
         default_result, default = self.run_lane()
         explicit_result, explicit = self.run_lane("--lane", "all")
@@ -201,8 +231,8 @@ class PostgresRunnerTests(unittest.TestCase):
         self.assertEqual(default, explicit)
         self.assertEqual(expected, self.inventory(ordinary) + self.inventory(actions))
         self.assertFalse(self.inventory(ordinary) & self.inventory(actions))
-        self.assertEqual(9, len(ordinary))
-        self.assertEqual(10, len(default))
+        self.assertEqual(10, len(ordinary))
+        self.assertEqual(11, len(default))
         self.assertEqual([shlex.split(
             "test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_actions"
         )], actions)
@@ -383,6 +413,7 @@ class PostgresRunnerTests(unittest.TestCase):
                 '  run_sharded_targets runtime,tooling,schema "${runtime_targets[@]}"\n',
                 '  run_sharded_targets runtime,tooling,schema "${runtime_targets[@]}"\n' * 2,
             ),
+            source.replace(' -- --test-threads=2\n', '\n'),
         )):
             with self.subTest(mutation=index), tempfile.TemporaryDirectory() as directory:
                 candidate = Path(directory) / "runner.sh"
