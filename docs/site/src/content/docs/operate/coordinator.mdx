@@ -1026,6 +1026,20 @@ Ordinary cancellation leaves downstream work for explicit owner-authorized withd
     crates/registry-coordinator/tests/casework_adapter.rs reconciliation-unavailable;
     crates/registry-coordinator/src/store/recovery.rs reconciliation-unavailable. */}
 
+### Payment recovery
+
+An uncertain `payments.request-collection/v1` recovers through the Adapter's read-only original-request lookup, with the saved bill identity, version, and key under the current connection authorisation.
+An unresolved, expired, held, or unknown receipt never proves that a new collection may be requested.
+
+An uncertain `payments.request-disbursement/v1` stays held.
+`reconcile` may use the Adapter's read-only lookup for the exact original instruction and key, but `retry-same` is refused, and an unresolved lookup never proves absence or licenses a fresh submission.
+The separate `payments.record-receipt/v1` and `payments.record-provider-confirmation/v1` reporting commands may use `retry-same` with their frozen body and key.
+Investigate an unresolved original-request receipt with the Adapter operator before any same-command recovery or cancellation decision.
+
+{/* Evidence: crates/registry-coordinator/tests/payment_adapter.rs
+    collection_request_and_recovery_use_the_exact_original_command,
+    uncertain_disbursement_submission_never_becomes_a_fresh_send. */}
+
 ### Waits
 
 A `wait-for` observes a named completion, correlated to an earlier accepted call.

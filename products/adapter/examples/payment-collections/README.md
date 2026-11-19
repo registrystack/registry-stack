@@ -25,7 +25,7 @@ native payment operations:
 The request's named completion polls the provider through the Adapter, so an
 ordinary workflow does not need to author its own polling loop. See the
 [Coordinator operation catalog](../../../coordinator/generated/operations/README.md)
-and [connection setup](../../../coordinator/DEPLOYMENT.md).
+and [connection setup](https://docs.registrystack.org/reference/coordinator-configuration/#payment-connections).
 
 ## Bind the connection
 
