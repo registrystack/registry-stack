@@ -829,7 +829,8 @@ Each lists the condition, the consequence, the mitigation, and the related matri
     withholds.
     That release needs the field classified `public` (`BREG-RES-24`).
   - A count withheld by the contributor minimum does not blank its totals.
-    A reader can estimate it from the rounded total and its rounded siblings.
+    A reader can estimate it from the rounded total and its rounded siblings, to within about half the
+    rounding base per cell used.
     The contributor minimum protects a count only as far as rounding does (`BREG-RES-07`).
   - Revised versions of the same period can be differenced against each other.
     Changing `dominancePercent` between versions does not start a new series.
@@ -841,6 +842,7 @@ Each lists the condition, the consequence, the mitigation, and the related matri
     One is when no contributor has a value for the field.
     The other is when the field is `decimal` and every value is zero.
     Either tells every reader that no contributor in the cell has a positive value.
+    An `int64` sum of zero with status `rounded` says only that the sum is under half the rounding base.
     A smaller cell is suppressed, whether or not its Records have a value.
 - Mitigation: release a sum only after a statistician has reviewed the rules and their
   implementation.
