@@ -181,6 +181,7 @@ source_shapes:
 public_contracts:
   requests_and_payloads: golden/
   jws: jws-cases.yaml
+  consumer_verification: consumer-verification/cases.json
   sd_jwt_vc: sd-jwt-vc-cases.yaml
   audit: audit-events.yaml
   problems: ../../contracts/problem-contract.yaml

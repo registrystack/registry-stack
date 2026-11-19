@@ -694,6 +694,7 @@ export default defineConfig({
                 { label: 'Request an assertion', slug: 'tutorials/request-evidence-from-an-application' },
                 { label: 'Request an access token', slug: 'configure/request-an-access-token' },
                 { label: 'Verify an assertion', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
+                { label: 'Verify an answer without the client', slug: 'configure/verify-an-evidence-answer' },
                 { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
               ],
             },

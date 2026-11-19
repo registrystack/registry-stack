@@ -1,0 +1,32 @@
+{
+  "apiVersion": "id.registrystack.org/formats/evidence/verification-policy/v1",
+  "kind": "EvidenceVerificationPolicy",
+  "expectedAssuranceProfile": "evidence-grade",
+  "issuedBy": "urn:example:fixture:issuer:authority",
+  "providedBy": "urn:example:fixture:provider:evidence",
+  "requirement": "urn:example:fixture:requirement:adult-status:v1",
+  "evidenceType": "urn:example:fixture:evidence-type:adult-status:v1",
+  "purpose": "fixture-eligibility",
+  "audience": "urn:example:fixture:audience:requester-a",
+  "configurationRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
+  "expectedSubjects": [
+    {
+      "role": "subject",
+      "binding": "urn:evidence:subject:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  ],
+  "expectedOutputs": [
+    {
+      "handle": "adult-status",
+      "concept": "urn:example:fixture:concept:adult-status",
+      "required": true,
+      "form": {
+        "type": "boolean"
+      }
+    }
+  ],
+  "revokedKeyIds": [],
+  "maximumAssertionLifetimeSeconds": 86400,
+  "clockSkewSeconds": 0
+}

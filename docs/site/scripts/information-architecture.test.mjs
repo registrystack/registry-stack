@@ -751,6 +751,7 @@ test('keeps consumer and wallet-provider guidance in separate Evidence groups', 
     'tutorials/request-evidence-from-an-application',
     'configure/request-an-access-token',
     'tutorials/verify-an-assertion-as-a-consumer',
+    'configure/verify-an-evidence-answer',
     'tutorials/manage-evidence-verifier-trust',
   ]);
   assert.deepEqual(wallet.items.map((item) => item.slug), [

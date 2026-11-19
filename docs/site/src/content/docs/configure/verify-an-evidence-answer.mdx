@@ -1,0 +1,174 @@
+---
+title: Verify an Evidence answer
+description: Send a well-formed request nonce, check a signed Registry Evidence response in the order the verifier does, and test your checks against a published vector.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-19"
+doc_type: how-to
+persona:
+  - consumer or verifier
+locale: en
+standards_referenced: []
+---
+
+If your application reads Registry Evidence (Evidence) answers with its own code instead of the
+Evidence client, you must make every check the client makes. A response with a valid signature can
+still be expired, meant for another relying party, or the answer to a different request.
+
+## With the Evidence client
+
+The Python and Node clients generate the request nonce, keep it, and make every check on this page
+when they verify a response. Use them where you can:
+[Request Evidence from your application](../../tutorials/request-evidence-from-an-application/)
+shows how. The rest of this page is for code that does not use them.
+
+{/* Evidence: crates/registry-evidence-client/src/nonce.rs; crates/registry-evidence-client/src/prepare.rs, prepare;
+    crates/registry-evidence-verifier/src/verifier.rs, verify_flattened_jws. */}
+
+## Send a new request nonce with every request
+
+Every `POST /v1/evidence` request carries a `requestNonce`. It must be:
+
+- 32 bytes from a cryptographically secure random source
+- encoded as unpadded base64url, which makes exactly 43 characters from `A` to `Z`, `a` to `z`,
+  `0` to `9`, `-`, and `_`
+- generated again for every request, and for every item in a batch request
+
+In Python:
+
+```python
+import base64
+import secrets
+
+request_nonce = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
+```
+
+In Node:
+
+```js
+const { randomBytes } = require('node:crypto')
+
+const requestNonce = randomBytes(32).toString('base64url')
+```
+
+Keep the nonce with the request you sent, because you compare it with the answer. Do not use a UUID,
+a counter, a timestamp, or a value derived from the person or the case.
+
+Evidence refuses any other value with a `400` problem whose code is `request.nonce-invalid` and
+whose `detail` states the format. It refuses it before it checks your token or contacts a source.
+In a batch request, two items with the same nonce are refused in the same way.
+
+Evidence signs the nonce back into the answer but never stores it or checks whether it was used
+before. The nonce ties an answer to your request only if you compare it, as described in
+[Check the response](#check-the-response).
+
+{/* Evidence: products/evidence/contracts/request.schema.yaml, requestNonce;
+    crates/registry-evidence/src/model.rs, request_nonce_is_canonical;
+    crates/registry-evidence/src/server.rs, parse_evidence_request, parse_evidence_request_batch;
+    crates/registry-evidence/src/problem.rs, InvalidRequestNonce;
+    crates/registry-evidence/src/runtime_tests.rs, request_nonce_is_strict_and_never_reaches_source_or_audit. */}
+
+## What the response is
+
+Send `Accept: application/jose+json`, or no `Accept` header. A successful response is a flattened
+JWS JSON object with exactly three members: `protected`, `payload`, and `signature`.
+
+The payload is the Evidence assertion itself, not a JWT claim set. It has no `exp`, `iat`, `nbf`,
+or `aud` claim. The members that matter for verification are:
+
+- `requestNonce`, the exact nonce you sent
+- `audience`, the audience your access token was issued for
+- `issuedAt`, `observedAt`, and `validUntil`, as RFC 3339 date-time strings
+
+`validUntil` is the only claim that bounds how long the answer is valid. A check written for `exp`
+finds nothing and passes every answer, however old.
+
+{/* Evidence: products/evidence/contracts/jws-profile.yaml, response, protected_header;
+    products/evidence/contracts/evidence.schema.yaml, requestNonce, audience, validUntil;
+    crates/registry-evidence/src/server.rs, resolve_response_format. */}
+
+## Check the response
+
+Make these checks in this order and stop at the first one that fails. A failure means you have no
+answer: do not use any value from the payload, and do not retry with the same nonce.
+
+1. Parse the body as JSON and refuse it if any member is repeated. It must have exactly
+   `protected`, `payload`, and `signature`, and no `header` member.
+2. Decode `protected` from unpadded base64url and parse it the same way. It must have exactly
+   these members: `alg` set to `ES256`, `typ` set to `evidence+jws`, `cty` set to
+   `application/evidence+json`, and `kid`. Refuse any other member, including `jku`, `x5u`, `jwk`,
+   `x5c`, `crit`, and `b64`.
+3. Refuse a `kid` you have revoked. Then look up the `kid` only in the key set you pinned for this
+   provider. Never fetch a key the response names. You read `/.well-known/evidence/jwks.json` to
+   decide which keys to pin, but it is not proof of who the provider is.
+4. Verify the ES256 signature. The signing input is the `protected` string, a full stop, and the
+   `payload` string, exactly as received. The decoded `signature` is 64 bytes: `r` then `s`. Do not
+   read the payload before this check passes.
+5. Decode `payload` and validate it against the
+   [Evidence JSON Schema](https://github.com/registrystack/registry-stack/blob/main/products/evidence/generated/evidence-v1.schema.json).
+6. Compare the payload with values you hold yourself, never with values copied from this response.
+   Each of these must be equal:
+   - `requestNonce` and the nonce you sent with this request
+   - `audience` and the audience your access token was issued for
+   - `assuranceProfile`, `issuedBy`, `providedBy`, `supportsRequirement`, `isConformantTo`,
+     `purpose`, and `configurationRevision`, and the values you expect from this provider and
+     requirement
+   - `subjectBinding` and `audience-scoped`
+   - `channel` and a channel you accept, which is `source` unless you accept holder-presented
+     answers
+   - the `role` and `binding` pairs in `subjects` and the pairs you expect, in any order
+   - the concepts in `supportedValues` and the concepts you expect, each in its declared form
+7. Check the times. `observedAt` must not be later than `issuedAt`, and `validUntil` must be later
+   than both. `validUntil` minus `issuedAt` must not be longer than the longest lifetime you accept.
+   The answer is current only if the time now is before `validUntil`, and `issuedAt` and
+   `observedAt` are not later than now. `validUntil` is exclusive: at that instant the answer has
+   expired. Allow only the clock skew you have chosen, of at most 5 minutes.
+
+A subject binding is a value only the provider can compute. On the first request for a subject you
+cannot know it in advance, so the Evidence client either takes bindings you pinned from an earlier
+answer or accepts the response's bindings on first use and pins them. Accepting on first use proves
+every other check, but not that the answer is about the person you meant. The
+[client API reference](../../reference/client-api/#prepare-send-and-verify) describes both.
+
+A failed check on a response you already accepted, for example a later replay after `validUntil`,
+does not mean the answer was forged. Report authenticity and current validity separately when you
+keep answers as records.
+
+{/* Evidence: products/evidence/contracts/jws-profile.yaml, verifier_rules;
+    crates/registry-evidence-verifier/src/verifier.rs, verify_flattened_jws_report (parse, protected
+    header, revoked kid, pinned key, signature, payload schema, validate_policy) and validate_policy
+    (expectations, then chronology, lifetime, and current validity with skew);
+    crates/registry-evidence-verifier/src/verifier.rs, MAXIMUM_CLOCK_SKEW_SECONDS;
+    crates/registry-evidence-client/src/prepare.rs, SubjectExpectations. */}
+
+## Test your checks against the published vector
+
+Registry Stack publishes a synthetic signed response with everything a verifier needs, so your own
+test suite can prove each check before you call a live service. The
+[consumer verification vector](https://github.com/registrystack/registry-stack/tree/main/products/evidence/fixtures/conformance/consumer-verification)
+has:
+
+- `response.json`, a response body as Evidence returns it
+- `jwks.json`, the public key set to pin
+- `policy.json`, the expected values, including the `requestNonce` the request sent
+- `cases.json`, the instants and changes your verifier must accept or refuse
+
+Run every case in `cases.json`. Your verifier must accept the response at `2026-08-02T23:59:59Z`
+and refuse it at `2026-08-03T00:00:00Z`, the `validUntil` instant. It must also refuse it against
+another request's nonce, against another audience, and with one character of the payload changed.
+A verifier that accepts any of those is missing a check.
+
+{/* Evidence: products/evidence/fixtures/conformance/consumer-verification/cases.json;
+    crates/registry-evidence-verifier/tests/consumer_verification.rs,
+    the_published_consumer_vector_is_accepted_and_refused_as_stated. */}
+
+## Next
+
+- [Errors and problem codes](../../reference/evidence-problems/), for what each refusal from
+  Evidence means
+- [Verify an assertion as a consumer](../../tutorials/verify-an-assertion-as-a-consumer/), to replay
+  a kept answer with the Evidence client
+- [Manage verifier trust](../../tutorials/manage-evidence-verifier-trust/), to choose which provider
+  keys you pin
