@@ -158,7 +158,10 @@ context = (prepared / "verification.json").read_bytes()
 verified = verify_retained(context, response)
 
 Path("adult-status.response.jws").write_bytes(response)
-Path("adult-status.retained.json").write_bytes(context)
+retained = Path("adult-status.retained.json")
+retained.touch(mode=0o600)
+retained.chmod(0o600)
+retained.write_bytes(context)
 Path("adult-status.verified-at.txt").write_text(f"{decided_at}\n")
 
 if verified.evidence["supportedValues"][0]["value"] is not True:
@@ -172,7 +175,8 @@ three files:
 
 - `adult-status.response.jws`, the signed assertion exactly as received.
 - `adult-status.retained.json`, the retained verification: the keys and expectations fixed before
-  the request was sent, without selector values.
+  the request was sent, without selector values. Only you can read or change it, because
+  `rstack evidence verify` refuses a context that anyone else could alter.
 - `adult-status.verified-at.txt`, the decision instant in Unix seconds.
 
 Tokens last at most five minutes, so ask for the header file as you run it:
