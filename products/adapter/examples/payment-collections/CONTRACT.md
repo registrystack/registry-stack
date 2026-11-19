@@ -26,6 +26,10 @@ amounts, provider outcomes, tenant/biller routing and Action names are refused.
 | Recovery lookup | `POST /collections/receipt` | Original request and key | 200 if acceptance is known; lookup never dispatches |
 | `payments.read-collection/v1` | `GET /collections/{collectionId}` | Collection identifier | 200 with exact identity, money and current validated state |
 | `payments.record-receipt/v1` | `POST /collections/{collectionId}/record-receipt` | Matching `collectionId`; `Idempotency-Key` header | 200 only after exact BReg receipt readback |
+| `payments.request-disbursement/v1` | `POST /disbursements` | `instructionRecordId`, positive `instructionVersion`; `Idempotency-Key` header | 202, durable disbursement identity after provider acceptance; an uncertain send is held, never resent |
+| Recovery lookup | `POST /disbursements/receipt` | Original request and key | 200 if acceptance is known; lookup never dispatches |
+| `payments.read-disbursement/v1` | `GET /disbursements/{disbursementId}` | Disbursement identifier | 200 with exact identity, money and current validated provider observation |
+| `payments.record-provider-confirmation/v1` | `POST /disbursements/{disbursementId}/record-provider-confirmation` | Matching `disbursementId`; `Idempotency-Key` header | 200 only after the provider confirmation is reported to the instruction registry |
 
 `adapterctl payments contract FILE` exports these routes and the generated
 wire schemas. `registry-payment-protocol` owns the DTOs and the bounded problem

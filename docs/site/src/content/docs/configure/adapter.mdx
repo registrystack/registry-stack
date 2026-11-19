@@ -1137,6 +1137,13 @@ adapter serve --runtime-config /absolute/path/runtime.yaml \
 Registry Stack does not publish a Mifos Payment Hub EE pack yet, so the operator supplies a reviewed pack whose bytes match the pin.
 `adapterctl payments check` takes the same pack with `--provider-pack` and checks the pin offline.
 
+Before a Mifos disbursement connection goes live, set up its signing and the provider's access control.
+Create the request-signing key inside Transit, so it is non-exportable and service-created, and import only the provider's public key as the separate response-verification key; the Adapter pins each key's SPKI digest and version and refuses other custody.
+The released Payment Hub EE channel and operations apps ship with authorisation turned off, so enable bearer authorisation on them, or enforce it at a trusted gateway, before the Adapter's Operations credential means anything.
+An attempt reaches `Bound` before it is signed and sent, so let every `Bound` disbursement attempt dispatch before you raise the signing key's `min_encryption_version`; a raised minimum otherwise holds those attempts.
+The [Mifos connector README](https://github.com/registrystack/registry-stack/blob/main/crates/registry-payment-mifos-connector/README.md) and the [platform crypto README](https://github.com/registrystack/registry-stack/blob/main/crates/registry-platform-crypto/README.md) carry the exact profile and Transit details.
+Live signing through a real Transit engine is not verified yet, so do not let a live disbursement move real money until it is.
+
 The separate confirmation operation accepts only a disbursement identifier.
 The Adapter reports verified provider completion through its restricted BReg Action, using the original instruction facts and a separately keyed exact command.
 The resulting confirmation records what the provider reported; credit to the recipient and settlement require separate authoritative evidence.

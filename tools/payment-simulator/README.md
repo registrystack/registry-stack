@@ -163,8 +163,10 @@ mode, the existing `advance` command advances both G2P and P2G in two steps.
 ## Send a citizen to pay
 
 A citizen-facing front end can hand the citizen to a hosted page and get them
-back. Start `serve` with the front end's return URL, then add `X-Return-URL` to
-`POST /rtpRequest`:
+back. The hosted page is a standalone aid for such a front end: the Adapter
+payment host and Coordinator do not reach it yet. The Adapter creates requests
+without `X-Return-URL` and polls them. Start `serve` with the front end's return
+URL, then add `X-Return-URL` to `POST /rtpRequest`:
 
 ```sh
 uv run payment-simulator serve --database .state/payments.sqlite \
@@ -214,9 +216,9 @@ least 16 characters. Keep token and SQLite files in ignored `.state/`.
 Callbacks are accepted as configured wire fields but **are not delivered**.
 Use polling. Receipts are retained for the lifetime of this disposable
 database. There is no receipt expiry, reset API, real rail, production identity
-provider, high availability or container publishing. An
-unsupported database version is refused; only the additive v1-to-v2 upgrade is
-provided. Programme funding and real citizen checkout are outside this mock. The hosted
+provider, high availability or container publishing. `serve`
+upgrades a v1 or v2 state file to v3 in place, additively; any other database
+version is refused. Programme funding and real citizen checkout are outside this mock. The hosted
 page is a synthetic stand-in with no card or bank entry.
 Do not use real beneficiary data or expose this development server as a
 payment service.
