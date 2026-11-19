@@ -13,7 +13,6 @@ use std::time::Duration;
 use aws_lc_rs::rsa::PublicKey as RsaPublicKey;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use pkcs1::der::Decode as _;
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -265,7 +264,7 @@ impl TransitRsaNoOidClient {
         }
         let key = RsaPublicKey::from_der(spki_der.as_slice())
             .map_err(|_| TransitRsaNoOidError::InvalidPublicKey)?;
-        let pkcs1 = pkcs1::RsaPublicKey::from_der(key.as_ref())
+        let pkcs1 = pkcs1::RsaPublicKeyRef::try_from(key.as_ref())
             .map_err(|_| TransitRsaNoOidError::InvalidPublicKey)?;
         let modulus = pkcs1.modulus.as_bytes();
         let modulus_bits = exact_bit_length(modulus)?;
