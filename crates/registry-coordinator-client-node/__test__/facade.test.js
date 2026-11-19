@@ -13,6 +13,7 @@ const STATUS = {
 
   bindingDigest: 'sha256:binding',
   step: 'read-record',
+  stepLabel: 'Read the record',
   state: 'running',
   outcome: null,
   output: null,

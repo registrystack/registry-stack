@@ -133,6 +133,9 @@ the calls the run then makes.
 `GET /v1/runs/{run}` answers the run's `RunStatus`: its `workflow`, computed `workflowRevision`,
 `bindingDigest`, its current step and state, when it was admitted and when
 its deadline falls, whether an effect is `uncertain`, and whether it needs restore review.
+`stepLabel` is the label the workflow author gave the current step, as packaged in the workflow
+definition the run was admitted on. A later package that relabels the step does not change it. It
+is `null` when that step has no label, and after retention erases the run's stored payload.
 `cancelRequested` records ordinary stop cancellation; `authoredCancelRequested` records cancellation
 that took a completion wait's authored cleanup path. A finished run adds its `outcome` and the reviewed `output` its
 workflow declares. A failed run adds its `failureCode`, and `failurePath` when the failure concerns a
@@ -143,6 +146,7 @@ not list all answer the same `404 run.not-visible`. An operator policy reaches e
 in the workflows it lists.
 
 {/* Evidence: products/coordinator/generated/openapi/coordinator.openapi.json, RunStatus;
+    crates/registry-coordinator/src/store.rs, status_from_row;
     crates/registry-coordinator/src/http.rs, run_caller, run-absent;
     products/coordinator/README.md, Observe and recover. */}
 

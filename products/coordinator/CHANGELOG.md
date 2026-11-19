@@ -7,6 +7,17 @@
   `scenarios.yaml` formats, the HTTP API, and the `coordinator` client namespace. The operations
   that call Registry Scheduling or Registry Messaging stay experimental with those products. The
   state baseline and the `v1alpha1` version strings are unchanged.
+- Add `stepLabel` to every run status: start, status, list, cancel and the
+  `run` member of an inspection. It is the authored label of the current
+  step, read from the workflow definition the run was admitted on, so a later
+  package that only relabels the step does not change it. It is `null` when
+  the step has no label, and after retention erases the run's stored payload.
+  The protected state schema does not change.
+- BREAKING: upgrade the Coordinator clients with the server. The 0.46.0 and
+  earlier Rust, Python and Node clients refuse unknown fields, so they refuse
+  every run status that carries `stepLabel`, even when it is `null`. The
+  clients in this release accept a server that omits it. Rust callers that
+  build the client `RunStatus` as a struct literal must set `step_label`.
 
 ## 0.47.0 - 2026-11-20
 

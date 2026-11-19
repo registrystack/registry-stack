@@ -56,8 +56,9 @@ void [started, status, inspected, reconciled, listed, attention, followed, retri
 declare const run: RunStatus
 declare const step: StepStatus
 const runFailurePath: string | null | undefined = run.failurePath
+const runStepLabel: string | null | undefined = run.stepLabel
 const stepFailurePath: string | null | undefined = step.failurePath
-void [runFailurePath, stepFailurePath]
+void [runFailurePath, runStepLabel, stepFailurePath]
 const heldOn: string | undefined = step.holdDetail?.date
 const inForce: string[] | undefined = step.holdDetail?.recordIdentifiers
 void [heldOn, inForce]

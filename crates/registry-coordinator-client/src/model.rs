@@ -35,6 +35,9 @@ pub struct RunStatus {
 
     pub binding_digest: String,
     pub step: String,
+    /// The authored label of `step` in the workflow definition the run was
+    /// admitted on; `None` when the step has none.
+    pub step_label: Option<String>,
     pub state: String,
     pub outcome: Option<String>,
     pub output: Option<Value>,
@@ -63,6 +66,8 @@ struct RunStatusDocument {
 
     binding_digest: String,
     step: String,
+    #[serde(default)]
+    step_label: Option<String>,
     #[serde(deserialize_with = "run_state")]
     state: String,
     outcome: Option<String>,
@@ -101,6 +106,7 @@ impl TryFrom<RunStatusDocument> for RunStatus {
             workflow_revision: document.workflow_revision,
             binding_digest: document.binding_digest,
             step: document.step,
+            step_label: document.step_label,
             state: document.state,
             outcome: document.outcome,
             output: document.output,

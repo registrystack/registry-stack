@@ -18,6 +18,7 @@ STATUS = {
 
     "bindingDigest": "sha256:binding",
     "step": "notify",
+    "stepLabel": "Notify the applicant",
     "state": "running",
     "outcome": None,
     "output": None,

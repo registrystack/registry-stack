@@ -852,6 +852,48 @@ mod problem_tests {
     }
 
     #[test]
+    fn openapi_run_status_documents_every_member_the_runtime_serializes() {
+        let document = openapi();
+        let schema = &document["components"]["schemas"]["RunStatus"];
+        let at = chrono::Utc::now();
+        let status = serde_json::to_value(RunStatus {
+            run_id: Uuid::nil(),
+            workflow: "workflow".into(),
+            workflow_revision: "sha256:revision".into(),
+            binding_digest: "sha256:binding".into(),
+            step: "review".into(),
+            step_label: Some("Review the request".into()),
+            state: "running".into(),
+            outcome: None,
+            output: None,
+            failure_code: None,
+            failure_path: None,
+            admitted_at: at,
+            deadline_at: at,
+            next_due_at: None,
+            uncertain: false,
+            restore_review_required: false,
+            cancel_requested: false,
+            authored_cancel_requested: false,
+        })
+        .unwrap();
+        let serialized: std::collections::BTreeSet<&String> =
+            status.as_object().unwrap().keys().collect();
+        let documented: std::collections::BTreeSet<&String> =
+            schema["properties"].as_object().unwrap().keys().collect();
+        assert_eq!(serialized, documented);
+        assert_eq!(status["stepLabel"], "Review the request");
+        assert_eq!(
+            schema["properties"]["stepLabel"]["type"],
+            json!(["string", "null"])
+        );
+        assert!(!schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("stepLabel")));
+    }
+
+    #[test]
     fn every_problem_an_operation_can_answer_is_documented_on_one() {
         let document = openapi();
         let documented: std::collections::BTreeSet<ProblemCode> = operations(&document)
@@ -1767,7 +1809,7 @@ pub fn openapi() -> Value {
         .iter()
         .map(|operation| operation.id)
         .collect();
-    let status = json!({"type":"object","required":["runId","workflow","workflowRevision","bindingDigest","step","state","admittedAt","deadlineAt","uncertain","cancelRequested","authoredCancelRequested","restoreReviewRequired"],"properties":{"runId":{"type":"string","format":"uuid"},"workflow":{"type":"string"},"workflowRevision":{"type":"string"},"bindingDigest":{"type":"string"},"step":{"type":"string"},"state":run_state,"outcome":nullable_text,"output":{},"failureCode":nullable_text,"failurePath":nullable_text,"admittedAt":date,"deadlineAt":date,"nextDueAt":{"type":["string","null"],"format":"date-time"},"uncertain":{"type":"boolean"},"cancelRequested":{"type":"boolean","description":"Ordinary cancellation is irreversible and prevents later workflow effects; an uncertain evaluation may still have run at its provider."},"authoredCancelRequested":{"type":"boolean","description":"An authorized cancellation took a parked wait's authored onCancel path; cleanup on that path remains runnable."},"restoreReviewRequired":{"type":"boolean"}}});
+    let status = json!({"type":"object","required":["runId","workflow","workflowRevision","bindingDigest","step","state","admittedAt","deadlineAt","uncertain","cancelRequested","authoredCancelRequested","restoreReviewRequired"],"properties":{"runId":{"type":"string","format":"uuid"},"workflow":{"type":"string"},"workflowRevision":{"type":"string"},"bindingDigest":{"type":"string"},"step":{"type":"string"},"stepLabel":{"type":["string","null"],"description":"The authored label of the current step, as packaged in the workflow definition this run was admitted on; a later package that relabels the step does not change it. Null when the step has no label or retention erased the run payload."},"state":run_state,"outcome":nullable_text,"output":{},"failureCode":nullable_text,"failurePath":nullable_text,"admittedAt":date,"deadlineAt":date,"nextDueAt":{"type":["string","null"],"format":"date-time"},"uncertain":{"type":"boolean"},"cancelRequested":{"type":"boolean","description":"Ordinary cancellation is irreversible and prevents later workflow effects; an uncertain evaluation may still have run at its provider."},"authoredCancelRequested":{"type":"boolean","description":"An authorized cancellation took a parked wait's authored onCancel path; cleanup on that path remains runnable."},"restoreReviewRequired":{"type":"boolean"}}});
     let mut schemas = json!({
       "WorkflowContract":{"type":"object","additionalProperties":false,"required":["workflow","workflowRevision","input","outcomes"],"properties":{"workflow":{"type":"string"},"workflowRevision":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"input":{},"outcomes":{"type":"object","minProperties":1,"maxProperties":64}}},
       "Start":{"type":"object","additionalProperties":false,"required":["workflow","workflowRevision","input"],"properties":{"workflow":{"type":"string","minLength":1,"maxLength":64},"workflowRevision":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"input":{}}},

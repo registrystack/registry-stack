@@ -533,6 +533,36 @@ struct Snapshot {
     operation_identities: Vec<OperationIdentity>,
 }
 
+/// The authored label of `step` in a sealed workflow snapshot, or `None` when
+/// the step has none. It reads only the presentation metadata and never
+/// compiles the snapshot, so status stays readable for a run whose definition
+/// this version refuses.
+pub(crate) fn snapshot_step_label(snapshot: &str, step: &str) -> Result<Option<String>> {
+    #[derive(Deserialize)]
+    struct Frozen {
+        workflow: FrozenWorkflow,
+    }
+    #[derive(Deserialize)]
+    struct FrozenWorkflow {
+        #[serde(default)]
+        presentation: FrozenPresentation,
+    }
+    #[derive(Default, Deserialize)]
+    struct FrozenPresentation {
+        #[serde(default)]
+        steps: BTreeMap<String, Value>,
+    }
+    let frozen: Frozen = serde_json::from_str(snapshot).map_err(|_| fail("definition.snapshot"))?;
+    Ok(frozen
+        .workflow
+        .presentation
+        .steps
+        .get(step)
+        .and_then(|metadata| metadata.get("label"))
+        .and_then(Value::as_str)
+        .map(str::to_owned))
+}
+
 /// The first operation a snapshot names that the catalog no longer registers,
 /// so a removed operation is refused by name instead of as a shapeless snapshot.
 fn unregistered_operation(snapshot: &serde_json::Value) -> Option<&str> {
