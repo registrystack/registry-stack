@@ -75,7 +75,7 @@ fn validates(subject: &str, mut value: Value) {
         "model" => (
             include_str!("../../../products/breg/contracts/explain/ModelExplanation.schema.json"),
             "BRegModelExplanation",
-            "v1alpha7",
+            "v1alpha8",
         ),
         "actions" => (
             include_str!("../../../products/breg/contracts/explain/ActionsExplanation.schema.json"),
@@ -85,7 +85,7 @@ fn validates(subject: &str, mut value: Value) {
         "access" => (
             include_str!("../../../products/breg/contracts/explain/AccessExplanation.schema.json"),
             "BRegAccessExplanation",
-            "v1alpha8",
+            "v1alpha9",
         ),
         "events" => (
             include_str!("../../../products/breg/contracts/explain/EventsExplanation.schema.json"),
@@ -101,10 +101,12 @@ fn validates(subject: &str, mut value: Value) {
         }
     }
     if subject == "model" {
-        // The CLI adds source presence; this test covers the compiler projection.
+        // The CLI adds source presence and the PostGIS fact; this test covers
+        // the compiler projection.
         value["authoring"] = json!({"documents":[{
             "kind":"BRegProject", "file":"registry.yaml", "authoredPaths":[""], "bindings":[]
         }]});
+        value["requiresPostgis"] = json!(false);
     }
     value["apiVersion"] = json!(format!(
         "id.registrystack.org/formats/breg/{subject}-explanation/{version}"
