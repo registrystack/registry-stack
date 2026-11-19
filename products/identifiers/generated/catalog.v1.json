@@ -3158,7 +3158,7 @@
       "description": "bearer access token validation failed",
       "source": {
         "path": "crates/registry-evidence/src/problem.rs",
-        "sha256": "d5ed764d28ca622701a933dfe893a7888d039c208915eac017a1433e4a8e44c6"
+        "sha256": "0e4cd6f1eca84c22743821b3359be3fabacdf8bd6119d4c6ea6f89e8fc2697a7"
       },
       "problem": {
         "code": "auth.invalid-credential",
@@ -3177,7 +3177,7 @@
       "description": "the Evidence request is not permitted",
       "source": {
         "path": "crates/registry-evidence/src/problem.rs",
-        "sha256": "d5ed764d28ca622701a933dfe893a7888d039c208915eac017a1433e4a8e44c6"
+        "sha256": "0e4cd6f1eca84c22743821b3359be3fabacdf8bd6119d4c6ea6f89e8fc2697a7"
       },
       "problem": {
         "code": "evidence.denied",
@@ -3196,7 +3196,7 @@
       "description": "the Evidence request is invalid",
       "source": {
         "path": "crates/registry-evidence/src/problem.rs",
-        "sha256": "d5ed764d28ca622701a933dfe893a7888d039c208915eac017a1433e4a8e44c6"
+        "sha256": "0e4cd6f1eca84c22743821b3359be3fabacdf8bd6119d4c6ea6f89e8fc2697a7"
       },
       "problem": {
         "code": "evidence.invalid-request",
@@ -3215,7 +3215,7 @@
       "description": "the Evidence request rate is exhausted",
       "source": {
         "path": "crates/registry-evidence/src/problem.rs",
-        "sha256": "d5ed764d28ca622701a933dfe893a7888d039c208915eac017a1433e4a8e44c6"
+        "sha256": "0e4cd6f1eca84c22743821b3359be3fabacdf8bd6119d4c6ea6f89e8fc2697a7"
       },
       "problem": {
         "code": "evidence.rate-limited",
@@ -3234,7 +3234,7 @@
       "description": "evidence could not be produced for this request",
       "source": {
         "path": "crates/registry-evidence/src/problem.rs",
-        "sha256": "d5ed764d28ca622701a933dfe893a7888d039c208915eac017a1433e4a8e44c6"
+        "sha256": "0e4cd6f1eca84c22743821b3359be3fabacdf8bd6119d4c6ea6f89e8fc2697a7"
       },
       "problem": {
         "code": "evidence.unavailable",
@@ -3253,7 +3253,7 @@
       "description": "the requested format is not supported",
       "source": {
         "path": "crates/registry-evidence/src/problem.rs",
-        "sha256": "d5ed764d28ca622701a933dfe893a7888d039c208915eac017a1433e4a8e44c6"
+        "sha256": "0e4cd6f1eca84c22743821b3359be3fabacdf8bd6119d4c6ea6f89e8fc2697a7"
       },
       "problem": {
         "code": "format.unsupported",
@@ -3272,7 +3272,7 @@
       "description": "requestNonce must be 32 random bytes encoded as unpadded base64url (43 characters), generated anew for each request",
       "source": {
         "path": "crates/registry-evidence/src/problem.rs",
-        "sha256": "d5ed764d28ca622701a933dfe893a7888d039c208915eac017a1433e4a8e44c6"
+        "sha256": "0e4cd6f1eca84c22743821b3359be3fabacdf8bd6119d4c6ea6f89e8fc2697a7"
       },
       "problem": {
         "code": "request.nonce-invalid",
@@ -3291,7 +3291,7 @@
       "description": "selector does not match an available request profile",
       "source": {
         "path": "crates/registry-evidence/src/problem.rs",
-        "sha256": "d5ed764d28ca622701a933dfe893a7888d039c208915eac017a1433e4a8e44c6"
+        "sha256": "0e4cd6f1eca84c22743821b3359be3fabacdf8bd6119d4c6ea6f89e8fc2697a7"
       },
       "problem": {
         "code": "request.selector-invalid",
@@ -3310,7 +3310,7 @@
       "description": "the requested resource was not found",
       "source": {
         "path": "crates/registry-evidence/src/problem.rs",
-        "sha256": "d5ed764d28ca622701a933dfe893a7888d039c208915eac017a1433e4a8e44c6"
+        "sha256": "0e4cd6f1eca84c22743821b3359be3fabacdf8bd6119d4c6ea6f89e8fc2697a7"
       },
       "problem": {
         "code": "resource.not-found",
@@ -3329,7 +3329,7 @@
       "description": "the request could not be served",
       "source": {
         "path": "crates/registry-evidence/src/problem.rs",
-        "sha256": "d5ed764d28ca622701a933dfe893a7888d039c208915eac017a1433e4a8e44c6"
+        "sha256": "0e4cd6f1eca84c22743821b3359be3fabacdf8bd6119d4c6ea6f89e8fc2697a7"
       },
       "problem": {
         "code": "service.unavailable",
@@ -3348,7 +3348,7 @@
       "description": "the authoritative source is unavailable",
       "source": {
         "path": "crates/registry-evidence/src/problem.rs",
-        "sha256": "d5ed764d28ca622701a933dfe893a7888d039c208915eac017a1433e4a8e44c6"
+        "sha256": "0e4cd6f1eca84c22743821b3359be3fabacdf8bd6119d4c6ea6f89e8fc2697a7"
       },
       "problem": {
         "code": "source.unavailable",
