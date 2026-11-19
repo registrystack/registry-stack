@@ -204,7 +204,8 @@ The human report prints the same facts.
 - `runtimeConfigs` maps each product to the absolute path of the runtime configuration the run
   wrote for it. For Evidence it is `<run>/evidence-candidate/runtime.yaml`. Pass that path to
   `evidencectl request prepare --runtime-config` instead of guessing it. The human report prints
-  one `PRODUCT runtime config PATH` line per product.
+  one `Runtime config PRODUCT PATH` line per product. Only the address line starts with the
+  product name, so `awk '$1 == "breg" {print $2}'` reads the address.
 - `sinks` maps each Messaging provider to its sink, where you can read what the run sent:
   `{"type":"smtp","smtp":"HOST:PORT","url":"MAILPIT_URL"}` for Mailpit, or
   `{"type":"http","url":"GATEWAY_ORIGIN/sent"}` for the mock gateway. It is absent when the run has
