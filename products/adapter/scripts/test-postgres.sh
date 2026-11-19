@@ -85,9 +85,10 @@ fi
 printf '%s\n' 'Building the native BReg fixture binaries.' >&2
 PATH="$HOME/.cargo/bin:$PATH" registry_cargo_build "$repo_root" \
 	--manifest-path "$repo_root/Cargo.toml" --target-dir "$CARGO_TARGET_DIR" --locked \
-	-p registry-bregctl -p registry-breg --features registry-breg/runtime
+	-p registry-bregctl -p registry-rstack -p registry-breg --features registry-breg/runtime
 export BREG_TEST_BREG_BINARY="$CARGO_TARGET_DIR/debug/breg"
 export BREG_TEST_BREGCTL_BINARY="$CARGO_TARGET_DIR/debug/bregctl"
+export BREG_TEST_RSTACK_BINARY="$CARGO_TARGET_DIR/debug/rstack"
 export BREG_TEST_DOCKER_BINARY="$docker_bin"
 
 # Native source-shape acceptance invokes the matching authoring CLI as well as
