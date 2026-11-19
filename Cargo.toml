@@ -262,7 +262,7 @@ lapin = { version = "=4.12.3", default-features = false, features = ["tokio", "r
 # (https://docs.registrystack.org/configure/adapter/#jsonpath-results) is checked against.
 jsonpath-rust = { version = "1" }
 pdf-writer = { version = "0.15.0" }
-pest = { version = "=2.9.5" }
+pest = { version = "=2.9.6" }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 # Messaging SMTP only. Default features stay off: no connection pool, no
 # native-tls, no hostname lookup, and no sendmail or file transport. `tracing`
@@ -317,7 +317,7 @@ rustls-native-certs = { version = "0.8.4" }
 rustls-pki-types = { version = "1" }
 rustls-webpki = { version = "0.103.16", default-features = false, features = ["std", "ring"] }
 ryu-js = { version = "=1.0.3" }
-saphyr-parser = { version = "=0.3.3" }
+saphyr-parser = { version = "=0.3.4" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 schemars = { version = "=1.2.3" }
