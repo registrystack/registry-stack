@@ -158,7 +158,10 @@ connection/service scope.
 
 This slice permits one attempt per bill version, including after a definitive
 failure. There is no replacement-attempt operation, refund, settlement,
-callback handler or live-provider connector. Attempts and command receipts
+callback handler or live collection provider. Disbursements can bind a live
+provider pack, but live Mifos signing through a real Transit engine is not
+verified yet: do not let a live disbursement move real money until that
+verification lands. Attempts and command receipts
 have no automatic expiry; they contain restricted bill/payer facts needed for
 recovery and require protected database storage and backup. Generic facade
 retention does not erase these records.

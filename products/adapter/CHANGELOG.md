@@ -78,8 +78,23 @@
   Retained attempts preserve their original binding and exact commands across
   response loss and restart. Only a confirmed, correlated receipt can mark
   the authoritative bill paid. One attempt is permitted per bill version,
-  including after definitive failure; live providers, replacement attempts,
-  refunds and settlement are outside this slice.
+  including after definitive failure. Collections are simulation-only: a
+  collection binding other than the simulator with `simulation: true` is
+  refused with `adapter.payment.collection-simulation-only`. Live collection
+  providers, replacement attempts, refunds and settlement are outside this
+  slice.
+- The same host serves typed G2P disbursements: request a disbursement from an
+  approved BReg instruction, read its correlated provider observation, and
+  report verified provider confirmation through a restricted BReg Action. An
+  uncertain submission is never sent again. Disbursement connections pin a
+  provider pack, passed to `adapter serve` with a repeatable
+  `--payment-provider-pack`, and authenticate with `bearer` or, for Mifos
+  Payment Hub EE, `mifos-legacy-signature`, which signs the exact Bulk request
+  through a pinned Transit key and reads Operations status under a separate
+  bearer credential. Live Mifos signing through a real Transit engine is not
+  verified yet; do not let a live disbursement move real money until that
+  verification lands. A provider confirmation is not proof of beneficiary
+  credit or settlement.
 - `adapterctl payments check` validates connections offline and
   `adapterctl payments contract` exports their typed HTTP contract. Generated
   schemas, a native Coordinator workflow, the restricted BReg fee fixture,
