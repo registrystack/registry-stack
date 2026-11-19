@@ -28,9 +28,9 @@ use axum::{
 };
 use registry_adapter_core::AdapterRuntimeConfig;
 use registry_payment_protocol::{
-    DisbursementAccepted, DisbursementState, DisbursementStatus, Money, PaymentProblem,
-    PaymentProblemCode as Error, ProviderConfirmation, RecordProviderConfirmation, RecordReceipt,
-    RequestCollection, RequestDisbursement,
+    CollectionAccepted, DisbursementAccepted, DisbursementState, DisbursementStatus, Money,
+    PaymentProblem, PaymentProblemCode as Error, ProviderConfirmation, RecordProviderConfirmation,
+    RecordReceipt, RequestCollection, RequestDisbursement,
 };
 use registry_platform_config::{
     RuntimeConfigLoader, RuntimeEnvelope, SecretProvider, SecretResolver,
@@ -491,7 +491,7 @@ async fn request(
         &state,
         &caller,
         "request",
-        None,
+        audited_attempt(&result),
         true,
         StatusCode::ACCEPTED,
         result,
@@ -516,7 +516,7 @@ async fn request_receipt(
         &state,
         &caller,
         "request-receipt",
-        None,
+        audited_attempt(&result),
         false,
         StatusCode::OK,
         result,
@@ -714,7 +714,7 @@ async fn request_disbursement(
         &state,
         &caller,
         "request-disbursement",
-        None,
+        audited_attempt(&result),
         true,
         StatusCode::ACCEPTED,
         result,
@@ -755,7 +755,7 @@ async fn disbursement_receipt(
         &state,
         &caller,
         "request-disbursement-receipt",
-        None,
+        audited_attempt(&result),
         false,
         StatusCode::OK,
         result,
@@ -879,6 +879,24 @@ async fn finish<T: Serialize>(
         .map_err(HttpError)
 }
 
+/// The attempt an accepted request names, recorded in its audit event.
+trait AuditedAttempt {
+    fn attempt_id(&self) -> Uuid;
+}
+impl AuditedAttempt for CollectionAccepted {
+    fn attempt_id(&self) -> Uuid {
+        self.collection_id
+    }
+}
+impl AuditedAttempt for DisbursementAccepted {
+    fn attempt_id(&self) -> Uuid {
+        self.disbursement_id
+    }
+}
+fn audited_attempt<T: AuditedAttempt>(result: &Result<T, Error>) -> Option<Uuid> {
+    result.as_ref().ok().map(AuditedAttempt::attempt_id)
+}
+
 struct HttpError(Error);
 impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
@@ -919,6 +937,37 @@ fn refused(message: &str) -> ServeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_released_acceptance_is_audited_under_its_attempt() {
+        let collection = CollectionAccepted {
+            collection_id: Uuid::new_v4(),
+            bill_id: Uuid::new_v4(),
+            bill_version: 1,
+            binding_revision: "a".repeat(64),
+            simulation: true,
+        };
+        let disbursement = DisbursementAccepted {
+            disbursement_id: Uuid::new_v4(),
+            instruction_record_id: Uuid::new_v4(),
+            instruction_id: Uuid::new_v4(),
+            instruction_version: 1,
+            binding_revision: "b".repeat(64),
+            simulation: false,
+        };
+        assert_eq!(
+            audited_attempt(&Ok(collection.clone())),
+            Some(collection.collection_id)
+        );
+        assert_eq!(
+            audited_attempt(&Ok(disbursement.clone())),
+            Some(disbursement.disbursement_id)
+        );
+        assert_eq!(
+            audited_attempt::<CollectionAccepted>(&Err(Error::OutcomeUnknown)),
+            None
+        );
+    }
 
     #[test]
     fn startup_auth_match_is_exact_for_each_generic_payment_direction() {
