@@ -53,13 +53,13 @@ class ReleaseSelectionTest(unittest.TestCase):
 
     def test_refuses_a_start_before_the_immediate_predecessor(self) -> None:
         for tag in (
-            "v0.44.0", "v0.43.0", "v0.42.0", "v0.41.0", "v0.40.0",
+            "v0.45.0", "v0.44.0", "v0.43.0", "v0.42.0", "v0.41.0", "v0.40.0",
             "v0.39.0", "v0.33.0", "v0.1.0",
         ):
             with self.subTest(tag=tag), self.assertRaisesRegex(Error, "immediate predecessor"):
-                MODULE.check_forward_path(tag, "0.46.0")
-        MODULE.check_forward_path("v0.45.0", "0.45.0")
-        MODULE.check_forward_path("v0.45.0", "0.46.0")
+                MODULE.check_forward_path(tag, "0.47.0")
+        MODULE.check_forward_path("v0.46.0", "0.46.0")
+        MODULE.check_forward_path("v0.46.0", "0.47.0")
 
     def test_refuses_a_floor_behind_the_release_before_the_workspace_version(self) -> None:
         released = ["0.9.0", "0.37.0", "0.38.0", "0.39.0"]
@@ -448,9 +448,9 @@ class ProductSelectionTest(unittest.TestCase):
 
 
 class ForwardPathFloorTest(unittest.TestCase):
-    """v0.45.0 is the predecessor for v0.46.0 development source.
+    """v0.46.0 is the predecessor for v0.47.0 development source.
 
-    Once v0.45.0 is published and the workspace moves to v0.46.0, current
+    Once v0.46.0 is published and the workspace moves to v0.47.0, current
     source reads its immediate predecessor's state and the floor moves with it.
     """
 
@@ -459,22 +459,20 @@ class ForwardPathFloorTest(unittest.TestCase):
 
         def binaries(side, expected_version, names):
             seen["sides"].append((side.label, side.bin_dir, expected_version))
-            return {name: f"{name} 0.46.0-dev" for name in names}
+            return {name: f"{name} 0.47.0-dev" for name in names}
 
         def leg(product):
-            def run(work, keys, *rest, **named):
+            def run(work, keys, *rest):
                 seen["legs"].append((product, rest[-3].bin_dir, rest[-2].bin_dir))
-                if product == "messaging":
-                    seen["messagingStart"] = named["start"]
             return run
 
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
-                unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.46.0"), \
+                unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.47.0"), \
                 unittest.mock.patch.object(MODULE, "released_versions",
-                                           return_value=["0.44.0", "0.45.0"]), \
+                                           return_value=["0.45.0", "0.46.0"]), \
                 unittest.mock.patch.object(MODULE, "published_tags",
-                                           return_value=["v0.44.0", "v0.45.0"]), \
+                                           return_value=["v0.45.0", "v0.46.0"]), \
                 unittest.mock.patch.object(MODULE, "fetch_release") as fetched, \
                 unittest.mock.patch.object(MODULE, "check_binaries", side_effect=binaries), \
                 unittest.mock.patch.object(MODULE, "Keys"), \
@@ -487,10 +485,10 @@ class ForwardPathFloorTest(unittest.TestCase):
         seen["fetched"] = fetched.call_args_list
         return status, stdout.getvalue(), stderr.getvalue(), seen
 
-    def test_current_source_reads_state_from_v0_45_0(self) -> None:
-        self.assertEqual(MODULE.FORWARD_PATH_FLOOR, (0, 45, 0))
+    def test_current_source_reads_state_from_v0_46_0(self) -> None:
+        self.assertEqual(MODULE.FORWARD_PATH_FLOOR, (0, 46, 0))
 
-    def test_a_default_run_rehearses_every_leg_from_v0_45_0(self) -> None:
+    def test_a_default_run_rehearses_every_leg_from_v0_46_0(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             built = Path(temporary).resolve() / "bin"
             built.mkdir()
@@ -501,17 +499,16 @@ class ForwardPathFloorTest(unittest.TestCase):
             document = json.loads(report.read_text(encoding="utf-8"))
         self.assertEqual(status, 0, stderr)
         self.assertNotIn("no release from", stdout)
-        self.assertEqual(document["from"], "v0.45.0")
+        self.assertEqual(document["from"], "v0.46.0")
         self.assertEqual(document["fromProvenance"], "cosign and SHA256SUMS verified")
         self.assertEqual(document["omitted"], dict(MODULE.RETIRED_PRODUCTS))
         self.assertEqual(len(seen["fetched"]), 1)
-        self.assertEqual(seen["fetched"][0].args[0], "v0.45.0")
+        self.assertEqual(seen["fetched"][0].args[0], "v0.46.0")
         from_bin = Path(temporary).resolve() / "work/from-bin"
         self.assertEqual(seen["legs"],
                          [("evidence", from_bin, built), ("messaging", from_bin, built)])
-        self.assertEqual(seen["messagingStart"], (0, 45, 0))
 
-    def test_fetch_only_downloads_v0_45_0(self) -> None:
+    def test_fetch_only_downloads_v0_46_0(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary) / "work"
             report = Path(temporary) / "report.json"
@@ -523,17 +520,17 @@ class ForwardPathFloorTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertNotIn("no release from", stdout)
         self.assertEqual(len(seen["fetched"]), 1)
-        self.assertEqual(seen["fetched"][0].args[0], "v0.45.0")
-        self.assertEqual(seen["sides"], [("from", work.resolve() / "from-bin", "0.45.0")])
-        self.assertEqual(document["from"], "v0.45.0")
+        self.assertEqual(seen["fetched"][0].args[0], "v0.46.0")
+        self.assertEqual(seen["sides"], [("from", work.resolve() / "from-bin", "0.46.0")])
+        self.assertEqual(document["from"], "v0.46.0")
         self.assertEqual(document["platform"], "linux-amd64")
         self.assertEqual(document["fromProvenance"], "cosign and SHA256SUMS verified")
 
-    def test_a_named_v0_44_0_start_is_refused_before_any_state(self) -> None:
-        for chosen in (["--from-tag", "v0.44.0"],
-                       ["--from-tag", "v0.44.0", "--from-bin-dir", "/previous"],
-                       ["--from-tag", "v0.44.0", "--product", "evidence"],
-                       ["--from-tag", "v0.44.0", "--product", "messaging"]):
+    def test_a_named_v0_45_0_start_is_refused_before_any_state(self) -> None:
+        for chosen in (["--from-tag", "v0.45.0"],
+                       ["--from-tag", "v0.45.0", "--from-bin-dir", "/previous"],
+                       ["--from-tag", "v0.45.0", "--product", "evidence"],
+                       ["--from-tag", "v0.45.0", "--product", "messaging"]):
             with self.subTest(chosen=chosen), tempfile.TemporaryDirectory() as temporary:
                 work = Path(temporary) / "work"
                 status, _stdout, stderr, seen = self.run_main(
@@ -541,8 +538,8 @@ class ForwardPathFloorTest(unittest.TestCase):
                      "--work-dir", str(work)])
                 self.assertEqual(status, 1)
                 self.assertFalse(work.exists())
-                self.assertIn("refusing v0.44.0", stderr)
-                self.assertIn("reads no state written before v0.45.0", stderr)
+                self.assertIn("refusing v0.45.0", stderr)
+                self.assertIn("reads no state written before v0.46.0", stderr)
                 self.assertIn("installs on fresh state", stderr)
                 self.assertNotIn("one release at a time", stderr)
                 self.assertEqual(seen["sides"], [])
@@ -554,16 +551,16 @@ class ForwardPathFloorTest(unittest.TestCase):
             # No product is omitted for its starting release from the floor
             # onward, so a platform omission stands in for every leg.
             with contextlib.redirect_stdout(io.StringIO()), \
-                    unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.46.0"), \
+                    unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.47.0"), \
                     unittest.mock.patch.object(MODULE, "released_versions",
-                                               return_value=["0.44.0", "0.45.0"]), \
+                                               return_value=["0.45.0", "0.46.0"]), \
                     unittest.mock.patch.dict(MODULE.PRODUCT_PLATFORMS,
                                              {"evidence": ("linux-amd64",)}), \
                     unittest.mock.patch.object(MODULE, "fetch_release", side_effect=AssertionError("download")), \
                     unittest.mock.patch.object(MODULE, "Keys", side_effect=AssertionError("keys")), \
                     unittest.mock.patch.object(MODULE, "Postgres", side_effect=AssertionError("container")):
                 status = MODULE.main([
-                    "--from-tag", "v0.45.0", "--platform", "macos-arm64",
+                    "--from-tag", "v0.46.0", "--platform", "macos-arm64",
                     "--to-bin-dir", temporary, "--work-dir", str(Path(temporary) / "work"),
                     "--report", str(report),
                 ])
@@ -1283,60 +1280,6 @@ class MessagingAssertionsTest(unittest.TestCase):
                 (difference,) = MODULE.ledger_digest_differences(activated, self.plan())
                 self.assertIn("previous release", difference)
 
-    def test_the_acts_as_migration_runs_only_across_its_boundary(self) -> None:
-        # 0.46.0 refuses a Messaging package that writes `role`, so a 0.45.0
-        # project is re-authored and repackaged; the database state is kept.
-        self.assertEqual(MODULE.ACTS_AS_BOUNDARY, (0, 46, 0))
-        self.assertTrue(MODULE.crosses_messaging_acts_as_boundary((0, 45, 0)))
-        self.assertFalse(MODULE.crosses_messaging_acts_as_boundary((0, 46, 0)))
-        self.assertFalse(MODULE.crosses_messaging_acts_as_boundary((0, 46, 1)))
-
-    def test_the_acts_as_migration_is_removed_once_the_floor_reaches_it(self) -> None:
-        # From 0.46.0 on the floor is a release that writes `actsAs`, so no
-        # rehearsal crosses the boundary and the migration is dead code.
-        self.assertLess(MODULE.FORWARD_PATH_FLOOR, MODULE.ACTS_AS_BOUNDARY,
-                        "remove the Messaging actsAs migration from rehearse-upgrade.py")
-
-    def test_acts_as_replaces_role_in_place_in_every_access_profile(self) -> None:
-        project = {"kind": "MessagingProject", "role": "kept", "accessProfiles": [
-            {"id": "case-notices", "actorKind": "service", "role": "sender", "burst": 10},
-            {"id": "operations", "role": "operator"}]}
-        migrated = MODULE.acts_as_project(project)
-        self.assertEqual(migrated["role"], "kept")
-        self.assertEqual(
-            [list(profile.items()) for profile in migrated["accessProfiles"]],
-            [[("id", "case-notices"), ("actorKind", "service"), ("actsAs", "sender"),
-              ("burst", 10)],
-             [("id", "operations"), ("actsAs", "operator")]])
-
-    def test_a_project_with_no_role_to_migrate_is_refused(self) -> None:
-        for project in ({}, {"accessProfiles": []},
-                        {"accessProfiles": [{"id": "a", "actsAs": "sender"}]}):
-            with self.subTest(project=project), self.assertRaisesRegex(Error, "role"):
-                MODULE.acts_as_project(project)
-
-    def test_the_repackaged_project_must_replace_the_previous_activation(self) -> None:
-        before = {"activeDigest": self.ACTIVE, "packageDigest": self.OTHER,
-                  "change": "activate"}
-        after = {"activeDigest": self.OTHER, "packageDigest": self.OTHER, "change": "none"}
-        self.assertEqual(MODULE.repackaged_ledger_differences(self.ACTIVE, before, after), [])
-        for previous, planned, applied, named in (
-                (None, before, after, "previous release"),
-                (self.ACTIVE, {**before, "activeDigest": self.OTHER}, after,
-                 "package the previous release activated"),
-                (self.ACTIVE, {**before, "packageDigest": self.ACTIVE}, after,
-                 "re-authored package"),
-                (self.ACTIVE, {**before, "packageDigest": None}, after,
-                 "re-authored package"),
-                (self.ACTIVE, before, {**after, "activeDigest": self.ACTIVE}, "activeDigest"),
-                (self.ACTIVE, before, {**after, "packageDigest": self.ACTIVE},
-                 "packageDigest"),
-                (self.ACTIVE, before, {**after, "change": "activate"}, "change to apply")):
-            with self.subTest(planned=planned, applied=applied):
-                differences = MODULE.repackaged_ledger_differences(previous, planned, applied)
-                self.assertTrue(differences)
-                self.assertIn(named, differences[0])
-
     def test_counts_one_event_across_every_segment_of_the_stream(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             audit = Path(temporary)
@@ -1368,8 +1311,7 @@ class MessagingAssertionsTest(unittest.TestCase):
 
     def rehearse(self, *, erase_events: int = 1,
                  ledger_differences: tuple[str, ...] = (),
-                 dispatch_shape: str | None = None,
-                 start: tuple[int, int, int] = (0, 46, 0)) -> tuple[dict, Any, Any]:
+                 dispatch_shape: str | None = None) -> tuple[dict, Any, Any]:
         """Run rehearse_messaging with every process and database faked. The
         erase command writes `erase_events` requested and erased records."""
         old, new = unittest.mock.Mock(), unittest.mock.Mock()
@@ -1385,7 +1327,6 @@ class MessagingAssertionsTest(unittest.TestCase):
             return list(ledger_differences)
 
         messaging.upgrade.side_effect = upgrade
-        messaging.activate_repackaged.side_effect = upgrade
 
         def erase(*arguments, **_):
             if "erase-expired" in arguments:
@@ -1409,7 +1350,7 @@ class MessagingAssertionsTest(unittest.TestCase):
                     side_effect=lambda *_a, **_k: written["events"]) as events:
             try:
                 MODULE.rehearse_messaging(Path(directory), unittest.mock.Mock(), postgres,
-                                          old, new, report, start=start)
+                                          old, new, report)
             finally:
                 self.report = report
                 self.event_streams = {call.args[1] for call in events.call_args_list}
@@ -1435,22 +1376,6 @@ class MessagingAssertionsTest(unittest.TestCase):
     def test_the_leg_upgrades_from_the_digest_the_old_release_activated(self) -> None:
         _report, new, messaging = self.rehearse()
         messaging.upgrade.assert_called_once_with(new, self.ACTIVE)
-        messaging.migrate_acts_as.assert_not_called()
-        messaging.activate_repackaged.assert_not_called()
-
-    def test_the_leg_from_0_45_0_repackages_the_project_with_the_new_release(self) -> None:
-        report, new, messaging = self.rehearse(start=(0, 45, 0))
-        messaging.migrate_acts_as.assert_called_once_with(new)
-        messaging.activate_repackaged.assert_called_once_with(new, self.ACTIVE)
-        messaging.upgrade.assert_not_called()
-        self.assertEqual(report["messaging"]["viewDifferences"], [])
-        self.assertEqual(report["messaging"]["rowLosses"], [])
-
-    def test_the_leg_fails_on_a_difference_the_repackaged_activation_names(self) -> None:
-        with self.assertRaisesRegex(MODULE.RehearsalError, "not the re-authored package"):
-            self.rehearse(start=(0, 45, 0),
-                          ledger_differences=("the ledger activeDigest is not the "
-                                              "re-authored package",))
 
     def test_the_leg_fails_on_a_ledger_difference_the_upgrade_names(self) -> None:
         with self.assertRaisesRegex(MODULE.RehearsalError, "names another predecessor"):
