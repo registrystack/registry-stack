@@ -37,6 +37,7 @@ use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_crypto::parse_json_strict;
 use registry_platform_httpsec::CspBuilder;
 use serde::Serialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::{net::TcpListener, sync::Semaphore};
 use tower_http::cors::{Any, CorsLayer};
@@ -1066,8 +1067,23 @@ async fn add_no_store(request: Request<Body>, next: Next) -> Response {
     response
 }
 
+/// Whether a request object carries one canonical `requestNonce` member.
+///
+/// The nonce is judged before the transport schema so a caller whose only
+/// mistake is the nonce learns the expected format from the static problem
+/// detail. The member value itself never reaches the problem.
+fn request_nonce_member_is_canonical(object: &Value) -> bool {
+    object
+        .get("requestNonce")
+        .and_then(Value::as_str)
+        .is_some_and(request_nonce_is_canonical)
+}
+
 fn parse_evidence_request(bytes: &[u8]) -> Result<EvidenceRequest, ProblemCode> {
     let value = parse_json_strict(bytes).map_err(|_| ProblemCode::MalformedRequest)?;
+    if value.is_object() && !request_nonce_member_is_canonical(&value) {
+        return Err(ProblemCode::InvalidRequestNonce);
+    }
     match request_contract_accepts(&value) {
         Ok(true) => {}
         Ok(false) => return Err(ProblemCode::MalformedRequest),
@@ -1078,13 +1094,22 @@ fn parse_evidence_request(bytes: &[u8]) -> Result<EvidenceRequest, ProblemCode> 
     // The transport schema pins length and alphabet; canonicality of the
     // final base64url symbol is checked here, before authentication.
     if !request_nonce_is_canonical(&request.request_nonce) {
-        return Err(ProblemCode::MalformedRequest);
+        return Err(ProblemCode::InvalidRequestNonce);
     }
     Ok(request)
 }
 
 fn parse_evidence_request_batch(bytes: &[u8]) -> Result<EvidenceRequestBatch, ProblemCode> {
     let value = parse_json_strict(bytes).map_err(|_| ProblemCode::MalformedRequest)?;
+    if let Some(items) = value.get("items").and_then(Value::as_array) {
+        let mut nonces = BTreeSet::new();
+        if items.iter().filter(|item| item.is_object()).any(|item| {
+            !request_nonce_member_is_canonical(item)
+                || !nonces.insert(item["requestNonce"].as_str().unwrap_or_default())
+        }) {
+            return Err(ProblemCode::InvalidRequestNonce);
+        }
+    }
     match request_batch_contract_accepts(&value) {
         Ok(true) => {}
         Ok(false) => return Err(ProblemCode::MalformedRequest),
@@ -1100,7 +1125,7 @@ fn parse_evidence_request_batch(bytes: &[u8]) -> Result<EvidenceRequestBatch, Pr
         !request_nonce_is_canonical(&item.request_nonce)
             || !nonces.insert(item.request_nonce.as_str())
     }) {
-        return Err(ProblemCode::MalformedRequest);
+        return Err(ProblemCode::InvalidRequestNonce);
     }
     Ok(request)
 }
@@ -1376,16 +1401,25 @@ mod tests {
             base.replace("NONCE", &format!("{}=", "A".repeat(42))),
             base.replace("NONCE", &format!("{}+", "A".repeat(42))),
             base.replace("NONCE", &format!("{}B", "A".repeat(42))),
-            format!(
-                r#"{{"requestNonce":"{TEST_NONCE}","requestNonce":"{TEST_NONCE}","requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{{"role":"subject","selector":{{"profile":"opaque-v1","values":{{"opaque":"value"}}}}}}]}}"#
-            ),
+            base.replace("NONCE", "6f1c2e0a-4b7d-4c1e-9f3a-2d8b5e7c9a10"),
+            base.replace("\"NONCE\"", "42"),
         ] {
             assert_eq!(
                 parse_evidence_request(invalid.as_bytes()),
-                Err(ProblemCode::MalformedRequest),
+                Err(ProblemCode::InvalidRequestNonce),
                 "{invalid}"
             );
         }
+        // A repeated member is a malformed document before any member is read.
+        assert_eq!(
+            parse_evidence_request(
+                format!(
+                    r#"{{"requestNonce":"{TEST_NONCE}","requestNonce":"{TEST_NONCE}","requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{{"role":"subject","selector":{{"profile":"opaque-v1","values":{{"opaque":"value"}}}}}}]}}"#
+                )
+                .as_bytes()
+            ),
+            Err(ProblemCode::MalformedRequest)
+        );
 
         for invalid in [
             br#"{"requestNonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","requirement":"not a URI","purpose":"p","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{"opaque":"value"}}}]}"#.as_slice(),

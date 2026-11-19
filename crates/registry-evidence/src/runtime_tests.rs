@@ -4495,9 +4495,10 @@ async fn request_nonce_is_strict_and_never_reaches_source_or_audit() {
     let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
     let token = access_token(None);
 
-    // Missing, empty, short, long, padded, wrong-alphabet, oversized, and
-    // noncanonical final-symbol nonces fail as malformed requests before
-    // authorization, credential acquisition, or source access.
+    // Missing, empty, UUID, short, long, padded, wrong-alphabet, oversized,
+    // and noncanonical final-symbol nonces fail before authorization,
+    // credential acquisition, or source access, with a problem whose static
+    // detail names the expected format.
     let base = serde_json::to_value(adult_request()).expect("request serializes");
     let mut variants = Vec::new();
     let mut missing = base.clone();
@@ -4508,6 +4509,7 @@ async fn request_nonce_is_strict_and_never_reaches_source_or_audit() {
     variants.push(missing);
     for nonce in [
         String::new(),
+        "6f1c2e0a-4b7d-4c1e-9f3a-2d8b5e7c9a10".to_owned(),
         "A".repeat(42),
         "A".repeat(44),
         format!("{}=", "A".repeat(42)),
@@ -4526,10 +4528,18 @@ async fn request_nonce_is_strict_and_never_reaches_source_or_audit() {
             .json(&variant)
             .await;
         assert_eq!(response.status_code(), axum::http::StatusCode::BAD_REQUEST);
-        assert_eq!(
-            response.json::<Value>()["code"],
-            json!("evidence.invalid-request")
-        );
+        let problem = response.json::<Value>();
+        assert_eq!(problem["code"], json!("request.nonce-invalid"), "{variant}");
+        let detail = problem["detail"].as_str().expect("detail is text");
+        for named in ["requestNonce", "32", "base64url", "43"] {
+            assert!(detail.contains(named), "detail names {named}: {detail}");
+        }
+        if let Some(sent) = variant["requestNonce"].as_str().filter(|s| !s.is_empty()) {
+            assert!(
+                !problem.to_string().contains(sent),
+                "problem echoes no nonce"
+            );
+        }
     }
     // A duplicate requestNonce member fails strict JSON parsing.
     let duplicate = build_app(Arc::clone(&fixture.runtime))
@@ -4614,6 +4624,8 @@ async fn request_batch_bounds_unique_nonces_and_every_item_before_source_access(
 
     let mut duplicate = adult_request_batch(2);
     duplicate.items[1].request_nonce = duplicate.items[0].request_nonce.clone();
+    let mut uuid_nonce = adult_request_batch(2);
+    uuid_nonce.items[1].request_nonce = "6f1c2e0a-4b7d-4c1e-9f3a-2d8b5e7c9a10".to_owned();
     let mut invalid_later_item = adult_request_batch(2);
     invalid_later_item.items[1].subjects[0]
         .selector
@@ -4628,7 +4640,8 @@ async fn request_batch_bounds_unique_nonces_and_every_item_before_source_access(
     for (request, expected_code) in [
         (adult_request_batch(0), "evidence.invalid-request"),
         (adult_request_batch(17), "evidence.invalid-request"),
-        (duplicate, "evidence.invalid-request"),
+        (duplicate, "request.nonce-invalid"),
+        (uuid_nonce, "request.nonce-invalid"),
         (invalid_later_item, "request.selector-invalid"),
     ] {
         let response = http

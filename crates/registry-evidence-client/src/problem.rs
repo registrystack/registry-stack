@@ -18,12 +18,18 @@ const EVIDENCE_NOT_AVAILABLE: &str = "evidence.unavailable";
 /// Longest accepted problem body. The closed contract is far smaller.
 pub(crate) const MAXIMUM_PROBLEM_BYTES: usize = 4 * 1024;
 
-const REGISTERED_PROBLEMS: [(u16, &str, &str, &str); 10] = [
+const REGISTERED_PROBLEMS: [(u16, &str, &str, &str); 11] = [
     (
         400,
         "evidence.invalid-request",
         "Evidence request is invalid",
         "the Evidence request is invalid",
+    ),
+    (
+        400,
+        "request.nonce-invalid",
+        "Request nonce is invalid",
+        "requestNonce must be 32 random bytes encoded as unpadded base64url (43 characters), generated anew for each request",
     ),
     (
         400,
@@ -256,6 +262,7 @@ mod tests {
             (429, "evidence.rate-limited", "denied"),
             (422, EVIDENCE_NOT_AVAILABLE, "not-available"),
             (400, "evidence.invalid-request", "invalid-request"),
+            (400, "request.nonce-invalid", "invalid-request"),
             (400, "request.selector-invalid", "invalid-request"),
             (406, "format.unsupported", "invalid-request"),
             (404, "resource.not-found", "invalid-request"),

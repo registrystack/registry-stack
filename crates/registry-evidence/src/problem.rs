@@ -5,9 +5,14 @@ use registry_platform_httpsec::{ProblemBody, TraceId};
 
 const PROBLEM_BASE: &str = "https://id.registrystack.org/problems/registry-evidence/";
 
+/// Static detail for a request nonce outside its canonical form. It names the
+/// format a caller must send and never the value it sent.
+const REQUEST_NONCE_DETAIL: &str = "requestNonce must be 32 random bytes encoded as unpadded base64url (43 characters), generated anew for each request";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProblemCode {
     MalformedRequest,
+    InvalidRequestNonce,
     InvalidSelector,
     AuthenticationFailed,
     NotAuthorized,
@@ -23,6 +28,7 @@ impl ProblemCode {
     /// Complete inventory used to generate the public identifier catalog.
     pub const ALL: &'static [Self] = &[
         Self::MalformedRequest,
+        Self::InvalidRequestNonce,
         Self::InvalidSelector,
         Self::AuthenticationFailed,
         Self::NotAuthorized,
@@ -37,6 +43,7 @@ impl ProblemCode {
     pub const fn code(self) -> &'static str {
         match self {
             Self::MalformedRequest => "evidence.invalid-request",
+            Self::InvalidRequestNonce => "request.nonce-invalid",
             Self::InvalidSelector => "request.selector-invalid",
             Self::AuthenticationFailed => "auth.invalid-credential",
             Self::NotAuthorized => "evidence.denied",
@@ -51,7 +58,9 @@ impl ProblemCode {
 
     pub const fn status(self) -> StatusCode {
         match self {
-            Self::MalformedRequest | Self::InvalidSelector => StatusCode::BAD_REQUEST,
+            Self::MalformedRequest | Self::InvalidRequestNonce | Self::InvalidSelector => {
+                StatusCode::BAD_REQUEST
+            }
             Self::AuthenticationFailed => StatusCode::UNAUTHORIZED,
             Self::NotAuthorized => StatusCode::FORBIDDEN,
             Self::ResponseFormatNotAcceptable => StatusCode::NOT_ACCEPTABLE,
@@ -67,6 +76,7 @@ impl ProblemCode {
     pub const fn title(self) -> &'static str {
         match self {
             Self::MalformedRequest => "Evidence request is invalid",
+            Self::InvalidRequestNonce => "Request nonce is invalid",
             Self::InvalidSelector => "Selector is invalid",
             Self::AuthenticationFailed => "Bearer access token is invalid",
             Self::NotAuthorized => "Evidence request is not permitted",
@@ -82,6 +92,7 @@ impl ProblemCode {
     pub const fn detail(self) -> &'static str {
         match self {
             Self::MalformedRequest => "the Evidence request is invalid",
+            Self::InvalidRequestNonce => REQUEST_NONCE_DETAIL,
             Self::InvalidSelector => "selector does not match an available request profile",
             Self::AuthenticationFailed => "bearer access token validation failed",
             Self::NotAuthorized => "the Evidence request is not permitted",
@@ -188,6 +199,11 @@ mod tests {
                 400,
                 "Evidence request is invalid",
             ),
+            (
+                ProblemCode::InvalidRequestNonce,
+                400,
+                "Request nonce is invalid",
+            ),
             (ProblemCode::InvalidSelector, 400, "Selector is invalid"),
             (
                 ProblemCode::AuthenticationFailed,
@@ -234,5 +250,52 @@ mod tests {
             assert_eq!(code.status().as_u16(), status);
             assert_eq!(code.title(), title);
         }
+    }
+
+    #[test]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the test reads the published problem contract, not operator configuration"
+    )]
+    fn every_code_matches_the_frozen_problem_contract_exactly() {
+        let contract: serde_json::Value = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/contracts/problem-contract.yaml"
+        ))
+        .expect("problem contract parses");
+        let codes = contract["codes"]
+            .as_object()
+            .expect("problem contract lists its codes");
+        let served = ProblemCode::ALL
+            .iter()
+            .map(|code| code.code())
+            .collect::<std::collections::BTreeSet<_>>();
+        let contracted = codes
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(served, contracted);
+        for code in ProblemCode::ALL {
+            let entry = &codes[code.code()];
+            assert_eq!(entry["status"], code.status().as_u16(), "{}", code.code());
+            assert_eq!(entry["title"], code.title(), "{}", code.code());
+            assert_eq!(entry["detail"], code.detail(), "{}", code.code());
+        }
+    }
+
+    #[test]
+    fn a_request_nonce_problem_names_the_format_and_never_a_value() {
+        let detail = ProblemCode::InvalidRequestNonce.detail();
+        for named in [
+            "requestNonce",
+            "32 random bytes",
+            "base64url",
+            "43 characters",
+        ] {
+            assert!(detail.contains(named), "{named}");
+        }
+        assert_eq!(
+            ProblemCode::InvalidRequestNonce.status(),
+            StatusCode::BAD_REQUEST
+        );
     }
 }

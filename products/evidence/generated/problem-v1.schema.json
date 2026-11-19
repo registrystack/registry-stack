@@ -26,6 +26,25 @@
     {
       "properties": {
         "code": {
+          "const": "request.nonce-invalid"
+        },
+        "detail": {
+          "const": "requestNonce must be 32 random bytes encoded as unpadded base64url (43 characters), generated anew for each request"
+        },
+        "status": {
+          "const": 400
+        },
+        "title": {
+          "const": "Request nonce is invalid"
+        },
+        "type": {
+          "const": "https://id.registrystack.org/problems/registry-evidence/request/nonce-invalid"
+        }
+      }
+    },
+    {
+      "properties": {
+        "code": {
           "const": "request.selector-invalid"
         },
         "detail": {
@@ -199,6 +218,7 @@
     "code": {
       "enum": [
         "evidence.invalid-request",
+        "request.nonce-invalid",
         "request.selector-invalid",
         "auth.invalid-credential",
         "evidence.denied",
@@ -214,6 +234,7 @@
     "detail": {
       "enum": [
         "the Evidence request is invalid",
+        "requestNonce must be 32 random bytes encoded as unpadded base64url (43 characters), generated anew for each request",
         "selector does not match an available request profile",
         "bearer access token validation failed",
         "the Evidence request is not permitted",
@@ -242,6 +263,7 @@
     "title": {
       "enum": [
         "Evidence request is invalid",
+        "Request nonce is invalid",
         "Selector is invalid",
         "Bearer access token is invalid",
         "Evidence request is not permitted",
@@ -261,6 +283,7 @@
     "type": {
       "enum": [
         "https://id.registrystack.org/problems/registry-evidence/evidence/invalid-request",
+        "https://id.registrystack.org/problems/registry-evidence/request/nonce-invalid",
         "https://id.registrystack.org/problems/registry-evidence/request/selector-invalid",
         "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential",
         "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
