@@ -26,9 +26,9 @@ Registry Coordinator reads three files: the `workflow.yaml` project you author, 
 
 | File | Kind | Status | Source |
 | ---- | ---- | ------ | ------ |
-| `workflow.yaml` | `CoordinatorProject` | Pre-1.0, may change | [`project.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/generated/project/project.schema.json) |
-| `scenarios.yaml` | `CoordinatorScenarios` | Pre-1.0, may change | [`scenarios.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/generated/scenarios/scenarios.schema.json) |
-| `runtime.yaml` | `CoordinatorRuntimeConfig` | Pre-1.0, may change | [`runtime.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/generated/runtime/runtime.schema.json) |
+| `workflow.yaml` | `CoordinatorProject` | Promised at 1.0 | [`project.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/generated/project/project.schema.json) |
+| `scenarios.yaml` | `CoordinatorScenarios` | Promised at 1.0 | [`scenarios.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/generated/scenarios/scenarios.schema.json) |
+| `runtime.yaml` | `CoordinatorRuntimeConfig` | Promised at 1.0 | [`runtime.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/generated/runtime/runtime.schema.json) |
 
 JSON Schema is not the acceptance path: a document these schemas accept still has to pass
 `coordinatorctl check`, which resolves operation aliases, mapping paths, step routes, and
