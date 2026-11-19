@@ -45,6 +45,18 @@ python3 serve-source.py --port 8081
 
 ## Give the application an identity
 
+In a new terminal, read the run back from `run.json` and redefine the helper that fetches a token
+header file:
+
+```sh test-cwd="first-evidence-assertion/adult-status"
+run_id="$(jq -r .run_id run.json)"
+evidence_url="$(jq -r .products.evidence run.json)"
+runtime_config="$(jq -r .runtimeConfigs.evidence run.json)"
+headers_for() {
+  rstack dev token "$run_id" --as "$1" | awk '$1 == "evidence" && $2 == "headers" {print $3}'
+}
+```
+
 Under `rstack dev`, an application is a person: a subject, a client name, and the token claims its
 calls carry. Add `age-check-app` to `dev.yaml` with the same grant `caller` holds:
 
@@ -61,17 +73,7 @@ calls carry. Add `age-check-app` to `dev.yaml` with the same grant `caller` hold
  scenarioFile: tests/scenarios.yaml
 ```
 
-In a new terminal, read the run back from `run.json` and redefine the helper that fetches a token
-header file:
-
-```sh test-cwd="first-evidence-assertion/adult-status"
-run_id="$(jq -r .run_id run.json)"
-evidence_url="$(jq -r .products.evidence run.json)"
-runtime_config="$(jq -r .runtimeConfigs.evidence run.json)"
-headers_for() {
-  rstack dev token "$run_id" --as "$1" | awk '$1 == "evidence" && $2 == "headers" {print $3}'
-}
-```
+The run reads `dev.yaml` only as it starts, so restart it:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
 rstack dev stop "$run_id"
