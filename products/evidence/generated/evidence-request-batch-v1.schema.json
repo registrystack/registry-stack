@@ -5,6 +5,7 @@
       "additionalProperties": false,
       "properties": {
         "requestNonce": {
+          "description": "32 bytes from a cryptographically secure random source, encoded as unpadded base64url (43 characters), generated anew for each request. Registry Evidence echoes it as requestNonce in the signed payload; compare that echo with the value you sent. A value in any other form is refused with request.nonce-invalid.",
           "pattern": "^[A-Za-z0-9_-]{43}$",
           "type": "string"
         },

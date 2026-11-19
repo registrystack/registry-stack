@@ -78,12 +78,21 @@ const TRACEPARENT_PATTERN: &str = "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]
 const PROBLEM_TYPE_BASE: &str = "https://id.registrystack.org/problems/registry-evidence/";
 /// Unpadded base64url encoding of exactly one 32-byte P-256 affine coordinate.
 const HOLDER_KEY_COORDINATE_PATTERN: &str = "^[A-Za-z0-9_-]{43}$";
-const PROBLEM_VARIANTS: [(&str, u16, &str, &str); 10] = [
+/// What a caller must send as `requestNonce`, stated on the property so an
+/// OpenAPI reader sees it beside the pattern rather than only in a comment.
+const REQUEST_NONCE_DESCRIPTION: &str = "32 bytes from a cryptographically secure random source, encoded as unpadded base64url (43 characters), generated anew for each request. Registry Evidence echoes it as requestNonce in the signed payload; compare that echo with the value you sent. A value in any other form is refused with request.nonce-invalid.";
+const PROBLEM_VARIANTS: [(&str, u16, &str, &str); 11] = [
     (
         "evidence.invalid-request",
         400,
         "Evidence request is invalid",
         "the Evidence request is invalid",
+    ),
+    (
+        "request.nonce-invalid",
+        400,
+        "Request nonce is invalid",
+        "requestNonce must be 32 random bytes encoded as unpadded base64url (43 characters), generated anew for each request",
     ),
     (
         "request.selector-invalid",
@@ -375,7 +384,7 @@ fn request_schema() -> Value {
         "additionalProperties": false,
         "required": ["requestNonce", "requirement", "purpose", "subjects"],
         "properties": {
-            "requestNonce": {"type": "string", "pattern": REQUEST_NONCE_PATTERN},
+            "requestNonce": {"type": "string", "pattern": REQUEST_NONCE_PATTERN, "description": REQUEST_NONCE_DESCRIPTION},
             "requirement": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 512},
             "expectedConfigurationRevision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "Optional independent pin on the active definition revision. A mismatch refuses before authority resolution, credentials, or source I/O. Omission resolves the active revision carried by the assertion."},
             "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9._:-]{0,127}$"},
@@ -460,7 +469,7 @@ fn request_batch_schema() -> Value {
                 "additionalProperties": false,
                 "required": ["requestNonce", "subjects"],
                 "properties": {
-                    "requestNonce": {"type": "string", "pattern": REQUEST_NONCE_PATTERN},
+                    "requestNonce": {"type": "string", "pattern": REQUEST_NONCE_PATTERN, "description": REQUEST_NONCE_DESCRIPTION},
                     "subjects": {
                         "type": "array", "minItems": 1, "maxItems": 8,
                         "items": {"$ref": "#/$defs/subject"}
@@ -821,6 +830,7 @@ fn problem_schema() -> Value {
                 "type": "string",
                 "enum": [
                     "https://id.registrystack.org/problems/registry-evidence/evidence/invalid-request",
+                    "https://id.registrystack.org/problems/registry-evidence/request/nonce-invalid",
                     "https://id.registrystack.org/problems/registry-evidence/request/selector-invalid",
                     "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential",
                     "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
@@ -833,19 +843,22 @@ fn problem_schema() -> Value {
                 ]
             },
             "title": {"type": "string", "enum": [
-                "Evidence request is invalid", "Selector is invalid", "Bearer access token is invalid",
+                "Evidence request is invalid", "Request nonce is invalid", "Selector is invalid",
+                "Bearer access token is invalid",
                 "Evidence request is not permitted", "Requested format is not supported",
                 "Evidence could not be produced", "Evidence request rate is exhausted",
                 "Authoritative source is unavailable", "Service is unavailable", "Requested resource was not found"
             ]},
             "status": {"type": "integer", "enum": [400, 401, 403, 404, 406, 422, 429, 503]},
             "code": {"type": "string", "enum": [
-                "evidence.invalid-request", "request.selector-invalid", "auth.invalid-credential",
-                "evidence.denied", "format.unsupported", "evidence.unavailable",
+                "evidence.invalid-request", "request.nonce-invalid", "request.selector-invalid",
+                "auth.invalid-credential", "evidence.denied", "format.unsupported", "evidence.unavailable",
                 "evidence.rate-limited", "source.unavailable", "service.unavailable", "resource.not-found"
             ]},
             "detail": {"type": "string", "enum": [
-                "the Evidence request is invalid", "selector does not match an available request profile",
+                "the Evidence request is invalid",
+                "requestNonce must be 32 random bytes encoded as unpadded base64url (43 characters), generated anew for each request",
+                "selector does not match an available request profile",
                 "bearer access token validation failed", "the Evidence request is not permitted",
                 "the requested format is not supported", "evidence could not be produced for this request",
                 "the Evidence request rate is exhausted", "the authoritative source is unavailable",
@@ -1455,9 +1468,9 @@ fn openapi_document(
                             }
                         },
                         "400": {
-                            "description": "Malformed request or invalid selector",
+                            "description": "Malformed request, request nonce outside its canonical form, or invalid selector",
                             "headers": evidence_response_headers(None),
-                            "content": problem_content(&["evidence.invalid-request", "request.selector-invalid"])
+                            "content": problem_content(&["evidence.invalid-request", "request.nonce-invalid", "request.selector-invalid"])
                         },
                         "401": {
                             "description": "Authentication failed",
@@ -1513,9 +1526,9 @@ fn openapi_document(
                             }
                         },
                         "400": {
-                            "description": "Malformed batch request or invalid selector",
+                            "description": "Malformed batch request, a request nonce outside its canonical form or repeated across items, or invalid selector",
                             "headers": evidence_response_headers(None),
-                            "content": problem_content(&["evidence.invalid-request", "request.selector-invalid"])
+                            "content": problem_content(&["evidence.invalid-request", "request.nonce-invalid", "request.selector-invalid"])
                         },
                         "401": {
                             "description": "Authentication failed",

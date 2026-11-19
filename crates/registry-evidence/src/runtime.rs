@@ -1321,7 +1321,7 @@ impl EvidenceRuntime {
             !request_nonce_is_canonical(&item.request_nonce)
                 || !nonces.insert(item.request_nonce.as_str())
         }) {
-            return Err(failure(ProblemCode::MalformedRequest, "request-nonce"));
+            return Err(failure(ProblemCode::InvalidRequestNonce, "request-nonce"));
         }
 
         self.validate_expected_configuration_revision(
@@ -1762,7 +1762,7 @@ impl EvidenceRuntime {
         // The nonce is validated before authentication and never used again
         // until evidence construction echoes it.
         if !request_nonce_is_canonical(&request.request_nonce) {
-            return Err(failure(ProblemCode::MalformedRequest, "request-nonce"));
+            return Err(failure(ProblemCode::InvalidRequestNonce, "request-nonce"));
         }
         self.validate_expected_configuration_revision(
             &request.requirement,
