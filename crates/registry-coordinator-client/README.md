@@ -47,6 +47,8 @@ The computed Workflow revision identifies execution semantics, including the typ
 graph, declared outcomes, used Operation and Function revisions, and host execution contracts.
 Presentation titles and descriptions do not change it. Exact package bytes have a separate
 package checksum. Status retains the admitted `workflow` and `workflowRevision` after upgrades.
+The client ignores response members it does not recognise, so a newer runtime
+can add members without breaking it, and it keeps none of their values.
 Every returned run identity must be nonnil, and its deadline must follow its admission.
 Historical deadlines remain readable; this check does not compare them to the local clock.
 A finished run requires an outcome. Other states carry no terminal evidence, except

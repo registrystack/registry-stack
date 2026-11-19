@@ -155,7 +155,7 @@ test('status, inspect, and reconcile use only the requested run routes', async (
   assert.deepEqual(JSON.parse(requests[2].body), { reason: 'operator reviewed the original receipt' });
 });
 
-test('inspect carries the records and date behind a held step and refuses an unknown member in them', async (context) => {
+test('inspect carries the records and date behind a held step and drops an unknown member in them', async (context) => {
   const held = {
     ...INSPECTION.steps[0],
     failureCode: 'in-force-ambiguous',
@@ -168,17 +168,13 @@ test('inspect carries the records and date behind a held step and refuses an unk
   };
   const answers = [document, unknown];
   const { baseUrl, requests } = await serve(context, () => ({ status: 200, document: answers.shift() }));
-  const { CoordinatorClient, CoordinatorClientError } = require('../client');
+  const { CoordinatorClient } = require('../client');
   const client = new CoordinatorClient({ baseUrl });
 
   assert.deepEqual(await client.inspect('token', RUN_ID), { kind: 'complete', value: document });
-  await assert.rejects(() => client.inspect('token', RUN_ID), (error) => {
-    assert.ok(error instanceof CoordinatorClientError);
-    assert.equal(error.kind, 'protocol');
-    assert.equal(error.protocolFailure, 'body');
-    assert.doesNotMatch(inspectValue(error), /protected-detail-canary/);
-    return true;
-  });
+  const kept = await client.inspect('token', RUN_ID);
+  assert.deepEqual(kept, { kind: 'complete', value: document });
+  assert.doesNotMatch(JSON.stringify(kept), /protected-detail-canary/);
   assert.equal(requests.length, 2);
 });
 
@@ -377,13 +373,11 @@ test('inspect returns what the last Proposal read showed and the request link', 
   document = { ...INSPECTION, steps: [...INSPECTION.steps, observing], waits: [wait] };
   assert.deepEqual(await client.inspect('token-canary', RUN_ID), { kind: 'complete', value: document });
 
+  const expected = document;
   document = { ...document, waits: [{ ...wait, lastObservation: { ...observation, applicant: 'protected-canary' } }] };
-  await assert.rejects(() => client.inspect('token-canary', RUN_ID), (error) => {
-    assert.equal(error.kind, 'protocol');
-    assert.equal(error.protocolFailure, 'body');
-    assert.doesNotMatch(inspectValue(error), /protected-canary|token-canary/);
-    return true;
-  });
+  const kept = await client.inspect('token-canary', RUN_ID);
+  assert.deepEqual(kept, { kind: 'complete', value: expected });
+  assert.doesNotMatch(JSON.stringify(kept), /protected-canary/);
   assert.equal(requests.length, 2);
 });
 
@@ -925,16 +919,36 @@ test('workflow discovery is a bounded read under the exact client contract', asy
   assert.equal(requests[0].headers['idempotency-key'], undefined);
 });
 
-test('workflow discovery refuses a contract carrying a review policy member', async (context) => {
-  const contract = { workflow: 'decision-follow-up', workflowRevision: STATUS.workflowRevision, input: { type: 'object' }, outcomes: { accepted: { type: 'object' } }, reviewPolicy: null };
-  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document: contract }));
+test('workflow discovery never surfaces a review policy member', async (context) => {
+  const contract = { workflow: 'decision-follow-up', workflowRevision: STATUS.workflowRevision, input: { type: 'object' }, outcomes: { accepted: { type: 'object' } } };
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document: { ...contract, reviewPolicy: null } }));
   const { CoordinatorClient } = require('../client');
   const client = new CoordinatorClient({ baseUrl });
-  await assert.rejects(client.workflow('token', 'decision-follow-up'), (error) => {
-    assert.equal(error.kind, 'protocol');
-    return true;
-  });
+  assert.deepEqual(await client.workflow('token', 'decision-follow-up'), { kind: 'complete', value: contract });
   assert.equal(requests.length, 1);
+});
+
+test('responses ignore members the client does not recognise and keep none of them', async (context) => {
+  const canary = 'unrecognised-canary';
+  const { baseUrl } = await serve(context, (request) => ({
+    status: 200,
+    document: request.url.endsWith('/inspect')
+      ? { ...INSPECTION, addedLater: canary, run: { ...STATUS, addedLater: canary } }
+      : request.url.includes('?limit=')
+        ? { runs: [{ ...STATUS, addedLater: canary }], addedLater: canary }
+        : { ...STATUS, addedLater: canary },
+  }));
+  const { CoordinatorClient } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+  const answers = [
+    [await client.status('token', RUN_ID), STATUS],
+    [await client.inspect('token', RUN_ID), INSPECTION],
+    [await client.list('token', 5), { runs: [STATUS] }],
+  ];
+  for (const [answer, expected] of answers) {
+    assert.deepEqual(answer, { kind: 'complete', value: expected });
+    assert.ok(!JSON.stringify(answer).includes(canary));
+  }
 });
 
 

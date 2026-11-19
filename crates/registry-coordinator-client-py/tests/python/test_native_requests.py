@@ -67,12 +67,17 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(observed["path"], "/deployment/v1/workflows/nursing-notice")
         self.assertEqual(observed["idempotency_key"], "")
 
-    def test_workflow_refuses_a_contract_carrying_a_review_policy_member(self) -> None:
-        contract = {"workflow": "nursing-notice", "workflowRevision": START_REQUEST["workflowRevision"], "input": {"type": "object"}, "outcomes": {"sent": {"type": "object"}}, "reviewPolicy": None}
-        self.service.script(ok(contract))
-        with self.assertRaises(CoordinatorClientError) as refused:
-            self.client.workflow("contract-token", "nursing-notice")
-        self.assertEqual(refused.exception.kind, "protocol")
+    def test_workflow_never_surfaces_a_review_policy_member(self) -> None:
+        contract = {"workflow": "nursing-notice", "workflowRevision": START_REQUEST["workflowRevision"], "input": {"type": "object"}, "outcomes": {"sent": {"type": "object"}}}
+        self.service.script(ok({**contract, "reviewPolicy": None}))
+        self.assertEqual(self.client.workflow("contract-token", "nursing-notice"), {"kind": "complete", "value": contract})
+
+    def test_status_ignores_members_the_client_does_not_recognise(self) -> None:
+        canary = "unrecognised-canary"
+        self.service.script(ok({**STATUS, "addedLater": canary}))
+        outcome = self.client.status("status-token", RUN)
+        self.assertEqual(outcome, {"kind": "complete", "value": STATUS})
+        self.assertNotIn(canary, repr(outcome))
 
     def test_status_reads_the_run_without_a_key_or_body(self) -> None:
         self.service.script(ok(STATUS))
@@ -240,11 +245,9 @@ class NativeRequestTests(unittest.TestCase):
 
         unknown = {**wait, "lastObservation": {**observation, "applicant": "protected-canary"}}
         self.service.script(ok({**document, "waits": [unknown]}))
-        with self.assertRaises(CoordinatorClientError) as refused:
-            self.client.inspect("token-canary", RUN)
-        self.assertEqual(refused.exception.kind, "protocol")
-        self.assertEqual(refused.exception.protocol_failure, "body")
-        self.assertNotIn("protected-canary", rendered(refused.exception))
+        outcome = self.client.inspect("token-canary", RUN)
+        self.assertEqual(outcome, {"kind": "complete", "value": document})
+        self.assertNotIn("protected-canary", repr(outcome))
 
     def test_run_status_requires_coherent_terminal_evidence_and_preserves_restore_review(self) -> None:
         cases = [
@@ -353,11 +356,9 @@ class NativeRequestTests(unittest.TestCase):
         self.service.script(ok(document), ok(unknown))
 
         self.assertEqual(self.client.inspect("inspect-token", RUN), {"kind": "complete", "value": document})
-        with self.assertRaises(CoordinatorClientError) as refused:
-            self.client.inspect("inspect-token", RUN)
-        self.assertEqual(refused.exception.kind, "protocol")
-        self.assertEqual(refused.exception.protocol_failure, "body")
-        self.assertNotIn("protected-detail-canary", rendered(refused.exception))
+        outcome = self.client.inspect("inspect-token", RUN)
+        self.assertEqual(outcome, {"kind": "complete", "value": document})
+        self.assertNotIn("protected-detail-canary", repr(outcome))
 
     def test_inspect_reads_the_inspection(self) -> None:
         self.service.script(ok(INSPECTION))
@@ -561,7 +562,6 @@ class NativeRequestTests(unittest.TestCase):
         for answer in (
             {"runId": OTHER_RUN, "status": "retry-scheduled"},
             {"runId": RUN, "status": "scheduled"},
-            {"runId": RUN, "status": "retry-scheduled", "extra": 1},
         ):
             with self.subTest(answer=answer):
                 self.service.script(ok(answer))
