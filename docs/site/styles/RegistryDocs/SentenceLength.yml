@@ -1,0 +1,8 @@
+extends: occurrence
+message: "Shorten this sentence to 25 words or fewer. Split it so each sentence carries one idea."
+level: warning
+scope: sentence
+# Report-only. Documentation sentences carry one idea each, so the ceiling is
+# 25 words.
+max: 25
+token: '\b(\w+)\b'
