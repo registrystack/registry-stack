@@ -1035,7 +1035,7 @@ mod tests {
 
     #[tokio::test]
     async fn refused_hook_requests_are_counted_by_reason() {
-        let (_root, resolver) = secret_resolver();
+        let (root, resolver) = secret_resolver();
         let source = Arc::new(HookSource {
             credential: BasicCredential::resolve("kobo-submissions", &source_config(), &resolver)
                 .expect("the credential resolves"),
@@ -1060,7 +1060,10 @@ mod tests {
                 .expect("a hook request");
             receive_hook_until(State(state.clone()), request, std::future::pending())
         };
-        let good = basic_header("correct horse battery staple");
+        let password =
+            std::fs::read_to_string(root.path().join("password")).expect("the synthetic password");
+        let good = basic_header(&password);
+        let wrong = basic_header(&uuid::Uuid::new_v4().to_string());
         assert_eq!(
             send(Method::POST, "/hooks/elsewhere", good.clone())
                 .await
@@ -1074,9 +1077,7 @@ mod tests {
             StatusCode::METHOD_NOT_ALLOWED
         );
         assert_eq!(
-            send(Method::POST, "/hooks/kobo", basic_header("wrong"))
-                .await
-                .status(),
+            send(Method::POST, "/hooks/kobo", wrong).await.status(),
             StatusCode::UNAUTHORIZED
         );
         assert_eq!(
