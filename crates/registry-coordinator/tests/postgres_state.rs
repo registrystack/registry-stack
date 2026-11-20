@@ -5842,6 +5842,60 @@ async fn run_holds_count_attention_restore_review_holds_and_the_oldest_due_age()
     );
 }
 
+#[tokio::test]
+async fn oldest_due_age_ignores_pending_jobs_of_runs_the_worker_cannot_claim() {
+    let h = harness().await;
+    let held = h.admit().await;
+    h.sql(
+        "UPDATE {schema}.jobs SET next_attempt_at=now()-interval '2 hours' WHERE state='pending'",
+    )
+    .await;
+    h.sql(&format!(
+        "UPDATE {{schema}}.runs SET state='attention', failure_code='definition-refused' \
+         WHERE run_id='{held}'"
+    ))
+    .await;
+    assert_eq!(
+        h.store
+            .run_holds()
+            .await
+            .expect("sampled")
+            .oldest_due_age_seconds,
+        0,
+        "a run held for a refused definition keeps a pending job the worker never claims"
+    );
+
+    h.sql(&format!(
+        "UPDATE {{schema}}.runs SET failure_code=NULL, restore_review_required=true \
+         WHERE run_id='{held}'"
+    ))
+    .await;
+    assert_eq!(
+        h.store
+            .run_holds()
+            .await
+            .expect("sampled")
+            .oldest_due_age_seconds,
+        0,
+        "a run flagged for restore review is not claimed either"
+    );
+
+    h.sql(&format!(
+        "UPDATE {{schema}}.runs SET restore_review_required=false WHERE run_id='{held}'"
+    ))
+    .await;
+    let age = h
+        .store
+        .run_holds()
+        .await
+        .expect("sampled")
+        .oldest_due_age_seconds;
+    assert!(
+        (7200..7260).contains(&age),
+        "a claimable run's overdue job counts: {age}"
+    );
+}
+
 const LABELLED_WORKFLOW: &str = r#"apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
 kind: CoordinatorProject
 project: {id: labelled-steps, version: '1'}
