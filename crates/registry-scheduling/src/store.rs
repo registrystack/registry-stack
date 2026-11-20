@@ -50,6 +50,9 @@ use deadpool_postgres::{
 use registry_platform_calendar::CalendarInterval;
 use registry_platform_config::SecretResolver;
 use registry_platform_dispatch::postgres::{cancel_unattempted, JobKey, JobTable};
+use registry_platform_metrics::{
+    sample_error_class, ScrapeDeadline, CLASS_NO_TIME_LEFT, CLASS_POOL,
+};
 use registry_scheduling_core::{
     assess_window_record_impact, evaluate_exact_time_bundle, evaluate_exact_time_physical_bundle,
     evaluate_hold_state, evaluate_window_admission, location_closure_intervals,
@@ -1040,27 +1043,38 @@ impl PostgresStore {
     /// how long the oldest pending one has been eligible for pickup at `now`.
     /// An intent that is waiting out a retry back-off is not eligible, so it is
     /// left out, and a retried intent is measured from the end of its back-off.
-    /// The read is bounded so a slow store cannot hold a scrape open.
-    pub async fn outbox_depth(&self, now: DateTime<Utc>) -> Result<QueueDepth, StoreError> {
+    /// The read runs under the scrape `deadline`, which the server enforces,
+    /// and a failure returns its error class alone.
+    pub async fn outbox_depth(
+        &self,
+        now: DateTime<Utc>,
+        deadline: ScrapeDeadline,
+    ) -> Result<QueueDepth, String> {
         self.queue_depth(
             "SELECT state, count(*) FROM scheduling_outbox GROUP BY state",
             "SELECT min(next_attempt_at) FROM scheduling_outbox \
              WHERE state = 'pending' AND next_attempt_at <= $1",
             &[&now],
             now,
+            deadline,
         )
         .await
     }
 
     /// How many observer-hook deliveries wait in each delivery state, and
     /// how long ago the oldest pending one's event was captured, at `now`.
-    pub async fn hook_delivery_depth(&self, now: DateTime<Utc>) -> Result<QueueDepth, StoreError> {
+    pub async fn hook_delivery_depth(
+        &self,
+        now: DateTime<Utc>,
+        deadline: ScrapeDeadline,
+    ) -> Result<QueueDepth, String> {
         self.queue_depth(
             "SELECT state, count(*) FROM registry_webhook_delivery_state GROUP BY state",
             "SELECT min(o.created_at) FROM registry_webhook_delivery_state s \
              JOIN registry_outbox o USING (event_id) WHERE s.state = 'pending'",
             &[],
             now,
+            deadline,
         )
         .await
     }
@@ -1071,21 +1085,44 @@ impl PostgresStore {
         oldest: &str,
         oldest_params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
         now: DateTime<Utc>,
-    ) -> Result<QueueDepth, StoreError> {
-        let mut client = self.client().await?;
-        let transaction = client.build_transaction().read_only(true).start().await?;
+        deadline: ScrapeDeadline,
+    ) -> Result<QueueDepth, String> {
+        let class = |error: tokio_postgres::Error| {
+            sample_error_class(
+                error.code().map(tokio_postgres::error::SqlState::code),
+                error.is_closed(),
+            )
+        };
+        let mut client = self.client().await.map_err(|_| CLASS_POOL.to_owned())?;
+        let transaction = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(class)?;
+        // The server cancels a query that outlasts the time left, which
+        // dropping the client's future would not.
+        let milliseconds = deadline
+            .statement_timeout_milliseconds()
+            .ok_or_else(|| CLASS_NO_TIME_LEFT.to_owned())?;
         transaction
-            .batch_execute("SET LOCAL statement_timeout = '2s'")
-            .await?;
+            .batch_execute(&format!("SET LOCAL statement_timeout = {milliseconds}"))
+            .await
+            .map_err(class)?;
         let mut by_state = Vec::new();
-        for row in transaction.query(counts, &[]).await? {
-            by_state.push((row.try_get::<_, String>(0)?, row.try_get::<_, i64>(1)?));
+        for row in transaction.query(counts, &[]).await.map_err(class)? {
+            by_state.push((
+                row.try_get::<_, String>(0).map_err(class)?,
+                row.try_get::<_, i64>(1).map_err(class)?,
+            ));
         }
         let oldest: Option<DateTime<Utc>> = transaction
             .query_one(oldest, oldest_params)
-            .await?
-            .try_get(0)?;
-        transaction.commit().await?;
+            .await
+            .map_err(class)?
+            .try_get(0)
+            .map_err(class)?;
+        transaction.commit().await.map_err(class)?;
         let oldest_pending_age_seconds = oldest.map_or(0, |at| (now - at).num_seconds().max(0));
         Ok(QueueDepth {
             by_state,

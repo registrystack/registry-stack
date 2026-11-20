@@ -11982,7 +11982,11 @@ mod queue_depth {
             )
             .await
             .unwrap();
-        let outbox = fx.store.outbox_depth(now).await.expect("sample the outbox");
+        let outbox = fx
+            .store
+            .outbox_depth(now, deadline())
+            .await
+            .expect("sample the outbox");
         let count = |state: &str| {
             outbox
                 .by_state
@@ -11996,7 +12000,7 @@ mod queue_depth {
 
         let hooks = fx
             .store
-            .hook_delivery_depth(now)
+            .hook_delivery_depth(now, deadline())
             .await
             .expect("sample the hook deliveries");
         let dead: i64 = hooks
@@ -12034,7 +12038,7 @@ mod queue_depth {
             .unwrap();
         let hooks = fx
             .store
-            .hook_delivery_depth(now)
+            .hook_delivery_depth(now, deadline())
             .await
             .expect("sample the hook deliveries");
         assert!(
@@ -12045,6 +12049,62 @@ mod queue_depth {
             "{hooks:?}"
         );
         assert_eq!(hooks.oldest_pending_age_seconds, 300);
+    }
+
+    fn deadline() -> registry_platform_metrics::ScrapeDeadline {
+        registry_platform_metrics::ScrapeDeadline::from(std::time::Instant::now())
+    }
+
+    /// A queue read that waits on a lock is cancelled by the server when the
+    /// scrape deadline passes. Its gauges are omitted and the failure is
+    /// counted once. The read after it has no time left, so it fails too, and
+    /// the scrape still returns near the deadline instead of after two waits.
+    #[tokio::test]
+    async fn a_queue_read_stuck_on_a_lock_is_cancelled_on_the_server_and_counted_once() {
+        let fx = hook_fixture().await;
+        let metrics = registry_scheduling::metrics::Metrics::default();
+        fx.admin
+            .batch_execute("BEGIN; LOCK TABLE scheduling_outbox IN ACCESS EXCLUSIVE MODE;")
+            .await
+            .unwrap();
+        let short = registry_platform_metrics::ScrapeDeadline::with_budget(
+            std::time::Instant::now(),
+            std::time::Duration::from_millis(600),
+        );
+        let started = std::time::Instant::now();
+        let text = registry_scheduling::metrics::scrape(&metrics, &fx.store, short).await;
+        let elapsed = started.elapsed();
+        let mut waiting = i64::MAX;
+        for _ in 0..60 {
+            waiting = fx
+                .admin
+                .query_one(
+                    "SELECT count(*) FROM pg_stat_activity \
+                     WHERE wait_event_type = 'Lock' AND query LIKE '%scheduling_outbox%' \
+                       AND pid <> pg_backend_pid()",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if waiting == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        fx.admin.batch_execute("ROLLBACK").await.unwrap();
+        assert!(elapsed < std::time::Duration::from_secs(3), "{elapsed:?}");
+        assert_eq!(waiting, 0, "the server cancelled the read");
+        assert!(!text.contains("scheduling_outbox_items{"), "{text}");
+        assert!(
+            text.contains("scheduling_metrics_sample_failures_total{queue=\"outbox\"} 1"),
+            "{text}"
+        );
+        assert!(
+            text.contains("scheduling_metrics_sample_failures_total{queue=\"hook-deliveries\"} 1"),
+            "the read after a spent deadline has no time left: {text}"
+        );
+        assert!(text.contains("scheduling_worker_last_success_age_seconds{worker=\"retention\"}"));
     }
 
     #[tokio::test]
