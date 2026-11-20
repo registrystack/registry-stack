@@ -31,7 +31,7 @@ review context and public evidence.
 | Deny-by-default authorisation before source access | Built in |
 | Only public verification material is published | Built in |
 | Evidence person-level access audit | Built in and fail-closed, with no best-effort switch |
-| Evidence disclosure modes | `value`, `predicate`, and `redacted`; the requirement fixes what is permitted |
+| Evidence disclosure | Fixed by the requirement: only its declared concepts, each in one closed [value form](../explanation/how-evidence-works/); a caller cannot select or widen it |
 | SD-JWT VC assertion serialisation | Built in as an encoding; the assertion format itself is not a credential lifecycle |
 | Holder-bound presentation | Declared per requirement and verified by the relying party |
 | Replay prevention for presentation | Not provided; the relying party owns challenge issuance, retention, and consumption |
@@ -48,8 +48,9 @@ review context and public evidence.
   purpose, subject roles, selector profiles, origin, authority, and audience. Authorisation finishes
   before source credential resolution or source access.
 - **Serve.** The core runs only the governed fixed source stages, validates typed concepts, and
-  constructs the permitted `value`, `predicate`, or `redacted` answer. Caller input cannot add a
-  source request, expression, disclosure field, or output projection.
+  constructs an answer that carries only the requirement's declared concepts, each in its closed
+  value form. Caller input cannot add a source request, expression, disclosure field, or output
+  projection.
 - **Audit.** An access-attempt record is durably accepted before each acquisition stage and a
   disclosure-release record before the response leaves. Audit failure blocks the corresponding
   action. Entries are minimised and value-free; tamper evidence depends on shipping them to
