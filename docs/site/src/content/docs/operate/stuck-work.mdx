@@ -286,7 +286,16 @@ The operate page has the full table.
 
 **Signal.** `documentsctl verification list`, `documentsctl erasure status`, and `documentsctl erasure list` show pending verification and erasure jobs.
 All take `--runtime-config`.
-Documents publishes no metrics, and its probes are `/health` and `/ready`.
+Its probes are `/health` and `/ready`.
+With the optional `metricsListener` turned on, Documents also publishes these series on that private socket:
+
+- `documents_verification_jobs{state}` and `documents_erasure_jobs{state}` count jobs by stored state, and `documents_verification_oldest_overdue_age_seconds` and `documents_erasure_oldest_overdue_age_seconds` are how far the oldest pending one is past its due time.
+- `documents_hook_deliveries{state}` counts observer-hook deliveries by state, and `documents_hook_oldest_overdue_age_seconds` is how far the oldest pending one is past its due time.
+- `documents_worker_last_success_age_seconds{worker}` is the age of the last completed pass of the `cleanup` worker. The other workers have no age, so watch their overdue ages.
+- `documents_metrics_sample_failures_total{sample}` counts scrapes where a queue could not be read.
+- `documents_http_requests_total{route,method,status}` counts answered requests.
+
+The operate page has the full table.
 
 **Clear.** `documentsctl verification replay` and `documentsctl erasure replay` rerun a job.
 They take `--version-id` and `--expected-generation`.
@@ -297,10 +306,11 @@ A pending delivery pins its destination binding, so moving a hook needs the step
 
 **Access.** Host.
 
-**Read more.** [Replay a stuck verification](../documents/#replay-a-stuck-verification), [Removal and erasure](../documents/#removal-and-erasure), [Move a hook](../documents/#move-a-hook).
+**Read more.** [Replay a stuck verification](../documents/#replay-a-stuck-verification), [Removal and erasure](../documents/#removal-and-erasure), [Move a hook](../documents/#move-a-hook), [Watch the metrics](../documents/#watch-the-metrics).
 
 {/* Evidence: crates/registry-documentsctl/src/lib.rs, verification and erasure commands;
-    crates/registry-documents-core/src/naming.rs, HEALTH_PATH and READY_PATH. */}
+    crates/registry-documents-core/src/naming.rs, HEALTH_PATH and READY_PATH;
+    crates/registry-documents/src/metrics.rs, Metrics and render. */}
 
 ## Registry Discovery
 
@@ -347,7 +357,7 @@ Adjust the thresholds to your volumes.
 The `job` label comes from your scrape configuration, so match it to the names you use.
 
 Because a failed database sample omits the series, groups that read gauges from the database include an `absent()` rule.
-The Scheduling and Render groups need their optional `metricsListener` turned on.
+The Scheduling, Documents, and Render groups need their optional `metricsListener` turned on.
 
 To cover a new series, add one rule to that product's group.
 Keep one `groups` entry per product, with the product name as the `name`.
@@ -586,6 +596,68 @@ groups:
         labels: {severity: page}
         annotations:
           summary: Scheduling outbox gauges are missing. The database may be unreachable.
+```
+
+### Documents
+
+```yaml
+groups:
+  - name: documents
+    rules:
+      - alert: DocumentsVerificationDeadLettered
+        expr: documents_verification_jobs{state="dead-lettered"} > 0
+        for: 5m
+        labels: {severity: warn}
+        annotations:
+          summary: A content verification job was dead-lettered. List it with documentsctl verification list.
+      - alert: DocumentsErasureDeadLettered
+        expr: documents_erasure_jobs{state="dead-lettered"} > 0
+        for: 5m
+        labels: {severity: warn}
+        annotations:
+          summary: An erasure job was dead-lettered. List it with documentsctl erasure list.
+      - alert: DocumentsHookDeadLettered
+        expr: documents_hook_deliveries{state="dead-lettered"} > 0
+        for: 5m
+        labels: {severity: warn}
+        annotations:
+          summary: An observer-hook delivery was dead-lettered. Documents has no command to retry it.
+      - alert: DocumentsVerificationOverdue
+        expr: documents_verification_oldest_overdue_age_seconds > 900
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: The oldest pending content verification job has been due for more than 15 minutes.
+      - alert: DocumentsErasureOverdue
+        expr: documents_erasure_oldest_overdue_age_seconds > 900
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: The oldest pending erasure job has been due for more than 15 minutes.
+      - alert: DocumentsHookOverdue
+        expr: documents_hook_oldest_overdue_age_seconds > 900
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: The oldest pending observer-hook delivery has been due for more than 15 minutes.
+      - alert: DocumentsCleanupStalled
+        expr: documents_worker_last_success_age_seconds{worker="cleanup"} > 900
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: The Documents cleanup pass has not completed cleanly.
+      - alert: DocumentsMetricsSampleFailing
+        expr: increase(documents_metrics_sample_failures_total[15m]) > 0
+        for: 0m
+        labels: {severity: warn}
+        annotations:
+          summary: A queue could not be read at scrape time. The sample label names it.
+      - alert: DocumentsMetricsAbsent
+        expr: absent(documents_verification_jobs)
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: Documents queue gauges are missing. The database may be unreachable.
 ```
 
 ### Render

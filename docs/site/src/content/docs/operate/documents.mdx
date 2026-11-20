@@ -566,6 +566,51 @@ old entry until its events are dead-lettered or expire.
     a_destination_changed_under_a_pending_delivery_refuses_startup_until_it_drains; observed with
     documents 0.43.0-dev on 2026-10-22. */}
 
+## Watch the metrics
+
+Add a `metricsListener` block to `runtime.yaml` to serve Prometheus text. The starter runtime file
+carries one on `127.0.0.1:9116`. Without the block, the Document Store serves no metrics. The socket
+must be loopback or private, and must not be the `listener` socket. `GET /metrics` on that socket
+answers the series below and nothing else. The document listener does not route `/metrics`.
+
+| Series | Labels | Meaning |
+| --- | --- | --- |
+| `documents_http_requests_total` | `route`, `method`, `status`: `1xx`, `2xx`, `3xx`, `4xx`, `5xx`, `other` | Answered HTTP requests, by route template and status class |
+| `documents_verification_jobs` | `state`: `pending`, `leased`, `delivered`, `dead-lettered`, `expired`, `unknown`, `cancelled` | Gauge of content verification jobs by stored state, read from the database at each scrape |
+| `documents_verification_oldest_overdue_age_seconds` | none | Gauge of how many seconds the oldest pending verification job is past its due time. A job that is waiting out a retry back-off is not counted. Zero when none is overdue |
+| `documents_erasure_jobs` | `state`: the seven states above | Gauge of erasure jobs by stored state, read at each scrape |
+| `documents_erasure_oldest_overdue_age_seconds` | none | Gauge of how many seconds the oldest pending erasure job is past its due time, with the same rule as verification |
+| `documents_hook_deliveries` | `state`: `pending`, `leased`, `delivered`, `dead-lettered`, `expired` | Gauge of observer-hook deliveries by stored state, read at each scrape |
+| `documents_hook_oldest_overdue_age_seconds` | none | Gauge of how many seconds the oldest pending hook delivery is past its due time. Zero when none is overdue |
+| `documents_worker_last_success_age_seconds` | `worker`: `cleanup` | Gauge of seconds since the cleanup pass last finished without leaving an orphaned object unconfirmed |
+| `documents_metrics_sample_failures_total` | `sample`: `verification-jobs`, `erasure-jobs`, `hook-deliveries` | Scrapes in which that queue could not be read |
+
+Every state is listed, with a zero when no row is in it. Watch the `dead-lettered` state of each
+gauge, the work that gave up and needs a person. Replay a verification or erasure job as
+[described above](#replay-a-stuck-verification). A hook delivery has no command. A growing oldest
+overdue age means work is due and nothing is taking it.
+
+The queue gauges are read from PostgreSQL in a read-only transaction. All reads of one scrape share
+a single deadline of five seconds, enforced as a statement timeout. When a read fails, the runtime
+logs a warning with the cause, adds one to `documents_metrics_sample_failures_total` for that
+queue, and leaves that queue's series out of the scrape. The other queues are still read. A missing
+series is therefore a failed read, never a zero. Alert on `absent(documents_verification_jobs)` as
+well as on the values.
+
+Only the cleanup pass reports a last-success age. The verification, erasure, and hook delivery
+workers do not report one, so watch them through the oldest overdue ages above. Until the first
+cleanup success the gauge counts from process start, so a pass that never succeeds shows an age that
+keeps growing. No series carries a document, owner, recipient, grant, or content hash.
+
+Counters and the worker age are per process and restart at zero. The queue gauges read the shared
+database, so every replica reports the same values. When the runtime stops, the metrics listener
+has ten seconds to finish a scrape in flight. A scrape that overruns is closed and logged, and it
+never delays the document listener or changes the exit status.
+
+{/* Evidence: crates/registry-documents/src/metrics.rs, Metrics, Sampler and render;
+    crates/registry-documents/src/runtime.rs, serve_metrics_until_stopped and Cleanup;
+    crates/registry-documents/tests/postgres_metrics.rs. */}
+
 ## Restore from a backup
 
 :::caution

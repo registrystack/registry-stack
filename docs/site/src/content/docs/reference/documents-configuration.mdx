@@ -102,7 +102,7 @@ Expressions are refused in or under members whose names end in `Ref` and in secr
 ## Runtime keys
 
 The runtime reads and checks every key in the schema.
-It acts on `identity`, `package`, `listener`, `secretProviders`, `database`, `authentication`, `audit`, `storage`, `contentVerification`, `transfers`, `cleanup`, and `retention.receiptRetentionDays`.
+It acts on `identity`, `package`, `listener`, `secretProviders`, `database`, `authentication`, `audit`, `storage`, `contentVerification`, `transfers`, `cleanup`, `metricsListener`, and `retention.receiptRetentionDays`.
 The other blocks are checked, so a deployment written now keeps its meaning when the behaviour behind them arrives.
 
 - `identity.databaseId` is the logical identity of the one database this deployment owns, independent of the connection URL.
@@ -113,6 +113,13 @@ The other blocks are checked, so a deployment written now keeps its meaning when
   The starter uses `127.0.0.1:8116`.
 - `listener.tlsTermination` is `operator-controlled-upstream` behind a TLS proxy, or `development-loopback` for local work only.
 - `listener.networkExposure` is the shared network exposure declaration for the listener.
+- `metricsListener.bind` is optional and absent by default.
+  When it is present, `/metrics` is served on that socket only, and the document listener never routes it.
+  The address must be a concrete loopback or private address on a non-zero port.
+  It must not be the document listener's socket, or one that a wildcard document listener already covers.
+  A refused address stops startup with `documents.runtime.invalid-metrics-listener` or `documents.runtime.metrics-listener-overlaps-listener`.
+  `documentsctl check` reports the same codes.
+  When `listener.bind` is a `${VAR}` expression, the overlap comparison waits for `--environment`.
 - `secretProviders` declares the secret providers, such as `file.root`.
   A reference to an undeclared provider is refused.
 - `database.runtimeUrlRef` is the secret reference to the PostgreSQL URL the runtime connects with.
@@ -185,7 +192,7 @@ It then does these steps in order:
 4. It opens the audit journal.
 5. It activates content storage and refuses a storage binding other than the one pinned at the first upload.
 6. It activates the content verifier, then suspends and re-queues every finalised version verified or queued under another verifier binding.
-7. It binds the listener, serves `GET /health`, `GET /ready`, and the document routes, and runs the content verification worker until shutdown.
+7. It binds the listener and the metrics listener when one is configured, serves `GET /health`, `GET /ready`, and the document routes, and runs the content verification worker until shutdown.
 
 An upload that finalises a version wakes the verification worker of its own process, which claims the job at once.
 The worker also looks for due jobs every five seconds while idle, which picks up a job enqueued by another instance or by an operator command, and one due again after a backoff.
