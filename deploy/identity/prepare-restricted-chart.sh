@@ -68,7 +68,8 @@ if [[ "$lowercase_count" != "2" ]]; then
 	exit 1
 fi
 perl -pi -e 's/^(\s*)- all$/$1- ALL/' "$deployment_template" "$setup_template"
-if [[ "$(count_matches "$lowercase" "$deployment_template" "$setup_template")" != "0" ]]; then
+remaining_count="$(count_matches "$lowercase" "$deployment_template" "$setup_template")" || exit 1
+if [[ "$remaining_count" != "0" ]]; then
 	printf 'lowercase capability entry remains after patch\n' >&2
 	exit 1
 fi

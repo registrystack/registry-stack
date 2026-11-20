@@ -67,7 +67,8 @@ if [[ "$mount_gate_count" != "3" ]]; then
 	printf 'expected exactly three setup-gated state mounts in chart 1.0.1, found %s\n' "$mount_gate_count" >&2
 	exit 1
 fi
-if [[ "$(count_matches "$setup_gate" "$source_setup")" == "0" ]]; then
+source_setup_count="$(count_matches "$setup_gate" "$source_setup")" || exit 1
+if [[ "$source_setup_count" == "0" ]]; then
 	printf 'setup Job condition changed unexpectedly\n' >&2
 	exit 1
 fi
@@ -95,7 +96,8 @@ if [[ "$restored_gate_count" != "3" ]]; then
 	printf 'restored-state condition was not applied to exactly three state mounts\n' >&2
 	exit 1
 fi
-if contains 'restoreExistingState' "$setup_template" || [[ "$(count_matches "$setup_gate" "$setup_template")" == "0" ]]; then
+setup_count="$(count_matches "$setup_gate" "$setup_template")" || exit 1
+if contains 'restoreExistingState' "$setup_template" || [[ "$setup_count" == "0" ]]; then
 	printf 'setup Job condition changed unexpectedly\n' >&2
 	exit 1
 fi
