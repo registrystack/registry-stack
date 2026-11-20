@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -18,8 +17,9 @@ use registry_platform_config::{
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
-    JwksSource, ListenerNetworkExposure, OidcClientsConfig, OidcIssuerConfig,
-    PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TlsTermination,
+    JwksSource, ListenerNetworkExposure, MetricsListenerConfig, OidcClientsConfig,
+    OidcIssuerConfig, PrivateListenerConfig as ListenerConfig, SecretProvidersConfig,
+    TlsTermination,
 };
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
@@ -594,26 +594,20 @@ impl RuntimePackageConfig {
     }
 }
 
-/// Operator-private listener for `/metrics` and `/version`.
+/// Check the operator-private listener for `/metrics` and `/version`.
 ///
 /// It is separate from the API listener so the counters and the active
 /// package digest never appear on the surface the public contract describes.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MetricsListenerConfig {
-    #[cfg_attr(feature = "schema", schemars(with = "String"))]
-    pub bind: SocketAddr,
-}
-
-impl MetricsListenerConfig {
-    fn validate(&self, listener: &ListenerConfig) -> Result<(), RuntimeConfigError> {
-        registry_platform_config::check_metrics_bind(
-            self.bind,
-            &[("listener", listener.bind.socket_addr())],
-        )
-        .map_err(|_| RuntimeConfigError::InvalidMetricsListener)
-    }
+fn validate_metrics_listener(
+    metrics: MetricsListenerConfig,
+    listener: &ListenerConfig,
+) -> Result<(), RuntimeConfigError> {
+    registry_platform_config::check_metrics_bind(
+        metrics.bind.socket_addr(),
+        metrics.network_exposure,
+        &[("listener", listener.bind.socket_addr())],
+    )
+    .map_err(|_| RuntimeConfigError::InvalidMetricsListener)
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1247,7 +1241,7 @@ impl RuntimeConfig {
             findings.push(RuntimeConfigError::InvalidListener);
         }
         if let Some(metrics_listener) = &self.metrics_listener {
-            if let Err(error) = metrics_listener.validate(&self.listener) {
+            if let Err(error) = validate_metrics_listener(*metrics_listener, &self.listener) {
                 findings.push(error);
             }
         }
@@ -2065,7 +2059,9 @@ fn reads_deferred_value(
 ) -> bool {
     let reads: &[&str] = match finding {
         RuntimeConfigError::InvalidListener => &["/listener"],
-        RuntimeConfigError::InvalidMetricsListener => &["/listener/bind"],
+        RuntimeConfigError::InvalidMetricsListener => {
+            &["/listener/bind", "/metricsListener/networkExposure"]
+        }
         RuntimeConfigError::AllowedClientsRequired => &["/listener/tlsTermination"],
         RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
             &["/listener/tlsTermination"]
@@ -2093,6 +2089,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
         ["listener", "tlsTermination"] => "development-loopback",
         ["listener", "networkExposure"] => "private-address",
         ["metricsListener", "bind"] => "127.0.0.1:9100",
+        ["metricsListener", "networkExposure"] => "private-address",
         ["audit", "destination"] => "file",
         ["package", "root"] | ["audit", "path"] | ["secretProviders", "file", "root"] => {
             "/deferred"
@@ -2214,6 +2211,30 @@ mod tests {
             "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
             "audit":{"path":directory.join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"}
         })
+    }
+
+    #[test]
+    fn metrics_listener_wildcard_needs_container_private_exposure() {
+        let directory = tempfile::tempdir().unwrap();
+        let (_, _, project) = referenced_policy();
+        let refused = |value: &serde_json::Value| {
+            read_operator(value, directory.path())
+                .findings(Some(&project))
+                .iter()
+                .any(|finding| finding.code() == "casework.runtime.invalid-metrics-listener")
+        };
+        let mut value = operator_value(directory.path(), directory.path());
+        value["metricsListener"] = json!({"bind": "0.0.0.0:9100"});
+        assert!(refused(&value), "the wildcard needs the declaration");
+        value["metricsListener"] =
+            json!({"bind": "0.0.0.0:9100", "networkExposure": "container-private"});
+        assert!(!refused(&value), "container-private permits the wildcard");
+        value["metricsListener"] =
+            json!({"bind": "0.0.0.0:8100", "networkExposure": "container-private"});
+        assert!(refused(&value), "a wildcard on the served port overlaps");
+        value["metricsListener"] =
+            json!({"bind": "8.8.8.8:9100", "networkExposure": "container-private"});
+        assert!(refused(&value), "a public address is still refused");
     }
 
     #[test]

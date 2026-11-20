@@ -657,7 +657,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     // use refuses startup instead of leaving an API without its telemetry.
     let metrics = match &config.metrics_listener {
         Some(metrics_listener) => Some((
-            tokio::net::TcpListener::bind(metrics_listener.bind)
+            tokio::net::TcpListener::bind(metrics_listener.bind.socket_addr())
                 .await
                 .map_err(RuntimeError::MetricsListen)?,
             crate::metrics::metrics_router(metrics_state),
