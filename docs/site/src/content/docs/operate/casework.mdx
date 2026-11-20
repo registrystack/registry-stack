@@ -320,7 +320,7 @@ under one 5 second deadline shared by the whole scrape. Each read runs in a read
 whose server-side statement timeout is the time left, so the server cancels a slow query. When the review counts cannot be read, `casework_database_up` is 0 and
 the review gauges are absent from that scrape. When the completion backlog cannot be read, only the
 `casework_completion_*` series are absent and `casework_database_up` stays 1. Each failure is
-logged with its error class (`timeout`, `pool`, `no-time-left` or the SQLSTATE) and added to `casework_metrics_sample_failures_total` for that sample. Alert
+logged with its error class (`sqlstate-<code>`, `connection-closed`, `query`, `timeout`, `no-time-left` or `pool`) and added to `casework_metrics_sample_failures_total` for that sample. Alert
 on `casework_database_up` and on a rising failure counter as well as on the values.
 
 `casework_completion_deliveries` counts review completion deliveries that have not been delivered.

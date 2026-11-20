@@ -343,9 +343,8 @@ overdue work only.
 
 The queue gauges are read from PostgreSQL in read-only transactions. Both reads of one scrape share
 one 5 second deadline, and each read's statement timeout is the time left, so the server cancels a
-slow query. A read that starts after a slower one has used the deadline fails without querying.
-When a read fails, the runtime logs a warning with the error class (`timeout`, `pool`,
-`no-time-left`, or the SQLSTATE), adds one to
+slow query. A read that starts after a slower one has used the deadline fails with `no-time-left` and never starts.
+When a read fails, the runtime logs a warning with the error class (`sqlstate-<code>`, `connection-closed`, `query`, `timeout`, `no-time-left` or `pool`), adds one to
 `scheduling_metrics_sample_failures_total` for that queue, and leaves that queue's series out of
 the scrape. A missing series is therefore a failed read, never a zero. Alert on
 `absent(scheduling_outbox_items)` as well as on the values.

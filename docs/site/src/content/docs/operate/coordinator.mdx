@@ -750,7 +750,7 @@ They expose every label value from the first scrape.
 `coordinator_dispatch_jobs` is read from the database on each scrape.
 `pending` steps wait for their next attempt, `leased` steps are being attempted, and `unknown` steps wait for an operator to settle an uncertain effect.
 The count is a read-only query. Every database read of one scrape shares one 5 second deadline, and the server cancels a query that outlasts the time left.
-When the database cannot answer, that scrape has no `coordinator_dispatch_jobs` samples rather than zeros, `coordinator_metrics_sample_failures_total{sample="dispatch-queue"}` rises by one, and the service logs a warning with the failure class: `timeout`, `pool`, `no-time-left`, or the SQLSTATE.
+When the database cannot answer, that scrape has no `coordinator_dispatch_jobs` samples rather than zeros, `coordinator_metrics_sample_failures_total{sample="dispatch-queue"}` rises by one, and the service logs a warning with the failure class (`sqlstate-<code>`, `connection-closed`, `query`, `timeout`, `no-time-left` or `pool`), never the database's message.
 Alert on the gauge going absent as well as on its value.
 
 The held-work gauges are read from the database in one read-only query on each scrape, within the same 5 second deadline. A read that starts after a slower one has used the deadline fails with `no-time-left`.

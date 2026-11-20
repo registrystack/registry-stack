@@ -49,6 +49,7 @@ Four more gauges show holds and attention, all read from the database at scrape 
 - `coordinator_runs_attention{reason}` counts runs needing attention, with `reason` of `definition-refused` or `other`.
 - `coordinator_runs_restore_review_required` counts runs held for review after a restore.
 - `coordinator_hold_active{hold}` is 1 while the `restore` or `admissions` hold is set.
+- `coordinator_metrics_sample_failures_total{sample}` counts scrapes where the dispatch queue or the held-work gauges could not be read.
 - `coordinator_oldest_due_age_seconds` is how long ago the oldest pending step was due, counting only steps the worker can claim.
   Runs a worker cannot claim, such as runs waiting for restore review or with a refused definition, are not counted.
   Read `coordinator_runs_attention` and `coordinator_hold_active` beside it.
@@ -182,6 +183,7 @@ See the retention guide for what is kept.
   `unknown` means a provider attempt whose outcome is not known.
 - `messaging_provider_attempts_total{outcome}` counts `accepted`, `transient`, `permanent`, and `maybe-sent`.
 - `messaging_provider_callbacks_total{outcome}` counts callbacks, including `unmatched` and `ambiguous`.
+- `messaging_metrics_sample_failures_total{sample}` counts scrapes where the dispatch queue could not be read.
 - `messagingctl messages list --status` filters by status, with `--limit` (default 50).
 
 **Clear.** All of these take `--runtime-config` and run on the host.
@@ -355,6 +357,7 @@ A stopped audit writer needs a restart.
 A container often does not know its private address when you write the runtime file, so a loopback or private `metricsListener.bind` cannot be written down.
 Declare the placement instead.
 Add `metricsListener.networkExposure: container-private` and bind the wildcard address.
+Coordinator names the key `deployment.metricsListener`.
 Every other refusal still holds: a public, link-local, multicast or IPv4-mapped address, port `0`, and the service's own socket stay refused.
 The key is accepted by Registry Evidence and its OID4VCI and OID4VP services, BReg, Casework, Messaging, Scheduling, Render, Adapter, Documents and Coordinator.
 
@@ -380,6 +383,8 @@ networks:
 ```
 
 On Kubernetes, bind the pod address from the downward API, or use `container-private`.
+Bind the pod address only when it is in a private range. Write an IPv6 pod address in brackets (`[fd00::5]:9091`).
+`container-private` allows only the unspecified address, so a pod address outside the private ranges is refused. In that case bind `0.0.0.0` with `container-private` and keep the port off every public route.
 Substitution is allowed in operator files, so the runtime file can read `${POD_IP}` (see CFG-SEC-2 in the configuration conventions):
 
 ```yaml test-skip="illustrative fragment"
@@ -466,6 +471,12 @@ groups:
         labels: {severity: warn}
         annotations:
           summary: The oldest due job has waited more than 15 minutes.
+      - alert: CoordinatorMetricsSampleFailing
+        expr: increase(coordinator_metrics_sample_failures_total[15m]) > 0
+        for: 0m
+        labels: {severity: warn}
+        annotations:
+          summary: A database read failed at scrape time. The sample label names it.
       - alert: CoordinatorMetricsAbsent
         expr: absent(coordinator_dispatch_jobs) or absent(coordinator_hold_active)
         for: 10m
@@ -818,6 +829,12 @@ groups:
         labels: {severity: warn}
         annotations:
           summary: The provider refused messages permanently.
+      - alert: MessagingMetricsSampleFailing
+        expr: increase(messaging_metrics_sample_failures_total[15m]) > 0
+        for: 0m
+        labels: {severity: warn}
+        annotations:
+          summary: The dispatch queue could not be read at scrape time.
       - alert: MessagingMetricsAbsent
         expr: absent(messaging_dispatch_jobs)
         for: 10m

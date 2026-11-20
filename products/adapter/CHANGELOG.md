@@ -11,7 +11,7 @@
   failures. The job reports items by state, including `held` and `refused`, the
   age of its last settled pass, pass failures, hook refusals and failed item
   samples. Item counts are read one scrape at a time, reused for 5 seconds and
-  bounded by a 4 second statement timeout. A metrics listener closes within 10
+  bounded by one 5 second scrape deadline. A metrics listener closes within 10
   seconds of a stop signal, even with a stalled client. Held items stay
   read-only: the owning product resolves them.
 - The facade and job metrics listeners accept
