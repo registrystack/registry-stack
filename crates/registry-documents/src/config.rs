@@ -686,7 +686,7 @@ impl RuntimeConfig {
                 METRICS_LISTENER_CODE,
                 "/metricsListener/bind",
                 "metricsListener.bind must be a loopback or private address on a non-zero port",
-                "Bind metricsListener to a loopback or private address with a nonzero port.",
+                "Bind metricsListener to a loopback or private address with a nonzero port, or declare metricsListener.networkExposure: container-private on a container network.",
             ));
         } else if shares_socket(metrics, self.listener.bind.socket_addr()) {
             findings.push(Finding::new(
@@ -958,9 +958,9 @@ fn is_deferred(check: &RuntimeFileCheck<RuntimeConfig>, finding: &Finding) -> bo
 }
 
 /// The metrics listener binds a concrete loopback or private address on a
-/// non-zero port. Link-local, public, multicast, and wildcard addresses are
-/// refused, so the series are never published on a routable interface by
-/// accident.
+/// non-zero port. Link-local, public, and multicast addresses are refused, and
+/// a wildcard only under `container-private`, so the series are never
+/// published on a routable interface by accident.
 fn is_private_metrics_bind(
     metrics: SocketAddr,
     exposure: registry_platform_config::ListenerNetworkExposure,

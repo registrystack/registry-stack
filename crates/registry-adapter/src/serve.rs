@@ -819,7 +819,7 @@ pub async fn run(
             let metrics_address = configured.bind.socket_addr();
             if registry_adapter_core::metrics_bind_overlaps(metrics_address, address) {
                 return Err(ServeError::Configuration(
-                    "metricsListener.bind must differ from listener.bind".to_owned(),
+                    "metricsListener.bind must differ from listener.bind. Bind a different port, or a loopback or private address the facade does not use.".to_owned(),
                 ));
             }
             let bound = TcpListener::bind(metrics_address)

@@ -133,9 +133,9 @@ pub struct RenderRuntime {
 }
 
 impl RenderRuntime {
-    /// Whether `metricsListener`, when declared, binds a concrete loopback or
-    /// private address (never link-local) on a non-zero port that is not the
-    /// listener's socket. Sharing that socket would publish the series on the
+    /// Whether `metricsListener`, when declared, binds a loopback or private
+    /// address (never link-local, a wildcard only under `container-private`)
+    /// on a non-zero port that is not the listener's socket. Sharing that socket would publish the series on the
     /// document API's listener.
     #[must_use]
     pub fn metrics_listener_allowed(&self) -> bool {
@@ -1098,8 +1098,10 @@ fn findings(
             message: "metricsListener.bind must be a loopback or private address on a non-zero \
                       port, apart from the listener"
                 .to_owned(),
-            action: "Bind metricsListener to a private address the document API listener does \
-                     not use, or remove the block to serve no metrics."
+            action: "Bind metricsListener to a loopback or private address the document API \
+                     listener does not use, declare metricsListener.networkExposure: \
+                     container-private on a container network, or remove the block to serve \
+                     no metrics."
                 .to_owned(),
         });
     }
