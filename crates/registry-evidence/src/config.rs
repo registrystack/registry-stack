@@ -3172,11 +3172,13 @@ impl MetricsListenerConfig {
             Ok(()) => None,
             Err(MetricsBindError::PortZero) => validate_listener_port(bind.port())
                 .err()
-                .map(|error| (error, LISTENER_PORT_ACTION)),
-            Err(_) => Some((
+                .map(|error| (error, LISTENER_PORT_ACTION.to_owned())),
+            Err(cause) => Some((
                 ConfigError::Invalid("listener bind address must be loopback or private"),
-                "Bind the metrics listener to a loopback or private address, or declare \
-                 networkExposure: container-private on a container network.",
+                format!(
+                    "The metrics bind is refused: {cause}. {}",
+                    cause.remedy("metricsListener.networkExposure")
+                ),
             )),
         };
         // Sharing the evidence binding would publish the counters on the
@@ -3187,12 +3189,15 @@ impl MetricsListenerConfig {
             &[("evidence listener", evidence_listener.bind.socket_addr())],
         )
         .err()
-        .map(|_| {
+        .map(|cause| {
             (
                 ConfigError::Invalid(
                     "metricsListener must not share the evidence listener binding",
                 ),
-                "Bind the metrics listener to a port the evidence listener does not use.",
+                format!(
+                    "The metrics bind is refused: {cause}. {}",
+                    cause.remedy("metricsListener.networkExposure")
+                ),
             )
         });
         for (error, action) in address.into_iter().chain(separate) {
@@ -3200,7 +3205,7 @@ impl MetricsListenerConfig {
                 RUNTIME_METRICS_LISTENER_CODE,
                 "/metricsListener/bind",
                 error,
-                action,
+                &action,
             ));
         }
     }
@@ -10149,6 +10154,44 @@ outboundTls:
             format!("{base}metricsListener:\n  bind: 127.0.0.1:9090\n  path: /telemetry\n");
         assert!(RuntimeConfig::parse_yaml(unknown.as_bytes()).is_err());
         assert!(!validator.is_valid(&bundle_contract_instance(unknown.as_bytes())));
+    }
+
+    /// Each metrics refusal carries its own remedy, and only the wildcard
+    /// refusal points at `container-private`.
+    #[test]
+    fn a_metrics_refusal_names_its_cause_and_remedy() {
+        let listener: ListenerConfig = serde_json::from_value(serde_json::json!({
+            "bind": "127.0.0.1:8080",
+            "tlsTermination": "operator-controlled-upstream",
+            "trustProxyIdentityHeaders": false,
+            "maximumRequestBytes": 65536,
+            "maximumConcurrentRequests": 64,
+            "requestTimeoutMilliseconds": 10000,
+            "shutdownGraceMilliseconds": 30000,
+        }))
+        .expect("the listener fixture parses");
+        for (bind, remedy, names_container_private) in [
+            ("0.0.0.0:9090", "container-private", true),
+            ("[::]:9090", "container-private", true),
+            ("8.8.8.8:9090", "keep metrics off public addresses", false),
+            ("169.254.1.1:9090", "link-local", false),
+            ("127.0.0.1:8080", "its own port", false),
+        ] {
+            let metrics: MetricsListenerConfig = serde_json::from_value(serde_json::json!({
+                "bind": bind,
+            }))
+            .expect("the metrics fixture parses");
+            let mut findings = Vec::new();
+            metrics.findings(&listener, &mut findings);
+            assert_eq!(findings.len(), 1, "{bind}");
+            let action = &findings[0].action;
+            assert!(action.contains(remedy), "{bind}: {action}");
+            assert_eq!(
+                action.contains("container-private"),
+                names_container_private,
+                "{bind}: {action}"
+            );
+        }
     }
 
     /// A container whose private address is unknown when the file is written

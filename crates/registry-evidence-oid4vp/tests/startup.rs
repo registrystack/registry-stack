@@ -215,6 +215,33 @@ async fn metrics_accept_loopback_and_private_addresses_and_refuse_link_local_and
     }
 }
 
+/// Each metrics refusal carries its own remedy, and only the wildcard
+/// refusal points at `container-private`.
+#[tokio::test]
+async fn a_metrics_refusal_names_its_cause_and_remedy() {
+    for (bind, remedy, names_container_private) in [
+        ("0.0.0.0:9095", "container-private", true),
+        ("[::]:9095", "container-private", true),
+        ("8.8.8.8:9095", "keep metrics off public addresses", false),
+        ("169.254.1.1:9095", "link-local", false),
+        ("127.0.0.1:8095", "its own port", false),
+    ] {
+        let harness = Harness::new(&Options::default()).await;
+        with_metrics(&harness, bind, None);
+        let diagnostics = check_file(&harness.config_path, false).diagnostics;
+        let action = &diagnostics
+            .first()
+            .unwrap_or_else(|| panic!("{bind} should be refused"))
+            .suggested_action;
+        assert!(action.contains(remedy), "{bind}: {action}");
+        assert_eq!(
+            action.contains("container-private"),
+            names_container_private,
+            "{bind}: {action}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn the_metrics_wildcard_needs_container_private_exposure() {
     for wildcard in ["0.0.0.0:9095", "[::]:9095"] {

@@ -16,9 +16,9 @@ use registry_platform_audit::{
 };
 use registry_platform_config::{
     ConfigBlockError, ConfigBlockErrorKind, ListenerBind, ListenerNetworkExposure,
-    LoadedRuntimeConfig, MetricsListenerConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig,
-    RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvider,
-    SecretProvidersConfig, SecretReference,
+    LoadedRuntimeConfig, MetricsBindError, MetricsListenerConfig, OidcClientsConfig,
+    OidcIssuerConfig, PackageConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
+    RuntimeFileCheck, SecretProvider, SecretProvidersConfig, SecretReference,
 };
 use registry_platform_yaml::{
     escape_pointer_segment, shape_union, BoundedU32, BoundedU64, Diagnostic, ExternalId, LocalId,
@@ -132,6 +132,9 @@ pub struct RenderRuntime {
     pub assurance_profile: Option<AssuranceProfile>,
 }
 
+/// The config path of the exposure key a wildcard metrics refusal names.
+pub(crate) const METRICS_NETWORK_EXPOSURE_KEY: &str = "metricsListener.networkExposure";
+
 impl RenderRuntime {
     /// Whether `metricsListener`, when declared, binds a loopback or private
     /// address (never link-local, a wildcard only under `container-private`)
@@ -139,38 +142,48 @@ impl RenderRuntime {
     /// document API's listener.
     #[must_use]
     pub fn metrics_listener_allowed(&self) -> bool {
-        self.metrics_listener_address_allowed(false) && !self.metrics_listener_shares_socket()
+        self.check_metrics_listener().is_ok()
     }
 
-    /// Whether `metricsListener`, when declared, binds a loopback or private
-    /// address (never link-local) on a non-zero port. This depends on the
-    /// metrics bind and its network exposure alone. A deferred exposure is
-    /// judged as the most permissive value, so only what both values refuse is
-    /// reported.
-    fn metrics_listener_address_allowed(&self, exposure_deferred: bool) -> bool {
-        let Some(metrics) = &self.metrics_listener else {
-            return true;
-        };
+    /// The rule `metricsListener` breaks, when declared and refused. See
+    /// [`Self::metrics_listener_allowed`].
+    ///
+    /// # Errors
+    ///
+    /// The first metrics bind rule the declared block fails.
+    pub fn check_metrics_listener(&self) -> Result<(), MetricsBindError> {
+        self.metrics_listener_refusal(false, false)
+            .map_or(Ok(()), Err)
+    }
+
+    /// The rule `metricsListener`, when declared, breaks. The address rules
+    /// depend on the metrics bind and its network exposure alone. A deferred
+    /// exposure is judged as the most permissive value, so only what both
+    /// values refuse is reported. A deferred listener bind leaves out the
+    /// comparison with the listener's socket.
+    fn metrics_listener_refusal(
+        &self,
+        exposure_deferred: bool,
+        listener_deferred: bool,
+    ) -> Option<MetricsBindError> {
+        let metrics = self.metrics_listener.as_ref()?;
         let exposure = if exposure_deferred {
             ListenerNetworkExposure::ContainerPrivate
         } else {
             metrics.network_exposure
         };
-        registry_platform_config::check_metrics_bind_address(metrics.bind.socket_addr(), exposure)
-            .is_ok()
-    }
-
-    /// Whether `metricsListener`, when declared, uses a socket the listener
-    /// already holds.
-    fn metrics_listener_shares_socket(&self) -> bool {
-        let Some(metrics) = &self.metrics_listener else {
-            return false;
-        };
-        registry_platform_config::check_metrics_bind_apart(
-            metrics.bind.socket_addr(),
-            &[("listener", self.listener.bind.socket_addr())],
-        )
-        .is_err()
+        let bind = metrics.bind.socket_addr();
+        registry_platform_config::check_metrics_bind_address(bind, exposure)
+            .and_then(|()| {
+                if listener_deferred {
+                    return Ok(());
+                }
+                registry_platform_config::check_metrics_bind_apart(
+                    bind,
+                    &[("listener", self.listener.bind.socket_addr())],
+                )
+            })
+            .err()
     }
 
     /// Whether the deployment's seals are test seals: its assurance profile
@@ -1089,20 +1102,14 @@ fn findings(
                 .to_owned(),
         });
     }
-    if !runtime.metrics_listener_address_allowed(metrics_exposure_deferred)
-        || (runtime.metrics_listener_shares_socket() && !listener_deferred)
+    if let Some(cause) =
+        runtime.metrics_listener_refusal(metrics_exposure_deferred, listener_deferred)
     {
         findings.push(Finding {
             code: "render.runtime.invalid-metrics-listener",
             pointer: "/metricsListener/bind".to_owned(),
-            message: "metricsListener.bind must be a loopback or private address on a non-zero \
-                      port, apart from the listener"
-                .to_owned(),
-            action: "Bind metricsListener to a loopback or private address the document API \
-                     listener does not use, declare metricsListener.networkExposure: \
-                     container-private on a container network, or remove the block to serve \
-                     no metrics."
-                .to_owned(),
+            message: format!("metricsListener.bind is refused: {cause}"),
+            action: cause.remedy(METRICS_NETWORK_EXPOSURE_KEY),
         });
     }
     let blocks = [runtime.package.check()];
@@ -2582,6 +2589,42 @@ mod tests {
                 "{bind}"
             );
         }
+    }
+
+    #[test]
+    fn a_metrics_refusal_names_its_cause_and_remedy() {
+        let (_dir, home) = home();
+        let refusal = |bind: &str| {
+            let text = format!("{}metricsListener:\n  bind: \"{bind}\"\n", minimal(&home));
+            let problem = refused(&home, &text);
+            let diagnostic = problem.diagnostics[0].clone();
+            (diagnostic.message, diagnostic.suggested_action)
+        };
+        let (message, action) = refusal("203.0.113.4:9090");
+        assert!(message.contains("must be loopback or private"), "{message}");
+        assert!(
+            action.contains("keep metrics off public addresses"),
+            "{action}"
+        );
+        assert!(!action.contains("container-private"), "{action}");
+        let (_, action) = refusal("127.0.0.1:0");
+        assert!(action.contains("non-zero port"), "{action}");
+        assert!(!action.contains("container-private"), "{action}");
+        let (_, action) = refusal("127.0.0.1:8080");
+        assert!(action.contains("its own port"), "{action}");
+        assert!(!action.contains("container-private"), "{action}");
+        let (_, action) = refusal("0.0.0.0:9090");
+        assert!(
+            action.contains("metricsListener.networkExposure: container-private"),
+            "{action}"
+        );
+        // The serving path states the same cause and remedy.
+        let text = format!(
+            "{}metricsListener:\n  bind: 127.0.0.1:9090\n",
+            minimal(&home)
+        );
+        let runtime = load_text(&home, &text).expect("a private metrics bind loads");
+        assert_eq!(runtime.check_metrics_listener(), Ok(()));
     }
 
     #[test]

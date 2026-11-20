@@ -21,6 +21,7 @@ use registry_breg::runtime_config::{
     RUNTIME_CONFIG_KIND,
 };
 use registry_platform_config::package::{write_sum_file, PackageLimits};
+use registry_platform_config::MetricsBindError;
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::destination::{
     DestinationDnsFamily, DestinationSendError, EventDeliveryHeaders,
@@ -2126,18 +2127,18 @@ fn metrics_listener_refuses_public_unspecified_and_ephemeral_bindings() {
             "binding {bind} refused"
         );
     }
-    for bind in [
-        "0.0.0.0:9100",
-        "8.8.8.8:9100",
-        "\"[::]:9100\"",
-        "127.0.0.1:0",
+    for (bind, cause) in [
+        ("0.0.0.0:9100", MetricsBindError::Unspecified),
+        ("8.8.8.8:9100", MetricsBindError::NotPrivate),
+        ("\"[::]:9100\"", MetricsBindError::Unspecified),
+        ("127.0.0.1:0", MetricsBindError::PortZero),
     ] {
         let configured = format!("{base}metricsListener:\n  bind: {bind}\n");
         let error = parse_runtime_config_with_env(&configured, env_lookup)
             .expect_err("non-private metrics binding is refused");
         assert_eq!(
             error,
-            RuntimeConfigError::InvalidMetricsListener,
+            RuntimeConfigError::InvalidMetricsListener(cause),
             "binding {bind} refused"
         );
         assert_eq!(path_of(&error), "/metricsListener");
@@ -2163,15 +2164,18 @@ fn metrics_listener_container_private_permits_the_wildcard_only_when_declared() 
         assert_eq!(
             parse_runtime_config_with_env(&configured, env_lookup)
                 .expect_err("the wildcard needs the declaration"),
-            RuntimeConfigError::InvalidMetricsListener
+            RuntimeConfigError::InvalidMetricsListener(MetricsBindError::Unspecified)
         );
     }
     // Container-private permits the wildcard and nothing else.
-    for bind in [
-        "8.8.8.8:9100",
-        "169.254.1.1:9100",
-        "0.0.0.0:0",
-        "0.0.0.0:8080",
+    for (bind, cause) in [
+        ("8.8.8.8:9100", MetricsBindError::NotPrivate),
+        ("169.254.1.1:9100", MetricsBindError::LinkLocal),
+        ("0.0.0.0:0", MetricsBindError::PortZero),
+        (
+            "0.0.0.0:8080",
+            MetricsBindError::OverlapsServedSocket("listener"),
+        ),
     ] {
         let configured = format!(
             "{base}metricsListener:\n  bind: {bind}\n  networkExposure: container-private\n"
@@ -2179,7 +2183,7 @@ fn metrics_listener_container_private_permits_the_wildcard_only_when_declared() 
         assert_eq!(
             parse_runtime_config_with_env(&configured, env_lookup)
                 .expect_err("still refused under container-private"),
-            RuntimeConfigError::InvalidMetricsListener,
+            RuntimeConfigError::InvalidMetricsListener(cause),
             "{bind}"
         );
     }
@@ -2191,12 +2195,19 @@ fn metrics_listener_refuses_shared_registry_binding() {
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     // Same address as the Registry listener itself, and the dual-stack
     // wildcard equivalent of it.
-    for bind in ["127.0.0.1:8080", "\"[::]:8080\""] {
+    for (bind, cause) in [
+        (
+            "127.0.0.1:8080",
+            MetricsBindError::OverlapsServedSocket("listener"),
+        ),
+        // The wildcard is refused before the overlap is considered.
+        ("\"[::]:8080\"", MetricsBindError::Unspecified),
+    ] {
         let configured = format!("{base}metricsListener:\n  bind: {bind}\n");
         assert_eq!(
             parse_runtime_config_with_env(&configured, env_lookup)
                 .expect_err("shared binding is refused"),
-            RuntimeConfigError::InvalidMetricsListener
+            RuntimeConfigError::InvalidMetricsListener(cause)
         );
     }
     // An IPv6 wildcard Registry listener also covers the IPv4 metrics port
@@ -2206,7 +2217,54 @@ fn metrics_listener_refuses_shared_registry_binding() {
     assert_eq!(
         parse_runtime_config_with_env(&configured, env_lookup)
             .expect_err("dual-stack overlap is refused"),
-        RuntimeConfigError::InvalidMetricsListener
+        RuntimeConfigError::InvalidMetricsListener(MetricsBindError::OverlapsServedSocket(
+            "listener"
+        ))
+    );
+}
+
+#[test]
+fn metrics_listener_refusal_names_its_cause_and_remedy() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let refusal = |bind: &str| {
+        let configured = format!("{base}metricsListener:\n  bind: {bind}\n");
+        let error = parse_runtime_config_with_env(&configured, env_lookup)
+            .expect_err("the metrics binding is refused");
+        error.diagnostics(None).remove(0)
+    };
+    let public = refusal("8.8.8.8:9100");
+    assert!(
+        public.message.contains("must be loopback or private"),
+        "{}",
+        public.message
+    );
+    assert!(
+        public
+            .suggested_action
+            .contains("keep metrics off public addresses"),
+        "{}",
+        public.suggested_action
+    );
+    assert!(
+        !public.suggested_action.contains("container-private"),
+        "{}",
+        public.suggested_action
+    );
+    let port_zero = refusal("127.0.0.1:0");
+    assert!(
+        port_zero.suggested_action.contains("non-zero port"),
+        "{}",
+        port_zero.suggested_action
+    );
+    assert!(!port_zero.suggested_action.contains("container-private"));
+    let wildcard = refusal("0.0.0.0:9100");
+    assert!(
+        wildcard
+            .suggested_action
+            .contains("metricsListener.networkExposure: container-private"),
+        "{}",
+        wildcard.suggested_action
     );
 }
 

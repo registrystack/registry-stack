@@ -439,6 +439,7 @@ mod tests {
     use super::*;
     use registry_breg::package::PackageError;
     use registry_breg::runtime_config::RuntimeConfigError;
+    use registry_platform_config::MetricsBindError;
     use std::collections::HashSet;
 
     #[test]
@@ -910,7 +911,7 @@ mod tests {
                 "/listener",
             ),
             (
-                RuntimeConfigError::InvalidMetricsListener,
+                RuntimeConfigError::InvalidMetricsListener(MetricsBindError::PortZero),
                 "breg.runtime.invalid-metrics-listener",
                 "/metricsListener",
             ),

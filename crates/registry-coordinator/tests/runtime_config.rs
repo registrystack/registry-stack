@@ -1273,13 +1273,21 @@ fn the_metrics_listener_is_optional_private_and_apart_from_the_listener() {
         document["deployment"]["metricsListener"] = metrics;
         document
     };
-    for bind in [
-        "127.0.0.1:8108",
-        "0.0.0.0:9090",
-        "[::]:9090",
-        "203.0.113.4:9090",
-        "127.0.0.1:0",
-        "[2001:db8::1]:9090",
+    // Each refusal names its own cause and remedy. Only the wildcard names
+    // `container-private`.
+    for (bind, remedy) in [
+        ("127.0.0.1:8108", "its own port"),
+        (
+            "0.0.0.0:9090",
+            "deployment.metricsListener.networkExposure: container-private",
+        ),
+        (
+            "[::]:9090",
+            "deployment.metricsListener.networkExposure: container-private",
+        ),
+        ("203.0.113.4:9090", "keep metrics off public addresses"),
+        ("127.0.0.1:0", "non-zero port"),
+        ("[2001:db8::1]:9090", "keep metrics off public addresses"),
     ] {
         let error =
             refused(&serde_norway::to_string(&with_metrics(json!({"bind": bind}))).unwrap());
@@ -1289,11 +1297,13 @@ fn the_metrics_listener_is_optional_private_and_apart_from_the_listener() {
             Some("/deployment/metricsListener/bind"),
             "{bind}"
         );
-        assert!(error
-            .suggested_action
-            .as_deref()
-            .unwrap()
-            .contains("loopback or private address"));
+        let action = error.suggested_action.as_deref().unwrap();
+        assert!(action.contains(remedy), "{bind}: {action}");
+        assert_eq!(
+            action.contains("container-private"),
+            remedy.contains("container-private"),
+            "{bind}: {action}"
+        );
         assert!(!format!("{error}").contains(bind), "{bind}");
         assert!(!format!("{error:?}").contains(bind), "{bind}");
     }

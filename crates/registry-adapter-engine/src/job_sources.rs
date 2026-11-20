@@ -607,6 +607,14 @@ struct JobRuntimeDocument {
     metrics_listener: Option<MetricsListenerConfig>,
 }
 
+/// How a metrics refusal names the hook ingress socket.
+const HOOK_INGRESS_SOCKET_NAME: &str = "hook ingress listener";
+
+/// The platform's remedy for a metrics bind on the hook ingress socket,
+/// held as text because a reader refusal carries a static action.
+const METRICS_OVERLAP_ACTION: &str =
+    "Give metrics its own port, apart from the hook ingress listener socket.";
+
 impl<'de> Deserialize<'de> for JobRuntimeConfig {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let document = JobRuntimeDocument::deserialize(deserializer)?;
@@ -615,13 +623,16 @@ impl<'de> Deserialize<'de> for JobRuntimeConfig {
         }
         if let (Some(metrics), Some(ingress)) = (&document.metrics_listener, &document.hook_ingress)
         {
-            if registry_adapter_core::metrics_bind_overlaps(
+            if registry_adapter_core::metrics_bind_overlap(
                 metrics.bind.socket_addr(),
+                HOOK_INGRESS_SOCKET_NAME,
                 ingress.listener.bind.socket_addr(),
-            ) {
+            )
+            .is_some()
+            {
                 return Err(Invalid::expected(
                     "metricsListener.bind to differ from hookIngress.listener.bind",
-                    "Bind the metrics listener to a different port than the hook ingress.",
+                    METRICS_OVERLAP_ACTION,
                 )
                 .into_error());
             }
@@ -1638,7 +1649,36 @@ mod tests {
                 }}"#
             ))
         };
+        let refused = |member: &str| {
+            read(member)
+                .expect_err("the metrics bind is refused")
+                .to_string()
+        };
+        let wildcard = refused(r#"{ "bind": "0.0.0.0:9464" }"#);
+        assert!(
+            wildcard.contains("metricsListener.networkExposure: container-private"),
+            "{wildcard}"
+        );
+        let public = refused(r#"{ "bind": "203.0.113.7:9464" }"#);
+        assert!(
+            public.contains("keep metrics off public addresses"),
+            "{public}"
+        );
+        assert!(!public.contains("container-private"), "{public}");
+        let overlap = refused(r#"{ "bind": "127.0.0.1:8091" }"#);
+        assert!(
+            overlap.contains("metricsListener.bind to differ from hookIngress.listener.bind"),
+            "{overlap}"
+        );
+        assert!(!overlap.contains("container-private"), "{overlap}");
         assert!(read(r#"{ "bind": "0.0.0.0:9464" }"#).is_err());
+        assert_eq!(
+            METRICS_OVERLAP_ACTION,
+            registry_platform_config::MetricsBindError::OverlapsServedSocket(
+                HOOK_INGRESS_SOCKET_NAME
+            )
+            .remedy("metricsListener.networkExposure")
+        );
         assert!(
             read(r#"{ "bind": "0.0.0.0:9464", "networkExposure": "container-private" }"#).is_ok()
         );

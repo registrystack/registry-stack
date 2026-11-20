@@ -15,9 +15,9 @@ use registry_platform_audit::{
     MIN_AUDIT_ROTATE_BYTES,
 };
 use registry_platform_config::{
-    AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind, RemovedKey, RuntimeConfigLoader,
-    RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver, DEFAULT_STAND_IN,
-    REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
+    AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind, MetricsBindError, RemovedKey,
+    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver,
+    DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
 };
 pub use registry_platform_config::{
     DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
@@ -659,15 +659,15 @@ impl RuntimeConfig {
         if let Some(metrics) = &self.metrics_listener {
             let exposure = metrics.network_exposure;
             let metrics = metrics.bind.socket_addr();
-            if registry_platform_config::check_metrics_bind_address(metrics, exposure).is_err() {
-                findings.push(RuntimeConfigError::InvalidMetricsListener);
-            } else if registry_platform_config::check_metrics_bind_apart(
+            if let Err(cause) =
+                registry_platform_config::check_metrics_bind_address(metrics, exposure)
+            {
+                findings.push(RuntimeConfigError::InvalidMetricsListener(cause));
+            } else if let Err(cause) = registry_platform_config::check_metrics_bind_apart(
                 metrics,
                 &[("listener", self.listener.bind.socket_addr())],
-            )
-            .is_err()
-            {
-                findings.push(RuntimeConfigError::MetricsListenerSharesSocket);
+            ) {
+                findings.push(RuntimeConfigError::MetricsListenerSharesSocket(cause));
             }
         }
     }
@@ -1251,10 +1251,10 @@ fn reads_deferred_value(
     let pointer = finding.pointer();
     let reads: Vec<String> = match finding {
         RuntimeConfigError::InvalidListener => vec!["/listener".to_owned()],
-        RuntimeConfigError::InvalidMetricsListener => {
+        RuntimeConfigError::InvalidMetricsListener(_) => {
             vec!["/metricsListener/networkExposure".to_owned()]
         }
-        RuntimeConfigError::MetricsListenerSharesSocket => vec!["/listener/bind".to_owned()],
+        RuntimeConfigError::MetricsListenerSharesSocket(_) => vec!["/listener/bind".to_owned()],
         RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
             vec!["/listener/tlsTermination".to_owned()]
         }
@@ -1334,19 +1334,13 @@ pub enum RuntimeConfigError {
     InvalidSecretProviders,
     #[error("listener is not valid for its declared TLS termination and network exposure")]
     InvalidListener,
-    #[error(
-        "metricsListener.bind must be a loopback or private address on a non-zero port, apart \
-         from the listener"
-    )]
-    InvalidMetricsListener,
+    #[error("metricsListener.bind is refused: {0}")]
+    InvalidMetricsListener(MetricsBindError),
     /// The same refusal as `InvalidMetricsListener`, for a metrics bind that
     /// is acceptable alone but shares the listener's socket. It is separate so
     /// the offline check can defer it while the listener bind is an expression.
-    #[error(
-        "metricsListener.bind must be a loopback or private address on a non-zero port, apart \
-         from the listener"
-    )]
-    MetricsListenerSharesSocket,
+    #[error("metricsListener.bind is refused: {0}")]
+    MetricsListenerSharesSocket(MetricsBindError),
     #[error("authentication.oidc.scopeClaim must not be empty")]
     EmptyScopeClaim,
     #[error(
@@ -1443,7 +1437,7 @@ impl RuntimeConfigError {
             Self::RelativeOperatedPath(path) => pointer_to(&path.split('.').collect::<Vec<_>>()),
             Self::InvalidSecretProviders => "/secretProviders".to_owned(),
             Self::InvalidListener => "/listener".to_owned(),
-            Self::InvalidMetricsListener | Self::MetricsListenerSharesSocket => {
+            Self::InvalidMetricsListener(_) | Self::MetricsListenerSharesSocket(_) => {
                 "/metricsListener/bind".to_owned()
             }
             Self::EmptyScopeClaim => "/authentication/oidc/scopeClaim".to_owned(),
@@ -1485,7 +1479,7 @@ impl RuntimeConfigError {
             Self::RelativeOperatedPath(_) => "messaging.runtime.relative-path",
             Self::InvalidSecretProviders => "messaging.runtime.unusable-secret-providers",
             Self::InvalidListener => "messaging.runtime.invalid-listener",
-            Self::InvalidMetricsListener | Self::MetricsListenerSharesSocket => {
+            Self::InvalidMetricsListener(_) | Self::MetricsListenerSharesSocket(_) => {
                 "messaging.runtime.invalid-metrics-listener"
             }
             Self::EmptyScopeClaim => "messaging.runtime.empty-scope-claim",
@@ -1546,8 +1540,8 @@ impl RuntimeConfigError {
             Self::InvalidListener => {
                 "Bind to a loopback address under development-loopback; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
             }
-            Self::InvalidMetricsListener | Self::MetricsListenerSharesSocket => {
-                "Bind metricsListener to a loopback or private address with a nonzero port the API listener does not use, or declare metricsListener.networkExposure: container-private on a container network."
+            Self::InvalidMetricsListener(cause) | Self::MetricsListenerSharesSocket(cause) => {
+                return cause.remedy("metricsListener.networkExposure");
             }
             Self::EmptyScopeClaim => {
                 "Name the claim that carries the caller's scopes, or remove the member to use scope."
@@ -2387,7 +2381,9 @@ pub(crate) mod tests {
         value["metricsListener"] = json!({"bind": "127.0.0.1:8107"});
         assert!(matches!(
             load(value).unwrap_err(),
-            RuntimeConfigError::MetricsListenerSharesSocket
+            RuntimeConfigError::MetricsListenerSharesSocket(
+                MetricsBindError::OverlapsServedSocket("listener")
+            )
         ));
         for bind in [
             "0.0.0.0:9090",
@@ -2400,7 +2396,7 @@ pub(crate) mod tests {
             value["metricsListener"] = json!({"bind": bind});
             let error = load(value).unwrap_err();
             assert!(
-                matches!(error, RuntimeConfigError::InvalidMetricsListener),
+                matches!(error, RuntimeConfigError::InvalidMetricsListener(_)),
                 "{bind}: {error}"
             );
             assert!(!format!("{error:?}").contains(bind));
@@ -2416,7 +2412,7 @@ pub(crate) mod tests {
         value["metricsListener"] = json!({"bind": "0.0.0.0:9107"});
         assert!(matches!(
             load(value).unwrap_err(),
-            RuntimeConfigError::InvalidMetricsListener
+            RuntimeConfigError::InvalidMetricsListener(MetricsBindError::Unspecified)
         ));
         let mut value = base();
         value["metricsListener"] =
@@ -2428,12 +2424,40 @@ pub(crate) mod tests {
                 json!({"bind": bind, "networkExposure": "container-private"});
             let error = load(value).unwrap_err();
             let expected = if bind == "0.0.0.0:8107" {
-                matches!(error, RuntimeConfigError::MetricsListenerSharesSocket)
+                matches!(error, RuntimeConfigError::MetricsListenerSharesSocket(_))
             } else {
-                matches!(error, RuntimeConfigError::InvalidMetricsListener)
+                matches!(error, RuntimeConfigError::InvalidMetricsListener(_))
             };
             assert!(expected, "{bind}: {error}");
         }
+    }
+
+    #[test]
+    fn a_metrics_refusal_names_its_cause_and_remedy() {
+        let refusal = |bind: &str| {
+            let mut value = base();
+            value["metricsListener"] = json!({"bind": bind});
+            let error = load(value).unwrap_err();
+            (error.to_string(), error.suggested_action())
+        };
+        let (message, action) = refusal("203.0.113.4:9107");
+        assert!(message.contains("must be loopback or private"), "{message}");
+        assert!(
+            action.contains("keep metrics off public addresses"),
+            "{action}"
+        );
+        assert!(!action.contains("container-private"), "{action}");
+        let (_, action) = refusal("127.0.0.1:0");
+        assert!(action.contains("non-zero port"), "{action}");
+        assert!(!action.contains("container-private"), "{action}");
+        let (_, action) = refusal("127.0.0.1:8107");
+        assert!(action.contains("its own port"), "{action}");
+        assert!(!action.contains("container-private"), "{action}");
+        let (_, action) = refusal("0.0.0.0:9107");
+        assert!(
+            action.contains("metricsListener.networkExposure: container-private"),
+            "{action}"
+        );
     }
 
     #[test]

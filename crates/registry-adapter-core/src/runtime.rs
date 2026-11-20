@@ -415,13 +415,15 @@ impl<'de> Deserialize<'de> for AdapterRuntimeConfig {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let config = Self::deserialize(deserializer)?;
         if let Some(metrics) = &config.metrics_listener {
-            if metrics_bind_overlaps(
+            if let Some(cause) = metrics_bind_overlap(
                 metrics.bind.socket_addr(),
+                "facade listener",
                 config.listener.bind.socket_addr(),
             ) {
-                return Err(serde::de::Error::custom(
-                    "expected metricsListener.bind to differ from listener.bind; bind the metrics listener to a different port than the facade listener",
-                ));
+                return Err(serde::de::Error::custom(format!(
+                    "expected metricsListener.bind to differ from listener.bind. {}",
+                    cause.remedy(METRICS_NETWORK_EXPOSURE_KEY)
+                )));
             }
         }
         Ok(config)
@@ -443,27 +445,39 @@ where
 {
     let listener = Option::<MetricsListenerConfig>::deserialize(deserializer)?;
     if let Some(listener) = &listener {
-        if !metrics_bind_is_private(listener.bind.socket_addr(), listener.network_exposure) {
-            return Err(serde::de::Error::custom(
-                "metricsListener.bind must be a loopback or private address on a non-zero port; bind 127.0.0.1 or a private address, or declare networkExposure: container-private to bind the wildcard in a container",
-            ));
+        if let Err(cause) = registry_platform_config::check_metrics_bind_address(
+            listener.bind.socket_addr(),
+            listener.network_exposure,
+        ) {
+            return Err(serde::de::Error::custom(format!(
+                "metricsListener.bind is refused: {cause}. {}",
+                cause.remedy(METRICS_NETWORK_EXPOSURE_KEY)
+            )));
         }
     }
     Ok(listener)
 }
 
-fn metrics_bind_is_private(
-    bind: std::net::SocketAddr,
-    exposure: registry_platform_config::ListenerNetworkExposure,
-) -> bool {
-    registry_platform_config::check_metrics_bind_address(bind, exposure).is_ok()
+/// The config path of the exposure key a wildcard metrics refusal names.
+pub const METRICS_NETWORK_EXPOSURE_KEY: &str = "metricsListener.networkExposure";
+
+/// The refusal for a metrics bind that would occupy the same socket as
+/// `other`, a listener the metrics must stay apart from. `name` is how the
+/// refusal names that listener.
+#[must_use]
+pub fn metrics_bind_overlap(
+    metrics: std::net::SocketAddr,
+    name: &'static str,
+    other: std::net::SocketAddr,
+) -> Option<registry_platform_config::MetricsBindError> {
+    registry_platform_config::check_metrics_bind_apart(metrics, &[(name, other)]).err()
 }
 
 /// Whether a metrics bind would occupy the same socket as `other`, a
 /// listener the metrics must stay apart from.
 #[must_use]
 pub fn metrics_bind_overlaps(metrics: std::net::SocketAddr, other: std::net::SocketAddr) -> bool {
-    registry_platform_config::check_metrics_bind_apart(metrics, &[("other", other)]).is_err()
+    metrics_bind_overlap(metrics, "other", other).is_some()
 }
 
 fn checked_secret_providers<'de, D>(
@@ -1085,18 +1099,33 @@ mod tests {
             serde_json::from_str::<Holder>(&json)
                 .unwrap_or_else(|error| panic!("{bind} should be admitted: {error}"));
         }
-        for bind in [
-            "0.0.0.0:9464",
-            "203.0.113.7:9464",
-            "127.0.0.1:0",
-            "[::]:9464",
+        // Each refusal names its own cause and remedy. Only the wildcard
+        // names `container-private`.
+        for (bind, remedy) in [
+            (
+                "0.0.0.0:9464",
+                "metricsListener.networkExposure: container-private",
+            ),
+            ("203.0.113.7:9464", "keep metrics off public addresses"),
+            ("127.0.0.1:0", "non-zero port"),
+            (
+                "[::]:9464",
+                "metricsListener.networkExposure: container-private",
+            ),
         ] {
             let json = format!(r#"{{ "metrics_listener": {{ "bind": "{bind}" }} }}"#);
             let error = serde_json::from_str::<Holder>(&json)
                 .err()
-                .unwrap_or_else(|| panic!("{bind} should be refused"));
+                .unwrap_or_else(|| panic!("{bind} should be refused"))
+                .to_string();
             assert!(
-                error.to_string().contains("loopback or private"),
+                error.contains("metricsListener.bind is refused:"),
+                "{error}"
+            );
+            assert!(error.contains(remedy), "{bind}: {error}");
+            assert_eq!(
+                error.contains("container-private"),
+                remedy.contains("container-private"),
                 "{bind}: {error}"
             );
         }
@@ -1166,6 +1195,8 @@ mod tests {
                 .contains("metricsListener.bind to differ from listener.bind"),
             "{error}"
         );
+        assert!(error.to_string().contains("its own port"), "{error}");
+        assert!(!error.to_string().contains("container-private"), "{error}");
     }
 
     #[test]

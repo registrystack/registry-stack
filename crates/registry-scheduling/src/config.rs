@@ -16,7 +16,7 @@ use registry_platform_audit::{
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::package::is_envelope_file;
 use registry_platform_config::{
-    sha256_uri, url_hook_destinations, ConfigBlockError, ConfigBlockErrorKind,
+    sha256_uri, url_hook_destinations, ConfigBlockError, ConfigBlockErrorKind, MetricsBindError,
     PackageDigestMismatch, PackageError, PackageErrorKind, PackageLimits, RemovedKey,
     RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver,
     VerifiedPackage, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
@@ -954,10 +954,12 @@ impl RuntimeConfig {
         if let Some(metrics) = &self.metrics_listener {
             let exposure = metrics.network_exposure;
             let metrics = metrics.bind.socket_addr();
-            if !valid_metrics_address(metrics, exposure) {
-                findings.push(RuntimeConfigError::InvalidMetricsListener);
-            } else if metrics_shares_socket(metrics, self.listener.bind.socket_addr()) {
-                findings.push(RuntimeConfigError::MetricsListenerSharesSocket);
+            if let Err(cause) = check_metrics_address(metrics, exposure) {
+                findings.push(RuntimeConfigError::InvalidMetricsListener(cause));
+            } else if let Err(cause) =
+                check_metrics_apart(metrics, self.listener.bind.socket_addr())
+            {
+                findings.push(RuntimeConfigError::MetricsListenerSharesSocket(cause));
             }
         }
     }
@@ -1491,18 +1493,22 @@ fn valid_metrics_listener(
     exposure: ListenerNetworkExposure,
     listener: SocketAddr,
 ) -> bool {
-    valid_metrics_address(metrics, exposure) && !metrics_shares_socket(metrics, listener)
+    check_metrics_address(metrics, exposure).is_ok()
+        && check_metrics_apart(metrics, listener).is_ok()
 }
 
-/// Whether the metrics bind is a loopback or private address on a non-zero
+/// Check the metrics bind is a loopback or private address on a non-zero
 /// port. This depends on the metrics bind alone.
-fn valid_metrics_address(metrics: SocketAddr, exposure: ListenerNetworkExposure) -> bool {
-    registry_platform_config::check_metrics_bind_address(metrics, exposure).is_ok()
+fn check_metrics_address(
+    metrics: SocketAddr,
+    exposure: ListenerNetworkExposure,
+) -> Result<(), MetricsBindError> {
+    registry_platform_config::check_metrics_bind_address(metrics, exposure)
 }
 
-/// Whether the metrics bind uses a socket the listener already holds.
-fn metrics_shares_socket(metrics: SocketAddr, listener: SocketAddr) -> bool {
-    registry_platform_config::check_metrics_bind_apart(metrics, &[("listener", listener)]).is_err()
+/// Check the metrics bind uses no socket the listener already holds.
+fn check_metrics_apart(metrics: SocketAddr, listener: SocketAddr) -> Result<(), MetricsBindError> {
+    registry_platform_config::check_metrics_bind_apart(metrics, &[("listener", listener)])
 }
 
 /// Whether `finding` reads the value of a member the check left as an
@@ -1513,8 +1519,8 @@ fn reads_deferred_value(
 ) -> bool {
     let reads: &[&str] = match finding {
         RuntimeConfigError::InvalidListener => &["/listener"],
-        RuntimeConfigError::InvalidMetricsListener => &["/metricsListener/networkExposure"],
-        RuntimeConfigError::MetricsListenerSharesSocket => &["/listener/bind"],
+        RuntimeConfigError::InvalidMetricsListener(_) => &["/metricsListener/networkExposure"],
+        RuntimeConfigError::MetricsListenerSharesSocket(_) => &["/listener/bind"],
         RuntimeConfigError::InvalidTaskGrantStatus => &["/authentication/oidc/audience"],
         RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
             &["/listener/tlsTermination"]
@@ -1617,19 +1623,13 @@ pub enum RuntimeConfigError {
     PolicyChanged,
     #[error("listener is not valid for its declared TLS termination and network exposure")]
     InvalidListener,
-    #[error(
-        "metricsListener.bind must be a loopback or private address on a non-zero port, apart \
-         from the listener"
-    )]
-    InvalidMetricsListener,
+    #[error("metricsListener.bind is refused: {0}")]
+    InvalidMetricsListener(MetricsBindError),
     /// The same refusal as `InvalidMetricsListener`, for a metrics bind that
     /// is acceptable alone but shares the listener's socket. It is separate so
     /// the offline check can defer it while the listener bind is an expression.
-    #[error(
-        "metricsListener.bind must be a loopback or private address on a non-zero port, apart \
-         from the listener"
-    )]
-    MetricsListenerSharesSocket,
+    #[error("metricsListener.bind is refused: {0}")]
+    MetricsListenerSharesSocket(MetricsBindError),
     #[error("{path} {reason}")]
     InvalidOidcClaim {
         path: &'static str,
@@ -1721,7 +1721,7 @@ impl RuntimeConfigError {
             Self::MissingTaskGrantStatus | Self::InvalidTaskGrantStatus => "taskGrantStatus",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
             Self::InvalidListener => "listener.bind",
-            Self::InvalidMetricsListener | Self::MetricsListenerSharesSocket => {
+            Self::InvalidMetricsListener(_) | Self::MetricsListenerSharesSocket(_) => {
                 "metricsListener.bind"
             }
             Self::InvalidDatabaseReference => "database",
@@ -1775,7 +1775,7 @@ impl RuntimeConfigError {
             Self::PackageContents { .. } => "scheduling.package.unexpected-contents",
             Self::PolicyChanged => "scheduling.package.file-changed",
             Self::InvalidListener => "scheduling.runtime.invalid-listener",
-            Self::InvalidMetricsListener | Self::MetricsListenerSharesSocket => {
+            Self::InvalidMetricsListener(_) | Self::MetricsListenerSharesSocket(_) => {
                 "scheduling.runtime.invalid-metrics-listener"
             }
             Self::InvalidOidcClaim { .. } => "scheduling.runtime.invalid-oidc-claim",
@@ -1834,8 +1834,8 @@ impl RuntimeConfigError {
             Self::InvalidListener => {
                 "Bind to a loopback address under development-loopback; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
             }
-            Self::InvalidMetricsListener | Self::MetricsListenerSharesSocket => {
-                "Bind metricsListener to a loopback or private address with a nonzero port the API listener does not use, or declare metricsListener.networkExposure: container-private on a container network."
+            Self::InvalidMetricsListener(cause) | Self::MetricsListenerSharesSocket(cause) => {
+                return cause.remedy("metricsListener.networkExposure");
             }
             Self::InvalidOidcClaim { .. } => {
                 "Name a non-empty value, with explainScope distinct from readsScope, or remove the member to use its default."
@@ -4220,8 +4220,8 @@ holdPolicy:
             assert!(
                 matches!(
                     error,
-                    RuntimeConfigError::InvalidMetricsListener
-                        | RuntimeConfigError::MetricsListenerSharesSocket
+                    RuntimeConfigError::InvalidMetricsListener(_)
+                        | RuntimeConfigError::MetricsListenerSharesSocket(_)
                 ),
                 "{bind}: {error}"
             );
@@ -4247,7 +4247,9 @@ holdPolicy:
         };
         assert!(matches!(
             load(serde_json::json!({"bind": "0.0.0.0:9100"})),
-            Err(RuntimeConfigError::InvalidMetricsListener)
+            Err(RuntimeConfigError::InvalidMetricsListener(
+                MetricsBindError::Unspecified
+            ))
         ));
         assert!(load(
             serde_json::json!({"bind": "0.0.0.0:9100", "networkExposure": "container-private"})
@@ -4257,14 +4259,48 @@ holdPolicy:
             load(
                 serde_json::json!({"bind": "203.0.113.4:9100", "networkExposure": "container-private"})
             ),
-            Err(RuntimeConfigError::InvalidMetricsListener)
+            Err(RuntimeConfigError::InvalidMetricsListener(
+                MetricsBindError::NotPrivate
+            ))
         ));
         assert!(matches!(
             load(
                 serde_json::json!({"bind": "0.0.0.0:8105", "networkExposure": "container-private"})
             ),
-            Err(RuntimeConfigError::MetricsListenerSharesSocket)
+            Err(RuntimeConfigError::MetricsListenerSharesSocket(
+                MetricsBindError::OverlapsServedSocket("listener")
+            ))
         ));
+    }
+
+    #[test]
+    fn a_metrics_refusal_names_its_cause_and_remedy() {
+        let root = canonical_tempdir();
+        let refusal = |bind: &str| {
+            let (_, mut document) = development(root.path());
+            document["metricsListener"] = serde_json::json!({"bind": bind});
+            let error = RuntimeConfig::load(write_operator(root.path(), document))
+                .expect_err("the metrics listener is refused");
+            (error.to_string(), error.suggested_action())
+        };
+        let (message, action) = refusal("203.0.113.4:9100");
+        assert!(message.contains("must be loopback or private"), "{message}");
+        assert!(
+            action.contains("keep metrics off public addresses"),
+            "{action}"
+        );
+        assert!(!action.contains("container-private"), "{action}");
+        let (_, action) = refusal("127.0.0.1:0");
+        assert!(action.contains("non-zero port"), "{action}");
+        assert!(!action.contains("container-private"), "{action}");
+        let (_, action) = refusal("127.0.0.1:8105");
+        assert!(action.contains("its own port"), "{action}");
+        assert!(!action.contains("container-private"), "{action}");
+        let (_, action) = refusal("0.0.0.0:9100");
+        assert!(
+            action.contains("metricsListener.networkExposure: container-private"),
+            "{action}"
+        );
     }
 
     #[test]
