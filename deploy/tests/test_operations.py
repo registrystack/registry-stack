@@ -159,19 +159,6 @@ class ActivationTest(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(argparse.ArgumentTypeError):
                 operator_reference(invalid)
 
-    def test_upgrade_requires_an_operator_reference(self):
-        common = [
-            "stack_operator.py", "--kube-context", "test-only", "--namespace", "pilot", "--release", "directory",
-            "--database-id", "registry-test-db", "--values", "values.json",
-        ]
-        stderr = io.StringIO()
-        with (
-            patch.object(sys, "argv", [*common, "upgrade", "--backup-receipt", "backup.json"]),
-            redirect_stderr(stderr), self.assertRaises(SystemExit),
-        ):
-            stack_operator.main()
-        self.assertIn("--operator-reference", stderr.getvalue())
-
     def test_install_can_retry_same_inputs_and_resume_a_held_release(self):
         values = {
             "breg": {"enabled": True, "serve": True, "package": {"expectedDigest": DIGEST}},
@@ -667,7 +654,7 @@ class UpgradeRetryTest(unittest.TestCase):
             namespace="pilot", release="directory", database_id="registry-test-db",
             kube_context="test-only", kubectl_bin="kubectl", helm_bin="helm",
             chart=self.chart, values=root / "values.json", backup_receipt=root / "backup.json",
-            timeout=5, max_backup_age_hours=26, action="upgrade",
+            timeout=5, max_backup_age_hours=26, action="upgrade", operator_reference="CHANGE-1",
         )
         self.target = {
             "breg": {"package": {"existingClaim": "successor", "expectedDigest": DIGEST}},
@@ -692,11 +679,11 @@ class UpgradeRetryTest(unittest.TestCase):
         helm.start()
         self.addCleanup(helm.stop)
 
-    def backup_receipt(self, digest, activation_id, namespace="pilot"):
+    def backup_receipt(self, digest, activation_id, namespace="pilot", captured_at=None):
         self.args.backup_receipt.write_text(json.dumps({
             "namespace": namespace, "release": self.args.release, "databaseId": self.args.database_id,
             "packageDigest": digest, "activationId": activation_id, "snapshotId": "c" * 64,
-            "manifestSha256": "d" * 64, "capturedAt": datetime.now(timezone.utc).isoformat(),
+            "manifestSha256": "d" * 64, "capturedAt": (captured_at or datetime.now(timezone.utc)).isoformat(),
         }))
 
     def installation(self, values=None, action="upgrade"):
@@ -771,6 +758,42 @@ class UpgradeRetryTest(unittest.TestCase):
         retry.job.assert_not_called()
         retry.stop.assert_not_called()
         self.assertEqual(len(self.helm_inputs), 1)
+
+    def test_successor_activation_without_a_reference_refuses_before_any_change(self):
+        self.args.operator_reference = None
+        installation = self.installation()
+        with self.assertRaisesRegex(OperationError, "--operator-reference"):
+            installation.apply()
+        installation.stop.assert_not_called()
+        self.assertIsNone(self.record)
+        self.assertEqual(self.helm_inputs, [])
+        self.assertEqual(len(self.status["ledger"]), 1)
+
+    def test_upgrade_that_keeps_the_package_needs_no_reference(self):
+        self.args.operator_reference = None
+        self.fail_helm = False
+        self.target["breg"]["package"] = copy.deepcopy(self.deployed["breg"]["package"])
+        status = self.installation().apply()
+        self.assertEqual(status["activePackageDigest"], OTHER_DIGEST)
+        self.assertEqual(len(self.status["ledger"]), 1)
+        self.assertIsNone(self.record)
+
+    def test_retry_after_the_backup_window_resumes_with_the_original_receipt(self):
+        self.backup_receipt(OTHER_DIGEST, "previous-activation", captured_at=datetime.now(timezone.utc) - timedelta(hours=2))
+        self.interrupt()
+        self.args.max_backup_age_hours = 1
+        self.installation().apply()
+        self.assertEqual(len(self.status["ledger"]), 2)
+        self.assertIsNone(self.record)
+        self.assertEqual(self.deployed, release_values(self.target, serve=True))
+
+    def test_retry_after_the_backup_window_refuses_a_new_receipt(self):
+        self.interrupt()
+        self.backup_receipt(OTHER_DIGEST, "previous-activation")
+        retry = self.installation()
+        with self.assertRaisesRegex(OperationError, "original backup receipt"):
+            retry.apply()
+        retry.stop.assert_not_called()
 
     def test_post_commit_retry_refuses_changed_image(self):
         self.interrupt()
