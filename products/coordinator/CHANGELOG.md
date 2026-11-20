@@ -7,6 +7,16 @@
   for the restore and admissions holds, and `coordinator_oldest_due_age_seconds`
   for the oldest pending step a worker can claim. The counts cover every run,
   not the capped list in `coordinatorctl doctor`.
+- The metrics listener accepts `metricsListener.networkExposure`. Set
+  `metricsListener.networkExposure: container-private` to also allow the
+  unspecified address (for example `0.0.0.0`), for a container whose network
+  is private to the deployment. The default, `private-address`, keeps the
+  loopback-or-private rule.
+- Every database-sampled gauge is read under one 5 second scrape deadline,
+  with a server-side statement timeout set to the time left, so the server
+  cancels a slow read. Failed reads are logged by error class. A failed read
+  is counted in `coordinator_metrics_sample_failures_total`, and its gauge is
+  left out.
 - Promise Registry Coordinator at Registry Stack 1.0, as the sixth promised product, instead of
   an experimental surface. The promise covers the `workflow.yaml`, `runtime.yaml` and
   `scenarios.yaml` formats, the HTTP API, and the `coordinator` client namespace. The operations
