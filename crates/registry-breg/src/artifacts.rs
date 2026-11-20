@@ -384,6 +384,7 @@ pub(crate) fn event_data_schema_binding(
         EventTrigger::Created => "created",
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
+        EventTrigger::Read => "read",
     };
     let mut properties = Map::new();
     properties.insert("recordType".to_owned(), json!({"const": entity.id}));

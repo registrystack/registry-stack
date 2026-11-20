@@ -451,6 +451,9 @@ pub(super) struct AuthoredModuleProfile {
         schemars(with = "Listed<UniqueSet<String>, ProfilePurposes>")
     )]
     required_purposes: UniqueSet<String>,
+    /// Every request under the profile must carry a `Registry-Access-Reason` header.
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    require_access_reason: bool,
     operations: UniqueSet<Operation>,
     #[serde(default)]
     readable_fields: UniqueSet<String>,
@@ -510,6 +513,7 @@ impl From<AuthoredModuleProfile> for AccessProfileSource {
             principal_claim: authored.principal_claim,
             required_scopes: authored.required_scopes,
             required_purposes: authored.required_purposes,
+            require_access_reason: authored.require_access_reason,
             operations: authored.operations,
             readable_fields: authored.readable_fields,
             writable_fields: authored.writable_fields,
@@ -542,6 +546,7 @@ impl From<AccessProfileSource> for AuthoredModuleProfile {
             principal_claim: profile.principal_claim,
             required_scopes: profile.required_scopes,
             required_purposes: profile.required_purposes,
+            require_access_reason: profile.require_access_reason,
             operations: profile.operations,
             readable_fields: profile.readable_fields,
             writable_fields: profile.writable_fields,

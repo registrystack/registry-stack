@@ -1898,6 +1898,7 @@ fn action_profile_from_grant(
         revision_access: false,
         provenance_fields: Vec::new(),
         allow_data_export: false,
+        require_access_reason: false,
     })
 }
 

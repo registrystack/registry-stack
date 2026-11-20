@@ -414,6 +414,27 @@ pub(super) fn compile(
 
         let (dependency_entities, used_relations, evaluation_date_dependent) =
             dependencies(unit, &referenced_fields);
+        super::disclosure::validate_dataset(
+            &super::disclosure::DatasetReach {
+                dataset_id: &source.id,
+                entities,
+                dependency_entities: &dependency_entities,
+                unit,
+                referenced_fields: &referenced_fields,
+                publisher: releases
+                    .as_ref()
+                    .map(|releases| releases.publisher.as_str()),
+                readers: &grants
+                    .read_live
+                    .iter()
+                    .chain(&grants.read_exact)
+                    .chain(&grants.read_releases)
+                    .cloned()
+                    .collect(),
+                root: &root,
+            },
+            &mut errors,
+        );
         if let Some(releases) = &releases {
             validate_publisher_independence(
                 source,
@@ -796,6 +817,7 @@ fn authentication_profile(
         revision_access: false,
         provenance_fields: Vec::new(),
         allow_data_export: false,
+        require_access_reason: false,
     }
 }
 
