@@ -3634,7 +3634,7 @@ async fn apply_patch_document(
                     .fields
                     .get(&field_id)
                     .ok_or_else(|| at(PatchMember::Path))?;
-                if !profile.readable_fields.contains(&field_id) {
+                if !testable_fields(request, profile).contains(&field_id) {
                     return Err(at(PatchMember::Path));
                 }
                 if field.encryption.is_some() {
@@ -3935,12 +3935,14 @@ fn admit_submitted_names(
     {
         return Ok(());
     }
+    let testable = crate::disclosure::plan(&plan.entity, claims.access_profile())
+        .response_fields(&profile.readable_fields);
     let admitted = |api_name: &str, write: bool| {
         field_id_for_api_name(&plan.entity, api_name).is_ok_and(|field_id| {
             if write {
                 profile.writable_fields.contains(field_id)
             } else {
-                profile.readable_fields.contains(field_id)
+                testable.contains(field_id)
             }
         })
     };
@@ -4116,6 +4118,17 @@ fn validate_batch_request(
     Ok(())
 }
 
+/// The fields a JSON Patch `test` may compare. A field a bound disclosure
+/// condition names is never testable, whatever the record's state: a test
+/// against a withheld value would answer a guess about it.
+fn testable_fields(
+    request: &MutationRequest<'_>,
+    profile: &AccessProfileSource,
+) -> BTreeSet<String> {
+    crate::disclosure::plan(&request.plan.entity, request.claims.access_profile())
+        .response_fields(&profile.readable_fields)
+}
+
 fn validate_patch_static(
     request: &MutationRequest<'_>,
     operations: &[PatchOperation],
@@ -4159,7 +4172,7 @@ fn validate_patch_static(
                 mutated = true;
             }
             PatchOperation::Test { value, .. } => {
-                if !profile.readable_fields.contains(&field_id) {
+                if !testable_fields(request, profile).contains(&field_id) {
                     return Err(at(PatchMember::Path));
                 }
                 if !value.is_null() {

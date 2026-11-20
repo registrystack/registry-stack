@@ -221,6 +221,15 @@ pub(super) async fn fields(
                         current = &row.data;
                     }
                     let withheld = withheld_members(entity, record, current)?;
+                    // A change set is history: `before` and `after` are past
+                    // states, which a history condition on the current state
+                    // withholds like any other history surface.
+                    if crate::disclosure::plan(entity, record.context.access_profile())
+                        .withholds_history(current)
+                        .map_err(|_| MutationError::PreconditionFailed)?
+                    {
+                        return Err(MutationError::PreconditionFailed);
+                    }
                     let visible = |snapshot: &Map<String, Value>| {
                         select(
                             snapshot,
