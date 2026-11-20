@@ -14,6 +14,12 @@
 //! binding sweep runs after the bind, so a start that is refused never
 //! suspends what an instance already serving released.
 //!
+//! An optional operator-private metrics listener binds beside the serving
+//! listener, before either serves, and answers `/metrics` alone. The serving
+//! listener never answers it. A metrics listener that fails or is slow to
+//! drain never stops or delays the serving listener, and never changes the
+//! exit status.
+//!
 //! On SIGTERM or SIGINT, `serve` stops accepting, finishes the requests it
 //! is answering, and exits 0.
 
@@ -47,7 +53,8 @@ use crate::erasure::{
 use crate::hooks::{
     ActivatedHooks, HookActivationError, HookDeliveryService, HookRuntimeIdentity, ScopedHook,
 };
-use crate::http::{router, DocumentRoutes, Readiness};
+use crate::http::{metrics_router, router, DocumentRoutes, Readiness};
+use crate::metrics::{count_requests, Metrics, MetricsState, Sampler, Worker};
 use crate::package::{load_package, LoadedPackage, PackageLoadError};
 use crate::service::{DocumentService, ServiceSettings};
 use crate::store::{PostgresStore, StoreError};
@@ -69,6 +76,10 @@ const WORKER_IDLE_POLL: Duration = Duration::from_secs(5);
 
 /// The time between two cleanup passes.
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
+
+/// How long the metrics listener may take to drain after the runtime is
+/// asked to stop. Past it the listener is closed and the overrun is logged.
+const METRICS_SHUTDOWN_BOUND: Duration = Duration::from_secs(10);
 
 #[must_use]
 pub fn command() -> Command {
@@ -155,6 +166,8 @@ pub struct Prepared {
     transport: Arc<VerificationTransport>,
     cleanup: Cleanup,
     hook_delivery: HookDeliveryService,
+    metrics: Arc<Metrics>,
+    metrics_listener: Option<(tokio::net::TcpListener, axum::Router)>,
 }
 
 /// What the erasure worker and the cleanup pass run over.
@@ -166,6 +179,7 @@ struct Cleanup {
     orphan_age: Duration,
     dispatcher: Dispatcher<ErasureStore>,
     transport: Arc<ErasureTransport>,
+    metrics: Arc<Metrics>,
 }
 
 impl Cleanup {
@@ -198,12 +212,21 @@ impl Cleanup {
         )
     }
 
+    /// A pass that left an orphaned object unconfirmed has not completed
+    /// its work, so it is not a success.
+    fn record_pass(&self, pass: &CleanupPass) {
+        if pass.failed_orphans == 0 {
+            self.metrics.record_worker_success(Worker::Cleanup);
+        }
+    }
+
     /// Run a cleanup pass every [`CLEANUP_INTERVAL`] until `stopped` is
     /// set. A failed pass is logged and the next one runs on schedule.
     async fn run(self: Arc<Self>, mut stopped: watch::Receiver<bool>) {
         loop {
             match self.pass().await {
                 Ok(pass) if pass != CleanupPass::default() => {
+                    self.record_pass(&pass);
                     tracing::info!(
                         expired_uploads = pass.expired_uploads,
                         armed_erasures = pass.armed_erasures,
@@ -212,7 +235,7 @@ impl Cleanup {
                         "a cleanup pass finished"
                     );
                 }
-                Ok(_) => {}
+                Ok(_) => self.metrics.record_worker_success(Worker::Cleanup),
                 Err(error) => {
                     tracing::error!(error = %error, "a cleanup pass failed; the next pass retries");
                 }
@@ -311,6 +334,7 @@ async fn prepare_with(
         .verify_retained_bindings()
         .await
         .map_err(|_| RuntimeError::HookDelivery)?;
+    let sampler = Sampler::new(store.clone(), schema.clone());
     let jobs = job_table(&schema).map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
     let erasure_dispatcher = crate::erasure::dispatcher(ErasureStore::new(
         store.clone(),
@@ -327,6 +351,7 @@ async fn prepare_with(
     ))
     .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
     let deadline = TransferDeadline::new(&config.transfers);
+    let metrics = Arc::new(Metrics::default());
     let cleanup = Cleanup {
         store: store.clone(),
         storage: Arc::clone(&storage),
@@ -335,6 +360,7 @@ async fn prepare_with(
         orphan_age: deadline.for_length(ceiling) + ORPHAN_MARGIN,
         dispatcher: erasure_dispatcher,
         transport: Arc::new(ErasureTransport::new(store.clone(), Arc::clone(&storage))),
+        metrics: Arc::clone(&metrics),
     };
     let budget = TransferBudget::new(ceiling);
     let transport = Arc::new(VerificationTransport::new(
@@ -354,6 +380,20 @@ async fn prepare_with(
     let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr())
         .await
         .map_err(RuntimeError::Listen)?;
+    // Both sockets bind before either serves, so a metrics address already in
+    // use refuses startup rather than leaving a runtime nobody can scrape.
+    let metrics_listener = match &config.metrics_listener {
+        Some(metrics_listener) => Some((
+            tokio::net::TcpListener::bind(metrics_listener.bind.socket_addr())
+                .await
+                .map_err(RuntimeError::Listen)?,
+            metrics_router(MetricsState {
+                metrics: Arc::clone(&metrics),
+                sampler,
+            }),
+        )),
+        None => None,
+    };
     // The sweep changes what the instances already serving release, so it
     // runs only once every step that could refuse this start has succeeded.
     let suspended = sweep_bindings(&store, verifier.binding_digest())
@@ -400,6 +440,8 @@ async fn prepare_with(
         transport,
         cleanup,
         hook_delivery,
+        metrics,
+        metrics_listener,
     })
 }
 
@@ -742,6 +784,20 @@ impl Prepared {
         self.listener.local_addr().map_err(RuntimeError::Listen)
     }
 
+    /// The address the metrics listener is bound to, when one is configured.
+    pub fn metrics_addr(&self) -> Result<Option<SocketAddr>, RuntimeError> {
+        self.metrics_listener
+            .as_ref()
+            .map(|(listener, _)| listener.local_addr().map_err(RuntimeError::Listen))
+            .transpose()
+    }
+
+    /// The router the metrics listener serves, for tests that call it
+    /// without a socket.
+    pub fn metrics_app(&self) -> Option<axum::Router> {
+        self.metrics_listener.as_ref().map(|(_, app)| app.clone())
+    }
+
     /// The document operations this runtime serves.
     #[must_use]
     pub fn service(&self) -> Arc<DocumentService> {
@@ -759,7 +815,7 @@ impl Prepared {
 
     /// The router this runtime serves, authentication included.
     pub fn router(&self) -> axum::Router {
-        router(self.routes.clone())
+        serving_app(self.routes.clone(), Arc::clone(&self.metrics))
     }
 
     /// Run every due content verification attempt now and return how many
@@ -877,14 +933,73 @@ impl Prepared {
             "cleanup pass",
             tokio::spawn(Arc::new(self.cleanup).run(stopped.clone())),
         ));
+        let metrics_task = self.metrics_listener.map(|(listener, app)| {
+            tokio::spawn(serve_metrics_until_stopped(
+                listener,
+                app,
+                stopped.clone(),
+                METRICS_SHUTDOWN_BOUND,
+            ))
+        });
         let (listener, routes) = (self.listener, self.routes);
+        let app = serving_app(routes, self.metrics);
         let served = async move {
-            axum::serve(listener, router(routes))
+            axum::serve(listener, app)
                 .with_graceful_shutdown(stop_requested(stopped))
                 .await
                 .map_err(RuntimeError::Listen)
         };
-        supervise(served, shutdown, stop, tasks).await
+        let result = supervise(served, shutdown, stop, tasks).await;
+        if let Some(metrics_task) = metrics_task {
+            if let Err(error) = metrics_task.await {
+                tracing::error!(error = %error, "the Document Store metrics listener stopped unexpectedly");
+            }
+        }
+        result
+    }
+}
+
+/// The serving router with every answered request counted under the route
+/// template it matched. It never answers `/metrics`.
+fn serving_app(routes: DocumentRoutes, metrics: Arc<Metrics>) -> axum::Router {
+    router(routes).layer(axum::middleware::from_fn_with_state(
+        metrics,
+        count_requests,
+    ))
+}
+
+/// Serve the metrics listener until `stopped` turns true, then give it
+/// `bound` to drain. A listener that fails, or does not drain in time, is
+/// logged and ends alone: it never stops the serving listener and never
+/// changes the process's exit status.
+async fn serve_metrics_until_stopped(
+    listener: tokio::net::TcpListener,
+    app: axum::Router,
+    stopped: watch::Receiver<bool>,
+    bound: Duration,
+) {
+    let draining = stopped.clone();
+    let served = async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(stop_requested(draining))
+            .await
+    };
+    let overrun = async move {
+        stop_requested(stopped).await;
+        tokio::time::sleep(bound).await;
+    };
+    tokio::select! {
+        result = served => {
+            if let Err(error) = result {
+                tracing::error!(error = %error, "the Document Store metrics listener failed");
+            }
+        }
+        () = overrun => {
+            tracing::warn!(
+                bound_seconds = bound.as_secs_f64(),
+                "the Document Store metrics listener did not drain in time and was closed"
+            );
+        }
     }
 }
 
@@ -1338,5 +1453,41 @@ mod tests {
             rendered.contains("documents.runtime.allowed-clients-required"),
             "{rendered}"
         );
+    }
+
+    /// A scrape that hangs holds the metrics listener open past the stop
+    /// signal. The listener is closed at the bound, the overrun is not an
+    /// error, and the call returns so the process can exit cleanly.
+    #[tokio::test]
+    async fn a_metrics_listener_that_will_not_drain_is_closed_at_its_bound() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/hang",
+            axum::routing::get(std::future::pending::<&'static str>),
+        );
+        let (stop, stopped) = watch::channel(false);
+        let server = tokio::spawn(serve_metrics_until_stopped(
+            listener,
+            app,
+            stopped,
+            Duration::from_millis(200),
+        ));
+        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+        client
+            .write_all(b"GET /hang HTTP/1.1\r\nhost: x\r\n\r\n")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        stop.send(true).unwrap();
+        let started = tokio::time::Instant::now();
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("the listener is closed at its bound")
+            .expect("an overrun does not panic the task");
+        assert!(started.elapsed() >= Duration::from_millis(150));
     }
 }

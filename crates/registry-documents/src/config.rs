@@ -9,6 +9,7 @@
 //! value.
 
 use std::collections::BTreeMap;
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::Path;
 
 use registry_documents_core::{
@@ -20,8 +21,9 @@ use registry_platform_audit::{
 };
 use registry_platform_config::JwksSource;
 pub use registry_platform_config::{
-    AttachmentVerifierConfig, AuditKeyConfig, DatabaseConfig, ObjectStorageConfig,
-    OidcClientsConfig, OidcIssuerConfig, PackageConfig, PrivateListenerConfig as ListenerConfig,
+    AttachmentVerifierConfig, AuditKeyConfig, DatabaseConfig,
+    ListenerConfig as MetricsListenerConfig, ObjectStorageConfig, OidcClientsConfig,
+    OidcIssuerConfig, PackageConfig, PrivateListenerConfig as ListenerConfig,
     SecretProvidersConfig, TlsTermination, UrlHookDestinationConfig,
 };
 use registry_platform_config::{
@@ -43,6 +45,10 @@ pub(crate) use registry_platform_config::describe_secret_failure;
 /// default port so a laptop can run several side by side.
 pub const DEFAULT_LISTENER_BIND: &str = "127.0.0.1:8116";
 
+/// The stand-in for a `metricsListener.bind` expression the offline check
+/// does not substitute. It differs from [`DEFAULT_LISTENER_BIND`].
+const DEFAULT_METRICS_BIND: &str = "127.0.0.1:9100";
+
 pub const DOCUMENTS_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
     api_version: DOCUMENTS_RUNTIME_API_VERSION,
     kind: DOCUMENTS_RUNTIME_KIND,
@@ -52,6 +58,9 @@ pub const DOCUMENTS_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
 /// replaced them (CFG-CHANGE-2): the shared OIDC key-source spellings.
 const DOCUMENTS_REMOVED_KEYS: &[registry_platform_config::RemovedKey] =
     &[REMOVED_OIDC_JWKS_URI, REMOVED_OIDC_JWKS_SOURCE_KIND];
+
+const METRICS_LISTENER_CODE: &str = "documents.runtime.invalid-metrics-listener";
+const METRICS_OVERLAP_CODE: &str = "documents.runtime.metrics-listener-overlaps-listener";
 
 /// The media type an access token must declare (RFC 9068).
 const DOCUMENTS_ACCESS_TOKEN_TYPE: &str = "at+jwt";
@@ -99,6 +108,10 @@ pub struct RuntimeConfig {
     pub identity: Option<IdentityConfig>,
     pub package: PackageConfig,
     pub listener: ListenerConfig,
+    /// The operator-private listener that serves `/metrics`. Omit it to
+    /// serve no metrics.
+    #[serde(default)]
+    pub metrics_listener: Option<MetricsListenerConfig>,
     pub secret_providers: SecretProvidersConfig,
     pub database: DatabaseConfig,
     pub authentication: AuthenticationConfig,
@@ -629,6 +642,7 @@ impl RuntimeConfig {
             findings.push(Finding::block("/package", &error));
         }
         self.check_listener(&mut findings);
+        self.check_metrics_listener(&mut findings);
         self.check_secret_providers(&mut findings);
         self.check_database(&mut findings);
         self.check_oidc(&mut findings);
@@ -657,6 +671,28 @@ impl RuntimeConfig {
                 "/listener",
                 "listener.bind is not allowed for the declared tlsTermination and networkExposure",
                 "Bind a loopback address for development-loopback, a loopback or private address behind operator-controlled-upstream, or the unspecified address only with container-private.",
+            ));
+        }
+    }
+
+    fn check_metrics_listener(&self, findings: &mut Vec<Finding>) {
+        let Some(metrics) = &self.metrics_listener else {
+            return;
+        };
+        let metrics = metrics.bind.socket_addr();
+        if !is_private_metrics_bind(metrics) {
+            findings.push(Finding::new(
+                METRICS_LISTENER_CODE,
+                "/metricsListener/bind",
+                "metricsListener.bind must be a loopback or private address on a non-zero port",
+                "Bind metricsListener to a loopback or private address with a nonzero port.",
+            ));
+        } else if shares_socket(metrics, self.listener.bind.socket_addr()) {
+            findings.push(Finding::new(
+                METRICS_OVERLAP_CODE,
+                "/metricsListener/bind",
+                "metricsListener.bind shares a socket with listener.bind",
+                "Bind metricsListener to an address and port the serving listener does not use.",
             ));
         }
     }
@@ -897,7 +933,7 @@ pub fn check_runtime_file(
             }
             findings
                 .iter()
-                .filter(|finding| !check.defers_within(&finding.pointer))
+                .filter(|finding| !is_deferred(&check, finding))
                 .map(|finding| positioned(&check, finding))
                 .collect()
         }
@@ -907,6 +943,43 @@ pub fn check_runtime_file(
         report: check.report_with(DOCUMENTS_RUNTIME_KIND, diagnostics),
         unavailable: check.unavailable,
     }
+}
+
+/// Whether `finding` reads a member the check left as an expression, so a
+/// stand-in, not the operator's value, decided it. The overlap finding reads
+/// both binds, and sits at the metrics bind: when only the serving bind is
+/// an expression it is the only finding left out.
+fn is_deferred(check: &RuntimeFileCheck<RuntimeConfig>, finding: &Finding) -> bool {
+    check.defers_within(&finding.pointer)
+        || (finding.code == METRICS_OVERLAP_CODE && check.defers("/listener/bind"))
+}
+
+/// The metrics listener binds a concrete loopback or private address on a
+/// non-zero port. Link-local, public, multicast, and wildcard addresses are
+/// refused, so the series are never published on a routable interface by
+/// accident.
+fn is_private_metrics_bind(metrics: SocketAddr) -> bool {
+    let address = metrics.ip();
+    let private = match address {
+        IpAddr::V4(address) => address.is_loopback() || address.is_private(),
+        IpAddr::V6(address) => address.is_loopback() || is_unique_local(address),
+    };
+    metrics.port() != 0 && private && !address.is_unspecified() && !address.is_multicast()
+}
+
+fn is_unique_local(address: Ipv6Addr) -> bool {
+    address.segments()[0] & 0xfe00 == 0xfc00
+}
+
+/// Whether binding `metrics` would take the socket the serving `listener`
+/// holds. An IPv6 wildcard socket is commonly dual-stack, so it covers both
+/// families; the IPv4 wildcard covers only IPv4.
+fn shares_socket(metrics: SocketAddr, listener: SocketAddr) -> bool {
+    let wildcard_covers_metrics = match listener.ip() {
+        IpAddr::V4(listener) => listener.is_unspecified() && metrics.ip().is_ipv4(),
+        IpAddr::V6(listener) => listener.is_unspecified(),
+    };
+    (metrics.ip() == listener.ip() || wildcard_covers_metrics) && metrics.port() == listener.port()
 }
 
 /// The report `documents serve` prints when it refuses the runtime document
@@ -957,6 +1030,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
     let segments: Vec<&str> = pointer.split('/').skip(1).collect();
     match segments.as_slice() {
         ["listener", "bind"] => DEFAULT_LISTENER_BIND,
+        ["metricsListener", "bind"] => DEFAULT_METRICS_BIND,
         ["listener", "tlsTermination"] => "development-loopback",
         ["listener", "networkExposure"] => "private-address",
         ["audit", "destination"] => "file",
@@ -1463,5 +1537,110 @@ pub(crate) mod tests {
                 "Remove the member, or set audit.destination: file."
             );
         }
+    }
+
+    /// The starter runtime with a `metricsListener` bound to `bind` and its
+    /// serving listener bound to `listener`.
+    fn with_metrics(listener: &str, bind: &str) -> String {
+        STARTER_RUNTIME
+            .replace("bind: 127.0.0.1:8116", &format!("bind: {listener}"))
+            .replace("bind: 127.0.0.1:9116", &format!("bind: \"{bind}\""))
+    }
+
+    #[test]
+    fn the_metrics_listener_is_off_unless_named() {
+        assert!(parse(STARTER_RUNTIME).unwrap().metrics_listener.is_some());
+        let start = STARTER_RUNTIME.find("metricsListener:").unwrap();
+        let end = STARTER_RUNTIME.find("secretProviders:").unwrap();
+        let omitted = format!("{}{}", &STARTER_RUNTIME[..start], &STARTER_RUNTIME[end..]);
+        assert!(parse(&omitted).unwrap().metrics_listener.is_none());
+    }
+
+    #[test]
+    fn the_metrics_listener_must_be_private_and_apart_from_the_listener() {
+        for bind in [
+            "0.0.0.0:9090",
+            "[::]:9090",
+            "203.0.113.4:9090",
+            "169.254.1.1:9090",
+            "[fe80::1]:9090",
+            "127.0.0.1:0",
+            "[2001:db8::1]:9090",
+            "224.0.0.1:9090",
+            "127.0.0.1:8116",
+        ] {
+            let text = with_metrics("127.0.0.1:8116", bind);
+            let RuntimeConfigError::Refused(findings) = parse(&text).expect_err(bind) else {
+                panic!("a runtime refusal for {bind}");
+            };
+            assert_eq!(findings.len(), 1, "{bind}: {findings:?}");
+            assert_eq!(findings[0].pointer, "/metricsListener/bind", "{bind}");
+            assert!(!findings[0].message.contains(bind), "{bind}");
+        }
+        for bind in [
+            "127.0.0.1:9100",
+            "10.1.2.3:9100",
+            "[::1]:9100",
+            "[fd00::5]:9100",
+        ] {
+            let config = parse(&with_metrics("127.0.0.1:8116", bind)).expect(bind);
+            assert!(config.metrics_listener.is_some(), "{bind}");
+        }
+    }
+
+    #[test]
+    fn the_metrics_listener_may_not_share_a_wildcard_listener_port() {
+        let shares = |metrics: &str, listener: &str| {
+            shares_socket(metrics.parse().unwrap(), listener.parse().unwrap())
+        };
+        assert!(shares("10.0.0.5:8100", "0.0.0.0:8100"));
+        assert!(shares("10.0.0.5:8100", "[::]:8100"));
+        assert!(!shares("[fd00::5]:8100", "0.0.0.0:8100"));
+        assert!(!shares("10.0.0.5:8101", "0.0.0.0:8100"));
+    }
+
+    #[cfg(unix)]
+    fn offline_codes(text: &str) -> Vec<String> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("runtime.yaml");
+        std::fs::write(&path, text).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let check = check_runtime_file(&path, false, None);
+        check
+            .report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| format!("{} {}", diagnostic.code, diagnostic.path))
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_expression_serving_bind_defers_only_the_overlap_comparison() {
+        // The serving bind is not known, so a metrics bind equal to the
+        // stand-in or to the file's other value is not compared.
+        let deferred = with_metrics("${DOCUMENTS_BIND}", "127.0.0.1:8116");
+        assert_eq!(offline_codes(&deferred), Vec::<String>::new());
+        // A metrics bind that is itself public is still reported.
+        let public = with_metrics("${DOCUMENTS_BIND}", "203.0.113.4:9090");
+        assert_eq!(
+            offline_codes(&public),
+            ["documents.runtime.invalid-metrics-listener /metricsListener/bind"]
+        );
+        // A concrete overlap is reported when both binds are known.
+        let overlap = with_metrics("127.0.0.1:8116", "127.0.0.1:8116");
+        assert_eq!(
+            offline_codes(&overlap),
+            ["documents.runtime.metrics-listener-overlaps-listener /metricsListener/bind"]
+        );
+        // An expression metrics bind is not judged at all.
+        let expression = with_metrics("127.0.0.1:8116", "${DOCUMENTS_METRICS_BIND}");
+        assert_eq!(offline_codes(&expression), Vec::<String>::new());
     }
 }

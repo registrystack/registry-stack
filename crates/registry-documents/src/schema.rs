@@ -1069,6 +1069,8 @@ mod tests {
             .lines()
             .filter_map(|line| line.trim().strip_prefix(".route("))
             .filter_map(|rest| rest.split(',').next())
+            // The metrics listener is operator-private, not part of the API.
+            .filter(|path| *path != "METRICS_PATH")
             .collect();
         let described: std::collections::BTreeSet<&str> = OPERATIONS
             .iter()
