@@ -237,6 +237,38 @@ async fn the_metrics_wildcard_needs_container_private_exposure() {
 }
 
 #[tokio::test]
+async fn serve_revalidates_the_metrics_listener_before_any_socket_is_bound() {
+    use registry_evidence_oid4vp::config::MetricsListenerConfig;
+    use registry_evidence_oid4vp::service::{serve, VerifierService};
+    use registry_platform_config::ListenerNetworkExposure;
+
+    for bind in ["0.0.0.0:9090", "127.0.0.1:8095"] {
+        let harness = Harness::new(&Options::default()).await;
+        let mut config = harness.config();
+        config.listener.bind = "127.0.0.1:8095".parse().expect("a socket address");
+        config.metrics_listener = Some(MetricsListenerConfig {
+            bind: bind.parse().expect("a socket address"),
+            network_exposure: ListenerNetworkExposure::PrivateAddress,
+        });
+        let service = std::sync::Arc::new(
+            VerifierService::load_with_clock(config, harness.clock())
+                .await
+                .expect("the service starts"),
+        );
+        // A service that does not refuse binds and serves until shutdown, so
+        // the wait is bounded.
+        let served = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            serve(service, std::future::pending()),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{bind}: serve bound its sockets instead of refusing"));
+        let error = served.expect_err("a mutated unsafe metrics listener is refused");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput, "{bind}");
+    }
+}
+
+#[tokio::test]
 async fn a_secret_reference_to_a_disabled_provider_is_refused() {
     let harness = Harness::new(&Options::default()).await;
     edit(

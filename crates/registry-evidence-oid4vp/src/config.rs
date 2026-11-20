@@ -382,6 +382,23 @@ pub struct Oid4vpConfig {
 }
 
 impl Oid4vpConfig {
+    /// The first rule the listener bindings break, as a sentence.
+    ///
+    /// The service checks this again immediately before binding, so a
+    /// configuration assembled in code is held to the rule the file is.
+    #[must_use]
+    pub fn binding_fault(&self) -> Option<&'static str> {
+        let mut findings = Vec::new();
+        binding_findings(
+            self.listener.bind,
+            self.metrics_listener
+                .as_ref()
+                .map(|metrics| (metrics.bind, metrics.network_exposure)),
+            &mut findings,
+        );
+        findings.first().map(|finding| finding.message)
+    }
+
     /// Load and validate the runtime file at the absolute `path`.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         Self::load_reporting(path).map(|(config, _)| config)

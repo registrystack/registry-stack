@@ -1374,6 +1374,9 @@ pub async fn serve<F>(service: Arc<VerifierService>, shutdown: F) -> io::Result<
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    if let Some(fault) = service.config.binding_fault() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, fault));
+    }
     let listener = TcpListener::bind(service.config.listener.bind).await?;
     let metrics_listener = match &service.config.metrics_listener {
         Some(config) => Some(TcpListener::bind(config.bind).await?),
