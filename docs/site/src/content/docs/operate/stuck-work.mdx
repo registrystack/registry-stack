@@ -186,6 +186,10 @@ See the retention guide for what is kept.
 - `messaging_metrics_sample_failures_total{sample}` counts scrapes where the dispatch queue could not be read.
 - `messagingctl messages list --status` filters by status, with `--limit` (default 50).
 
+A message whose attempts run out leaves `pending` and becomes `failed`.
+With the default retry policy that happens within about 7.5 minutes, before the backlog alert below could fire.
+No gauge counts failed messages, so alert on `transient` attempts and list them with `messagingctl messages list --status failed`.
+
 **Clear.** All of these take `--runtime-config` and run on the host.
 
 - `messagingctl messages show` reads one message.
@@ -408,10 +412,12 @@ Publishing the metrics port or running the container on the host network exposes
 ## Scrape the metrics listeners
 
 Each product serves `/metrics` on its own `metricsListener`, so give each product its own scrape job.
+The Adapter facade (`adapter serve`) and the Adapter job host (`adapter-job pass --loop`) are separate processes, so each is its own scrape target.
+The Evidence protocol services, OID4VCI and OID4VP, are also separate processes with their own targets.
 No product has a default metrics port.
 The ports below are the examples on each product's operate or reference page, and the addresses are examples.
 Use the `bind` you set in each runtime file.
-Evidence and Adapter pages show no example port, so the two ports here are placeholders.
+The Evidence and Adapter pages show no example port, so the ports for those jobs are placeholders.
 
 ```yaml
 global:
@@ -436,8 +442,14 @@ scrape_configs:
     static_configs: [{targets: ["10.42.0.11:9108"]}]
   - job_name: adapter
     static_configs: [{targets: ["10.42.0.12:9109"]}]
+  - job_name: adapter-job
+    static_configs: [{targets: ["10.42.0.14:9109"]}]
   - job_name: evidence
     static_configs: [{targets: ["10.42.0.13:9110"]}]
+  - job_name: evidence-oid4vci
+    static_configs: [{targets: ["10.42.0.15:9111"]}]
+  - job_name: evidence-oid4vp
+    static_configs: [{targets: ["10.42.0.16:9112"]}]
 ```
 
 The listener has no authentication.
@@ -459,6 +471,7 @@ To keep one file instead, write a single `groups:` key and move each product's `
 
 To cover a new series, add one rule to that product's group.
 Keep one `groups` entry per product, with the product name as the `name`.
+Adapter has two, one for the facade and one for the job host.
 
 ### Coordinator
 
@@ -800,9 +813,25 @@ groups:
 
 ### Adapter
 
+The facade and the job host each get their own rule file.
+Load the job host file only where `adapter-job pass --loop` runs.
+A facade-only deployment never serves `adapter_job_items`, so its `absent()` rule would page for nothing.
+
 ```yaml
 groups:
   - name: adapter
+    rules:
+      - alert: AdapterJournalWriteFailing
+        expr: increase(adapter_journal_write_failures_total[15m]) > 0
+        for: 0m
+        labels: {severity: page}
+        annotations:
+          summary: The facade failed to write its audit journal, so exchanges answered an internal error.
+```
+
+```yaml
+groups:
+  - name: adapter-job
     rules:
       - alert: AdapterJobItemsHeld
         expr: adapter_job_items{state="held"} > 0
@@ -828,12 +857,6 @@ groups:
         labels: {severity: warn}
         annotations:
           summary: Passes are failing to settle. The reason label names why.
-      - alert: AdapterJournalWriteFailing
-        expr: increase(adapter_journal_write_failures_total[15m]) > 0
-        for: 0m
-        labels: {severity: page}
-        annotations:
-          summary: The facade failed to write its audit journal, so exchanges answered an internal error.
       - alert: AdapterJobGaugeSampleFailing
         expr: increase(adapter_job_gauge_sample_failures_total[15m]) > 0
         for: 0m
@@ -865,7 +888,13 @@ groups:
         for: 15m
         labels: {severity: warn}
         annotations:
-          summary: Messages have stayed pending.
+          summary: Messages have stayed pending. The dispatch worker may be stopped.
+      - alert: MessagingTransientFailures
+        expr: increase(messaging_provider_attempts_total{outcome="transient"}[15m]) > 0
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: The provider keeps failing temporarily. Messages that run out of attempts become failed. Run messagingctl messages list.
       - alert: MessagingPermanentFailures
         expr: increase(messaging_provider_attempts_total{outcome="permanent"}[15m]) > 0
         for: 0m
