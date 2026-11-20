@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -1492,28 +1492,12 @@ fn valid_metrics_listener(metrics: SocketAddr, listener: SocketAddr) -> bool {
 /// Whether the metrics bind is a loopback or private address on a non-zero
 /// port. This depends on the metrics bind alone.
 fn valid_metrics_address(metrics: SocketAddr) -> bool {
-    let address = metrics.ip();
-    let private = match address {
-        IpAddr::V4(address) => address.is_loopback() || address.is_private(),
-        IpAddr::V6(address) => address.is_loopback() || is_unique_local(address),
-    };
-    metrics.port() != 0 && private && !address.is_unspecified() && !address.is_multicast()
+    registry_platform_config::check_metrics_bind_address(metrics).is_ok()
 }
 
 /// Whether the metrics bind uses a socket the listener already holds.
 fn metrics_shares_socket(metrics: SocketAddr, listener: SocketAddr) -> bool {
-    let address = metrics.ip();
-    // An IPv6 wildcard socket is commonly dual-stack, so it covers both
-    // families; the IPv4 wildcard covers only IPv4.
-    let wildcard_covers_metrics = match listener.ip() {
-        IpAddr::V4(listener) => listener.is_unspecified() && address.is_ipv4(),
-        IpAddr::V6(listener) => listener.is_unspecified(),
-    };
-    (address == listener.ip() || wildcard_covers_metrics) && metrics.port() == listener.port()
-}
-
-fn is_unique_local(address: Ipv6Addr) -> bool {
-    address.segments()[0] & 0xfe00 == 0xfc00
+    registry_platform_config::check_metrics_bind_apart(metrics, &[("listener", listener)]).is_err()
 }
 
 /// Whether `finding` reads the value of a member the check left as an
