@@ -224,6 +224,71 @@ The key gives no profile any access.
     crates/registry-bregctl/src/starters.rs, facility-registry replacements;
     products/breg/examples/facility/registry.yaml. */}
 
+## Require search criteria for lists
+
+A grant that lets a profile `list` a Record type lets it browse every row the boundaries admit.
+When the caller should find a Record, not enumerate them, add `requiredFilters` to the grant. Each
+entry is an alternative set of fields, and a list must pin every field of at least one set with an
+`eq` filter:
+
+```diff lang="yaml" title="facility/registry.yaml" test-edit
+           readPaths:
+             - {path: operators, readableFields: [operator-code, status, jurisdiction]}
++          filterableFields: [facility-code, city, status]
++          requiredFilters:
++            - fields: [facility-code]
++            - fields: [city, status]
+           rowBoundaries:
+             - {field: jurisdiction, claim: jurisdiction, operator: equals}
+```
+
+With this grant, `GET /v1/records/facilities?$filter=facilityCode eq 'F-001'` runs, and so does
+a filter that pins both `city` and `status`. A list with no filter, or with only `city`, is refused
+with `400 query.filter_required` before any query runs. The response carries `requiredFilters`, the
+acceptable sets as API field names, and its `detail` names them.
+
+An alternative counts as met only when the filter is a top-level `and` of predicates, brackets
+included, and every field of the alternative has an `eq` predicate with a non-null value. A predicate
+under `or` or `not` does not count, and neither do `ne`, comparisons, `in`, `startswith`, or a test for
+null. Other predicates may sit beside the required ones. `$count` is held to the same rule. A
+`$skiptoken` cursor carries the first page's filter under its signature, so a continuation page
+cannot drop or change it.
+
+`bregctl check` refuses a `requiredFilters` that:
+
+- names a field missing from the same grant's `filterableFields`
+  (`breg.access-profile.required-filters-field-not-filterable`);
+- names a field that cannot take an `eq` filter
+  (`breg.access-profile.required-filters-field-not-equality-filterable`);
+- sits on a grant without `list`
+  (`breg.access-profile.required-filters-list-required`);
+- is empty, has an empty alternative, repeats a field, repeats an alternative, or has more than
+  eight alternatives (`breg.access-profile.required-filters-empty`,
+  `breg.access-profile.required-filters-duplicate`, `breg.access-profile.required-filters-too-many`).
+
+Check the edited project:
+
+```sh
+bregctl check facility
+```
+
+```text test-excerpt
+0 errors, 4 warnings in 3 files
+```
+
+`requiredFilters` governs `list` only. That includes the paged collection reads that share its
+grant, such as a temporal `current` or `as-of` list and a GIS collection with `bbox`. It does not
+change lookups, a get, a read path, a bulk export, or a `snapshot` read. A profile that holds those grants can still enumerate
+through them, so grant them only where the caller may enumerate. The same metadata that lists
+`filterableFields` for a surface also lists its `requiredFilters`, so a client can ask for the
+right criteria before it searches.
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, required_filters_satisfied() and read_query();
+    crates/registry-breg/src/compiler.rs, validate_required_filters();
+    crates/registry-breg/src/problem.rs, QueryFilterRequired;
+    crates/registry-breg/tests/http_read_only.rs, a_list_that_pins_no_alternative_is_refused_before_any_query;
+    crates/registry-breg/tests/required_filters_compile.rs. */}
+
 ## Require a current membership
 
 A row boundary works when the Record carries the claim value it is compared with. Sometimes the

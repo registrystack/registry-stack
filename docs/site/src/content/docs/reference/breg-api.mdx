@@ -196,6 +196,11 @@ from `filterableFields`, `$orderby` from `sortableFields`, and `$count` needs `a
 else answers `400 query.invalid` with `fieldPath` naming the parameter. An unknown field and a
 withheld field return the same problem, and the field itself is never named.
 
+A grant that sets `requiredFilters` also refuses a list, and a `$count`, whose `$filter` does not
+pin every field of one listed set with a top-level `eq` predicate. The answer is
+`400 query.filter_required`, whose `requiredFilters` member and `detail` name the acceptable sets.
+See [Require search criteria for lists](../../configure/breg-access/#require-search-criteria-for-lists).
+
 <ApiReferenceTable id="query-options" />
 
 ```text
@@ -821,7 +826,7 @@ changes with the declaration. `unique` and `temporal-non-overlap` conflicts stay
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs, fixed_problem(), lookup_unresolved(), cursor_invalid(), precondition_required(), invalid_request_at(), and invalid_query_at();
     crates/registry-breg/src/problem_location.rs, RequestLocation and STATISTICS_QUERY_PARAMETERS;
-    crates/registry-breg/src/query.rs, QueryBuilder::apply();
+    crates/registry-breg/src/query.rs, QueryBuilder::apply(); crates/registry-breg/src/problem.rs, QueryFilterRequired;
     crates/registry-breg/src/mutation.rs, admit_submitted_names() and map_field_database_error();
     crates/registry-breg/src/correlation.rs, row_local_constraint_response();
     crates/registry-breg/tests/postgres_mutation.rs, record_and_query_refusals_name_only_fixed_members_and_admitted_fields() and real_postgres_row_local_constraint_problems_name_only_readable_declarations();
