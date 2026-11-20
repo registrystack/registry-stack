@@ -190,6 +190,23 @@
       ],
       "type": "string"
     },
+    "MetricsListenerConfig": {
+      "additionalProperties": false,
+      "description": "The operator-private metrics listener of a runtime. `networkExposure`\nhas the meaning it has on the serving listener: `private-address` (the\ndefault) requires a loopback or private address, and `container-private`\nalso permits the unspecified address inside a private container network.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "networkExposure": {
+          "$ref": "#/$defs/ListenerNetworkExposure",
+          "default": "private-address"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
     "ObjectStorageConfig": {
       "additionalProperties": false,
       "description": "One S3-compatible bucket a runtime keeps content bytes in, and the\nruntime's credentials for it. The decode checks only the shape; the\nobject-store transport refuses a non-loopback `http` URL, a URL carrying a\npath, query, or fragment, and a malformed bucket or region name before it\nsends anything.",
