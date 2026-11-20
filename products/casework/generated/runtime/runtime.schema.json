@@ -418,10 +418,14 @@
     },
     "MetricsListenerConfig": {
       "additionalProperties": false,
-      "description": "Operator-private listener for `/metrics` and `/version`.\n\nIt is separate from the API listener so the counters and the active\npackage digest never appear on the surface the public contract describes.",
+      "description": "The operator-private metrics listener of a runtime. `networkExposure`\nhas the meaning it has on the serving listener: `private-address` (the\ndefault) requires a loopback or private address, and `container-private`\nalso permits the unspecified address inside a private container network.",
       "properties": {
         "bind": {
-          "type": "string"
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "networkExposure": {
+          "$ref": "#/$defs/ListenerNetworkExposure",
+          "default": "private-address"
         }
       },
       "required": [
