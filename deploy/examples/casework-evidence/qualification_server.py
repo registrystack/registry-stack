@@ -111,6 +111,8 @@ def main():
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        # Ctrl-C is the intended way to stop this development fixture. The
+        # finally block closes the server.
         pass
     finally:
         server.server_close()

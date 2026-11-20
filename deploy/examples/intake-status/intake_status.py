@@ -3,7 +3,7 @@
 import calendar
 import json
 import os
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -19,13 +19,13 @@ def status_payload(text):
     return (json.dumps(values, separators=(",", ":")) + "\n").encode()
 
 
-def main():
-    path = os.environ["PUBLIC_PATH"]
-    port = int(os.environ["PORT"])
-    body = status_payload(Path("/etc/registry-extension/status.json").read_text())
-
+def make_handler(path, body):
     class StatusHandler(BaseHTTPRequestHandler):
         timeout = 5
+
+        def version_string(self):
+            # The default names the Python runtime and its version.
+            return "intake-status"
 
         def log_request(self, code="-", size="-"):
             self.log_message("intake status request returned %s", code)
@@ -41,7 +41,19 @@ def main():
             self.end_headers()
             self.wfile.write(body)
 
-    with HTTPServer(("0.0.0.0", port), StatusHandler) as server:
+    return StatusHandler
+
+
+def make_server(address, path, body):
+    return ThreadingHTTPServer(address, make_handler(path, body))
+
+
+def main():
+    path = os.environ["PUBLIC_PATH"]
+    port = int(os.environ["PORT"])
+    body = status_payload(Path("/etc/registry-extension/status.json").read_text())
+
+    with make_server(("0.0.0.0", port), path, body) as server:
         print(f"Public intake status is listening on port {port}.")
         server.serve_forever()
 

@@ -8,9 +8,9 @@ production identity, source, or signing services.
 
 `qualification_server.py` serves:
 
-- one fixed OIDC JWKS document at `/.well-known/jwks.json`;
-- one health response at `/healthz`;
-- the bounded synthetic records used by the released Evidence standalone
+- One fixed OIDC JWKS document at `/.well-known/jwks.json`.
+- One health response at `/healthz`.
+- The bounded synthetic records used by the released Evidence standalone
   example.
 
 The server requires TLS and a static source token. It disables access logging
@@ -18,8 +18,8 @@ because source paths can contain selectors. Keep the issuer private key outside
 Kubernetes and issue only short-lived synthetic tokens for qualification.
 
 Casework has two independently governed issuer bindings. The runtime OIDC issuer
-authenticates access tokens, while each `trustedProducers` entry in the immutable
-package authorizes review submissions. A live create test therefore requires a
+authenticates access tokens. Each `trustedProducers` entry in the immutable
+package authorises review submissions. A live create test therefore requires a
 fresh reviewed package whose trusted producer issuer and subject exactly match
 the synthetic HTTPS issuer and token subject. Changing only the runtime OIDC
 configuration is expected to leave review creation denied.
@@ -34,7 +34,7 @@ when one service address is sufficient.
 `qualification_transit_proxy.py` is a workload-local, Unix-socket proxy for one
 synthetic Vault Transit key named `evidence-signing`. It forwards only:
 
-- `GET /v1/transit/keys/evidence-signing`;
+- `GET /v1/transit/keys/evidence-signing`.
 - `POST /v1/transit/sign/evidence-signing/sha2-256`.
 
 The scoped synthetic Vault policy must match those exact upstream paths:
@@ -54,6 +54,11 @@ Unix socket. This fixture proves the v0.46 Transit protocol and sign-and-verify
 startup check with a disposable synthetic key. Qualify key custody, unseal,
 backup, rotation, and recovery with the institution's signer.
 
+The proxy reaches Vault over plain HTTP and sends the synthetic token with every
+request. That is acceptable only when Vault runs in the same Pod or on loopback.
+Do not point `--vault-host` at a Vault across the Pod network. Use HTTPS to any
+remote Vault.
+
 ## Focused checks
 
 Run the pure proxy contract test directly:
@@ -72,12 +77,12 @@ Live acceptance should retain only synthetic artifacts and establish, at
 minimum:
 
 - Casework `plan`, `apply`, and post-apply `plan` under separate runtime and
-  migration database roles over TLS;
-- Casework `/health` and `/ready`, authorized review creation, wrong-scope
+  migration database roles over TLS.
+- Casework `/health` and `/ready`, authorised review creation, wrong-scope
   denial, authenticated readback, and owner-only persistent audit readback after
-  a Pod restart;
-- Evidence authority activation, history, and post-activation check;
-- Evidence `/health` and `/ready`, authorized assertion issuance, authority
+  a Pod restart.
+- Evidence authority activation, history, and post-activation check.
+- Evidence `/health` and `/ready`, authorised assertion issuance, authority
   denial, signature verification against the governed public key, and
   owner-only persistent audit readback after a Pod restart.
 

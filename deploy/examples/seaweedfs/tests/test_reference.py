@@ -51,7 +51,7 @@ class SeaweedFSReferenceTests(unittest.TestCase):
         self.assertIn("name: registry-breg-s3", values)
         self.assertIn("networkPolicy:\n  enabled: true", values)
         self.assertNotIn("extraIngress:", values)
-        self.assertNotIn("registry-k3s-proof", values)
+        self.assertNotIn(".svc.cluster.local", values)
         self.assertIn("type: ClusterIP", values)
         self.assertNotIn("accessKey:", values)
         self.assertNotIn("secretKey:", values)
@@ -77,7 +77,7 @@ class SeaweedFSReferenceTests(unittest.TestCase):
             "accessKeyIdRef: secret:file/s3-access-key-id",
             "secretAccessKeyRef: secret:file/s3-secret-access-key",
             "attemptTimeoutMilliseconds: 10000",
-            "https://storage.registry.example.gov",
+            "https://storage.registry.example.org",
             "caBundleRef: secret:file/s3-ca.pem",
         ):
             self.assertIn(field, snippet)
@@ -97,6 +97,22 @@ class SeaweedFSReferenceTests(unittest.TestCase):
         self.assertIn("attachment_storage -- --include-ignored", script)
         self.assertNotIn("set -x", script)
         self.assertNotIn("rm -rf", script)
+
+    def test_local_qualification_needs_no_ripgrep_and_fails_when_a_check_cannot_run(self) -> None:
+        script = (ROOT / "qualify-s3.sh").read_text()
+        self.assertNotRegex(script, r"\brg\b")
+        self.assertIn("command -v grep", script)
+        self.assertIn("Could not check the versioning response", script)
+
+    def test_runbook_names_no_lab_tooling_and_states_single_server_backup(self) -> None:
+        runbook = (ROOT / "README.md").read_text()
+        self.assertNotIn("OrbStack", runbook)
+        self.assertNotIn("example.gov", runbook)
+        self.assertIn("no CSI snapshot class", runbook)
+        self.assertIn("Back up the bucket and its objects only", runbook)
+        self.assertIn("/usr/local/lib/registry-stack/helm", runbook)
+        for line in runbook.splitlines():
+            self.assertFalse(line.startswith(("helm ", "kubectl ")), line)
 
     def test_runbook_separates_bootstrap_runtime_tls_and_recovery(self) -> None:
         runbook = (ROOT / "README.md").read_text()
@@ -119,13 +135,13 @@ class SeaweedFSReferenceTests(unittest.TestCase):
         self.assertRegex(runbook, r"without\s+a trailing newline")
         for phrase in (
             "one supported BReg binding",
-            "DNS:storage.registry.example.gov",
+            "DNS:storage.registry.example.org",
             "same exact `attachmentStorage.url`",
             "same exact `region`",
             "databaseId",
             "registryId",
             "openssl verify -CAfile",
-            "-verify_hostname storage.registry.example.gov",
+            "-verify_hostname storage.registry.example.org",
         ):
             self.assertIn(phrase, runbook)
         self.assertRegex(

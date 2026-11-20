@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 
@@ -12,7 +16,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class ReferenceIdentityContract(unittest.TestCase):
-    def test_release_pin_matches_beta_58(self) -> None:
+    def test_release_pin_matches_the_chart_lock(self) -> None:
         lock = json.loads((ROOT / "chart-lock.json").read_text())
         self.assertEqual(lock["chart"]["version"], "1.0.1")
         self.assertEqual(
@@ -122,7 +126,7 @@ class ReferenceIdentityContract(unittest.TestCase):
         self.assertIn("enabled: false", values)
         self.assertIn("application: mutable", values)
         self.assertIn("resource: mutable", values)
-        self.assertIn("name: registry-proof-postgres-ca", values)
+        self.assertIn("name: registry-identity-postgres-ca", values)
         runbook = (ROOT / "README.md").read_text()
         install = runbook[runbook.index("helm install thunderid") :]
         self.assertIn(
@@ -157,6 +161,7 @@ class ReferenceIdentityContract(unittest.TestCase):
         preparer = (ROOT / "prepare-material.sh").read_text()
         self.assertIn("resources.app-kit.yaml", preparer)
         self.assertIn('--from-file="resources=', preparer)
+        self.assertNotIn("rg ", preparer)
 
     def test_runbook_names_external_postgres_schema_prerequisite(self) -> None:
         runbook = (ROOT / "README.md").read_text()
@@ -176,19 +181,14 @@ class ReferenceIdentityContract(unittest.TestCase):
         self.assertIn('command: ["./setup.sh"]', job)
         self.assertIn("initContainers:", job)
         self.assertIn("wait-for-postgres", job)
-        self.assertIn("/dev/tcp/registry-postgres.registry-k3s-proof.svc.cluster.local/5432", job)
+        self.assertIn("/dev/tcp/registry-postgres.directory.svc.cluster.local/5432", job)
         self.assertIn("/opt/thunderid/bootstrap/70-registry-agent-type.yaml", job)
         self.assertIn("/opt/thunderid/bootstrap/80-registry-agent.yaml", job)
+        self.assertIn("subPath: agent.yaml", job)
+        self.assertNotRegex(job, r"subPath: [0-9a-f]{8}-[0-9a-f-]{27}")
         self.assertNotIn("bootstrap --defaults", job)
         self.assertIn("secretKeyRef:", job)
         self.assertNotIn("value: registry-identity", job)
-
-    def test_restricted_post_renderer_only_normalizes_capability_name(self) -> None:
-        renderer = (ROOT / "post-render-restricted.sh").read_text()
-        self.assertIn("set -euo pipefail", renderer)
-        self.assertIn('select(. == "all")', renderer)
-        self.assertIn('= "ALL"', renderer)
-        self.assertNotIn("del(", renderer)
 
     def test_chart_preparer_verifies_upstream_before_narrow_patch(self) -> None:
         preparer = (ROOT / "prepare-restricted-chart.sh").read_text()
@@ -197,6 +197,7 @@ class ReferenceIdentityContract(unittest.TestCase):
         self.assertIn("expected exactly two lowercase capability entries", preparer)
         self.assertIn("- ALL", preparer)
         self.assertNotIn("rm ", preparer)
+        self.assertNotIn("rg ", preparer)
 
     def test_qualification_script_never_prints_bearer_or_password(self) -> None:
         script = (ROOT / "qualify-oidc.sh").read_text()
@@ -212,6 +213,151 @@ class ReferenceIdentityContract(unittest.TestCase):
         self.assertNotIn("set -x", script)
         self.assertNotIn("echo $", script)
         self.assertNotIn("console.log(accessToken", driver)
+
+    def test_public_files_name_no_lab_infrastructure(self) -> None:
+        banned = ("registry-k3s-proof", "beta-58", "OrbStack", "private lab", "App Kit v0.44")
+        for path in ROOT.iterdir():
+            if path.is_file():
+                text = path.read_text()
+                for name in banned:
+                    self.assertNotIn(name, text, f"{name} appears in {path.name}")
+
+    def test_runbook_uses_the_main_guide_commands(self) -> None:
+        runbook = (ROOT / "README.md").read_text()
+        self.assertIn("sudo k3s kubectl", runbook)
+        self.assertIn("/usr/local/lib/registry-stack/helm", runbook)
+        self.assertIn("KUBECONFIG=/etc/rancher/k3s/k3s.yaml", runbook)
+        for line in runbook.splitlines():
+            self.assertFalse(line.startswith("helm "), line)
+            self.assertFalse(line.startswith("sudo -n k3s"), line)
+
+    def test_runbook_says_what_to_remove_before_a_pilot(self) -> None:
+        runbook = (ROOT / "README.md").read_text()
+        self.assertIn("Before a pilot", runbook)
+        self.assertIn("qualification-officer", runbook[runbook.index("Before a pilot") :])
+        self.assertIn("QUALIFICATION_OFFICER_PASSWORD", runbook[runbook.index("Before a pilot") :])
+
+    def test_network_policy_admits_only_the_edge_and_registry_stack(self) -> None:
+        policy = (ROOT / "network-policy.yaml").read_text()
+        self.assertIn("kind: NetworkPolicy", policy)
+        self.assertIn("namespace: registry-identity-qualification", policy)
+        self.assertIn("policyTypes:\n    - Ingress", policy)
+        self.assertIn("kubernetes.io/metadata.name: kube-system", policy)
+        self.assertIn("app.kubernetes.io/name: traefik", policy)
+        self.assertIn("app.kubernetes.io/part-of: registry-stack", policy)
+        self.assertIn("kubernetes.io/metadata.name: directory", policy)
+        self.assertEqual(policy.count("port: 8090"), 1)
+        self.assertNotIn("ipBlock", policy)
+        runbook = (ROOT / "README.md").read_text()
+        self.assertIn("deploy/identity/network-policy.yaml", runbook)
+
+    def test_dead_post_renderer_is_not_referenced(self) -> None:
+        for path in ROOT.iterdir():
+            if path.is_file() and path.suffix in {".md", ".py", ".sh", ".yaml"}:
+                self.assertNotIn("post-render-restricted", path.read_text())
+
+
+class PreparerScripts(unittest.TestCase):
+    def setUp(self) -> None:
+        self.scratch = pathlib.Path(tempfile.mkdtemp(prefix="identity-prep-"))
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.bin = self.scratch / "bin"
+        self.bin.mkdir()
+        self.log = self.scratch / "kubectl.log"
+        fake = self.bin / "kubectl"
+        fake.write_text(
+            '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >>"$FAKE_KUBECTL_LOG"\n'
+            "printf 'kind: Fake\\n'\n"
+        )
+        fake.chmod(0o755)
+
+    def run_script(self, name, *args, path=None):
+        env = {
+            "PATH": path or f"{self.bin}:/usr/bin:/bin",
+            "FAKE_KUBECTL_LOG": str(self.log),
+        }
+        return subprocess.run(
+            [shutil.which("bash"), str(ROOT / name), *map(str, args)],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+    def generated(self, agents=1):
+        root = self.scratch / "generated"
+        (root / "resources").mkdir(parents=True)
+        (root / "registry-schema" / "agents").mkdir(parents=True)
+        (root / "identity-receipt.json").write_text("{}")
+        (root / "resources" / "resources.app-kit.yaml").write_text("a: b\n")
+        (root / "registry-schema" / "agent-type.yaml").write_text("a: b\n")
+        for number in range(agents):
+            (root / "registry-schema" / "agents" / f"0000000{number}-agent.yaml").write_text("a: b\n")
+        ca = self.scratch / "ca.pem"
+        ca.write_text("ca")
+        return root, ca
+
+    def test_material_is_prepared_with_fixed_agent_key_and_ca_configmap(self) -> None:
+        root, ca = self.generated()
+        out = self.scratch / "out"
+        result = self.run_script("prepare-material.sh", root, ca, out)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            sorted(p.name for p in out.iterdir()),
+            ["agent-type.yaml", "agents.yaml", "material.yaml", "postgres-ca.yaml"],
+        )
+        calls = self.log.read_text()
+        self.assertIn("create configmap registry-identity-postgres-ca", calls)
+        self.assertIn("--from-file=agent.yaml=", calls)
+        self.assertEqual([p.name for p in self.scratch.glob("out.partial.*")], [])
+
+    def test_material_failure_leaves_no_output_that_blocks_a_rerun(self) -> None:
+        root, ca = self.generated(agents=2)
+        out = self.scratch / "out"
+        result = self.run_script("prepare-material.sh", root, ca, out)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exactly one agent", result.stderr)
+        self.assertFalse(out.exists())
+        (root / "registry-schema" / "agents" / "00000001-agent.yaml").unlink()
+        rerun = self.run_script("prepare-material.sh", root, ca, out)
+        self.assertEqual(rerun.returncode, 0, rerun.stderr)
+        self.assertTrue(out.is_dir())
+
+    def fake_chart(self, gates=3):
+        chart = self.scratch / "chart"
+        (chart / "templates").mkdir(parents=True, exist_ok=True)
+        (chart / "Chart.yaml").write_text("name: thunderid\n")
+        gate = "{{- if .Values.setup.enabled }}\n"
+        (chart / "templates" / "thunderid-deployment.yaml").write_text(gate * 2)
+        (chart / "templates" / "pvc.yaml").write_text(gate * (gates - 2))
+        (chart / "templates" / "setup-job.yaml").write_text(gate)
+        return chart
+
+    def test_restored_state_chart_is_moved_into_place_only_on_success(self) -> None:
+        chart = self.fake_chart(gates=2)
+        out = self.scratch / "restored"
+        failed = self.run_script("prepare-restored-state-chart.sh", chart, out)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("expected exactly three", failed.stderr)
+        self.assertFalse(out.exists())
+        chart = self.fake_chart(gates=3)
+        ok = self.run_script("prepare-restored-state-chart.sh", chart, out)
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertIn(
+            "restoreExistingState",
+            (out / "templates" / "pvc.yaml").read_text(),
+        )
+
+    def test_missing_grep_is_reported_as_a_missing_tool(self) -> None:
+        chart = self.fake_chart()
+        tools = self.scratch / "tools"
+        tools.mkdir()
+        for tool in ("mktemp", "cp", "mv", "perl", "wc", "tr", "dirname", "chmod"):
+            (tools / tool).symlink_to(shutil.which(tool))
+        result = self.run_script(
+            "prepare-restored-state-chart.sh", chart, self.scratch / "x", path=str(tools)
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("grep is required", result.stderr)
 
 
 if __name__ == "__main__":
