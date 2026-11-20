@@ -753,7 +753,9 @@ The stop report prints the same fix as its `next` step.
 ## Scrape metrics
 
 Neither the facade listener nor the hook ingress serves metrics. Set `metricsListener.bind` in the
-runtime file to a loopback or private address with a non-zero port. It answers `GET /metrics` in
+runtime file to a loopback or private address with a non-zero port. In a container, declare
+`metricsListener.networkExposure: container-private` to bind `0.0.0.0`; see
+[Scrape metrics from a container](../stuck-work/#scrape-metrics-from-a-container). It answers `GET /metrics` in
 the Prometheus text format without authentication, so keep it inside the scraper's network. Without
 the key, no metrics are served. A public address, or the socket of the facade listener or the hook
 ingress, is refused when the runtime file is read.

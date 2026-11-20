@@ -124,7 +124,8 @@ schema gives it, and `check` also enforces the rules a schema cannot hold:
 - `store.nonceLifetimeSeconds` must not exceed `store.accessTokenLifetimeSeconds`.
 - The listener port must be non-zero.
 - `metricsListener.bind` must be a loopback or private address on a non-zero port the delivery
-  listener does not use.
+  listener does not use. Link-local and IPv4-mapped addresses are refused.
+  `metricsListener.networkExposure: container-private` also permits `0.0.0.0` or `::`.
 - A reference must name a provider the file enables, and `secretProviders.file.root` must be
   absolute.
 
