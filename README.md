@@ -29,7 +29,7 @@ release manifests, and docs.
 | Read the technical docs | [docs.registrystack.org](https://docs.registrystack.org/) |
 | Get a first minimum-disclosure assertion | [Evidence Gateway overview](https://docs.registrystack.org/dev/start/evidence-quickstart/) |
 | Build a writable registry backed by PostgreSQL | [Create and query your first registry](https://docs.registrystack.org/dev/tutorials/first-breg/) |
-| Deploy a registry on Kubernetes | [Registry Stack Helm deployment](deploy/README.md) |
+| Read an unsupported reference deployment on K3s | [Reference Helm chart](deploy/README.md) |
 | Publish an index of registry providers | [Publish and consume a Registry Discovery index](https://docs.registrystack.org/dev/tutorials/publish-and-consume-discovery-index/) |
 | Explore separate and combined product projects | [Individual and combined examples](#explore-individual-and-combined-examples) |
 | Read how Registry Studio navigates project documents | [Registry Stack language server](crates/registry-language-server/README.md) |
@@ -199,8 +199,9 @@ flowchart LR
   material, scripts, performance harnesses, and fixtures that are not normal
   workspace crates.
 - `docs/site/`: the public Registry Stack docs site.
-- `deploy/`: the Helm chart, K3s host bootstrap, workspace handover, and
+- `deploy/`: a reference Helm chart, K3s host bootstrap, and
   installation and recovery tooling for a single-server Kubernetes deployment.
+  It is unsupported and not part of any release.
 - `release/`: stack release manifests, schemas, import audit records, and public
   release and conformance tooling.
 - `external/`: notes for external inputs that intentionally stay outside this
