@@ -1002,7 +1002,11 @@ async fn read_dispatch(
             {
                 Ok(Some(query)) => query,
                 Ok(None) => return unavailable(),
-                Err(error @ (ReadQueryError::Invalid | ReadQueryError::InvalidAt(_))) => {
+                Err(
+                    error @ (ReadQueryError::Invalid
+                    | ReadQueryError::InvalidAt(_)
+                    | ReadQueryError::FilterRequired(_)),
+                ) => {
                     return audited_read_refusal_with_reason(
                         &service,
                         &route,
@@ -3089,6 +3093,12 @@ async fn read_query(
             .as_ref()
             .map(|filter| read_filter_expr_from_cursor(surface.response_entity, operation, filter))
             .transpose()?;
+        // A cursor only ever carries the filter its first page was admitted
+        // with, so a cursor that no longer meets the grant is not one this
+        // service issued for it.
+        if !required_filters_satisfied(operation, filter.as_ref()) {
+            return Err(ReadQueryError::CursorInvalid);
+        }
         let order = payload
             .query
             .order
@@ -3150,6 +3160,12 @@ async fn read_query(
         query_options.filter.as_ref(),
     )
     .map_err(|error| error.at("$filter"))?;
+    if !required_filters_satisfied(operation, filter.as_ref()) {
+        return Err(ReadQueryError::FilterRequired(required_filter_names(
+            surface.response_entity,
+            operation,
+        )));
+    }
     let spatial = first_page_spatial_query(surface, operation, query_options.bbox.as_ref())
         .map_err(|error| error.at("bbox"))?;
     let order = match &query_options.orderby {
@@ -3232,6 +3248,71 @@ async fn read_query(
         adapter_origin,
         continuation: None,
     }))
+}
+
+/// Whether the filter pins one of the operation's required field sets. A field
+/// is pinned by an `eq` predicate in the top-level conjunction, looking through
+/// groups. A predicate under `or` or `not` does not count, and neither does
+/// any other operator, since each can match many rows.
+fn required_filters_satisfied(
+    operation: &CompiledQueryOperation,
+    filter: Option<&ReadFilterExpr>,
+) -> bool {
+    if operation.required_filters.is_empty() {
+        return true;
+    }
+    let mut pinned = BTreeSet::new();
+    if let Some(filter) = filter {
+        collect_pinned_fields(filter, &mut pinned);
+    }
+    operation.required_filters.iter().any(|alternative| {
+        alternative
+            .iter()
+            .all(|field| pinned.contains(field.as_str()))
+    })
+}
+
+fn collect_pinned_fields<'a>(expr: &'a ReadFilterExpr, pinned: &mut BTreeSet<&'a str>) {
+    match expr {
+        ReadFilterExpr::Binary {
+            op: ReadLogicalOp::And,
+            left,
+            right,
+        } => {
+            collect_pinned_fields(left, pinned);
+            collect_pinned_fields(right, pinned);
+        }
+        ReadFilterExpr::Group(inner) => collect_pinned_fields(inner, pinned),
+        ReadFilterExpr::Predicate(predicate) if predicate.operator == ReadFilterOperator::Eq => {
+            pinned.insert(predicate.field_id.as_str());
+        }
+        ReadFilterExpr::Binary { .. } | ReadFilterExpr::Not(_) | ReadFilterExpr::Predicate(_) => {}
+    }
+}
+
+/// The required field sets under the names a caller writes in `$filter`.
+fn required_filter_names(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+) -> Vec<Vec<String>> {
+    operation
+        .required_filters
+        .iter()
+        .map(|alternative| {
+            alternative
+                .iter()
+                .map(|field_id| {
+                    entity
+                        .stored_fields
+                        .iter()
+                        .map(|field| &field.logical)
+                        .chain(entity.derived_fields.values().map(|field| &field.logical))
+                        .find(|field| field.id == *field_id)
+                        .map_or_else(|| field_id.clone(), |field| field.api_name.clone())
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn query_operation_for_route<'a>(
@@ -4665,10 +4746,13 @@ impl QueryParseError {
 }
 
 /// A refused read query. `InvalidAt` names the one fixed parameter at fault.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum ReadQueryError {
     Invalid,
     InvalidAt(&'static str),
+    /// The grant requires search criteria the list did not carry. Holds the
+    /// acceptable field sets as API names.
+    FilterRequired(Vec<Vec<String>>),
     CursorInvalid,
 }
 
@@ -4682,10 +4766,13 @@ impl ReadQueryError {
         }
     }
 
-    fn problem(self) -> Response {
+    fn problem(&self) -> Response {
         match self {
             Self::Invalid => invalid_query(),
             Self::InvalidAt(parameter) => invalid_query_at(parameter),
+            Self::FilterRequired(alternatives) => {
+                crate::correlation::filter_required_response(alternatives.clone())
+            }
             Self::CursorInvalid => cursor_invalid(),
         }
     }

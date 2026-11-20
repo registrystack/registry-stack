@@ -434,6 +434,7 @@ export interface BRegQueryDescriptor {
   readonly maximumInValues: number
   readonly pagination: { readonly parameter: string; readonly responsePath: string; readonly exclusive: boolean }
   readonly temporal: JsonObject | null
+  readonly requiredFilters?: ReadonlyArray<{ readonly fields: ReadonlyArray<string> }>
   readonly spatialQueries?: {
     readonly bbox: {
       readonly geometryProperty: string

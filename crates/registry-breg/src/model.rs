@@ -1822,6 +1822,10 @@ pub struct CompiledQueryOperation {
     pub projection_fields: Vec<String>,
     pub filter_fields: Vec<CompiledQueryFilterField>,
     pub sort_fields: Vec<CompiledQuerySortField>,
+    /// Alternative field sets a list must pin with top-level equality
+    /// filters. Empty when the grant requires no search criteria.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_filters: Vec<Vec<String>>,
     #[serde(default)]
     pub allow_count: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

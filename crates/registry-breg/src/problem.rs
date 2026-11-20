@@ -43,6 +43,7 @@ pub enum ProblemCode {
     ProposalReviewResultMismatch,
     ProposalSubmissionExpired,
     QueryCursorInvalid,
+    QueryFilterRequired,
     QueryInvalid,
     RequestInvalid,
     RequestTimeout,
@@ -83,6 +84,7 @@ impl ProblemCode {
         Self::ProposalReviewResultMismatch,
         Self::ProposalSubmissionExpired,
         Self::QueryCursorInvalid,
+        Self::QueryFilterRequired,
         Self::QueryInvalid,
         Self::RequestInvalid,
         Self::RequestTimeout,
@@ -125,6 +127,7 @@ impl ProblemCode {
         Self::ProposalReviewResultMismatch,
         Self::ProposalSubmissionExpired,
         Self::QueryCursorInvalid,
+        Self::QueryFilterRequired,
         Self::QueryInvalid,
         Self::RequestInvalid,
         Self::RequestTimeout,
@@ -164,6 +167,7 @@ impl ProblemCode {
             Self::ProposalReviewResultMismatch => "proposal.review_result_mismatch",
             Self::ProposalSubmissionExpired => "proposal.submission_expired",
             Self::QueryCursorInvalid => "query.cursor_invalid",
+            Self::QueryFilterRequired => "query.filter_required",
             Self::QueryInvalid => "query.invalid",
             Self::RequestInvalid => "request.invalid",
             Self::RequestTimeout => "request.timeout",
@@ -185,7 +189,10 @@ impl ProblemCode {
     #[must_use]
     pub const fn status(self) -> u16 {
         match self {
-            Self::QueryCursorInvalid | Self::QueryInvalid | Self::RequestInvalid => 400,
+            Self::QueryCursorInvalid
+            | Self::QueryFilterRequired
+            | Self::QueryInvalid
+            | Self::RequestInvalid => 400,
             Self::AuthenticationRefused => 401,
             Self::IngestionProfileMismatch | Self::WriteOutsideBoundary => 403,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
@@ -276,6 +283,9 @@ impl ProblemCode {
                 "The review result and application receipt of the submission are no longer retained."
             }
             Self::QueryCursorInvalid => "The query cursor is invalid.",
+            Self::QueryFilterRequired => {
+                "The list did not carry the search criteria its access profile requires."
+            }
             Self::QueryInvalid => "The query request is invalid.",
             Self::RequestInvalid => "The request is invalid.",
             Self::RequestTimeout => "The request timed out.",

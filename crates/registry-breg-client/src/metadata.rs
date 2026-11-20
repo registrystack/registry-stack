@@ -576,8 +576,19 @@ pub struct BRegQueryDescriptor {
     /// uninterpreted, so the caller can tell that default results are not
     /// described by a mode it knows.
     pub temporal: Option<Value>,
+    /// Alternative field sets a list must pin with `eq` filters. Empty when
+    /// the grant requires no search criteria.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_filters: Vec<BRegRequiredFilter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spatial_queries: Option<BRegSpatialQueryDescriptor>,
+}
+
+/// One acceptable set of search criteria, as API field names.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BRegRequiredFilter {
+    pub fields: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -3187,6 +3198,9 @@ fn validate_query(value: Value) -> Result<bool, BRegMetadataError> {
     positive_integer(required(&mut query, "maximumInValues")?)?;
     validate_pagination(required(&mut query, "pagination")?)?;
     validate_temporal(required(&mut query, "temporal")?)?;
+    if let Some(required) = query.remove("requiredFilters") {
+        validate_required_filters(required)?;
+    }
     let spatial_is_supported = query
         .remove("spatialQueries")
         .map(validate_spatial_queries)
@@ -3194,6 +3208,29 @@ fn validate_query(value: Value) -> Result<bool, BRegMetadataError> {
         .unwrap_or(true);
     finish(query)?;
     Ok(spatial_is_supported)
+}
+
+fn validate_required_filters(value: Value) -> Result<(), BRegMetadataError> {
+    let Value::Array(alternatives) = value else {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    };
+    if alternatives.is_empty() {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
+    for alternative in alternatives {
+        let mut alternative = object(alternative)?;
+        let Value::Array(fields) = required(&mut alternative, "fields")? else {
+            return Err(metadata_error(BRegMetadataErrorKind::Shape));
+        };
+        if fields.is_empty() {
+            return Err(metadata_error(BRegMetadataErrorKind::Shape));
+        }
+        for field in fields {
+            api_name(field)?;
+        }
+        finish(alternative)?;
+    }
+    Ok(())
 }
 
 fn validate_spatial_queries(value: Value) -> Result<bool, BRegMetadataError> {

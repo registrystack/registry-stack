@@ -3996,6 +3996,12 @@ fn problem_responses(
             },
         ]);
     }
+    if operation == Operation::List {
+        responses.entry("400").or_default().push(ProblemExample {
+            code: "query.filter_required",
+            detail: "The list did not carry the search criteria its access profile requires.",
+        });
+    }
     if operation == Operation::Lookup {
         responses.entry("404").or_default().push(ProblemExample {
             code: "lookup.unresolved",

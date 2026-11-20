@@ -4102,6 +4102,7 @@ pub(crate) fn expand_project_access(
                 writable_fields: grant.writable_fields.clone(),
                 filterable_fields: grant.filterable_fields.clone(),
                 sortable_fields: grant.sortable_fields.clone(),
+                required_filters: grant.required_filters.clone(),
                 spatial_queries: grant.spatial_queries.clone(),
                 row_boundaries: grant.row_boundaries.clone(),
                 membership_boundaries: grant.membership_boundaries.clone(),
@@ -5921,6 +5922,7 @@ fn validate_profiles(
             ));
         }
         validate_spatial_queries(access, entity, errors);
+        validate_required_filters(access, entity, errors);
         let mut read_processed = access.readable_fields.clone();
         read_processed.extend(access.filterable_fields.iter().cloned());
         read_processed.extend(access.sortable_fields.iter().cloned());
@@ -6261,6 +6263,78 @@ fn validate_single_default(
                 entity_id
             ),
         ));
+    }
+}
+
+/// The most alternative field sets one grant may require.
+const MAXIMUM_REQUIRED_FILTER_ALTERNATIVES: usize = 8;
+
+fn validate_required_filters(
+    access: &AccessProfileSource,
+    entity: &EntitySource,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if access.required_filters.is_empty() {
+        return;
+    }
+    let path = format!(
+        "recordTypes[id={}].accessProfiles[id={}].requiredFilters",
+        entity.id, access.id
+    );
+    if !access.operations.contains(&Operation::List) {
+        errors.push(Diagnostic::error(
+            "breg.access-profile.required-filters-list-required",
+            path.clone(),
+            "requiredFilters governs list, so the grant must include list",
+        ));
+    }
+    if access.required_filters.len() > MAXIMUM_REQUIRED_FILTER_ALTERNATIVES {
+        errors.push(Diagnostic::error(
+            "breg.access-profile.required-filters-too-many",
+            path.clone(),
+            &format!(
+                "requiredFilters lists {} alternatives, more than the {MAXIMUM_REQUIRED_FILTER_ALTERNATIVES} allowed",
+                access.required_filters.len()
+            ),
+        ));
+    }
+    let mut seen: Vec<BTreeSet<&str>> = Vec::new();
+    for (index, alternative) in access.required_filters.iter().enumerate() {
+        let alternative_path = format!("{path}[{index}]");
+        if alternative.fields.is_empty() {
+            errors.push(Diagnostic::error(
+                "breg.access-profile.required-filters-empty",
+                format!("{alternative_path}.fields"),
+                "a required filter alternative must name at least one field",
+            ));
+            continue;
+        }
+        let mut fields = BTreeSet::new();
+        for field in &alternative.fields {
+            if !fields.insert(field.as_str()) {
+                errors.push(Diagnostic::error(
+                    "breg.access-profile.required-filters-duplicate",
+                    format!("{alternative_path}.fields[field={field}]"),
+                    "a required filter alternative names this field more than once",
+                ));
+            }
+            if !access.filterable_fields.contains(field) {
+                errors.push(Diagnostic::error(
+                    "breg.access-profile.required-filters-field-not-filterable",
+                    format!("{alternative_path}.fields[field={field}]"),
+                    "a required filter field must also be one of the grant's filterableFields",
+                ));
+            }
+        }
+        if seen.contains(&fields) {
+            errors.push(Diagnostic::error(
+                "breg.access-profile.required-filters-duplicate",
+                alternative_path,
+                "this required filter alternative repeats an earlier one",
+            ));
+        } else {
+            seen.push(fields);
+        }
     }
 }
 
@@ -8586,6 +8660,7 @@ fn read_path_query_operation(
         projection_fields,
         filter_fields,
         sort_fields,
+        required_filters: Vec::new(),
         allow_count: grant.allow_count,
         selector_fields: Vec::new(),
         read_path: Some(grant.path.clone()),
@@ -8708,6 +8783,18 @@ fn query_operation(
     {
         processing_fields.insert(geometry_field);
     }
+    // Only the list family carries the requirement: lookups, read paths and
+    // snapshots are other operations with their own bounds.
+    let required_filters = if matches!(
+        kind,
+        CompiledQueryKind::List | CompiledQueryKind::Current | CompiledQueryKind::AsOf
+    ) && selector_fields.is_empty()
+        && read_path.is_none()
+    {
+        required_filter_alternatives(entity, profile, &filter_fields, kind, errors)
+    } else {
+        Vec::new()
+    };
     let id = if !selector_fields.is_empty() {
         format!("records.{}.{}.lookup", entity.id, profile.id)
     } else {
@@ -8729,6 +8816,7 @@ fn query_operation(
         projection_fields,
         filter_fields,
         sort_fields,
+        required_filters,
         allow_count,
         selector_fields,
         read_path,
@@ -8737,6 +8825,51 @@ fn query_operation(
         spatial,
         temporal,
     })
+}
+
+/// The authored alternatives as field-id lists, each field checked against
+/// the operation's equality-capable filter fields.
+fn required_filter_alternatives(
+    entity: &CompiledEntity,
+    profile: &AccessProfileSource,
+    filter_fields: &[CompiledQueryFilterField],
+    kind: CompiledQueryKind,
+    errors: &mut Vec<Diagnostic>,
+) -> Vec<Vec<String>> {
+    let equality = filter_fields
+        .iter()
+        .filter(|field| {
+            field
+                .operators
+                .contains(&CompiledQueryFilterOperator::Equals)
+        })
+        .map(|field| field.field.as_str())
+        .collect::<BTreeSet<_>>();
+    for alternative in &profile.required_filters {
+        for field in &alternative.fields {
+            // A field outside filterableFields is reported by the profile
+            // validation, so this reports only a filterable field that
+            // equality cannot match.
+            if kind == CompiledQueryKind::List
+                && profile.filterable_fields.contains(field)
+                && !equality.contains(field.as_str())
+            {
+                errors.push(Diagnostic::error(
+                    "breg.access-profile.required-filters-field-not-equality-filterable",
+                    format!(
+                        "recordTypes[id={}].accessProfiles[id={}].requiredFilters[field={field}]",
+                        entity.id, profile.id
+                    ),
+                    "a required filter field must be one that an eq filter can match",
+                ));
+            }
+        }
+    }
+    profile
+        .required_filters
+        .iter()
+        .map(|alternative| alternative.fields.clone())
+        .collect()
 }
 
 fn canonical_spatial_span(value: &serde_json::Number) -> serde_json::Number {

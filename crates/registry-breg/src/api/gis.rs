@@ -364,6 +364,17 @@ async fn items(
             )
             .await;
         }
+        Err(error @ ReadQueryError::FilterRequired(_)) => {
+            return audited_read_refusal(
+                &service,
+                authorized.route,
+                &authorized.surface,
+                None,
+                error.problem(),
+                &correlation,
+            )
+            .await;
+        }
         Err(ReadQueryError::CursorInvalid) => {
             return audited_read_refusal(
                 &service,

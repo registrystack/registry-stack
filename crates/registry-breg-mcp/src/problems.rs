@@ -218,6 +218,7 @@ fn problem_code(code: &BRegProblemCode) -> ToolErrorCode {
         BRegProblemCode::RequestInvalid
         | BRegProblemCode::QueryInvalid
         | BRegProblemCode::QueryCursorInvalid
+        | BRegProblemCode::QueryFilterRequired
         | BRegProblemCode::UnsupportedMediaType => ToolErrorCode::InvalidArguments,
         BRegProblemCode::RuntimeNotReady
         | BRegProblemCode::ServiceUnavailable
@@ -333,6 +334,7 @@ mod tests {
             (BRegProblemCode::RequestInvalid, "invalid-arguments"),
             (BRegProblemCode::QueryInvalid, "invalid-arguments"),
             (BRegProblemCode::QueryCursorInvalid, "invalid-arguments"),
+            (BRegProblemCode::QueryFilterRequired, "invalid-arguments"),
             (BRegProblemCode::UnsupportedMediaType, "invalid-arguments"),
             (BRegProblemCode::RuntimeNotReady, "registry-unavailable"),
             (BRegProblemCode::ServiceUnavailable, "registry-unavailable"),
