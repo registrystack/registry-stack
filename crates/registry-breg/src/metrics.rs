@@ -65,10 +65,24 @@ const QUEUE_SAMPLE_STATEMENT_TIMEOUT: &str = "5s";
 /// One database instant for runnable ages and package-blocked application work.
 pub(crate) struct QueueSample {
     ages: Vec<(PendingQueue, f64)>,
-    blocked_application_jobs: i64,
+    blocked_application_jobs: Option<i64>,
     timer: Option<TimerSample>,
     hook_deliveries: Option<[i64; HOOK_DELIVERY_STATES.len()]>,
     ingestion_runs: Option<[i64; INGESTION_RUN_STATES.len()]>,
+}
+
+impl QueueSample {
+    /// A sample with no queue reading, for the scrape in which the queue
+    /// read failed. The other samples are added to it.
+    fn unsampled() -> Self {
+        Self {
+            ages: Vec::new(),
+            blocked_application_jobs: None,
+            timer: None,
+            hook_deliveries: None,
+            ingestion_runs: None,
+        }
+    }
 }
 
 /// The delivery states of `registry_webhook_delivery_state`, in the order
@@ -456,12 +470,12 @@ impl Metrics {
             "Application jobs closed or held by a package change on the current submitted proposal, sampled at scrape.",
             MetricKind::Gauge,
         );
-        if let Some(queue_sample) = queue_sample {
+        if let Some(blocked) = queue_sample.and_then(|sample| sample.blocked_application_jobs) {
             sample(
                 &mut out,
                 "breg_proposal_application_blocked_jobs",
                 &[],
-                queue_sample.blocked_application_jobs,
+                blocked,
             );
         }
         for (name, help) in [
@@ -621,50 +635,50 @@ impl Metrics {
     }
 
     /// Sample how long the oldest due item in each queue has waited, at one
-    /// database instant. `None` when this registry has no pool, or when the
-    /// sample could not be read: that scrape then publishes no queue age,
-    /// so the series goes stale rather than reporting an empty queue, and a
-    /// failure emits a closed operational event.
+    /// database instant, with the timer, hook delivery and import samples.
+    /// `None` when this registry has no pool. A sample that could not be read
+    /// is left out of that scrape, so its series go stale rather than
+    /// reporting an empty queue, and its failure is counted and emits a
+    /// closed operational event. The samples fail independently.
     pub(crate) async fn sample_queues(&self) -> Option<QueueSample> {
         let pool = self.pool.as_ref()?;
         let _sampling = self.queue_sample.lock().await;
-        match read_queues(pool).await {
-            Ok(mut sample) => {
-                sample.timer =
-                    match read_timer_sample_from_pool(pool, self.active_package_digest.as_deref())
-                        .await
-                    {
-                        Ok(timer) => Some(timer),
-                        Err(()) => {
-                            self.note_sample_failure(SampleKind::Timer);
-                            crate::startup::OperationalEvent::MetricsTimerSampleFailed.emit();
-                            None
-                        }
-                    };
-                sample.hook_deliveries = match read_hook_deliveries(pool).await {
-                    Ok(counts) => Some(counts),
-                    Err(()) => {
-                        self.note_sample_failure(SampleKind::HookDelivery);
-                        crate::startup::OperationalEvent::MetricsHookDeliverySampleFailed.emit();
-                        None
-                    }
-                };
-                sample.ingestion_runs = match read_ingestion_runs(pool).await {
-                    Ok(counts) => Some(counts),
-                    Err(()) => {
-                        self.note_sample_failure(SampleKind::IngestionRun);
-                        crate::startup::OperationalEvent::MetricsIngestionRunSampleFailed.emit();
-                        None
-                    }
-                };
-                Some(sample)
-            }
+        // Each sample stands alone: a queue failure leaves out only the queue
+        // series, and the timer, hook and import samples still run.
+        let mut sample = match read_queues(pool).await {
+            Ok(sample) => sample,
             Err(()) => {
                 self.note_sample_failure(SampleKind::Queue);
                 crate::startup::OperationalEvent::MetricsQueueSampleFailed.emit();
+                QueueSample::unsampled()
+            }
+        };
+        sample.timer =
+            match read_timer_sample_from_pool(pool, self.active_package_digest.as_deref()).await {
+                Ok(timer) => Some(timer),
+                Err(()) => {
+                    self.note_sample_failure(SampleKind::Timer);
+                    crate::startup::OperationalEvent::MetricsTimerSampleFailed.emit();
+                    None
+                }
+            };
+        sample.hook_deliveries = match read_hook_deliveries(pool).await {
+            Ok(counts) => Some(counts),
+            Err(()) => {
+                self.note_sample_failure(SampleKind::HookDelivery);
+                crate::startup::OperationalEvent::MetricsHookDeliverySampleFailed.emit();
                 None
             }
-        }
+        };
+        sample.ingestion_runs = match read_ingestion_runs(pool).await {
+            Ok(counts) => Some(counts),
+            Err(()) => {
+                self.note_sample_failure(SampleKind::IngestionRun);
+                crate::startup::OperationalEvent::MetricsIngestionRunSampleFailed.emit();
+                None
+            }
+        };
+        Some(sample)
     }
 
     fn note_sample_failure(&self, kind: SampleKind) {
@@ -739,7 +753,7 @@ async fn read_queues(pool: &RuntimePool) -> Result<QueueSample, ()> {
         .map(|(column, queue)| Ok((queue, row.try_get::<_, f64>(column)?)))
         .collect::<Result<Vec<_>, tokio_postgres::Error>>()
         .map_err(|_| ())?;
-    let blocked_application_jobs = row.try_get::<_, i64>(3).map_err(|_| ())?;
+    let blocked_application_jobs = Some(row.try_get::<_, i64>(3).map_err(|_| ())?);
     transaction.commit().await.map_err(|_| ())?;
     Ok(QueueSample {
         ages,
@@ -1325,7 +1339,7 @@ mod tests {
                 (PendingQueue::ReviewSubmission, 90.5),
                 (PendingQueue::ReviewApplication, 0.0),
             ],
-            blocked_application_jobs: 2,
+            blocked_application_jobs: Some(2),
             timer: None,
             hook_deliveries: None,
             ingestion_runs: None,
@@ -1354,7 +1368,7 @@ mod tests {
 
         let sampled = metrics.render(Some(&QueueSample {
             ages: Vec::new(),
-            blocked_application_jobs: 0,
+            blocked_application_jobs: Some(0),
             timer: None,
             hook_deliveries: Some([1, 2, 3, 4, 5]),
             ingestion_runs: Some([6, 7, 8, 9]),
@@ -1397,7 +1411,7 @@ mod tests {
         let metrics = Metrics::default();
         let rendered = metrics.render(Some(&QueueSample {
             ages: Vec::new(),
-            blocked_application_jobs: 0,
+            blocked_application_jobs: Some(0),
             timer: Some(TimerSample {
                 observed_live_lease_owners: 2,
                 oldest_due_lag_seconds: Some(12.5),
@@ -1479,6 +1493,15 @@ mod tests {
         metrics
     }
 
+    #[test]
+    fn an_unsampled_queue_publishes_nothing_a_failed_read_could_zero() {
+        let metrics = golden_registry();
+        assert_eq!(
+            metrics.render(Some(&QueueSample::unsampled())),
+            metrics.render(None)
+        );
+    }
+
     fn golden_queue_sample() -> QueueSample {
         QueueSample {
             ages: vec![
@@ -1486,7 +1509,7 @@ mod tests {
                 (PendingQueue::ReviewSubmission, 90.5),
                 (PendingQueue::ReviewApplication, 12.25),
             ],
-            blocked_application_jobs: 2,
+            blocked_application_jobs: Some(2),
             timer: Some(TimerSample {
                 observed_live_lease_owners: 2,
                 oldest_due_lag_seconds: Some(12.5),
