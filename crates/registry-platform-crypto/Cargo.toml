@@ -35,7 +35,7 @@ cms = { workspace = true, optional = true }
 # CMS 0.2 owns DER 0.7 certificate and SignedData types. Keep this edge on
 # that generation until CMS itself moves, while the workspace X.509 crates use
 # DER 0.8.
-der = { version = "0.7.10", default-features = false, features = ["alloc", "derive", "oid", "pem", "std"], optional = true }
+der = { version = "0.8.2", default-features = false, features = ["alloc", "derive", "oid", "pem", "std"], optional = true }
 ed25519-dalek.workspace = true
 hmac.workspace = true
 p256.workspace = true

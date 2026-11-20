@@ -239,7 +239,7 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry and build artifacts
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           key: platform-all-features
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -280,13 +280,13 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry and build artifacts
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           key: platform-coverage
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install pinned coverage tool
-        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
           tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
 
@@ -363,7 +363,7 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -418,14 +418,14 @@ jobs:
           toolchain: nightly
 
       - name: Cache Cargo registry and build artifacts
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           key: platform-fuzz-${{ matrix.group }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: products/platform/fuzz -> target
 
       - name: Install pinned cargo-fuzz
-        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
           tool: cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }}
 
@@ -477,14 +477,14 @@ jobs:
           toolchain: nightly
 
       - name: Cache Cargo registry and build artifacts
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           key: evidence-fuzz-${{ matrix.group }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: products/evidence/fuzz -> target
 
       - name: Install pinned cargo-fuzz
-        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
           tool: cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }}
 
@@ -520,14 +520,14 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
           tool: cargo-deny@0.19.8
 
@@ -608,7 +608,7 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -653,7 +653,7 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -721,7 +721,7 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -801,7 +801,7 @@ jobs:
           persist-credentials: false
           submodules: false
       - name: Rust cache
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -837,7 +837,7 @@ jobs:
           cache-dependency-path: docs/site/package-lock.json
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -916,7 +916,7 @@ jobs:
           persist-credentials: false
           submodules: false
       - name: Rust cache
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -1022,7 +1022,7 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -1066,7 +1066,7 @@ jobs:
           persist-credentials: false
           submodules: false
       - name: Rust cache
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -1153,7 +1153,7 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -1200,7 +1200,7 @@ jobs:
           persist-credentials: false
           submodules: false
       - name: Rust cache
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -1297,7 +1297,7 @@ jobs:
           persist-credentials: false
           submodules: false
       - name: Rust cache
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -1355,7 +1355,7 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -1393,7 +1393,7 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -1436,7 +1436,7 @@ jobs:
           persist-credentials: false
           submodules: false
       - name: Rust cache
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -1484,7 +1484,7 @@ jobs:
           persist-credentials: false
           submodules: false
       - name: Rust cache
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -1547,7 +1547,7 @@ jobs:
           } >> "${GITHUB_ENV}"
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -1774,7 +1774,7 @@ jobs:
           printf 'port=%s\n' "${port}" >> "${GITHUB_OUTPUT}"
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -1840,7 +1840,7 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -1879,7 +1879,7 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -1912,7 +1912,7 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -2345,7 +2345,7 @@ jobs:
           cache-dependency-path: docs/site/package-lock.json
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -2533,7 +2533,7 @@ jobs:
           cache-dependency-path: docs/site/package-lock.json
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -2640,7 +2640,7 @@ jobs:
             crates/registry-casework-client-node/package-lock.json
             docs/site/package-lock.json
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -2769,7 +2769,7 @@ jobs:
           cache-dependency-path: docs/site/package-lock.json
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -2827,7 +2827,7 @@ jobs:
           cache-dependency-path: docs/site/package-lock.json
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -2887,7 +2887,7 @@ jobs:
           cache-dependency-path: docs/site/package-lock.json
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -2947,7 +2947,7 @@ jobs:
           cache-dependency-path: docs/site/package-lock.json
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -3008,7 +3008,7 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -3262,7 +3262,7 @@ jobs:
             crates/registry-stack-client-node/package-lock.json
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -3372,7 +3372,7 @@ jobs:
           submodules: false
 
       - name: Install Go for the AWS-LC-FIPS source build
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: 1.27.2
           cache: false
