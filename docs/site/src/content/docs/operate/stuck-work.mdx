@@ -350,6 +350,56 @@ A stopped audit writer needs a restart.
 {/* Evidence: crates/registry-render/src/server.rs, ready and healthcheck;
     crates/registry-render/src/cli.rs, Healthcheck and environment. */}
 
+## Scrape metrics from a container
+
+A container often does not know its private address when you write the runtime file, so a loopback or private `metricsListener.bind` cannot be written down.
+Declare the placement instead.
+Add `metricsListener.networkExposure: container-private` and bind the wildcard address.
+Every other refusal still holds: a public, link-local, multicast or IPv4-mapped address, port `0`, and the service's own socket stay refused.
+The key is accepted by Registry Evidence and its OID4VCI and OID4VP services, BReg, Casework, Messaging, Scheduling, Render, Adapter, Documents and Coordinator.
+
+With Docker Compose, put Prometheus on the same Compose network and do not publish the metrics port:
+
+```yaml test-skip="illustrative fragment"
+# runtime.yaml
+metricsListener:
+  bind: 0.0.0.0:9091
+  networkExposure: container-private
+```
+
+```yaml test-skip="illustrative fragment"
+# compose.yaml: no ports entry for 9091
+services:
+  casework:
+    networks: [registry]
+  prometheus:
+    networks: [registry]
+    # scrape target: casework:9091
+networks:
+  registry: {}
+```
+
+On Kubernetes, bind the pod address from the downward API, or use `container-private`.
+Substitution is allowed in operator files, so the runtime file can read `${POD_IP}` (see CFG-SEC-2 in the configuration conventions):
+
+```yaml test-skip="illustrative fragment"
+metricsListener:
+  bind: ${POD_IP}:9091
+```
+
+```yaml test-skip="illustrative fragment"
+env:
+  - name: POD_IP
+    valueFrom:
+      fieldRef:
+        fieldPath: status.podIP
+```
+
+Publishing the metrics port or running the container on the host network exposes the counts on the host, and the counters carry no authentication.
+
+{/* Evidence: crates/registry-platform-config/src/metrics_bind.rs, check_metrics_bind_address;
+    crates/registry-platform-config/src/blocks.rs, MetricsListenerConfig. */}
+
 ## Example alert rules
 
 These rules use only series that the products publish.

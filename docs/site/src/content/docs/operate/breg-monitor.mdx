@@ -151,7 +151,9 @@ first page.
 ## Scrape metrics
 
 The API listener never serves metrics. Set `metricsListener.bind` in the runtime file to a loopback
-or private address with a port, different from `listener.bind`. It answers `GET /metrics` in the
+or private address with a port, different from `listener.bind`. In a container, declare
+`metricsListener.networkExposure: container-private` to bind `0.0.0.0`; see
+[Scrape metrics from a container](../stuck-work/#scrape-metrics-from-a-container). It answers `GET /metrics` in the
 Prometheus text format without authentication, so keep it inside the scraper's network.
 
 ```sh test-skip="needs a serving registry with metricsListener set"

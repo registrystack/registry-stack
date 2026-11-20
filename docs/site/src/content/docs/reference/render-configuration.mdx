@@ -64,6 +64,9 @@ another value, such as `audit.path` on `audit.destination`. `audit.rotateBytes` 
 When it is present, `metricsListener.bind` is required and `/metrics` is served on that socket only.
 When it is absent, no metrics are served.
 The address must be a concrete loopback or private address on a non-zero port.
+`metricsListener.networkExposure` defaults to `private-address`.
+`container-private` also permits `0.0.0.0` or `::`, for a container whose private address is not known when the file is written.
+Every other refusal still applies under both values.
 It must not be the `listener` socket, or one that a wildcard `listener` already covers.
 A refused address stops startup and `check` with `render.runtime.invalid-metrics-listener`.
 

@@ -210,6 +210,7 @@ The residuals refer to these obligations by number.
         crates/registry-bregctl/src/doctor.rs, insecure_http_warning. */}
 8. Keep the metrics listener private.
    `metricsListener.bind` must be a loopback or private address; it carries no authentication.
+   A wildcard bind needs an explicit `metricsListener.networkExposure: container-private`, and the metrics port must not be published.
    {/* Evidence: crates/registry-breg/src/runtime_config.rs, InvalidMetricsListener,
         MetricsListenerConfig. */}
 9. Run the idempotency sweep.

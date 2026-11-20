@@ -341,6 +341,7 @@ Token signing-key rotation preserves the registered downstream client identity, 
 When present, its `bind` is required and `/metrics` is served on that socket only: the service listener has no metrics route, and the OpenAPI document lists none.
 When absent, no metrics are served.
 The address must be a concrete loopback or private address on a nonzero port.
+`deployment.metricsListener.networkExposure` defaults to `private-address`; `container-private` also permits `0.0.0.0` or `::`.
 It must not be the service listener's socket or one a wildcard service listener already covers; the configuration check refuses any other bind at `/deployment/metricsListener/bind`.
 The key and its address rule are the ones Registry Messaging uses.
 
