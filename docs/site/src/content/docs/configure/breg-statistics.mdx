@@ -166,15 +166,18 @@ A vocabulary code beginning with `_` is reserved and refused (`breg.statistical-
 A non-null value outside the declared vocabulary refuses the whole computation without disclosing
 that value.
 
-The names `period`, `periodStart`, `periodEnd`, `measure`, `value`, and `status` are reserved for the
-document and CSV representation, so a dimension cannot use one of them
-(`breg.statistical-dataset.dimension-reserved`).
+A dimension's CSV column is named after its field identifier.
+A dimension cannot use `period`, `measure`, `value`, or `status`, because the document and CSV use
+those names (`breg.statistical-dataset.dimension-reserved`).
+The `periodStart` and `periodEnd` columns cannot clash with a dimension, because field identifiers
+are lowercase.
 
-{/* Evidence: crates/registry-breg/src/statistics.rs TOTAL_CODE, UNKNOWN_CODE,
+{/* Evidence: crates/registry-breg/src/statistics.rs TOTAL_CODE, UNKNOWN_CODE, document_csv,
     unknown_code_error_names_dataset_and_dimension_but_not_value (tests/statistics.rs);
     crates/registry-breg/src/compiler/statistics.rs
     breg.statistical-dataset.dimension-reserved,
     breg.statistical-dataset.dimension-code-reserved;
+    crates/registry-breg/src/compiler.rs validate_id, breg.identifier.invalid;
     crates/registry-breg/tests/compiler_statistics.rs
     statistical_dataset_refuses_reserved_and_unbounded_dimensions. */}
 
