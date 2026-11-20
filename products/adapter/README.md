@@ -120,9 +120,9 @@ documentation credits Camel and the EIP book regardless.
 
 ## Try an example
 
-The Adapter is unreleased, so run `adapterctl` from a checkout. From the
-repository root, with `CARGO_TARGET_DIR` set to a directory outside the
-repository, check, compile and replay the
+These steps run `adapterctl` from a checkout. Release archives carry it
+from 0.46.0. From the repository root, with `CARGO_TARGET_DIR` set to a
+directory outside the repository, check, compile and replay the
 [facade recovery example](examples/facade-recovery/README.md) offline. No
 source, database or token is needed:
 
