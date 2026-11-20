@@ -233,7 +233,7 @@ a principal, or a destination.
 Alert when `breg_hook_deliveries{state="dead-lettered"}` is above zero, and when
 `breg_ingestion_runs{state="blocked"}` stays above zero. List dead letters with `bregctl hook list`. [Webhook operations](../breg-webhooks/) covers replaying or discarding them.
 
-A failed sample omits its series for that scrape instead of reporting zero, so use
+The queue, timer, hook delivery, and import samples fail independently, so one failing sample omits only its own series. A failed sample omits its series for that scrape instead of reporting zero, so use
 `absent(breg_hook_deliveries)` or a rising `breg_metrics_sample_failures_total` to catch it. The
 process also logs a warning with the code `metrics.hook_delivery_sample.failed` or
 `metrics.ingestion_run_sample.failed`.
