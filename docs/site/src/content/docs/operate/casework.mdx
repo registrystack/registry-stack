@@ -301,7 +301,7 @@ metricsListener:
 ```
 
 It serves `/metrics` and `/version` only, on a loopback or private address that is not the API
-listener's. Metrics carry no subject identifiers. `/version` reports the binary version and the
+listener's. In a container whose private address is not known when you write the file, set `metricsListener.networkExposure: container-private` to bind `0.0.0.0`: see [Scrape metrics from a container](../stuck-work/#scrape-metrics-from-a-container). Metrics carry no subject identifiers. `/version` reports the binary version and the
 package digest the process serves, so a rollout can confirm what each process runs.
 
 | Series | Type | Labels |

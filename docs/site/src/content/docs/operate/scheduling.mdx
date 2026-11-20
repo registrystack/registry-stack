@@ -320,7 +320,7 @@ intents: [{"appointmentRevision":1,"attempts":1,"deliveryState":"local","purpose
 
 Add a `metricsListener` block to `runtime.yaml` to serve Prometheus text. The example files carry
 one on `127.0.0.1:9105`. Without the block, Scheduling serves no metrics. The socket must be
-loopback or private, and must not be the `listener` socket. `GET /metrics` on that socket answers
+loopback or private, and must not be the `listener` socket. In a container whose private address is not known when you write the file, set `metricsListener.networkExposure: container-private` to bind `0.0.0.0`: see [Scrape metrics from a container](../stuck-work/#scrape-metrics-from-a-container). `GET /metrics` on that socket answers
 the series below and nothing else. The public listener does not route `/metrics`.
 
 | Series | Labels | Meaning |

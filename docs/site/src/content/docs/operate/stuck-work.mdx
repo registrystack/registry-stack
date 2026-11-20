@@ -453,6 +453,10 @@ The `job` label comes from your scrape configuration, so match it to the names y
 Because a failed database sample omits the series, groups that read gauges from the database include an `absent()` rule.
 The Scheduling, Documents, and Render groups need their optional `metricsListener` turned on.
 
+Each block below is a separate rule file with its own `groups:` key.
+Save each one as its own file and list every file under `rule_files` in `prometheus.yml`.
+To keep one file instead, write a single `groups:` key and move each product's `- name:` entry under it.
+
 To cover a new series, add one rule to that product's group.
 Keep one `groups` entry per product, with the product name as the `name`.
 

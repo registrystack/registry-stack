@@ -102,7 +102,7 @@ or IPv6 unique-local addresses. A container deployment may instead declare
 `listener.networkExposure: container-private` and bind `0.0.0.0` or `::`.
 That explicit mode treats the container network and upstream TLS proxy as the
 operator-owned exposure boundary. It still rejects concrete public addresses,
-hostnames, and multicast addresses. The metrics listener remains private-only.
+hostnames, and multicast addresses. The metrics listener follows the same rule through `metricsListener.networkExposure`, so `container-private` also lets it bind a wildcard address.
 
 This example mounts a whole directory, so the
 [runtime file rule](#running-casework-locally) covers that directory as well as
