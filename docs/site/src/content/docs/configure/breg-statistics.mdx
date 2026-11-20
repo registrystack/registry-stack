@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-19"
+last_reviewed: "2026-11-21"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -363,6 +363,23 @@ This keeps different publishers from producing different populations under one d
 {/* Evidence: crates/registry-breg/src/compiler/statistics.rs validate_publisher_independence;
     crates/registry-breg/tests/compiler_statistics.rs
     statistical_dataset_refuses_caller_dependent_publisher_authority. */}
+
+#### Disclosure conditions
+
+A `record` [disclosure condition](../breg-access/#withhold-a-record-while-a-condition-holds) on a
+source Record type hides matching records from every profile it does not exempt. Two rules keep a
+dataset from disclosing them.
+The publishing profile must be in `exemptProfiles` of every `record` condition on a source Record
+type, so a release counts every record whatever the caller (`breg.disclosure.statistics-publisher-bound`).
+A profile that reads live or exact values over a Record type with a `record` condition must be
+exempt too, or hold `read-releases` instead (`breg.disclosure.statistics-live-bound`).
+Live counts for a profile that stays bound therefore never include a withheld record, and the
+check refuses a grant that would.
+A derived relation that reads a field a `fields` condition withholds is refused unless every profile
+that reaches the dataset is exempt (`breg.disclosure.statistics-withheld-field`).
+
+{/* Evidence: crates/registry-breg/src/compiler/disclosure/reach.rs;
+    crates/registry-breg/tests/disclosure_compile.rs. */}
 
 #### Standing agents
 
