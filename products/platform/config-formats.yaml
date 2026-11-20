@@ -1865,7 +1865,7 @@ formats:
       - pointer: /listener/bind
         whenOmitted: refused
       - pointer: /metricsListener/bind
-        whenOmitted: open
+        whenOmitted: closed
       - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
       - pointer: /authentication/oidc/allowInsecureHttp
@@ -2484,7 +2484,7 @@ formats:
       - pointer: /listener/bind
         whenOmitted: refused
       - pointer: /metricsListener/bind
-        whenOmitted: open
+        whenOmitted: closed
       - pointer: /authentication/apiKeyRef
         whenOmitted: refused
       - pointer: /authentication/oidc/allowedClients
