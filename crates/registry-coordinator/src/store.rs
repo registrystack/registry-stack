@@ -24,6 +24,9 @@ use registry_platform_dispatch::postgres::{
 use registry_platform_dispatch::{
     AttemptTimeoutBound, Backoff, DispatchError, Jitter, JobPolicy, RetrySchedule, UncertainOutcome,
 };
+use registry_platform_metrics::{
+    sample_error_class, ScrapeDeadline, CLASS_NO_TIME_LEFT, CLASS_POOL,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -620,6 +623,39 @@ pub(crate) fn schema_statements(namespace: &str) -> Result<Vec<String>> {
     Ok(statements)
 }
 
+/// The error class of a driver error: never its text, which can carry query
+/// text or row data.
+fn database_error_class(error: &tokio_postgres::Error) -> String {
+    sample_error_class(
+        error.code().map(tokio_postgres::error::SqlState::code),
+        error.is_closed(),
+    )
+}
+
+/// Start a read-only transaction whose server-side `statement_timeout` is the
+/// time left before `deadline`, so a slow query is cancelled on the server
+/// and not only abandoned by the client. A sample with no time left fails
+/// without querying.
+async fn begin_sample(
+    client: &mut tokio_postgres::Client,
+    deadline: ScrapeDeadline,
+) -> std::result::Result<tokio_postgres::Transaction<'_>, String> {
+    let transaction = client
+        .build_transaction()
+        .read_only(true)
+        .start()
+        .await
+        .map_err(|error| database_error_class(&error))?;
+    let milliseconds = deadline
+        .statement_timeout_milliseconds()
+        .ok_or_else(|| CLASS_NO_TIME_LEFT.to_owned())?;
+    transaction
+        .batch_execute(&format!("SET LOCAL statement_timeout = {milliseconds}"))
+        .await
+        .map_err(|error| database_error_class(&error))?;
+    Ok(transaction)
+}
+
 fn unavailable(_: impl std::fmt::Display) -> CoordinatorError {
     CoordinatorError::new("store-unavailable", "durable state is unavailable")
 }
@@ -798,18 +834,15 @@ impl Store {
     }
 
     /// The dispatch jobs waiting in each state work waits in, read in one
-    /// bounded read-only transaction.
-    pub async fn dispatch_depth(&self) -> Result<DispatchDepth> {
-        let mut client = self.client().await.map_err(unavailable)?;
-        let tx = client
-            .build_transaction()
-            .read_only(true)
-            .start()
-            .await
-            .map_err(unavailable)?;
-        tx.batch_execute("SET LOCAL statement_timeout = '2s'")
-            .await
-            .map_err(unavailable)?;
+    /// read-only transaction that the server cancels when `deadline` passes.
+    /// A failed read returns its error class alone: never query text, values
+    /// or rows.
+    pub async fn dispatch_depth(
+        &self,
+        deadline: ScrapeDeadline,
+    ) -> std::result::Result<DispatchDepth, String> {
+        let mut client = self.client().await.map_err(|_| CLASS_POOL.to_owned())?;
+        let tx = begin_sample(&mut client, deadline).await?;
         let row = tx
             .query_one(
                 &format!(
@@ -822,8 +855,10 @@ impl Store {
                 &[],
             )
             .await
-            .map_err(unavailable)?;
-        tx.commit().await.map_err(unavailable)?;
+            .map_err(|error| database_error_class(&error))?;
+        tx.commit()
+            .await
+            .map_err(|error| database_error_class(&error))?;
         Ok(DispatchDepth {
             pending: row.get(0),
             leased: row.get(1),
@@ -835,17 +870,12 @@ impl Store {
     /// statement. The attention count is the doctor report's `attention`
     /// state count, split by whether the run is held for a refused
     /// definition; unlike the doctor's run list it is never capped.
-    pub async fn run_holds(&self) -> Result<RunHolds> {
-        let mut client = self.client().await.map_err(unavailable)?;
-        let tx = client
-            .build_transaction()
-            .read_only(true)
-            .start()
-            .await
-            .map_err(unavailable)?;
-        tx.batch_execute("SET LOCAL statement_timeout = '2s'")
-            .await
-            .map_err(unavailable)?;
+    pub async fn run_holds(
+        &self,
+        deadline: ScrapeDeadline,
+    ) -> std::result::Result<RunHolds, String> {
+        let mut client = self.client().await.map_err(|_| CLASS_POOL.to_owned())?;
+        let tx = begin_sample(&mut client, deadline).await?;
         let row = tx
             .query_one(
                 &format!(
@@ -872,17 +902,31 @@ impl Store {
                 &[],
             )
             .await
-            .map_err(unavailable)?;
-        tx.commit().await.map_err(unavailable)?;
+            .map_err(|error| database_error_class(&error))?;
+        tx.commit()
+            .await
+            .map_err(|error| database_error_class(&error))?;
         // A missing control row reads as NULL: refuse it as a failed
         // sample instead of panicking.
         Ok(RunHolds {
-            attention_other: row.try_get(0).map_err(unavailable)?,
-            attention_definition_refused: row.try_get(1).map_err(unavailable)?,
-            restore_review_required: row.try_get(2).map_err(unavailable)?,
-            restore_hold: row.try_get(3).map_err(unavailable)?,
-            admissions_hold: row.try_get(4).map_err(unavailable)?,
-            oldest_due_age_seconds: row.try_get(5).map_err(unavailable)?,
+            attention_other: row
+                .try_get(0)
+                .map_err(|error| database_error_class(&error))?,
+            attention_definition_refused: row
+                .try_get(1)
+                .map_err(|error| database_error_class(&error))?,
+            restore_review_required: row
+                .try_get(2)
+                .map_err(|error| database_error_class(&error))?,
+            restore_hold: row
+                .try_get(3)
+                .map_err(|error| database_error_class(&error))?,
+            admissions_hold: row
+                .try_get(4)
+                .map_err(|error| database_error_class(&error))?,
+            oldest_due_age_seconds: row
+                .try_get(5)
+                .map_err(|error| database_error_class(&error))?,
         })
     }
 

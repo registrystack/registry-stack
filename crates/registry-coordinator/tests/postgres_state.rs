@@ -5,10 +5,12 @@ use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use registry_coordinator::{
     definition::Definition,
+    metrics::scrape,
     protocol::{AdapterSet, CallOutcome, CallRequest, DeclaredRefusal, Operation},
     store::{RetryBlockReason, Store},
     worker::Worker,
 };
+use registry_platform_metrics::ScrapeDeadline;
 use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
@@ -5679,7 +5681,7 @@ async fn metrics_count_committed_admissions_attempts_and_terminal_runs_by_closed
         "a replayed idempotency key is not a second admission"
     );
     assert_eq!(
-        h.store.dispatch_depth().await.expect("sampled"),
+        h.store.dispatch_depth(deadline()).await.expect("sampled"),
         DispatchDepth {
             pending: 1,
             leased: 0,
@@ -5692,7 +5694,7 @@ async fn metrics_count_committed_admissions_attempts_and_terminal_runs_by_closed
     assert_eq!(sample(&h.store, &attempts("accepted")), 5);
     assert_eq!(sample(&h.store, &finished("finished")), 1);
     assert_eq!(
-        h.store.dispatch_depth().await.expect("sampled"),
+        h.store.dispatch_depth(deadline()).await.expect("sampled"),
         DispatchDepth::default()
     );
 
@@ -5773,9 +5775,141 @@ async fn metrics_count_committed_admissions_attempts_and_terminal_runs_by_closed
         .unwrap();
     assert_eq!(sample(&withdrawn.store, &finished("cancelled")), 1);
     assert_eq!(
-        withdrawn.store.dispatch_depth().await.expect("sampled"),
+        withdrawn
+            .store
+            .dispatch_depth(deadline())
+            .await
+            .expect("sampled"),
         DispatchDepth::default()
     );
+}
+
+/// A scrape deadline with the full budget.
+fn deadline() -> ScrapeDeadline {
+    ScrapeDeadline::from(std::time::Instant::now())
+}
+
+/// A scrape deadline short enough for a test to wait out.
+fn short_deadline() -> ScrapeDeadline {
+    ScrapeDeadline::with_budget(
+        std::time::Instant::now(),
+        std::time::Duration::from_millis(600),
+    )
+}
+
+/// Hold an exclusive lock on one table of the harness namespace until the
+/// returned client is dropped.
+async fn hold_lock(h: &Harness, table: &str) -> tokio_postgres::Client {
+    let (client, connection) = tokio_postgres::connect(&h.url, tokio_postgres::NoTls)
+        .await
+        .expect("lock connection");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    client
+        .batch_execute(&format!(
+            "BEGIN; LOCK TABLE {}.{table} IN ACCESS EXCLUSIVE MODE;",
+            h.namespace
+        ))
+        .await
+        .expect("lock");
+    client
+}
+
+/// Sessions of this harness's namespace still waiting on a lock. A read the
+/// server cancelled leaves none. A read only the client abandoned would keep
+/// waiting.
+async fn sessions_waiting_on_a_lock(h: &Harness) -> i64 {
+    let (client, connection) = tokio_postgres::connect(&h.url, tokio_postgres::NoTls)
+        .await
+        .expect("observer connection");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    for _ in 0..60 {
+        let waiting: i64 = client
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE wait_event_type = 'Lock' AND query LIKE '%' || $1 || '%' \
+                   AND pid <> pg_backend_pid()",
+                &[&h.namespace],
+            )
+            .await
+            .expect("observe")
+            .get(0);
+        if waiting == 0 {
+            return 0;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    1
+}
+
+#[tokio::test]
+async fn a_read_that_waits_on_a_lock_is_cancelled_on_the_server_with_its_class() {
+    let h = harness().await;
+    h.admit().await;
+    let _lock = hold_lock(&h, "jobs").await;
+    assert_eq!(
+        h.store.dispatch_depth(short_deadline()).await,
+        Err("timeout".to_owned()),
+        "the statement timeout is the time left, and SQLSTATE 57014 is the timeout class"
+    );
+    assert_eq!(
+        sessions_waiting_on_a_lock(&h).await,
+        0,
+        "the server cancelled the read, so nothing is left waiting"
+    );
+    let spent = ScrapeDeadline::with_budget(std::time::Instant::now(), std::time::Duration::ZERO);
+    assert_eq!(
+        h.store.run_holds(spent).await,
+        Err("no-time-left".to_owned()),
+        "a read that starts with no time left never queries"
+    );
+}
+
+#[tokio::test]
+async fn a_scrape_with_one_read_stuck_omits_its_gauges_counts_it_once_and_keeps_the_rest() {
+    let h = harness().await;
+    h.admit().await;
+    let _lock = hold_lock(&h, "control").await;
+    let body = scrape(&h.store, short_deadline()).await;
+    assert_eq!(
+        sessions_waiting_on_a_lock(&h).await,
+        0,
+        "the server cancelled the read"
+    );
+    assert!(
+        body.contains("coordinator_dispatch_jobs{state=\"pending\"} 1"),
+        "the read before the stuck one still publishes: {body}"
+    );
+    assert!(
+        !body.contains("coordinator_runs_attention{") && !body.contains("coordinator_hold_active{"),
+        "the stuck read's gauges are omitted: {body}"
+    );
+    assert!(body.contains("coordinator_metrics_sample_failures_total{sample=\"run-holds\"} 1"));
+    assert!(body.contains("coordinator_metrics_sample_failures_total{sample=\"dispatch-queue\"} 0"));
+    assert!(
+        body.contains("coordinator_runs_admitted_total 1"),
+        "the in-process counters render regardless: {body}"
+    );
+}
+
+#[tokio::test]
+async fn one_stuck_read_spends_the_scrape_deadline_and_the_later_read_has_no_time_left() {
+    let h = harness().await;
+    h.admit().await;
+    let _lock = hold_lock(&h, "jobs").await;
+    let started = std::time::Instant::now();
+    let body = scrape(&h.store, short_deadline()).await;
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "both reads share one deadline: {:?}",
+        started.elapsed()
+    );
+    assert!(body.contains("coordinator_metrics_sample_failures_total{sample=\"dispatch-queue\"} 1"));
+    assert!(body.contains("coordinator_metrics_sample_failures_total{sample=\"run-holds\"} 1"));
+    assert_eq!(sessions_waiting_on_a_lock(&h).await, 0);
 }
 
 #[tokio::test]
@@ -5784,7 +5918,7 @@ async fn run_holds_count_attention_restore_review_holds_and_the_oldest_due_age()
 
     let h = harness().await;
     assert_eq!(
-        h.store.run_holds().await.expect("sampled"),
+        h.store.run_holds(deadline()).await.expect("sampled"),
         RunHolds::default(),
         "an empty store holds nothing"
     );
@@ -5805,7 +5939,7 @@ async fn run_holds_count_attention_restore_review_holds_and_the_oldest_due_age()
         "UPDATE {schema}.jobs SET next_attempt_at=now()-interval '2 hours' WHERE state='pending'",
     )
     .await;
-    let holds = h.store.run_holds().await.expect("sampled");
+    let holds = h.store.run_holds(deadline()).await.expect("sampled");
     assert!(
         (7200..7260).contains(&holds.oldest_due_age_seconds),
         "the oldest pending job was due two hours ago: {}",
@@ -5829,7 +5963,7 @@ async fn run_holds_count_attention_restore_review_holds_and_the_oldest_due_age()
     h.sql("UPDATE {schema}.control SET restore_hold=true,admissions_hold=true")
         .await;
     assert_eq!(
-        h.store.run_holds().await.expect("sampled"),
+        h.store.run_holds(deadline()).await.expect("sampled"),
         RunHolds {
             attention_other: 1,
             attention_definition_refused: 1,
@@ -5857,7 +5991,7 @@ async fn oldest_due_age_ignores_pending_jobs_of_runs_the_worker_cannot_claim() {
     .await;
     assert_eq!(
         h.store
-            .run_holds()
+            .run_holds(deadline())
             .await
             .expect("sampled")
             .oldest_due_age_seconds,
@@ -5872,7 +6006,7 @@ async fn oldest_due_age_ignores_pending_jobs_of_runs_the_worker_cannot_claim() {
     .await;
     assert_eq!(
         h.store
-            .run_holds()
+            .run_holds(deadline())
             .await
             .expect("sampled")
             .oldest_due_age_seconds,
@@ -5886,7 +6020,7 @@ async fn oldest_due_age_ignores_pending_jobs_of_runs_the_worker_cannot_claim() {
     .await;
     let age = h
         .store
-        .run_holds()
+        .run_holds(deadline())
         .await
         .expect("sampled")
         .oldest_due_age_seconds;
