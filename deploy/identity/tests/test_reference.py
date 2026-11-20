@@ -237,19 +237,24 @@ class ReferenceIdentityContract(unittest.TestCase):
         self.assertIn("qualification-officer", runbook[runbook.index("Before a pilot") :])
         self.assertIn("QUALIFICATION_OFFICER_PASSWORD", runbook[runbook.index("Before a pilot") :])
 
-    def test_network_policy_admits_only_the_edge_and_registry_stack(self) -> None:
+    def test_network_policy_admits_only_the_ingress_controller(self) -> None:
+        # Registry Stack Pods reach ThunderID through its HTTPS origin at the
+        # ingress, and the chart does not label Pods with part-of, so a rule
+        # for them would match nothing.
         policy = (ROOT / "network-policy.yaml").read_text()
         self.assertIn("kind: NetworkPolicy", policy)
         self.assertIn("namespace: registry-identity-qualification", policy)
         self.assertIn("policyTypes:\n    - Ingress", policy)
         self.assertIn("kubernetes.io/metadata.name: kube-system", policy)
         self.assertIn("app.kubernetes.io/name: traefik", policy)
-        self.assertIn("app.kubernetes.io/part-of: registry-stack", policy)
-        self.assertIn("kubernetes.io/metadata.name: directory", policy)
+        self.assertEqual(policy.count("namespaceSelector:"), 1)
+        self.assertEqual(policy.count("podSelector:"), 2)
+        self.assertNotIn("part-of", policy)
         self.assertEqual(policy.count("port: 8090"), 1)
         self.assertNotIn("ipBlock", policy)
         runbook = (ROOT / "README.md").read_text()
         self.assertIn("deploy/identity/network-policy.yaml", runbook)
+        self.assertNotIn("Registry Stack Pods in\nthe `directory` namespace", runbook)
 
     def test_postgres_network_policy_admits_only_the_identity_namespace(self) -> None:
         policy = (ROOT / "postgres-network-policy.yaml").read_text()
