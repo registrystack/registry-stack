@@ -301,11 +301,39 @@ metricsListener:
 ```
 
 It serves `/metrics` and `/version` only, on a loopback or private address that is not the API
-listener's. Metrics count open review requests, open tasks, and due tasks, with no subject
-identifiers. `/version` reports the binary version and the package digest the process serves, so a
-rollout can confirm what each process runs.
+listener's. Metrics carry no subject identifiers. `/version` reports the binary version and the
+package digest the process serves, so a rollout can confirm what each process runs.
 
-{/* Evidence: crates/registry-casework/src/metrics.rs, metrics_router();
+| Series | Type | Labels |
+| --- | --- | --- |
+| `casework_database_up` | gauge | none |
+| `casework_open_review_requests` | gauge | none |
+| `casework_open_review_tasks` | gauge | none |
+| `casework_due_review_tasks` | gauge | none |
+| `casework_completion_deliveries` | gauge | `state`: `pending`, `retrying`, `leased`, `unknown`, `dead-lettered`, `expired` |
+| `casework_completion_oldest_undelivered_age_seconds` | gauge | none |
+
+Every gauge except `casework_database_up` is read from the database, cached for 5 seconds, and
+bounded at 5 seconds. When the database cannot answer, `casework_database_up` is 0, the other series
+are absent from that scrape, and the service logs a warning. Alert on `casework_database_up` as well
+as on the values.
+
+`casework_completion_deliveries` counts review completion deliveries that have not been delivered.
+`pending` has not been attempted yet, `retrying` has failed an attempt and waits for the next one,
+`leased` is being attempted, and `unknown` is held because an attempt's outcome is not known.
+`dead-lettered` ran out of attempts or failed permanently, and `expired` reached the end of its
+retention undelivered. Delivered and withdrawn deliveries are not counted. A dead-lettered or
+expired delivery stays counted until review retention erases it, so a non-zero `dead-lettered` or
+`expired` count means a requester was not told that a review finished.
+
+`casework_completion_oldest_undelivered_age_seconds` is how long the oldest pending, leased, unknown
+or dead-lettered delivery has waited, or 0 when there are none. It runs from the delivery's next
+attempt time while pending, from its attempt start while leased, and from its last change once it is
+unknown or dead-lettered. Expired deliveries do not set it.
+
+{/* Evidence: crates/registry-casework/src/metrics.rs, metrics_router() and render();
+    crates/registry-casework/src/runtime/completion.rs, completion_backlog();
+    crates/registry-casework/tests/review_postgres.rs, the_completion_backlog_counts_every_undelivered_state_and_the_oldest_age;
     crates/registry-casework/src/config.rs, MetricsListenerConfig;
     crates/registry-casework/src/config.rs, metrics_listener. */}
 

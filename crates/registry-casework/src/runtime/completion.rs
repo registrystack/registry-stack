@@ -38,6 +38,79 @@ use crate::config::{
 };
 use crate::{LeasedReviewCompletion, PostgresStore, StoreError};
 
+/// How many completion deliveries wait in each state an operator acts on,
+/// and how long the oldest undelivered one has waited.
+///
+/// `retrying` is a pending delivery that has already been attempted. A
+/// delivery that was accepted (`delivered`) or withdrawn (`cancelled`) is not
+/// backlog. The age runs from the moment the delivery was last due or last
+/// changed: its next attempt time while pending, its attempt start while
+/// leased, and its last update once it is unknown or dead-lettered. An
+/// `expired` delivery is counted but never sets the age.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CompletionBacklog {
+    pub pending: i64,
+    pub retrying: i64,
+    pub leased: i64,
+    pub unknown: i64,
+    pub dead_lettered: i64,
+    pub expired: i64,
+    pub oldest_undelivered_seconds: i64,
+}
+
+impl PostgresStore {
+    /// Count the completion outbox by state in one read-only statement.
+    pub async fn completion_backlog(&self) -> Result<CompletionBacklog, StoreError> {
+        let mut client = self.client().await?;
+        let transaction = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| StoreError::Unavailable)?;
+        transaction
+            .batch_execute("SET LOCAL statement_timeout = '2s'")
+            .await
+            .map_err(|_| StoreError::Unavailable)?;
+        let row = transaction
+            .query_one(
+                &format!(
+                    "SELECT \
+                       count(*) FILTER (WHERE state = 'pending' AND attempt = 0), \
+                       count(*) FILTER (WHERE state = 'pending' AND attempt > 0), \
+                       count(*) FILTER (WHERE state = 'leased'), \
+                       count(*) FILTER (WHERE state = 'unknown'), \
+                       count(*) FILTER (WHERE state = 'dead-lettered'), \
+                       count(*) FILTER (WHERE state = 'expired'), \
+                       COALESCE(floor(extract(epoch FROM greatest( \
+                         transaction_timestamp() - min(CASE state \
+                           WHEN 'pending' THEN next_attempt_at \
+                           WHEN 'leased' THEN attempt_started_at \
+                           ELSE updated_at END) \
+                         FILTER (WHERE state IN ('pending', 'leased', 'unknown', 'dead-lettered')), \
+                         interval '0'))), 0)::bigint \
+                     FROM {COMPLETION_TABLE}"
+                ),
+                &[],
+            )
+            .await
+            .map_err(|_| StoreError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| StoreError::Unavailable)?;
+        Ok(CompletionBacklog {
+            pending: row.get(0),
+            retrying: row.get(1),
+            leased: row.get(2),
+            unknown: row.get(3),
+            dead_lettered: row.get(4),
+            expired: row.get(5),
+            oldest_undelivered_seconds: row.get(6),
+        })
+    }
+}
+
 /// The completion outbox table.
 pub(super) const COMPLETION_TABLE: &str = "casework_review_completion_outbox";
 

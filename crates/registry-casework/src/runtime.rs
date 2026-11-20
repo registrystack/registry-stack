@@ -19,6 +19,7 @@ use tokio::task::JoinHandle;
 use tracing_subscriber::filter::LevelFilter;
 
 mod completion;
+pub use completion::CompletionBacklog;
 
 use crate::{
     router, CaseworkAuthenticator, CaseworkService, HttpState, PostgresStore, RuntimeConfig,
