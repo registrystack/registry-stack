@@ -344,23 +344,37 @@ pub async fn serve(
         })
 }
 
-async fn scrape(State(state): State<ScrapeState>) -> impl IntoResponse {
-    let sampled = state
-        .samples
+/// The item counts for a scrape. A failed read is logged and counted when the
+/// read happens, so scrapes served from the cache do not count it again.
+async fn sampled_items<F, Fut>(
+    samples: &SampleCache,
+    metrics: &JobMetrics,
+    read: F,
+) -> Option<[(ItemStatus, u64); 4]>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Sample>,
+{
+    samples
         .get(|| async {
-            tokio::time::timeout(SAMPLE_DEADLINE, sample_items(&state.pool, &state.job_id))
-                .await
-                .unwrap_or_else(|_| Err("the item count read timed out".to_owned()))
+            let sample = read().await;
+            if let Err(cause) = &sample {
+                tracing::error!(cause = %cause, "the job item counts could not be read");
+                metrics.record_sample_failure();
+            }
+            sample
         })
-        .await;
-    let items = match sampled {
-        Ok(items) => Some(items),
-        Err(cause) => {
-            tracing::error!(cause = %cause, "the job item counts could not be read for a scrape");
-            state.metrics.record_sample_failure();
-            None
-        }
-    };
+        .await
+        .ok()
+}
+
+async fn scrape(State(state): State<ScrapeState>) -> impl IntoResponse {
+    let items = sampled_items(&state.samples, &state.metrics, || async {
+        tokio::time::timeout(SAMPLE_DEADLINE, sample_items(&state.pool, &state.job_id))
+            .await
+            .unwrap_or_else(|_| Err("the item count read timed out".to_owned()))
+    })
+    .await;
     (
         [(CONTENT_TYPE, METRICS_CONTENT_TYPE)],
         state.metrics.render(items),
@@ -521,6 +535,21 @@ mod tests {
         assert_eq!(cache.get(|| async { Ok(items()) }).await, Ok(items()));
         assert_eq!(cache.get(failing).await, Ok(items()));
         assert_eq!(queries.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn scrapes_served_from_the_cache_do_not_recount_a_failed_read() {
+        let cache = SampleCache::new(Duration::from_secs(60));
+        let metrics = JobMetrics::default();
+        let failing = || async { Err("the store is down".to_owned()) };
+        for _ in 0..3 {
+            assert_eq!(sampled_items(&cache, &metrics, failing).await, None);
+        }
+        let text = metrics.render(None);
+        assert!(
+            has(&text, "adapter_job_gauge_sample_failures_total 1"),
+            "{text}"
+        );
     }
 
     fn has_age_sample(text: &str) -> bool {

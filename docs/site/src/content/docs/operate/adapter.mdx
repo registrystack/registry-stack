@@ -390,7 +390,8 @@ Use either one scheduler that invokes bounded passes or one `--loop` process for
 the same way.
 A loop that is waiting exits at once with status 0.
 The process stops after its listeners drain. The metrics listener and the hook ingress each wait
-at most 10 seconds for open connections, then close them.
+at most 10 seconds for open connections, then close them and log the cut-off. A stalled client
+never changes the exit status.
 A pass already in progress finishes first (it ends at its page deadline at the latest), releases its
 lease, and then the process exits with status 0.
 Give the supervisor a stop timeout longer than the job's `pageDeadlineMilliseconds`: a process
@@ -766,7 +767,7 @@ Facade series:
 
 | Series | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `adapter_http_requests_total` | counter | `route` (route template, or `unmatched`), `method`, `status` (`1xx`, `2xx`, `3xx`, `4xx`, `5xx`) | Answered facade requests. |
+| `adapter_http_requests_total` | counter | `route` (route template, or `unmatched`), `method`, `status` (`1xx`, `2xx`, `3xx`, `4xx`, `5xx`, `other`) | Answered facade requests. |
 | `adapter_upstream_failures_total` | counter | `class` (`upstream`, `upstream.http`, `upstream.timeout`, `upstream.connection`, `upstream.malformed`, `upstream.too-large`, `upstream.redirect`, `breaker.open`, `throttle.rejected`, `credential.rejected`, `egress.refused`) | Calls to the source that failed, by error class. It counts failed exchanges, status polls, bounded-wait polls and recovery checks. |
 | `adapter_journal_write_failures_total` | counter | none | Audit journal writes that failed, so the exchange answered an internal error. Custody and rendering failures are not counted here. |
 | `adapter_retention_sweep_failures_total` | counter | `store` (`journal`, `idempotency`, `other`) | Retention sweep batches that failed and were left to the next tick. |

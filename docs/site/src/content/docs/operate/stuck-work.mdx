@@ -244,7 +244,7 @@ The signals are:
   The reasons are `page-fault`, `destination-stop`, `refusal-limit`, and `store-unreachable`.
   A standby process that finds the lease held by another process is not counted.
 - `adapter_job_hook_refusals_total{reason}` counts refused hook-trigger requests.
-- `adapter_job_gauge_sample_failures_total` counts scrapes where the store could not be read.
+- `adapter_job_gauge_sample_failures_total` counts item count reads that failed or timed out. Scrapes served from the cached result do not count again.
   The items gauge then has no samples.
 
 The job serves these only under `adapter-job pass --loop`, on an optional `metricsListener.bind` in its runtime document.

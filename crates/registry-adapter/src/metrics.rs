@@ -199,7 +199,8 @@ fn status_class(status: StatusCode) -> &'static str {
         200..=299 => "2xx",
         300..=399 => "3xx",
         400..=499 => "4xx",
-        _ => "5xx",
+        500..=599 => "5xx",
+        _ => "other",
     }
 }
 
@@ -303,10 +304,11 @@ mod tests {
             StatusCode::NOT_MODIFIED,
             StatusCode::NOT_FOUND,
             StatusCode::BAD_GATEWAY,
+            StatusCode::from_u16(600).expect("600 is a valid status code"),
         ] {
             metrics.record_request("/records", &Method::GET, status);
         }
-        for class in ["1xx", "2xx", "3xx", "4xx", "5xx"] {
+        for class in ["1xx", "2xx", "3xx", "4xx", "5xx", "other"] {
             let line = format!(
                 "adapter_http_requests_total{{route=\"/records\",method=\"GET\",status=\"{class}\"}} 1"
             );

@@ -867,6 +867,7 @@ pub async fn run(
             None => Ok(()),
         }
     };
+    let metrics_serving = async move { tolerate_metrics_shutdown_timeout(metrics_serving.await) };
     let server = async move { tokio::try_join!(serving, metrics_serving).map(|_| ()) };
     let journal_sweep = sweep_journal_events(
         journal_sweep_pool,
@@ -913,9 +914,31 @@ pub async fn run(
     }
 }
 
+/// A metrics client that outlives the metrics listener's shutdown deadline is
+/// logged and dropped. It must not end the join with the facade listener, which
+/// would cut off the facade's in-flight requests.
+fn tolerate_metrics_shutdown_timeout(result: std::io::Result<()>) -> std::io::Result<()> {
+    match result {
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+            tracing::warn!(%error, "the metrics listener was cut off at the shutdown deadline");
+            Ok(())
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_metrics_shutdown_timeout_is_not_fatal_but_other_faults_are() {
+        let timed_out = std::io::Error::new(std::io::ErrorKind::TimedOut, "stalled client");
+        assert!(tolerate_metrics_shutdown_timeout(Err(timed_out)).is_ok());
+        let fault = std::io::Error::other("accept failed");
+        assert!(tolerate_metrics_shutdown_timeout(Err(fault)).is_err());
+        assert!(tolerate_metrics_shutdown_timeout(Ok(())).is_ok());
+    }
 
     use std::collections::VecDeque;
     use std::sync::Mutex;
