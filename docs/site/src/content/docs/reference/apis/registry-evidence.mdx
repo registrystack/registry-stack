@@ -117,8 +117,8 @@ See the [public certificate check example](https://github.com/registrystack/regi
 A grant may also permit the visibly unsigned envelope
 `application/vnd.registrystack.evidence-unsigned+json`, which is not later-verifiable evidence, and
 a holder-bound requirement offers one more encoding, listed with the [operations](../evidence/).
-`POST /v1/evidence/batch` accepts only
-`application/vnd.registrystack.evidence.request-batch+json`. Evidence authorises every item before
+`POST /v1/evidence/batch` takes an `application/json` body and requires
+`Accept: application/vnd.registrystack.evidence.request-batch+json`. Evidence authorises every item before
 it calls any source. The response holds one member per item, in request order. An available item
 carries its own signed flattened JWS, and an unavailable one carries only
 `evidence-not-available`. Either route refuses an `Accept` value it does not offer with

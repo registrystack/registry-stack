@@ -163,8 +163,10 @@ and which limits a deployment of it accepts.
 Every product that validates access tokens fetches the issuer's keys under one shared issuer
 network policy:
 
-- The declared issuer and a declared key set URI may resolve to any private or loopback address.
-  The operator who writes the runtime file is trusted to name them.
+- The declared issuer and a declared key set URI may be on a private network or on loopback.
+  Loopback means a host written as a literal loopback address or `localhost`. A name that resolves
+  to a loopback address is refused. The operator who writes the runtime file is trusted to name
+  them.
 - Cloud metadata and link-local addresses are refused for declared and discovered endpoints alike.
 - A key endpoint discovered on the issuer's own origin inherits the issuer's policy. On another
   origin it must use HTTPS and is refused when it resolves to a private or loopback address.
@@ -177,15 +179,16 @@ network policy:
 
 Under `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute keys
 and so mint tokens the product accepts. An HTTPS issuer, an unset `allowInsecureHttp`, or keys
-pinned with a static `jwksSource` each close that path. Each product's security model names its
-own setting path and any stricter rule, such as Coordinator's loopback rule.
+pinned with a static `jwksSource` each close that path. The security models for Base Registry
+Engine, Casework, Coordinator, Document Store, Messaging and Scheduling name their own setting path
+and any stricter rule, such as Coordinator's loopback rule.
 
 Registry Evidence is stricter. It accepts only a declared `uri` key source, and it refuses
-`allowInsecureHttp` outside the local assurance profile. Registry Render logs no startup warning
-when `allowInsecureHttp` is on.
+`allowInsecureHttp` outside the local assurance profile. Registry Render and the `evidence-oid4vp`
+verifier front end log no startup warning when `allowInsecureHttp` is on.
 
 {/* Evidence: crates/registry-evidence/src/config.rs, jwksSource and allowInsecureHttp validation;
-    crates/registry-render/src/auth.rs;
+    crates/registry-render/src/auth.rs; crates/registry-evidence-oid4vp/src/auth.rs;
     crates/registry-platform-oidc/src/lib.rs, IssuerNetworkPolicy,
     fetch_discovery_for_issuer,
     non_loopback_http_requires_the_named_opt_in_while_loopback_does_not,
