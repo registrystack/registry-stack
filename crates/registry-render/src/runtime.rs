@@ -149,12 +149,7 @@ impl RenderRuntime {
         let Some(metrics) = &self.metrics_listener else {
             return true;
         };
-        let metrics = metrics.bind.socket_addr();
-        let private = match metrics.ip() {
-            std::net::IpAddr::V4(ip) => ip.is_loopback() || ip.is_private(),
-            std::net::IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local(),
-        };
-        metrics.port() != 0 && private
+        registry_platform_config::check_metrics_bind_address(metrics.bind.socket_addr()).is_ok()
     }
 
     /// Whether `metricsListener`, when declared, uses a socket the listener
@@ -163,16 +158,11 @@ impl RenderRuntime {
         let Some(metrics) = &self.metrics_listener else {
             return false;
         };
-        let metrics = metrics.bind.socket_addr();
-        let listener = self.listener.bind.socket_addr();
-        // An IPv6 wildcard socket is commonly dual-stack, so it covers both
-        // families. The IPv4 wildcard covers only IPv4.
-        let wildcard_covers_metrics = match listener.ip() {
-            std::net::IpAddr::V4(ip) => ip.is_unspecified() && metrics.is_ipv4(),
-            std::net::IpAddr::V6(ip) => ip.is_unspecified(),
-        };
-        (metrics.ip() == listener.ip() || wildcard_covers_metrics)
-            && metrics.port() == listener.port()
+        registry_platform_config::check_metrics_bind_apart(
+            metrics.bind.socket_addr(),
+            &[("listener", self.listener.bind.socket_addr())],
+        )
+        .is_err()
     }
 
     /// Whether the deployment's seals are test seals: its assurance profile
