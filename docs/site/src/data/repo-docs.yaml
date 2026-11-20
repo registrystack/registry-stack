@@ -146,6 +146,9 @@ repos:
           - docsets: [ v0.46.0 ]
             standards_referenced: [ dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, json-ld, odrl ]
             last_reviewed: unreviewed
+          - docsets: [ v0.47.0 ]
+            standards_referenced: [ dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, json-ld, odrl ]
+            last_reviewed: unreviewed
         description: Operator and integrator documentation for Registry Manifest.
       - src: products/manifest/docs/validate-and-render.md
         archive_src: docs/validate-and-render.md
@@ -216,6 +219,9 @@ repos:
           - docsets: [ v0.46.0 ]
             standards_referenced: [ dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, odrl ]
             last_reviewed: unreviewed
+          - docsets: [ v0.47.0 ]
+            standards_referenced: [ dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, odrl ]
+            last_reviewed: unreviewed
       - src: products/manifest/docs/profile-fixtures.md
         archive_src: docs/profile-fixtures.md
         dest: products/registry-manifest/profile-fixtures
@@ -280,6 +286,9 @@ repos:
             standards_referenced: [ sp-dci ]
             last_reviewed: unreviewed
           - docsets: [ v0.46.0 ]
+            standards_referenced: [ sp-dci ]
+            last_reviewed: unreviewed
+          - docsets: [ v0.47.0 ]
             standards_referenced: [ sp-dci ]
             last_reviewed: unreviewed
       - src: products/manifest/docs/reference.md
@@ -351,6 +360,9 @@ repos:
           - docsets: [ v0.46.0 ]
             standards_referenced: [ dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, cccev, odrl, w3c-did ]
             last_reviewed: unreviewed
+          - docsets: [ v0.47.0 ]
+            standards_referenced: [ dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, cccev, odrl, w3c-did ]
+            last_reviewed: unreviewed
       - src: products/manifest/docs/itb-semic-validation.md
         dest: products/registry-manifest/itb-semic-validation
         label: ITB and SEMIC validation
@@ -415,6 +427,9 @@ repos:
             standards_referenced: [ dcat, bregdcat-ap, shacl, skos, json-schema, json-ld ]
             last_reviewed: unreviewed
           - docsets: [ v0.46.0 ]
+            standards_referenced: [ dcat, bregdcat-ap, shacl, skos, json-schema, json-ld ]
+            last_reviewed: unreviewed
+          - docsets: [ v0.47.0 ]
             standards_referenced: [ dcat, bregdcat-ap, shacl, skos, json-schema, json-ld ]
             last_reviewed: unreviewed
   registry-evidence:
@@ -491,6 +506,9 @@ repos:
           - docsets: [ v0.46.0 ]
             standards_referenced: [ openapi, json-schema, sd-jwt-vc ]
             last_reviewed: unreviewed
+          - docsets: [ v0.47.0 ]
+            standards_referenced: [ openapi, json-schema, sd-jwt-vc ]
+            last_reviewed: unreviewed
         description: Operator and integrator documentation for Registry Evidence, the minimum-disclosure assertion service.
       - src: products/evidence/reference/authoring-projects/CONFIG.md
         dest: products/registry-evidence/authoring-form
@@ -556,6 +574,9 @@ repos:
             standards_referenced: [ json-schema, openapi, sd-jwt-vc ]
             last_reviewed: unreviewed
           - docsets: [ v0.46.0 ]
+            standards_referenced: [ json-schema, openapi, sd-jwt-vc ]
+            last_reviewed: unreviewed
+          - docsets: [ v0.47.0 ]
             standards_referenced: [ json-schema, openapi, sd-jwt-vc ]
             last_reviewed: unreviewed
         description: Complete reference for the editable Evidence authoring project, its validation layers, local key material, and access policies.
@@ -625,6 +646,9 @@ repos:
           - docsets: [ v0.46.0 ]
             standards_referenced: []
             last_reviewed: unreviewed
+          - docsets: [ v0.47.0 ]
+            standards_referenced: []
+            last_reviewed: unreviewed
         description: Optional native source import, customized updates, provenance and interrupted transaction recovery.
       - src: products/evidence/reference/request-adapter/deployment-projects/SOURCE-CREDENTIAL-ROTATION.md
         dest: products/registry-evidence/source-credential-rotation
@@ -692,6 +716,9 @@ repos:
           - docsets: [ v0.46.0 ]
             standards_referenced: []
             last_reviewed: unreviewed
+          - docsets: [ v0.47.0 ]
+            standards_referenced: []
+            last_reviewed: unreviewed
         description: Rotate source credentials with explicit overlap, bounded OAuth caches and verified restart.
       - src: products/evidence/OPERATOR-CONTRACT.md
         dest: products/registry-evidence/operator-contract
@@ -757,6 +784,9 @@ repos:
             standards_referenced: [ openapi, sd-jwt-vc ]
             last_reviewed: unreviewed
           - docsets: [ v0.46.0 ]
+            standards_referenced: [ openapi, sd-jwt-vc ]
+            last_reviewed: unreviewed
+          - docsets: [ v0.47.0 ]
             standards_referenced: [ openapi, sd-jwt-vc ]
             last_reviewed: unreviewed
         description: Supported deployment shape, requester authority and purpose duties, required configuration and secrets, and readiness, audit, and key obligations.
