@@ -15,7 +15,7 @@ use registry_platform_audit::{
     MAX_AUDIT_RETAIN_DAYS, MIN_AUDIT_ROTATE_BYTES,
 };
 use registry_platform_config::{
-    ConfigBlockError, ConfigBlockErrorKind, ListenerBind, ListenerNetworkExposure,
+    ConfigBlockError, ConfigBlockErrorKind, ListenerBind, ListenerConfig, ListenerNetworkExposure,
     LoadedRuntimeConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig, RemovedKey,
     RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvider, SecretProvidersConfig,
     SecretReference,
@@ -104,6 +104,11 @@ pub struct RenderRuntime {
     pub api_version: String,
     pub kind: String,
     pub listener: ListenerRuntime,
+    /// The operator-private listener that serves `/metrics`. Omit it to serve
+    /// no metrics. It must be a loopback or private address on a non-zero
+    /// port, apart from `listener`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics_listener: Option<ListenerConfig>,
     /// The verified bundle package Render serves.
     pub package: PackageConfig,
     /// Providers for secret references. Omit when the authentication mode uses
@@ -128,6 +133,29 @@ pub struct RenderRuntime {
 }
 
 impl RenderRuntime {
+    /// Whether `metricsListener`, when declared, binds a concrete private
+    /// address on a non-zero port that is not the listener's socket. Sharing
+    /// that socket would publish the series on the document API's listener.
+    #[must_use]
+    pub fn metrics_listener_allowed(&self) -> bool {
+        let Some(metrics) = &self.metrics_listener else {
+            return true;
+        };
+        let metrics = metrics.bind.socket_addr();
+        let listener = self.listener.bind.socket_addr();
+        if metrics.port() == 0 || metrics.ip().is_unspecified() || !bind_allowed(metrics) {
+            return false;
+        }
+        // An IPv6 wildcard socket is commonly dual-stack, so it covers both
+        // families. The IPv4 wildcard covers only IPv4.
+        let wildcard_covers_metrics = match listener.ip() {
+            std::net::IpAddr::V4(ip) => ip.is_unspecified() && metrics.is_ipv4(),
+            std::net::IpAddr::V6(ip) => ip.is_unspecified(),
+        };
+        !((metrics.ip() == listener.ip() || wildcard_covers_metrics)
+            && metrics.port() == listener.port())
+    }
+
     /// Whether the deployment's seals are test seals: its assurance profile
     /// is `local`.
     #[must_use]
@@ -1034,6 +1062,18 @@ fn findings(runtime: &RenderRuntime) -> Vec<Finding> {
                 .to_owned(),
         });
     }
+    if !runtime.metrics_listener_allowed() {
+        findings.push(Finding {
+            code: "render.runtime.invalid-metrics-listener",
+            pointer: "/metricsListener/bind".to_owned(),
+            message: "metricsListener.bind must be a loopback or private address on a non-zero \
+                      port, apart from the listener"
+                .to_owned(),
+            action: "Bind metricsListener to a private address the document API listener does \
+                     not use, or remove the block to serve no metrics."
+                .to_owned(),
+        });
+    }
     let blocks = [runtime.package.check()];
     findings.extend(
         blocks
@@ -1479,6 +1519,7 @@ pub fn validate_seal_bindings(
 fn stand_in_for(pointer: &str) -> &'static str {
     match pointer {
         "/listener/bind" => "127.0.0.1:8080",
+        "/metricsListener/bind" => "127.0.0.1:9108",
         "/package/root" => "/",
         "/package/expectedDigest" => {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -2253,6 +2294,40 @@ mod tests {
             let addr: SocketAddr = bind.parse().unwrap();
             validate_bind(addr).unwrap_or_else(|err| panic!("{bind} must be allowed: {err}"));
         }
+    }
+
+    #[test]
+    fn the_metrics_listener_must_be_private_and_apart_from_the_listener() {
+        let (_dir, home) = home();
+        for bind in [
+            "127.0.0.1:8080",
+            "0.0.0.0:9090",
+            "[::]:9090",
+            "203.0.113.4:9090",
+            "127.0.0.1:0",
+            "[2001:db8::1]:9090",
+        ] {
+            let text = format!("{}metricsListener:\n  bind: \"{bind}\"\n", minimal(&home));
+            let problem = refused(&home, &text);
+            assert_eq!(
+                codes(&problem),
+                [(
+                    "render.runtime.invalid-metrics-listener",
+                    "/metricsListener/bind"
+                )],
+                "{bind}"
+            );
+            // CFG-SEC-3: the finding names the member, never its value.
+            assert!(!problem.diagnostics[0].message.contains(bind), "{bind}");
+        }
+        let text = format!(
+            "{}metricsListener:\n  bind: 127.0.0.1:9108\n",
+            minimal(&home)
+        );
+        let runtime = load_text(&home, &text).expect("a private metrics listener is accepted");
+        assert!(runtime.metrics_listener.is_some());
+        let runtime = load_text(&home, &minimal(&home)).expect("no metrics listener");
+        assert!(runtime.metrics_listener.is_none());
     }
 
     #[test]

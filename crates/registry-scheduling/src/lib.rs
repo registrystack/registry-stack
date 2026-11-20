@@ -23,6 +23,7 @@ pub mod config;
 pub mod cursors;
 pub mod hooks;
 pub mod http;
+pub mod metrics;
 pub mod operational;
 pub mod runtime;
 #[cfg(feature = "schema")]

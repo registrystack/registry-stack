@@ -163,6 +163,16 @@ interface by itself.
 {/* Evidence: crates/registry-scheduling/src/config.rs
     listener_requires_a_private_address_or_explicit_container_network. */}
 
+`metricsListener` is optional and absent by default.
+When it is present, `metricsListener.bind` is required and `/metrics` is served on that socket only.
+When it is absent, no metrics are served.
+The address must be a concrete loopback or private address on a non-zero port.
+It must not be the public listener's socket, or one that a wildcard public listener already covers.
+A refused address stops startup with `scheduling.runtime.invalid-metrics-listener`.
+
+{/* Evidence: crates/registry-scheduling/src/config.rs, valid_metrics_listener and
+    RuntimeConfigError::InvalidMetricsListener. */}
+
 ## Secrets
 
 `secretProviders` explicitly enables each accepted reference form.

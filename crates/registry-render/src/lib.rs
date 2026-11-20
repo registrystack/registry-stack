@@ -36,6 +36,7 @@ pub mod init;
 pub mod keygen;
 pub mod labels;
 pub mod manifest;
+pub mod metrics;
 pub mod openapi;
 pub mod pdf_signature;
 pub mod problem;

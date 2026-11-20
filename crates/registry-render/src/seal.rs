@@ -882,6 +882,12 @@ impl Seal {
         }
     }
 
+    /// Seconds from `now` until the certificate stops being valid, negative
+    /// once it has. The metrics gauge reads this.
+    pub fn seconds_until_expiry(&self, now: OffsetDateTime) -> i64 {
+        (self.chain.not_after() - now).whole_seconds()
+    }
+
     /// Whether a seal that can sign at `now` stops within
     /// [`EXPIRY_WARNING_DAYS`], the window `check --environment` warns in.
     pub fn expires_soon(&self, now: OffsetDateTime) -> bool {
@@ -1352,6 +1358,26 @@ mod tests {
         Arc::new(tokio::sync::Semaphore::new(1))
             .try_acquire_owned()
             .expect("a free place")
+    }
+
+    #[test]
+    fn the_seconds_until_expiry_count_down_and_go_negative() {
+        let pki = TestPki::generate().expect("test PKI");
+        let test_seal = pki.issue_seal(SigningAlgorithm::Es256).expect("test seal");
+        let seal = Seal::for_test(
+            "ministry",
+            &test_seal,
+            Arc::new(test_seal.signer().expect("test signer")),
+        );
+        let not_after = seal.chain.not_after();
+        assert_eq!(
+            seal.seconds_until_expiry(not_after - time::Duration::seconds(90)),
+            90
+        );
+        assert_eq!(
+            seal.seconds_until_expiry(not_after + time::Duration::seconds(10)),
+            -10
+        );
     }
 
     /// A client that disconnects drops its seal's future, but preparing the

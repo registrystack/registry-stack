@@ -51,12 +51,13 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::auth::{AuthenticationError, SchedulingAuthenticator};
+use crate::metrics::{serve_metrics, Metrics, MetricsState, METRICS_PATH};
 use crate::service::{Caller, CommitmentAnswer, DetailAdmission, SchedulingService, ServiceError};
 use crate::source_busy::{
     validate_busy_reconciliation_request, BusyReconciliationRequest, BusyRequestError,
     BUSY_SOURCE_APPLY_PATH, BUSY_SOURCE_PREVIEW_PATH,
 };
-use crate::store::BusyStoreError;
+use crate::store::{BusyStoreError, PostgresStore};
 
 tokio::task_local! {
     static REQUEST_TRACE: TraceContext;
@@ -74,6 +75,16 @@ const APPOINTMENT_RESCHEDULE_ROUTE: &str = "/v1/appointments/{appointment_id}/re
 const APPOINTMENT_CANCEL_ROUTE: &str = "/v1/appointments/{appointment_id}/cancel";
 const APPOINTMENT_HISTORY_ROUTE: &str = "/v1/appointments/{appointment_id}/history";
 const APPOINTMENT_ATTENDANCE_ROUTE: &str = "/v1/appointments/{appointment_id}/attendance";
+/// The operator-private router the metrics listener serves: the series, with
+/// the queues sampled from `store` at each scrape.
+pub fn metrics_router(metrics: Arc<Metrics>, store: PostgresStore) -> Router {
+    http_edge(
+        Router::new()
+            .route(METRICS_PATH, get(serve_metrics))
+            .with_state(MetricsState { metrics, store }),
+    )
+}
+
 pub fn router(state: HttpState) -> Router {
     http_edge(
         Router::new()

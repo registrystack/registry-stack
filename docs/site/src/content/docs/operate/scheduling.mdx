@@ -316,6 +316,50 @@ Undelivered delivery intents listed.
 intents: [{"appointmentRevision":1,"attempts":1,"deliveryState":"local","purpose":"confirmation",...}]
 ```
 
+## Watch the metrics
+
+Add a `metricsListener` block to `runtime.yaml` to serve Prometheus text. The example files carry
+one on `127.0.0.1:9105`. Without the block, Scheduling serves no metrics. The socket must be
+loopback or private, and must not be the `listener` socket. `GET /metrics` on that socket answers
+the series below and nothing else. The public listener does not route `/metrics`.
+
+| Series | Labels | Meaning |
+| --- | --- | --- |
+| `scheduling_http_requests_total` | `route`, `method`, `status`: `2xx`, `4xx`, `5xx` | Answered HTTP requests, by route template and status class |
+| `scheduling_outbox_items` | `state`: `pending`, `leased`, `delivered`, `dead-lettered`, `expired`, `unknown`, `cancelled` | Gauge of reminder and notice intents by stored state, read from the database at each scrape |
+| `scheduling_outbox_oldest_pending_age_seconds` | none | Gauge of how many seconds the oldest pending intent is past its due time. Zero when none is overdue |
+| `scheduling_hook_deliveries` | `state`: `pending`, `leased`, `delivered`, `dead-lettered`, `expired` | Gauge of observer-hook deliveries by stored state, read at each scrape |
+| `scheduling_hook_oldest_pending_age_seconds` | none | Gauge of how many seconds ago the oldest pending hook delivery's event was captured. Zero when none is pending |
+| `scheduling_worker_last_success_age_seconds` | `worker`: `hold-expiry`, `retention` | Gauge of seconds since the worker last finished a pass |
+| `scheduling_metrics_sample_failures_total` | `queue`: `outbox`, `hook-deliveries` | Scrapes in which that queue could not be read |
+
+Every state is listed, with a zero when no row is in it. Watch
+`scheduling_outbox_items{state="dead-lettered"}` and
+`scheduling_hook_deliveries{state="dead-lettered"}`, the work that gave up and needs a person.
+A growing `scheduling_outbox_oldest_pending_age_seconds` or
+`scheduling_hook_oldest_pending_age_seconds` means work is waiting and nothing is delivering it.
+
+The queue gauges are read from PostgreSQL in a read-only transaction with a two-second statement
+timeout. When a read fails, the runtime logs a warning, adds one to
+`scheduling_metrics_sample_failures_total` for that queue, and leaves that queue's series out of
+the scrape. A missing series is therefore a failed read, never a zero. Alert on
+`absent(scheduling_outbox_items)` as well as on the values.
+
+`scheduling_worker_last_success_age_seconds` covers the two loops that Scheduling owns: hold
+expiry, which wakes every 2 seconds, and retention, which runs about every 60 seconds. Retention
+counts as a success only when all of its erase passes finish. Until a worker's first success the
+gauge counts from process start, so a worker that never succeeds shows an age that keeps growing.
+The reminder dispatcher and the hook delivery worker belong to shared platform crates and are not
+in this series. Watch their backlog through the outbox and hook gauges above.
+
+Counters and worker ages are per process and restart at zero. The queue gauges read the shared
+database, so every replica reports the same values.
+
+{/* Evidence: crates/registry-scheduling/src/metrics.rs, Metrics, Worker and render;
+    crates/registry-scheduling/src/store.rs, outbox_depth and hook_delivery_depth;
+    crates/registry-scheduling/src/runtime.rs, WORKER_INTERVAL and RETENTION_TICKS;
+    crates/registry-scheduling/tests/postgres_commitments.rs, queue_depth. */}
+
 ## Change the policy
 
 Edit the project and run `schedulingctl test`. Package into a new directory, set `package.root`

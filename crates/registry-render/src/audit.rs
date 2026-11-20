@@ -15,6 +15,9 @@
 //! what was sealed, the certificate and the timestamp token; never a
 //! certificate subject, a signer name or a token.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
 use serde::Serialize;
 
 use registry_platform_audit::{AuditDestination, AuditEntry, AuditRequest, AuditWriter};
@@ -27,6 +30,8 @@ pub const AUDIT_SCHEMA: &str = "render.registrystack.org/audit/v1";
 #[derive(Clone, Debug)]
 pub struct RenderAudit {
     writer: AuditWriter,
+    /// Entries a write refused, counted for the metrics listener.
+    write_failures: Arc<AtomicU64>,
 }
 
 /// One value-free audit event. Field set is closed; adding a field is a
@@ -195,7 +200,22 @@ impl RenderAudit {
     }
 
     pub fn new(writer: AuditWriter) -> Self {
-        Self { writer }
+        Self {
+            writer,
+            write_failures: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// How many audit entries could not be written since the process
+    /// started. An entry a dropped call hands to a stream destination to
+    /// write later is not counted here.
+    pub fn write_failures(&self) -> u64 {
+        self.write_failures.load(Ordering::Relaxed)
+    }
+
+    fn write_failed(&self, err: impl std::fmt::Display) -> RenderProblem {
+        self.write_failures.fetch_add(1, Ordering::Relaxed);
+        RenderProblem::new(ProblemKind::AuditFailed, format!("audit append: {err}"))
     }
 
     /// Append the request entry and return the handle that owes its
@@ -211,9 +231,7 @@ impl RenderAudit {
         self.writer
             .begin(AUDIT_SCHEMA, correlation, record, unfinished)
             .await
-            .map_err(|err| {
-                RenderProblem::new(ProblemKind::AuditFailed, format!("audit append: {err}"))
-            })
+            .map_err(|err| self.write_failed(err))
     }
 
     /// Append the response entry. It must be accepted before the caller
@@ -229,9 +247,10 @@ impl RenderAudit {
     }
 
     async fn append(&self, entry: AuditEntry) -> Result<(), RenderProblem> {
-        self.writer.append(entry).await.map_err(|err| {
-            RenderProblem::new(ProblemKind::AuditFailed, format!("audit append: {err}"))
-        })
+        self.writer
+            .append(entry)
+            .await
+            .map_err(|err| self.write_failed(err))
     }
 
     /// Wait for the unfinished response entries dropped calls handed to a

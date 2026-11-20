@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -22,9 +23,9 @@ use registry_platform_config::{
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
-    JwksSource, ListenerNetworkExposure, OidcClientsConfig, OidcIssuerConfig, PackageConfig,
-    PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TaskGrantStatusConfig,
-    TlsTermination, UrlHookDestinationConfig,
+    JwksSource, ListenerConfig as MetricsListenerConfig, ListenerNetworkExposure,
+    OidcClientsConfig, OidcIssuerConfig, PackageConfig, PrivateListenerConfig as ListenerConfig,
+    SecretProvidersConfig, TaskGrantStatusConfig, TlsTermination, UrlHookDestinationConfig,
 };
 use registry_platform_httputil::destination::validate_fixed_destination_path;
 use registry_platform_oidc::task_grant::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry};
@@ -136,6 +137,10 @@ pub struct RuntimeConfig {
     pub identity: Option<IdentityConfig>,
     pub package: PackageConfig,
     pub listener: ListenerConfig,
+    /// The operator-private listener that serves `/metrics`. Omit it to
+    /// serve no metrics.
+    #[serde(default)]
+    pub metrics_listener: Option<MetricsListenerConfig>,
     pub secret_providers: SecretProvidersConfig,
     pub database: DatabaseConfig,
     pub authentication: AuthenticationConfig,
@@ -946,6 +951,12 @@ impl RuntimeConfig {
         if !self.listener.is_valid() {
             findings.push(RuntimeConfigError::InvalidListener);
         }
+        if let Some(metrics) = &self.metrics_listener {
+            if !valid_metrics_listener(metrics.bind.socket_addr(), self.listener.bind.socket_addr())
+            {
+                findings.push(RuntimeConfigError::InvalidMetricsListener);
+            }
+        }
     }
 
     fn check_oidc(&self, findings: &mut Vec<RuntimeConfigError>) {
@@ -1468,6 +1479,31 @@ fn positioned(check: &RuntimeFileCheck<RuntimeConfig>, finding: &RuntimeConfigEr
     diagnostic
 }
 
+/// The metrics listener binds a concrete private address on a non-zero port
+/// and never shares the public listener's socket: sharing it would publish
+/// the series on the listener the public contract describes.
+fn valid_metrics_listener(metrics: SocketAddr, listener: SocketAddr) -> bool {
+    let address = metrics.ip();
+    let private = match address {
+        IpAddr::V4(address) => address.is_loopback() || address.is_private(),
+        IpAddr::V6(address) => address.is_loopback() || is_unique_local(address),
+    };
+    if metrics.port() == 0 || !private || address.is_unspecified() || address.is_multicast() {
+        return false;
+    }
+    // An IPv6 wildcard socket is commonly dual-stack, so it covers both
+    // families; the IPv4 wildcard covers only IPv4.
+    let wildcard_covers_metrics = match listener.ip() {
+        IpAddr::V4(listener) => listener.is_unspecified() && address.is_ipv4(),
+        IpAddr::V6(listener) => listener.is_unspecified(),
+    };
+    !((address == listener.ip() || wildcard_covers_metrics) && metrics.port() == listener.port())
+}
+
+fn is_unique_local(address: Ipv6Addr) -> bool {
+    address.segments()[0] & 0xfe00 == 0xfc00
+}
+
 /// Whether `finding` reads the value of a member the check left as an
 /// expression, so the stand-in, not the operator's value, decided it.
 fn reads_deferred_value(
@@ -1476,6 +1512,7 @@ fn reads_deferred_value(
 ) -> bool {
     let reads: &[&str] = match finding {
         RuntimeConfigError::InvalidListener => &["/listener"],
+        RuntimeConfigError::InvalidMetricsListener => &["/listener/bind"],
         RuntimeConfigError::InvalidTaskGrantStatus => &["/authentication/oidc/audience"],
         RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
             &["/listener/tlsTermination"]
@@ -1499,6 +1536,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
     let segments: Vec<&str> = pointer.split('/').skip(1).collect();
     match segments.as_slice() {
         ["listener", "bind"] => "127.0.0.1:8100",
+        ["metricsListener", "bind"] => "127.0.0.1:9100",
         ["listener", "tlsTermination"] => "development-loopback",
         ["listener", "networkExposure"] => "private-address",
         ["audit", "destination"] => "file",
@@ -1576,6 +1614,11 @@ pub enum RuntimeConfigError {
     PolicyChanged,
     #[error("listener is not valid for its declared TLS termination and network exposure")]
     InvalidListener,
+    #[error(
+        "metricsListener.bind must be a private address on a non-zero port, apart from the \
+         listener"
+    )]
+    InvalidMetricsListener,
     #[error("{path} {reason}")]
     InvalidOidcClaim {
         path: &'static str,
@@ -1667,6 +1710,7 @@ impl RuntimeConfigError {
             Self::MissingTaskGrantStatus | Self::InvalidTaskGrantStatus => "taskGrantStatus",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
             Self::InvalidListener => "listener.bind",
+            Self::InvalidMetricsListener => "metricsListener.bind",
             Self::InvalidDatabaseReference => "database",
             Self::PlaintextDatabase => "database.testOnlyPlaintext",
             Self::InvalidAuditDestination(error) => audit_field(error),
@@ -1718,6 +1762,7 @@ impl RuntimeConfigError {
             Self::PackageContents { .. } => "scheduling.package.unexpected-contents",
             Self::PolicyChanged => "scheduling.package.file-changed",
             Self::InvalidListener => "scheduling.runtime.invalid-listener",
+            Self::InvalidMetricsListener => "scheduling.runtime.invalid-metrics-listener",
             Self::InvalidOidcClaim { .. } => "scheduling.runtime.invalid-oidc-claim",
             Self::InvalidOperationalReadProfile { .. } => {
                 "scheduling.runtime.invalid-operational-read-profile"
@@ -1773,6 +1818,9 @@ impl RuntimeConfigError {
             }
             Self::InvalidListener => {
                 "Bind to a loopback address under development-loopback; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
+            }
+            Self::InvalidMetricsListener => {
+                "Bind metricsListener to a loopback or private address with a nonzero port the API listener does not use."
             }
             Self::InvalidOidcClaim { .. } => {
                 "Name a non-empty value, with explainScope distinct from readsScope, or remove the member to use its default."
@@ -4137,6 +4185,53 @@ holdPolicy:
             let error = parse_runtime(&document).expect_err("an explicit null is refused");
             assert_eq!(error.pointer(), pointer, "{error}");
         }
+    }
+
+    #[test]
+    fn the_metrics_listener_must_be_private_and_apart_from_the_listener() {
+        let root = canonical_tempdir();
+        for bind in [
+            "127.0.0.1:8105",
+            "0.0.0.0:9090",
+            "[::]:9090",
+            "203.0.113.4:9090",
+            "127.0.0.1:0",
+            "[2001:db8::1]:9090",
+        ] {
+            let (_, mut document) = development(root.path());
+            document["metricsListener"] = serde_json::json!({"bind": bind});
+            let error = RuntimeConfig::load(write_operator(root.path(), document))
+                .expect_err("the metrics listener is refused");
+            assert!(
+                matches!(error, RuntimeConfigError::InvalidMetricsListener),
+                "{bind}: {error}"
+            );
+            assert!(!format!("{error:?}").contains(bind));
+        }
+        let (_, mut document) = development(root.path());
+        document["metricsListener"] = serde_json::json!({"bind": "127.0.0.1:9100"});
+        let config = RuntimeConfig::load(write_operator(root.path(), document))
+            .expect("a private metrics listener is accepted");
+        assert!(config.metrics_listener.is_some());
+        let (_, document) = development(root.path());
+        let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
+        assert!(config.metrics_listener.is_none());
+    }
+
+    #[test]
+    fn the_metrics_listener_may_not_share_a_wildcard_listener_port() {
+        assert!(!valid_metrics_listener(
+            "10.0.0.5:8100".parse().unwrap(),
+            "0.0.0.0:8100".parse().unwrap()
+        ));
+        assert!(!valid_metrics_listener(
+            "10.0.0.5:8100".parse().unwrap(),
+            "[::]:8100".parse().unwrap()
+        ));
+        assert!(valid_metrics_listener(
+            "[fd00::5]:8100".parse().unwrap(),
+            "0.0.0.0:8100".parse().unwrap()
+        ));
     }
 
     #[test]
