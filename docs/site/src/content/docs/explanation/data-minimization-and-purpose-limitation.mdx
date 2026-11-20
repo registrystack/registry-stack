@@ -50,8 +50,8 @@ bucket, an audience-scoped opaque reference, or a reviewed closed structure. The
 closed at twelve, and a requirement issuing under the holder-bound subject binding mode may use
 ten of them: the two entity-reference forms take the audience as a derivation input, so a
 holder-bound requirement declaring either is refused at startup rather than served with a
-degenerate reference. The answer carries a value for each declared concept and nothing else, and the
-assertion schema rejects additional properties.
+degenerate reference. The answer carries only the declared concepts. Each is present once, except a
+declared optional concept, which may be absent. The assertion schema rejects additional properties.
 For a reviewer, this moves the disclosure decision from request time, where a caller could argue
 for more, to authoring and review time, where an operator justifies it once and can be held to it.
 (The forms themselves are catalogued in [How Evidence
@@ -198,8 +198,8 @@ Some of the most important things for a DPO to know are the absences.
   operation that carries it out.
 - Erasure is per product and covers retained detail only: Registry Evidence erases nothing at the
   source it reads. BReg erases retained record history with `bregctl history erase` and Proposal
-  detail with `bregctl proposal-retention erase`. It erases expired Evidence responses it retained
-  for a record with `bregctl evidence-retention erase-expired`. None of these commands erases the
+  detail with `bregctl proposal-retention erase`. It erases the Evidence responses it retained that
+  expired before a time you give with `bregctl evidence-retention erase-expired`. None of these commands erases the
   current record or the audit journal (see [Retain, erase, and audit](../../operate/breg-retention/)). Registry Casework erases
   expired review data. Registry Messaging erases message payloads and records when their retention
   periods end. The Registry Document Store erases a removed document's bytes after the policy's

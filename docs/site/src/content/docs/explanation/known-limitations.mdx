@@ -80,13 +80,15 @@ linked here. Configuration and operation pages state the rest next to the settin
   [what a deployment needs](../../operate/breg/#what-you-need),
   [spatial fields](../../configure/breg/#declare-record-types),
   [encrypted fields](../../configure/breg-field-encryption/),
-  [history erasure](../../operate/breg-retention/#what-cannot-be-undone), and
-  [statistical releases](../../configure/breg-statistics/#review-what-a-release-discloses).
+  [history erasure](../../operate/breg-retention/#what-cannot-be-undone),
+  [statistical releases](../../configure/breg-statistics/#review-what-a-release-discloses), and
+  [backups, which you take yourself](../../operate/advanced/back-up-and-restore/#base-registry-engine-state).
 - Registry Manifest: [what metadata does not do](../../products/registry-manifest/#what-metadata-does-not-do)
   and [what standards validation covers](../../reference/itb-semic-evidence/#what-is-not-covered).
 - Registry Discovery: [when it is not the right product](../../start/discovery/#when-it-is-not-the-right-product)
   and [startup refusals](../../configure/discovery/#troubleshooting).
-- Registry Adapter: [limits to plan for](../../configure/adapter-packs/#limits-to-plan-for).
+- Registry Adapter: [what the route language does not port](../../configure/adapter-routes/#what-is-not-ported)
+  and the [limits of the KoboToolbox pack](../../configure/adapter-packs/#limits-to-plan-for).
 
 <DocsetProduct product="registry-casework">
 
@@ -148,7 +150,8 @@ Read the full security boundary in the [security overview](../../security/).
   and Registry Scheduling write their local audit logs through one shared writer.
   It neither chains nor signs entries, so the log gives no cryptographic tamper evidence.
   A running writer detects an external change to its active file and fails closed.
-  With the `file` destination it deletes sealed files after `retentionDays`.
+  With the `file` destination it deletes sealed files after the product's `retentionDays`, 90 days
+  by default. Registry Coordinator has no such setting and always keeps 90 days.
   Registry Adapter keeps its audit journal in an append-only PostgreSQL table and deletes rows
   older than its retention period.
   No product ships sealed history for you.
@@ -159,7 +162,8 @@ Read the full security boundary in the [security overview](../../security/).
   must not be relied on for freshness, expiry, or replay protection.
 
 {/* Evidence: crates/registry-platform-audit/src/writer.rs, module documentation ("Entries are
-    not chained"), retain_days, and the active-file identity check;
+    not chained"), retain_days, DEFAULT_AUDIT_RETAIN_DAYS, and the active-file identity check;
+    crates/registry-coordinator/src/deployment.rs, the audit writer built from auditFile alone;
     crates/registry-adapter/src/journal.rs, module documentation. */}
 
 ## Supply-chain and release limits
