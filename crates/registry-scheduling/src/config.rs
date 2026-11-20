@@ -1618,16 +1618,16 @@ pub enum RuntimeConfigError {
     #[error("listener is not valid for its declared TLS termination and network exposure")]
     InvalidListener,
     #[error(
-        "metricsListener.bind must be a private address on a non-zero port, apart from the \
-         listener"
+        "metricsListener.bind must be a loopback or private address on a non-zero port, apart \
+         from the listener"
     )]
     InvalidMetricsListener,
     /// The same refusal as `InvalidMetricsListener`, for a metrics bind that
     /// is acceptable alone but shares the listener's socket. It is separate so
     /// the offline check can defer it while the listener bind is an expression.
     #[error(
-        "metricsListener.bind must be a private address on a non-zero port, apart from the \
-         listener"
+        "metricsListener.bind must be a loopback or private address on a non-zero port, apart \
+         from the listener"
     )]
     MetricsListenerSharesSocket,
     #[error("{path} {reason}")]
@@ -1835,7 +1835,7 @@ impl RuntimeConfigError {
                 "Bind to a loopback address under development-loopback; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
             }
             Self::InvalidMetricsListener | Self::MetricsListenerSharesSocket => {
-                "Bind metricsListener to a loopback or private address with a nonzero port the API listener does not use."
+                "Bind metricsListener to a loopback or private address with a nonzero port the API listener does not use, or declare metricsListener.networkExposure: container-private on a container network."
             }
             Self::InvalidOidcClaim { .. } => {
                 "Name a non-empty value, with explainScope distinct from readsScope, or remove the member to use its default."

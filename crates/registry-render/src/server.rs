@@ -152,7 +152,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     if !runtime.metrics_listener_allowed() {
         return Err(RenderProblem::new(
             ProblemKind::RuntimeInvalid,
-            "metricsListener.bind must be a private address on a non-zero port, apart from the listener",
+            "metricsListener.bind must be a loopback or private address on a non-zero port, apart from the listener. Bind a loopback or private address, or declare metricsListener.networkExposure: container-private on a container network.",
         ));
     }
     let bundle = runtime::load_package(&runtime)?;

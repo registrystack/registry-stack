@@ -165,7 +165,7 @@ impl DeploymentConfig {
             ) {
                 errors.push(config_fail(
                     "deployment.metricsListener.bind",
-                    "bind metricsListener to a loopback or private address with a nonzero port the listener does not use",
+                    "bind metricsListener to a loopback or private address with a nonzero port the listener does not use, or declare deployment.metricsListener.networkExposure: container-private on a container network",
                 ));
             }
         }
@@ -258,8 +258,9 @@ fn audit_open_refusal(error: registry_platform_audit::AuditError) -> Coordinator
     ))
 }
 /// The metrics listener serves operator data, so it binds only a loopback or
-/// private address on its own nonzero port, never a wildcard and never the
-/// socket the public listener already covers. The rule is the platform's.
+/// private address on its own nonzero port, a wildcard only under
+/// `container-private`, and never the socket the public listener already
+/// covers. The rule is the platform's.
 fn valid_metrics_listener(
     metrics: SocketAddr,
     exposure: ListenerNetworkExposure,
