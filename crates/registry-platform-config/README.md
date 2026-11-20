@@ -110,6 +110,10 @@ accepted reference through the explicitly enabled environment or file provider.
 - `ListenerConfig` and `PrivateListenerConfig`: `bind` as `host:port` with an
   IP address host, and for private listeners the declared TLS termination and
   network exposure.
+- `MetricsListenerConfig`: `bind` as `host:port` and an optional
+  `networkExposure` (`private-address` by default, or `container-private`,
+  which also permits the unspecified address). `check_metrics_bind` and
+  `check_metrics_bind_address` take the exposure.
 - `TaskGrantStatusConfig`: one `taskGrantStatus` entry naming a task
   authority's issuer, its base URL and status route, and the runtime's own
   private-key JWT credentials for the status check. `statusPath` and

@@ -938,6 +938,19 @@ pub struct ListenerConfig {
     pub bind: ListenerBind,
 }
 
+/// The operator-private metrics listener of a runtime. `networkExposure`
+/// has the meaning it has on the serving listener: `private-address` (the
+/// default) requires a loopback or private address, and `container-private`
+/// also permits the unspecified address inside a private container network.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MetricsListenerConfig {
+    pub bind: ListenerBind,
+    #[serde(default)]
+    pub network_exposure: ListenerNetworkExposure,
+}
+
 /// Declares the trusted transport boundary for a runtime's plaintext HTTP
 /// listener. Production listeners require operator-controlled upstream TLS
 /// termination; direct plaintext is limited to the explicit loopback-only
