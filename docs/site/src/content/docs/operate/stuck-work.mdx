@@ -146,7 +146,8 @@ Use the metrics.
 - `casework_open_review_requests` and `casework_open_review_tasks` count open work.
 - `casework_due_review_tasks` counts open tasks past their due time.
   It is the overdue signal.
-- `casework_database_up` is 0 when the database cannot answer.
+- `casework_database_up` is 0 when the database cannot answer the review counts.
+- `casework_metrics_sample_failures_total{sample}` counts scrapes in which the review counts or the completion backlog could not be read.
 - `casework_completion_deliveries{state}` counts completion deliveries in `pending`, `retrying`, `leased`, `unknown`, `dead-lettered`, or `expired`.
 - `casework_completion_oldest_undelivered_age_seconds` is how long the oldest undelivered completion has waited.
 - `caseworkctl status` and `caseworkctl doctor` take `--runtime-config`.
@@ -421,6 +422,12 @@ groups:
         labels: {severity: warn}
         annotations:
           summary: The oldest undelivered completion has waited more than 30 minutes.
+      - alert: CaseworkMetricsSampleFailing
+        expr: increase(casework_metrics_sample_failures_total[15m]) > 0
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: A Casework metrics sample is failing, so some series are missing.
       - alert: CaseworkMetricsAbsent
         expr: absent(casework_database_up)
         for: 10m

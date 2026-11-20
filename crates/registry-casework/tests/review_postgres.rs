@@ -1525,7 +1525,7 @@ async fn the_completion_backlog_counts_every_undelivered_state_and_the_oldest_ag
         .database
         .execute(
             "UPDATE casework_review_completion_outbox
-             SET updated_at=now() - interval '2 hours' WHERE request_id=$1",
+             SET dead_lettered_at=now() - interval '2 hours' WHERE request_id=$1",
             &[&dead],
         )
         .await
@@ -1545,7 +1545,7 @@ async fn the_completion_backlog_counts_every_undelivered_state_and_the_oldest_ag
     );
     assert!(
         (7200..7260).contains(&backlog.oldest_undelivered_seconds),
-        "the oldest undelivered delivery is the aged dead letter: {}",
+        "the oldest undelivered delivery is the aged dead letter, aged from when it was dead-lettered and not from its last touch: {}",
         backlog.oldest_undelivered_seconds
     );
 }

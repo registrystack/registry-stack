@@ -86,6 +86,7 @@ impl PostgresStore {
                          transaction_timestamp() - min(CASE state \
                            WHEN 'pending' THEN next_attempt_at \
                            WHEN 'leased' THEN attempt_started_at \
+                           WHEN 'dead-lettered' THEN COALESCE(dead_lettered_at, updated_at) \
                            ELSE updated_at END) \
                          FILTER (WHERE state IN ('pending', 'leased', 'unknown', 'dead-lettered')), \
                          interval '0'))), 0)::bigint \
