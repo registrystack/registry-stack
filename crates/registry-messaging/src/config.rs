@@ -22,7 +22,7 @@ use registry_platform_config::{
 };
 pub use registry_platform_config::{
     DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
-    JwksSource as OidcJwksSource, ListenerConfig as MetricsListenerConfig, ListenerNetworkExposure,
+    JwksSource as OidcJwksSource, ListenerNetworkExposure, MetricsListenerConfig,
     OidcClientsConfig, OidcIssuerConfig, PackageConfig as RuntimePackageConfig,
     PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TlsTermination,
     MAX_ASSERTION_ISSUERS_PER_CLIENT as MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT,
@@ -658,8 +658,11 @@ impl RuntimeConfig {
             findings.push(RuntimeConfigError::InvalidListener);
         }
         if let Some(metrics) = &self.metrics_listener {
-            if !valid_metrics_listener(metrics.bind.socket_addr(), self.listener.bind.socket_addr())
-            {
+            if !valid_metrics_listener(
+                metrics.bind.socket_addr(),
+                metrics.network_exposure,
+                self.listener.bind.socket_addr(),
+            ) {
                 findings.push(RuntimeConfigError::InvalidMetricsListener);
             }
         }
@@ -991,8 +994,13 @@ fn dotted(pointer: &str) -> String {
 /// The metrics listener binds a concrete private address on a non-zero port
 /// and never shares the public listener's socket: sharing it would publish
 /// the counters on the listener the public contract describes.
-fn valid_metrics_listener(metrics: SocketAddr, listener: SocketAddr) -> bool {
-    registry_platform_config::check_metrics_bind(metrics, &[("listener", listener)]).is_ok()
+fn valid_metrics_listener(
+    metrics: SocketAddr,
+    exposure: ListenerNetworkExposure,
+    listener: SocketAddr,
+) -> bool {
+    registry_platform_config::check_metrics_bind(metrics, exposure, &[("listener", listener)])
+        .is_ok()
 }
 
 /// The package an offline check holds a runtime document's package rules
@@ -1238,7 +1246,10 @@ fn reads_deferred_value(
     let pointer = finding.pointer();
     let reads: Vec<String> = match finding {
         RuntimeConfigError::InvalidListener => vec!["/listener".to_owned()],
-        RuntimeConfigError::InvalidMetricsListener => vec!["/listener/bind".to_owned()],
+        RuntimeConfigError::InvalidMetricsListener => vec![
+            "/listener/bind".to_owned(),
+            "/metricsListener/networkExposure".to_owned(),
+        ],
         RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
             vec!["/listener/tlsTermination".to_owned()]
         }
@@ -1270,6 +1281,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
         ["listener", "tlsTermination"] => "development-loopback",
         ["listener", "networkExposure"] => "private-address",
         ["metricsListener", "bind"] => "127.0.0.1:9107",
+        ["metricsListener", "networkExposure"] => "private-address",
         ["audit", "destination"] => "file",
         ["package", "root"] | ["audit", "path"] | ["secretProviders", "file", "root"] => {
             "/deferred"
@@ -2377,17 +2389,46 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_metrics_wildcard_needs_container_private_exposure() {
+        let mut value = base();
+        value["metricsListener"] = json!({"bind": "0.0.0.0:9107"});
+        assert!(matches!(
+            load(value).unwrap_err(),
+            RuntimeConfigError::InvalidMetricsListener
+        ));
+        let mut value = base();
+        value["metricsListener"] =
+            json!({"bind": "0.0.0.0:9107", "networkExposure": "container-private"});
+        assert!(load(value).unwrap().metrics_listener.is_some());
+        for bind in ["203.0.113.4:9107", "0.0.0.0:8107"] {
+            let mut value = base();
+            value["metricsListener"] =
+                json!({"bind": bind, "networkExposure": "container-private"});
+            assert!(
+                matches!(
+                    load(value).unwrap_err(),
+                    RuntimeConfigError::InvalidMetricsListener
+                ),
+                "{bind}"
+            );
+        }
+    }
+
+    #[test]
     fn the_metrics_listener_may_not_share_a_wildcard_listener_port() {
         assert!(!valid_metrics_listener(
             "10.0.0.5:8107".parse().unwrap(),
+            ListenerNetworkExposure::PrivateAddress,
             "0.0.0.0:8107".parse().unwrap()
         ));
         assert!(!valid_metrics_listener(
             "10.0.0.5:8107".parse().unwrap(),
+            ListenerNetworkExposure::PrivateAddress,
             "[::]:8107".parse().unwrap()
         ));
         assert!(valid_metrics_listener(
             "[fd00::5]:8107".parse().unwrap(),
+            ListenerNetworkExposure::PrivateAddress,
             "0.0.0.0:8107".parse().unwrap()
         ));
     }
