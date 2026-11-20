@@ -134,30 +134,45 @@ pub struct RenderRuntime {
 
 impl RenderRuntime {
     /// Whether `metricsListener`, when declared, binds a concrete loopback or
-    /// private address (never link-local) on a non-zero port that is not the listener's socket. Sharing
-    /// that socket would publish the series on the document API's listener.
+    /// private address (never link-local) on a non-zero port that is not the
+    /// listener's socket. Sharing that socket would publish the series on the
+    /// document API's listener.
     #[must_use]
     pub fn metrics_listener_allowed(&self) -> bool {
+        self.metrics_listener_address_allowed() && !self.metrics_listener_shares_socket()
+    }
+
+    /// Whether `metricsListener`, when declared, binds a loopback or private
+    /// address (never link-local) on a non-zero port. This depends on the
+    /// metrics bind alone.
+    fn metrics_listener_address_allowed(&self) -> bool {
         let Some(metrics) = &self.metrics_listener else {
             return true;
         };
         let metrics = metrics.bind.socket_addr();
-        let listener = self.listener.bind.socket_addr();
         let private = match metrics.ip() {
             std::net::IpAddr::V4(ip) => ip.is_loopback() || ip.is_private(),
             std::net::IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local(),
         };
-        if metrics.port() == 0 || !private {
+        metrics.port() != 0 && private
+    }
+
+    /// Whether `metricsListener`, when declared, uses a socket the listener
+    /// already holds.
+    fn metrics_listener_shares_socket(&self) -> bool {
+        let Some(metrics) = &self.metrics_listener else {
             return false;
-        }
+        };
+        let metrics = metrics.bind.socket_addr();
+        let listener = self.listener.bind.socket_addr();
         // An IPv6 wildcard socket is commonly dual-stack, so it covers both
         // families. The IPv4 wildcard covers only IPv4.
         let wildcard_covers_metrics = match listener.ip() {
             std::net::IpAddr::V4(ip) => ip.is_unspecified() && metrics.is_ipv4(),
             std::net::IpAddr::V6(ip) => ip.is_unspecified(),
         };
-        !((metrics.ip() == listener.ip() || wildcard_covers_metrics)
-            && metrics.port() == listener.port())
+        (metrics.ip() == listener.ip() || wildcard_covers_metrics)
+            && metrics.port() == listener.port()
     }
 
     /// Whether the deployment's seals are test seals: its assurance profile
@@ -859,14 +874,10 @@ fn read_runtime(
     let mut seal_capacities = BTreeMap::new();
     if let Some(loaded) = &check.loaded {
         let mut audit_refused = false;
-        for finding in findings(&loaded.config) {
+        for finding in findings(&loaded.config, check.defers("/listener/bind")) {
             let audit_deferred =
                 finding.pointer.starts_with("/audit") && check.defers("/audit/destination");
-            // The metrics socket is compared with the listener's, so a
-            // deferred listener bind defers that comparison too.
-            let metrics_deferred =
-                finding.pointer == "/metricsListener/bind" && check.defers("/listener/bind");
-            if !check.defers(&finding.pointer) && !audit_deferred && !metrics_deferred {
+            if !check.defers(&finding.pointer) && !audit_deferred {
                 audit_refused |= finding.pointer.starts_with("/audit");
                 diagnostics.push(check.error_at(
                     RUNTIME_KIND,
@@ -1057,7 +1068,9 @@ struct Finding {
     action: String,
 }
 
-fn findings(runtime: &RenderRuntime) -> Vec<Finding> {
+/// The findings for a decoded runtime. A deferred listener bind has no value
+/// yet, so the metrics socket comparison with it waits for the environment.
+fn findings(runtime: &RenderRuntime, listener_deferred: bool) -> Vec<Finding> {
     let mut findings = Vec::new();
     if !runtime.listener.bind_allowed() {
         findings.push(Finding {
@@ -1070,7 +1083,9 @@ fn findings(runtime: &RenderRuntime) -> Vec<Finding> {
                 .to_owned(),
         });
     }
-    if !runtime.metrics_listener_allowed() {
+    if !runtime.metrics_listener_address_allowed()
+        || (runtime.metrics_listener_shares_socket() && !listener_deferred)
+    {
         findings.push(Finding {
             code: "render.runtime.invalid-metrics-listener",
             pointer: "/metricsListener/bind".to_owned(),
@@ -2541,6 +2556,36 @@ mod tests {
         .expect("runtime file");
         let offline = check_runtime(&file, false, None);
         assert!(offline.diagnostics.is_empty(), "{:?}", offline.diagnostics);
+    }
+
+    #[test]
+    fn cfg_check_1_a_deferred_listener_still_refuses_a_metrics_address_class() {
+        let (_dir, home) = home();
+        let file = home.join("runtime.yaml");
+        for bind in ["169.254.1.1:9464", "203.0.113.4:9464", "0.0.0.0:9464"] {
+            std::fs::write(
+                &file,
+                format!(
+                    "{}metricsListener:\n  bind: \"{bind}\"\n",
+                    minimal(&home).replace("127.0.0.1:8080", "\"${RENDER_CHECK_UNSET_BIND}\"")
+                ),
+            )
+            .expect("runtime file");
+            let offline = check_runtime(&file, false, None);
+            let found: Vec<_> = offline
+                .diagnostics
+                .iter()
+                .map(|d| (d.code.as_str(), d.path.as_str()))
+                .collect();
+            assert_eq!(
+                found,
+                [(
+                    "render.runtime.invalid-metrics-listener",
+                    "/metricsListener/bind"
+                )],
+                "{bind}"
+            );
+        }
     }
 
     #[test]
