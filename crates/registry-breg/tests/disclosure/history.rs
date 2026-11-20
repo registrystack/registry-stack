@@ -12,24 +12,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use reqwest::Method;
 use serde_json::{json, Value};
 
+use super::client_http::ClientFixture;
 use super::fixture::{
     assert_has_sentinel, assert_no_sentinel, assert_same_absence, project_source, Answer,
     ABSENT_ID, CANARY_ADDRESS, CANARY_EMAIL, CANARY_OLD_NAME, CANARY_PHONE, EMERGENCY_REGISTRAR,
     PROTECTION_OFFICER, REGISTRAR,
 };
-use client_http::ClientFixture;
 use registry_breg::api::{VerifiedClaimValue, VerifiedRequestClaims};
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::CompiledRegistry;
 use registry_breg_client::{BRegActionInvocationRequest, BRegIdempotencyKey, BRegProposalState};
-
-// The real-HTTP fixture reaches the harness through its parent module.
-use super::postgres_harness;
-
-#[path = "../support/client_http.rs"]
-#[allow(dead_code)]
-mod client_http;
 
 const WRITER: &str = "writer";
 const PERSON_FIELDS: [&str; 5] = [
@@ -49,6 +42,7 @@ fn history_source() -> Value {
     for record in records.iter_mut() {
         if record["id"] == "person" {
             record["tombstone"] = json!(true);
+            record["batch"] = json!({"maximumItems": 4, "maximumBytes": 8192});
         }
         for condition in record["disclosureConditions"].as_array_mut().unwrap() {
             condition["exemptProfiles"]
@@ -62,15 +56,17 @@ fn history_source() -> Value {
             grant["operations"] = json!(["get", "list", "snapshot", "revisions"]);
             grant["revisionAccess"] = json!(true);
             grant["allowCount"] = json!(true);
+            grant["provenanceFields"] = json!(["kind", "reasonText", "sourceReferences"]);
         }
     }
     let writable = |record_type: &str, fields: &[&str]| {
         let mut operations = vec!["create", "get", "list", "patch", "snapshot", "revisions"];
         if record_type == "person" {
             operations.push("tombstone");
+            operations.push("batch");
         }
         json!({"recordType": record_type, "operations": operations,
-            "revisionAccess": true, "allowCount": true, "rowBoundaries": "unrestricted",
+            "revisionAccess": true, "provenanceFields": ["kind", "reasonText", "sourceReferences"], "allowCount": true, "rowBoundaries": "unrestricted",
             "readableFields": fields, "writableFields": fields})
     };
     let person_target = json!([{"recordType": "person", "rowBoundaries": "unrestricted"}]);
@@ -405,8 +401,14 @@ async fn snapshots_withhold_flagged_records_and_match_a_random_identifier() {
         .iter()
         .find(|item| item["recordIdentifier"] == seeded.f.as_str())
         .unwrap();
-    assert!(shielded["domainData"].get("emailAddress").is_none());
-    assert!(shielded["domainData"].get("phoneNumber").is_none());
+    assert_eq!(
+        shielded["domainData"].get("emailAddress"),
+        Some(&Value::Null)
+    );
+    assert_eq!(
+        shielded["domainData"].get("phoneNumber"),
+        Some(&Value::Null)
+    );
     assert_eq!(shielded["domainData"]["familyName"], "Shielded");
     let open = people.body["items"]
         .as_array()
@@ -497,14 +499,21 @@ async fn revisions_of_withheld_records_answer_like_a_random_identifier() {
     assert_eq!(shielded.status, 200, "{}", shielded.text());
     let items = shielded.body["items"].as_array().unwrap();
     assert_eq!(items.len(), 1);
-    assert!(items[0]["domainData"].get("emailAddress").is_none());
-    assert!(items[0]["domainData"].get("phoneNumber").is_none());
+    assert_eq!(
+        items[0]["domainData"].get("emailAddress"),
+        Some(&Value::Null)
+    );
+    assert_eq!(
+        items[0]["domainData"].get("phoneNumber"),
+        Some(&Value::Null)
+    );
     assert_eq!(items[0]["domainData"]["familyName"], "Shielded");
     let detail = history.revision("people", &seeded.f, 1, REGISTRAR).await;
     assert_eq!(detail.status, 200, "{}", detail.text());
-    assert!(detail.body["data"]["domainData"]
-        .get("emailAddress")
-        .is_none());
+    assert_eq!(
+        detail.body["data"]["domainData"].get("emailAddress"),
+        Some(&Value::Null)
+    );
     let detail = history
         .revision("people", &seeded.f, 1, PROTECTION_OFFICER)
         .await;
@@ -750,4 +759,224 @@ async fn assert_latest_equals_current(history: &History, id: &str, revision: u32
         revision.to_string(),
         "no revision is newer than {revision}"
     );
+}
+
+/// The change context a revision carries, wherever the response nests it.
+fn change_context(value: &Value) -> Option<&Value> {
+    match value {
+        Value::Object(members) => members
+            .get("changeContext")
+            .or_else(|| members.values().find_map(change_context)),
+        Value::Array(items) => items.iter().find_map(change_context),
+        _ => None,
+    }
+}
+
+/// A snapshot reference taken before a record is marked must not read it.
+/// Disclosure follows the latest retained revision of the record, not the
+/// state at the reference.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_old_snapshot_reference_does_not_read_a_record_marked_since() {
+    let history = History::start().await;
+    let open_person = |name: &str, email: &str, phone: &str| {
+        json!({"familyName": name, "protectionLevel": "none", "historyProtected": false,
+            "emailAddress": email, "phoneNumber": phone})
+    };
+    let p = history
+        .create("people", open_person("Later", CANARY_EMAIL, CANARY_PHONE))
+        .await;
+    let f = history
+        .create(
+            "people",
+            open_person("Shielded", "shielded@example.invalid", "555-0199"),
+        )
+        .await;
+    let open = history
+        .create(
+            "people",
+            open_person("Open", "open@example.invalid", "555-0100"),
+        )
+        .await;
+    let r = history
+        .create(
+            "residences",
+            json!({"personId": p, "protectionLevel": "none", "address": CANARY_ADDRESS}),
+        )
+        .await;
+    let n = history
+        .create(
+            "name-usages",
+            json!({"personId": p, "protectionLevel": "none",
+                "oldName": CANARY_OLD_NAME, "closedOn": "2020-01-01"}),
+        )
+        .await;
+
+    // Before marking, the reference reads every value: the canary is not vacuous.
+    let people = history.snapshot("people", REGISTRAR).await;
+    let reference = people.body["snapshot"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a snapshot reference in {}", people.text()))
+        .to_owned();
+    assert_has_sentinel(&people.text(), CANARY_EMAIL);
+    assert_has_sentinel(
+        &history.snapshot("residences", REGISTRAR).await.text(),
+        CANARY_ADDRESS,
+    );
+    assert_has_sentinel(
+        &history.snapshot("name-usages", REGISTRAR).await.text(),
+        CANARY_OLD_NAME,
+    );
+
+    // Mark P (record and history), F (contacts only), R and N.
+    history
+        .patch(
+            "people",
+            &p,
+            &[
+                ("protectionLevel", json!("protected")),
+                ("historyProtected", json!(true)),
+            ],
+        )
+        .await;
+    history
+        .patch("people", &f, &[("protectionLevel", json!("protected"))])
+        .await;
+    history
+        .patch("residences", &r, &[("protectionLevel", json!("protected"))])
+        .await;
+    history
+        .patch(
+            "name-usages",
+            &n,
+            &[("protectionLevel", json!("protected"))],
+        )
+        .await;
+
+    let at_reference = |route: &'static str| {
+        let history = &history;
+        let reference = reference.clone();
+        async move {
+            history
+                .get(
+                    &format!(
+                        "/v1/records/{route}:snapshot?$count=true&$top=100&snapshot={reference}"
+                    ),
+                    REGISTRAR,
+                )
+                .await
+        }
+    };
+    let people = at_reference("people").await;
+    assert_eq!(people.status, 200, "{}", people.text());
+    assert_no_sentinel(&people.text());
+    let ids = History::ids(&people);
+    assert!(!ids.contains(&p), "the marked person is absent");
+    assert!(ids.contains(&open), "the open person is still read");
+    assert_eq!(
+        people.body["count"], 2,
+        "the count excludes withheld records"
+    );
+    let shielded = people.body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["recordIdentifier"] == f.as_str())
+        .expect("the shielded person is listed");
+    assert_eq!(
+        shielded["domainData"].get("emailAddress"),
+        Some(&Value::Null)
+    );
+    assert_eq!(shielded["domainData"]["familyName"], "Shielded");
+    for route in ["residences", "name-usages"] {
+        let reply = at_reference(route).await;
+        assert_eq!(reply.status, 200, "{}", reply.text());
+        assert_no_sentinel(&reply.text());
+        assert!(History::ids(&reply).is_empty(), "{route}: {}", reply.text());
+        assert_eq!(reply.body["count"], 0);
+    }
+    history.fixture.finish().await;
+}
+
+/// A commit shares one change context across its records. A marked record in
+/// the commit must not lend that context to an unmarked one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_commit_context_shared_with_a_marked_record_is_withheld() {
+    let history = History::start().await;
+    let batch = |items: Value, key: &str| {
+        let history = &history;
+        let key = key.to_owned();
+        async move {
+            let reply = history
+                .send(
+                    Method::POST,
+                    "/v1/records/people:batch",
+                    WRITER,
+                    &[("idempotency-key", &key)],
+                    Some((
+                        "application/json",
+                        serde_json::to_vec(&json!({
+                            "changeContext": {"kind": "correction", "reasonCode": "commit-context",
+                                "reasonText": "COMMIT-CONTEXT-CANARY",
+                                "sourceReferences": ["case-document:commit-context-canary"]},
+                            "items": items
+                        }))
+                        .unwrap(),
+                    )),
+                )
+                .await;
+            assert_eq!(reply.status, 200, "batch: {}", reply.text());
+            reply.body["results"]
+                .as_array()
+                .expect("a batch lists its results")
+                .iter()
+                .map(|item| item["recordIdentifier"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        }
+    };
+    let person = |name: &str, level: &str, flag: bool| {
+        json!({"operation": "create", "data": {"familyName": name, "protectionLevel": level,
+            "historyProtected": flag, "emailAddress": "mixed@example.invalid",
+            "phoneNumber": "555-0123"}})
+    };
+    let mixed = batch(
+        json!([
+            person("Marked", "protected", true),
+            person("Unmarked", "none", false)
+        ]),
+        "mixed-batch",
+    )
+    .await;
+    let (marked, unmarked) = (&mixed[0], &mixed[1]);
+    // A commit of two open records lends its context, so the control is not vacuous.
+    let open = batch(
+        json!([
+            person("OpenOne", "none", false),
+            person("OpenTwo", "none", false)
+        ]),
+        "open-batch",
+    )
+    .await;
+    let control = history.revisions("people", &open[0], REGISTRAR).await;
+    assert_eq!(control.status, 200, "{}", control.text());
+    assert_has_sentinel(&control.text(), "COMMIT-CONTEXT-CANARY");
+
+    let exempt = history
+        .revisions("people", unmarked, PROTECTION_OFFICER)
+        .await;
+    assert_has_sentinel(&exempt.text(), "COMMIT-CONTEXT-CANARY");
+    let reply = history.revisions("people", unmarked, REGISTRAR).await;
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert!(
+        change_context(&reply.body).is_none(),
+        "the unmarked record carries the marked record's context: {}",
+        reply.text()
+    );
+    let text = reply.text();
+    assert!(!text.contains("COMMIT-CONTEXT-CANARY"), "{text}");
+    assert!(!text.contains("commit-context-canary"), "{text}");
+    assert!(!text.contains(marked.as_str()), "{text}");
+    let detail = history.revision("people", unmarked, 1, REGISTRAR).await;
+    assert_eq!(detail.status, 200, "{}", detail.text());
+    assert!(change_context(&detail.body).is_none(), "{}", detail.text());
+    history.fixture.finish().await;
 }

@@ -8,6 +8,11 @@
 #[allow(dead_code)]
 mod postgres_harness;
 
+// The real-HTTP fixture is shared by the history and proposal suites.
+#[path = "support/client_http.rs"]
+#[allow(dead_code)]
+mod client_http;
+
 #[path = "disclosure/fields.rs"]
 mod fields;
 #[path = "disclosure/fixture.rs"]

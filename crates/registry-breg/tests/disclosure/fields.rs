@@ -2,9 +2,10 @@
 
 //! Field-level canaries: omitted members on reads and write responses.
 //!
-//! A `fields` condition must leave a withheld member absent, exactly as a
-//! member the profile cannot read is absent, on get, list and every write
-//! response. An idempotent replay must not return a value captured earlier.
+//! A `fields` condition must render a withheld member as null on get and list,
+//! exactly as a member the record never set, and drop it from every write
+//! response. An idempotent replay must not return a value captured earlier. A
+//! JSON Patch `test` must not answer a guess about a withheld member.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -65,11 +66,13 @@ fn the_fixture_withholds_contacts_from_the_registrar_only() {
 /// The fixture project with create and patch granted on `person`.
 fn writable_project() -> registry_breg::CompiledRegistry {
     let mut source = project_source();
+    source["recordTypes"][0]["batch"] = json!({"maximumItems": 4, "maximumBytes": 8192});
     for profile in source["accessProfiles"].as_array_mut().unwrap() {
         let grant = &mut profile["permissions"]["records"][0];
         assert_eq!(grant["recordType"], "person");
-        grant["operations"] = json!(["create", "get", "list", "patch"]);
+        grant["operations"] = json!(["create", "get", "list", "patch", "batch"]);
         grant["writableFields"] = json!(PERSON_FIELDS);
+        grant["sortableFields"] = json!(["family-name"]);
     }
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project(&project, &[], CompileProfile::Authoring).unwrap()
@@ -273,7 +276,7 @@ fn api_names(fixture: &Fixture, fields: &[&str]) -> BTreeSet<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_get_omits_withheld_members_only_while_the_condition_matches() {
+async fn a_get_nulls_withheld_members_only_while_the_condition_matches() {
     let (fixture, app) = serve().await;
 
     let marked = send(
@@ -289,11 +292,21 @@ async fn a_get_omits_withheld_members_only_while_the_condition_matches() {
     assert_no_sentinel(&marked.text);
     assert_eq!(
         data_members(&marked),
-        api_names(
-            &fixture,
-            &["family-name", "protection-level", "history-protected"]
-        ),
-        "a withheld member is absent, not null: {}",
+        api_names(&fixture, &PERSON_FIELDS),
+        "a withheld member is present: {}",
+        marked.text
+    );
+    let data = find_object(&marked.body, "domainData").unwrap();
+    assert_eq!(
+        data.get("emailAddress"),
+        Some(&Value::Null),
+        "{}",
+        marked.text
+    );
+    assert_eq!(
+        data.get("phoneNumber"),
+        Some(&Value::Null),
+        "{}",
         marked.text
     );
 
@@ -326,7 +339,7 @@ async fn a_get_omits_withheld_members_only_while_the_condition_matches() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_list_omits_withheld_members_row_by_row() {
+async fn a_list_nulls_withheld_members_row_by_row() {
     let (fixture, app) = serve().await;
 
     let registrar = send(
@@ -344,6 +357,12 @@ async fn a_list_omits_withheld_members_row_by_row() {
     assert_has_sentinel(&registrar.text, "open@example.invalid");
     let items = registrar.body["items"].as_array().expect("a page of items");
     assert_eq!(items.len(), 2, "{}", registrar.text);
+    let marked = items
+        .iter()
+        .find(|item| item["recordIdentifier"] == PERSON_ID)
+        .expect("the marked person is listed");
+    assert_eq!(marked["domainData"].get("emailAddress"), Some(&Value::Null));
+    assert_eq!(marked["domainData"].get("phoneNumber"), Some(&Value::Null));
 
     let officer = send(
         &app,
@@ -503,5 +522,209 @@ async fn a_replayed_write_never_returns_a_value_the_response_once_held() {
     )
     .await;
     assert_has_sentinel(&officer.text, "late@example.invalid");
+    fixture.database.cleanup().await;
+}
+
+/// A record the condition withholds from and one with the field unset answer
+/// with the same members, so the shape does not reveal the marker.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_withheld_member_is_indistinguishable_from_an_unset_one() {
+    let (fixture, app) = serve().await;
+    let created = send(
+        &app,
+        Method::POST,
+        "/v1/records/people",
+        REGISTRAR,
+        &[
+            ("content-type", "application/json"),
+            ("idempotency-key", "create-unset"),
+        ],
+        Some(json!({"data": {
+            "familyName": "Unset", "protectionLevel": "none", "historyProtected": false
+        }})),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.text);
+    let unset_id = created.body["data"]["recordIdentifier"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a created id in {}", created.text))
+        .to_owned();
+    let unset = send(
+        &app,
+        Method::GET,
+        &person_path(&unset_id),
+        REGISTRAR,
+        &[],
+        None,
+    )
+    .await;
+    let marked = send(
+        &app,
+        Method::GET,
+        &person_path(PERSON_ID),
+        REGISTRAR,
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(unset.status, StatusCode::OK, "{}", unset.text);
+    assert_eq!(data_members(&marked), data_members(&unset));
+    assert_eq!(
+        find_object(&marked.body, "domainData").unwrap()["emailAddress"],
+        find_object(&unset.body, "domainData").unwrap()["emailAddress"]
+    );
+    fixture.database.cleanup().await;
+}
+
+/// `$orderby` adds a column before the condition flags. The flag of each row
+/// must still be read from the right column.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_ordered_list_withholds_by_the_condition_flag_of_each_row() {
+    let (fixture, app) = serve().await;
+    let ordered = send(
+        &app,
+        Method::GET,
+        "/v1/records/people?$orderby=familyName",
+        REGISTRAR,
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(ordered.status, StatusCode::OK, "{}", ordered.text);
+    assert_no_sentinel(&ordered.text);
+    let items = ordered.body["items"].as_array().expect("a page of items");
+    assert_eq!(items.len(), 2, "{}", ordered.text);
+    // Open sorts before Protected.
+    assert_eq!(items[0]["recordIdentifier"], OPEN_PERSON_ID);
+    assert_eq!(
+        items[0]["domainData"]["emailAddress"],
+        "open@example.invalid"
+    );
+    assert_eq!(items[1]["recordIdentifier"], PERSON_ID);
+    assert_eq!(
+        items[1]["domainData"].get("emailAddress"),
+        Some(&Value::Null)
+    );
+    fixture.database.cleanup().await;
+}
+
+/// The problem body without its per-request trace identifier.
+fn without_trace(mut body: Value) -> Value {
+    body.as_object_mut()
+        .expect("a problem body")
+        .remove("traceId");
+    body
+}
+
+/// A JSON Patch `test` on a withheld member must not answer a guess. A wrong,
+/// a right and a null guess give the same status, code and body, alone and
+/// next to a harmless replace in a batch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_patch_test_on_a_withheld_member_answers_every_guess_alike() {
+    let (fixture, app) = serve().await;
+    let guesses = [json!("guess@example.org"), json!(CANARY_EMAIL), Value::Null];
+    let mut answers = Vec::new();
+    for (index, guess) in guesses.iter().enumerate() {
+        let current = send(
+            &app,
+            Method::GET,
+            &person_path(PERSON_ID),
+            REGISTRAR,
+            &[],
+            None,
+        )
+        .await;
+        let key = format!("test-oracle-{index}");
+        let reply = send(
+            &app,
+            Method::PATCH,
+            &person_path(PERSON_ID),
+            REGISTRAR,
+            &[
+                ("content-type", "application/json-patch+json"),
+                ("idempotency-key", &key),
+                ("if-match", &current.etag),
+            ],
+            Some(json!([
+                {"op": "test", "path": "/data/emailAddress", "value": guess},
+                {"op": "replace", "path": "/data/familyName", "value": "Harmless"}
+            ])),
+        )
+        .await;
+        assert_no_sentinel(&reply.text);
+        answers.push((reply.status, without_trace(reply.body)));
+    }
+    assert!(answers[0].0.is_client_error(), "{:?}", answers[0]);
+    assert!(
+        answers.iter().all(|answer| *answer == answers[0]),
+        "guesses are told apart: {answers:?}"
+    );
+
+    // The same guesses beside a harmless replace in a batch.
+    let mut batched = Vec::new();
+    for (index, guess) in guesses.iter().enumerate() {
+        let current = send(
+            &app,
+            Method::GET,
+            &person_path(PERSON_ID),
+            REGISTRAR,
+            &[],
+            None,
+        )
+        .await;
+        let key = format!("test-oracle-batch-{index}");
+        let reply = send(
+            &app,
+            Method::POST,
+            "/v1/records/people:batch",
+            REGISTRAR,
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", &key),
+            ],
+            Some(json!({"items": [{
+                "operation": "patch", "recordIdentifier": PERSON_ID, "ifMatch": current.etag,
+                "patch": [
+                    {"op": "test", "path": "/data/emailAddress", "value": guess},
+                    {"op": "replace", "path": "/data/familyName", "value": "Harmless"}]}]})),
+        )
+        .await;
+        assert_no_sentinel(&reply.text);
+        batched.push((reply.status, without_trace(reply.body)));
+    }
+    assert!(batched[0].0.is_client_error(), "{:?}", batched[0]);
+    assert!(
+        batched.iter().all(|answer| *answer == batched[0]),
+        "guesses are told apart in a batch: {batched:?}"
+    );
+
+    // A test on a member the condition does not name still works, so the
+    // refusal is not a blanket one.
+    let current = send(
+        &app,
+        Method::GET,
+        &person_path(PERSON_ID),
+        REGISTRAR,
+        &[],
+        None,
+    )
+    .await;
+    let allowed = send(
+        &app,
+        Method::PATCH,
+        &person_path(PERSON_ID),
+        REGISTRAR,
+        &[
+            ("content-type", "application/json-patch+json"),
+            ("idempotency-key", "test-allowed"),
+            ("if-match", &current.etag),
+        ],
+        Some(json!([
+            {"op": "test", "path": "/data/familyName", "value": "Protected"},
+            {"op": "replace", "path": "/data/familyName", "value": "Allowed"}
+        ])),
+    )
+    .await;
+    assert_eq!(allowed.status, StatusCode::OK, "{}", allowed.text);
     fixture.database.cleanup().await;
 }

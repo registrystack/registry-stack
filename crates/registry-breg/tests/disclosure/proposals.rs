@@ -7,15 +7,12 @@
 //! so a profile a disclosure condition binds never sees a withheld member.
 //! Inputs and attachments are submitter content and are not filtered.
 
-#[path = "../support/client_http.rs"]
-#[allow(dead_code)]
-mod client_http;
-use super::postgres_harness;
+use super::client_http;
 
 use super::fixture::{
-    assert_has_sentinel, assert_no_sentinel, compile_fixture, project_source, quote_identifier,
-    CANARY_ADDRESS, CANARY_EMAIL, CANARY_PHONE, OPEN_PERSON_ID, PERSON_ID, PROTECTION_OFFICER,
-    REGISTRAR, RESIDENCE_ID,
+    assert_has_sentinel, assert_no_sentinel, body_shape, compile_fixture, project_source,
+    quote_identifier, CANARY_ADDRESS, CANARY_EMAIL, CANARY_PHONE, OPEN_PERSON_ID, PERSON_ID,
+    PROTECTION_OFFICER, REGISTRAR, RESIDENCE_ID,
 };
 use registry_breg::api::VerifiedRequestClaims;
 use registry_breg::compiler::{compile_project, CompileProfile};
@@ -261,6 +258,58 @@ async fn submit(
     submitted
 }
 
+/// Fail unless `withheld` is the answer a Proposal whose target row is gone
+/// gets: same status, same problem code and same body shape. A Proposal cannot
+/// be started against an identifier that never existed, so the absent target is
+/// a row removed after submission.
+async fn assert_absent_like_a_random_target(
+    fixture: &client_http::ClientFixture,
+    withheld: (u16, String),
+) {
+    const GONE_ID: &str = "00000000-0000-0000-0000-00000000d0ee";
+    seed(
+        fixture,
+        "residence",
+        GONE_ID,
+        &[
+            ("person-id", OPEN_PERSON_ID),
+            ("protection-level", "none"),
+            ("address", "Gone"),
+        ],
+    )
+    .await;
+    let missing = submit(
+        fixture,
+        "correct-residence",
+        json!({"target": GONE_ID, "value": "Nowhere"}),
+        "gone-target",
+    )
+    .await;
+    fixture
+        .database
+        .admin
+        .execute(
+            &format!(
+                "DELETE FROM registry_data.{} WHERE record_id = $1::text::uuid",
+                quote_identifier(&fixture.registry.entities()["residence"].physical_table)
+            ),
+            &[&GONE_ID.to_owned()],
+        )
+        .await
+        .unwrap();
+    let random = review(fixture, &missing, REGISTRAR).await;
+    assert_ne!(
+        random.0, 200,
+        "an absent target is not reviewable: {}",
+        random.1
+    );
+    assert_eq!(withheld.0, random.0, "{} against {}", withheld.1, random.1);
+    let parse = |body: &str| serde_json::from_str::<Value>(body).unwrap();
+    let (withheld, random) = (parse(&withheld.1), parse(&random.1));
+    assert_eq!(withheld.get("code"), random.get("code"));
+    assert_eq!(body_shape(&withheld), body_shape(&random));
+}
+
 /// The review-context answer for `profile`: status and raw body.
 async fn review(
     fixture: &client_http::ClientFixture,
@@ -402,12 +451,46 @@ async fn a_change_set_on_a_record_withheld_after_submission_is_refused() {
         )
         .await
         .unwrap();
-    let (status, body) = review(&fixture, &proposal, REGISTRAR).await;
-    assert_ne!(status, 200, "a withheld record stays refused: {body}");
-    assert_no_sentinel(&body);
+    let withheld = review(&fixture, &proposal, REGISTRAR).await;
+    assert_no_sentinel(&withheld.1);
+    assert_absent_like_a_random_target(&fixture, withheld).await;
     // The exempt profile still reviews it.
     let (status, body) = review(&fixture, &proposal, PROTECTION_OFFICER).await;
     assert_eq!(status, 200, "{body}");
     assert_has_sentinel(&body, CANARY_ADDRESS);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_change_set_on_a_record_whose_history_is_withheld_after_submission_is_refused() {
+    let fixture = start_fixture().await;
+    let proposal = submit(
+        &fixture,
+        "correct-person",
+        json!({"target": OPEN_PERSON_ID, "value": "Renamed"}),
+        "changes-history",
+    )
+    .await;
+    let (status, body) = review(&fixture, &proposal, REGISTRAR).await;
+    assert_eq!(status, 200, "the unmarked person is reviewable: {body}");
+    let person = &fixture.registry.entities()["person"];
+    fixture
+        .database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.{} SET {} = TRUE WHERE record_id = $1::text::uuid",
+                quote_identifier(&person.physical_table),
+                physical(&fixture, "person", "history-protected")
+            ),
+            &[&OPEN_PERSON_ID.to_owned()],
+        )
+        .await
+        .unwrap();
+    let withheld = review(&fixture, &proposal, REGISTRAR).await;
+    assert_absent_like_a_random_target(&fixture, withheld).await;
+    // The profile exempt from history still reviews it.
+    let (status, body) = review(&fixture, &proposal, PROTECTION_OFFICER).await;
+    assert_eq!(status, 200, "{body}");
     fixture.finish().await;
 }
