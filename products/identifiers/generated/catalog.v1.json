@@ -4583,7 +4583,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/job-runtime.v1alpha1.schema.json",
-        "sha256": "51855477ee51642b9504b1d33c6b589e7dbafd4d690fd074c259bfb25c0200cd",
+        "sha256": "8f19b718605d42cb268bd7a9df40f7ac4f0ac2a6d0805dccb783728022670503",
         "mediaType": "application/schema+json"
       }
     },
@@ -4709,7 +4709,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/runtime.v1alpha1.schema.json",
-        "sha256": "39387f94f8e740e4bb070a67c8b447f824ce3106e4d81439ba23dda3e5ddd62d",
+        "sha256": "6973fbcf86612af5be1b160808839e5bd6ddb2da66796defd5bc53703b14f711",
         "mediaType": "application/schema+json"
       }
     },
@@ -5105,7 +5105,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "9de77e27bf668654d643c47466b540307163d827d93cc4d2f645b44d2dfb0d87",
+        "sha256": "73d4d416be219d5a3b3d7bebc1eca6a12178681c7a211934dcd2127d9052fce1",
         "mediaType": "application/schema+json"
       }
     },
@@ -5213,7 +5213,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "f47599b9c66513bd39dc99c2ebebe8e09a7aa4ce2755fbee7f44668462da571e",
+        "sha256": "957f7d0c65557e1f1f9b3a3c583cf7f21d4f217dc6fa665bf0d0e795af7cc081",
         "mediaType": "application/schema+json"
       }
     },
@@ -5245,11 +5245,11 @@
       "description": "Registry Coordinator runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/runtime.rs",
-        "sha256": "557622b966f74f4543e943fb828d7accbe5fc0e5a0248933b0794aa5f53c0a6e"
+        "sha256": "3cb518408ec97e49cbdaaf37e0094b7e4ce3152c3597766c47c27074cdb9882e"
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "264c95638a427789585a112891e85cdc0d73db142ce72fac622e7eb0e9c0c0b4",
+        "sha256": "026e85bfaf50e3edcbae4aef2310967f1bc6569118668370a0a6963a8c9d7200",
         "mediaType": "application/schema+json"
       }
     },
@@ -5353,7 +5353,7 @@
       "description": "Registry Document Store event data JSON Schemas, one per event family.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "9d6fc4ae1e652e78cb3de6410e3fb044ea2883e468db99e10bbb7ac4022a4914"
+        "sha256": "819d4b5c92e5a318e75e3d89c0e38d65bb53632c6ff1dbcc7f2fa1cd627c310a"
       },
       "artifact": {
         "path": "products/documents/generated/events/document-grant-changed.schema.json",
@@ -5371,7 +5371,7 @@
       "description": "Registry Document Store event data JSON Schemas, one per event family.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "9d6fc4ae1e652e78cb3de6410e3fb044ea2883e468db99e10bbb7ac4022a4914"
+        "sha256": "819d4b5c92e5a318e75e3d89c0e38d65bb53632c6ff1dbcc7f2fa1cd627c310a"
       },
       "artifact": {
         "path": "products/documents/generated/events/document-version-ready.schema.json",
@@ -5389,7 +5389,7 @@
       "description": "Registry Document Store event data JSON Schemas, one per event family.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "9d6fc4ae1e652e78cb3de6410e3fb044ea2883e468db99e10bbb7ac4022a4914"
+        "sha256": "819d4b5c92e5a318e75e3d89c0e38d65bb53632c6ff1dbcc7f2fa1cd627c310a"
       },
       "artifact": {
         "path": "products/documents/generated/events/document-version-rejected.schema.json",
@@ -5407,7 +5407,7 @@
       "description": "Registry Document Store project JSON Schema.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "9d6fc4ae1e652e78cb3de6410e3fb044ea2883e468db99e10bbb7ac4022a4914"
+        "sha256": "819d4b5c92e5a318e75e3d89c0e38d65bb53632c6ff1dbcc7f2fa1cd627c310a"
       },
       "artifact": {
         "path": "products/documents/generated/project/project.schema.json",
@@ -5425,11 +5425,11 @@
       "description": "Registry Document Store runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "9d6fc4ae1e652e78cb3de6410e3fb044ea2883e468db99e10bbb7ac4022a4914"
+        "sha256": "819d4b5c92e5a318e75e3d89c0e38d65bb53632c6ff1dbcc7f2fa1cd627c310a"
       },
       "artifact": {
         "path": "products/documents/generated/runtime/runtime.schema.json",
-        "sha256": "8f4833f26187b81d360edb0849313806ecdc55191a2dc1bbad731023130fa873",
+        "sha256": "3ccee874a50d707d955425e46a70caecb1f0203787ad0b1183b78bc5f78f8869",
         "mediaType": "application/schema+json"
       }
     },
@@ -5591,7 +5591,7 @@
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json",
-        "sha256": "d236d44b53a95512464e67dd0b3d2037518b1920b1d454d8a43a8cda438719b3",
+        "sha256": "4412d9e39955ffbb3d89e1c5fba790b5519ffb57861a1292ef14e95500808e04",
         "mediaType": "application/schema+json"
       }
     },
@@ -5609,7 +5609,7 @@
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json",
-        "sha256": "225b0d03402f422442432fd5195ccf3483ef79cf744d883bbfb9e96ba89e6465",
+        "sha256": "933ad51331aaf9586f238fbc8bb5f0171ea09fa0f61052e71c36e685e5b521a9",
         "mediaType": "application/schema+json"
       }
     },
@@ -5641,11 +5641,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/runtime.schema.yaml",
-        "sha256": "209cb6f6bc92f1891711648feaec2ff8083e1ecfe0de7ec2dbaf3e78b4f49005"
+        "sha256": "2352d68a2f7d78aeb2365d398e74796e5a84e157fca05295c5ab620560f9f7aa"
       },
       "artifact": {
         "path": "products/evidence/contracts/runtime.schema.yaml",
-        "sha256": "209cb6f6bc92f1891711648feaec2ff8083e1ecfe0de7ec2dbaf3e78b4f49005",
+        "sha256": "2352d68a2f7d78aeb2365d398e74796e5a84e157fca05295c5ab620560f9f7aa",
         "mediaType": "application/yaml"
       }
     },
@@ -5785,7 +5785,7 @@
       "description": "Registry Messaging project, template, and HTTP provider authoring JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "566657f59c1c8bb5059c0e0e2faa499f559a6fe905d1d8b1aba2eff781f62a09"
+        "sha256": "8bed9e73bd0387785aedfb00959f5b9156d082e49e958b8836eae2a80d98a443"
       },
       "artifact": {
         "path": "products/messaging/generated/authoring/project.schema.json",
@@ -5803,7 +5803,7 @@
       "description": "Registry Messaging project, template, and HTTP provider authoring JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "566657f59c1c8bb5059c0e0e2faa499f559a6fe905d1d8b1aba2eff781f62a09"
+        "sha256": "8bed9e73bd0387785aedfb00959f5b9156d082e49e958b8836eae2a80d98a443"
       },
       "artifact": {
         "path": "products/messaging/generated/authoring/provider.schema.json",
@@ -5821,11 +5821,11 @@
       "description": "Registry Messaging runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "566657f59c1c8bb5059c0e0e2faa499f559a6fe905d1d8b1aba2eff781f62a09"
+        "sha256": "8bed9e73bd0387785aedfb00959f5b9156d082e49e958b8836eae2a80d98a443"
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "56b15b5ec2c5a799f9debd7d034cf8f7a490c76c71458720b6469c98b3a469b5",
+        "sha256": "3e58a90a1119e95d2a383da5a81013886c9e7548a463d18e60159ae48c783e26",
         "mediaType": "application/schema+json"
       }
     },
@@ -5839,7 +5839,7 @@
       "description": "Registry Messaging project, template, and HTTP provider authoring JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "566657f59c1c8bb5059c0e0e2faa499f559a6fe905d1d8b1aba2eff781f62a09"
+        "sha256": "8bed9e73bd0387785aedfb00959f5b9156d082e49e958b8836eae2a80d98a443"
       },
       "artifact": {
         "path": "products/messaging/generated/authoring/template.schema.json",
@@ -6019,7 +6019,7 @@
       "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-render/src/schema.rs",
-        "sha256": "acd150211c62d59faa685a76727ffa2e52d9f6e858ec49a10f51add49f430f30"
+        "sha256": "18d499196c2ba75334c7a63f42cba0129d8f6dbed0759d1bd231a6265ed2112d"
       },
       "artifact": {
         "path": "products/render/schemas/bundle.schema.json",
@@ -6037,7 +6037,7 @@
       "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-render/src/schema.rs",
-        "sha256": "acd150211c62d59faa685a76727ffa2e52d9f6e858ec49a10f51add49f430f30"
+        "sha256": "18d499196c2ba75334c7a63f42cba0129d8f6dbed0759d1bd231a6265ed2112d"
       },
       "artifact": {
         "path": "products/render/schemas/labels.schema.json",
@@ -6055,11 +6055,11 @@
       "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-render/src/schema.rs",
-        "sha256": "acd150211c62d59faa685a76727ffa2e52d9f6e858ec49a10f51add49f430f30"
+        "sha256": "18d499196c2ba75334c7a63f42cba0129d8f6dbed0759d1bd231a6265ed2112d"
       },
       "artifact": {
         "path": "products/render/schemas/runtime.schema.json",
-        "sha256": "b5f7140e63c4307838e4b26286f0aad064577c7facc5e7423e1b63887d9afb95",
+        "sha256": "8db0c75502d68d1a6ecfffdf1ffce77136df2f87a832d5829b2bf14afa65ead3",
         "mediaType": "application/schema+json"
       }
     },
@@ -6167,7 +6167,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "eaf6f80ebeb9ebb3896982b2b334a1926e30fca4d62615c368d4b69e9c3366af",
+        "sha256": "a3395d362cb9532a2b0b13465c3901aedbb29dc4e650cf073f74a1e65732cf1c",
         "mediaType": "application/schema+json"
       }
     },
