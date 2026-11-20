@@ -9,10 +9,15 @@
 
 mod error;
 mod exposition;
+mod sampling;
 mod series;
 
 pub use error::MetricsError;
 pub use exposition::{Exposition, HistogramSnapshot, MetricKind, SumCountOrder, Value};
+pub use sampling::{
+    sample_error_class, ScrapeDeadline, CLASS_NO_TIME_LEFT, CLASS_POOL, CLASS_TIMEOUT,
+    SCRAPE_BUDGET,
+};
 pub use series::{CounterVec, HistogramVec, LabelSpace, MAX_LABEL_VALUE_BYTES, MAX_SERIES_LIMIT};
 
 /// The `Content-Type` of a text exposition scrape response.
