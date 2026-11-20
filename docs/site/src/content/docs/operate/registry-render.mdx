@@ -645,6 +645,8 @@ must not be the `listener` socket. A refused address stops `serve` and fails `ch
 `render.runtime.invalid-metrics-listener`. `GET /metrics` on that socket answers the series below
 and nothing else. The document listener answers `/metrics` with not found.
 
+The metrics listener has no authentication, so keep it on a private network that only your monitoring can reach.
+
 | Series | Labels | Meaning |
 | --- | --- | --- |
 | `render_documents_total` | `operation`: `render`, `seal`. `result`: `ok`, `refused`, `failed` | Calls to the render and seal routes. `ok` is a 2xx answer, `refused` a 4xx answer, and `failed` a 5xx answer |

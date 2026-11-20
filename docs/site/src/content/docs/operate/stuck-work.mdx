@@ -405,6 +405,45 @@ Publishing the metrics port or running the container on the host network exposes
 {/* Evidence: crates/registry-platform-config/src/metrics_bind.rs, check_metrics_bind_address;
     crates/registry-platform-config/src/blocks.rs, MetricsListenerConfig. */}
 
+## Scrape the metrics listeners
+
+Each product serves `/metrics` on its own `metricsListener`, so give each product its own scrape job.
+No product has a default metrics port.
+The ports below are the examples on each product's operate or reference page, and the addresses are examples.
+Use the `bind` you set in each runtime file.
+Evidence and Adapter pages show no example port, so the two ports here are placeholders.
+
+```yaml
+global:
+  scrape_interval: 30s
+  # Sampled gauges stop reading after 5 s, so 10 s leaves room for the rest of the scrape.
+  scrape_timeout: 10s
+
+scrape_configs:
+  - job_name: coordinator
+    static_configs: [{targets: ["10.42.0.5:9108"]}]
+  - job_name: breg
+    static_configs: [{targets: ["10.42.0.6:9464"]}]
+  - job_name: casework
+    static_configs: [{targets: ["10.42.0.7:9100"]}]
+  - job_name: messaging
+    static_configs: [{targets: ["10.42.0.8:9107"]}]
+  - job_name: scheduling
+    static_configs: [{targets: ["10.42.0.9:9105"]}]
+  - job_name: documents
+    static_configs: [{targets: ["10.42.0.10:9116"]}]
+  - job_name: render
+    static_configs: [{targets: ["10.42.0.11:9108"]}]
+  - job_name: adapter
+    static_configs: [{targets: ["10.42.0.12:9109"]}]
+  - job_name: evidence
+    static_configs: [{targets: ["10.42.0.13:9110"]}]
+```
+
+The listener has no authentication.
+Keep every target on a private network that only your monitoring can reach.
+The alert rules below do not filter on `job`, so any job names work.
+
 ## Example alert rules
 
 These rules use only series that the products publish.
