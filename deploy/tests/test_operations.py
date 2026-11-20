@@ -13,10 +13,9 @@ from contextlib import redirect_stderr
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, call, patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import stack_operator
 from stack_operator import (
     BREG_SUCCESSOR_WARNINGS, Installation, OperationError, activation_action, command_output, operator_reference,
     rendered_operation, require_install_retry, release_values, successor_job_values, verify_active,
@@ -371,7 +370,7 @@ class JobLifecycleTest(unittest.TestCase):
             if self.delete_error and args[0] == self.delete_error[0]:
                 raise OperationError(self.delete_error[1])
             return ""
-        self.fail(f"Unexpected Kubernetes command {command}")
+        raise self.failureException(f"Unexpected Kubernetes command {command}")
 
     def installation(self):
         installation = Installation(self.args)
@@ -421,9 +420,13 @@ class JobLifecycleTest(unittest.TestCase):
         self.delete_error = ("--raw", "synthetic Lease failure")
         installation = self.installation()
         stderr = io.StringIO()
-        with redirect_stderr(stderr), self.assertRaisesRegex(OperationError, "^Original failure$"):
+
+        def fail_while_locked():
             with installation.lock():
                 raise OperationError("Original failure")
+
+        with redirect_stderr(stderr):
+            self.assertRaisesRegex(OperationError, "^Original failure$", fail_while_locked)
         self.assertIn("Lease directory-operator-lock was not released", stderr.getvalue())
         self.assertIn("synthetic Lease failure", stderr.getvalue())
 
@@ -709,7 +712,7 @@ class UpgradeRetryTest(unittest.TestCase):
             self.assertEqual(json.loads(data)["preconditions"], {"uid": "checkpoint-uid"})
             self.record = None
             return ""
-        self.fail(f"Unexpected Kubernetes command {command}")
+        raise self.failureException(f"Unexpected Kubernetes command {command}")
 
     def job(self, kind, digest, overrides=None):
         if kind == "status":
