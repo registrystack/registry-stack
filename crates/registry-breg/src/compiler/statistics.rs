@@ -419,11 +419,18 @@ pub(super) fn compile(
                 dataset_id: &source.id,
                 entities,
                 dependency_entities: &dependency_entities,
+                used_relations: &used_relations,
                 unit,
                 referenced_fields: &referenced_fields,
                 publisher: releases
                     .as_ref()
                     .map(|releases| releases.publisher.as_str()),
+                live_readers: &grants
+                    .read_live
+                    .iter()
+                    .chain(&grants.read_exact)
+                    .cloned()
+                    .collect(),
                 readers: &grants
                     .read_live
                     .iter()
