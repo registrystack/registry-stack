@@ -168,6 +168,8 @@ pub struct Prepared {
     hook_delivery: HookDeliveryService,
     metrics: Arc<Metrics>,
     metrics_listener: Option<(tokio::net::TcpListener, axum::Router)>,
+    #[cfg(feature = "postgres-test")]
+    sampler: Sampler,
 }
 
 /// What the erasure worker and the cleanup pass run over.
@@ -389,7 +391,8 @@ async fn prepare_with(
                 .map_err(RuntimeError::Listen)?,
             metrics_router(MetricsState {
                 metrics: Arc::clone(&metrics),
-                sampler,
+                sampler: sampler.clone(),
+                budget: crate::metrics::SCRAPE_BUDGET,
             }),
         )),
         None => None,
@@ -442,6 +445,8 @@ async fn prepare_with(
         hook_delivery,
         metrics,
         metrics_listener,
+        #[cfg(feature = "postgres-test")]
+        sampler,
     })
 }
 
@@ -796,6 +801,17 @@ impl Prepared {
     /// without a socket.
     pub fn metrics_app(&self) -> Option<axum::Router> {
         self.metrics_listener.as_ref().map(|(_, app)| app.clone())
+    }
+
+    /// The metrics router with each scrape's database reads bounded by
+    /// `budget`, for tests that hold a lock the reads wait on.
+    #[cfg(feature = "postgres-test")]
+    pub fn metrics_app_within(&self, budget: Duration) -> axum::Router {
+        metrics_router(MetricsState {
+            metrics: Arc::clone(&self.metrics),
+            sampler: self.sampler.clone(),
+            budget,
+        })
     }
 
     /// The document operations this runtime serves.

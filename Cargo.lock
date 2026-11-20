@@ -7876,6 +7876,9 @@ dependencies = [
 [[package]]
 name = "registry-platform-metrics"
 version = "0.47.0"
+dependencies = [
+ "tokio",
+]
 
 [[package]]
 name = "registry-platform-objectstore"

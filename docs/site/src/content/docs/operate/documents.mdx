@@ -592,7 +592,7 @@ overdue age means work is due and nothing is taking it.
 
 The queue gauges are read from PostgreSQL in a read-only transaction. All reads of one scrape share
 a single deadline of five seconds, enforced as a statement timeout. When a read fails, the runtime
-logs a warning with the cause, adds one to `documents_metrics_sample_failures_total` for that
+logs a warning that names the failure class (`sqlstate-<code>`, `connection-closed`, `query`, `timeout`, `no-time-left` or `pool`) and never the database's message, adds one to `documents_metrics_sample_failures_total` for that
 queue, and leaves that queue's series out of the scrape. The other queues are still read. A missing
 series is therefore a failed read, never a zero. Alert on `absent(documents_verification_jobs)` as
 well as on the values.

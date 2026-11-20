@@ -10,6 +10,7 @@ mod support;
 
 use std::net::TcpListener;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use registry_documents::runtime::{prepare_with_verifier, Prepared};
@@ -18,6 +19,7 @@ use support::{
     DATABASE_STORAGE, DISABLED_VERIFIER, UNAVAILABLE,
 };
 use tower::ServiceExt as _;
+use tracing::instrument::WithSubscriber as _;
 
 /// A loopback port nothing holds, for a `metricsListener.bind`.
 fn free_port() -> u16 {
@@ -62,9 +64,16 @@ async fn upload(api: &Api, seed: u8) -> String {
 
 /// The exposition the metrics router answers for one scrape.
 async fn scrape(prepared: &Prepared) -> String {
-    let response = prepared
-        .metrics_app()
-        .expect("a metrics listener is configured")
+    scrape_on(
+        prepared
+            .metrics_app()
+            .expect("a metrics listener is configured"),
+    )
+    .await
+}
+
+async fn scrape_on(app: axum::Router) -> String {
+    let response = app
         .oneshot(
             axum::http::Request::builder()
                 .uri("/metrics")
@@ -300,4 +309,106 @@ async fn the_metrics_listener_answers_over_a_socket_and_the_serving_listener_doe
     assert_eq!(other.status(), 404);
     stop.send(()).unwrap();
     server.await.unwrap().expect("a clean stop");
+}
+
+#[tokio::test]
+async fn a_failed_read_logs_its_error_class_and_never_the_driver_message() {
+    let verifier = FakeVerifier::new("binding-a", UNAVAILABLE);
+    let (deployment, prepared, _api, _) = start(&verifier).await;
+    deployment
+        .execute("ALTER TABLE documents_erasure_jobs RENAME TO documents_erasure_jobs_away")
+        .await;
+    let logs = registry_platform_testing::CapturedDiagnosticLogs::default();
+
+    let exposition = scrape(&prepared)
+        .with_subscriber(logs.subscriber_with_max_level(tracing::Level::WARN))
+        .await;
+
+    assert!(
+        has(
+            &exposition,
+            r#"documents_metrics_sample_failures_total{sample="erasure-jobs"} 1"#
+        ),
+        "{exposition}"
+    );
+    let text = logs.text();
+    assert!(
+        text.contains("sqlstate-42P01"),
+        "the class is logged\n{text}"
+    );
+    assert!(
+        !text.contains("does not exist") && !text.contains("documents_erasure_jobs"),
+        "the driver message and relation name are never logged\n{text}"
+    );
+}
+
+/// The sessions still waiting on a lock while running a read of `table` in
+/// this deployment's schema. A query the client merely abandoned keeps
+/// waiting on the server; one the server cancelled does not.
+async fn sessions_waiting_on_a_lock(deployment: &Deployment, table: &str) -> i64 {
+    let pattern = format!("%{}.{table}%", deployment.schema);
+    let give_up = Instant::now() + Duration::from_secs(3);
+    loop {
+        let waiting: i64 = deployment
+            .admin
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity
+                  WHERE wait_event_type = 'Lock' AND query LIKE $1",
+                &[&pattern],
+            )
+            .await
+            .expect("count the waiting sessions")
+            .get(0);
+        if waiting == 0 || Instant::now() >= give_up {
+            return waiting;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_read_that_waits_on_a_lock_is_cancelled_on_the_server_and_counted_once() {
+    let verifier = FakeVerifier::new("binding-a", UNAVAILABLE);
+    let (deployment, prepared, api, _) = start(&verifier).await;
+    upload(&api, 7).await;
+    deployment
+        .execute(&format!(
+            "BEGIN; LOCK TABLE {}.documents_verification_jobs IN ACCESS EXCLUSIVE MODE;",
+            deployment.schema
+        ))
+        .await;
+    let started = Instant::now();
+
+    let exposition = scrape_on(prepared.metrics_app_within(Duration::from_millis(600))).await;
+
+    let elapsed = started.elapsed();
+    let waiting = sessions_waiting_on_a_lock(&deployment, "documents_verification_jobs").await;
+    deployment.execute("ROLLBACK").await;
+    assert_eq!(
+        waiting, 0,
+        "the server cancels the read; a client that only abandons it leaves it waiting"
+    );
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "the scrape returns near its budget: {elapsed:?}"
+    );
+    assert_eq!(
+        exposition
+            .lines()
+            .filter(|line| line.starts_with("documents_verification_jobs{"))
+            .count(),
+        0,
+        "the stuck read's gauges are omitted, never zero\n{exposition}"
+    );
+    // The stuck read used the whole shared deadline, so the reads after it
+    // have no time left: each is counted failed once and never queries.
+    for sample in ["verification-jobs", "erasure-jobs", "hook-deliveries"] {
+        assert!(
+            has(
+                &exposition,
+                &format!(r#"documents_metrics_sample_failures_total{{sample="{sample}"}} 1"#)
+            ),
+            "{sample}\n{exposition}"
+        );
+    }
 }

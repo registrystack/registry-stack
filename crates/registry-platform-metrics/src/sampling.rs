@@ -7,7 +7,9 @@
 //! cancelled on the server and not only abandoned by the client: dropping a
 //! database client future does not cancel the query. A failed read is logged
 //! by its [`sample_error_class`] and counted once, its gauges are omitted,
-//! and the reads after it still run.
+//! and the reads after it still run. [`ScrapeDeadline::run`] wraps each read:
+//! a read that starts with the budget spent fails as `no-time-left` without
+//! querying.
 
 use std::time::{Duration, Instant};
 
@@ -66,6 +68,29 @@ impl ScrapeDeadline {
         u64::try_from(milliseconds).ok().filter(|ms| *ms > 0)
     }
 
+    /// Run `read` so it cannot outlast the deadline. A read that would start
+    /// with no time left (under a millisecond) is never polled, so it takes
+    /// no pool connection and sends no query, and fails as
+    /// [`CLASS_NO_TIME_LEFT`]. A read still running at the deadline is
+    /// dropped and fails as [`CLASS_TIMEOUT`]. Pass an unpolled future: its
+    /// work starts only when this runs it.
+    ///
+    /// # Errors
+    ///
+    /// The read's own error class, [`CLASS_NO_TIME_LEFT`] or
+    /// [`CLASS_TIMEOUT`].
+    pub async fn run<T>(
+        self,
+        read: impl std::future::Future<Output = Result<T, String>>,
+    ) -> Result<T, String> {
+        if self.statement_timeout_milliseconds().is_none() {
+            return Err(CLASS_NO_TIME_LEFT.to_owned());
+        }
+        tokio::time::timeout_at(tokio::time::Instant::from_std(self.at), read)
+            .await
+            .unwrap_or_else(|_| Err(CLASS_TIMEOUT.to_owned()))
+    }
+
     /// [`Self::statement_timeout_milliseconds_at`] at the current instant.
     #[must_use]
     pub fn statement_timeout_milliseconds(self) -> Option<u64> {
@@ -97,6 +122,7 @@ pub fn sample_error_class(sqlstate: Option<&str>, connection_closed: bool) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn the_deadline_is_at_most_the_budget() {
@@ -158,5 +184,43 @@ mod tests {
         assert_eq!(sample_error_class(Some("42P01"), false), "sqlstate-42P01");
         assert_eq!(sample_error_class(None, true), "connection-closed");
         assert_eq!(sample_error_class(None, false), "query");
+    }
+
+    #[tokio::test]
+    async fn a_spent_deadline_fails_without_starting_the_read() {
+        let started = AtomicBool::new(false);
+        let deadline = ScrapeDeadline::with_budget(Instant::now(), Duration::ZERO);
+        let result = deadline
+            .run(async {
+                started.store(true, Ordering::SeqCst);
+                Ok::<_, String>(1)
+            })
+            .await;
+        assert_eq!(result, Err(CLASS_NO_TIME_LEFT.to_owned()));
+        assert!(!started.load(Ordering::SeqCst), "the read must not start");
+    }
+
+    #[tokio::test]
+    async fn a_read_with_time_left_returns_its_value_or_its_class() {
+        let deadline = ScrapeDeadline::from(Instant::now());
+        assert_eq!(deadline.run(async { Ok::<_, String>(7) }).await, Ok(7));
+        assert_eq!(
+            deadline
+                .run(async { Err::<u8, _>("sqlstate-42P01".to_owned()) })
+                .await,
+            Err("sqlstate-42P01".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_read_that_runs_past_the_deadline_is_a_timeout() {
+        let deadline = ScrapeDeadline::with_budget(Instant::now(), Duration::from_millis(50));
+        let result = deadline
+            .run(async {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                Ok::<_, String>(())
+            })
+            .await;
+        assert_eq!(result, Err(CLASS_TIMEOUT.to_owned()));
     }
 }
