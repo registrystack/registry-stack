@@ -65,6 +65,8 @@ breg:
     name: ""
     # verify, doctor, status and plan are non-mutating. Apply is always explicit.
     kind: verify
+    # Recorded by apply-initial and apply-successor. Empty omits the flag.
+    operatorReference: ""
     backoffLimit: 0
     ttlSecondsAfterFinished: 86400
     activeDeadlineSeconds: 1800
@@ -257,6 +259,9 @@ evidence:
     existingClaim: ""
     mountPath: /var/lib/registry-evidence/authority
   transitProxy:
+    # Evidence cannot serve without this proxy, so the chart refuses to
+    # render evidence.serve=true while enabled is false. Leave it false only for
+    # operation Jobs, which run with serve=false.
     enabled: false
     image:
       repository: ""

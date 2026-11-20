@@ -3,6 +3,10 @@ kind: ConfigMap
 metadata:
   name: registry-postgres
 data:
+  # The bootstrap role postgres is the only superuser. The provisioning SQL
+  # creates NOSUPERUSER roles only, so rejecting postgres over the network
+  # covers every superuser role. A role later granted SUPERUSER by hand is
+  # not covered and needs its own reject line.
   pg_hba.conf: |
     local   all   postgres                  peer
     local   all   all                       reject
@@ -34,8 +38,11 @@ spec:
       app.kubernetes.io/name: registry-postgres
   policyTypes: [Ingress]
   ingress:
+    # Only Pods the chart labels as database clients may connect.
     - from:
-        - podSelector: {}
+        - podSelector:
+            matchLabels:
+              registrystack.org/database-client: "true"
       ports:
         - {protocol: TCP, port: 5432}
 ---

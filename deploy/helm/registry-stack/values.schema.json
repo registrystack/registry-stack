@@ -59,7 +59,7 @@
             "mountPath": {"const": "/var/log/breg"}
           }
         },
-        "service": {"$ref": "#/definitions/service"},
+        "service": {"allOf": [{"$ref": "#/definitions/service"}, {"properties": {"type": {"const": "ClusterIP"}}}]},
         "ingress": {"$ref": "#/definitions/ingress"},
         "resources": {"$ref": "#/definitions/resources"},
         "operation": {
@@ -69,6 +69,7 @@
             "enabled": {"type": "boolean"},
             "name": {"type": "string", "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 30},
             "kind": {"enum": ["verify", "doctor", "status", "plan", "apply-initial", "apply-successor", "claim-status", "claim-adopt", "reconcile"]},
+            "operatorReference": {"type": "string", "maxLength": 256},
             "candidate": {
               "type": "object", "additionalProperties": false, "required": ["existingClaim", "expectedDigest"],
               "properties": {
@@ -108,7 +109,7 @@
             "runAsGroup": {"type": "integer", "minimum": 1, "maximum": 4294967295}
           }
         },
-        "service": {"$ref": "#/definitions/service"},
+        "service": {"allOf": [{"$ref": "#/definitions/service"}, {"properties": {"type": {"const": "ClusterIP"}}}]},
         "ingress": {"$ref": "#/definitions/ingress"},
         "probes": {
           "type": "object",
@@ -260,6 +261,18 @@
   "required": ["global", "staging", "breg", "appKit", "casework", "evidence"],
   "allOf": [
     {
+      "if": {"properties": {"breg": {"properties": {"operation": {"properties": {"enabled": {"const": true}}}}}}},
+      "then": {"properties": {"breg": {"properties": {"serve": {"const": false}}}}}
+    },
+    {
+      "if": {"properties": {"casework": {"properties": {"operation": {"properties": {"enabled": {"const": true}}}}}}},
+      "then": {"properties": {"casework": {"properties": {"serve": {"const": false}}}}}
+    },
+    {
+      "if": {"properties": {"evidence": {"properties": {"operation": {"properties": {"enabled": {"const": true}}}}}}},
+      "then": {"properties": {"evidence": {"properties": {"serve": {"const": false}}}}}
+    },
+    {
       "if": {"properties": {"breg": {"properties": {"serve": {"const": true}}}}},
       "then": {"properties": {"breg": {"properties": {"enabled": {"const": true}}}}}
     },
@@ -307,7 +320,7 @@
     },
     {
       "if": {"properties": {"evidence": {"properties": {"serve": {"const": true}}}}},
-      "then": {"properties": {"staging": {"$ref": "#/definitions/requiredStaging"}, "evidence": {"allOf": [{"properties": {"enabled": {"const": true}, "transitProxy": {"properties": {"enabled": {"const": true}}}}}, {"$ref": "#/definitions/requiredEvidenceServing"}]}}}
+      "then": {"properties": {"staging": {"$ref": "#/definitions/requiredStaging"}, "evidence": {"allOf": [{"properties": {"enabled": {"const": true}}}, {"$ref": "#/definitions/requiredEvidenceServing"}]}}}
     },
     {
       "if": {"properties": {"evidence": {"properties": {"operation": {"properties": {"enabled": {"const": true}}}}}}},
@@ -349,7 +362,7 @@
           "properties": {
             "ipBlock": {
               "type": "object", "additionalProperties": false, "required": ["cidr"],
-              "properties": {"cidr": {"type": "string", "pattern": "/[1-9][0-9]{0,2}$"}}
+              "properties": {"cidr": {"type": "string", "pattern": "^[0-9a-fA-F:.]+/([89]|[1-9][0-9]{1,2})$"}}
             }
           }
         }
@@ -422,7 +435,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "repository": {"type": "string", "pattern": "^$|^[^@]+$"},
+        "repository": {"type": "string", "pattern": "^$|^([^/@]+/)*[^/:@]+$"},
         "digest": {"$ref": "#/definitions/digest"}
       }
     },
@@ -430,7 +443,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "repository": {"type": "string", "pattern": "^$|^[^@]+$"},
+        "repository": {"type": "string", "pattern": "^$|^([^/@]+/)*[^/:@]+$"},
         "digest": {"$ref": "#/definitions/digest"},
         "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
       }
