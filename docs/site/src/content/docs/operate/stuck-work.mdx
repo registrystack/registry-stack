@@ -246,6 +246,8 @@ The signals are:
   Held and refused items are the ones that need a person.
 - `adapter_job_last_successful_pass_age_seconds` is the age of the last pass this process settled.
   It is absent until the first pass settles.
+  A standby process keeps ageing while another process holds the lease, so alert on the youngest age across processes.
+  Passes can be up to `delayMilliseconds` times `backoffMultiplier` apart, so set the threshold above that gap.
 - `adapter_job_pass_failures_total{reason}` counts passes that did not settle.
   The reasons are `page-fault`, `destination-stop`, `refusal-limit`, and `store-unreachable`.
   A standby process that finds the lease held by another process is not counted.
@@ -463,6 +465,10 @@ Adjust the thresholds to your volumes.
 The `job` label comes from your scrape configuration, so match it to the names you use.
 
 Because a failed database sample omits the series, groups that read gauges from the database include an `absent()` rule.
+
+Where you can clear a dead-lettered item with a command, the rule fires while any are left.
+Where no command can clear it, a count above zero would fire until retention erases the item, so the rule fires only when the count rises.
+Check the series itself to see how many are left.
 The Scheduling, Documents, and Render groups need their optional `metricsListener` turned on.
 
 Each block below is a separate rule file with its own `groups:` key.
@@ -560,11 +566,11 @@ groups:
         annotations:
           summary: Review tasks are past their due time. A supervisor can reassign them.
       - alert: CaseworkCompletionDeadLettered
-        expr: casework_completion_deliveries{state="dead-lettered"} > 0
-        for: 5m
+        expr: delta(casework_completion_deliveries{state="dead-lettered"}[15m]) > 0
+        for: 0m
         labels: {severity: page}
         annotations:
-          summary: A completion delivery was dead-lettered. Casework has no command to retry it.
+          summary: A completion delivery was dead-lettered. Casework has no command to retry it, so tell the requester the review finished.
       - alert: CaseworkCompletionUnknown
         expr: casework_completion_deliveries{state="unknown"} > 0
         for: 15m
@@ -660,8 +666,8 @@ groups:
   - name: scheduling
     rules:
       - alert: SchedulingOutboxDeadLettered
-        expr: scheduling_outbox_items{state="dead-lettered"} > 0
-        for: 5m
+        expr: delta(scheduling_outbox_items{state="dead-lettered"}[15m]) > 0
+        for: 0m
         labels: {severity: warn}
         annotations:
           summary: A delivery intent was dead-lettered. List it with schedulingctl intents.
@@ -678,8 +684,8 @@ groups:
         annotations:
           summary: The oldest pending delivery intent has waited more than 15 minutes.
       - alert: SchedulingHookDeadLettered
-        expr: scheduling_hook_deliveries{state="dead-lettered"} > 0
-        for: 5m
+        expr: delta(scheduling_hook_deliveries{state="dead-lettered"}[15m]) > 0
+        for: 0m
         labels: {severity: warn}
         annotations:
           summary: An observer-hook delivery was dead-lettered. Scheduling has no command to retry it.
@@ -734,8 +740,8 @@ groups:
         annotations:
           summary: An erasure job was dead-lettered. List it with documentsctl erasure list.
       - alert: DocumentsHookDeadLettered
-        expr: documents_hook_deliveries{state="dead-lettered"} > 0
-        for: 5m
+        expr: delta(documents_hook_deliveries{state="dead-lettered"}[15m]) > 0
+        for: 0m
         labels: {severity: warn}
         annotations:
           summary: An observer-hook delivery was dead-lettered. Documents has no command to retry it.
@@ -846,11 +852,11 @@ groups:
         annotations:
           summary: The destination refused items. Run adapter-job status to see why.
       - alert: AdapterJobPassStale
-        expr: adapter_job_last_successful_pass_age_seconds > 1800
+        expr: min without (instance) (adapter_job_last_successful_pass_age_seconds) > 1800
         for: 10m
         labels: {severity: page}
         annotations:
-          summary: The job has not settled a pass for more than 30 minutes.
+          summary: No job process has settled a pass for more than 30 minutes. Set the threshold to twice the job's longest interval times its backoffMultiplier.
       - alert: AdapterJobPassFailing
         expr: sum by (reason) (increase(adapter_job_pass_failures_total[15m])) > 0
         for: 15m
