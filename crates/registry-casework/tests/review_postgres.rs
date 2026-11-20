@@ -1482,7 +1482,7 @@ async fn an_interrupted_final_completion_attempt_dead_letters_without_another_se
 }
 
 #[tokio::test]
-async fn the_completion_backlog_counts_every_undelivered_state_and_the_oldest_age() {
+async fn the_completion_backlog_counts_every_undelivered_state_and_ages_only_work_in_flight() {
     let fixture = fixture().await;
     let empty = fixture
         .store
@@ -1534,6 +1534,16 @@ async fn the_completion_backlog_counts_every_undelivered_state_and_the_oldest_ag
         )
         .await
         .expect("age the dead-lettered delivery");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET next_attempt_at=now() - interval '1 hour'
+             WHERE state='pending' AND attempt=0",
+            &[],
+        )
+        .await
+        .expect("age the unattempted pending delivery");
 
     let backlog = fixture
         .store
@@ -1552,8 +1562,8 @@ async fn the_completion_backlog_counts_every_undelivered_state_and_the_oldest_ag
         (1, 1, 1, 0, 1, 0)
     );
     assert!(
-        (7200..7260).contains(&backlog.oldest_undelivered_seconds),
-        "the oldest undelivered delivery is the aged dead letter, aged from when it was dead-lettered and not from its last touch: {}",
+        (3600..3660).contains(&backlog.oldest_undelivered_seconds),
+        "the age follows the oldest pending or leased delivery; the older dead letter is terminal, has its own count, and must not pin the age until retention: {}",
         backlog.oldest_undelivered_seconds
     );
 }

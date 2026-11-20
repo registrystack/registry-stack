@@ -45,8 +45,9 @@ use crate::{LeasedReviewCompletion, PostgresStore, StoreError};
 /// delivery that was accepted (`delivered`) or withdrawn (`cancelled`) is not
 /// backlog. The age runs from the moment the delivery was last due or last
 /// changed: its next attempt time while pending, its attempt start while
-/// leased, and its last update once it is unknown or dead-lettered. An
-/// `expired` delivery is counted but never sets the age.
+/// leased, and its last update once it is unknown. A `dead-lettered` or
+/// `expired` delivery is terminal: it is counted until retention erases it
+/// but never sets the age, so one dead letter cannot hold the age high.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CompletionBacklog {
     pub pending: i64,
@@ -82,9 +83,8 @@ impl PostgresStore {
                          transaction_timestamp() - min(CASE state \
                            WHEN 'pending' THEN next_attempt_at \
                            WHEN 'leased' THEN attempt_started_at \
-                           WHEN 'dead-lettered' THEN COALESCE(dead_lettered_at, updated_at) \
                            ELSE updated_at END) \
-                         FILTER (WHERE state IN ('pending', 'leased', 'unknown', 'dead-lettered')), \
+                         FILTER (WHERE state IN ('pending', 'leased', 'unknown')), \
                          interval '0'))), 0)::bigint \
                      FROM {COMPLETION_TABLE}"
                 ),

@@ -331,14 +331,14 @@ retention undelivered. Delivered and withdrawn deliveries are not counted. A dea
 expired delivery stays counted until review retention erases it, so a non-zero `dead-lettered` or
 `expired` count means a requester was not told that a review finished.
 
-`casework_completion_oldest_undelivered_age_seconds` is how long the oldest pending, leased, unknown
-or dead-lettered delivery has waited, or 0 when there are none. It runs from the delivery's next
-attempt time while pending, from its attempt start while leased, from its last change once it is
-unknown, and from the time it was dead-lettered once it is dead-lettered. Expired deliveries do not set it.
+`casework_completion_oldest_undelivered_age_seconds` is how long the oldest pending, leased or
+unknown delivery has waited, or 0 when there are none. It runs from the delivery's next attempt time
+while pending, from its attempt start while leased, and from its last change once it is unknown.
+Dead-lettered and expired deliveries do not set it, because they stay counted until retention erases them.
 
 {/* Evidence: crates/registry-casework/src/metrics.rs, metrics_router() and render();
     crates/registry-casework/src/runtime/completion.rs, completion_backlog();
-    crates/registry-casework/tests/review_postgres.rs, the_completion_backlog_counts_every_undelivered_state_and_the_oldest_age;
+    crates/registry-casework/tests/review_postgres.rs, the_completion_backlog_counts_every_undelivered_state_and_ages_only_work_in_flight;
     crates/registry-casework/src/config.rs, MetricsListenerConfig;
     crates/registry-casework/src/config.rs, metrics_listener. */}
 
