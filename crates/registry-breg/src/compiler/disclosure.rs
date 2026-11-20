@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::contract::{
     DisclosureConditionSource, DisclosureWhenPredicate, DisclosureWithholdSource, EntitySource,
-    EventTrigger, FieldTypeSource, Operation, ProjectAccessProfileSource,
+    EventTrigger, FieldTypeSource, Operation, ProjectAccessProfileSource, UniqueSet,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{CompiledDisclosureCondition, CompiledEntity, DisclosureWithhold};
@@ -46,6 +46,56 @@ pub(super) fn compile_conditions(source: &EntitySource) -> Vec<CompiledDisclosur
         .collect()
 }
 
+/// Why a profile that requires an access reason cannot hold a grant.
+const ACCESS_REASON_UNSUPPORTED: &str = "a profile that requires an access reason cannot hold this permission, because its route does not check the Registry-Access-Reason header";
+const ACCESS_REASON_CODE: &str = "breg.access-profile.access-reason-operation-unsupported";
+
+/// Whether any operation is one whose route does not check the header.
+fn holds_unchecked_operation(operations: &UniqueSet<Operation>) -> bool {
+    operations.iter().any(|operation| {
+        matches!(
+            operation,
+            Operation::Import | Operation::Invoke | Operation::Start
+        )
+    })
+}
+
+/// The same refusal for profiles a module contributes to a record type, which
+/// carry their grant directly. Runs before project profiles expand onto the
+/// entities, so every profile it sees is a module's. Bulk export is refused
+/// too: its client sends no reason, so the list route would refuse every page.
+pub(super) fn validate_module_access_reason_operations(
+    entities: &BTreeMap<String, EntitySource>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    for entity in entities.values() {
+        for profile in entity
+            .access_profiles
+            .iter()
+            .filter(|profile| profile.require_access_reason)
+        {
+            let root = format!(
+                "recordTypes[id={}].accessProfiles[id={}]",
+                entity.id, profile.id
+            );
+            if holds_unchecked_operation(&profile.operations) {
+                errors.push(Diagnostic::error(
+                    ACCESS_REASON_CODE,
+                    format!("{root}.operations"),
+                    ACCESS_REASON_UNSUPPORTED,
+                ));
+            }
+            if profile.allow_data_export {
+                errors.push(Diagnostic::error(
+                    ACCESS_REASON_CODE,
+                    format!("{root}.allowDataExport"),
+                    ACCESS_REASON_UNSUPPORTED,
+                ));
+            }
+        }
+    }
+}
+
 /// Refuse a profile that requires an access reason yet holds a permission whose
 /// route does not check the header. The reason is enforced on record reads and
 /// direct writes only, so every other grant would admit a request with no reason
@@ -60,21 +110,22 @@ pub(super) fn validate_access_reason_operations(
     let root = format!("project.accessProfiles[id={}].permissions", profile.id);
     let mut refuse = |path: String| {
         errors.push(Diagnostic::error(
-            "breg.access-profile.access-reason-operation-unsupported",
+            ACCESS_REASON_CODE,
             path,
-            "a profile that requires an access reason cannot hold this permission, because its route does not check the Registry-Access-Reason header",
+            ACCESS_REASON_UNSUPPORTED,
         ));
     };
     let permissions = &profile.permissions;
     for grant in &permissions.entities {
-        if grant.operations.iter().any(|operation| {
-            matches!(
-                operation,
-                Operation::Import | Operation::Invoke | Operation::Start
-            )
-        }) {
+        if holds_unchecked_operation(&grant.operations) {
             refuse(format!(
                 "{root}.records[recordType={}].operations",
+                grant.entity
+            ));
+        }
+        if grant.allow_data_export {
+            refuse(format!(
+                "{root}.records[recordType={}].allowDataExport",
                 grant.entity
             ));
         }
