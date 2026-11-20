@@ -1037,12 +1037,15 @@ impl PostgresStore {
     }
 
     /// How many reminder and notice intents wait in each outbox state, and
-    /// how long overdue the oldest pending one is at `now`. The read is
-    /// bounded so a slow store cannot hold a scrape open.
+    /// how long overdue the oldest pending one is at `now`. An intent that is
+    /// waiting out a retry back-off is not overdue, so it is left out of the
+    /// age. The read is bounded so a slow store cannot hold a scrape open.
     pub async fn outbox_depth(&self, now: DateTime<Utc>) -> Result<QueueDepth, StoreError> {
         self.queue_depth(
             "SELECT state, count(*) FROM scheduling_outbox GROUP BY state",
-            "SELECT min(due_at) FROM scheduling_outbox WHERE state = 'pending'",
+            "SELECT min(due_at) FROM scheduling_outbox \
+             WHERE state = 'pending' AND next_attempt_at <= $1",
+            &[&now],
             now,
         )
         .await
@@ -1055,6 +1058,7 @@ impl PostgresStore {
             "SELECT state, count(*) FROM registry_webhook_delivery_state GROUP BY state",
             "SELECT min(o.created_at) FROM registry_webhook_delivery_state s \
              JOIN registry_outbox o USING (event_id) WHERE s.state = 'pending'",
+            &[],
             now,
         )
         .await
@@ -1064,6 +1068,7 @@ impl PostgresStore {
         &self,
         counts: &str,
         oldest: &str,
+        oldest_params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
         now: DateTime<Utc>,
     ) -> Result<QueueDepth, StoreError> {
         let mut client = self.client().await?;
@@ -1075,7 +1080,10 @@ impl PostgresStore {
         for row in transaction.query(counts, &[]).await? {
             by_state.push((row.try_get::<_, String>(0)?, row.try_get::<_, i64>(1)?));
         }
-        let oldest: Option<DateTime<Utc>> = transaction.query_one(oldest, &[]).await?.try_get(0)?;
+        let oldest: Option<DateTime<Utc>> = transaction
+            .query_one(oldest, oldest_params)
+            .await?
+            .try_get(0)?;
         transaction.commit().await?;
         let oldest_pending_age_seconds = oldest.map_or(0, |at| (now - at).num_seconds().max(0));
         Ok(QueueDepth {
