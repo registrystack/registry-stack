@@ -1529,7 +1529,9 @@ async fn the_completion_backlog_counts_every_undelivered_state_and_ages_only_wor
         .database
         .execute(
             "UPDATE casework_review_completion_outbox
-             SET dead_lettered_at=now() - interval '2 hours' WHERE request_id=$1",
+             SET dead_lettered_at=now() - interval '2 hours',
+                 updated_at=now() - interval '2 hours'
+             WHERE request_id=$1",
             &[&dead],
         )
         .await
