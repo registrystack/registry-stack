@@ -13,17 +13,21 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from state_bundle import BundleError, file_hashes, verify_capture_age
+from state_bundle import DNS_LABEL, BundleError, file_hashes, stderr_tail, verify_capture_age
 
 CHART = Path(__file__).resolve().parent / "helm" / "registry-stack"
 PACKAGE_ANNOTATION = "registrystack.org/package-digest"
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 MODULES = ("breg", "appKit", "casework", "evidence")
+# BReg records an operator reference only for package activations. The chart
+# accepts up to 256 characters; BReg accepts up to 512 bytes.
+ACTIVATION_KINDS = ("apply-initial", "apply-successor")
+MAX_OPERATOR_REFERENCE_BYTES = 256
 BREG_SUCCESSOR_WARNINGS = (
     "warning: Review authority bindings are absent; affected retained Proposals will require rebase or cancellation after activation.",
     "warning: The retained Review closure could not be verified; affected Proposals will require rebase or cancellation after activation.",
@@ -125,7 +129,23 @@ def verify_backup_receipt(receipt, namespace, release, database_id, digest, acti
     try:
         verify_capture_age(receipt, datetime.now(timezone.utc), timedelta(hours=max_age_hours))
     except BundleError as error:
-        raise OperationError(str(error)) from error
+        raise OperationError(
+            f"{error} An upgrade needs a recent backup of the active registry so that a failed activation can be "
+            "recovered without losing later changes. Take and check a new backup, or set --max-backup-age-hours "
+            "to the recovery point the service owner accepts."
+        ) from error
+
+
+def operator_reference(value):
+    """Accept the change reference BReg records as a keyed hash with an activation."""
+    if (
+        not value or len(value.encode()) > MAX_OPERATOR_REFERENCE_BYTES
+        or any(unicodedata.category(character) == "Cc" for character in value)
+    ):
+        raise argparse.ArgumentTypeError(
+            f"use a change reference of 1 to {MAX_OPERATOR_REFERENCE_BYTES} bytes with no control characters"
+        )
+    return value
 
 
 def previous_activation(status, previous_digest):
@@ -151,9 +171,13 @@ def command_output(args, label, data=None, timeout=60):
     except FileNotFoundError as error:
         raise OperationError(f"Required command is unavailable: {args[0]}") from error
     except subprocess.TimeoutExpired as error:
-        raise OperationError(f"{label} timed out. Inspect its state before retrying.") from error
+        raise OperationError(
+            f"{label} timed out. Inspect its state before retrying.{stderr_tail(error.stderr)}"
+        ) from error
     if result.returncode:
-        raise OperationError(f"{label} failed with exit {result.returncode}. Inspect the selected resource.")
+        raise OperationError(
+            f"{label} failed with exit {result.returncode}. Inspect the selected resource.{stderr_tail(result.stderr)}"
+        )
     return result.stdout
 
 
@@ -258,25 +282,48 @@ class Installation:
             lease = decode_json(self.kubectl("create", "-f", "-", "-o", "json", data=json.dumps(document)), "Lease")
         except OperationError as error:
             raise OperationError(f"Cannot acquire Lease {name}. Check for another operation and inspect its Jobs.") from error
+        failed = False
         try:
             yield
+        except BaseException:
+            failed = True
+            raise
         finally:
             if self.active_job:
                 print(f"Lease {name} retained while Job {self.active_job} has an uncertain outcome.", file=sys.stderr)
             else:
                 path = f"/apis/coordination.k8s.io/v1/namespaces/{self.args.namespace}/leases/{name}"
                 options = {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": lease["metadata"]["uid"]}}
-                self.kubectl("delete", "--raw", path, "-f", "-", data=json.dumps(options))
+                try:
+                    self.kubectl("delete", "--raw", path, "-f", "-", data=json.dumps(options))
+                except OperationError as error:
+                    # Keep the operation's own failure as the reported error.
+                    message = f"Lease {name} was not released. Delete it once no operation is running. {error}"
+                    if not failed:
+                        raise OperationError(message) from error
+                    print(f"registry-stack: {message}", file=sys.stderr)
 
     def render_job(self, kind, overrides=None):
         name = f"{kind[:12]}-{uuid.uuid4().hex[:8]}"
-        values = self.target if not overrides else {**self.target, "breg": {**self.target["breg"], **overrides["breg"]}}
+        override = (overrides or {}).get("breg", {})
+        operation = {
+            **self.target["breg"].get("operation", {}), **override.get("operation", {}),
+            "enabled": True, "name": name, "kind": kind,
+        }
+        # Only --operator-reference supplies the reference, never a values file.
+        operation.pop("operatorReference", None)
+        if kind in ACTIVATION_KINDS:
+            reference = getattr(self.args, "operator_reference", None)
+            if not reference:
+                raise OperationError("A package activation needs --operator-reference.")
+            operation["operatorReference"] = reference
+        # The chart renders an operation Job only while BReg does not serve.
+        # Values travel over standard input so the reference is never parsed
+        # as a Helm --set expression.
+        values = {**self.target, "breg": {**self.target["breg"], **override, "serve": False, "operation": operation}}
         manifest = command_output([
             *self.helm, "template", self.args.release, str(self.chart), "-f", "-",
             "--show-only", "templates/breg-operation-job.yaml",
-            "--set", "breg.operation.enabled=true",
-            "--set-string", f"breg.operation.name={name}",
-            "--set-string", f"breg.operation.kind={kind}",
         ], f"Render the BReg {kind} Job", data=json.dumps(values))
         return rendered_operation(
             self.kubectl("create", "--dry-run=client", "-f", "-", "-o", "json", data=manifest)
@@ -312,7 +359,12 @@ class Installation:
                 break
             time.sleep(2)
         if terminal is None:
-            raise OperationError(f"Job {name} timed out. Inspect the Job and product ledger before unlocking.")
+            raise OperationError(
+                f"Job {name} timed out. Its Lease and NetworkPolicy remain. "
+                "Inspect the Job and product ledger before unlocking."
+            )
+        if policy:
+            self.remove_policy(policy["metadata"]["name"], name)
         output = self.kubectl("logs", f"job/{name}", "--container", "bregctl")
         report = decode_job_report(output, kind, name)
         if terminal != "Complete" or report.get("ok") is not True:
@@ -322,10 +374,25 @@ class Installation:
             raise OperationError(f"BReg {kind} failed in Job {name}{suffix}. Review the Job and product ledger.")
         return report, digest
 
+    def remove_policy(self, policy, job):
+        """Remove the operation's database egress once its Job has a known outcome."""
+        try:
+            self.kubectl("delete", "networkpolicy", policy, "--ignore-not-found")
+        except OperationError as error:
+            print(
+                f"registry-stack: NetworkPolicy {policy} was not removed. Kubernetes removes it with Job {job}. {error}",
+                file=sys.stderr,
+            )
+
     def stop(self):
-        deployments = self.kubectl("get", "deployments", "-l", self.selector, "-o", "name").splitlines()
-        if deployments:
-            self.kubectl("scale", *deployments, "--replicas=0")
+        if not self.releases():
+            raise OperationError("Helm has no release to stop.")
+        # Keep the release's recorded inputs, which name the active package,
+        # and record serve=false so any later Helm apply keeps it stopped.
+        recorded = self.values(all_values=False) or {}
+        stopped = release_values(recorded, serve=False)
+        if recorded != stopped:
+            self.apply_values(stopped, "Stop the Helm release")
         deadline = time.monotonic() + self.args.timeout
         while time.monotonic() < deadline:
             pods = decode_json(self.kubectl("get", "pods", "-l", self.selector, "-o", "json"), "Pods")
@@ -334,11 +401,14 @@ class Installation:
             time.sleep(2)
         raise OperationError("Serving Pods did not terminate. The release is held in maintenance.")
 
-    def apply_release(self, serve):
+    def apply_values(self, values, label):
         command_output([
             *self.helm, "upgrade", "--install", self.args.release, str(self.chart),
             "-f", "-", "--wait", f"--timeout={self.args.timeout}s",
-        ], "Apply Helm release", data=json.dumps(release_values(self.target, serve=serve)), timeout=self.args.timeout + 30)
+        ], label, data=json.dumps(values), timeout=self.args.timeout + 30)
+
+    def apply_release(self, serve):
+        self.apply_values(release_values(self.target, serve=serve), "Apply Helm release")
 
     def verify_ready(self, digest):
         status, _ = self.job("status", digest)
@@ -438,7 +508,10 @@ class Installation:
                     "backupSha256": backup_sha256,
                 })
 
-        self.stop()
+        # A resumed upgrade whose Helm release already serves the committed
+        # target needs no maintenance stop before it is verified.
+        if not committed or self.values(all_values=False) != release_values(self.target, serve=True):
+            self.stop()
         if action:
             self.job(action, digest, overrides)
         status = self.verify_ready(digest)
@@ -471,6 +544,10 @@ class Installation:
         action = activation_action(plan, digest, "install")
         if not existing and action is None:
             raise OperationError("The database is already active outside this Helm release. Use the recovery procedure.")
+        if action and not getattr(self.args, "operator_reference", None):
+            raise OperationError(
+                "Activating the package needs --operator-reference. Reopening an active installation does not."
+            )
         if existing and action:
             self.stop()
         elif not existing:
@@ -510,13 +587,19 @@ def main():
     parser.add_argument("--kubectl-bin", default=os.environ.get("REGISTRY_STACK_KUBECTL", "kubectl"))
     parser.add_argument("--timeout", type=int, default=300)
     commands = parser.add_subparsers(dest="action", required=True)
-    commands.add_parser("install", help="Activate a new registry or resume the exact installation.")
+    install = commands.add_parser("install", help="Activate a new registry or resume the exact installation.")
     commands.add_parser("status", help="Inspect the product ledger and Helm release.")
     commands.add_parser("claim-status", help="Inspect the connected BReg database instance claim.")
-    commands.add_parser("stop", help="Quiesce serving workloads for a coordinated backup.")
+    commands.add_parser("stop", help="Record a stopped Helm release for a coordinated backup and wait for its Pods.")
     upgrade = commands.add_parser("upgrade", help="Quiesce and apply a reviewed successor.")
     upgrade.add_argument("--backup-receipt", type=Path, required=True)
     upgrade.add_argument("--max-backup-age-hours", type=int, default=26)
+    for command, required in ((install, False), (upgrade, True)):
+        command.add_argument(
+            "--operator-reference", type=operator_reference, required=required,
+            help="Change or ticket reference that BReg records, as a keyed hash, with a package activation. "
+            "Install needs it only when it activates a package.",
+        )
     restore = commands.add_parser("adopt-restored", help="Adopt a logical restore after permanently fencing the source.")
     restore.add_argument("--confirm-original-fenced", action="store_true", required=True)
     args = parser.parse_args()
@@ -540,7 +623,7 @@ def main():
                 print(json.dumps(report, indent=2))
             elif args.action == "stop":
                 installation.stop()
-                print("Serving workloads are stopped.")
+                print("Serving workloads are stopped. Helm keeps the release stopped until install, with the same values, or upgrade reopens it.")
             elif args.action == "adopt-restored":
                 print(json.dumps(installation.adopt(), indent=2))
             else:

@@ -3,13 +3,19 @@
 
 import argparse
 import base64
+import binascii
+import hashlib
+import hmac
 import json
 import os
 import re
 import shutil
 import socket
+import stat
+import stringprep
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -20,6 +26,12 @@ from state_bundle import BundleError, file_hashes
 DEPLOY = Path(__file__).resolve().parent
 OWNERSHIP = "registrystack.org/local-installation"
 FILE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+SCRAM_VERIFIER = re.compile(r"SCRAM-SHA-256\$([1-9][0-9]{0,9}):([A-Za-z0-9+/=]+)\$([A-Za-z0-9+/=]+):([A-Za-z0-9+/=]+)")
+SASLPREP_PROHIBITED = (
+    stringprep.in_table_c12, stringprep.in_table_c21, stringprep.in_table_c22, stringprep.in_table_c3,
+    stringprep.in_table_c4, stringprep.in_table_c5, stringprep.in_table_c6, stringprep.in_table_c7,
+    stringprep.in_table_c8, stringprep.in_table_c9, stringprep.in_table_a1,
+)
 
 
 class PrepareError(Exception):
@@ -59,11 +71,97 @@ def postgres_manifest(tls_secret):
 
 
 def input_file(path, private=False):
-    if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
-        raise PrepareError(f"Supply a nonempty regular file at {path.name}.")
-    if private and path.stat().st_mode & 0o077:
-        raise PrepareError(f"Make {path.name} readable only by its owner.")
-    return path.read_bytes()
+    # Check the file that was opened, so a link or special file put in place
+    # after a check cannot be read. O_NONBLOCK keeps a FIFO from blocking.
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as error:
+        raise PrepareError(f"Supply a nonempty regular file at {path.name}.") from error
+    try:
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode) or status.st_size == 0:
+            raise PrepareError(f"Supply a nonempty regular file at {path.name}.")
+        if private and status.st_mode & 0o077:
+            raise PrepareError(f"Make {path.name} readable only by its owner.")
+        with open(descriptor, "rb", closefd=False) as data:
+            return data.read()
+    finally:
+        os.close(descriptor)
+
+
+def saslprep(password):
+    """Prepare a password the way PostgreSQL does before deriving its SCRAM verifier.
+
+    PostgreSQL uses an ASCII password unchanged. It uses the raw UTF-8 bytes
+    when SASLprep refuses the password, so a refusal is not an error here.
+    """
+    if password.isascii():
+        return password.encode()
+    mapped = "".join(
+        " " if stringprep.in_table_c12(character) else character
+        for character in password if not stringprep.in_table_b1(character)
+    )
+    prepared = unicodedata.normalize("NFKC", mapped)
+    if not prepared or any(table(character) for character in prepared for table in SASLPREP_PROHIBITED):
+        return password.encode()
+    if any(stringprep.in_table_d1(character) for character in prepared) and (
+        any(stringprep.in_table_d2(character) for character in prepared)
+        or not stringprep.in_table_d1(prepared[0]) or not stringprep.in_table_d1(prepared[-1])
+    ):
+        return password.encode()
+    return prepared.encode()
+
+
+def scram_matches(verifier, password, role):
+    match = SCRAM_VERIFIER.fullmatch(verifier)
+    try:
+        iterations, salt, stored_key, server_key = (
+            int(match[1]), *(base64.b64decode(part, validate=True) for part in match.groups()[1:])
+        ) if match else (0, b"", b"", b"")
+    except binascii.Error:
+        match = None
+    if not match or len(stored_key) != 32 or len(server_key) != 32 or not salt:
+        raise PrepareError(
+            f"PostgreSQL role {role} stores its password in a format other than SCRAM-SHA-256. "
+            "Set a SCRAM-SHA-256 password for it in PostgreSQL, then prepare again."
+        )
+    salted = hashlib.pbkdf2_hmac("sha256", saslprep(password), salt, iterations)
+    client_key = hmac.digest(salted, b"Client Key", "sha256")
+    return hmac.compare_digest(hashlib.sha256(client_key).digest(), stored_key) and hmac.compare_digest(
+        hmac.digest(salted, b"Server Key", "sha256"), server_key
+    )
+
+
+def role_password_needed(row, role, password):
+    """Return whether the role still needs its first password.
+
+    Refuse a role whose stored password differs from the supplied credential.
+    """
+    unset, _, verifier = row.strip().partition("|")
+    if unset == "t" and not verifier:
+        return True
+    if unset != "f":
+        raise PrepareError(f"PostgreSQL role {role} was not provisioned.")
+    if not scram_matches(verifier, password, role):
+        raise PrepareError(
+            f"PostgreSQL role {role} already has a different password. Preparation does not rotate database "
+            "passwords. Supply the credential the role already uses, or change the password in PostgreSQL during "
+            "maintenance and then supply versioned Secrets that carry it."
+        )
+    return False
+
+
+def set_role_passwords(postgres_command, passwords):
+    """Set the first password of each provisioned role after checking every role."""
+    unset = [
+        role for role, password in passwords.items()
+        if role_password_needed(postgres_command(
+            "-c", f"SELECT rolpassword IS NULL, coalesce(rolpassword, '') FROM pg_authid WHERE rolname = '{role}'"
+        ), role, password)
+    ]
+    for role in unset:
+        password = passwords[role]
+        postgres_command("-c", f"\\password {role}", data=f"{password}\n{password}\n")
 
 
 def secret_files(directory):
@@ -190,12 +288,7 @@ def prepare(args):
 
     prepare_schema = "false" if args.for_restore else "true"
     postgres_command("-v", f"prepare_schema={prepare_schema}", data=(DEPLOY / "postgres/provision-breg.sql").read_text())
-    for role, password in passwords.items():
-        unset = postgres_command("-c", f"SELECT rolpassword IS NULL FROM pg_authid WHERE rolname = '{role}'").strip()
-        if unset == "t":
-            postgres_command("-c", f"\\password {role}", data=f"{password}\n{password}\n")
-        elif unset != "f":
-            raise PrepareError(f"PostgreSQL role {role} was not provisioned.")
+    set_role_passwords(postgres_command, passwords)
     print("Prepared the retained local PostgreSQL and BReg inputs.")
 
 

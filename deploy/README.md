@@ -100,7 +100,7 @@ For the HTTPS certificate, use one issued by a CA your clients trust. Save its c
 
 Keep credential and private-key files owner-only. The two database URLs name `registry_runtime` and `registry_migration`, respectively, on `registry-postgres.<namespace>.svc.cluster.local:5432/registry_breg`. Encode any reserved characters in passwords as URL components. Put the PostgreSQL CA in `breg-runtime/database-ca`. Reference it from the `trustedRootCertificateRef` field of the BReg `runtime.yaml`. That field is part of the BReg runtime file, not a chart value. If the OIDC issuer uses a private CA, also supply its CA with the chart's `breg.caBundleKey`. Configure the issuer's exact HTTPS origin and a network policy that admits the actual issuer endpoint. On K3s, traffic to a Service can be matched at its destination Pod and target port.
 
-Pass the `--database-id` below the same value as `identity.databaseId` in `runtime.yaml`. The claim check refuses an install when the two differ. Pass `--operator-reference` with the change or ticket reference for this installation. The operator records it with the BReg activation. <!-- operator-check -->
+Pass the `--database-id` below the same value as `identity.databaseId` in `runtime.yaml`. The claim check refuses an install when the two differ. Pass `--operator-reference` with the change or ticket reference for this installation. BReg records a keyed hash of it with the first activation, so its runtime audit profile must be keyed. Running `install` again later, for example to reopen after `stop`, activates nothing and needs no reference.
 
 ```bash
 sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 deploy/prepare_local.py \

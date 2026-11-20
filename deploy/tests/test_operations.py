@@ -1,8 +1,11 @@
 """State transition checks for the Kubernetes operator workflow."""
 
+import argparse
 import copy
 import io
+import itertools
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -10,17 +13,25 @@ from contextlib import redirect_stderr
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import stack_operator
 from stack_operator import (
-    Installation, OperationError, activation_action, rendered_operation, require_install_retry, release_values,
-    successor_job_values, verify_active, verify_backup_receipt,
+    BREG_SUCCESSOR_WARNINGS, Installation, OperationError, activation_action, command_output, operator_reference,
+    rendered_operation, require_install_retry, release_values, successor_job_values, verify_active,
+    verify_backup_receipt,
 )
 
 
 DIGEST = "sha256:" + "a" * 64
 OTHER_DIGEST = "sha256:" + "b" * 64
+REPOSITORY = Path(__file__).resolve().parents[2]
+
+
+def fake_clock():
+    """Advance one second per reading so polling loops reach their deadline at once."""
+    return SimpleNamespace(monotonic=itertools.count().__next__, sleep=lambda seconds: None)
 
 
 class ActivationTest(unittest.TestCase):
@@ -125,6 +136,42 @@ class ActivationTest(unittest.TestCase):
         with self.assertRaisesRegex(OperationError, "capture.*backup window"):
             verify_backup_receipt(stale, "pilot", "directory", "registry-test-db", OTHER_DIGEST, "previous-activation")
 
+    def test_stale_backup_refusal_names_the_window_option_and_its_reason(self):
+        receipt = {
+            "namespace": "pilot", "release": "directory", "databaseId": "registry-test-db",
+            "packageDigest": OTHER_DIGEST, "activationId": "previous-activation", "snapshotId": "c" * 64,
+            "manifestSha256": "d" * 64,
+            "capturedAt": (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat(),
+        }
+        with self.assertRaises(OperationError) as raised:
+            verify_backup_receipt(receipt, "pilot", "directory", "registry-test-db", OTHER_DIGEST, "previous-activation")
+        message = str(raised.exception)
+        self.assertIn("--max-backup-age-hours", message)
+        self.assertIn("failed activation can be recovered", message)
+        verify_backup_receipt(
+            receipt, "pilot", "directory", "registry-test-db", OTHER_DIGEST, "previous-activation", max_age_hours=31,
+        )
+
+    def test_operator_reference_matches_the_breg_and_chart_limits(self):
+        self.assertEqual(operator_reference("CHANGE-42, approved by the service owner"), "CHANGE-42, approved by the service owner")
+        self.assertEqual(operator_reference("é" * 128), "é" * 128)
+        for invalid in ("", "x" * 257, "é" * 129, "CHANGE-42\nforged", "tab\there", "\x7f"):
+            with self.subTest(invalid=invalid), self.assertRaises(argparse.ArgumentTypeError):
+                operator_reference(invalid)
+
+    def test_upgrade_requires_an_operator_reference(self):
+        common = [
+            "stack_operator.py", "--kube-context", "test-only", "--namespace", "pilot", "--release", "directory",
+            "--database-id", "registry-test-db", "--values", "values.json",
+        ]
+        stderr = io.StringIO()
+        with (
+            patch.object(sys, "argv", [*common, "upgrade", "--backup-receipt", "backup.json"]),
+            redirect_stderr(stderr), self.assertRaises(SystemExit),
+        ):
+            stack_operator.main()
+        self.assertIn("--operator-reference", stderr.getvalue())
+
     def test_install_can_retry_same_inputs_and_resume_a_held_release(self):
         values = {
             "breg": {"enabled": True, "serve": True, "package": {"expectedDigest": DIGEST}},
@@ -136,6 +183,73 @@ class ActivationTest(unittest.TestCase):
         other["appKit"]["image"]["digest"] = DIGEST
         with self.assertRaisesRegex(OperationError, "Use upgrade"):
             require_install_retry(other, release_values(values, serve=True))
+
+
+class InstallReferenceTest(unittest.TestCase):
+    """Install asks for a change reference only when it activates a package."""
+
+    def setUp(self):
+        self.target = {"breg": {"enabled": True, "serve": True, "package": {"expectedDigest": DIGEST}}}
+        self.status = {
+            "ok": True, "command": "status", "databaseId": "registry-test-db",
+            "activePackageDigest": DIGEST, "activationId": "applied-activation",
+            "roleMode": "split", "maintenanceStatus": "ready", "maintenanceTargetPackageDigest": None,
+        }
+
+    def installation(self, deployed, active_digest, reference=None):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        values = Path(temporary.name) / "values.json"
+        values.write_text(json.dumps(self.target))
+        args = SimpleNamespace(
+            namespace="pilot", release="directory", database_id="registry-test-db",
+            kube_context="test-only", kubectl_bin="kubectl", helm_bin="helm", chart=Path("chart"),
+            values=values, timeout=5, action="install", operator_reference=reference,
+        )
+        installation = Installation(args)
+        installation.releases = Mock(return_value=[{"revision": "2"}] if deployed is not None else [])
+        installation.values = Mock(return_value=deployed)
+        installation.require_no_upgrade_record = Mock()
+        installation.stop = Mock()
+        installation.apply_release = Mock()
+        pending = active_digest != DIGEST
+
+        def job(kind, digest, overrides=None):
+            if kind == "plan":
+                return {
+                    "ok": True, "command": "plan", "packageDigest": DIGEST, "roleMode": "split",
+                    "activePackageDigest": active_digest, "pending": pending,
+                    "activation": "initial" if pending else "none", "resumesActivationId": None,
+                    "requiredBackups": [],
+                }, digest
+            if kind == "status":
+                return copy.deepcopy(self.status), digest
+            return {"ok": True}, digest
+
+        installation.job = Mock(side_effect=job)
+        return installation
+
+    def test_reopening_a_stopped_release_needs_no_reference(self):
+        installation = self.installation(release_values(self.target, serve=False), DIGEST)
+        self.assertEqual(installation.apply()["activationId"], "applied-activation")
+        installation.stop.assert_not_called()
+        installation.apply_release.assert_called_once_with(serve=True)
+        self.assertNotIn("apply-initial", [call.args[0] for call in installation.job.call_args_list])
+
+    def test_initial_activation_without_a_reference_refuses_before_any_change(self):
+        installation = self.installation(None, None)
+        with self.assertRaisesRegex(OperationError, "--operator-reference"):
+            installation.apply()
+        installation.apply_release.assert_not_called()
+        installation.stop.assert_not_called()
+        self.assertEqual([call.args[0] for call in installation.job.call_args_list], ["plan"])
+
+    def test_initial_activation_with_a_reference_proceeds(self):
+        installation = self.installation(None, None, reference="CHANGE-42")
+        installation.apply()
+        kinds = [call.args[0] for call in installation.job.call_args_list]
+        self.assertIn("apply-initial", kinds)
+        installation.apply_release.assert_called_with(serve=True)
 
 
 class JobReportTest(unittest.TestCase):
@@ -225,6 +339,321 @@ class JobReportTest(unittest.TestCase):
         with self.assertRaisesRegex(OperationError, "configured package changed"):
             installation.job("apply-successor", OTHER_DIGEST)
         installation.kubectl.assert_not_called()
+
+    def test_accepted_warnings_are_the_ones_bregctl_prints(self):
+        source = (REPOSITORY / "crates/registry-bregctl/src/apply_lifecycle.rs").read_text()
+        printed = re.findall(r'eprintln!\(\s*"(warning: [^"\\]*)"\s*\);', source)
+        self.assertEqual(sorted(printed), sorted(BREG_SUCCESSOR_WARNINGS))
+        self.assertEqual(sorted(self.WARNINGS), sorted(BREG_SUCCESSOR_WARNINGS))
+
+
+class JobLifecycleTest(unittest.TestCase):
+    """The operation NetworkPolicy and Lease follow the Job's known or uncertain outcome."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        values = root / "values.json"
+        values.write_text("{}")
+        self.args = SimpleNamespace(
+            namespace="pilot", release="directory", kube_context="test-only",
+            kubectl_bin="kubectl", helm_bin="helm", chart=root / "chart", values=values, timeout=2,
+        )
+        self.report = {"ok": True, "command": "status"}
+        self.conditions = [{"type": "Complete", "status": "True"}]
+        self.delete_error = None
+        self.calls = []
+
+    def kubectl(self, command, *args, data=None, **kwargs):
+        self.calls.append((command, *args))
+        body = json.loads(data) if data else {}
+        if command == "create" and body.get("kind") == "Lease":
+            return json.dumps({"metadata": {"uid": "lease-uid"}})
+        if command == "create" and body.get("kind") == "NetworkPolicy":
+            return "networkpolicy.networking.k8s.io/status-test"
+        if command == "create" and body.get("kind") == "Job":
+            return json.dumps({"metadata": {"uid": "job-uid"}})
+        if command == "patch":
+            return ""
+        if command == "get":
+            return json.dumps({"status": {"conditions": self.conditions}})
+        if command == "logs":
+            return json.dumps(self.report)
+        if command == "delete":
+            if self.delete_error and args[0] == self.delete_error[0]:
+                raise OperationError(self.delete_error[1])
+            return ""
+        self.fail(f"Unexpected Kubernetes command {command}")
+
+    def installation(self):
+        installation = Installation(self.args)
+        job = {"kind": "Job", "metadata": {"name": "status-test"}}
+        policy = {"kind": "NetworkPolicy", "metadata": {"name": "status-test"}}
+        installation.render_job = Mock(return_value=(job, policy, DIGEST))
+        installation.kubectl = Mock(side_effect=self.kubectl)
+        return installation
+
+    def test_known_outcome_removes_the_operation_network_policy(self):
+        for terminal in ("Complete", "Failed"):
+            with self.subTest(terminal=terminal):
+                self.calls.clear()
+                self.conditions = [{"type": terminal, "status": "True"}]
+                installation = self.installation()
+                if terminal == "Complete":
+                    self.assertEqual(installation.job("status", DIGEST), (self.report, DIGEST))
+                else:
+                    with self.assertRaisesRegex(OperationError, "BReg status failed"):
+                        installation.job("status", DIGEST)
+                removal = ("delete", "networkpolicy", "status-test", "--ignore-not-found")
+                self.assertIn(removal, self.calls)
+                self.assertLess(self.calls.index(("get", "job", "status-test", "-o", "json")), self.calls.index(removal))
+
+    def test_policy_removal_failure_is_reported_without_hiding_the_outcome(self):
+        self.delete_error = ("networkpolicy", "synthetic removal failure")
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            self.assertEqual(self.installation().job("status", DIGEST), (self.report, DIGEST))
+        self.assertIn("NetworkPolicy status-test", stderr.getvalue())
+        self.assertIn("synthetic removal failure", stderr.getvalue())
+
+    def test_job_timeout_keeps_the_lease_and_network_policy(self):
+        self.conditions = []
+        installation = self.installation()
+        stderr = io.StringIO()
+        with (
+            patch("stack_operator.time", fake_clock()), redirect_stderr(stderr),
+            self.assertRaisesRegex(OperationError, "Job status-test timed out"),
+        ):
+            with installation.lock():
+                installation.job("status", DIGEST)
+        self.assertIn("Lease directory-operator-lock retained while Job status-test", stderr.getvalue())
+        self.assertFalse([entry for entry in self.calls if entry[0] == "delete"])
+
+    def test_lease_release_failure_keeps_the_original_error(self):
+        self.delete_error = ("--raw", "synthetic Lease failure")
+        installation = self.installation()
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaisesRegex(OperationError, "^Original failure$"):
+            with installation.lock():
+                raise OperationError("Original failure")
+        self.assertIn("Lease directory-operator-lock was not released", stderr.getvalue())
+        self.assertIn("synthetic Lease failure", stderr.getvalue())
+
+    def test_lease_release_failure_after_success_is_raised(self):
+        self.delete_error = ("--raw", "synthetic Lease failure")
+        installation = self.installation()
+        with self.assertRaisesRegex(OperationError, "Lease directory-operator-lock was not released.*synthetic Lease failure"):
+            with installation.lock():
+                pass
+
+    def test_released_lease_names_its_uid_precondition(self):
+        installation = self.installation()
+        with installation.lock():
+            pass
+        deletes = [entry for entry in installation.kubectl.call_args_list if entry.args[0] == "delete"]
+        self.assertEqual(len(deletes), 1)
+        self.assertEqual(json.loads(deletes[0].kwargs["data"])["preconditions"], {"uid": "lease-uid"})
+
+
+class RenderJobTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.target = {
+            "breg": {
+                "enabled": True, "serve": True,
+                "package": {"existingClaim": "successor", "expectedDigest": DIGEST},
+                "operation": {"activeDeadlineSeconds": 900},
+            },
+            "appKit": {"enabled": True, "serve": True},
+        }
+        values = root / "values.json"
+        values.write_text(json.dumps(self.target))
+        self.args = SimpleNamespace(
+            namespace="pilot", release="directory", kube_context="test-only", kubectl_bin="kubectl",
+            helm_bin="helm", chart=root / "chart", values=values, timeout=2,
+            operator_reference="CHANGE-42, approved=service owner",
+        )
+        self.job = {"kind": "Job", "metadata": {"annotations": {"registrystack.org/package-digest": DIGEST}}}
+
+    def render(self, kind, overrides=None):
+        installation = Installation(self.args)
+        installation.kubectl = Mock(return_value=json.dumps(self.job))
+        with patch("stack_operator.command_output", return_value="rendered") as helm:
+            installation.render_job(kind, overrides)
+        command = helm.call_args.args[0]
+        return command, json.loads(helm.call_args.kwargs["data"])
+
+    def test_operation_jobs_render_with_breg_serving_disabled(self):
+        for kind in ("status", "doctor", "plan", "claim-status", "claim-adopt", "apply-initial"):
+            with self.subTest(kind=kind):
+                command, values = self.render(kind)
+                self.assertIs(values["breg"]["serve"], False)
+                operation = values["breg"]["operation"]
+                self.assertEqual((operation["enabled"], operation["kind"]), (True, kind))
+                self.assertRegex(operation["name"], r"^[a-z0-9-]{1,21}$")
+                self.assertEqual(operation["activeDeadlineSeconds"], 900)
+                self.assertTrue(values["appKit"]["serve"])
+                self.assertNotIn("--set", command)
+                self.assertNotIn("--set-string", command)
+
+    def test_only_package_activations_carry_the_operator_reference(self):
+        candidate = {"existingClaim": "candidate", "expectedDigest": OTHER_DIGEST}
+        overrides = {"breg": {"package": {"existingClaim": "previous", "expectedDigest": DIGEST}, "operation": {"candidate": candidate}}}
+        for kind, kind_overrides in (("apply-initial", None), ("apply-successor", overrides)):
+            with self.subTest(kind=kind):
+                command, values = self.render(kind, kind_overrides)
+                self.assertEqual(values["breg"]["operation"]["operatorReference"], self.args.operator_reference)
+                self.assertNotIn(self.args.operator_reference, " ".join(command))
+        _, values = self.render("apply-successor", overrides)
+        self.assertEqual(values["breg"]["operation"]["candidate"], candidate)
+        self.assertEqual(values["breg"]["operation"]["activeDeadlineSeconds"], 900)
+        self.assertEqual(values["breg"]["package"]["existingClaim"], "previous")
+        for kind in ("status", "doctor", "plan", "claim-status", "claim-adopt"):
+            with self.subTest(kind=kind):
+                self.assertNotIn("operatorReference", self.render(kind)[1]["breg"]["operation"])
+
+    def test_package_activation_without_a_reference_is_refused(self):
+        del self.args.operator_reference
+        with self.assertRaisesRegex(OperationError, "--operator-reference"):
+            self.render("apply-initial")
+
+    def test_only_the_command_line_supplies_the_operator_reference(self):
+        self.target["breg"]["operation"]["operatorReference"] = "VALUES-FILE-REFERENCE"
+        self.args.values.write_text(json.dumps(self.target))
+        self.assertNotIn("operatorReference", self.render("plan")[1]["breg"]["operation"])
+        operation = self.render("apply-initial")[1]["breg"]["operation"]
+        self.assertEqual(operation["operatorReference"], self.args.operator_reference)
+        del self.args.operator_reference
+        with self.assertRaisesRegex(OperationError, "--operator-reference"):
+            self.render("apply-initial")
+
+
+class StopTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.target = {
+            "breg": {"enabled": True, "serve": True, "package": {"existingClaim": "previous", "expectedDigest": OTHER_DIGEST}},
+            "appKit": {"enabled": True, "serve": True},
+        }
+        values = root / "values.json"
+        values.write_text(json.dumps(self.target))
+        self.args = SimpleNamespace(
+            namespace="pilot", release="directory", kube_context="test-only", kubectl_bin="kubectl",
+            helm_bin="helm", chart=root / "chart", values=values, timeout=2,
+        )
+        self.recorded = release_values(self.target, serve=True)
+        self.helm_calls = []
+        self.pods = [{"status": {"phase": "Succeeded"}}]
+        helm = patch("stack_operator.command_output", side_effect=self.helm)
+        helm.start()
+        self.addCleanup(helm.stop)
+
+    def helm(self, args, label, data=None, timeout=60):
+        self.helm_calls.append((args, label))
+        self.recorded = json.loads(data)
+        return ""
+
+    def kubectl(self, command, *args, **kwargs):
+        self.assertEqual((command, *args), ("get", "pods", "-l", "app.kubernetes.io/instance=directory", "-o", "json"))
+        return json.dumps({"items": self.pods})
+
+    def installation(self, releases=({"name": "directory"},)):
+        installation = Installation(self.args)
+        installation.releases = Mock(return_value=list(releases))
+        installation.values = Mock(side_effect=self.recorded_values)
+        installation.kubectl = Mock(side_effect=self.kubectl)
+        return installation
+
+    def recorded_values(self, *, all_values=True):
+        self.assertFalse(all_values)
+        return copy.deepcopy(self.recorded)
+
+    def test_stop_records_the_stopped_state_in_the_helm_release(self):
+        self.installation().stop()
+        self.assertEqual(len(self.helm_calls), 1)
+        args, _ = self.helm_calls[0]
+        self.assertEqual(args[:4], ["helm", "--kube-context", "test-only", "--namespace"])
+        self.assertIn("upgrade", args)
+        self.assertIn("--install", args)
+        self.assertIn("--wait", args)
+        self.assertNotIn("--force-conflicts", args)
+        self.assertEqual(self.recorded, release_values(self.target, serve=False))
+        # An interrupted install or reopen can resume from the stopped release.
+        require_install_retry(self.target, self.recorded)
+
+    def test_stop_keeps_the_recorded_inputs_of_the_active_package(self):
+        self.recorded = release_values({**self.target, "breg": {**self.target["breg"], "runtimeConfig": {"configMapName": "active"}}}, serve=True)
+        self.installation().stop()
+        self.assertEqual(self.recorded["breg"]["package"]["expectedDigest"], OTHER_DIGEST)
+        self.assertEqual(self.recorded["breg"]["runtimeConfig"], {"configMapName": "active"})
+        self.assertFalse(self.recorded["breg"]["serve"])
+
+    def test_stopped_release_is_not_reapplied(self):
+        self.recorded = release_values(self.target, serve=False)
+        installation = self.installation()
+        installation.stop()
+        self.assertFalse(self.helm_calls)
+        installation.kubectl.assert_called_once()
+
+    def test_stop_timeout_holds_the_release_in_maintenance(self):
+        self.pods = [{"status": {"phase": "Running"}}]
+        with (
+            patch("stack_operator.time", fake_clock()),
+            self.assertRaisesRegex(OperationError, "Serving Pods did not terminate"),
+        ):
+            self.installation().stop()
+        self.assertEqual(self.recorded, release_values(self.target, serve=False))
+
+    def test_stop_requires_a_helm_release(self):
+        installation = self.installation(releases=())
+        with self.assertRaisesRegex(OperationError, "no release to stop"):
+            installation.stop()
+        self.assertFalse(self.helm_calls)
+        installation.kubectl.assert_not_called()
+
+
+class CommandOutputTest(unittest.TestCase):
+    def failure(self, script, data=None):
+        with self.assertRaises(OperationError) as raised:
+            command_output([sys.executable, "-I", "-c", script], "Synthetic step", data=data)
+        return str(raised.exception)
+
+    def test_failure_reports_the_last_error_lines_without_stdin(self):
+        message = self.failure(
+            "import sys\nsys.stdin.read()\nfor number in range(30):\n    print(f'diagnostic {number}', file=sys.stderr)\nsys.exit(3)",
+            data="stdin-only-credential",
+        )
+        self.assertIn("Synthetic step failed with exit 3", message)
+        lines = message.splitlines()
+        self.assertIn("diagnostic 29", lines)
+        self.assertIn("diagnostic 10", lines)
+        self.assertNotIn("diagnostic 9", lines)
+        self.assertNotIn("stdin-only-credential", message)
+
+    def test_error_output_is_bounded_and_printable(self):
+        message = self.failure("import sys\nprint('\\x1b[2J' + 'x' * 20000, file=sys.stderr)\nsys.exit(1)")
+        self.assertLess(len(message), 2500)
+        self.assertNotIn("\x1b", message)
+        self.assertTrue(message.endswith("x"))
+
+    def test_quiet_failure_keeps_the_short_message(self):
+        self.assertEqual(
+            self.failure("import sys\nsys.exit(4)"),
+            "Synthetic step failed with exit 4. Inspect the selected resource.",
+        )
+
+    def test_timeout_reports_the_error_output_so_far(self):
+        script = "import sys, time\nprint('waiting for the API server', file=sys.stderr, flush=True)\ntime.sleep(30)"
+        with self.assertRaises(OperationError) as raised:
+            command_output([sys.executable, "-I", "-c", script], "Synthetic step", timeout=1)
+        message = str(raised.exception)
+        self.assertIn("Synthetic step timed out", message)
+        self.assertIn("waiting for the API server", message.splitlines())
 
 
 class UpgradeRetryTest(unittest.TestCase):
@@ -408,6 +837,21 @@ class UpgradeRetryTest(unittest.TestCase):
         self.assertEqual(self.installation().apply()["activationId"], "successor-activation")
         self.assertEqual(len(self.status["ledger"]), 2)
         self.assertEqual(self.helm_inputs[0], self.helm_inputs[1])
+
+    def test_resume_skips_the_stop_when_helm_already_serves_the_committed_target(self):
+        self.record_helm_before_failure = True
+        self.interrupt()
+        retry = self.installation()
+        self.assertEqual(retry.apply()["activationId"], "successor-activation")
+        retry.stop.assert_not_called()
+        self.assertEqual(self.helm_inputs[0], self.helm_inputs[1])
+
+    def test_resume_stops_while_helm_records_the_predecessor(self):
+        self.interrupt()
+        retry = self.installation()
+        self.assertEqual(retry.apply()["activationId"], "successor-activation")
+        retry.stop.assert_called_once_with()
+        self.assertEqual(len(self.status["ledger"]), 2)
 
     def test_failed_checkpoint_creation_leaves_the_predecessor_intact(self):
         upgrade = self.installation()
