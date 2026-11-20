@@ -115,6 +115,25 @@ breg_record_timer_retained_attempts 7
 breg_record_timer_stale_current_occurrences 1
 breg_record_timer_control_compatible{state="paused"} 1
 breg_record_timer_counts_truncated 0
+# HELP breg_hook_deliveries Outbound hook deliveries by state, sampled at scrape; dead-lettered deliveries wait for an operator.
+# TYPE breg_hook_deliveries gauge
+breg_hook_deliveries{state="pending"} 3
+breg_hook_deliveries{state="leased"} 1
+breg_hook_deliveries{state="delivered"} 40
+breg_hook_deliveries{state="dead-lettered"} 2
+breg_hook_deliveries{state="expired"} 5
+# HELP breg_ingestion_runs Import runs by state across every creator, sampled at scrape.
+# TYPE breg_ingestion_runs gauge
+breg_ingestion_runs{state="open"} 4
+breg_ingestion_runs{state="complete"} 6
+breg_ingestion_runs{state="cancelled"} 1
+breg_ingestion_runs{state="blocked"} 2
+# HELP breg_metrics_sample_failures_total Scrape-time database samples that failed since this process started, by sample.
+# TYPE breg_metrics_sample_failures_total counter
+breg_metrics_sample_failures_total{sample="queue"} 0
+breg_metrics_sample_failures_total{sample="record-timer"} 0
+breg_metrics_sample_failures_total{sample="hook-delivery"} 0
+breg_metrics_sample_failures_total{sample="ingestion-run"} 0
 # HELP breg_active_package_info The package this process verified at startup, by digest.
 # TYPE breg_active_package_info gauge
 breg_active_package_info{package_digest="sha256:abababababababababababababababababababababababababababababababab"} 1

@@ -759,7 +759,8 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
             .expect("prepared server verifies package, database, audit, and OIDC");
     assert_ready(&prepared, StatusCode::OK).await;
     assert_unknown_static_kid_refuses_value_free(&prepared).await;
-    assert_metrics_publish_the_verified_package_and_every_queue(&prepared, &verified).await;
+    assert_metrics_publish_the_verified_package_and_every_queue(&database, &prepared, &verified)
+        .await;
 
     let wrong_role_path = fixture.write_static_jwks_config(
         &package,
@@ -2620,9 +2621,116 @@ async fn wait_for_maintenance_without_sleep(client: &impl GenericClient, expecte
 /// The registry the verified startup path builds names the package it
 /// verified, and the runtime role can read every queue the scrape samples.
 async fn assert_metrics_publish_the_verified_package_and_every_queue(
+    database: &TestDatabase,
     prepared: &PreparedServer,
     verified: &VerifiedPackage,
 ) {
+    let body = scrape_metrics(prepared).await;
+    assert_package_and_queues(&body, verified);
+    for state in ["pending", "leased", "delivered", "dead-lettered", "expired"] {
+        assert!(
+            body.contains(&format!("breg_hook_deliveries{{state=\"{state}\"}} 0\n")),
+            "no {state} hook delivery is sampled as zero:\n{body}"
+        );
+    }
+    for state in ["open", "complete", "cancelled", "blocked"] {
+        assert!(
+            body.contains(&format!("breg_ingestion_runs{{state=\"{state}\"}} 0\n")),
+            "no {state} import run is sampled as zero:\n{body}"
+        );
+    }
+    assert!(
+        body.contains("breg_metrics_sample_failures_total{sample=\"hook-delivery\"} 0\n")
+            && body.contains("breg_metrics_sample_failures_total{sample=\"ingestion-run\"} 0\n"),
+        "no sample has failed:\n{body}"
+    );
+
+    // Deliveries and runs the metrics runtime did not create: counts span
+    // every one, by stored state, and a run counts as the state its document
+    // renders, so an open run bound to another package counts as blocked.
+    for state in [
+        CapturedDeliveryState::Pending,
+        CapturedDeliveryState::Pending,
+        CapturedDeliveryState::Leased,
+        CapturedDeliveryState::DeadLettered,
+        CapturedDeliveryState::DeadLettered,
+        CapturedDeliveryState::DeadLettered,
+        CapturedDeliveryState::Delivered,
+    ] {
+        insert_captured_delivery(database, "urn:test:metrics-source", state).await;
+    }
+    for (status, blocked_reason, retired_binding, creator) in [
+        ("open", None, false, "creator-a"),
+        ("open", None, false, "creator-b"),
+        ("open", None, true, "creator-a"),
+        ("complete", None, false, "creator-b"),
+        ("cancelled", None, false, "creator-a"),
+        (
+            "blocked",
+            Some("active_package_changed"),
+            false,
+            "creator-c",
+        ),
+    ] {
+        database
+            .admin
+            .execute(
+                "INSERT INTO registry_internal.registry_ingestion_runs
+                     (run_id, created_issuer, created_subject, created_principal_reference,
+                      package_revision, schema_fingerprint, entity_id, operation, profile_id,
+                      bound_context_reference, input_digest, input_length, item_count,
+                      chunk_count, chunk_algorithm_version, maximum_items, maximum_bytes,
+                      status, blocked_reason, next_chunk_index, committed_items,
+                      committed_prefix_digest)
+                 SELECT gen_random_uuid(), 'https://issuer.example.test', $1, $1,
+                        CASE WHEN $4 THEN 'sha256:retired' ELSE state.active_package_digest END,
+                        state.schema_fingerprint, 'neutral-record', 'create', 'profile',
+                        'context', repeat('a', 64), 1, 1, 1, 'v1', 1, 1, $2, $3, 0, 0,
+                        repeat('b', 64)
+                   FROM registry_internal.registry_state AS state
+                  WHERE state.singleton",
+                &[&creator, &status, &blocked_reason, &retired_binding],
+            )
+            .await
+            .expect("an import run inserts");
+    }
+    let body = scrape_metrics(prepared).await;
+    for expected in [
+        "breg_hook_deliveries{state=\"pending\"} 2\n",
+        "breg_hook_deliveries{state=\"leased\"} 1\n",
+        "breg_hook_deliveries{state=\"delivered\"} 1\n",
+        "breg_hook_deliveries{state=\"dead-lettered\"} 3\n",
+        "breg_hook_deliveries{state=\"expired\"} 0\n",
+        "breg_ingestion_runs{state=\"open\"} 2\n",
+        "breg_ingestion_runs{state=\"complete\"} 1\n",
+        "breg_ingestion_runs{state=\"cancelled\"} 1\n",
+        "breg_ingestion_runs{state=\"blocked\"} 2\n",
+    ] {
+        assert!(body.contains(expected), "{expected} in:\n{body}");
+    }
+    for forbidden in ["creator-", "issuer.example.test", "metrics-source"] {
+        assert!(
+            !body.contains(forbidden),
+            "the counts carry no {forbidden} value:\n{body}"
+        );
+    }
+    // The later startup checks in this journey must not see the captured
+    // deliveries or the inserted runs.
+    for table in [
+        "registry_ingestion_runs",
+        "registry_webhook_delivery_state",
+        "registry_webhook_deliveries",
+        "registry_outbox",
+    ] {
+        database
+            .admin
+            .execute(&format!("DELETE FROM registry_internal.{table}"), &[])
+            .await
+            .expect("the metrics fixture rows delete");
+    }
+}
+
+async fn scrape_metrics(prepared: &PreparedServer) -> String {
     let response = prepared
         .metrics_app_for_test()
         .expect("the runtime file configures a metrics listener")
@@ -2638,7 +2746,10 @@ async fn assert_metrics_publish_the_verified_package_and_every_queue(
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("metrics body reads");
-    let body = String::from_utf8(body.to_vec()).expect("metrics body is UTF-8");
+    String::from_utf8(body.to_vec()).expect("metrics body is UTF-8")
+}
+
+fn assert_package_and_queues(body: &str, verified: &VerifiedPackage) {
     let packages = body
         .lines()
         .filter(|line| line.starts_with("breg_active_package_info{"))

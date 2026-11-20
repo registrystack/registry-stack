@@ -679,6 +679,20 @@ fn expected_operational_event(
             None,
             Some("metrics.timer_sample.failed"),
         ),
+        OperationalEvent::MetricsHookDeliverySampleFailed => (
+            OperationalLogLevel::Warn,
+            "registry_breg::metrics",
+            "hook delivery counts could not be sampled for this metrics scrape",
+            None,
+            Some("metrics.hook_delivery_sample.failed"),
+        ),
+        OperationalEvent::MetricsIngestionRunSampleFailed => (
+            OperationalLogLevel::Warn,
+            "registry_breg::metrics",
+            "import run counts could not be sampled for this metrics scrape",
+            None,
+            Some("metrics.ingestion_run_sample.failed"),
+        ),
         OperationalEvent::HookStateTransitionFailed(code) => (
             OperationalLogLevel::Warn,
             "registry_breg::hooks",

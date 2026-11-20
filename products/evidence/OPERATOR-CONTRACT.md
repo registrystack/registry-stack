@@ -1119,6 +1119,7 @@ also publish bounded attempt counts and latency histograms:
 |---|---|---|
 | `evidence_source_requests_total` | `source`, `outcome` | Fixed HTTP or statement attempts, including failures and cancellations |
 | `evidence_source_request_duration_seconds` | `source`, `outcome` | Attempt latency, with histogram bucket, sum and count series |
+| `evidence_source_lookups_total` | `source`, `outcome` | Adapter pack lookups that completed with an answer, by what the lookup found. Failed attempts count in `evidence_source_requests_total` instead |
 | `evidence_signer_requests_total` | `signer="active"`, `outcome` | JWS or SD-JWT issuance attempts, excluding readiness probes |
 | `evidence_signer_request_duration_seconds` | `signer="active"`, `outcome` | Issuance latency, with histogram bucket, sum and count series |
 | `evidence_build_info` | `version`, `bundle`, `authority` | Gauge fixed at 1 for the captured package and authority revision. `authority="package"` means no separate authority document is active, so the package's own ceilings govern. |
@@ -1131,6 +1132,12 @@ categories emit series. No selector, subject, request ID, raw error, URL,
 credential, or signing key becomes a label. Source observations cover transport,
 projection, and response verification; assertion derivation remains visible at
 the request boundary. Upstream reachability does not decide `/ready`.
+`evidence_source_lookups_total` counts each completed lookup once, under the
+same governed `source` label and its own closed `outcome` values: `match`,
+`no-match`, `ambiguous`, and `unresolved`. It is incremented only when the
+lookup returned an answer, so an attempt that failed appears under a failure
+category of `evidence_source_requests_total` and never here. Only observed
+outcomes emit series.
 A source-data outage returns `503 source.unavailable` without `Retry-After`
 when no useful recovery interval is known; meaningful rate-limit hints remain.
 The instance stays ready while its own required dependencies are healthy,

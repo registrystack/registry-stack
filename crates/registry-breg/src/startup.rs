@@ -506,6 +506,10 @@ pub enum OperationalEvent {
     /// Record-timer state could not be read for one metrics scrape. Other
     /// independently sampled metrics remain available.
     MetricsTimerSampleFailed,
+    /// Hook delivery counts could not be read for one metrics scrape.
+    MetricsHookDeliverySampleFailed,
+    /// Import run counts could not be read for one metrics scrape.
+    MetricsIngestionRunSampleFailed,
     HookStateTransitionFailed(HookStateTransitionCode),
     /// One PostgreSQL baseline advisory, logged once at startup. It carries a
     /// closed code and message plus the server's observed setting counts.
@@ -634,6 +638,20 @@ impl OperationalEvent {
                 error: None,
                 code: Some("metrics.timer_sample.failed"),
             },
+            Self::MetricsHookDeliverySampleFailed => OperationalLogRecord {
+                level: OperationalLogLevel::Warn,
+                target: "registry_breg::metrics",
+                message: "hook delivery counts could not be sampled for this metrics scrape",
+                error: None,
+                code: Some("metrics.hook_delivery_sample.failed"),
+            },
+            Self::MetricsIngestionRunSampleFailed => OperationalLogRecord {
+                level: OperationalLogLevel::Warn,
+                target: "registry_breg::metrics",
+                message: "import run counts could not be sampled for this metrics scrape",
+                error: None,
+                code: Some("metrics.ingestion_run_sample.failed"),
+            },
             Self::HookStateTransitionFailed(code) => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
                 target: "registry_breg::hooks",
@@ -736,7 +754,10 @@ impl OperationalEvent {
                 let code = record.code.expect("review warning records have a code");
                 tracing::warn!(target: "registry_breg::review", code, message = record.message);
             }
-            Self::MetricsQueueSampleFailed | Self::MetricsTimerSampleFailed => {
+            Self::MetricsQueueSampleFailed
+            | Self::MetricsTimerSampleFailed
+            | Self::MetricsHookDeliverySampleFailed
+            | Self::MetricsIngestionRunSampleFailed => {
                 let code = record.code.expect("metrics warning records have a code");
                 tracing::warn!(target: "registry_breg::metrics", code, message = record.message);
             }

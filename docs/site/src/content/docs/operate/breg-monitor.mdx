@@ -192,7 +192,8 @@ rise in `client-error`, and put the registry behind an upstream rate limit: it h
 
 | `worker` | What it does |
 | --- | --- |
-| `webhook` | Delivers events from the [outbox](../../reference/glossary/#outbox) to webhook destinations. |
+| `hook` | Delivers events from the [outbox](../../reference/glossary/#outbox) to webhook destinations and local hook handlers. |
+| `record-timer` | Runs due [Record timers](../../configure/breg-record-timers/), when the active package declares a timer or the database still holds timer state. |
 | `review` | Submits Proposals for review and reads results. |
 | `attachment-verification` | Sends uploaded files to an external verifier, when enabled. |
 | `subject-access-log-retention` | Drops expired subject access log entries, once a minute. |
@@ -200,8 +201,8 @@ rise in `client-error`, and put the registry behind an upstream rate limit: it h
 | `external-refresh` | Runs each configured [refresh plan](../../configure/breg-external-views/#refresh-plans-and-the-in-process-worker) in process, as the plan's worker identity, when the active package declares an indexed external projection. |
 
 `breg_worker_last_success_age_seconds` counts from the last iteration that did not fail, work or no
-work. The first three loop at least once a second, so an age of minutes means a worker fails every
-time or is stuck. The `external-projection-retention` series is absent until its first pass
+work. The `hook`, `review`, and `attachment-verification` workers loop at least once a second, so an
+age of minutes means a worker fails every time or is stuck. The `external-projection-retention` series is absent until its first pass
 completes; alert when it grows well past five seconds. `breg_queue_oldest_pending_age_seconds` is
 how long the oldest due item has waited; when it grows while the worker age stays small, the worker
 cannot keep up or keeps failing one item.
@@ -216,6 +217,31 @@ Use [blocked Proposal recovery](../breg-changes/#recover-a-blocked-proposal) for
 {/* Evidence: crates/registry-breg/src/metrics.rs, read_queues();
     crates/registry-breg/tests/support/review_go_live.rs,
     activation_blocked_application_remains_counted_without_queue_age. */}
+
+## Watch for stuck work
+
+These gauges count work that waits for an operator. Each is sampled on the scrape, in its own
+read-only transaction, and carries one `state` label from a fixed list. None carries an identifier,
+a principal, or a destination.
+
+| Series | `state` values | What it counts |
+| --- | --- | --- |
+| `breg_hook_deliveries` | `pending`, `leased`, `delivered`, `dead-lettered`, `expired` | Retained outbound hook deliveries by state. A `dead-lettered` delivery has used its attempts and stays until an operator replays or discards it. |
+| `breg_ingestion_runs` | `open`, `complete`, `cancelled`, `blocked` | Import runs of every creator. The run endpoints show a caller only the runs it created, but this count spans all of them and names no creator. An open run bound to a package that is no longer active counts as `blocked`, as its run document shows. |
+| `breg_metrics_sample_failures_total` | `sample` is `queue`, `record-timer`, `hook-delivery`, or `ingestion-run` | Scrapes where that sample could not be read, since the process started. |
+
+Alert when `breg_hook_deliveries{state="dead-lettered"}` is above zero, and when
+`breg_ingestion_runs{state="blocked"}` stays above zero. List dead letters with `bregctl hook list`. [Webhook operations](../breg-webhooks/) covers replaying or discarding them.
+
+A failed sample omits its series for that scrape instead of reporting zero, so use
+`absent(breg_hook_deliveries)` or a rising `breg_metrics_sample_failures_total` to catch it. The
+process also logs a warning with the code `metrics.hook_delivery_sample.failed` or
+`metrics.ingestion_run_sample.failed`.
+
+{/* Evidence: crates/registry-breg/src/metrics.rs, read_hook_deliveries() and
+    read_ingestion_runs(); crates/registry-platform-hooks/src/delivery_schema.rs;
+    crates/registry-breg/src/ingestion_store.rs; crates/registry-breg/tests/postgres_startup.rs,
+    assert_metrics_publish_the_verified_package_and_every_queue. */}
 
 The process writes JSON lines on standard output. A failed iteration is a warning with a `code` such
 as `hook.worker.iteration_failed`, `review.result_lookups.unavailable`, or

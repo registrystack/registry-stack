@@ -24,13 +24,20 @@
 //! a time and separate read-only transactions under short statement
 //! timeouts. A failed sample is omitted rather than rendered as an empty
 //! queue, and emits a closed operational event without erasing an independent
-//! successful sample. The package info series carries the single `sha256:`
+//! successful sample. The hook delivery and import run counts are sampled the
+//! same way, each in its own read-only transaction, and are counted by state
+//! across every delivery and every run: the run count has no creator or access
+//! context label, although the run endpoints are creator-scoped. A failed
+//! sample is counted in `breg_metrics_sample_failures_total`. The package info series carries the single `sha256:`
 //! digest of the package this process verified at startup, so it adds one
 //! series per process.
 
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -60,6 +67,44 @@ pub(crate) struct QueueSample {
     ages: Vec<(PendingQueue, f64)>,
     blocked_application_jobs: i64,
     timer: Option<TimerSample>,
+    hook_deliveries: Option<[i64; HOOK_DELIVERY_STATES.len()]>,
+    ingestion_runs: Option<[i64; INGESTION_RUN_STATES.len()]>,
+}
+
+/// The delivery states of `registry_webhook_delivery_state`, in the order
+/// the sample reports them.
+const HOOK_DELIVERY_STATES: [&str; 5] =
+    ["pending", "leased", "delivered", "dead-lettered", "expired"];
+/// The run states a run document renders, in the order the sample reports
+/// them. An open run whose binding a successor package retired counts as
+/// blocked, as it does everywhere a run is rendered.
+const INGESTION_RUN_STATES: [&str; 4] = ["open", "complete", "cancelled", "blocked"];
+
+/// The samples whose failure `breg_metrics_sample_failures_total` counts.
+#[derive(Clone, Copy)]
+enum SampleKind {
+    Queue,
+    Timer,
+    HookDelivery,
+    IngestionRun,
+}
+
+impl SampleKind {
+    const ALL: [Self; 4] = [
+        Self::Queue,
+        Self::Timer,
+        Self::HookDelivery,
+        Self::IngestionRun,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Queue => "queue",
+            Self::Timer => "record-timer",
+            Self::HookDelivery => "hook-delivery",
+            Self::IngestionRun => "ingestion-run",
+        }
+    }
 }
 
 const TIMER_STATUS_SCAN_MAXIMUM: i64 = 10_000;
@@ -114,6 +159,8 @@ pub struct Metrics {
     /// The digest of the package this process verified at startup, published
     /// as `breg_active_package_info`.
     active_package_digest: Option<String>,
+    /// Failed samples since this process started, indexed by [`SampleKind`].
+    sample_failures: [AtomicU64; SampleKind::ALL.len()],
 }
 
 /// A background worker reported by `breg_worker_last_success_age_seconds`.
@@ -522,6 +569,42 @@ impl Metrics {
         }
         declare(
             &mut out,
+            "breg_hook_deliveries",
+            "Outbound hook deliveries by state, sampled at scrape; dead-lettered deliveries wait for an operator.",
+            MetricKind::Gauge,
+        );
+        if let Some(counts) = queue_sample.and_then(|sample| sample.hook_deliveries) {
+            for (state, count) in HOOK_DELIVERY_STATES.into_iter().zip(counts) {
+                sample(&mut out, "breg_hook_deliveries", &[("state", state)], count);
+            }
+        }
+        declare(
+            &mut out,
+            "breg_ingestion_runs",
+            "Import runs by state across every creator, sampled at scrape.",
+            MetricKind::Gauge,
+        );
+        if let Some(counts) = queue_sample.and_then(|sample| sample.ingestion_runs) {
+            for (state, count) in INGESTION_RUN_STATES.into_iter().zip(counts) {
+                sample(&mut out, "breg_ingestion_runs", &[("state", state)], count);
+            }
+        }
+        declare(
+            &mut out,
+            "breg_metrics_sample_failures_total",
+            "Scrape-time database samples that failed since this process started, by sample.",
+            MetricKind::Counter,
+        );
+        for kind in SampleKind::ALL {
+            sample(
+                &mut out,
+                "breg_metrics_sample_failures_total",
+                &[("sample", kind.label())],
+                self.sample_failures[kind as usize].load(Ordering::Relaxed),
+            );
+        }
+        declare(
+            &mut out,
             "breg_active_package_info",
             "The package this process verified at startup, by digest.",
             MetricKind::Gauge,
@@ -553,17 +636,39 @@ impl Metrics {
                     {
                         Ok(timer) => Some(timer),
                         Err(()) => {
+                            self.note_sample_failure(SampleKind::Timer);
                             crate::startup::OperationalEvent::MetricsTimerSampleFailed.emit();
                             None
                         }
                     };
+                sample.hook_deliveries = match read_hook_deliveries(pool).await {
+                    Ok(counts) => Some(counts),
+                    Err(()) => {
+                        self.note_sample_failure(SampleKind::HookDelivery);
+                        crate::startup::OperationalEvent::MetricsHookDeliverySampleFailed.emit();
+                        None
+                    }
+                };
+                sample.ingestion_runs = match read_ingestion_runs(pool).await {
+                    Ok(counts) => Some(counts),
+                    Err(()) => {
+                        self.note_sample_failure(SampleKind::IngestionRun);
+                        crate::startup::OperationalEvent::MetricsIngestionRunSampleFailed.emit();
+                        None
+                    }
+                };
                 Some(sample)
             }
             Err(()) => {
+                self.note_sample_failure(SampleKind::Queue);
                 crate::startup::OperationalEvent::MetricsQueueSampleFailed.emit();
                 None
             }
         }
+    }
+
+    fn note_sample_failure(&self, kind: SampleKind) {
+        self.sample_failures[kind as usize].fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -640,7 +745,104 @@ async fn read_queues(pool: &RuntimePool) -> Result<QueueSample, ()> {
         ages,
         blocked_application_jobs,
         timer: None,
+        hook_deliveries: None,
+        ingestion_runs: None,
     })
+}
+
+/// Count every outbound hook delivery by state in one bounded, read-only
+/// statement. Delivered, dead-lettered, and expired rows stay until the
+/// retention worker removes them, so the count is of retained deliveries.
+async fn read_hook_deliveries(pool: &RuntimePool) -> Result<[i64; HOOK_DELIVERY_STATES.len()], ()> {
+    let mut client = pool.get().await.map_err(|_| ())?;
+    let transaction = client
+        .build_transaction()
+        .read_only(true)
+        .start()
+        .await
+        .map_err(|_| ())?;
+    transaction
+        .execute(
+            "SELECT set_config('statement_timeout', $1, true)",
+            &[&QUEUE_SAMPLE_STATEMENT_TIMEOUT],
+        )
+        .await
+        .map_err(|_| ())?;
+    let row = transaction
+        .query_one(
+            &format!(
+                "SELECT count(*) FILTER (WHERE state = 'pending')::bigint,
+                        count(*) FILTER (WHERE state = 'leased')::bigint,
+                        count(*) FILTER (WHERE state = 'delivered')::bigint,
+                        count(*) FILTER (WHERE state = 'dead-lettered')::bigint,
+                        count(*) FILTER (WHERE state = 'expired')::bigint
+                   FROM {schema}.registry_webhook_delivery_state",
+                schema = crate::hooks::DELIVERY_SCHEMA,
+            ),
+            &[],
+        )
+        .await
+        .map_err(|_| ())?;
+    let mut counts = [0_i64; HOOK_DELIVERY_STATES.len()];
+    for (column, count) in counts.iter_mut().enumerate() {
+        *count = row.try_get::<_, i64>(column).map_err(|_| ())?;
+    }
+    transaction.commit().await.map_err(|_| ())?;
+    Ok(counts)
+}
+
+/// Count every import run by state in one bounded, read-only statement. The
+/// count spans all creators and access contexts, and reports no creator. An
+/// open run whose package binding is no longer the active one counts as
+/// blocked, the state its run document renders. A run with no active binding
+/// to compare with counts as blocked too, so no run is dropped from the total.
+async fn read_ingestion_runs(pool: &RuntimePool) -> Result<[i64; INGESTION_RUN_STATES.len()], ()> {
+    let mut client = pool.get().await.map_err(|_| ())?;
+    let transaction = client
+        .build_transaction()
+        .read_only(true)
+        .start()
+        .await
+        .map_err(|_| ())?;
+    transaction
+        .execute(
+            "SELECT set_config('statement_timeout', $1, true)",
+            &[&QUEUE_SAMPLE_STATEMENT_TIMEOUT],
+        )
+        .await
+        .map_err(|_| ())?;
+    let row = transaction
+        .query_one(
+            "WITH effective AS (
+                 SELECT CASE
+                            WHEN run.status <> 'open' THEN run.status
+                            WHEN run.package_revision = active.package_revision
+                                 AND run.schema_fingerprint = active.schema_fingerprint
+                                THEN 'open'
+                            ELSE 'blocked'
+                        END AS state
+                   FROM registry_internal.registry_ingestion_runs AS run
+                   LEFT JOIN (
+                        SELECT active_package_digest AS package_revision, schema_fingerprint
+                          FROM registry_internal.registry_state
+                         WHERE singleton
+                   ) AS active ON true
+             )
+             SELECT count(*) FILTER (WHERE state = 'open')::bigint,
+                    count(*) FILTER (WHERE state = 'complete')::bigint,
+                    count(*) FILTER (WHERE state = 'cancelled')::bigint,
+                    count(*) FILTER (WHERE state = 'blocked')::bigint
+               FROM effective",
+            &[],
+        )
+        .await
+        .map_err(|_| ())?;
+    let mut counts = [0_i64; INGESTION_RUN_STATES.len()];
+    for (column, count) in counts.iter_mut().enumerate() {
+        *count = row.try_get::<_, i64>(column).map_err(|_| ())?;
+    }
+    transaction.commit().await.map_err(|_| ())?;
+    Ok(counts)
 }
 
 /// Read the timer sample independently from the existing queues. Each scrape
@@ -1125,6 +1327,8 @@ mod tests {
             ],
             blocked_application_jobs: 2,
             timer: None,
+            hook_deliveries: None,
+            ingestion_runs: None,
         }));
         assert!(sampled.contains("breg_proposal_application_blocked_jobs 2\n"));
         for expected in [
@@ -1133,6 +1337,58 @@ mod tests {
             "breg_queue_oldest_pending_age_seconds{queue=\"review-application\"} 0\n",
         ] {
             assert!(sampled.contains(expected), "{expected} in:\n{sampled}");
+        }
+    }
+
+    #[test]
+    fn hook_delivery_and_ingestion_run_counts_are_published_only_when_sampled() {
+        let metrics = Metrics::default();
+        let unsampled = metrics.render(None);
+        assert!(unsampled.contains("# TYPE breg_hook_deliveries gauge\n"));
+        assert!(unsampled.contains("# TYPE breg_ingestion_runs gauge\n"));
+        assert!(
+            !unsampled.contains("breg_hook_deliveries{")
+                && !unsampled.contains("breg_ingestion_runs{"),
+            "an unsampled scrape publishes no count, not a zero:\n{unsampled}"
+        );
+
+        let sampled = metrics.render(Some(&QueueSample {
+            ages: Vec::new(),
+            blocked_application_jobs: 0,
+            timer: None,
+            hook_deliveries: Some([1, 2, 3, 4, 5]),
+            ingestion_runs: Some([6, 7, 8, 9]),
+        }));
+        for expected in [
+            "breg_hook_deliveries{state=\"pending\"} 1\n",
+            "breg_hook_deliveries{state=\"leased\"} 2\n",
+            "breg_hook_deliveries{state=\"delivered\"} 3\n",
+            "breg_hook_deliveries{state=\"dead-lettered\"} 4\n",
+            "breg_hook_deliveries{state=\"expired\"} 5\n",
+            "breg_ingestion_runs{state=\"open\"} 6\n",
+            "breg_ingestion_runs{state=\"complete\"} 7\n",
+            "breg_ingestion_runs{state=\"cancelled\"} 8\n",
+            "breg_ingestion_runs{state=\"blocked\"} 9\n",
+        ] {
+            assert!(sampled.contains(expected), "{expected} in:\n{sampled}");
+        }
+    }
+
+    #[test]
+    fn sample_failures_are_counted_by_closed_sample_label() {
+        let metrics = Metrics::default();
+        metrics.note_sample_failure(SampleKind::HookDelivery);
+        metrics.note_sample_failure(SampleKind::HookDelivery);
+        metrics.note_sample_failure(SampleKind::IngestionRun);
+        let rendered = metrics.render(None);
+        assert!(rendered.contains("# TYPE breg_metrics_sample_failures_total counter\n"));
+        for expected in [
+            "breg_metrics_sample_failures_total{sample=\"queue\"} 0\n",
+            "breg_metrics_sample_failures_total{sample=\"record-timer\"} 0\n",
+            "breg_metrics_sample_failures_total{sample=\"hook-delivery\"} 2\n",
+            "breg_metrics_sample_failures_total{sample=\"ingestion-run\"} 1\n",
+        ] {
+            assert!(rendered.contains(expected), "{expected} in:\n{rendered}");
         }
     }
 
@@ -1154,6 +1410,8 @@ mod tests {
                 control_compatible: true,
                 counts_truncated: false,
             }),
+            hook_deliveries: None,
+            ingestion_runs: None,
         }));
         for expected in [
             "# HELP breg_record_timer_observed_live_lease_owners Distinct observed current live lease owners, not a census of running replicas.\n",
@@ -1241,6 +1499,8 @@ mod tests {
                 control_compatible: true,
                 counts_truncated: false,
             }),
+            hook_deliveries: Some([3, 1, 40, 2, 5]),
+            ingestion_runs: Some([4, 6, 1, 2]),
         }
     }
 
