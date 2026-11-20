@@ -15,8 +15,9 @@ standards_referenced: []
 
 You run a deployed Registry Evidence service and answer for what it disclosed. For every admitted
 operation, Evidence writes one entry before any source read and one with its outcome, and refuses
-the request when an entry cannot be written. Requests refused before admission write nothing:
-authentication failures, malformed requests, invalid selectors, and rate-limited requests. The log
+the request when an entry cannot be written. An authenticated request refused at authorisation
+writes one refusal entry and no access attempt. Authentication failures, malformed requests,
+invalid selectors, and rate-limited requests write nothing. The log
 is tamper-evident only once it reaches the append-only storage you ship it to.
 
 {/* Evidence: crates/registry-evidence/src/audit.rs, EvidenceAuditLog;
@@ -79,7 +80,8 @@ evidencectl doctor \
 ```
 
 When every dependency is reachable, doctor prints `Dependency preflight passed for` the runtime
-file and a `Proof:` line. When the root does not exist on the host, it refuses with
+file and a `Proof:` line. When the audit path resolves outside the root, cannot be
+resolved, or the root does not exist on the host, it refuses with
 `evidence.deployment.audit-outside-root` and exits 3. A `stdout` destination is refused here,
 because it has no local file.
 
@@ -190,7 +192,7 @@ A holder, or anyone the holder shows a certificate to, scans a QR code and a sta
 route to learn whether the certificate is `valid`, `suspended`, `revoked` or `expired`.
 Declaring `publicCheck` in the package does nothing until a target authority activates it; until
 then the route is not registered and answers like any unknown route.
-The synthetic public check example project in the repository carries a working package, pack and page.
+The synthetic public check example project in the repository carries the package sources, a pack and a page.
 
 Source failure before the check code is compared (transport, timeout, budget, an error status from
 the Source, or protocol, which includes a facts-schema refusal and an extract-script failure) answers
@@ -316,7 +318,7 @@ https://check.example.org/#n=<url-encoded number>&c=<code>
 The number and code are in the URL fragment (after `#`).
 Browsers do not send the fragment to the static host, so the host's access log never holds a code.
 The page removes the fragment from the address bar and the history entry once it has read it.
-With no fragment the page shows a two-field form instead.
+The page always shows a two-field form, which a fragment fills in and submits.
 The page strips spaces and hyphens from the code before sending it.
 
 {/* Evidence: products/evidence/examples/public-check/page/check.js parseFragment, normalizeCode,
@@ -361,7 +363,7 @@ phase is `request` for the access attempt and `response` for every other phase, 
 | `access-attempt` | `authorized` | The subject resolved and the record was durably accepted before the Source was read. `executionBounds` carries the effective acquisition budget. |
 | `disclosure-release` | `released` | The exact answer bytes were serialised and durably recorded before they were returned. `disclosedConcepts` names exactly the status and fields concepts. |
 | `denial` | `no-match`, `ambiguous`, `unresolved`, `fact-missing`, or `code-mismatch` | The check ended in a miss, with a `safeErrorCategory`. |
-| `transient-failure` | `dependency-failure` or `evaluation-failure` | An admitted check failed in a value-free class a retry may clear, with a `safeErrorCategory`. |
+| `transient-failure` | `dependency-failure` or `evaluation-failure` | An admitted check failed in a value-free class, with a `safeErrorCategory`. A retry may clear a `dependency-failure`. An `evaluation-failure` can be a package fault that a retry does not clear. |
 
 All five miss decisions are answered to the caller with one identical `404 resource.not-found`
 problem. The log is where you tell them apart: `code-mismatch` also covers a stored check code that
@@ -569,8 +571,8 @@ connection. A deployment may add `signing.certificateChainFile`, a PEM chain cer
 key, so relying parties can validate it against their own trust anchors. Without it, credentials and
 the served key set carry no `x5c`.
 
-After a rotation, the previous public key stays published for at least the maximum assertion
-validity plus the verifier clock skew. Relying parties must add the new key to their pinned set to
+After a rotation, keep the previous public key in `signing.publishedPublicJwkFiles` for at least
+the maximum assertion validity plus the verifier clock skew. Evidence does not enforce that period. Relying parties must add the new key to their pinned set to
 verify assertions it signs.
 
 {/* Evidence: products/evidence/contracts/bundle.schema.yaml, signing.jwksPath,

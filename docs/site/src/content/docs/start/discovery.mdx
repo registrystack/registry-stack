@@ -25,10 +25,10 @@ Node.js, or Python.
 
 ## What an operator maintains
 
-An operator keeps one project directory: the HTTPS origins it approved, one per provider, in
-`origins.yaml`. Mapping files say which Evidence types meet which requirement. A runtime file
-completes the project. `discoveryctl` checks the project offline, then fetches each approved
-description once and writes an immutable, digest-sealed package. `discovery` serves that one package
+An operator keeps one project directory. `origins.yaml` lists the HTTPS description URLs it
+approved, each once. Mapping files say which Evidence types meet which requirement. A runtime file
+for the `discovery` server usually sits beside them. `discoveryctl` checks the project offline, then
+fetches each enabled origin once and writes an immutable, digest-sealed package. `discovery` serves that one package
 read-only, needs no database, and never contacts a provider while it runs.
 
 {/* Evidence: crates/registry-discoveryctl/src/project.rs (origins.yaml);
@@ -37,8 +37,8 @@ read-only, needs no database, and never contacts a provider while it runs.
 ## Why the index is curated
 
 A Registry Evidence deployment can publish a public description of itself: its service identifier,
-its endpoint, the Evidence types it asserts, its jurisdictions, and optional publisher, operator,
-and issuer identifiers. Private configuration never enters that description. Anyone can publish such
+title, endpoint, the Evidence types it asserts, its jurisdictions, the profiles it follows, and its
+issuer and provider identifiers. Publisher and operator identifiers are optional. Private configuration never enters that description. Anyone can publish such
 a file, so Discovery lists only the descriptions an operator approved, by URL.
 
 Approval is the whole meaning of a listing: the operator chose that origin, and the provider
@@ -97,16 +97,19 @@ revision.
 ## What a selection holds, and what it does not do
 
 The application saves a selection for each type it needs: the chosen record and binding, the
-Evidence type it matched, the whole alternative it came from, both revisions, and the origin's
-provenance. The Registry Stack client refuses a selection whose binding no longer matches its
+Evidence type it matched, the catalogue revision, and the origin's provenance. A selection made
+from a resolve result also keeps the whole alternative it came from and the mapping revision. The
+Registry Stack client refuses a selection whose binding no longer matches its
 fields, whose service does not assert the matched type, or whose service does not cover the resolved
 jurisdiction. Keeping the whole alternative stops a set of types required together from shrinking to
 one.
 
 A selection is inert public metadata, never a credential or a trust decision. Before calling the
-provider, the application applies its own policy to the selection. Only when that policy accepts it
-does the client hand over the provider's base URL, and that handoff exists in memory only: it is
-never saved, so the policy runs again each time. The application then calls Registry Evidence
+provider, the application applies its own policy to the selection. The client's accept step runs
+that policy and returns a handoff with the provider's base URL. The handoff exists in memory only
+and cannot be saved, so the policy runs again each time. The saved selection also stores the
+endpoint as plain data, and nothing stops an application from reading it, so use the accept step.
+The application then calls Registry Evidence
 directly, with its own credentials and its own Evidence trust configuration. Discovery is never on
 that path.
 
@@ -136,7 +139,7 @@ search only when everything that bears on trust is unchanged. The
 ## Why a new revision needs a new package
 
 An index that changed in place would be one nobody reviewed, so a revision always means a new
-package, a new pin, and a restart. `discovery` recomputes the package before it listens and refuses
+package and a restart, and a new pin when the deployment pins its package. `discovery` recomputes the package before it listens and refuses
 a changed, missing, or extra file. [Package and run a Registry Discovery index](../../configure/discovery/#restart-on-the-new-package)
 shows the commands.
 

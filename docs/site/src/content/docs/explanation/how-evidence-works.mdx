@@ -64,14 +64,17 @@ refused.
 How much a definition reveals is fixed when it is written and reviewed, and it is the same for
 every caller and purpose allowed to ask. A request carries a nonce, the Requirement URI, the
 purpose, and one selector per subject role; nothing in it chooses a disclosure level. The
-representations a definition permits, a signed JWS or an [SD-JWT VC](../../reference/glossary/#sd-jwt-vc),
-change the encoding, not the values.
+representations a definition permits, such as a signed JWS, an
+[SD-JWT VC](../../reference/glossary/#sd-jwt-vc) or unsigned JSON, change the encoding, not the
+values.
 
 Two refusals protect what the answer leaves out. No match, an ambiguous match, a missing fact, and
 an unresolved input all reach the caller as one problem, `evidence.unavailable`, so a refusal does
 not reveal whether a record exists; the audit keeps the outcomes distinct for the operator. A
-subject appears in the answer only as an opaque [subject binding](../../reference/glossary/#subject-binding) scoped to the audience that asked, so two
-relying parties asking about the same person cannot join their answers.
+subject appears in the answer only as an opaque
+[subject binding](../../reference/glossary/#subject-binding). By default it is scoped to the
+audience and purpose that asked, so two relying parties asking about the same person cannot join
+their answers. A holder-bound answer derives the binding from the holder's key instead.
 
 Minimisation is modelled, not automatic: two definitions each defensible alone can reconstruct
 a protected value between them, so the operator reviews the enabled definitions together.
@@ -125,7 +128,8 @@ restart.
 
 Each request passes five stages: the selectors are checked, the source is read, the Functions
 run, only declared outputs are accepted, and the assertion is signed with its definition's
-[`configurationRevision`](../../reference/glossary/#configuration-revision).
+[`configurationRevision`](../../reference/glossary/#configuration-revision). An unsigned JSON
+answer, where the definition permits one, carries the revision without a signature.
 
 Registry Evidence keeps no database and no copy of a source response. Two things it keeps are
 durable. The audit trail records an access event before the source is read and a release event
@@ -168,12 +172,13 @@ target, the target authority, the signing keys, and audit retention.
 ## How do I inspect or change it?
 
 `evidencectl` checks a project and runs its synthetic fixtures before anything serves, and verifies
-a retained response or reads a stopped session's audit afterwards; the
+a retained response afterwards; the
 [`evidencectl` reference](../../reference/cli/evidencectl/) lists each command.
 
 Relying services pin the `configurationRevision`. It moves when you edit what a definition does,
 such as its source, selector profiles, Functions, codelists, or outputs, and stays put for
-`question` text, fixtures, endpoints, credentials, grants, and signing keys. A change in meaning gets a new
+`question` text, fixtures, credentials, grants, and signing keys. Changing the address of a source
+connection the definition uses also moves it. A change in meaning gets a new
 Requirement URI, published beside the old one for an announced period; a clarification keeps the
 URI, and relying services read the new revision from `GET /v1/evidence-definitions` and re-pin.
 When you cannot tell which kind of change it is, treat it as a change in meaning.

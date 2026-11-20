@@ -24,20 +24,23 @@ You define a package, and an operator defines a runtime file. A package is the r
 configuration a deployment serves unchanged. Three of its parts carry most of the work:
 
 - A template renders the message from the data a request carries, in each locale it declares. It
-  has a JSON Schema for that data and a sample that `messagingctl check` renders.
+  has a JSON Schema for that data, and it can carry a sample that `messagingctl check` renders.
 - A sender profile fixes a channel, email or SMS, to one provider and one sender identity. It says
   how a failed send is retried, how long a message may wait, and what happens when a send may have
   reached the provider.
 - An access profile names the OAuth clients it admits, the scopes their tokens carry, the sender
   profiles and templates a sender may use, and the rate limits that apply.
 
-A provider in the package is only a type, `smtp` or `http`. The endpoint, credentials, and callback
-secret belong to the runtime file, together with the database, the token issuer, the audit journal,
-and retention.
+The package declares each provider's type, `smtp` or `http`, and whether the provider deduplicates
+a repeated send. For an `http` provider it also holds the request scripts and says whether the
+provider reports delivery. The endpoint, credentials, and callback secret belong to the runtime
+file, together with the database, the token issuer, the audit journal, and retention.
 
 A caller picks a sender profile and a template, and sends the recipient and the data. Messaging
 answers `202` once the message is queued. A caller that lost that answer sends the same body under
-the same `Idempotency-Key` and gets the original answer back, never a second message.
+the same `Idempotency-Key`. It gets the original answer back while Messaging keeps the receipt, 7
+days by default, and never a second message. An access profile can also let a caller send its own
+content with no template (`allowDirectContent`).
 
 {/* Evidence: crates/registry-messaging-core/src/package.rs, MessagingProject, SenderProfile,
     Channel and RetryPolicy; crates/registry-messaging/src/config.rs, RuntimeConfig;
@@ -55,10 +58,11 @@ A worker then sends it. The message carries two separate facts. Dispatch is what
 `submitted` means the provider accepted the message. Report is what the provider said afterwards.
 `status` reads `delivered` only when the provider reported it.
 
-Whether a message can reach `delivered` depends on the provider type, not the channel. An HTTP
-gateway that posts signed reports moves the status on, for SMS or email. An SMTP relay sends no
-receipts, so an email sent through SMTP stays `submitted`. A send that definitely failed is retried
-with growing delays until it succeeds, runs out of attempts, or expires. The
+Whether a message can reach `delivered` depends on the provider, not the channel. An `http`
+provider whose `provider.yaml` sets `capabilities.receipts: callback` posts reports that move the
+status on, for SMS or email. Any other provider reports nothing, so an email sent through SMTP stays `submitted`. A
+send that failed in a way a later attempt may overcome is retried with growing delays. It stops
+when it succeeds, runs out of attempts, or expires. A permanent refusal is not retried. The
 [message status](../../reference/apis/registry-messaging/#message-status) and the
 [dispatch policy](../../reference/messaging-configuration/#dispatch-policy) hold the states and the
 defaults.
@@ -88,8 +92,9 @@ operator who has asked the provider settles it.
 ## What it is not
 
 Messaging is not a contact directory, a consent registry, or a scheduler. It holds no recipient
-beyond what a request carries, and it keeps rendered content and contact details only as long as
-the operator's retention allows.
+beyond what a request carries. It erases rendered content and contact details when the retention
+period ends, counted from when the message finishes. A message still waiting or held as `unknown`
+keeps them.
 
 Being allowed to act on a record elsewhere does not let a caller send. Every product reaches
 Messaging over its public HTTP contract, and Messaging's own access profile decides. An
@@ -101,8 +106,8 @@ another product's database.
 
 ## Try it locally
 
-`rstack dev` runs the starter package on your machine, with Mailpit to catch email and a
-mock SMS gateway that reports delivery.
+`rstack dev` runs a package, such as the starter, on your machine, with Mailpit to catch email and
+a mock SMS gateway that reports delivery.
 
 {/* Evidence: crates/registry-rstack-dev/src/messaging.rs, start_sinks and config. */}
 

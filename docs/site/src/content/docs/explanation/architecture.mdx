@@ -33,8 +33,9 @@ flowchart LR
 
 - Base Registry Engine owns writable PostgreSQL records, governed changes, history, events, and
   its record API.
-- Registry Evidence evaluates predefined requirements against fixed sources and returns signed,
-  minimum-disclosure assertions.
+- Registry Evidence evaluates predefined requirements against fixed sources and returns
+  minimum-disclosure assertions. An assertion is signed unless the package and the caller's grant
+  allow unsigned JSON and the caller asks for it.
 - [Registry Manifest](../../reference/glossary/#registry-manifest) validates and renders portable static metadata.
 - Registry Discovery serves a curated public index. Current contracts index Evidence providers.
 - Registry Casework coordinates human review while mutations remain with the source system.
@@ -68,8 +69,8 @@ record from one product does not silently authorise another.
 
 | Boundary | Invariant |
 | --- | --- |
-| BReg write boundary | Only compiled model operations and authorised profiles can mutate PostgreSQL records. |
-| Evidence source boundary | Every request origin, method, and path comes from the reviewed package and its pinned Adapter pack route. Credentials, the acquisition deadline, and the response budget come from the operator runtime file, which must match the governed connection policy. Caller input selects none of them. |
+| BReg write boundary | Only compiled model operations under authorised profiles, and reviewed `bregctl` maintenance commands, can change PostgreSQL records. |
+| Evidence source boundary | The reviewed package and its pinned Adapter pack route fix every request origin, method, and path template. Authorised selector values fill only the path segments the route declares. Credentials, endpoint bindings, the acquisition deadline, and the response budget come from the operator runtime file. Its endpoint bindings must match the governed connection policy. |
 | Evidence assertion boundary | Only declared concepts and value forms enter the signed assertion. |
 | Manifest publication boundary | Output is descriptive static metadata and grants no runtime authority. |
 | Discovery selection boundary | A selection is inert until an application validates and accepts it locally. |
@@ -84,8 +85,8 @@ Operators record and recover each product revision separately.
 
 ### What crosses a boundary
 
-Only a product's documented contract crosses its boundary: an authorised BReg API response, a
-signed Evidence assertion, or static Manifest metadata. The source stays responsible for the
+Only a product's documented contract crosses its boundary, for example an authorised BReg API
+response, an Evidence assertion, or static Manifest metadata. The source stays responsible for the
 correctness and currentness of its data. A signed Evidence assertion names the requirement it
 supports and the configuration revision it was evaluated under. It does not establish that the
 source's data was correct or current. An Evidence error body carries static text and a trace

@@ -90,6 +90,7 @@ The [WebAssembly handler guide](../../configure/breg-wasm-action-handlers/) says
 The rule works out what the Action writes, or it refuses the Action.
 For example, a rule can refuse a renewal when the requested period is longer than three years.
 The rule works from the inputs that its Action passes to it.
+A Rhai rule can also ask Registry Evidence for facts that the Action declares.
 It cannot read stored Records, and it can write only what the Action declares.
 A check against stored data, such as whether the licence is suspended, is not a rule.
 It is a guard that you configure on the Action.
@@ -135,8 +136,8 @@ Your team owns four things:
   The product then applies the change once and not twice.
   BReg returns its first answer to a repeated request for 7 days by default.
   After that, it refuses the repeat with `410 idempotency.expired`.
-  That answer means that the first request was applied, so read the Record and do not send the
-  change again.
+  That answer means that the first request completed.
+  Read its result, such as the Record or the Proposal, and do not send the request again.
 
 Each product still checks every call itself and stores its own results.
 
@@ -194,8 +195,8 @@ This rule applies to all four ways.
 Your code gets no special rights, wherever it runs.
 An extension, an application, or a module needs authority that the receiving product accepts.
 In practice, every product checks every call itself.
-The caller needs an access token issued for that product.
-A token for one product does not open another.
+The caller needs an access token whose audience names that product.
+Give each product its own audience, so that a token for one product does not open another.
 
 For example, a reviewer approves a change in
 [Registry Casework](../../reference/glossary/#registry-casework).

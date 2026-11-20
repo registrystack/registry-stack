@@ -19,21 +19,24 @@ Fixed inputs produce identical PDF bytes, on one machine and across machines.
 
 A caller sends the document's data and its issuance time, and receives the PDF with two hashes: one
 for the file (`pdfDigest`), one for the exact input it was rendered from (`dataDigest`). A re-render
-from the same inputs months later is byte for byte the same file, so a hash in an audit log still
+from the same inputs on the same renderer months later is byte for byte the same file, so a hash in an audit log still
 matches the paper in the folder, and a retry of a plain render never yields a different document.
 
 ## What you define
 
-A bundle. Its `manifest.yaml` declares each document type with a version, a Typst entry file, a JSON
-Schema for the document's data, and the label locales it uses. Label tables hold the words a
-template prints in each language, and every table carries the same keys. Fonts ship in the bundle.
+A bundle. Its `manifest.yaml` declares each document type with a version and a Typst entry file. A
+document type can also declare a JSON Schema for its data and the label locales it uses. Label
+tables hold the words a template prints in each language, and every table carries the same keys. A
+template uses the fonts built into the binary and any fonts the bundle ships.
 `registry-render check` checks the bundle offline, and `registry-render package` turns it into a
 package whose digest names its exact files.
 [The configuration reference](../../reference/render-configuration/) lists every key.
 
-A template reads one input: an envelope holding the request's `data`, its decoded image `assets`,
-the label tables, the locale when one is sent, the issuance time, and the document's id and version.
-Nothing else reaches it: no host fonts, no environment, no clock, no network.
+A template reads one envelope. It holds the request's `data` and its image `assets`, as the base64
+text the caller sent. It also holds the label tables, the locale when one is sent, the issuance
+time, and the document's id and version. On the seal route it also holds a `signing` member. The
+template reads each decoded image as a file under `/assets/`, beside the bundle's own files. Nothing
+else reaches it: no host fonts, no environment, no clock, no network.
 
 {/* Evidence: crates/registry-render/src/manifest.rs, Manifest and DocumentSpec;
     crates/registry-render/src/envelope.rs, build_envelope. */}
@@ -64,10 +67,11 @@ runs in a worker process that verifies the package again, so a file changed afte
 by name. [Deploy Registry Render](../../operate/registry-render/#what-you-provide) lists what a
 worker is held to.
 
-The service keeps no database and no rendered document, and it makes no outbound call while rendering. A
-timestamped seal calls the timestamp authority you configure. Its one file is the audit log: a
-`request` entry before each render starts and a `response` entry, with both hashes, before the PDF
-leaves. If either write fails, the call fails and no document is returned.
+The service keeps no database and no rendered document, and it makes no outbound call while
+rendering. A timestamped seal calls the timestamp authority you configure. It writes only the audit
+log, to a file or to standard output. It writes a `request` entry before each render starts. It
+writes a `response` entry, with the document's hashes, before the PDF leaves. If either write fails,
+the call fails and no document is returned.
 
 {/* Evidence: crates/registry-render/src/cli.rs, Command;
     crates/registry-render/src/bundle.rs, load_package and bind_verified_snapshot;
@@ -78,8 +82,9 @@ leaves. If either write fails, the call fails and no document is returned.
 ## What Render refuses
 
 Render refuses data its schema rejects, a request without an issuance time, a package whose files
-changed, a caller whose token or API key it does not accept, and a public listening address. A render
-never reads the host's clock, fonts, or network.
+changed, a caller whose token or API key it does not accept, and a public listening address. A
+served render never reads the host's clock, fonts, or network. `registry-render compile --now` is
+the one preview option that takes the issuance time from the clock.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, validate_bind;
     crates/registry-render/src/problem.rs, ProblemKind. */}
@@ -87,8 +92,9 @@ never reads the host's clock, fonts, or network.
 ## Who owns the result
 
 The caller does. Render returns the PDF and forgets it. The record the document was made from should
-keep `pdfDigest` for the file and `dataDigest` for the exact input. The audit log holds hashes,
-versions, and a fingerprint of the caller's key, never data values or image bytes. What a template
+keep `pdfDigest` for the file and `dataDigest` for the exact input. A sealed file has no
+`pdfDigest`, so keep its `documentDigest` and `signedFileDigest` instead. The audit log holds
+hashes, versions, and a fingerprint of the caller's credential, never data values or image bytes. What a template
 prints is a disclosure decision that belongs to its author: once on paper, it has left every access
 profile behind. Render does not store documents, issue credentials, or decide who may see a field.
 It can add an optional PAdES seal to a document it just rendered, as described in
@@ -105,10 +111,12 @@ of one request differs in its signed bytes.
 
 ## How to check a document later
 
-Re-render it. The same package, document type, locale, data, assets, and `issuedAt` reproduce the
-stored `pdfDigest` byte for byte, which is what makes a replay after a failure safe and lets an
-auditor match paper to the log. `GET /health` names the live package digest as `bundleHash`, and
-every audit entry carries the bundle hash and renderer version.
+Re-render it. On the same renderer, the same package, document type, locale, data, assets, and
+`issuedAt` reproduce the stored `pdfDigest` of a plain render byte for byte. That makes a replay
+after a failure safe and lets an auditor match paper to the log. `GET /health` gives the live
+package digest as `bundleHash`, in hex without the `sha256:` prefix that `package.expectedDigest`
+carries. Every audit entry carries the renderer version, and every entry for a render that started
+also carries the bundle hash.
 
 When a hash moved, one of three things changed: an input, the package, or the renderer. A Typst or
 compression upgrade can change the bytes, so
