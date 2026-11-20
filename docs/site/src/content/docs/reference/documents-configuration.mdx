@@ -117,7 +117,7 @@ The other blocks are checked, so a deployment written now keeps its meaning when
   When it is present, `/metrics` is served on that socket only, and the document listener never routes it.
   The address must be a concrete loopback or private address on a non-zero port, unless `metricsListener.networkExposure` is `container-private`, which also permits `0.0.0.0` or `::`.
   `networkExposure` defaults to `private-address`, and every other refusal still applies under both values.
-  It must not be the document listener's socket, or one that a wildcard document listener already covers.
+  It must not share a socket with the document listener (a wildcard on the listener's port counts as shared).
   A refused address stops startup with `documents.runtime.invalid-metrics-listener` or `documents.runtime.metrics-listener-overlaps-listener`.
   `documentsctl check` reports the same codes.
   When `listener.bind` is a `${VAR}` expression, the overlap comparison waits for `--environment`.

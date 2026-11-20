@@ -165,8 +165,8 @@ properties:
           host must be a loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6
           address; link-local, IPv4-mapped, multicast, public, and hostname values are
           prohibited, the unspecified address is prohibited unless `networkExposure` is
-          `container-private`, port `0` is refused, and the address must not repeat the
-          evidence listener's binding.
+          `container-private`, port `0` is refused, and the address must not share a socket
+          with the evidence listener (a wildcard on the listener's port counts as shared).
         $ref: '#/$defs/socket-address'
         x-runtime-validation: >-
           Parsed as a socket address and accepted only when Rust classifies its host as
@@ -186,7 +186,8 @@ properties:
           - container-private
         default: private-address
     x-runtime-validation: >-
-      Rejected at startup when the bind address repeats the evidence listener binding.
+      Rejected at startup when the bind address shares a socket with the evidence listener,
+      including a wildcard on the same port.
   secretProviders:
     description: >-
       Enables the providers a secret reference may resolve through; it supplies storage
