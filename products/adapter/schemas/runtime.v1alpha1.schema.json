@@ -250,10 +250,35 @@
       ],
       "type": "object"
     },
+    "ListenerNetworkExposure": {
+      "description": "The operator-declared private network placement of an HTTP listener.",
+      "enum": [
+        "private-address",
+        "container-private"
+      ],
+      "type": "string"
+    },
     "LocalId": {
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
+    },
+    "MetricsListenerConfig": {
+      "additionalProperties": false,
+      "description": "The operator-private metrics listener of a runtime. `networkExposure`\nhas the meaning it has on the serving listener: `private-address` (the\ndefault) requires a loopback or private address, and `container-private`\nalso permits the unspecified address inside a private container network.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "networkExposure": {
+          "$ref": "#/$defs/ListenerNetworkExposure",
+          "default": "private-address"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
     },
     "MtlsIdentity": {
       "additionalProperties": false,
@@ -657,8 +682,8 @@
       "description": "The facade listener, from the platform shared block."
     },
     "metricsListener": {
-      "$ref": "#/$defs/ListenerConfig",
-      "description": "The operator-private socket `/metrics` is served on. Absent, no\nmetrics are served. The address is loopback or private, on a non-zero\nport, and never the facade listener's own socket."
+      "$ref": "#/$defs/MetricsListenerConfig",
+      "description": "The operator-private socket `/metrics` is served on. Absent, no\nmetrics are served. The address is loopback or private, on a non-zero\nport, and never the facade listener's own socket. `networkExposure:\ncontainer-private` also permits the wildcard address."
     },
     "oidc": {
       "$ref": "#/$defs/OidcIssuerConfig",

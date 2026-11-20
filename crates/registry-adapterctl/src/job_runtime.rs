@@ -14,7 +14,9 @@
 use std::collections::BTreeMap;
 
 use registry_adapter_core::AdapterEndpointBindings;
-use registry_platform_config::{ListenerConfig, PrivateListenerConfig, SecretProvidersConfig};
+use registry_platform_config::{
+    MetricsListenerConfig, PrivateListenerConfig, SecretProvidersConfig,
+};
 use registry_platform_yaml::{BoundedU32, BoundedU64, LocalId, SecretReference};
 use schemars::JsonSchema;
 
@@ -51,7 +53,7 @@ pub(crate) struct JobRuntimeDocument {
     /// Absent, the loop serves no metrics. The address is loopback or
     /// private, on a non-zero port, and never the hook ingress's socket.
     #[serde(default)]
-    metrics_listener: Option<ListenerConfig>,
+    metrics_listener: Option<MetricsListenerConfig>,
 }
 
 #[allow(dead_code)]

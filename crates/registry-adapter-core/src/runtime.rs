@@ -16,7 +16,8 @@
 use crate::auth::{CredentialPlacement, MtlsIdentity, RuntimeCredential};
 use crate::job::MAXIMUM_JOB_RESPONSE_BYTES;
 use registry_platform_config::{
-    DatabaseConfig, ListenerConfig, OidcIssuerConfig, RemovedKey, SecretProvidersConfig,
+    DatabaseConfig, ListenerConfig, MetricsListenerConfig, OidcIssuerConfig, RemovedKey,
+    SecretProvidersConfig,
 };
 use registry_platform_yaml::{
     BoundedU64, ExternalId, LocalId, SecretReference, UniqueIdList, UniqueList, Url,
@@ -365,13 +366,14 @@ pub struct AdapterRuntimeConfig {
     pub listener: ListenerConfig,
     /// The operator-private socket `/metrics` is served on. Absent, no
     /// metrics are served. The address is loopback or private, on a non-zero
-    /// port, and never the facade listener's own socket.
+    /// port, and never the facade listener's own socket. `networkExposure:
+    /// container-private` also permits the wildcard address.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "checked_metrics_listener"
     )]
-    pub metrics_listener: Option<ListenerConfig>,
+    pub metrics_listener: Option<MetricsListenerConfig>,
     /// The PostgreSQL connections, from the platform shared block.
     pub database: DatabaseConfig,
     /// The OIDC issuer that authenticates facade callers, from the
@@ -433,23 +435,28 @@ impl<'de> Deserialize<'de> for AdapterRuntimeConfig {
 /// # Errors
 ///
 /// A bind that is public, unspecified, multicast, or on port zero.
-pub fn checked_metrics_listener<'de, D>(deserializer: D) -> Result<Option<ListenerConfig>, D::Error>
+pub fn checked_metrics_listener<'de, D>(
+    deserializer: D,
+) -> Result<Option<MetricsListenerConfig>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let listener = Option::<ListenerConfig>::deserialize(deserializer)?;
+    let listener = Option::<MetricsListenerConfig>::deserialize(deserializer)?;
     if let Some(listener) = &listener {
-        if !metrics_bind_is_private(listener.bind.socket_addr()) {
+        if !metrics_bind_is_private(listener.bind.socket_addr(), listener.network_exposure) {
             return Err(serde::de::Error::custom(
-                "metricsListener.bind must be a loopback or private address on a non-zero port; bind 127.0.0.1 or a private address",
+                "metricsListener.bind must be a loopback or private address on a non-zero port; bind 127.0.0.1 or a private address, or declare networkExposure: container-private to bind the wildcard in a container",
             ));
         }
     }
     Ok(listener)
 }
 
-fn metrics_bind_is_private(bind: std::net::SocketAddr) -> bool {
-    registry_platform_config::check_metrics_bind_address(bind).is_ok()
+fn metrics_bind_is_private(
+    bind: std::net::SocketAddr,
+    exposure: registry_platform_config::ListenerNetworkExposure,
+) -> bool {
+    registry_platform_config::check_metrics_bind_address(bind, exposure).is_ok()
 }
 
 /// Whether a metrics bind would occupy the same socket as `other`, a
@@ -1066,7 +1073,7 @@ mod tests {
         #[allow(dead_code)]
         struct Holder {
             #[serde(deserialize_with = "checked_metrics_listener")]
-            metrics_listener: Option<ListenerConfig>,
+            metrics_listener: Option<MetricsListenerConfig>,
         }
         for bind in [
             "127.0.0.1:9464",
@@ -1092,6 +1099,37 @@ mod tests {
                 error.to_string().contains("loopback or private"),
                 "{bind}: {error}"
             );
+        }
+    }
+
+    #[test]
+    fn the_metrics_wildcard_needs_container_private_exposure() {
+        #[derive(Deserialize)]
+        #[allow(dead_code)]
+        struct Holder {
+            #[serde(deserialize_with = "checked_metrics_listener")]
+            metrics_listener: Option<MetricsListenerConfig>,
+        }
+        let read = |member: &str| {
+            serde_json::from_str::<Holder>(&format!(r#"{{ "metrics_listener": {member} }}"#))
+        };
+        assert!(read(r#"{ "bind": "0.0.0.0:9464" }"#).is_err());
+        assert!(
+            read(r#"{ "bind": "0.0.0.0:9464", "networkExposure": "private-address" }"#).is_err()
+        );
+        assert!(
+            read(r#"{ "bind": "0.0.0.0:9464", "networkExposure": "container-private" }"#).is_ok()
+        );
+        assert!(read(r#"{ "bind": "[::]:9464", "networkExposure": "container-private" }"#).is_ok());
+        for bind in [
+            "203.0.113.7:9464",
+            "169.254.1.1:9464",
+            "0.0.0.0:0",
+            "[::ffff:10.0.0.1]:9464",
+        ] {
+            let member =
+                format!(r#"{{ "bind": "{bind}", "networkExposure": "container-private" }}"#);
+            assert!(read(&member).is_err(), "{bind}");
         }
     }
 
@@ -1149,7 +1187,7 @@ mod tests {
         #[allow(dead_code)]
         struct Holder {
             #[serde(deserialize_with = "checked_metrics_listener")]
-            metrics_listener: Option<ListenerConfig>,
+            metrics_listener: Option<MetricsListenerConfig>,
         }
         for bind in [
             "169.254.1.1:9464",

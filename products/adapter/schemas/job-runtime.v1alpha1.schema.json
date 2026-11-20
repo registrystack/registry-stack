@@ -348,19 +348,6 @@
       "minLength": 1,
       "type": "string"
     },
-    "ListenerConfig": {
-      "additionalProperties": false,
-      "description": "The listener of a runtime that declares no TLS or exposure settings.",
-      "properties": {
-        "bind": {
-          "$ref": "#/$defs/ListenerBind"
-        }
-      },
-      "required": [
-        "bind"
-      ],
-      "type": "object"
-    },
     "ListenerNetworkExposure": {
       "description": "The operator-declared private network placement of an HTTP listener.",
       "enum": [
@@ -373,6 +360,23 @@
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
+    },
+    "MetricsListenerConfig": {
+      "additionalProperties": false,
+      "description": "The operator-private metrics listener of a runtime. `networkExposure`\nhas the meaning it has on the serving listener: `private-address` (the\ndefault) requires a loopback or private address, and `container-private`\nalso permits the unspecified address inside a private container network.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "networkExposure": {
+          "$ref": "#/$defs/ListenerNetworkExposure",
+          "default": "private-address"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
     },
     "MtlsIdentity": {
       "additionalProperties": false,
@@ -1055,7 +1059,7 @@
       "type": "string"
     },
     "metricsListener": {
-      "$ref": "#/$defs/ListenerConfig",
+      "$ref": "#/$defs/MetricsListenerConfig",
       "description": "The operator-private socket the loop's `/metrics` is served on.\nAbsent, the loop serves no metrics. The address is loopback or\nprivate, on a non-zero port, and never the hook ingress's socket."
     },
     "outboundTls": {
