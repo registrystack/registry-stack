@@ -166,11 +166,15 @@ The material includes the namespace-scoped ConfigMaps and Secrets. The
 NetworkPolicy admits only the ingress controller and the Registry Stack Pods in
 the `directory` namespace to ThunderID's plain-HTTP port 8090. Edit its
 namespace and Pod selectors if your ingress controller or Registry Stack
-namespace differs. Apply it before the first install.
+namespace differs. Apply it before the first install. The additive
+`postgres-network-policy.yaml` admits the identity namespace to the reference
+PostgreSQL workload in `directory`, which otherwise admits only Registry Stack
+database clients.
 
 ```bash
 sudo k3s kubectl apply -f /absolute/private/identity-k8s-material/
 sudo k3s kubectl apply -f deploy/identity/network-policy.yaml
+sudo k3s kubectl apply -f deploy/identity/postgres-network-policy.yaml
 sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \
   /usr/local/lib/registry-stack/helm install thunderid \
   /absolute/private/chart-restricted/thunderid \
@@ -311,7 +315,8 @@ augmented declarative bundle and the CA-signed issuer leaf. Preserve the
 issuer hostname and callback exactly.
 
 Prepare the digest-verified Restricted chart as above, apply
-`deploy/identity/network-policy.yaml`, then make a restore-only
+`deploy/identity/network-policy.yaml` and
+`deploy/identity/postgres-network-policy.yaml`, then make a restore-only
 copy. This prepares both durable claims and their runtime mounts independently
 of `setup.enabled`. Keep the setup Job disabled during recovery.
 

@@ -322,7 +322,8 @@ NetworkPolicy. The core workloads' own egress is not subject to this guard.
 
 The database manifests in `deploy/postgres` admit connections only from Pods
 labelled `registrystack.org/database-client: "true"`, which the chart sets on
-BReg serving and operation Pods.
+BReg, Casework and App Kit serving Pods and on BReg and Casework operation Pods.
+Evidence and extension Pods do not carry it.
 
 For a bounded test environment whose real TLS names are not available through
 cluster DNS, `breg.hostAliases` applies standard Pod host aliases to BReg

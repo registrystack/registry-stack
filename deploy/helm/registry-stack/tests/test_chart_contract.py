@@ -445,11 +445,15 @@ class ServingTest(ChartTest):
         self.assertEqual(set(proxy), {"proxy-config-private", "proxy-secret-private", "transit-socket"})
         self.assertEqual(proxy["proxy-secret-private"]["mountPath"], "/run/secrets/registry-evidence-transit-proxy")
 
-    def test_only_breg_pods_carry_the_database_client_label(self):
+    def test_database_client_label_marks_exactly_the_postgresql_workloads(self):
         label = "registrystack.org/database-client"
+        clients = {"breg", "casework", "app-kit"}
         for deployment in of_kind(self.docs, "Deployment"):
-            has = label in pod_labels(deployment)
-            self.assertEqual(has, deployment["metadata"]["name"].endswith("-breg"), deployment["metadata"]["name"])
+            name = deployment["metadata"]["name"]
+            expected = name.removeprefix("pilot-registry-stack-") in clients
+            self.assertEqual(label in pod_labels(deployment), expected, name)
+            if expected:
+                self.assertEqual(pod_labels(deployment)[label], "true", name)
 
     def test_services_are_cluster_ip(self):
         for service in of_kind(self.docs, "Service"):
@@ -690,6 +694,10 @@ class CaseworkOperationTest(ChartTest):
         self.assert_invariants(docs, f"casework {kind}")
         return named(docs, "Job", f"pilot-registry-stack-casework-{kind}-001")
 
+    def test_job_pod_carries_the_database_client_label(self):
+        job = self.render("plan")
+        self.assertEqual(pod_labels(job)["registrystack.org/database-client"], "true")
+
     def test_plan(self):
         job = self.render("plan")
         c = container(job, "caseworkctl")
@@ -732,6 +740,10 @@ class EvidenceOperationTest(ChartTest):
         docs = render_operation(EVIDENCE_JOB, "evidence", f"{kind}-001", kind, *extra)
         self.assert_invariants(docs, f"evidence {kind}")
         return named(docs, "Job", f"pilot-registry-stack-evidence-{kind}-001")
+
+    def test_job_pod_has_no_database_client_label(self):
+        job = self.render("check")
+        self.assertNotIn("registrystack.org/database-client", pod_labels(job))
 
     def test_check(self):
         job = self.render("check")
@@ -795,6 +807,7 @@ class ExtensionTest(ChartTest):
         for doc in self.docs:
             self.assertEqual(doc["metadata"]["namespace"], "pilot-extensions")
         self.assertEqual(named(self.docs, "Service", "extension-intake")["spec"]["type"], "ClusterIP")
+        self.assertNotIn("registrystack.org/database-client", pod_labels(deployment))
 
     def test_ingress_path_is_exact(self):
         ingress = named(self.docs, "Ingress", "extension-intake")

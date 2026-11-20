@@ -20,6 +20,7 @@ spec:
     metadata:
       labels:
         {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "casework") | nindent 8 }}
+        registrystack.org/database-client: "true"
       annotations:
         registrystack.org/package-digest: {{ .Values.casework.package.expectedDigest | quote }}
     spec:
