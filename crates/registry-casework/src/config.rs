@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -608,29 +608,11 @@ pub struct MetricsListenerConfig {
 
 impl MetricsListenerConfig {
     fn validate(&self, listener: &ListenerConfig) -> Result<(), RuntimeConfigError> {
-        let address = self.bind.ip();
-        let private = match address {
-            IpAddr::V4(address) => address.is_loopback() || address.is_private(),
-            IpAddr::V6(address) => address.is_loopback() || is_unique_local(address),
-        };
-        if self.bind.port() == 0 || !private || address.is_multicast() {
-            return Err(RuntimeConfigError::InvalidMetricsListener);
-        }
-        // An IPv6 wildcard socket is commonly dual-stack, so it is treated as
-        // covering both families on every host; the IPv4 wildcard covers
-        // only IPv4.
-        let listener_address = listener.bind.ip();
-        let listener_port = listener.bind.socket_addr().port();
-        let wildcard_covers_metrics = match listener_address {
-            IpAddr::V4(listener_address) => listener_address.is_unspecified() && address.is_ipv4(),
-            IpAddr::V6(listener_address) => listener_address.is_unspecified(),
-        };
-        if (address == listener_address || wildcard_covers_metrics)
-            && self.bind.port() == listener_port
-        {
-            return Err(RuntimeConfigError::InvalidMetricsListener);
-        }
-        Ok(())
+        registry_platform_config::check_metrics_bind(
+            self.bind,
+            &[("listener", listener.bind.socket_addr())],
+        )
+        .map_err(|_| RuntimeConfigError::InvalidMetricsListener)
     }
 }
 
@@ -1931,10 +1913,6 @@ fn valid_review_completion_url(raw: &str) -> bool {
         "http" => matches!(url.host_str(), Some("127.0.0.1" | "::1" | "[::1]")),
         _ => false,
     }
-}
-
-fn is_unique_local(address: Ipv6Addr) -> bool {
-    address.octets()[0] & 0xfe == 0xfc
 }
 
 /// What an offline check of one runtime file found (CFG-CHECK-1).
