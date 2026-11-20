@@ -465,7 +465,7 @@
     - label: Retired registryctl FHIR project-authoring fixture
       url: https://github.com/registrystack/registry-stack/tree/2dfcf2ddf22e2c0fa4bf5fd84eb06b8736057605/crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active
     - label: Registry Evidence FHIR source limitations
-      url: /explanation/known-limitations/
+      url: /security/evidence/#limits-a-deployment-accepts
   last_checked: 2026-08-11
   notes: No maintained Registry Stack surface parses or serves FHIR. Registry Evidence's frozen fixed-source contract accepts `application/json`, not `application/fhir+json`, so FHIR compatibility runs through a local read-through adapter the operator writes. That adapter and its profile-specific matching are project code, not a Registry Stack surface. Registry Stack has never claimed to implement a FHIR server or broad FHIR conformance.
 - id: universal-dpi-safeguards

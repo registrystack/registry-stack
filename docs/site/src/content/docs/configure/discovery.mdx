@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-14"
+last_reviewed: "2026-11-20"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -217,7 +217,8 @@ symbolic links.
 {/* Evidence: crates/registry-discovery/src/startup.rs, load_runtime(),
     startup_verifies_package_and_refuses_expected_digest_mismatch_with_common_shape,
     runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration, and
-    exact_consumed_index_bytes_remain_bound_to_the_verified_package. */}
+    exact_consumed_index_bytes_remain_bound_to_the_verified_package,
+    startup_refuses_changed_missing_and_extra_package_files_by_name. */}
 
 ## Maintain the index
 
@@ -227,8 +228,19 @@ symbolic links.
 | Operator | `origins.yaml`, mappings, `runtime.yaml`, the deployed package | An origin or mapping changes, or a provider republishes | Check, package into a new directory, pin, restart |
 | Application | Its saved selections and its own Evidence trust | A saved selection's service, endpoint, roles, jurisdictions, capability, mapping, or origin changes; a new catalogue revision or `originContentDigest` alone does not | Re-deciding trust, then calling the provider directly |
 
-Discovery never trusts a provider for the application: [How Registry Discovery
-works](../../explanation/discovery-as-an-index/) explains that boundary.
+A republish that changes only formatting moves `originContentDigest` but leaves `catalogRevision` and
+every record identity alone. A change to an endpoint or a type changes the binding. `originContentDigest`
+is the SHA-256 of the exact bytes the package build fetched, so it lets anyone compare the index with
+what the provider publishes now. It is not a signature: it records which bytes were fetched, not who
+wrote them. An index that changed in place would be one nobody reviewed, so a revision always means a
+new package.
+
+{/* Evidence: crates/registry-discoveryctl/src/build.rs, fetch loop and sha256_digest();
+    crates/registry-discovery/src/model.rs, build_time_provenance_does_not_change_semantic_revisions;
+    crates/registry-discovery-client/src/selection.rs, same_acceptance_subject(). */}
+
+Discovery never trusts a provider for the application. The [Registry Discovery
+overview](../../start/discovery/#what-a-selection-holds-and-what-it-does-not-do) explains that boundary.
 
 ## Troubleshooting
 
@@ -238,11 +250,14 @@ works](../../explanation/discovery-as-an-index/) explains that boundary.
 | Packaging cannot fetch an origin | The description is unavailable or the URL breaks the fetch policy | Restore the approved publication, then package into a new directory |
 | Startup reports a digest mismatch | The package is incomplete, changed, or not the pinned one | Deploy the complete pinned package, or update `package.expectedDigest` |
 | Startup says the index predates `apiVersion` and `kind` | The package was built by an older `discoveryctl` | Package it again, then update the pin |
+| Startup says the package contains a retired Relay service | The published `registry-discovery-v1alpha1` profile still validates Relay descriptions, but the current runtime serves Evidence providers only | Remove Relay origins, package it again, then update the pin |
 | Search returns no items | No indexed description matches every filter | Review the indexed descriptions and the identifiers you sent |
 
 {/* Evidence: crates/registry-discoveryctl/src/build.rs, BuildError;
     crates/registry-discovery/src/startup.rs,
     startup_refuses_an_index_with_the_retired_header_with_rebuild_guidance;
+    crates/registry-discovery/src/startup.rs, PackageIndexRetiredService,
+    startup_refuses_a_pre_retirement_mixed_package_with_rebuild_guidance; products/discovery/README.md;
     crates/registry-discovery/src/query.rs, service_matches_filters. */}
 
 ## Check commands

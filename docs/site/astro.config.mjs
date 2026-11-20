@@ -389,7 +389,6 @@ const caseworkRoutes = [
   '/start/casework/',
   '/tutorials/first-casework/',
   '/tutorials/review-breg-changes-in-casework/',
-  '/explanation/how-casework-works/',
   '/configure/casework/',
   '/configure/casework-directory/',
   '/configure/casework-completion-receivers/',
@@ -445,6 +444,47 @@ export function bregRewriteRedirects(internalRedirect) {
   ]));
 }
 
+// Pages folded into the page that now carries their facts. Each product's
+// model page is part of its overview, the specification pages are replaced by
+// the reference, security, and architecture pages that state the same facts,
+// and both retirement records share one page.
+const foldedPageMoves = [
+  ['/explanation/how-casework-works/', '/start/casework/'],
+  ['/explanation/how-coordinator-works/', '/start/coordinator/'],
+  ['/explanation/how-messaging-works/', '/start/messaging/'],
+  ['/explanation/how-scheduling-works/', '/start/scheduling/'],
+  ['/explanation/discovery-as-an-index/', '/start/discovery/'],
+  ['/explanation/render-determinism/', '/start/registry-render/'],
+  ['/explanation/evidence-deployment-patterns/', '/operate/evidence-audit/'],
+  ['/explanation/records-stay-home/', '/start/concepts/'],
+  ['/explanation/trusted-context-constraints/', '/explanation/where-each-rule-lives/'],
+  ['/map/boundaries-and-map/', '/explanation/architecture/'],
+  ['/generated-artifacts/', '/reference/'],
+  ['/security/self-assessment/', '/security/'],
+  ['/spec/', '/reference/'],
+  ['/spec/rs-doc/', '/reference/'],
+  ['/spec/rs-terms/', '/reference/glossary/'],
+  ['/spec/rs-arc-g/', '/explanation/architecture/'],
+  ['/spec/rs-pr-evidence/', '/reference/apis/registry-evidence/'],
+  ['/spec/rs-sec-g/', '/security/'],
+  ['/spec/rs-dm-manifest/', '/products/registry-manifest/reference/'],
+  ['/decisions/notary-retirement-2026-08-03/', '/decisions/registry-relay-retirement-2026-10-03/'],
+  [
+    '/products/registry-evidence/source-credential-rotation/',
+    '/operate/advanced/rotate-credentials-and-trust/',
+  ],
+];
+
+/**
+ * @param {(path: string) => string} internalRedirect
+ */
+export function foldedPageRedirects(internalRedirect) {
+  return Object.fromEntries(foldedPageMoves.flatMap(([route, target]) => [
+    [route, internalRedirect(target)],
+    [`${route.slice(0, -1)}.md`, internalRedirect(target)],
+  ]));
+}
+
 export default defineConfig({
   site: 'https://docs.registrystack.org',
   base,
@@ -477,7 +517,7 @@ export default defineConfig({
     '/start/quickstart/': internalRedirect('/'),
     '/start/when-to-use/': internalRedirect('/'),
     '/explanation/trust-posture-and-security-guarantees/': internalRedirect('/security/'),
-    '/reference/security-self-assessment/': internalRedirect('/security/self-assessment/'),
+    '/reference/security-self-assessment/': internalRedirect('/security/'),
     '/reference/openssf-evidence/': internalRedirect('/security/openssf-evidence/'),
     // Webhook binding is an operator task with its own page; history reads
     // and the event reference are sections of the API reference page.
@@ -503,6 +543,7 @@ export default defineConfig({
     '/reference/evidencectl.md': internalRedirect('/reference/cli/evidencectl/'),
     '/start/evaluate-breg/': internalRedirect('/operate/breg/'),
     ...bregRewriteRedirects(internalRedirect),
+    ...foldedPageRedirects(internalRedirect),
     // One client package documents the retained namespaces in one reference.
     '/reference/breg-client-api/': internalRedirect('/reference/client-api/'),
     // The deprecation rules are a section of the one stability promise page.
@@ -712,7 +753,6 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { label: 'Prove with fixtures', slug: 'tutorials/prove-an-evidence-project' },
-                { label: 'Deployment patterns', slug: 'explanation/evidence-deployment-patterns' },
                 { label: 'Build and deploy', slug: 'tutorials/build-and-deploy-evidence-project' },
                 { label: 'Sign with Vault Transit', slug: 'tutorials/move-evidence-to-production-signing' },
                 { label: 'Run with Docker Compose', slug: 'tutorials/integrate-evidence-candidate-with-docker-compose' },
@@ -840,7 +880,6 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/casework' },
             { label: 'Decide your first ReviewRequest', slug: 'tutorials/first-casework' },
-            { label: 'How Casework works', slug: 'explanation/how-casework-works' },
             {
               label: 'Author a policy',
               collapsed: true,
@@ -880,7 +919,6 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/scheduling' },
             { label: 'Prove your first booking policy', slug: 'tutorials/first-scheduling' },
-            { label: 'How Scheduling works', slug: 'explanation/how-scheduling-works' },
             { label: 'Author a policy', slug: 'configure/scheduling' },
             { label: 'Deploy and operate Scheduling', slug: 'operate/scheduling' },
             { label: 'Configuration reference', slug: 'reference/scheduling-configuration' },
@@ -896,7 +934,6 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/registry-render' },
             { label: 'Render your first document', slug: 'tutorials/first-render-document' },
-            { label: 'How Render works', slug: 'explanation/render-determinism' },
             { label: 'Deploy Render', slug: 'operate/registry-render' },
             { label: 'Configuration reference', slug: 'reference/render-configuration' },
             { label: 'What a template receives', slug: 'reference/render-payload' },
@@ -909,7 +946,6 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/messaging' },
             { label: 'Send your first message', slug: 'tutorials/first-messaging' },
-            { label: 'How Messaging works', slug: 'explanation/how-messaging-works' },
             { label: 'Author a package', slug: 'configure/messaging' },
             { label: 'Deploy Messaging', slug: 'operate/messaging' },
             { label: 'Configuration reference', slug: 'reference/messaging-configuration' },
@@ -925,7 +961,6 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/coordinator' },
             { label: 'Review an application and send a notice', slug: 'tutorials/review-an-application-and-send-a-notice' },
-            { label: 'How Coordinator works', slug: 'explanation/how-coordinator-works' },
             { label: 'Author a flow', slug: 'configure/coordinator' },
             { label: 'Deploy Coordinator', slug: 'operate/coordinator' },
             { label: 'Configuration reference', slug: 'reference/coordinator-configuration' },
@@ -967,7 +1002,6 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/discovery' },
             { label: 'Publish and consume an index', slug: 'tutorials/publish-and-consume-discovery-index' },
-            { label: 'How Discovery works', slug: 'explanation/discovery-as-an-index' },
             { label: 'Package and run an index', slug: 'configure/discovery' },
             ...(hasDiscovery ? [discoveryOpenApiSidebarGroup] : []),
           ],
@@ -988,7 +1022,6 @@ export default defineConfig({
             { label: 'Upgrade and retire', slug: 'operate/advanced/upgrade-and-retire' },
             { label: 'Retention and persistent state', slug: 'operate/retention-and-persistent-state' },
             { label: 'Find and clear stuck work', slug: 'operate/stuck-work' },
-            { label: 'Generated files and ownership', slug: 'generated-artifacts' },
             { label: 'Production hardening', slug: 'security/hardening-checklist' },
             {
               label: 'Security',
@@ -999,7 +1032,6 @@ export default defineConfig({
                 { label: 'Known limitations', slug: 'explanation/known-limitations' },
                 { label: 'Report a vulnerability', slug: 'security/report-a-vulnerability' },
                 { label: 'Support window', slug: 'security/support-window' },
-                { label: 'Self-assessment', slug: 'security/self-assessment' },
                 { label: 'Release trust', slug: 'security/openssf-evidence' },
               ],
             },
@@ -1010,21 +1042,10 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Architecture', slug: 'explanation/architecture' },
-            { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
             { label: 'Where each rule lives', slug: 'explanation/where-each-rule-lives' },
-            { label: 'Records stay home', slug: 'explanation/records-stay-home' },
             { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },
-            { label: 'Trusted context', slug: 'explanation/trusted-context-constraints' },
             { label: 'DPI safeguards', slug: 'explanation/dpi-safeguards-alignment' },
-            {
-              // These records have no index; keep both destinations visible.
-              label: 'Decisions',
-              collapsed: true,
-              items: [
-                { label: 'Registry Relay retirement', slug: 'decisions/registry-relay-retirement-2026-10-03' },
-                { label: 'Registry Notary retirement', slug: 'decisions/notary-retirement-2026-08-03' },
-              ],
-            },
+            { label: 'Retired products', slug: 'decisions/registry-relay-retirement-2026-10-03' },
           ],
         },
         {
@@ -1049,19 +1070,6 @@ export default defineConfig({
                 { label: 'ITB and SEMIC evidence', slug: 'reference/itb-semic-evidence' },
               ],
             },
-            {
-              label: 'Specifications',
-              collapsed: true,
-              items: [
-                { label: 'Register', slug: 'spec' },
-                { label: 'Documentation framework', slug: 'spec/rs-doc' },
-                { label: 'Terms', slug: 'spec/rs-terms' },
-                { label: 'Architecture', slug: 'spec/rs-arc-g' },
-                { label: 'Registry Evidence protocol', slug: 'spec/rs-pr-evidence' },
-                { label: 'Security model', slug: 'spec/rs-sec-g' },
-                { label: 'Portable metadata model', slug: 'spec/rs-dm-manifest' },
-              ],
-            },
             // Flatten the generated Diataxis categories here: product and
             // page are enough context inside Reference.
             {
@@ -1070,12 +1078,12 @@ export default defineConfig({
               items: flattenSidebarGroups(generatedProduct('Manifest').items),
             },
             // Older docsets can predate the generated Evidence product pages.
-            ...(optionalGeneratedProduct('Registry Evidence')
+            ...(optionalGeneratedProduct('Evidence')
               ? [
                   {
                     label: 'Registry Evidence',
                     collapsed: true,
-                    items: flattenSidebarGroups(generatedProduct('Registry Evidence').items),
+                    items: flattenSidebarGroups(generatedProduct('Evidence').items),
                   },
                 ]
               : []),

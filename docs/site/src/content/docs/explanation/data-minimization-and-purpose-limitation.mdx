@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-evidence
-last_reviewed: "2026-10-29"
+last_reviewed: "2026-11-20"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -15,7 +15,7 @@ standards_referenced:
 
 ## How the requirement model limits collection at the source
 
-The first place minimisation appears is in the unit of data the system is built around.
+The first place minimisation appears is in the unit of data Registry Evidence is built around.
 A requirement describes one reviewed question and the exact values its answer may carry, not a
 whole record, so returning a full record would over-collect relative to the question actually
 asked.
@@ -27,9 +27,11 @@ from the question it was asked.
 
 ## Purpose limitation as an enforced gate, not a label
 
-The closed request schema carries the same idea further: a caller supplies a nonce, a requirement,
-a purpose, one selector per declared role, and optionally a holder public key that matters only to
-the SD-JWT VC response format. There are no thresholds,
+The closed Registry Evidence request schema carries the same idea further. A caller supplies a
+nonce, a requirement, a purpose, and one selector per declared role. It may also pin a
+configuration revision and supply up to sixteen holder public keys, one per credential. A holder
+key reaches only the credential response formats, and under the holder-bound mode its thumbprint
+also scopes the subject binding. There are no thresholds,
 expressions, paths, headers, source fields, or response projections a caller can set.
 The effect a reviewer should take away is that purpose, when configured, acts as a precondition
 for access rather than an after-the-fact annotation.
@@ -71,7 +73,7 @@ verifier accepts the result when the relying party's policy does not require tha
 output the policy marks required must be disclosed, a disclosed output must match its declared
 concept and form, and a structured value is disclosed whole or not at all, so a presentation that
 shows some fields of one and withholds the others is refused. The verifier never accepts a
-shortened value. Registry Evidence runs no wallet interaction of its own; the experimental
+shortened value. Registry Evidence runs no wallet protocol of its own. The experimental
 `evidence-oid4vci` service beside it delivers the credential to a wallet (see [OID4VCI
 issuance](../../configure/evidence-oid4vci/)), and the holder's wallet decides what to present.
 Under the default audience-scoped binding mode a caller may supply a holder public key that
@@ -80,8 +82,10 @@ verifies it.
 
 A requirement may instead declare the holder-bound subject binding mode, which changes what the
 credential is bound to and moves the audience check from issuance to presentation. The service
-still issues no key-binding JWT and holds no presentation state; verification is a relying-party
-act, performed by the portable verifier or the `evidence verify-presentation` operator command.
+still issues no key-binding JWT and holds no presentation state. A relying party verifies a
+presentation with the portable verifier or the `evidence verify-presentation` operator command.
+Registry Evidence itself verifies a credential a holder presents from a wallet before it answers
+with a `holder-presented` assertion.
 For minimisation the mode is a trade rather than a gain: the same holder key, trust domain,
 purpose, subject role, selector profile, and selector values yield the same binding for every
 verifier, so a holder who reuses one key is correlatable across the verifiers it presents to.
@@ -97,9 +101,12 @@ low-cardinality attribute, so treat it as visible rather than internal.
 
 A further minimisation detail guards against a subtler leak.
 No match, ambiguity, a missing required fact, and an unresolved derivation input all collapse into
-one problem response with the same title and body shape, so a caller cannot use a refusal to learn
-whether a record exists. The outcomes stay distinct in the audit record; collapsing is a property
-of what the caller sees, not of what the operator can review.
+one problem response with the same title and body shape, so the refusal itself does not tell a
+caller whether a record exists. Registry Evidence does not pad responses to a constant time. A
+source that answers a no-match faster than a match can still reveal membership through latency
+(see the [Registry Evidence security model](../../security/evidence/)). The outcomes stay distinct
+in the audit record. Collapsing is a property of what the caller sees, not of what the operator can
+review.
 
 ## Ask for the weakest answer that does the job
 
@@ -132,18 +139,25 @@ to stop.
 
 Underneath all of this is an architectural choice that matters for minimisation at the system
 level: data stays at source.
-The design premise is distributed custody: the stack provides an API surface for lawful exchange
-between authorities and does not aggregate data into a central system.
-The read component must not mutate source registry data and exposes no write-back route, and
-runtime services are read-only in this version, with no source-registry data-mutation routes at
-all.
+The design premise is distributed custody. Registry Evidence answers from each authority's own
+register without copying records into a shared store. BReg holds records only where an
+institution runs it as its system of record.
+Registry Evidence reads a source only through the reviewed Adapter pack route its project selects.
+It refuses a route that can reach a write, and it exposes no route that writes to a source registry.
+Base Registry Engine (BReg) is different: it is a writable register. Its write routes create
+records, patch or tombstone records of a mutable Record type, and run the Actions and Proposals the
+institution configures.
 
 For a reviewer this has a direct consequence.
-Because the architecture cannot alter or delete source records, it is also why no erasure flow
-exists at the source layer: the design has no mechanism to reach into and change the registry it
-reads from.
-The [What the architecture does not provide](#what-the-architecture-does-not-provide) section
-describes this as a limit, not a feature.
+Registry Evidence cannot alter or delete the records it reads, so it has no erasure flow at the
+source. Erasure there is an operation on the source registry.
+Erasure of retained detail is a per-product operation, listed in the
+[What the architecture does not provide](#what-the-architecture-does-not-provide) section.
+
+{/* Evidence: crates/registry-adapter-engine/src/evidence.rs, check_read_only_steps and
+    reachable_writes_are_refused_even_through_direct_routes;
+    products/evidence/contracts/security-invariant-matrix.yaml, V1-I09; crates/registry-breg/src/api/mod.rs, Operation::Create, Operation::Patch,
+    Operation::Tombstone and the Action routes; crates/registry-breg/src/contract.rs, MutationMode. */}
 
 One related boundary is positive rather than cautionary.
 The portable metadata the stack publishes must not carry person-level data or runtime secrets and
@@ -156,39 +170,61 @@ data.
 
 Accountability is supported through audit, which is treated as a security control rather than an
 optional log.
-Every request that returns person-level records or an assertion must be recorded with at least
-the caller principal, the scopes exercised, a request identifier, and the purpose value where one
-was supplied, and a deployment can run audit fail-closed so that a request whose audit record
-cannot be written does not succeed.
-Registry Evidence takes that further and is fail-closed by construction rather than by configuration: it
+Registry Evidence is fail-closed by construction rather than by configuration. It
 writes an access record before it contacts any source and a release record after signing and
-before release, and an audit failure fails the request. Selector, source, and disclosed values
+before release. An audit failure fails the request. Selector, source, and disclosed values
 never appear in those records or in logs, and raw source responses are never persisted.
+BReg is also fail-closed by construction. It writes a request entry before protected I/O and a
+response entry with the outcome. When the request entry is refused, BReg performs no protected
+I/O and releases nothing. A mutation appends its response entry after the commit, so a refused
+response entry leaves the change committed and the response withheld. Its entries carry keyed
+references and closed terms, never a raw principal, record id, or selector.
 
-Audit fail-closed is a capability a deployment can turn on, not a guarantee that every route in
-any given build has been individually audited against it.
+{/* Evidence: crates/registry-breg/src/audit.rs, module doc and RegistryAudit::append;
+    crates/registry-breg/src/mutation.rs, MutationError::CommitUnresolved. */}
+
+Fail-closed audit is not a deployment setting in either product. It is also not a guarantee that
+every route in any given build has been individually audited against it.
 Whether a particular deployment meets it is something a reviewer verifies in that deployment, not
 something the design asserts on its behalf.
 
 ## What the architecture does not provide
 
 Some of the most important things for a DPO to know are the absences.
-The full, canonical inventory is in [Known limitations and non-guarantees](../known-limitations/).
+[Known limitations](../known-limitations/) lists the cross-product limits and links each product's own.
 
-- No data-subject erasure or right-to-be-forgotten workflow: There is no built-in erasure or
-  deletion flow anywhere in the design, so it does not satisfy erasure obligations on its own.
-  As the Data stays at source: distributed custody section notes, the read-only design cannot
-  mutate source records, so erasure, where it is required, remains an operation on the source
-  registry outside this system.
-- No rectification or data-subject-rights flow: Beyond erasure, there is no rectification or
-  general data-subject-rights mechanism.
+- No data-subject request workflow: No product ships a workflow for a data subject's request for
+  erasure, rectification, or access. The institution decides each request and runs the product
+  operation that carries it out.
+- Erasure is per product and covers retained detail only: Registry Evidence erases nothing at the
+  source it reads. BReg erases retained record history with `bregctl history erase` and Proposal
+  detail with `bregctl proposal-retention erase`. It erases expired Evidence responses it retained
+  for a record with `bregctl evidence-retention erase-expired`. None of these commands erases the
+  current record or the audit journal (see [Retain, erase, and audit](../../operate/breg-retention/)). Registry Casework erases
+  expired review data. Registry Messaging erases message payloads and records when their retention
+  periods end. The Registry Document Store erases a removed document's bytes after the policy's
+  grace period.
+- Rectification is an ordinary change: BReg corrects a record through a patch on a mutable Record
+  type, or a configured Action or Proposal. For an event record, a later record declares that it
+  `corrects` or `supersedes` the earlier one. No product ships a data-subject rectification
+  workflow.
+- Subject access log: a BReg Record type can opt in to a subject-facing log of reads. The log
+  records who read one subject's Record, when, and for which declared purpose (see
+  [Give subjects a log of reads of their Record](../../operate/breg-access-log/)).
 
-There is also no revocation, suspension, status list, or credential-status endpoint of any kind: an
-assertion carries a validity window and is otherwise final once released. Cross-authority
+{/* Evidence: crates/registry-bregctl/src/lib.rs, HistoryCommand::Erase, ProposalRetentionCommand::Erase,
+    EvidenceRetentionCommand::EraseExpired; crates/registry-casework/src/review/maintenance.rs,
+    erase_expired_reviews_at; crates/registry-messaging/src/retention.rs, module doc;
+    crates/registry-documents/src/erasure.rs, module doc;
+    crates/registry-breg/tests/postgres_access_log.rs,
+    subject_access_log_requires_current_record_ownership_and_records_each_read_hit. */}
+
+A Registry Evidence assertion has no revocation, suspension, status list, or credential-status
+endpoint. It carries a validity window and is otherwise final once released. Cross-authority
 federation, aggregate-analytics privacy budgeting, and the general compliance disclaimer are
 likewise stack-wide absences rather than specifics of data minimisation or purpose limitation, but
 a data-protection assessment should weigh them too.
-See the [known limitations hub](../known-limitations/) for the full inventory.
+[Known limitations](../known-limitations/) links each product's own limits.
 
 ## Operator responsibilities: what the design leaves to you
 
@@ -221,4 +257,4 @@ whether it meets any legal obligation) depends on how the operator configures an
 - [How Evidence works](../how-evidence-works/)
 - [Threat model](../threat-model/)
 - [Known limitations and non-guarantees](../known-limitations/)
-- [Records stay home](../records-stay-home/)
+- [How the products fit together](../../start/concepts/)

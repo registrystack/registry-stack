@@ -233,7 +233,6 @@ test('every gated page exists and maps to its route', () => {
   assert.deepEqual(productRoutes('registry-messaging'), [
     '/start/messaging/',
     '/tutorials/first-messaging/',
-    '/explanation/how-messaging-works/',
     '/configure/messaging/',
     '/operate/messaging/',
     '/reference/messaging-configuration/',
@@ -244,7 +243,6 @@ test('every gated page exists and maps to its route', () => {
   assert.deepEqual(productRoutes('registry-scheduling'), [
     '/start/scheduling/',
     '/tutorials/first-scheduling/',
-    '/explanation/how-scheduling-works/',
     '/configure/scheduling/',
     '/operate/scheduling/',
     '/reference/scheduling-configuration/',
@@ -255,7 +253,6 @@ test('every gated page exists and maps to its route', () => {
   assert.deepEqual(productRoutes('registry-render'), [
     '/start/registry-render/',
     '/tutorials/first-render-document/',
-    '/explanation/render-determinism/',
     '/operate/registry-render/',
     '/reference/render-configuration/',
     '/reference/render-payload/',
@@ -263,7 +260,6 @@ test('every gated page exists and maps to its route', () => {
   ]);
   assert.deepEqual(productRoutes('registry-coordinator'), [
     '/start/coordinator/',
-    '/explanation/how-coordinator-works/',
     '/configure/coordinator/',
     '/operate/coordinator/',
     '/reference/coordinator-configuration/',
@@ -558,7 +554,6 @@ for (const page of [
   'configure/breg.mdx',
   'reference/environment-variables.mdx',
   'reference/configuration-files.mdx',
-  'changelog.mdx',
 ]) {
   test(`${page} mentions the citizen services only inside DocsetProduct regions`, () => {
     const source = readFileSync(resolve(docsRoot, page), 'utf8');

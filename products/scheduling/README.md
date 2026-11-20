@@ -10,7 +10,7 @@ The runtime is `crates/registry-scheduling`. The source-neutral model and evalua
 
 Concepts, configuration, operation, and the security model are on the documentation site:
 
-- [How Registry Scheduling works](https://docs.registrystack.org/explanation/how-scheduling-works/)
+- [Registry Scheduling overview](https://docs.registrystack.org/start/scheduling/)
 - [Author a Scheduling policy](https://docs.registrystack.org/configure/scheduling/)
 - [Deploy and operate Registry Scheduling](https://docs.registrystack.org/operate/scheduling/)
 - [Registry Scheduling configuration reference](https://docs.registrystack.org/reference/scheduling-configuration/)

@@ -109,12 +109,17 @@ ReviewPolicy active at admission, or send both to require the `identity` that
 ReviewResult repeats the accepted binding with the subject and `submissionDigest`; the consumer
 checks that correlation and authorises any business change itself.
 
+The request binds its subject by `source`, `type`, `id`, `version`, and a content `digest`. The
+digest is the producer's own fingerprint of the version it asks about. Casework does not recompute
+it, and carries it into the task and the result so the producer can tell which version was
+reviewed. `submissionDigest` covers the producer, its source namespace, and the whole request.
+
 After a lost response, resend the same `Idempotency-Key` and the same body: the first submission
 answered `201`, the resend `200` with the same `requestId`. A changed body under that key is
 `idempotency.key-reused`, and a fresh key is a fresh operation. A `503` on a mutation does not say
 whether the change committed, so recover it the same way before you choose another operation.
 
-{/* Evidence: crates/registry-review-protocol/src/lib.rs;
+{/* Evidence: crates/registry-review-protocol/src/lib.rs, SubjectBinding, submission_digest;
     crates/registry-casework/src/http.rs, create_review_request, get_review_result;
     crates/registry-casework/src/audit.rs, AuditOperation::commit and complete;
     crates/registry-casework/tests/review_acceptance_postgres.rs,

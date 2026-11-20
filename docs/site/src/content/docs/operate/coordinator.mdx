@@ -864,7 +864,7 @@ Settled terminal history remains inspectable with its recorded binding identity 
 This requires no runnable or uncertain job and no outstanding restore review; a failed label alone does not qualify.
 Unresolved and recoverable work still requires its original configured connections.
 
-[How Registry Coordinator works](../../explanation/how-coordinator-works/#how-do-you-inspect-and-recover-a-run) explains what the states mean.
+The [Registry Coordinator overview](../../start/coordinator/#uncertain-calls-and-recovery) explains what the states mean.
 
 {/* Evidence: crates/registry-coordinator/src/http.rs List, limit, proposal, outcome, lastObservation, holdDetail;
     crates/registry-coordinator/src/store.rs in-force-ambiguous;
@@ -1372,4 +1372,4 @@ Your institution still needs its own backup custody, complete history recovery, 
 - [Author a Coordinator workflow](../../configure/coordinator/) writes and packages the workflows you serve.
 - [Registry Coordinator configuration reference](../../reference/coordinator-configuration/) lists every runtime key and operation.
 - [Registry Coordinator API](../../reference/apis/registry-coordinator/) lists every problem code.
-- [How Registry Coordinator works](../../explanation/how-coordinator-works/) explains runs, waits, and recovery.
+- The [Registry Coordinator overview](../../start/coordinator/) explains runs, waits, and recovery.

@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-11-20"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -26,42 +26,120 @@ review, and apply it through BReg without running Coordinator. Use the
 ## What you write, and what runs
 
 You write a **[workflow](../../reference/glossary/#workflow)**: a finite graph of steps in YAML, checked offline and packaged into an
-immutable artifact that an operator pins by digest. Each start of that workflow is a **[run](../../reference/glossary/#run)**, which
+immutable artifact that an operator pins by digest. `workflow.yaml` names the operations the workflow may
+call, the typed input it accepts, and the steps from `start` to every finish. Each operation alias
+binds one exact versioned host operation, such as `casework.submit-review-request/v1`, to a
+logical connection name.
+
+Each start of that workflow is a **[run](../../reference/glossary/#run)**, which
 Coordinator keeps in its own PostgreSQL 17 or newer database. A run keeps the definition it was
 admitted under, so a later upgrade never changes a run in flight.
 
-A workflow is built from five step types: `call` one product operation, `choose` the next step,
-`wait-until` an instant, `wait-for` a named result such as a Casework review decision, and
-`finish` with a declared outcome.
+A workflow is built from five step types:
 
-{/* Evidence: crates/registry-coordinator/src/authoring.rs, AuthoredStep;
-    crates/registry-coordinator/src/store.rs, runs insert. */}
+- `call` runs one product operation.
+- `choose` routes on a pure [Function](../../reference/glossary/#function) written in bounded
+  [Rhai](../../reference/glossary/#rhai), or on a `compare` of typed values that needs no Function.
+  A value that is missing or of the wrong type fails the run instead of routing to `unmatched`.
+- `wait-until` waits for an instant.
+- `wait-for` waits for a named result, such as a Casework review decision.
+- `finish` ends the run with a declared outcome and the output the workflow chooses to publish.
+
+`coordinatorctl check` compiles the project offline and proves that every mapping reads data that
+exists on every route that reaches it. `coordinatorctl package` freezes the project into an immutable
+[package](../../reference/glossary/#package) whose digest the deployment pins.
+
+{/* Evidence: crates/registry-coordinator/src/authoring.rs, AuthoredStep, CoordinatorProject;
+    crates/registry-coordinator/src/store.rs, runs insert and the server_version_num < 170000
+    check (PostgreSQL 17 or later);
+    crates/registry-coordinator/src/definition.rs, seal_revisions;
+    crates/registry-coordinator/src/compare.rs, WRONG_TYPE. */}
+
+## How a run starts and waits
+
+An authorised caller starts a run with `POST /v1/runs`, giving the expected workflow revision, its
+input, and an idempotency key. An authored event trigger can also start one from a signed product
+event at `POST /v1/events/{workflow}/{trigger}`. The same key with the same revision and input
+returns the same run, and the
+[API reference](../../reference/apis/registry-coordinator/) states what a conflicting reuse gets.
+
+A wait is durable state, not a sleeping process. A `wait-for` has a required `timeoutSeconds` and an
+optional `onTimeout` and `onCancel` route. Coordinator reads the awaited result on a schedule, and a
+Casework completion event only brings the next read forward. It carries no result and starts no
+run. [Author a Coordinator workflow](../../configure/coordinator/) gives the read timings.
+
+A timeout means the workflow stopped waiting, not that the review stopped.
+
+{/* Evidence: crates/registry-coordinator/src/http.rs, /v1/runs;
+    crates/registry-coordinator/src/event_trigger.rs, event_triggers;
+    crates/registry-coordinator/src/runtime.rs, DEFAULT_RESULT_CHECK_SECONDS and
+    minimum_observation_interval_seconds;
+    crates/registry-coordinator/src/review.rs, already-terminal. */}
 
 ## What stays with each product
 
 Every product a run calls keeps its own authority. Coordinator calls each one over its public HTTP
 API with a service identity the operator configured, and that product decides, under its current
-policy, whether to allow the call. Being allowed to start a workflow grants nothing downstream.
-Coordinator never writes another product's database, never applies a Base Registry Engine (BReg) Proposal for the
-applicant, and never reverses an effect a product accepted.
+policy, whether to allow the call. Being allowed to start a workflow grants nothing downstream. A
+wait, retry, or restart never renews an approval or widens its scope.
 
-When Coordinator cannot tell whether a call took effect, it holds the run for an operator rather
-than sending the call again.
+Coordinator keeps the progress, the prepared commands, the waits, and its own
+[audit journal](../../reference/glossary/#audit-journal). It never writes another product's
+database, and it never reverses an effect a product accepted. It is not a review provider: when a
+workflow needs a human decision, it submits its own request to Casework.
+
+Coordinator does not apply a BReg [Proposal](../../reference/glossary/#proposal). `check` refuses a
+Proposal [Action](../../reference/glossary/#action) with `coordinator.operation.proposal-action`.
+The applicant drives the Proposal in BReg, and a workflow follows it through a product event or a
+later record read.
+
+A product refusal is a fact about the product's policy. A call whose product declares a no-effect
+refusal may route it through `onDeclaredRefusal`, and any other refusal fails the run with
+`product-refused`. [Author a Coordinator workflow](../../configure/coordinator/) lists which
+operations declare one.
 
 {/* Evidence: crates/registry-coordinator/src/contracts.rs, coordinator.operation.proposal-action;
     crates/registry-coordinator/src/breg_action.rs; crates/registry-coordinator/src/adapters.rs;
-    crates/registry-coordinator/src/store/recovery.rs, uncertain. */}
+    crates/registry-coordinator/src/operations.rs, declared_refusal;
+    crates/registry-coordinator/src/worker.rs, call_result_with_failure;
+    products/coordinator/README.md. */}
+
+## Uncertain calls and recovery
+
+When a call might have reached the product but no answer came back, the effect is uncertain, and
+Coordinator puts the run in `attention` for an operator rather than guessing. When the product
+answers with a definite, retryable failure instead, Coordinator resends the same saved command
+within the original deadline. Three operations have a receipt for the original idempotency key:
+`messaging.submit-message/v1`, `scheduling.create-appointment/v1`, and `scheduling.confirm-hold/v1`.
+`coordinatorctl reconcile` can settle an uncertain call to one of them against it. Other calls
+have none, so a record read or an operator's word does not settle them. A decision-evaluation call
+(`evaluation.evaluate/v1`) that may have been sent is never repeated.
+
+A restored database is never handed to an ordinary worker first, because a backup can predate
+effects that products already accepted. The operator starts `coordinator --recovery-only`, which
+admits and dispatches nothing. [Deploy Registry Coordinator](../../operate/coordinator/) covers
+`retry-same`, `cancel`, and the restore hold, and the
+[API reference](../../reference/apis/registry-coordinator/) lists the run states.
+
+{/* Evidence: crates/registry-coordinator/src/store/recovery.rs, uncertain;
+    crates/registry-coordinator/src/operations.rs, the operation table (read_receipt);
+    crates/registry-coordinator/src/service.rs, recovery_only;
+    crates/registry-coordinator/src/cli.rs, RestoreHold, ReleaseRestoreHold;
+    products/coordinator/generated/openapi/coordinator.openapi.json, RunStatus. */}
 
 ## When to look elsewhere
 
 Coordinator has no SQL steps, no loops, no number of calls decided at run time, no arbitrary HTTP
-methods, no automatic compensation, and no distributed rollback. It is an optional service and
-pre-1.0: use the binaries and documentation of one source version together.
+methods or destinations, no automatic compensation, and no distributed rollback. It is pre-1.0: use
+the binaries and documentation of one source version together.
 
 {/* Evidence: crates/registry-coordinator/src/definition.rs, seal_revisions;
     crates/registry-coordinator/src/authoring.rs, CoordinatorProject. */}
 
 ## Next
 
-[Review an application and send an approval notice](../../tutorials/review-an-application-and-send-a-notice/)
-runs one workflow through a human review to a delivered notice, on your machine.
+- [Review an application and send an approval notice](../../tutorials/review-an-application-and-send-a-notice/)
+  runs one workflow through a human review to a delivered notice, on your machine.
+- [Author a Coordinator workflow](../../configure/coordinator/)
+- [Deploy Registry Coordinator](../../operate/coordinator/)
+- [Registry Coordinator configuration reference](../../reference/coordinator-configuration/)

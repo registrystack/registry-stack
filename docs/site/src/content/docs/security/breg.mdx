@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-19"
+last_reviewed: "2026-11-20"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -13,7 +13,7 @@ standards_referenced: []
 
 This page states what the Base Registry Engine (BReg) security invariants assume, what you must do
 for them to hold, and which limits a deployment accepts.
-The operator obligations are numbered 1 to 20, and each accepted residual risk carries a stable
+The operator obligations are numbered 1 to 21, and each accepted residual risk carries a stable
 identifier from `BREG-RES-01` to `BREG-RES-26`.
 The invariants themselves, each with its threat, enforcement point, refusal, and negative test, are
 the rows of the machine-checked BReg security invariant matrix in the registry-stack repository.
@@ -52,6 +52,13 @@ product can take back.
     split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writes_nothing;
     crates/registry-breg/tests/postgres_proposal_review_delivery.rs,
     first_acceptance_refuses_wrong_policy_id_or_exact_pin. */}
+
+No runtime API edits access profiles, Record types, or webhook destinations, and a running
+process reloads nothing. Each change is a new package applied under the migration credential.
+
+{/* Evidence: products/breg/generated/facility/generated/openapi.json, paths;
+    crates/registry-breg/src/startup.rs, production startup verifies the package once,
+    before any listener binds. */}
 
 ### In-process refresh worker
 
@@ -156,10 +163,14 @@ The residuals refer to these obligations by number.
    The audit stream is not tamper-evident on the host.
    Ship the `file` or `stdout` stream, including the activation audit stream, to storage the host
    users cannot rewrite.
+   A mutation appends its response entry after the commit, so a crash in between leaves a request
+   entry without its response.
+   Revision history still records the change.
    BReg's retention is the platform audit writer's rotation and `retentionDays`; BReg adds no prune
    or export of its own.
    {/* Evidence: crates/registry-breg/src/runtime_config.rs, AuditDestination, retention_days;
-        crates/registry-platform-audit/src/writer.rs, MAX_AUDIT_RETAIN_DAYS. */}
+        crates/registry-platform-audit/src/writer.rs, MAX_AUDIT_RETAIN_DAYS;
+        crates/registry-breg/src/audit.rs, terminal_entry. */}
 3. Treat a restore as a security event.
    A restore rewinds every row, including erasures, deliveries, and closed import authorities.
    After a physical restore, run `bregctl instance-claim adopt` before the copy serves, and fence
@@ -661,11 +672,10 @@ Each lists the condition, the consequence, the mitigation, and the related matri
 ### `BREG-RES-17`: declared issuer and key endpoints are trusted
 
 - Condition: the runtime file names an issuer or JWKS URI.
-- Consequence: a declared issuer or JWKS URI may name any private address that is not cloud
-  metadata or link-local; the operator who writes the file is trusted to name it.
-  A discovered cross-origin endpoint stays under the strict policy and must use HTTPS, and
-  redirects are disabled.
-  Under `allowInsecureHttp: true`, an on-path attacker can substitute keys.
+- Consequence: BReg trusts a declared issuer or JWKS URI on the operator's word.
+  Under `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute
+  keys.
+  The residual is shared across products and set out in [Token issuer and key endpoints](../#token-issuer-and-key-endpoints).
   `breg-review` never takes the HTTP opt-in, because it sends client credentials to the token
   endpoint.
 - Mitigation: use an HTTPS issuer; leave `allowInsecureHttp` off.
@@ -740,8 +750,10 @@ Each lists the condition, the consequence, the mitigation, and the related matri
     head_on_statistical_reads_is_refused_and_journaled_as_head;
     crates/registry-breg/tests/http_read_only.rs,
     head_is_refused_on_governed_reads_and_answered_only_by_probes. */}
-{/* TODO[evidence]: no test or symbol found that shows an aggregate statistical read emits no
-    per-subject access-log hit. */}
+{/* Evidence: crates/registry-breg/tests/postgres_statistics_http.rs,
+    statistical_http_full_journey_preserves_visibility_release_and_withdrawal_rules
+    (statistics reads add no registry_subject_access_log rows);
+    crates/registry-breg/src/postgres/statistics.rs (writes no subject access log row). */}
 
 ### `BREG-RES-22`: the standing-agent ceiling needs a declared actor kind
 

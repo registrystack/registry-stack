@@ -892,15 +892,15 @@ Each residual names the condition under which it applies, its consequence, and t
 
 - Condition: outside `development-loopback`, the declared issuer and a declared key URI may resolve
   to a private address.
-- Consequence: an operator who declares an internal address points Coordinator at it; the
-  allowance covers only what the operator wrote, and cloud metadata stays refused.
-- Mitigation: declare only intended addresses.
+- Consequence: an operator who declares an internal address points Coordinator at it.
+  The residual is shared across products and set out in [Token issuer and key endpoints](../#token-issuer-and-key-endpoints).
+- Mitigation: declare only intended addresses (obligation 4).
 
 ### COORDINATOR-RES-14: plain-HTTP issuer allows key substitution
 
 - Condition: `allowInsecureHttp: true` is set and an on-path attacker sits between Coordinator and
   the issuer.
-- Consequence: the attacker can substitute keys.
+- Consequence: the attacker can substitute keys (see [Token issuer and key endpoints](../#token-issuer-and-key-endpoints)).
   The setting is explicit, named in the startup warning, and confined to the issuer's origin and
   the declared key URI.
 - Mitigation: keep the setting unset outside trusted networks.
@@ -995,7 +995,7 @@ Each residual names the condition under which it applies, its consequence, and t
 - Consequence: the read is advisory at commit time: consent revoked between the read and the send
   is not seen.
   Messaging does not own consent to be contacted (see
-  [How Registry Messaging works](../../explanation/how-messaging-works/)).
+  [Registry Messaging](../../start/messaging/)).
 - Mitigation: where revoked consent must stop a send, the source of record or Messaging's own
   policy has to refuse it.
 

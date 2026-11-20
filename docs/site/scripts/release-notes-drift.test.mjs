@@ -86,6 +86,42 @@ test('product release notes track newest released changelog headings', () => {
   }
 });
 
+// The docs changelog page is an index of the stack release notes: one line per
+// `release/notes/vX.Y.Z.md`, newest first, each linking to its note.
+const releaseNoteLink =
+  /^- \[v([0-9]+\.[0-9]+\.[0-9]+)\]\(https:\/\/github\.com\/registrystack\/registry-stack\/blob\/main\/release\/notes\/v([0-9]+\.[0-9]+\.[0-9]+)\.md\)/gm;
+
+test('the changelog page lists every stack release note exactly once, newest first', () => {
+  const notes = readdirSync(resolve(repoRoot, 'release/notes'))
+    .map((name) => /^v([0-9]+\.[0-9]+\.[0-9]+)\.md$/.exec(name)?.[1])
+    .filter(Boolean);
+  const page = readRepoFile('docs/site/src/content/docs/changelog.mdx');
+  const listed = [];
+  const listLines = page.split('\n').filter((line) => line.startsWith('- '));
+  for (const line of listLines) {
+    assert.ok(
+      new RegExp(releaseNoteLink.source).test(line),
+      `changelog.mdx list line does not match the release note link pattern: ${line}`,
+    );
+  }
+  for (const match of page.matchAll(releaseNoteLink)) {
+    assert.equal(match[1], match[2], `index line for v${match[1]} must link to its own note`);
+    listed.push(match[1]);
+  }
+
+  for (const version of notes) {
+    assert.equal(
+      listed.filter((entry) => entry === version).length,
+      1,
+      `changelog.mdx must list release/notes/v${version}.md exactly once`,
+    );
+  }
+  for (const version of listed) {
+    assert.ok(notes.includes(version), `changelog.mdx links to a missing release/notes/v${version}.md`);
+  }
+  assert.deepEqual(listed, listed.toSorted(compareSemver).reverse(), 'index lines must be newest first');
+});
+
 // The registryctl changelog guard is gone with the Relay V2 cutover:
 // registryctl is no longer a release artifact (see release/manifests for the
 // current stack release) and relayctl, the tool that replaced it, keeps no

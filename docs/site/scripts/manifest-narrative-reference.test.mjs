@@ -12,9 +12,7 @@ const manifestReference = readFileSync(
   'utf8',
 );
 const narrativePages = [
-  'src/content/docs/spec/rs-terms.mdx',
   'src/content/docs/reference/glossary.mdx',
-  'src/content/docs/spec/rs-arc-g.mdx',
   'src/content/docs/explanation/architecture.mdx',
 ];
 

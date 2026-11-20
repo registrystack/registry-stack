@@ -66,7 +66,14 @@ is a separate answer, `request.not-found`: it does not exist, so no reload produ
 offering listing every caller holding the reads scope can read is where the published ones are
 named.
 
-{/* Evidence: crates/registry-scheduling-core/src/model.rs, AdmissionRequest;
+An appointment confirmed from a hold, or booked directly, has `state: confirmed` and `revision: 1`.
+Each reschedule or cancel advances the revision, and `GET /v1/appointments/{appointmentId}/history`
+lists every revision.
+
+{/* Evidence: crates/registry-scheduling-core/src/model.rs, AdmissionRequest and
+    BookingState::Confirmed; crates/registry-scheduling/src/store.rs, the appointment insert that
+    sets the revision; crates/registry-scheduling/tests/postgres_commitments.rs, which asserts
+    the confirmed state after a hold is confirmed;
     crates/registry-scheduling-core/src/admission.rs, check_duplicate();
     products/scheduling/generated/registry-scheduling.openapi.json. */}
 

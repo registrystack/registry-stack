@@ -51,7 +51,7 @@ Latin font set. Scripts beyond Latin (Arabic, Hebrew, …) need a bundle font
 - [Registry Render configuration reference](https://docs.registrystack.org/reference/render-configuration/):
   every manifest, label and runtime key, and the
   [exit codes](https://docs.registrystack.org/reference/render-configuration/#exit-codes).
-- [How Registry Render works](https://docs.registrystack.org/explanation/render-determinism/): the
+- [Registry Render overview](https://docs.registrystack.org/start/registry-render/): the
   byte-stability, path-safety, resource-bound and audit guarantees.
 - [Registry Render security](https://docs.registrystack.org/security/render/): the trust
   boundaries, operator obligations and accepted residuals.

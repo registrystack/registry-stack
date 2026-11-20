@@ -106,10 +106,13 @@ channels of one definition, the entry keeps the source channel's request shape a
 holder-presented shape under `alternatives`, so a client that ignores the member requests as it
 always did. A channel the caller is not entitled to is never listed, and a caller entitled to the
 source channel alone receives the same entry, without a `channel` member, that a source-only
-definition produces.
+definition produces. Any other collision under one definition handle, such as two request shapes on
+one channel or two purposes, fails the whole listing with `503`. Discovery never publishes an
+arbitrary winner.
 
 {/* Evidence: products/evidence/contracts/definitions.schema.yaml, alternatives;
-    crates/registry-evidence/src/runtime.rs, merge_channel_alternatives, unalternated_source;
+    crates/registry-evidence/src/runtime.rs, merge_channel_alternatives, merge_handle_group,
+    unalternated_source;
     crates/registry-evidence/src/discovery_channel_tests.rs;
     crates/registry-evidence-client/src/definitions.rs, request_shape. */}
 

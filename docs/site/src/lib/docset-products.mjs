@@ -20,7 +20,6 @@ export const PRODUCT_PAGES = Object.freeze({
   'registry-scheduling': Object.freeze([
     'start/scheduling',
     'tutorials/first-scheduling',
-    'explanation/how-scheduling-works',
     'configure/scheduling',
     'operate/scheduling',
     'reference/scheduling-configuration',
@@ -31,7 +30,6 @@ export const PRODUCT_PAGES = Object.freeze({
   'registry-render': Object.freeze([
     'start/registry-render',
     'tutorials/first-render-document',
-    'explanation/render-determinism',
     'operate/registry-render',
     'reference/render-configuration',
     'reference/render-payload',
@@ -40,7 +38,6 @@ export const PRODUCT_PAGES = Object.freeze({
   'registry-messaging': Object.freeze([
     'start/messaging',
     'tutorials/first-messaging',
-    'explanation/how-messaging-works',
     'configure/messaging',
     'operate/messaging',
     'reference/messaging-configuration',
@@ -49,7 +46,6 @@ export const PRODUCT_PAGES = Object.freeze({
   ]),
   'registry-coordinator': Object.freeze([
     'start/coordinator',
-    'explanation/how-coordinator-works',
     'configure/coordinator',
     'operate/coordinator',
     'reference/coordinator-configuration',

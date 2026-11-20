@@ -1,6 +1,6 @@
 ---
-title: Registry Relay retirement decision
-description: Why Registry Relay was retired, what support ended, and which bounded Registry Stack capabilities remain.
+title: Retired products
+description: Why Registry Relay and Registry Notary were retired, what support ended, what replaces each, and where their old documentation URLs now go.
 status: current
 owner: registry-docs
 source_repos:
@@ -10,6 +10,8 @@ doc_type: decision
 locale: en
 standards_referenced: []
 ---
+
+This page records two retired products. Registry Relay comes first, then [Registry Notary](#registry-notary).
 
 Registry Stack retired Registry Relay on 2026-10-03.
 Version 0.38.0 is the last numbered release that includes the `relay` runtime,
@@ -86,3 +88,31 @@ They remain available in two places:
 Published documentation archives and release artifacts remain unchanged.
 Current source and numbered releases beginning with 0.39.0 do not contain Relay binaries, clients,
 installers, images, or authoring tools. The latest published 0.38.0 release remains unchanged.
+
+## Registry Notary
+
+Registry Stack decided on 2026-08-03 to retire Registry Notary from the current product surface,
+source workspace, release train, and continuous integration gates.
+
+Notary combined claim evaluation, credential issuance, disclosure policy, replay handling, and
+audit provenance. Registry Evidence defines a smaller assertion boundary with its own frozen
+Version 1 contracts. Keeping both products would have given adopters overlapping entry points
+and two different product models.
+
+Registry Evidence replaces Notary for learning only a fact. It owns its source access
+independently of every other product. It is not a Notary mode or a continuation of the Notary
+credential lifecycle. Evidence Version 1 wire identifiers and production behaviour did not
+change.
+
+At the time of the decision, the Notary guidance for specific, authorised data reads pointed to
+Registry Relay. Relay has since been retired, so use [What remains](#what-remains) for that need.
+
+Historical changelogs, decision records, release manifests, and archived documentation keep their
+Registry Notary references.
+
+{/* Evidence: docs/site/src/lib/notary-retirement-redirects.mjs,
+    RETIRED_NOTARY_ROUTE_TARGETS and buildNotaryRetirementRedirects;
+    docs/site/scripts/notary-retirement.test.mjs. */}
+Current Notary documentation URLs redirect. This covers the product pages, narrative pages, API
+reference, and API operation pages. Each goes to this page or to the matching Registry
+Evidence guidance.

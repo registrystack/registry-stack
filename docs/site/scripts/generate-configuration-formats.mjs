@@ -106,7 +106,7 @@ export const PRODUCTS = [
     docsetProduct: 'registry-manifest',
     checkPage: 'products/registry-manifest/validate-and-render',
     references: [
-      { label: 'Registry Manifest portable metadata data model', page: 'spec/rs-dm-manifest' },
+      { label: 'Registry Manifest reference', page: 'products/registry-manifest/reference' },
     ],
   },
   {

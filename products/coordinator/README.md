@@ -5,7 +5,7 @@ across durable waits, outages, and worker restarts. One optional Rust service ex
 acyclic workflows. PostgreSQL stores encrypted progress and prepared commands. Receiving products
 retain authority and ownership of every effect.
 
-The [Coordinator guides](https://docs.registrystack.org/explanation/how-coordinator-works/) define the
+The [Coordinator overview](https://docs.registrystack.org/start/coordinator/) defines the
 boundary; [Deploy Registry Coordinator](https://docs.registrystack.org/operate/coordinator/) covers
 installation, custody, activation, and recovery.
 Coordinator is one of the six products the Registry Stack 1.0 compatibility promise covers: the

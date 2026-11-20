@@ -1,67 +1,128 @@
 ---
 title: Registry Render overview
-description: What Registry Render gives a registry that prints documents, what you define, what runs, what it refuses, and where to start.
+description: What Registry Render gives a registry that prints documents, what a bundle defines, what fixes a document's bytes, what runs, what it refuses, and where to start.
 status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-17"
+last_reviewed: "2026-11-20"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
 If your registry hands people printed letters, receipts, or certificates,
-[Registry Render](../../reference/glossary/#registry-render) turns record data into those PDFs,
-and the same inputs always give the same bytes.
+[Registry Render](../../reference/glossary/#registry-render) turns record data into those PDFs.
+Fixed inputs produce identical PDF bytes, on one machine and across machines.
 
 ## What a caller gets
 
-A caller sends the document's data and its issuance time, and receives the PDF with two hashes:
-one for the file, one for the exact input it was rendered from. Store both with the record. A
-re-render from the same inputs months later is byte for byte the same file, so a hash in an audit
-log still matches the paper in the folder, and a retry never yields a different document.
+A caller sends the document's data and its issuance time, and receives the PDF with two hashes: one
+for the file (`pdfDigest`), one for the exact input it was rendered from (`dataDigest`). A re-render
+from the same inputs months later is byte for byte the same file, so a hash in an audit log still
+matches the paper in the folder, and a retry of a plain render never yields a different document.
 
 ## What you define
 
-You write a bundle: plain Typst templates, a JSON Schema for each document's data, label tables
-for each language, and the fonts the templates use. `registry-render check` checks it offline,
-and `registry-render package` turns it into a package whose digest names its exact files.
+A bundle. Its `manifest.yaml` declares each document type with a version, a Typst entry file, a JSON
+Schema for the document's data, and the label locales it uses. Label tables hold the words a
+template prints in each language, and every table carries the same keys. Fonts ship in the bundle.
+`registry-render check` checks the bundle offline, and `registry-render package` turns it into a
+package whose digest names its exact files.
+[The configuration reference](../../reference/render-configuration/) lists every key.
+
+A template reads one input: an envelope holding the request's `data`, its decoded image `assets`,
+the label tables, the locale when one is sent, the issuance time, and the document's id and version.
+Nothing else reaches it: no host fonts, no environment, no clock, no network.
+
+{/* Evidence: crates/registry-render/src/manifest.rs, Manifest and DocumentSpec;
+    crates/registry-render/src/envelope.rs, build_envelope. */}
+
+## What fixes the bytes
+
+Render hashes the exact canonical input the template reads, and the issuance time in the request is
+the only clock a template sees. Each render starts a fresh Typst world, fonts load in a fixed order,
+and the PDF names a fixed creator with no version. [What a Render template
+receives](../../reference/render-payload/#what-fixes-the-bytes) gives the rules.
+
+{/* Evidence: crates/registry-render/src/envelope.rs, canonical_bytes;
+    crates/registry-render/src/world.rs, today;
+    crates/registry-render/tests/golden.rs, injected_bytes_are_the_hashed_canonical_bytes,
+    golden_hashes_match; .github/workflows/render-golden.yml. */}
 
 ## What runs
 
 `registry-render compile` renders one document at a terminal, for authoring and for printing at a
 counter without a service. `registry-render serve` is a small HTTP service that admits callers by
-OIDC access token, or by a legacy API key, and renders from one package in supervised worker
-processes. For every call it appends an audit entry that carries hashes and versions, never the
-document's data. It keeps no database and makes no outbound call while rendering; a timestamped
-seal calls the timestamp authority you configure.
+OIDC access token, or by a legacy API key, and serves one package. `registry-render package` copies
+validated source into a new directory and writes a sorted `SHA256SUMS` file covering every file,
+plus an optional `REVISION`. The package digest is the sha256 of that checksum file. The package
+writer refuses an existing directory, so a digest never gains different bytes.
+
+At startup serve verifies the checksums and, when configured, `package.expectedDigest`. Each render
+runs in a worker process that verifies the package again, so a file changed after startup is refused
+by name. [Deploy Registry Render](../../operate/registry-render/#what-you-provide) lists what a
+worker is held to.
+
+The service keeps no database and no rendered document, and it makes no outbound call while rendering. A
+timestamped seal calls the timestamp authority you configure. Its one file is the audit log: a
+`request` entry before each render starts and a `response` entry, with both hashes, before the PDF
+leaves. If either write fails, the call fails and no document is returned.
+
+{/* Evidence: crates/registry-render/src/cli.rs, Command;
+    crates/registry-render/src/bundle.rs, load_package and bind_verified_snapshot;
+    crates/registry-render/src/worker.rs, render_in_worker, supervise and cap_address_space;
+    crates/registry-render/src/server.rs, serve, render_route and seal_route;
+    crates/registry-render/tests/serve.rs, bundle_drift_after_serve_starts_is_refused_per_render. */}
 
 ## What Render refuses
 
 Render refuses data its schema rejects, a request without an issuance time, a package whose files
-changed, a caller whose token or API key it does not accept, and a public listening address. A
-render never reads the host's clock, fonts, or network; a seal takes its signing time from the
-host's clock.
-[How Registry Render works](../../explanation/render-determinism/) explains each boundary.
+changed, a caller whose token or API key it does not accept, and a public listening address. A render
+never reads the host's clock, fonts, or network.
 
-## When it is not the right product
+{/* Evidence: crates/registry-render/src/runtime.rs, validate_bind;
+    crates/registry-render/src/problem.rs, ProblemKind. */}
 
-Render does not store documents, issue credentials, or decide who may see a field:
-what a template prints is the template author's disclosure decision, and paper leaves every
-access control behind. Records stay in your registry; Render only lays them out. It can add an
-optional PAdES seal to a document it just rendered, as described in
+## Who owns the result
+
+The caller does. Render returns the PDF and forgets it. The record the document was made from should
+keep `pdfDigest` for the file and `dataDigest` for the exact input. The audit log holds hashes,
+versions, and a fingerprint of the caller's key, never data values or image bytes. What a template
+prints is a disclosure decision that belongs to its author: once on paper, it has left every access
+profile behind. Render does not store documents, issue credentials, or decide who may see a field.
+It can add an optional PAdES seal to a document it just rendered, as described in
 [Deploy Registry Render](../../operate/registry-render/#seal-documents), but it makes no
-qualified-signature claim.
+qualified-signature claim. A seal takes its signing time from the host's clock, so each sealed copy
+of one request differs in its signed bytes.
+
+{/* Evidence: crates/registry-render/src/seal.rs, module doc (PAdES) and signature_field;
+    crates/registry-render/src/openapi.rs, render route seal description ("The signing time is the
+    server's clock, truncated to seconds") and the correlation-id description ("two seals of one
+    request differ in their signed bytes");
+    crates/registry-render/src/audit.rs, module doc (no data values or asset bytes);
+    crates/registry-render/src/server.rs, sealed response (documentDigest and signedFileDigest). */}
+
+## How to check a document later
+
+Re-render it. The same package, document type, locale, data, assets, and `issuedAt` reproduce the
+stored `pdfDigest` byte for byte, which is what makes a replay after a failure safe and lets an
+auditor match paper to the log. `GET /health` names the live package digest as `bundleHash`, and
+every audit entry carries the bundle hash and renderer version.
+
+When a hash moved, one of three things changed: an input, the package, or the renderer. A Typst or
+compression upgrade can change the bytes, so
+[check a new binary before you switch to it](../../operate/registry-render/#upgrade).
+
+Compare packages, not source directories: the hash of an unpackaged source directory is not a package
+digest. [Deploy Registry Render](../../operate/registry-render/#upgrade) says what it covers.
+
+{/* Evidence: crates/registry-render/src/bundle.rs, bundle_hash (authored bundle: sha256 of the
+    manifest.yaml bytes); crates/registry-render/src/server.rs, health;
+    products/render/integrations/openfn/README.md. */}
 
 ## Where to start
 
-[Render your first document](../../tutorials/first-render-document/) renders one letter offline
-and over HTTP in about 15 minutes. [Deploy Registry Render](../../operate/registry-render/) runs
-the service for real callers.
-
-{/* Evidence: crates/registry-render/src/cli.rs, Command;
-    crates/registry-render/src/server.rs, serve, render_route and seal_route;
-    crates/registry-render/src/world.rs, RenderWorld and today;
-    crates/registry-render/src/runtime.rs, validate_bind;
-    crates/registry-render/src/problem.rs, ProblemKind. */}
+- [Render your first document](../../tutorials/first-render-document/) renders one letter offline
+  and over HTTP in about 15 minutes.
+- [Deploy Registry Render](../../operate/registry-render/) runs the service for real callers.

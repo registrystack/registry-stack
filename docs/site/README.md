@@ -134,6 +134,12 @@ value, or secret.
 
 ## Generated references
 
+Generated files name their source or generator in a header, an adjacent manifest, or the owning
+product documentation. Change the source and rerun the documented generator. Do not hand-edit
+generated OpenAPI, command reference, schema, or publication output. Static Registry Manifest
+output is a publication artifact, and Registry Evidence generated contracts are owned by its
+contract generator.
+
 Commit the source definitions, authored pages, and generators. The CLI pages in
 `src/content/docs/reference/cli/` and JSON in `src/data/generated/` are ignored
 build artifacts, like fetched OpenAPI files and synced product docs. A change to

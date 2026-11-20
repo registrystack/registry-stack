@@ -16,8 +16,9 @@ The supported native deployment has:
   fallback;
 - reviewed requester and subject-authority mappings for named requirement
   revisions, purposes, audiences, roles, selector profiles, and value origins;
-- fixed, bounded HTTP JSON source requests with fixed or tagged selector/prior-fact-bound paths,
-  fixed non-secret headers, client-side response projection, denied redirects,
+- sources that each bind a digest-pinned Adapter pack route to a named source
+  connection, with fixed, bounded HTTP JSON requests built by the pack,
+  client-side response projection, denied redirects,
   logical private-CA trust profiles, and generic Basic, static Authorization
   header, static API-key, or OAuth 2.0 client-credentials authentication through
   secret references, the last authenticating by client secret or by private-key
@@ -70,8 +71,8 @@ clients unbound tokens.
 ## Governed bundle and operator runtime
 
 The operator supplies one atomic bundle containing the approved YAML,
-preparation scripts, extraction scripts, derivation scripts, schemas, codelists,
-mappings, and fixtures. A separate closed `runtime.yaml` binds the bundle to
+Adapter packs, derivation scripts, schemas, codelists, queries, and
+fixtures. A separate closed `runtime.yaml` binds the bundle to
 one listener, bundle directory, secret root, audit destination, signer
 transport and pinned version, and local TLS trust files. It also records which
 gated acquisition kinds this deployment enables, which is a decision the
@@ -229,28 +230,19 @@ Evidence route that reads registry data. It exists only when the
 package declares `publicCheck` and the target authority activates
 `publicCheck.definition`; otherwise `POST /v1/public-check` answers as an
 unknown route. Evidence has no rate limiter on it and never reads a client
-address, so the operator's proxy carries these duties:
+address, so the operator's proxy carries the duties set out in
+[Operate the Registry Evidence audit log](https://docs.registrystack.org/operate/evidence-audit/#expose-the-public-check-route):
+method and path restriction, a per-client and whole-path limit answered with
+`429`, no client address in any log for the location, and TLS on the check
+origin printed on the certificate. The admission limit `maximumConcurrentRequests` still
+bounds concurrent source reads, but a flood that passes the proxy can occupy
+those slots. The check code is in the request body, never in a path or query,
+so a log of the path holds no code. A log of addresses would let the operator
+correlate checkers with certificates.
 
-1. Forward exactly `POST` and `OPTIONS` on `/v1/public-check`. Refuse every
-   other method on that path, and answer 404 on every other path, so no
-   relying-service route is reachable.
-2. Apply a per-client request limit and a cap on the whole path, and refuse
-   with `429` so a checker can tell the limit from an Evidence outage. The
-   admission limit `maximumConcurrentRequests` still bounds concurrent source
-   reads, but a flood that passes the proxy can occupy those slots.
-3. Keep no log with client addresses or request headers for that location,
-   neither the access log nor the error log (nginx writes the client address in
-   error-log lines too, including rate-limit refusals and upstream errors). The
-   check code is in the request body, never in a path or query, so a log of the
-   path holds no code; a log of addresses would let the operator correlate
-   checkers with certificates.
-4. Terminate TLS on the check origin printed on the certificate.
-
-Run the check on its own Evidence instance, with only the check requirement and
-its own signing, audit and subject-binding keys, so a flood or a compromise on
-the public path reaches no institutional signing key and does not starve
-relying services. This is recommended, not enforced. The cost is a second
-process with its own package, runtime file, keys and audit destination.
+Running the check on its own instance is recommended, not enforced. The cost
+is a second process with its own package, runtime file, keys and audit
+destination.
 
 A check-only instance still needs a minimal `authentication` block in its
 target, because the target schema requires one and startup proves that the
@@ -579,12 +571,8 @@ Private JWK parsing uses an explicit ES256/P-256 allowlist. Missing or failed
 signing is fail-closed and never releases an unsigned success response.
 
 Replacing a source credential file at the same secret reference does not
-invalidate an unexpired OAuth token. Provision provider overlap, replace
-owner-only files, drain and restart every affected Evidence process when
-immediate cache replacement is needed, verify a real synthetic source request,
-and retire the predecessor under the provider's token-validity policy. See
-[Source credential rotation](reference/request-adapter/deployment-projects/SOURCE-CREDENTIAL-ROTATION.md)
-for the supported sequence and the distinct emergency-revocation boundary.
+invalidate an unexpired OAuth token. [Rotate credentials and trust](https://docs.registrystack.org/operate/advanced/rotate-credentials-and-trust/)
+gives the supported sequence and the distinct emergency-revocation boundary.
 
 The operator commits one active public JWK and zero or more additionally
 published public JWKs. Every key is exact ES256/P-256 public material and its

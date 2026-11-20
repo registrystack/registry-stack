@@ -1,15 +1,17 @@
 # ITB/SEMIC validation smoke checks
 
-Registry Manifest includes an optional smoke script for checking generated DCAT
-and BRegDCAT-AP JSON-LD against the public SHACL validator endpoints of the EU
-Interoperability Test Bed (ITB), operated by the Semantic Interoperability
-Community (SEMIC).
+An optional smoke script checks generated DCAT and BRegDCAT-AP against the public EU Interoperability Test Bed validators.
+
+The Interoperability Test Bed (ITB) is operated by the Semantic Interoperability Community (SEMIC).
 The script is not a certification gate. It is a reproducible compatibility check
 for selected generated artifacts.
+For what the evidence covers and does not cover, see
+[ITB and SEMIC evidence](https://docs.registrystack.org/reference/itb-semic-evidence/).
 
 ## Run locally
 
-Render and validate the example manifest without calling external services:
+Run the script from the `products/manifest` directory of a Registry Stack checkout.
+It renders and validates the example manifest without calling external services:
 
 ```sh
 scripts/itb-semic-smoke.sh
@@ -71,18 +73,3 @@ value while accepting the artifact with zero validation errors.
 These warning classes are intentionally documented rather than hidden: the
 smoke script retains the validator reports, and public release notes should
 carry the profile and warning count when BRegDCAT-AP evidence is cited.
-
-## Public claim boundary
-
-If you cite this smoke evidence in your own documentation, keep the claim
-within these bounds:
-
-- The selected Registry Manifest JSON Schema artifacts passed ITB JSON validator
-  checks against JSON Schema Draft 2020-12 with zero errors.
-- The selected Registry Manifest DCAT JSON-LD artifact passed the public
-  ITB/SEMIC DCAT-AP SHACL validator with zero errors.
-- The selected Registry Manifest BRegDCAT-AP JSON-LD artifact passed the public
-  ITB/SEMIC BRegDCAT-AP SHACL validator with zero errors; any warnings must be
-  reported with the validator profile and saved report.
-- The smoke check is compatibility evidence for selected artifacts. It is not EU
-  certification and does not prove full conformance for every generated manifest.

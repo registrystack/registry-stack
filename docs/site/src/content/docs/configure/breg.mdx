@@ -347,7 +347,7 @@ A violating value raises a stable database error identifying the field without i
 Only derived relations reached by a read are evaluated.
 
 View definitions belong to the managed catalog fingerprint.
-When a compiler release changes these wrappers, the [changelog](../../changelog/) carries the package upgrade instructions: rebuild from the authored project with the deployed package as the baseline and apply the successor before switching the runtime.
+When a compiler release changes these wrappers, its release note carries the package upgrade instructions, and the [changelog](../../changelog/) links every release note: rebuild from the authored project with the deployed package as the baseline and apply the successor before switching the runtime.
 Starting the runtime never rewrites the active catalog.
 
 {/* Evidence: crates/registry-breg/src/derived_sql.rs, JSON_VALUE, JSON_QUERY and the accepted-grammar tests in that module;

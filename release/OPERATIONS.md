@@ -522,6 +522,9 @@ an existing output file and does not fetch refs, edit release metadata, or
 publish anything. Omit `--output` to print the draft. Review the linked changes
 and replace the draft's compatibility and migration placeholders when authoring
 `release/notes/v<version>.md`; titles and paths alone do not establish behavior.
+Add one line for the release to the changelog index,
+`docs/site/src/content/docs/changelog.mdx`, in the same change. The docs tests
+require exactly one index line for every stack release note.
 
 Update and commit the version metadata, workspace package versions in current
 lockfiles, changelogs, release notes, manifest, and generated inputs. A

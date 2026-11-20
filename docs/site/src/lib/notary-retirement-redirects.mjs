@@ -1,4 +1,4 @@
-export const NOTARY_RETIREMENT_ROUTE = '/decisions/notary-retirement-2026-08-03/';
+export const NOTARY_RETIREMENT_ROUTE = '/decisions/registry-relay-retirement-2026-10-03/';
 
 export const RETIRED_NOTARY_ROUTE_TARGETS = {
   '/journeys/registry-backed-notary-claim/': '/start/evidence-quickstart/',

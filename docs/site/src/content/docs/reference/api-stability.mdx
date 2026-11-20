@@ -50,11 +50,12 @@ the reference wins.
 | Registry Casework | [Casework policy](../../configure/casework/) and [runtime file](../../operate/casework/#write-the-runtime-file) | [Casework API](../apis/registry-casework/) |
 | Registry Coordinator | [`workflow.yaml`, `runtime.yaml`, and `scenarios.yaml`](../coordinator-configuration/) | [Coordinator API](../apis/registry-coordinator/) |
 | Registry Discovery | [Origins, evidence-type mappings, and runtime file](../../configure/discovery/) | [`GET /v1/services` and `POST /v1/evidence-types/resolve`](../../tutorials/publish-and-consume-discovery-index/#resolve-a-requirement) |
-| Registry Manifest | [`registry-manifest/v1` metadata documents](../../spec/rs-dm-manifest/) | None |
+| Registry Manifest | [`registry-manifest/v1` metadata documents](../../products/registry-manifest/reference/) | None |
 
 Registry Evidence's versioned routes are `POST /v1/evidence`, `POST /v1/evidence/batch`, and
 `GET /v1/evidence-definitions`. Its operational routes are `/health`, `/ready`, `/openapi.json`,
-`/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`. The public certificate check,
+`/catalog.jsonld`, `/.well-known/evidence/jwks.json`, `/.well-known/jwt-vc-issuer`, and
+`/.well-known/oauth-protected-resource`. The public certificate check,
 `POST /v1/public-check`, is a versioned route that stays outside the promise: see
 [experimental surfaces](#experimental-surfaces).
 

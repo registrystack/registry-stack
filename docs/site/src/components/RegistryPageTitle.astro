@@ -9,20 +9,14 @@ const path = Astro.url.pathname.replace(import.meta.env.BASE_URL, '/');
 const sectionLabels = new Map([
   ['start', 'Start'],
   ['projects', 'Projects'],
-  ['map', 'Context'],
   ['tutorials', 'Tutorials'],
   ['explanation', 'Context'],
   ['reference', 'Reference'],
   ['decisions', 'Context'],
 ]);
 
-const sectionHref = new Map([
-  ['map', 'map/boundaries-and-map/'],
-]);
-
 const currentLabels = new Map([
   ['/start/your-first-call/', 'Your first call'],
-  ['/map/boundaries-and-map/', 'Boundaries and map'],
   ['/reference/apis/', 'API reference'],
 ]);
 
@@ -65,10 +59,7 @@ const personaHref = `${import.meta.env.BASE_URL}#who-does-what`;
   <nav class="registry-breadcrumb" aria-label="Breadcrumb">
     <a href={import.meta.env.BASE_URL}>Docs</a>
     {section && <span aria-hidden="true"> / </span>}
-    {section && sectionHref.has(parts[0]) && (
-      <a href={`${import.meta.env.BASE_URL}${sectionHref.get(parts[0])}`}>{section}</a>
-    )}
-    {section && !sectionHref.has(parts[0]) && <span>{section}</span>}
+    {section && <span>{section}</span>}
     <span aria-hidden="true"> / </span>
     <span aria-current="page">{current}</span>
   </nav>

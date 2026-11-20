@@ -11,24 +11,19 @@ locale: en
 standards_referenced: []
 ---
 
-If you are building a registry service on Registry Stack and ask "this rule or step, where do I put
-it?", find its kind in the table, then follow the link to the product that holds it. Each kind of
-logic has one home, and each home declares its own interface.
+Find the kind of rule or step in the table, then follow the link to the product that holds it. Each
+kind of logic has one home, and each home declares its own interface.
 
-## Three things to know first
+## Two things to know first
 
-- **There is no single cross-product operation grammar.** A field rule, an Action plan, a hook, a
+- There is no single cross-product operation grammar. A field rule, an Action plan, a hook, a
   workflow step, an Adapter route and a message template are each written in the notation of the
-  product that owns them. Rhai appears in several products, but each product gives it its own
-  inputs, helper functions and limits.
-- **Two products publish machine-readable operation catalogues.** The Registry Coordinator
-  operation catalogue lists every versioned operation a workflow can call, with schemas, effect
-  class, idempotency key, recovery and receipt mode. The Registry Adapter effective contract lists
-  the operations one loaded Adapter exposes to a gateway. Neither covers the other products' own
-  configuration, which each product's schemas and `explain` output describe.
-- **Logic implemented outside the stack follows one pattern.** Put it behind an Adapter facade
-  route and call it from a workflow through `external.command/v1` (a POST that changes
-  something) or `external.get/v1` (a read).
+  product that owns them. Rhai appears in several products, but each gives it its own inputs,
+  helper functions and limits.
+- Two products publish machine-readable operation catalogues. The Registry Coordinator
+  operation catalogue lists every versioned operation a workflow can call. The Registry Adapter
+  effective contract lists the operations one loaded Adapter exposes to a gateway. Each other
+  product's schemas and `explain` output describe its own configuration.
 
 {/* Evidence: products/coordinator/generated/operations/catalog.json;
     products/coordinator/generated/operations/README.md;
@@ -72,57 +67,54 @@ products hold what happens around a record.
     products/casework/README.md; products/messaging/README.md; products/scheduling/README.md;
     crates/registry-breg/src/contract.rs (ACTION_PLAN_ABI_V1). */}
 
-## Keep numbers that change in records, not in scripts
+## Plans for an Action
 
-Keep a rate or fee table in a dated record, as the parameters row shows, so each change is a
-reviewed record with history, not a code edit.
+A plan runs only when its Action is invoked. It reads no stored record and no clock. The one date it
+can read is `today()`, the registry-local date captured once for the evaluation, and a Function that
+calls `today()` requires `project.timezone`. Where the Action declares Evidence, the plan can also
+call `evidence::resolve`. [Actions and Proposals](../../configure/breg-actions/)
+has the details.
 
-## Choosing a plan for an Action
-
-Start with a `fixed` plan, which writes declared values and needs no code. Move to a Rhai Function
-when a value must be calculated from the inputs or the Action must decline for a stated reason. A
-Wasm Function takes the same plan contract for logic written in another language, with narrower
-rules: it reads only the declared inputs, calls no Evidence resolver, and cannot serve a Proposal
-Action. All three produce effects only through write slots the compiler admitted, so a script
-cannot reach a target, field or operation the project did not declare.
-
-A plan runs only when its Action is invoked, and the Action context carries no trusted calendar
-date. If a rule must not be bypassed, withhold the ordinary create profile that could write the
-same state without the Action. The details are in
-[Actions and Proposals](../../configure/breg-actions/).
-
-{/* Evidence: crates/registry-breg/src/wasm_handler.rs;
-    crates/registry-breg/src/immediate_actions.rs (breg.action.handler-abi-invalid). */}
+{/* Evidence: crates/registry-breg/src/rhai_planner.rs register_action_helpers (today);
+    crates/registry-breg/src/action_handler.rs evaluate_action_at_date;
+    crates/registry-breg/src/tests/rhai_planner_sandbox_tests.rs a_plan_cannot_read_the_clock. */}
 
 ## Logic outside the stack
 
-When a rule lives in another system, such as a licensing authority's calculation service, the stack
-has no plugin mechanism to host it. Write an Adapter pack route that calls the system, and serve it
-as a facade route. The Adapter keeps the source credentials, an audit journal and an
-idempotency store for writes. A workflow then calls the route through one of two operations:
-
-- `external.get/v1` reads. The connection lists exact paths and a required response schema.
-- `external.command/v1` sends one POST to the single relative path configured on the connection. The
-  workflow supplies only the JSON body, and the alias's `interpret` Function turns the reply into
-  `accepted`, `refused` or `uncertain`. Every attempt carries the same stored body and the same
-  `Idempotency-Key`, so the receiving route must deduplicate on that header.
-
-Coordinator does not verify the provider's effect, and neither operation takes an arbitrary method
-or a destination chosen at run time. The effective contract of the Adapter lists only operations it
-can serve as reads to a gateway; a write the facade serves appears there as unserved. The
+The stack has no plugin mechanism for a rule that lives in another system. An Adapter pack route
+calls the system and is served as a facade route. A workflow reaches it through `external.get/v1`,
+a read over exact paths, or `external.command/v1`, one POST to the single path configured on the
+connection. Every attempt of a command carries the same `Idempotency-Key`, so the receiving route
+must deduplicate on that header. Coordinator does not verify the provider's effect. A write the
+facade serves appears in the Adapter effective contract as unserved. The
 [Coordinator catalogue](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/generated/operations/README.md)
-therefore remains the place to see what a workflow can call, and the
-[Adapter product page](https://github.com/registrystack/registry-stack/blob/main/products/adapter/README.md)
-describes packs, profiles and facade routes.
+lists what a workflow can call.
 
 {/* Evidence: crates/registry-coordinator/src/definition.rs;
     products/adapter/README.md;
     crates/registry-adapter-engine/src/effective_contract.rs EffectiveContract;
     crates/registry-coordinator/src/external_http.rs. */}
 
+## Trusted context
+
+Trusted context is information a product takes from a verified credential, reviewed configuration,
+or its own governed state. A caller-supplied field is not trusted because of its name.
+
+- Registry Evidence authenticates the caller and matches one complete entitlement before source
+  access. Requirement, purpose, audience, source binding (its Adapter pack route and connection),
+  derivation and output form come from the reviewed bundle. The caller selects only values the
+  request contract permits.
+- BReg access profiles bind allowed operations, fields, row constraints, purposes and claims to the
+  verified caller and the compiled registry model. The runtime does not treat an arbitrary request
+  field as an authorisation decision.
+- The identity provider stays responsible for the accuracy of the claims a product trusts.
+
+{/* Evidence: crates/registry-evidence/src/auth.rs; crates/registry-evidence/src/server.rs;
+    crates/registry-breg/src/access.rs; crates/registry-platform-oidc/src/lib.rs. */}
+
 ## Next
 
 - [How a registry works](../configuration-defined-registry/)
 - [Actions and Proposals](../../configure/breg-actions/)
-- [How Registry Coordinator works](../how-coordinator-works/)
+- [Registry Coordinator overview](../../start/coordinator/)
 - [How the products fit together](../../start/concepts/)

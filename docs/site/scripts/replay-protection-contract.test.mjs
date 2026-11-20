@@ -5,18 +5,18 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const spec = readFileSync(
-  resolve(here, '../src/content/docs/spec/rs-sec-g.mdx'),
+const page = readFileSync(
+  resolve(here, '../src/content/docs/security/evidence.mdx'),
   'utf8',
 );
-const replaySection = spec.match(
-  /^## 7[.] Replay-protection authority\n(?<body>[\s\S]*?)(?=^## 8[.] )/m,
+const replaySection = page.match(
+  /^## Replay protection\n(?<body>[\s\S]*?)(?=^## )/m,
 )?.groups?.body;
 
-assert.ok(replaySection, 'RS-SEC-G must contain the replay-protection authority section');
+assert.ok(replaySection, 'The Registry Evidence security model must contain the replay protection section');
 const prose = replaySection.replace(/\s+/g, ' ');
 
-test('RS-SEC-G distinguishes Evidence credential replay from operation receipts', () => {
+test('Evidence replay protection distinguishes credential replay from operation receipts', () => {
   assert.match(
     prose,
     /Registry Evidence holds no credential or presentation replay state/,
@@ -30,14 +30,20 @@ test('RS-SEC-G distinguishes Evidence credential replay from operation receipts'
   assert.doesNotMatch(replaySection, /^\| Registry /m);
 });
 
-test('RS-SEC-G does not turn validation into credential consumption', () => {
+test('Evidence replay protection does not turn validation into credential consumption', () => {
   assert.match(
     prose,
-    /A service that holds no replay state MUST NOT claim replay prevention or single-use enforcement/,
+    /Registry Evidence does not claim replay prevention or single-use enforcement/,
   );
   assert.match(
     prose,
     /signature[s]?, expiry, audience, nonce equality, and other request bindings/,
   );
+  assert.match(prose, /Nonce equality is not nonce consumption/);
+  assert.doesNotMatch(prose, /Evidence (prevents|enforces|blocks) (replay|single-use|reuse)/i);
   assert.doesNotMatch(replaySection, /\bRedis\b|\bPostgreSQL\b|batch-child/i);
+});
+
+test('Evidence replay protection is product behaviour, not a normative requirement', () => {
+  assert.doesNotMatch(replaySection, /\bMUST\b|\bSHALL\b|\bMAY\b|REQ-SEC/);
 });

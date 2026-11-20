@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-25"
+last_reviewed: "2026-11-20"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -15,28 +15,75 @@ standards_referenced: []
 caller. It renders the message from a reviewed template, hands it to a provider the operator
 configured, and reports what is known about delivery.
 
-Why and when to send, to whom, and whether the person agreed to be contacted stay with the
-caller's source of record. Messaging decides none of them.
-
 {/* Evidence: products/messaging/README.md;
     crates/registry-messaging-core/src/access.rs, AccessProfile. */}
 
 ## What you work with
 
-A package is the reviewed configuration a deployment serves. Three of its parts carry most of the
-work:
+You define a package, and an operator defines a runtime file. A package is the reviewed
+configuration a deployment serves unchanged. Three of its parts carry most of the work:
 
-- A template renders the message from the data a request carries, in each locale it declares.
-- A sender profile fixes a channel, email or SMS, to one provider and one sender identity.
-- An access profile names the callers allowed to send, the sender profiles and templates they may
-  use, and how fast.
+- A template renders the message from the data a request carries, in each locale it declares. It
+  has a JSON Schema for that data and a sample that `messagingctl check` renders.
+- A sender profile fixes a channel, email or SMS, to one provider and one sender identity. It says
+  how a failed send is retried, how long a message may wait, and what happens when a send may have
+  reached the provider.
+- An access profile names the OAuth clients it admits, the scopes their tokens carry, the sender
+  profiles and templates a sender may use, and the rate limits that apply.
+
+A provider in the package is only a type, `smtp` or `http`. The endpoint, credentials, and callback
+secret belong to the runtime file, together with the database, the token issuer, the audit journal,
+and retention.
 
 A caller picks a sender profile and a template, and sends the recipient and the data. Messaging
-answers `202` once the message is queued, then tracks two facts: what it did with the message, and
-what the provider reported afterwards.
+answers `202` once the message is queued. A caller that lost that answer sends the same body under
+the same `Idempotency-Key` and gets the original answer back, never a second message.
 
 {/* Evidence: crates/registry-messaging-core/src/package.rs, MessagingProject, SenderProfile,
-    and Channel; crates/registry-messaging-core/src/wire.rs, MessageDispatch and MessageReport. */}
+    Channel and RetryPolicy; crates/registry-messaging/src/config.rs, RuntimeConfig;
+    crates/registry-messaging-core/src/wire.rs, MessageDispatch and MessageReport;
+    products/messaging/generated/registry-messaging.openapi.json, the Idempotency-Key header on
+    the submit operation. */}
+
+## What a message is once accepted
+
+Before it answers `202`, Messaging resolves the caller's access profile, checks the data against
+the template's schema, renders every part, and stores the message with its recipient and rendered
+content. Nothing renders later, so a package change never alters a message already accepted.
+
+A worker then sends it. The message carries two separate facts. Dispatch is what Messaging did, and
+`submitted` means the provider accepted the message. Report is what the provider said afterwards.
+`status` reads `delivered` only when the provider reported it.
+
+Whether a message can reach `delivered` depends on the provider type, not the channel. An HTTP
+gateway that posts signed reports moves the status on, for SMS or email. An SMTP relay sends no
+receipts, so an email sent through SMTP stays `submitted`. A send that definitely failed is retried
+with growing delays until it succeeds, runs out of attempts, or expires. The
+[message status](../../reference/apis/registry-messaging/#message-status) and the
+[dispatch policy](../../reference/messaging-configuration/#dispatch-policy) hold the states and the
+defaults.
+
+{/* Evidence: crates/registry-messaging/src/messages.rs, prepare_submission();
+    crates/registry-messaging-core/src/wire.rs, MessageDispatch, MessageReport, derive_status();
+    crates/registry-messaging-core/src/package.rs, RetryPolicy, DEFAULT_MAXIMUM_ATTEMPTS and
+    DEFAULT_EXPIRY_SECONDS; crates/registry-messaging/src/callbacks.rs. */}
+
+## Who owns each answer
+
+Three parties own three different answers:
+
+- The caller's source of record owns why and when to send, the recipient, and whether the person
+  agreed to be contacted. Messaging decides none of them.
+- Messaging owns rendering, the queue, attempts, receipts, retention, and its audit journal.
+- The provider owns delivery. Messaging repeats what the provider reported and never more.
+
+One state belongs to nobody yet. `unknown` means a send may have reached the provider and nobody can
+tell. Under the sender profile's default `onUncertain: hold`, the worker sends nothing more until an
+operator who has asked the provider settles it.
+
+{/* Evidence: products/messaging/README.md; crates/registry-messaging-core/src/access.rs,
+    AccessProfile; crates/registry-messaging/src/dispatch.rs; products/messaging/contracts/;
+    products/messaging/generated/registry-messaging.openapi.json, getMessage. */}
 
 ## What it is not
 
@@ -45,8 +92,9 @@ beyond what a request carries, and it keeps rendered content and contact details
 the operator's retention allows.
 
 Being allowed to act on a record elsewhere does not let a caller send. Every product reaches
-Messaging over its public HTTP contract, and Messaging's own access profile decides. It never
-writes to another product's database.
+Messaging over its public HTTP contract, and Messaging's own access profile decides. An
+authorisation the caller holds in another product does not carry over. Messaging never writes to
+another product's database.
 
 {/* Evidence: products/messaging/README.md; crates/registry-messaging/src/retention.rs;
     products/messaging/scripts/check_dependency_direction.py. */}
@@ -56,11 +104,14 @@ writes to another product's database.
 `rstack dev` runs the starter package on your machine, with Mailpit to catch email and a
 mock SMS gateway that reports delivery.
 
+{/* Evidence: crates/registry-rstack-dev/src/messaging.rs, start_sinks and config. */}
+
 ## Next
 
 - [Send your first message](../../tutorials/first-messaging/) to send one SMS and one email
   locally.
-- [How Registry Messaging works](../../explanation/how-messaging-works/) for status, ownership,
-  and recovery.
+- [Author a Messaging package](../../configure/messaging/) to add a locale and package your change.
 - [Deploy Registry Messaging](../../operate/messaging/) to run it against PostgreSQL and your own
-  providers.
+  providers, inspect messages, and recover them.
+- [Registry Messaging API](../../reference/apis/registry-messaging/) for routes, limits, and problem
+  codes.

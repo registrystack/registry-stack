@@ -36,11 +36,14 @@ compatibility promise.
 - **A TLS proxy in front.** The listener serves plain HTTP, reads no forwarded header, and accepts
   only a loopback, private, or link-local address.
 - **A host for one process and its render workers.** Each render runs in a worker that is killed at
-  the timeout and, on Linux, capped in address space.
+  the timeout and, on Linux, capped in address space. The worker verifies the package again, and the
+  parent requires the worker's digest to equal the startup digest, so a file changed after startup is
+  refused by name.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, RenderRuntime and validate_bind;
     crates/registry-render/src/server.rs, normalize_api_key;
-    crates/registry-render/src/worker.rs, supervise and cap_address_space;
+    crates/registry-render/src/worker.rs, render_in_worker, supervise and cap_address_space;
+    crates/registry-render/tests/serve.rs, bundle_drift_after_serve_starts_is_refused_per_render;
     crates/registry-render/src/audit.rs, RenderAudit. */}
 
 ## Install the binary
@@ -301,12 +304,12 @@ bytes.
 ## Seal documents
 
 Sealing is optional. Without a `signing` block, Render loads no key, makes no timestamp call, and
-serves no seal route. With one, `POST /v1/seal/<document-type>` renders the document and returns
+serves no [seal](../../reference/glossary/#seal) route. With one, `POST /v1/seal/<document-type>` renders the document and returns
 it with a PAdES signature made with your institution's key. Render seals only what it has
 rendered from the verified package, never bytes a caller sends. A production seal's private key
 stays in Transit, which signs for Render; a test seal's key file is loaded in the serving process.
 Neither is ever sent to a render worker. The seal is PAdES baseline B-B or B-T. Render makes no
-claim that it is a qualified seal under eIDAS or any other scheme: that depends on your
+claim that it is a qualified [electronic seal](../../reference/glossary/#electronic-seal) under eIDAS or any other scheme: that depends on your
 certificate, its issuer, and how you hold the key.
 
 ### Enable a seal
@@ -719,8 +722,13 @@ refuses an existing directory, so a published digest never gains different bytes
 switch to a new binary, render a stored request with it and compare `pdfDigest` with the stored
 value. A changed hash means documents rendered after the switch differ from earlier ones.
 
+`registry-render check` prints a hash for a source directory too, but for unpackaged source it covers
+`manifest.yaml` only. Compare package digests, not source directories.
+
 {/* Evidence: .github/workflows/render-golden.yml;
-    crates/registry-render/tests/golden.rs, golden_hashes_match. */}
+    crates/registry-render/tests/golden.rs, golden_hashes_match;
+    crates/registry-render/src/bundle.rs, bundle_hash (authored bundle: sha256 of the manifest.yaml
+    bytes). */}
 
 ## Call Render from a web application
 
@@ -749,4 +757,4 @@ describes.
 ## Next
 
 - [Registry Render configuration reference](../../reference/render-configuration/)
-- [How Registry Render works](../../explanation/render-determinism/)
+- [Registry Render overview](../../start/registry-render/)

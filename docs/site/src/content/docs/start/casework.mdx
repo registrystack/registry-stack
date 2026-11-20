@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-20"
+last_reviewed: "2026-11-20"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -37,27 +37,113 @@ before any request uses it.
 own OpenID Connect issuer. Reviewers claim and decide tasks through its API, so your application
 supplies their screens. A request stays `reviewing` until a decision settles it as approved,
 rejected, changes-requested or answered, or until its producer cancels it or supersedes it with a
-replacement.
+replacement for the same subject and policy.
+
+{/* Evidence: crates/registry-casework-core/src/lifecycle.rs, "review-request" settle transitions
+    including cancelled and superseded. */}
+
+## Who is allowed to act
+
+Three parties authenticate independently. The producer is named under `trustedProducers`, bound to
+an issuer, a subject, the source namespaces it may name, and the policies it may ask for. The human
+reviewer is a person holding a staff or supervisor access profile. The downstream executor is
+whatever system later acts on the answer, under its own authority.
+
+Each party sends its own token and selects one
+[access profile](../../reference/glossary/#access-profile) per request. Casework never combines two
+profiles, and a producer's authority never supplies a reviewer's. A producer may read its result
+but never the human work, and only a staff or supervisor profile can decide.
+
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, explain() "authority";
+    crates/registry-casework/src/auth.rs; crates/registry-casework-core/src/lifecycle.rs,
+    "caller-authentication"; crates/registry-casework/src/http.rs, get_review_task. */}
+
+## What a request binds
+
+Casework freezes the policy and subject a request names when it accepts it, so a later policy
+change never reinterprets admitted work. A pinned version and digest that are not the active ones
+are refused with `review.policy-mismatch`. The
+[API reference](../../reference/apis/registry-casework/#policy-pins-and-retries) lists the subject
+fields and the `submissionDigest` the acceptance returns.
+
+{/* Evidence: crates/registry-review-protocol/src/lib.rs, PolicySelection::matches,
+    ReviewCreateRequest, SubjectBinding, submission_digest, ReviewRequestAccepted;
+    crates/registry-casework/src/review.rs, PolicyMismatch at admission;
+    crates/registry-casework/src/pinned_work.rs. */}
+
+## Where the reviewer's context comes from
+
+With `context.mode: submitted`, the producer sends a snapshot that Casework validates against the
+policy's `displaySchema` and keeps. With `context.mode: current-source`, the policy names a
+[context provider](../../reference/glossary/#context-provider), the source's read-only review
+interface. Casework keeps an exact reference and task metadata, never the source's data, and asks
+the source again under the reviewer's own credential each time a task opens. When the source
+conceals the subject or its version moved, Casework refuses the read rather than show stale data.
+Either way the source keeps its data and its disclosure.
+
+{/* Evidence: crates/registry-review-protocol/src/lib.rs, ReviewContext;
+    crates/registry-caseworkctl/src/project.rs, explain() contextCustody;
+    crates/registry-casework/src/review.rs, preflight_review_disclosure;
+    crates/registry-casework-core/src/adapter.rs. */}
+
+## Who decides, and when a request settles
+
+A policy's [stages](../../reference/glossary/#stage) run in order. Each names its
+[queue](../../reference/glossary/#queue), the profiles that may decide, and how many independent
+reviewers must approve. When a stage becomes active, Casework creates a
+[ReviewTask](../../reference/glossary/#review-task). A person reaches it only as a member of a
+[team](../../reference/glossary/#team) that serves the queue in the
+[directory](../../reference/glossary/#directory), holding a deciding profile, and not excluded as
+the initiator or an earlier stage's reviewer. The policy declares which queues and teams exist.
+The directory, which an administrator keeps at runtime, says who is in each team.
+
+Approvals that meet a stage's threshold advance the request, or settle it as approved at the last
+stage. A rejection, a request for changes, or an answer settles it at once. A decision made on a
+stale read of a task is refused, and a [clock](../../reference/glossary/#clock) never decides an
+outcome. [Author a Casework policy](../../configure/casework/) covers claims, fencing and clocks.
+
+{/* Evidence: crates/registry-casework-core/src/review.rs, ReviewStagePolicy;
+    crates/registry-casework-core/src/lifecycle.rs, "producer-or-reviewer-admission", "threshold";
+    crates/registry-casework-core/src/config.rs, TeamPolicy;
+    crates/registry-casework/src/assignment.rs, bootstrap_directory() and update_directory_team();
+    crates/registry-casework-core/src/policy.rs, ClockPolicy, ClockStepAction. */}
+
+## What comes back, and for how long
+
+The ReviewResult repeats the subject, the policy binding, and the `submissionDigest`, so the
+producer can match it to its request. It adds a terminal `status`, the `outcome`, any public reason,
+and any structured result the policy requires. It never carries the reviewer's private reason,
+which stays in Casework's
+[accountability record](../../reference/glossary/#accountability-record).
+
+The policy sets two retention windows: how long the producer can read the result, and how long the
+record of who decided is kept. [Casework retention](../../operate/casework-retention/) describes
+both.
+
+{/* Evidence: crates/registry-review-protocol/src/lib.rs, ReviewResult;
+    crates/registry-casework-core/src/review.rs, DecisionKind, ReviewRetentionPolicy;
+    crates/registry-casework/src/review/maintenance.rs, erase_expired_reviews_at. */}
 
 ## What Casework refuses
 
 Casework refuses an untrusted producer, a stale policy pin, an ineligible reviewer, and a
-decision against a changed task, and it never writes to the source;
-[How Casework works](../../explanation/how-casework-works/) explains each boundary.
+decision against a changed task.
+
+{/* Evidence: crates/registry-review-protocol/src/lib.rs, ReviewCreateRequest, ReviewResult and
+    ReviewRequestLifecycle; crates/registry-caseworkctl/src/project.rs,
+    check() and explain() refusals; crates/registry-casework/src/review.rs,
+    preflight_review_disclosure; crates/registry-casework/src/auth.rs; products/casework/README.md. */}
 
 ## When it is not the right product
 
 Casework is for human judgement. A check a program can make from data belongs in the producer or
-in an [Registry Evidence](../../reference/glossary/#evidence-gateway) assertion, and a change to a
-registry stays with that registry, which decides whether to apply an approved review.
+in a [Registry Evidence](../../reference/glossary/#evidence-gateway) assertion, and a change to a
+registry stays with that registry, which decides whether to apply an approved review. Casework
+holds no write or apply authority over the source, so a review never becomes a change there by
+itself.
 
 ## Where to start
 
 [Decide your first ReviewRequest](../../tutorials/first-casework/) runs Casework on your machine
-and takes one request to a decision in about 20 minutes.
-
-{/* Evidence: crates/registry-review-protocol/src/lib.rs, ReviewCreateRequest, ReviewResult and
-    ReviewRequestLifecycle; crates/registry-casework-core/src/lifecycle.rs, "review-request" settle
-    transitions including cancelled and superseded; crates/registry-caseworkctl/src/project.rs,
-    check() and explain() refusals; crates/registry-casework/src/review.rs,
-    preflight_review_disclosure; crates/registry-casework/src/auth.rs; products/casework/README.md. */}
+and takes one request to a decision in about 20 minutes. To write a policy, see
+[Author a Casework policy](../../configure/casework/).

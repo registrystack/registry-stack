@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-manifest
   - registry-evidence
-last_reviewed: "2026-10-03"
+last_reviewed: "2026-11-20"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -26,6 +26,10 @@ standards_referenced:
 
 Use this page to place Registry Stack inside a safeguards programme and to distinguish software
 evidence from responsibilities that remain with the institution governing and operating a DPI.
+
+This mapping covers Registry Manifest, Registry Evidence, and Registry Platform. The one exception
+is the Base Registry Engine (BReg) consent control noted under F6. Other products are not mapped on
+this page.
 
 ## Claim scope
 
@@ -52,19 +56,26 @@ against the cited product contracts.
 | Project | Safeguards contribution | Explicit boundary |
 | --- | --- | --- |
 | [Registry Manifest](../../products/registry-manifest/) | Validates and renders portable catalogue, schema, service, policy, and evidence-offering metadata. | Manifest does not serve HTTP, read production data, authorise callers, or evaluate claims. |
-| [Registry Evidence](../../products/registry-evidence/) | Evaluates predefined requirements against fixed, bounded source requests and returns signed, minimum-disclosure assertions with keyed audit. | Registry Evidence does not accept caller-provided facts, run a general policy engine, decide eligibility, or certify source truth. |
-| Registry Platform | Supplies shared primitives for authentication, audit envelopes, HTTP security, cryptography, secret references, and bounded source access. | Each runtime configures and enforces its own behaviour. See [RS-SEC-G](../../spec/rs-sec-g/). |
+| [Registry Evidence](../../products/registry-evidence/) | Evaluates predefined requirements against fixed, bounded source requests and returns signed, minimum-disclosure assertions with keyed audit. | Registry Evidence does not accept unverified caller-provided facts, run a general policy engine, decide eligibility, or certify source truth. |
+| Registry Platform | Supplies shared primitives for authentication, audit envelopes, HTTP security, cryptography, secret references, and bounded source access. | Each runtime configures and enforces its own behaviour. See [Security](../../security/). |
 
 ## Principle alignment
 
 | Framework principle cluster | How the stack helps | What remains outside the stack |
 | --- | --- | --- |
-| Data privacy by design (O3) | Computed answers in closed value forms and selective disclosure reduce unnecessary data movement. | Legal privacy duties, data-subject rights, retention rules, and consent operations remain deployment responsibilities. |
+| Data privacy by design (O3) | Computed answers in closed value forms and selective disclosure reduce unnecessary data movement. | Legal privacy duties, data-subject rights, retention rules, and collecting consent remain deployment responsibilities. BReg can enforce recorded consent (F6). |
 | Data security by design (O4) | Protected operations authenticate and authorise before source access and use shared security primitives. | Key custody, network controls, incident response, and production hardening remain operator responsibilities. |
 | Data protection during use (O5) | Registry Evidence writes keyed audit records for each evaluation and returns stable denial codes. | A programme still needs lawful basis, oversight, retention policy, and protections against overreaching requests. |
 | Transparency and accountability (F4) | Portable metadata, OpenAPI references, stable error codes, audit records, signed assertions, and the [standards register](../../reference/standards/) make behaviour reviewable. | Public governance, remedies, procurement discipline, and independent accountability mechanisms are institutional controls. |
-| Autonomy and agency (F6) | A Registry Evidence subject is represented by an audience-scoped opaque binding, limiting correlation across relying parties. | The stack does not provide a wallet, consent journey, opt-out path, appeal process, or assisted service channel. |
+| Autonomy and agency (F6) | By default a Registry Evidence subject is represented by an audience-scoped opaque binding, limiting correlation across relying parties. Under the holder-bound mode, the experimental `evidence-oid4vci` service delivers the credential to the holder's wallet. The holder proves possession of the bound key and chooses which verifiers see it. Reusing one key makes the holder correlatable across those verifiers. A BReg `requireConsent` read permission returns a row only while the subject's recorded consent covers that recipient and purpose. A withdrawal applies to the next request. | The stack does not provide a wallet, a subject-facing consent or opt-out workflow, an appeal process, or an assisted service channel. BReg records the subject's decision but does not establish its lawful basis. |
 | Inclusion and non-discrimination (F2, F3, O6) | Metadata, audit, and assertion records can help reviewers inspect what a service exposes and how it behaves. | Accessibility, language access, community participation, and non-digital alternatives require institutional action. |
+
+{/* Evidence (F6): crates/registry-evidence-oid4vci/src/service.rs, /offers, /token, /nonce, and
+    /credential routes and ProofRefusal; crates/registry-platform-sdjwt/src/lib.rs,
+    validate_oid4vci_proof_jwt; crates/registry-evidence/src/selector.rs,
+    ResolvedSubjectScope::HolderKeyThumbprint; crates/registry-breg/src/consent.rs, module doc;
+    crates/registry-breg/tests/postgres_consent_access.rs,
+    real_postgres_consent_gates_every_read_operation_on_id_and_on_reference. */}
 
 ## Fit boundaries
 
@@ -76,5 +87,4 @@ supervision, or public accountability.
 
 - [Architecture overview](../architecture/)
 - [How Evidence works](../how-evidence-works/)
-- [Boundaries and map](../../map/boundaries-and-map/)
 - [Standards register](../../reference/standards/)
