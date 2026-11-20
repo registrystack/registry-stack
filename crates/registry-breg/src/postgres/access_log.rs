@@ -83,7 +83,7 @@ impl PostgresRecordReadService {
                     to_char(accessed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
                     requester, service_client, purpose, operation_id,
                     to_char(visible_after AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
-                    exemption_reason
+                    exemption_reason, access_reason
                 FROM (SELECT record_id FROM registry_data.{}
                       WHERE record_id = $2::text::uuid AND {} = $5
                         AND record_lifecycle = 'active' LIMIT 1) AS owned
@@ -130,7 +130,8 @@ impl PostgresRecordReadService {
                 json!({"id":row.get::<_,String>(0), "accessedAt":row.get::<_,String>(1),
                     "requester":row.get::<_,String>(2), "serviceClient":row.get::<_,Option<String>>(3),
                     "purpose":row.get::<_,Option<String>>(4), "operationId":row.get::<_,String>(5),
-                    "visibleAfter":row.get::<_,String>(6), "exemptionReason":row.get::<_,Option<String>>(7)})
+                    "visibleAfter":row.get::<_,String>(6), "exemptionReason":row.get::<_,Option<String>>(7),
+                    "accessReason":row.get::<_,Option<String>>(8)})
             }).collect::<Vec<_>>();
             let next_cursor = has_more.then(|| events.last().expect("nonempty page")["id"].clone());
             let held = HeldReadResponse::from_json(&json!({"events":events,"nextCursor":next_cursor}))?;

@@ -16,6 +16,7 @@ use crate::postgres::{ExpectedRegistryIdentity, RuntimePool, RuntimeRevoke, SqlI
 
 pub(crate) const REQUESTER_HEADER: &str = "registry-access-requester";
 pub(crate) const PURPOSE_HEADER: &str = "registry-access-purpose";
+pub(crate) const ACCESS_REASON_HEADER: &str = "registry-access-reason";
 const MAX_VALUE_BYTES: usize = 512;
 /// Rows one `expire_subject_access_log()` call erases at most.
 const EXPIRY_BATCH_ROWS: i64 = 1_000;
@@ -55,6 +56,12 @@ pub(crate) fn forwarded_attribution(
         requester: decode_header(headers, REQUESTER_HEADER)?,
         purpose: decode_header(headers, PURPOSE_HEADER)?,
     }))
+}
+
+/// The caller's own stated reason for the request, in the same canonical
+/// base64url UTF-8 form as the forwarded attribution headers.
+pub(crate) fn access_reason(headers: &HeaderMap) -> Result<String, ()> {
+    decode_header(headers, ACCESS_REASON_HEADER)
 }
 
 fn decode_header(headers: &HeaderMap, name: &str) -> Result<String, ()> {
@@ -107,6 +114,9 @@ pub(crate) async fn install(
                 exemption_reason text CHECK (octet_length(exemption_reason) BETWEEN 1 AND 256),
                 CHECK (accessed_at <= visible_after AND visible_after < expires_at)
              );
+             ALTER TABLE registry_internal.registry_subject_access_log
+                ADD COLUMN IF NOT EXISTS access_reason text
+                CHECK (octet_length(access_reason) BETWEEN 1 AND 512);
              CREATE INDEX IF NOT EXISTS registry_subject_access_log_record
                 ON registry_internal.registry_subject_access_log (entity_id, record_id, accessed_at DESC, event_id DESC);
              CREATE INDEX IF NOT EXISTS registry_subject_access_log_expiry
@@ -163,6 +173,7 @@ pub(crate) async fn record_reads(
         .map(|value| value.purpose.as_str())
         .or(context.purpose());
     let service_client = forwarded.and(context.requester_client());
+    let access_reason = context.access_reason();
     let exemption = policy
         .exemptions
         .get(context.selected_profile())
@@ -222,10 +233,10 @@ pub(crate) async fn record_reads(
                     (event_id, entity_id, record_id, requester, service_client, purpose,
                      operation_id, access_profile, package_revision, request_id,
                      authority_entity,
-                     visible_after, expires_at, exemption_reason)
+                     visible_after, expires_at, exemption_reason, access_reason)
                  SELECT hit.event_id::uuid, $2, hit.record_id::uuid, $4, $5, $6, $7, $8, $9,
                          $10::text::uuid, $14, transaction_timestamp() + make_interval(days => $11),
-                         transaction_timestamp() + make_interval(days => $12), $13
+                         transaction_timestamp() + make_interval(days => $12), $13, $15
                  FROM unnest($1::text[], $3::text[]) AS hit(event_id, record_id)",
             &[
                 (&event_ids, Type::TEXT_ARRAY),
@@ -242,6 +253,7 @@ pub(crate) async fn record_reads(
                 (&retention, Type::INT4),
                 (&reason, Type::TEXT),
                 (&authority_entity, Type::TEXT),
+                (&access_reason, Type::TEXT),
             ],
         )
         .await

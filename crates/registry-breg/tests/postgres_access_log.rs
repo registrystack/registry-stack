@@ -49,10 +49,20 @@ impl ReadinessProbe for Ready {
 }
 
 fn compiled() -> CompiledRegistry {
+    compiled_with_profiles(false)
+}
+
+/// The same registry plus a non-default `reasoned` profile that requires an
+/// access reason on every request.
+fn compiled_with_access_reason() -> CompiledRegistry {
+    compiled_with_profiles(true)
+}
+
+fn compiled_with_profiles(with_reasoned: bool) -> CompiledRegistry {
     let permission = json!({"recordType":"entry", "operations":["get","list","lookup"],
         "readableFields":["label"], "lookups":[{"selector":"by-subject","valueOrigin":"request"}],
         "rowBoundaries":"unrestricted"});
-    let source = json!({"datasets":{"records": {}},
+    let mut source = json!({"datasets":{"records": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
         "recordTypes":{"entry": {"primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
@@ -63,9 +73,15 @@ fn compiled() -> CompiledRegistry {
                 "exemptions":{"investigator":{"reason":"investigation-policy-canary","delayDays":7}}}}},
         "accessProfiles":{
             "reader": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{"records":[permission.clone()]}},
-            "investigator": {"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{"records":[permission]}}
+            "investigator": {"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{"records":[permission.clone()]}}
         }
     });
+    if with_reasoned {
+        source["accessProfiles"].as_object_mut().unwrap().insert(
+            "reasoned".to_owned(),
+            json!({"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"requireAccessReason":true,"permissions":{"records":[permission]}}),
+        );
+    }
     compile_project(
         &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
         &[],
@@ -234,8 +250,12 @@ async fn setup_relationships() -> (TestDatabase, Router, MockIdp) {
 }
 
 async fn setup() -> (TestDatabase, Router, MockIdp) {
+    setup_registry(compiled()).await
+}
+
+async fn setup_registry(registry: CompiledRegistry) -> (TestDatabase, Router, MockIdp) {
     let database = TestDatabase::create(2).await;
-    let registry = Arc::new(compiled());
+    let registry = Arc::new(registry);
     let (migration, task) = database.connect_migration().await;
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
@@ -1291,6 +1311,193 @@ async fn head_on_history_reads_is_refused_without_a_journaled_read() {
     assert_eq!(status, StatusCode::OK, "the same read is served to GET");
     assert_eq!(logged_operations(&db, &record).await.len(), 1);
     db.assert_every_audit_request_answered_once();
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+/// A request under the `reasoned` profile. `reason` is the raw header value, so
+/// a test can send a malformed one; `None` sends no header.
+async fn send_reasoned(
+    app: &Router,
+    token: &str,
+    method: Method,
+    uri: &str,
+    body: Option<Value>,
+    reason: Option<&str>,
+) -> (StatusCode, Value) {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"));
+    if let Some(reason) = reason {
+        request = request.header("Registry-Access-Reason", reason);
+    }
+    let body = if let Some(body) = body {
+        request = request.header("content-type", "application/json");
+        Body::from(serde_json::to_vec(&body).unwrap())
+    } else {
+        Body::empty()
+    };
+    let response = app
+        .clone()
+        .oneshot(request.body(body).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+fn reason_header(reason: &str) -> String {
+    URL_SAFE_NO_PAD.encode(reason)
+}
+
+#[tokio::test]
+async fn a_request_without_its_required_access_reason_is_refused_before_any_record_is_read() {
+    let (db, app, idp) = setup_registry(compiled_with_access_reason()).await;
+    let agency = token(&idp, "agency", "officer");
+    let record = format!("/v1/records/entries/{RECORD_A}?accessProfile=reasoned");
+    let (status, problem) = send_reasoned(&app, &agency, Method::GET, &record, None, None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+    assert_eq!(problem["code"], "request.access_reason_required");
+    let (status, problem) = send_reasoned(
+        &app,
+        &agency,
+        Method::GET,
+        "/v1/records/entries?accessProfile=reasoned&$top=1",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+    assert_eq!(problem["code"], "request.access_reason_required");
+    let (status, problem) = send_reasoned(
+        &app,
+        &agency,
+        Method::POST,
+        "/v1/records/entries:lookup?accessProfile=reasoned",
+        Some(json!({"selector":"by-subject","values":{"subject":SUBJECT}})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+    assert_eq!(problem["code"], "request.access_reason_required");
+    assert_eq!(access_log_rows(&db).await, 0);
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn an_invalid_access_reason_is_refused_like_a_missing_one() {
+    let (db, app, idp) = setup_registry(compiled_with_access_reason()).await;
+    let agency = token(&idp, "agency", "officer");
+    let record = format!("/v1/records/entries/{RECORD_A}?accessProfile=reasoned");
+    let too_long = reason_header(&"r".repeat(513));
+    let control = reason_header("reason\nwith control");
+    let blank = reason_header("   ");
+    let padded = format!("{}=", reason_header("padded"));
+    let doubled = format!("{0}, {0}", reason_header("twice"));
+    for invalid in [
+        "not base64url!",
+        "",
+        padded.as_str(),
+        too_long.as_str(),
+        control.as_str(),
+        blank.as_str(),
+        doubled.as_str(),
+    ] {
+        let (status, problem) =
+            send_reasoned(&app, &agency, Method::GET, &record, None, Some(invalid)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{invalid:?}: {problem}");
+        assert_eq!(problem["code"], "request.access_reason_required");
+    }
+    assert_eq!(access_log_rows(&db).await, 0);
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_valid_access_reason_is_stored_and_returned_by_the_access_log_route() {
+    let (db, app, idp) = setup_registry(compiled_with_access_reason()).await;
+    let agency = token(&idp, "agency", "officer");
+    let owner = token(&idp, "portal", SUBJECT);
+    let reason = "welfare check, case 42 é";
+    let (status, record) = send_reasoned(
+        &app,
+        &agency,
+        Method::GET,
+        &format!("/v1/records/entries/{RECORD_A}?accessProfile=reasoned"),
+        None,
+        Some(&reason_header(reason)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{record}");
+    let (status, page) = history(&app, &owner, RECORD_A, "").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let events = page["events"].as_array().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["accessReason"], reason);
+    let stored: Option<String> = db
+        .admin
+        .query_one(
+            "SELECT access_reason FROM registry_internal.registry_subject_access_log",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(stored.as_deref(), Some(reason));
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_access_log_route_requires_the_reason_under_a_profile_that_requires_one() {
+    let (db, app, idp) = setup_registry(compiled_with_access_reason()).await;
+    let owner = token(&idp, "portal", SUBJECT);
+    let uri = format!("/v1/records/entries/{RECORD_A}/access-log?accessProfile=reasoned");
+    let (status, problem) = send_reasoned(&app, &owner, Method::GET, &uri, None, None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+    assert_eq!(problem["code"], "request.access_reason_required");
+    let (status, page) = send_reasoned(
+        &app,
+        &owner,
+        Method::GET,
+        &uri,
+        None,
+        Some(&reason_header("subject reviews their own history")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_profile_without_the_flag_needs_no_reason_and_logs_none() {
+    let (db, app, idp) = setup_registry(compiled_with_access_reason()).await;
+    let agency = token(&idp, "agency", "officer");
+    let owner = token(&idp, "portal", SUBJECT);
+    let (status, _) = send_reasoned(
+        &app,
+        &agency,
+        Method::GET,
+        &format!("/v1/records/entries/{RECORD_A}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, page) = history(&app, &owner, RECORD_A, "").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let events = page["events"].as_array().unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(events[0]["accessReason"].is_null());
     drop(app);
     drop(idp);
     db.cleanup().await;
