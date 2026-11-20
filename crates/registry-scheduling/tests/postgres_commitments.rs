@@ -11950,6 +11950,22 @@ mod queue_depth {
             .await
             .unwrap();
 
+        // An intent still waiting out its back-off is not overdue, however old
+        // its due time.
+        fx.admin
+            .execute(
+                "INSERT INTO scheduling_outbox
+         (outbox_id,purpose,generation,state,attempt,next_attempt_at,claim_id,
+          appointment_revision,due_at,payload,created_at)
+         VALUES (gen_random_uuid(),'change',2,'pending',1,$2,$1,1,$3,'{}'::jsonb,$3)",
+                &[
+                    &claim,
+                    &(now + TimeDelta::hours(1)),
+                    &(earliest - TimeDelta::hours(5)),
+                ],
+            )
+            .await
+            .unwrap();
         let outbox = fx.store.outbox_depth(now).await.expect("sample the outbox");
         let count = |state: &str| {
             outbox
@@ -11976,6 +11992,43 @@ mod queue_depth {
         assert!(dead >= 1, "{hooks:?}");
         assert!(hooks.by_state.iter().all(|(state, _)| state != "pending"));
         assert_eq!(hooks.oldest_pending_age_seconds, 0);
+    }
+
+    #[tokio::test]
+    async fn the_hook_age_measures_from_when_the_pending_event_was_captured() {
+        let fx = hook_fixture().await;
+        let slot = first_slot(&fx, OFFERING, 90, 200).await;
+        let booking = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+        let (status, appointment) = fx
+            .post("/v1/appointments", &fx.agent, "queue-depth-1", booking)
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{appointment}");
+        let now: DateTime<Utc> = fx
+            .admin
+            .query_one("SELECT now()", &[])
+            .await
+            .unwrap()
+            .get(0);
+        fx.admin
+            .execute(
+                "UPDATE registry_outbox SET created_at=$1",
+                &[&(now - TimeDelta::seconds(300))],
+            )
+            .await
+            .unwrap();
+        let hooks = fx
+            .store
+            .hook_delivery_depth(now)
+            .await
+            .expect("sample the hook deliveries");
+        assert!(
+            hooks
+                .by_state
+                .iter()
+                .any(|(state, n)| state == "pending" && *n >= 1),
+            "{hooks:?}"
+        );
+        assert_eq!(hooks.oldest_pending_age_seconds, 300);
     }
 
     #[tokio::test]

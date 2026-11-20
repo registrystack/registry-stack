@@ -295,8 +295,14 @@ fn status_class(status: StatusCode) -> &'static str {
         "5xx"
     } else if status.is_client_error() {
         "4xx"
-    } else {
+    } else if status.is_redirection() {
+        "3xx"
+    } else if status.is_success() {
         "2xx"
+    } else if status.is_informational() {
+        "1xx"
+    } else {
+        "other"
     }
 }
 
@@ -387,6 +393,15 @@ mod tests {
         assert!(text.contains(
             "scheduling_http_requests_total{route=\"unmatched\",method=\"other\",status=\"2xx\"} 1"
         ));
+    }
+
+    #[test]
+    fn every_status_has_its_own_bounded_class() {
+        let class = |code: u16| status_class(StatusCode::from_u16(code).unwrap());
+        assert_eq!(
+            [100, 200, 204, 304, 404, 503, 600].map(class),
+            ["1xx", "2xx", "2xx", "3xx", "4xx", "5xx", "other"]
+        );
     }
 
     #[test]
