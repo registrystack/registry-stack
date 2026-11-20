@@ -751,7 +751,7 @@ pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
                     (id, value)
                 })
                 .collect::<BTreeMap<_, _>>();
-            json!({
+            let mut inspection = json!({
                 "id": record_type.id, "apiName": record_type.api_name,
                 "revision": record_type.definition_revision, "display": record_type.display,
                 "grouping": record_type.grouping, "eventRecord": record_type.event_record,
@@ -797,7 +797,11 @@ pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
                     "encrypted": false,
                     "required": false, "derivation": field.derivation_id,
                 }))).collect::<Vec<_>>()
-            })
+            });
+            if !record_type.disclosure_conditions.is_empty() {
+                inspection["disclosureConditions"] = json!(record_type.disclosure_conditions);
+            }
+            inspection
         })
         .collect::<Vec<_>>();
     json!({"registryId": registry.registry_id(), "revision": registry.revision(),

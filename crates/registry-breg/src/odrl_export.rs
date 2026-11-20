@@ -87,7 +87,7 @@ pub fn export_odrl(
             }
             for operation in &access.operations {
                 let operation_name = operation_name(*operation);
-                let reasons = omission_reasons(access, *operation);
+                let reasons = omission_reasons(entity, profile_id, access, *operation);
                 let status = if reasons.is_empty() {
                     let policy = policies
                         .entry(profile_id.clone())
@@ -299,7 +299,12 @@ fn set_constraint<'a>(
     }
 }
 
-fn omission_reasons(access: &AccessProfileSource, operation: Operation) -> Vec<&'static str> {
+fn omission_reasons(
+    entity: &CompiledEntity,
+    profile_id: &str,
+    access: &AccessProfileSource,
+    operation: Operation,
+) -> Vec<&'static str> {
     let mut reasons = Vec::new();
     if !matches!(operation, Operation::Get | Operation::List) {
         reasons.push("unsupported-operation");
@@ -315,6 +320,9 @@ fn omission_reasons(access: &AccessProfileSource, operation: Operation) -> Vec<&
     }
     if access.task_grant.is_some() {
         reasons.push("task-grant");
+    }
+    if !crate::disclosure::plan(entity, profile_id).is_empty() {
+        reasons.push("disclosure-condition");
     }
     reasons
 }
