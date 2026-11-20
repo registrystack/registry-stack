@@ -112,6 +112,35 @@ test('accepts semver tags, full commits, and root-relative current docs', (t) =>
   });
 });
 
+test('resolves a synced product page through its repository source', (t) => {
+  const { root, commit } = createRepository(t);
+  const dataDir = writeEvidenceData(root, {
+    contractUrls: ['/products/thing/reference/', '/products/thing/absent/'],
+    contractStatus: 'current-source',
+  });
+  writeFileSync(
+    resolve(dataDir, 'repo-docs.yaml'),
+    [
+      'repos:',
+      '  thing:',
+      '    local: ../..',
+      '    docs:',
+      '      - src: source/file.md',
+      '        dest: products/thing/reference',
+      '      - src: source/absent.md',
+      '        dest: products/thing/absent',
+      '',
+    ].join('\n'),
+  );
+
+  assert.deepEqual(checkEvidenceLinks({ repoRoot: root, dataDir, sourceRef: commit }), {
+    checked: 2,
+    errors: [
+      `contracts[2]: /products/thing/absent/: does not resolve to a documentation page at release source ${commit}`,
+    ],
+  });
+});
+
 test('selects the exact tag from the highest valid release manifest', (t) => {
   const manifestDir = mkdtempSync(join(tmpdir(), 'registry-release-manifests-'));
   t.after(() => rmSync(manifestDir, { recursive: true, force: true }));

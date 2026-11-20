@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -332,7 +332,31 @@ function checkRepositoryEvidence(
   return undefined;
 }
 
-function currentDocsCandidates(rawUrl) {
+// Product pages under `products/` are copied into the site at build time, so
+// the documentation tree in Git does not hold them. `repo-docs.yaml` maps each
+// one to the repository file it is copied from, and that file is what a link
+// to the page resolves to. Only entries copied from this repository count.
+function syncedPageSources(dataDir) {
+  const manifestPath = resolve(dataDir, 'repo-docs.yaml');
+  const sources = new Map();
+  if (!existsSync(manifestPath)) {
+    return sources;
+  }
+  const manifest = YAML.parse(readFileSync(manifestPath, 'utf8'));
+  for (const repo of Object.values(manifest?.repos ?? {})) {
+    if (repo?.local !== '../..') {
+      continue;
+    }
+    for (const entry of repo.docs ?? []) {
+      if (typeof entry?.src === 'string' && typeof entry?.dest === 'string') {
+        sources.set(entry.dest, entry.src);
+      }
+    }
+  }
+  return sources;
+}
+
+function currentDocsCandidates(rawUrl, syncedSources) {
   let url;
   try {
     url = new URL(rawUrl, 'https://docs.registrystack.invalid');
@@ -347,6 +371,10 @@ function currentDocsCandidates(rawUrl) {
     return [];
   }
   const route = posix.join(...parts);
+  const syncedSource = syncedSources.get(route);
+  if (syncedSource !== undefined) {
+    return [syncedSource];
+  }
   return [
     `docs/site/src/content/docs/${route}.mdx`,
     `docs/site/src/content/docs/${route}.md`,
@@ -355,8 +383,8 @@ function currentDocsCandidates(rawUrl) {
   ];
 }
 
-function checkCurrentDocsEvidence(repoRoot, sourceRef, rawUrl, gitCommand) {
-  const candidates = currentDocsCandidates(rawUrl);
+function checkCurrentDocsEvidence(repoRoot, sourceRef, rawUrl, gitCommand, syncedSources) {
+  const candidates = currentDocsCandidates(rawUrl, syncedSources);
   if (candidates.length === 0) {
     return 'contains an invalid current-docs route';
   }
@@ -388,9 +416,16 @@ export function checkEvidenceLinks({
     return { checked: 0, errors: [error.message] };
   }
 
+  let syncedSources;
+  try {
+    syncedSources = syncedPageSources(dataDir);
+  } catch (error) {
+    return { checked: 0, errors: [`repo-docs.yaml: ${error.message}`] };
+  }
+
   for (const item of evidence) {
     const error = item.url.startsWith('/')
-      ? checkCurrentDocsEvidence(repoRoot, sourceRef, item.url, gitCommand)
+      ? checkCurrentDocsEvidence(repoRoot, sourceRef, item.url, gitCommand, syncedSources)
       : checkRepositoryEvidence(repoRoot, item.url, gitCommand, {
           candidateTag,
           sourceRef,
