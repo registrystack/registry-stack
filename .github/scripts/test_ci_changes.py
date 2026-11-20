@@ -2451,6 +2451,14 @@ class CiChangesTest(unittest.TestCase):
         self.assertFalse(classify(self.workspace, ("README.md",), pull_request=True)["deployment"])
         self.assertTrue(classify(self.workspace, (), full_sweep=True)["deployment"])
 
+    def test_bregctl_apply_warnings_run_the_deployment_tests(self) -> None:
+        # The operator accepts exactly the successor warnings bregctl prints,
+        # and its tests read them from this file.
+        outputs = classify(
+            self.workspace, ("crates/registry-bregctl/src/apply_lifecycle.rs",), pull_request=True
+        )
+        self.assertTrue(outputs["deployment"])
+
     def test_evidence_code_and_product_contracts_select_its_shards_and_drift_gate(self) -> None:
         # A runtime change reaches the real Evidence router consumers, including
         # the Casework institutional exchange acceptance through its dev dependency.
