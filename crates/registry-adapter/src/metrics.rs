@@ -393,7 +393,10 @@ mod tests {
             .read_to_string(&mut answer)
             .await
             .expect("the barrier response drains");
-        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        assert!(
+            answer.starts_with("HTTP/1.1 200"),
+            "the request after the partial connection is answered with 200"
+        );
 
         shutdown.send(()).expect("signal metrics-server shutdown");
         let result = tokio::time::timeout(std::time::Duration::from_secs(1), task)
