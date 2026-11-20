@@ -312,11 +312,15 @@ package digest the process serves, so a rollout can confirm what each process ru
 | `casework_due_review_tasks` | gauge | none |
 | `casework_completion_deliveries` | gauge | `state`: `pending`, `retrying`, `leased`, `unknown`, `dead-lettered`, `expired` |
 | `casework_completion_oldest_undelivered_age_seconds` | gauge | none |
+| `casework_metrics_sample_failures_total` | counter | `sample`: `review`, `completion-backlog` |
 
-Every gauge except `casework_database_up` is read from the database, cached for 5 seconds, and
-bounded at 5 seconds. When the database cannot answer, `casework_database_up` is 0, the other series
-are absent from that scrape, and the service logs a warning. Alert on `casework_database_up` as well
-as on the values.
+Every gauge except `casework_database_up` is read from the database and cached for 5 seconds.
+The review counts and the completion backlog are read separately, one pool connection at a time,
+each bounded at 5 seconds. When the review counts cannot be read, `casework_database_up` is 0 and
+the review gauges are absent from that scrape. When the completion backlog cannot be read, only the
+`casework_completion_*` series are absent and `casework_database_up` stays 1. Each failure is
+logged with its cause and added to `casework_metrics_sample_failures_total` for that sample. Alert
+on `casework_database_up` and on a rising failure counter as well as on the values.
 
 `casework_completion_deliveries` counts review completion deliveries that have not been delivered.
 `pending` has not been attempted yet, `retrying` has failed an attempt and waits for the next one,
@@ -328,8 +332,8 @@ expired delivery stays counted until review retention erases it, so a non-zero `
 
 `casework_completion_oldest_undelivered_age_seconds` is how long the oldest pending, leased, unknown
 or dead-lettered delivery has waited, or 0 when there are none. It runs from the delivery's next
-attempt time while pending, from its attempt start while leased, and from its last change once it is
-unknown or dead-lettered. Expired deliveries do not set it.
+attempt time while pending, from its attempt start while leased, from its last change once it is
+unknown, and from the time it was dead-lettered once it is dead-lettered. Expired deliveries do not set it.
 
 {/* Evidence: crates/registry-casework/src/metrics.rs, metrics_router() and render();
     crates/registry-casework/src/runtime/completion.rs, completion_backlog();
