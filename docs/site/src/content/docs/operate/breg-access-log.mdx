@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-21"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -142,6 +142,58 @@ from the operational audit.
     crates/registry-breg/tests/postgres_access_log.rs
     direct_client_is_distinguished_in_allowed_and_refused_request_audit,
     forwarded_access_attribution_requires_a_verified_trusted_client_and_never_grants_subject_access. */}
+
+### Record why a record was read
+
+An access profile with `requireAccessReason: true` refuses every request that does not carry a
+`Registry-Access-Reason` header, with `400 request.access_reason_required`.
+The header is the reason as UTF-8 text, base64url-encoded without padding.
+It must be sent once, decode to at most 512 bytes, and be neither blank nor contain a control
+character.
+BReg stores the decoded text as `accessReason` on each subject access log entry the request
+writes, and returns it with the entry.
+It is null when the profile does not require a reason.
+The text is caller-asserted, so treat it as a claim and not as verified authority.
+
+A Record type with `accessLog` gives each reason a durable home.
+A Record type without `accessLog` still refuses a request that omits the reason, but keeps no entry
+of it.
+`bregctl check` refuses `requireAccessReason` on a profile that holds an operation that does not check
+the reason: import, invoke, start, bulk data export (`allowDataExport`), and the action, proposal, dataset,
+external view and projection-refresh permissions
+(`breg.access-profile.access-reason-operation-unsupported`).
+
+### Alert on reads
+
+A Record type that declares `accessLog` can raise an event for each logged read by a named profile.
+A read hook on a Record type without `accessLog` compiles and never fires, because the event is
+written with the entry.
+Declare a hook with `trigger: read` and the profiles it covers:
+
+```yaml
+hooks:
+  - id: case-read-v1
+    phase: after
+    trigger: read
+    profiles:
+      - caseworker
+    projection: []
+    handler:
+      type: url
+      destinationId: security-desk
+```
+
+The event is stored in the same transaction as the access log entry, so a read that is logged
+raises its alert, and a failure to store either refuses the read.
+Its `values` is empty and its `access` member names the profile, operation, requester, purpose,
+access reason and the access log event id.
+It names the record's latest retained revision.
+See [Webhooks](../breg-webhooks/#alert-on-reads).
+
+{/* Evidence: crates/registry-breg/src/outbox.rs insert_read_events;
+    crates/registry-breg/src/subject_access_log.rs access_reason;
+    crates/registry-breg/src/compiler/disclosure.rs validate_module_access_reason_operations;
+    crates/registry-breg/tests/postgres_access_log.rs. */}
 
 ## Set the retention
 

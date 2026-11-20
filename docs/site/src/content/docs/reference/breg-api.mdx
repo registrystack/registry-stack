@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-11-21"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -226,6 +226,21 @@ them against current data.
     crates/registry-breg/tests/http_read_only.rs, relationship_route_uses_path_grant_not_direct_target_rights();
     crates/registry-breg/tests/postgres_membership_access.rs, real_postgres_membership_reads_recheck_live_membership_and_hide_processing_inputs();
     crates/registry-breg/tests/postgres_consent_access.rs, hidden_or_empty() and real_postgres_consent_gates_every_read_operation_on_id_and_on_reference(). */}
+
+### Access reason
+
+A profile that sets `requireAccessReason` refuses a request without a `Registry-Access-Reason` header
+with `400 request.access_reason_required`. The value is the reason as UTF-8 text, base64url-encoded
+without padding. It must be one header, at most 684 characters encoded, decode to at most 512 bytes,
+and be neither blank nor contain a control character. The reason is checked on Record reads and
+direct writes, stored with each subject access log entry, and carried by a `read` event.
+
+### Withheld records and fields
+
+A `disclosureConditions` entry on a Record type withholds a record, its history or named fields from
+the profiles it does not exempt. A withheld record answers as an absent one. A withheld member is
+returned as `null` on reads and revisions, and is dropped from write responses. A Patch `test` on a
+withheld member is refused like a guess at an absent one.
 
 ## Mutations
 
@@ -656,6 +671,11 @@ All responses use `Cache-Control: no-store`.
 Unknown optional object members remain ignorable within the client's validated grammar.
 Malformed required members, duplicate identities, resource bounds, and broken references refuse selection.
 A descriptor alone never permits an operation under another profile.
+
+Runtime metadata flags `mayBeWithheld: true` on each field a `fields` condition names for the selected
+profile. It also lists the bound conditions as `disclosure`, each with its `id` and `withhold`, and the
+field names of a `fields` condition. It never carries the `when` literals. A profile that no condition
+binds sees neither member.
 
 ### Event records
 

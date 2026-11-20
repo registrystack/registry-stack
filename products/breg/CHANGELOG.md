@@ -120,6 +120,31 @@
   both. The Node.js and Python clients expose `review`
   and `application` on each Action as the served string, or `null` (`None`) when
   the server sends none, as an older server does.
+- A Record type can declare `disclosureConditions`. Each is a conjunction of one to four literal
+  tests on the record's current values, and withholds the whole record (`withhold: record`), its
+  revisions and snapshots (`history`) or named optional fields (`fields`) from every access profile
+  that does not list it under `exemptProfiles`. The record timer is never withheld from. A withheld
+  record answers as an absent one, and a withheld member is `null` on reads and revisions and absent
+  from write responses. A JSON Patch `test` on a withheld field is refused, and a direct write that a
+  `record` condition would hide from the writer is refused with `write.outside-boundary`. PostgreSQL
+  enforces a `record` condition as a restrictive row policy. `bregctl check` refuses a bound profile
+  whose filters, sorts, lookups, export, hook projections, read paths, row, membership or consent
+  boundaries, derived fields, spatial queries, Evidence facts, external view links or statistical
+  datasets reach a withheld value (`breg.disclosure.*`). Runtime metadata flags `mayBeWithheld` and
+  lists the bound conditions without their literals, `bregctl explain access` lists them in full, the
+  access preview names the ids that bind a profile, and the ODRL export omits a grant a condition
+  binds (`disclosure-condition`). Proposal inputs stay visible to reviewers, and a uniqueness or
+  reference conflict can reveal that a withheld record exists. Packages that use the new key change
+  revision, and the metadata, OpenAPI and Explain documents gain members that earlier clients ignore.
+- An access profile can set `requireAccessReason: true`. A request under it without a valid
+  `Registry-Access-Reason` header (unpadded base64url UTF-8, at most 512 bytes) is refused with
+  `400 request.access_reason_required`. The reason is stored on the subject access log entry and
+  returned as `accessReason`. A hook with `trigger: read` and `profiles` raises a value-free event
+  for each logged read by those profiles, carrying an `access` object. The event is written with the
+  access log entry, so it fires only on a Record type with `accessLog`. `bregctl check` refuses the
+  key on a profile that grants import, invoke, start, `allowDataExport`, or an action, proposal,
+  dataset, external view or projection-refresh permission, which do not check the reason
+  (`breg.access-profile.access-reason-operation-unsupported`).
 
 - Report hook deliveries and ingestion runs as metrics:
   `breg_hook_deliveries` by state, including `dead-lettered`, and
