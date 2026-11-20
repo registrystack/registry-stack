@@ -13,10 +13,38 @@ from pathlib import Path
 
 DATABASE_NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
 SNAPSHOT_ID = re.compile(r"[0-9a-f]{8,64}")
+DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+STDERR_LINES = 20
+STDERR_CHARACTERS = 2000
+# A backup receipt identifies its bundle by these manifest fields and by the
+# digest of the manifest bytes.
+RECEIPT_FIELDS = ("namespace", "release", "databaseId", "packageDigest", "activationId", "capturedAt")
+NOT_INCLUDED = (
+    "Persistent volumes are not included: the BReg audit and package claims, and any attachment or object storage. "
+    "Copy their files into the --files directory to keep them with this bundle."
+)
+STOPPED_PHASES = {"Succeeded", "Failed"}
 
 
 class BundleError(Exception):
     """A refused capture, snapshot or restore."""
+
+
+def stderr_tail(output):
+    """Format the end of a command's error output for an operator message.
+
+    Only the command's own error output is used, never the data sent to its
+    standard input. Control characters are replaced so a message cannot drive
+    the operator's terminal.
+    """
+    if isinstance(output, bytes):
+        output = output.decode(errors="replace")
+    lines = (output or "").splitlines()[-STDERR_LINES:]
+    text = "\n".join(
+        "".join(character if character.isprintable() else " " if character == "\t" else "?" for character in line)
+        for line in lines
+    )[-STDERR_CHARACTERS:]
+    return f"\nLast error output:\n{text}" if text.strip() else ""
 
 
 def file_hashes(root):
@@ -36,23 +64,40 @@ def file_hashes(root):
     return hashes
 
 
-def verify_bundle(root):
+def verify_bundle(root, receipt=None):
+    """Check the bundle files against its manifest and, when given, the manifest against its receipt."""
     manifest_path = root / "manifest.json"
     if not manifest_path.is_file() or manifest_path.is_symlink():
         raise BundleError("A complete backup needs a regular manifest.json.")
+    encoded = manifest_path.read_bytes()
     try:
-        manifest = json.loads(manifest_path.read_text())
+        manifest = json.loads(encoded)
     except ValueError as error:
         raise BundleError("The backup manifest is unreadable.") from error
-    if manifest.get("version") != 1 or manifest.get("files") != file_hashes(root / "payload"):
+    if not isinstance(manifest, dict) or manifest.get("version") != 1 or manifest.get("files") != file_hashes(root / "payload"):
         raise BundleError("The backup files differ from the recorded manifest.")
+    if receipt is not None and (
+        not isinstance(receipt, dict) or hashlib.sha256(encoded).hexdigest() != receipt.get("manifestSha256")
+        or any(manifest.get(field) != receipt.get(field) for field in RECEIPT_FIELDS)
+    ):
+        raise BundleError("The bundle manifest differs from the backup receipt. Use the receipt written for this bundle.")
     return manifest
+
+
+def read_receipt(path):
+    try:
+        return json.loads(path.read_text())
+    except ValueError as error:
+        raise BundleError("The backup receipt is unreadable.") from error
 
 
 def checked_run(argv, label, *, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE):
     result = subprocess.run(argv, stdin=stdin, stdout=stdout, stderr=subprocess.PIPE, check=False)
     if result.returncode:
-        raise BundleError(f"{label} failed with exit {result.returncode}. Inspect it in the private operator environment.")
+        raise BundleError(
+            f"{label} failed with exit {result.returncode}. Inspect it in the private operator environment."
+            f"{stderr_tail(result.stderr)}"
+        )
     return result.stdout
 
 
@@ -69,7 +114,21 @@ def valid_database(name):
     return name
 
 
+def running_release_pods(args):
+    """Name the release's Pods that have not finished."""
+    pods = json.loads(checked_run([
+        args.kubectl_bin, "--context", args.kube_context, "--namespace", args.namespace,
+        "get", "pods", "-l", f"app.kubernetes.io/instance={args.release}", "-o", "json",
+    ], "List the release Pods"))
+    return [
+        pod.get("metadata", {}).get("name", "unnamed") for pod in pods.get("items", [])
+        if pod.get("status", {}).get("phase") not in STOPPED_PHASES
+    ]
+
+
 def capture(args):
+    if not DNS_LABEL.fullmatch(args.release) or len(args.release) > 53:
+        raise BundleError("Supply a valid Helm release name.")
     captured_at = datetime.now(timezone.utc).isoformat()
     if len(set(args.database)) != len(args.database):
         raise BundleError("Name each database once.")
@@ -88,6 +147,14 @@ def capture(args):
         raise BundleError("Supply the reviewed installation files in a private directory.")
     if args.output.resolve().is_relative_to(args.files.resolve()):
         raise BundleError("Put the new backup outside the directory being copied.")
+    # A dump is consistent with the audit and other copied files only while
+    # no release workload can write.
+    running = running_release_pods(args)
+    if running:
+        raise BundleError(
+            f"Release {args.release} has {len(running)} Pods that have not finished. "
+            "Stop it with stack_operator.py stop, then capture again."
+        )
     args.output.mkdir(mode=0o700)
     payload = args.output / "payload"
     dumps = payload / "databases"
@@ -100,15 +167,21 @@ def capture(args):
                 *pg_command(args), "pg_dump", "--format=custom", "--no-password",
                 "--username=postgres", f"--dbname={database}",
             ], f"Dump {database}", stdout=output)
+    if running_release_pods(args):
+        raise BundleError(
+            f"Release {args.release} started Pods during the capture. {args.output} has no manifest and is not a "
+            "backup. Stop the release and capture again into a new directory."
+        )
     manifest = {
         "version": 1, "namespace": args.namespace, "release": args.release,
         "databaseId": status["databaseId"], "packageDigest": digest, "activationId": status["activationId"],
         "capturedAt": captured_at, "databases": databases, "files": file_hashes(payload),
+        "notIncluded": NOT_INCLUDED,
     }
     with (args.output / "manifest.json").open("x") as output:
         json.dump(manifest, output, indent=2)
         output.write("\n")
-    print(f"Captured {len(databases)} databases and the reviewed files.")
+    print(f"Captured {len(databases)} databases and the reviewed files. {NOT_INCLUDED}")
 
 
 def snapshot(args):
@@ -125,9 +198,7 @@ def snapshot(args):
     _, archived = archived_manifest(args.restic_bin, ids[0])
     if hashlib.sha256(archived).hexdigest() != manifest_hash:
         raise BundleError("The archived manifest digest differs from the captured bundle.")
-    receipt = {
-        key: manifest[key] for key in ("namespace", "release", "databaseId", "packageDigest", "activationId", "capturedAt")
-    }
+    receipt = {key: manifest[key] for key in RECEIPT_FIELDS}
     receipt.update({"snapshotId": ids[0], "manifestSha256": manifest_hash})
     with args.receipt.open("x") as output:
         json.dump(receipt, output, indent=2)
@@ -165,8 +236,7 @@ def verify_archived_manifest(archived, receipt, now, maximum_age):
     if hashlib.sha256(archived).hexdigest() != receipt.get("manifestSha256"):
         raise BundleError("The archived manifest digest differs from the backup receipt.")
     manifest = json.loads(archived)
-    fields = ("namespace", "release", "databaseId", "packageDigest", "activationId", "capturedAt")
-    if any(manifest.get(field) != receipt.get(field) for field in fields):
+    if any(manifest.get(field) != receipt.get(field) for field in RECEIPT_FIELDS):
         raise BundleError("The archived manifest differs from the backup receipt.")
     verify_capture_age(manifest, now, maximum_age)
 
@@ -194,7 +264,7 @@ def check_snapshot(args):
 
 
 def restore_database(args):
-    manifest = verify_bundle(args.bundle)
+    manifest = verify_bundle(args.bundle, read_receipt(args.receipt))
     source = valid_database(args.database)
     target = valid_database(args.target)
     if source not in manifest.get("databases", []):
@@ -234,6 +304,7 @@ def main():
     capture_command.add_argument("--files", type=Path, required=True)
     capture_command.add_argument("--output", type=Path, required=True)
     restore_command.add_argument("--bundle", type=Path, required=True)
+    restore_command.add_argument("--receipt", type=Path, required=True)
     restore_command.add_argument("--database", required=True)
     restore_command.add_argument("--target", required=True)
     snapshot_command = commands.add_parser("snapshot", help="Archive the bundle to the configured Restic repository.")
@@ -244,8 +315,9 @@ def main():
     check_command.add_argument("--receipt", type=Path, required=True)
     check_command.add_argument("--max-age-hours", type=int, required=True)
     check_command.add_argument("--restic-bin", default="restic")
-    verify_command = commands.add_parser("verify", help="Verify the manifest of a retrieved bundle.")
+    verify_command = commands.add_parser("verify", help="Verify a retrieved bundle against its manifest and receipt.")
     verify_command.add_argument("--bundle", type=Path, required=True)
+    verify_command.add_argument("--receipt", type=Path, required=True)
     args = parser.parse_args()
     os.umask(0o077)
     try:
@@ -258,8 +330,8 @@ def main():
         elif args.action == "restore-database":
             restore_database(args)
         else:
-            manifest = verify_bundle(args.bundle)
-            print(f"Verified {len(manifest['files'])} backup files.")
+            manifest = verify_bundle(args.bundle, read_receipt(args.receipt))
+            print(f"Verified {len(manifest['files'])} backup files against the receipt.")
     except (BundleError, OSError, ValueError, KeyError, TypeError) as error:
         parser.exit(1, f"state-bundle: {error}\n")
 
