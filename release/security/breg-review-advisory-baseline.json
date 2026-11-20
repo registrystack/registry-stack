@@ -1053,6 +1053,64 @@
         ],
         "definition_digest": "sha256:291057518c3668fba9608f489e29086cd1ba6ae51ea8efbb51f6a890af40188c"
       }
+    },
+    {
+      "vulnerability_id": "CVE-2026-84786",
+      "package": "libssl3t64",
+      "installed_version": "3.5.7-1~deb13u3",
+      "severity": "High",
+      "status": "accepted_risk",
+      "owner": "@jeremi",
+      "rationale": "On 2026-11-20, candidate run 44691945435 at source 36d25ef65267fce0c8f38446e9b18677977e9698 reports CVE-2026-84786 as High with no fixed version for libssl3t64 3.5.7-1~deb13u3 in this breg-review image. The Grype database added it after review-only advisory evidence rehearsal 44669797021 recorded the executable closure cited below. The flaw is in OpenSSL's libssl and libcrypto: a TLS client with DANE enabled can dereference a NULL pointer on an unusual combination of certificates and TLSA records, so it crashes. Debian trixie and trixie-security still list it as vulnerable with no fix. libssl3t64 is present only as the reviewed Debian package overlay on the Distroless cc-debian13 base, in the same layer as libc6 and zlib1g. No shipped executable loads it. The reviewed reports exposure/breg-review.json record DT_NEEDED for /usr/local/bin/breg-review as only libc, libm, libpthread and the loader. No resolved dynamic lookup names an OpenSSL symbol, so no DANE verification code runs. The workspace links no OpenSSL crate (cargo tree -i openssl-sys finds none). TLS uses rustls on ring, and aws-lc-rs is used only for cryptography. No product starts a QUIC or HTTP/3 endpoint, and reqwest's optional quinn dependency is not compiled. Images carry no openssl CLI or shell. The exception holds only while the whole-image fingerprint, package version and executable closure stay as reviewed. Remove it when Debian publishes a fix (fix_available) or an executable starts to load libssl or libcrypto.",
+      "reviewed_at": "2026-11-20",
+      "expires_at": "2027-01-26",
+      "invalidation_triggers": [
+        "candidate_image_identity_mismatch",
+        "candidate_rootfs_changed",
+        "component_layer_changed",
+        "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
+        "fix_available",
+        "material_finding_changed",
+        "package_version_changed",
+        "rootfs_evidence_mismatch",
+        "runtime_base_changed",
+        "runtime_config_changed"
+      ],
+      "runtime_definition_digest": "sha256:132a61db5ec73d17ed885e4f10f5a86ee108073b33856b2bffea4db240488f1b",
+      "component_layer_id": "sha256:004fe0af626f09a5df9f6585febab3ccea05ff19d5194c3332ebf605a56e56d0",
+      "exposure_assertion": {
+        "kind": "whole_image_fingerprint_equals",
+        "reference_image_digest": "sha256:9c0c24f57676de415111b2b95ff60b5d187ed30b0ae61aa54e4a9c925bffa4d7",
+        "reference_source_revision": "0946377c19e093fa33b5121580560e24244cbf6b",
+        "reference_provenance": "local_reproduction",
+        "runtime_definition_digest": "sha256:132a61db5ec73d17ed885e4f10f5a86ee108073b33856b2bffea4db240488f1b",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:c8438e4fde1934e61c88311633f00949ff645d5c04cdb8671fa3d78164d2f307"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:9792e3cbb541c8f44c7acf5f14f4022ea62998ecc787d326bed4d8b6547dfd92"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+            "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
+          },
+          {
+            "path": "/usr/local/bin/breg-review",
+            "sha256": "sha256:714cead3681fdec5b2edd65924cbcc7342d45f67bb9941bb559842f9d6142990"
+          }
+        ],
+        "definition_digest": "sha256:291057518c3668fba9608f489e29086cd1ba6ae51ea8efbb51f6a890af40188c"
+      }
     }
   ]
 }

@@ -1053,6 +1053,64 @@
         ],
         "definition_digest": "sha256:c5730e09fdcb5c2e45168d1340e1862da94633ffcaf73677ad997cf4566c6c18"
       }
+    },
+    {
+      "vulnerability_id": "CVE-2026-84786",
+      "package": "libssl3t64",
+      "installed_version": "3.5.7-1~deb13u3",
+      "severity": "High",
+      "status": "accepted_risk",
+      "owner": "@jeremi",
+      "rationale": "On 2026-11-20, candidate run 44691945435 at source 36d25ef65267fce0c8f38446e9b18677977e9698 reports CVE-2026-84786 as High with no fixed version for libssl3t64 3.5.7-1~deb13u3 in this evidence image. The Grype database added it after review-only advisory evidence rehearsal 44669797021 recorded the executable closure cited below. The flaw is in OpenSSL's libssl and libcrypto: a TLS client with DANE enabled can dereference a NULL pointer on an unusual combination of certificates and TLSA records, so it crashes. Debian trixie and trixie-security still list it as vulnerable with no fix. libssl3t64 is present only as the reviewed Debian package overlay on the Distroless cc-debian13 base, in the same layer as libc6 and zlib1g. No shipped executable loads it. The reviewed reports exposure/evidence.json record DT_NEEDED for /usr/local/bin/evidence as only libc, libm, libpthread and the loader. No resolved dynamic lookup names an OpenSSL symbol, so no DANE verification code runs. The one review-required nonconstant dlsym site is bundled SQLite's extension-symbol wrapper, closed from source because registry-platform-sqlite denies load_extension and the compiled rusqlite features omit it. The workspace links no OpenSSL crate (cargo tree -i openssl-sys finds none). TLS uses rustls on ring, and aws-lc-rs is used only for cryptography. No product starts a QUIC or HTTP/3 endpoint, and reqwest's optional quinn dependency is not compiled. Images carry no openssl CLI or shell. The exception holds only while the whole-image fingerprint, package version and executable closure stay as reviewed. Remove it when Debian publishes a fix (fix_available) or an executable starts to load libssl or libcrypto.",
+      "reviewed_at": "2026-11-20",
+      "expires_at": "2027-01-26",
+      "invalidation_triggers": [
+        "candidate_image_identity_mismatch",
+        "candidate_rootfs_changed",
+        "component_layer_changed",
+        "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
+        "fix_available",
+        "material_finding_changed",
+        "package_version_changed",
+        "rootfs_evidence_mismatch",
+        "runtime_config_changed",
+        "runtime_base_changed"
+      ],
+      "runtime_definition_digest": "sha256:6f1f0923487c307bc5127387df7392ccc2fa68457ce47622807a04cbe1eff9c4",
+      "component_layer_id": "sha256:5f3a59fbb6d622b679afa03a04897a4cb81e04332d432e6928f3ed1990bb98d7",
+      "exposure_assertion": {
+        "kind": "whole_image_fingerprint_equals",
+        "reference_image_digest": "sha256:b062c376cc180dfaeed6700dd9b3c0392a54b7271651fff40ce9502f95703763",
+        "reference_source_revision": "0946377c19e093fa33b5121580560e24244cbf6b",
+        "reference_provenance": "local_reproduction",
+        "runtime_definition_digest": "sha256:6f1f0923487c307bc5127387df7392ccc2fa68457ce47622807a04cbe1eff9c4",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:c8438e4fde1934e61c88311633f00949ff645d5c04cdb8671fa3d78164d2f307"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:9792e3cbb541c8f44c7acf5f14f4022ea62998ecc787d326bed4d8b6547dfd92"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+            "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
+          },
+          {
+            "path": "/usr/local/bin/evidence",
+            "sha256": "sha256:ee17da4483cfda5740f94b7e4911b74ba012046edcd5820e79b1650101641d05"
+          }
+        ],
+        "definition_digest": "sha256:c5730e09fdcb5c2e45168d1340e1862da94633ffcaf73677ad997cf4566c6c18"
+      }
     }
   ]
 }
