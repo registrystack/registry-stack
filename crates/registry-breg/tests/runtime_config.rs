@@ -2146,6 +2146,46 @@ fn metrics_listener_refuses_public_unspecified_and_ephemeral_bindings() {
 }
 
 #[test]
+fn metrics_listener_container_private_permits_the_wildcard_only_when_declared() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let configured = format!(
+        "{base}metricsListener:\n  bind: 0.0.0.0:9100\n  networkExposure: container-private\n"
+    );
+    let config = parse_runtime_config_with_env(&configured, env_lookup)
+        .expect("container-private permits the wildcard");
+    assert_eq!(
+        config.metrics_listener().expect("configured").bind(),
+        "0.0.0.0:9100".parse().unwrap()
+    );
+    for exposure in ["", "  networkExposure: private-address\n"] {
+        let configured = format!("{base}metricsListener:\n  bind: 0.0.0.0:9100\n{exposure}");
+        assert_eq!(
+            parse_runtime_config_with_env(&configured, env_lookup)
+                .expect_err("the wildcard needs the declaration"),
+            RuntimeConfigError::InvalidMetricsListener
+        );
+    }
+    // Container-private permits the wildcard and nothing else.
+    for bind in [
+        "8.8.8.8:9100",
+        "169.254.1.1:9100",
+        "0.0.0.0:0",
+        "0.0.0.0:8080",
+    ] {
+        let configured = format!(
+            "{base}metricsListener:\n  bind: {bind}\n  networkExposure: container-private\n"
+        );
+        assert_eq!(
+            parse_runtime_config_with_env(&configured, env_lookup)
+                .expect_err("still refused under container-private"),
+            RuntimeConfigError::InvalidMetricsListener,
+            "{bind}"
+        );
+    }
+}
+
+#[test]
 fn metrics_listener_refuses_shared_registry_binding() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);

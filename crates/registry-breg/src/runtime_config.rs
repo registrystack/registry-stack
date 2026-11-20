@@ -16,9 +16,9 @@ use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
     check_metrics_bind_address, check_metrics_bind_apart, AuditKeyConfig, JwksSource, ListenerBind,
-    OidcIssuerConfig, PackageConfig as SharedPackageConfig, RemovedKey, RuntimeConfigLoader,
-    RuntimeEnvelope, SecretError, SecretReference, SecretResolver, TaskGrantStatusConfig,
-    REMOVED_OIDC_JWKS_SOURCE_KIND,
+    ListenerNetworkExposure, OidcIssuerConfig, PackageConfig as SharedPackageConfig, RemovedKey,
+    RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
+    TaskGrantStatusConfig, REMOVED_OIDC_JWKS_SOURCE_KIND,
 };
 use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
@@ -1767,7 +1767,8 @@ pub struct MetricsListenerConfig {
 impl MetricsListenerConfig {
     fn from_raw(raw: RawMetricsListenerConfig) -> Result<Self> {
         let bind = raw.bind.socket_addr();
-        check_metrics_bind_address(bind).map_err(|_| RuntimeConfigError::InvalidMetricsListener)?;
+        check_metrics_bind_address(bind, raw.network_exposure)
+            .map_err(|_| RuntimeConfigError::InvalidMetricsListener)?;
         Ok(Self { bind })
     }
 
@@ -3236,6 +3237,11 @@ struct RawMetricsListenerConfig {
     /// Operator-private loopback or private numeric address and named port,
     /// for example `127.0.0.1:9100`.
     bind: ListenerBind,
+    /// `private-address` (the default) requires a loopback or private
+    /// address. `container-private` also permits the unspecified address
+    /// (`0.0.0.0` or `::`) for a container on a private network.
+    #[serde(default)]
+    network_exposure: ListenerNetworkExposure,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
