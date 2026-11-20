@@ -4457,6 +4457,8 @@ formats:
     securityMembers:
       - pointer: /listener/bind
         whenOmitted: refused
+      - pointer: /metricsListener/bind
+        whenOmitted: closed
       - pointer: /database/runtimeUrlRef
         whenOmitted: refused
       - pointer: /database/testOnlyPlaintext
@@ -4551,6 +4553,10 @@ formats:
       - pointer: /hookIngress/sources/*/requestsPerMinute
         whenOmitted: refused
       - pointer: /hookIngress/sources/*/burst
+        whenOmitted: refused
+      - pointer: /metricsListener
+        whenOmitted: closed
+      - pointer: /metricsListener/bind
         whenOmitted: refused
       - pointer: /sources/rabbitmq/*/host
         whenOmitted: refused

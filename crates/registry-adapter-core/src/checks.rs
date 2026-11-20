@@ -13734,6 +13734,7 @@ mod tests {
             outbound_tls: None,
             allowed_private_cidrs: UniqueList::new(Vec::new()).expect("empty"),
             listener: serde_json::from_str(r#"{ "bind": "127.0.0.1:8080" }"#).expect("listener"),
+            metrics_listener: None,
             database: serde_json::from_str(
                 r#"{
                     "runtimeUrlRef": "secret:env/DB_RUNTIME",

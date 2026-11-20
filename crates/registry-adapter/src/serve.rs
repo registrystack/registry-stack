@@ -36,6 +36,7 @@ use crate::idempotent::{
     self, PostgresIdempotencyStore, MAX_CALLER_IDENTITY_BYTES, MAX_CALLER_ISSUER_BYTES,
 };
 use crate::journal;
+use crate::metrics::{metrics_router, Metrics};
 
 /// The access token media type the facade admits (RFC 9068).
 const ACCESS_TOKEN_TYPE: &str = "at+jwt";
@@ -428,6 +429,7 @@ async fn sweep_on_cadence<Sweep, Batch>(
     store: &'static str,
     cadence: Duration,
     batch_bound: u64,
+    metrics: Arc<Metrics>,
     mut shutdown: watch::Receiver<bool>,
     mut sweep: Sweep,
 ) -> Result<(), ServeError>
@@ -457,6 +459,7 @@ where
                         result = sweep() => match result {
                             Ok(erased) => erased,
                             Err(reason) => {
+                                metrics.record_sweep_failure(store);
                                 tracing::error!(store, reason = %reason,
                                     "retention sweep failed; retrying at the next tick");
                                 break;
@@ -479,12 +482,14 @@ where
 async fn sweep_idempotency_responses(
     store: PostgresIdempotencyStore,
     cadence: Duration,
+    metrics: Arc<Metrics>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ServeError> {
     sweep_on_cadence(
         "idempotency response",
         cadence,
         u64::from(idempotent::MAX_SWEEP_BATCH),
+        metrics,
         shutdown,
         || {
             let store = store.clone();
@@ -505,12 +510,14 @@ async fn sweep_idempotency_responses(
 async fn sweep_journal_events(
     pool: Pool,
     retention: Duration,
+    metrics: Arc<Metrics>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ServeError> {
     sweep_on_cadence(
         "journal",
         retention_cadence(retention),
         u64::from(journal::MAX_RETENTION_BATCH),
+        metrics,
         shutdown,
         || {
             let pool = pool.clone();
@@ -805,7 +812,29 @@ pub async fn run(
         tracing::info!(operation = %operation.operation, binding = %operation.binding, "serving");
     }
     tracing::info!(address = %local, "listening");
+    let metrics = Arc::new(Metrics::default());
+    let metrics_for_server = Arc::clone(&metrics);
+    let metrics_listener = match &loaded.runtime.metrics_listener {
+        Some(configured) => {
+            let metrics_address = configured.bind.socket_addr();
+            if registry_adapter_core::metrics_bind_overlaps(metrics_address, address) {
+                return Err(ServeError::Configuration(
+                    "metricsListener.bind must differ from listener.bind".to_owned(),
+                ));
+            }
+            let bound = TcpListener::bind(metrics_address)
+                .await
+                .map_err(|error| ServeError::Bind(format!("metrics listener: {error}")))?;
+            let metrics_local = bound
+                .local_addr()
+                .map_err(|error| ServeError::Bind(error.to_string()))?;
+            tracing::info!(address = %metrics_local, "serving metrics");
+            Some(bound)
+        }
+        None => None,
+    };
     let state = Arc::new(FacadeState {
+        metrics: Arc::clone(&metrics),
         codec,
         loaded,
         effective_contract,
@@ -821,17 +850,36 @@ pub async fn run(
     let serving = axum::serve(listener, router(state)).with_graceful_shutdown(async move {
         let _closed = server_shutdown.changed().await;
     });
-    let server = async move { serving.await };
+    let mut metrics_shutdown = shutdown_receiver.clone();
+    let metrics_serving = async move {
+        match metrics_listener {
+            Some(bound) => {
+                axum::serve(bound, metrics_router(Arc::clone(&metrics_for_server)))
+                    .with_graceful_shutdown(async move {
+                        let _closed = metrics_shutdown.changed().await;
+                    })
+                    .await
+            }
+            None => Ok(()),
+        }
+    };
+    let server = async move { tokio::try_join!(serving, metrics_serving).map(|_| ()) };
     let journal_sweep = sweep_journal_events(
         journal_sweep_pool,
         journal_window,
+        Arc::clone(&metrics),
         shutdown_receiver.clone(),
     );
     let sweeper = async move {
         match idempotency {
             Some((store, retention)) => tokio::try_join!(
                 journal_sweep,
-                sweep_idempotency_responses(store, retention_cadence(retention), shutdown_receiver),
+                sweep_idempotency_responses(
+                    store,
+                    retention_cadence(retention),
+                    Arc::clone(&metrics),
+                    shutdown_receiver,
+                ),
             )
             .map(|_| ()),
             None => journal_sweep.await,
@@ -912,6 +960,7 @@ mod tests {
             "test",
             Duration::from_secs(3_600),
             10,
+            Arc::new(Metrics::default()),
             receiver,
             move || {
                 let erased = batches
@@ -951,6 +1000,7 @@ mod tests {
             "test",
             Duration::from_secs(3_600),
             10,
+            Arc::new(Metrics::default()),
             receiver,
             std::future::pending::<Result<u64, String>>,
         ));
@@ -1006,18 +1056,26 @@ mod tests {
             Err("connection refused".to_owned()),
             Ok(3_u64),
         ])));
+        let sweep_metrics = Arc::new(Metrics::default());
         let sweeping = tokio::spawn(
-            sweep_on_cadence("journal", cadence, 10, receiver, move || {
-                let batch = batches
-                    .lock()
-                    .expect("the batch list is not poisoned")
-                    .pop_front()
-                    .expect("the sweep asked for no more batches than listed");
-                called
-                    .send((tokio::time::Instant::now(), batch.is_ok()))
-                    .expect("the test is listening");
-                async move { batch }
-            })
+            sweep_on_cadence(
+                "journal",
+                cadence,
+                10,
+                Arc::clone(&sweep_metrics),
+                receiver,
+                move || {
+                    let batch = batches
+                        .lock()
+                        .expect("the batch list is not poisoned")
+                        .pop_front()
+                        .expect("the sweep asked for no more batches than listed");
+                    called
+                        .send((tokio::time::Instant::now(), batch.is_ok()))
+                        .expect("the test is listening");
+                    async move { batch }
+                },
+            )
             .with_subscriber(subscriber),
         );
         for (tick, succeeded) in [(0_u32, false), (1, false), (2, true)] {
@@ -1041,6 +1099,13 @@ mod tests {
             .expect("shutdown stays responsive")
             .expect("the sweep task joins")
             .expect("shutdown succeeds after failed sweeps");
+        assert!(
+            sweep_metrics
+                .render()
+                .lines()
+                .any(|line| line == "adapter_retention_sweep_failures_total{store=\"journal\"} 2"),
+            "the two failed batches are counted by store"
+        );
         let logged = String::from_utf8(log.0.lock().expect("the log is not poisoned").clone())
             .expect("the log is UTF-8");
         let failures = logged

@@ -20,7 +20,6 @@ default = []
 # Enables the separate Basic-authenticated, rate-bounded hook ingress that can
 # wake the interval pass loop early. The facade never enables or links it.
 job-hook = [
-    "dep:axum",
     "dep:base64",
     "dep:futures",
     "dep:registry-platform-crypto",
@@ -95,9 +94,10 @@ registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto = { workspace = true, optional = true }
 registry-platform-httputil = { workspace = true, optional = true }
+registry-platform-metrics.workspace = true
 registry-platform-ratelimit = { workspace = true, optional = true }
 registry-platform-yaml.workspace = true
-axum = { workspace = true, optional = true }
+axum.workspace = true
 base64 = { workspace = true, optional = true }
 chrono = { workspace = true, features = ["clock", "std"] }
 clap.workspace = true

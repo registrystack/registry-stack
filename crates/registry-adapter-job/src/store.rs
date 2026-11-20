@@ -1723,12 +1723,13 @@ pub struct StatusCounts {
 /// How many pending keys status names.
 pub const PENDING_KEYS_SHOWN: i64 = 5;
 
-/// Count the job's items by status and refusal code.
+/// Count the job's items by status alone: the four totals, with the
+/// per-code and pending-key members left empty.
 ///
 /// # Errors
 ///
 /// A failed read refuses.
-pub async fn item_counts(
+pub async fn item_status_counts(
     client: &impl GenericClient,
     job_id: &str,
 ) -> Result<StatusCounts, StoreError> {
@@ -1749,6 +1750,19 @@ pub async fn item_counts(
             None => {}
         }
     }
+    Ok(counts)
+}
+
+/// Count the job's items by status and refusal code.
+///
+/// # Errors
+///
+/// A failed read refuses.
+pub async fn item_counts(
+    client: &impl GenericClient,
+    job_id: &str,
+) -> Result<StatusCounts, StoreError> {
+    let mut counts = item_status_counts(client, job_id).await?;
     for row in client
         .query(
             "SELECT code, count(*) FROM adapter_job_items \

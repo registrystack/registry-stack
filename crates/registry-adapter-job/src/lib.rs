@@ -23,6 +23,7 @@ pub mod destination;
 pub mod direct_breg;
 #[cfg(feature = "job-hook")]
 pub mod hook_ingress;
+pub mod metrics;
 pub mod pass;
 #[cfg(feature = "job-postgres")]
 pub mod postgres_source;

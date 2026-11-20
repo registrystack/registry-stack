@@ -18,6 +18,7 @@ use registry_adapter_job::cli::{Cli, Command, WorkspaceArgs};
 use registry_adapter_job::destination::{
     FixtureDestination, JobDestination as DestinationSeam, NullDestination,
 };
+use registry_adapter_job::metrics::{metrics_router, JobMetrics};
 use registry_adapter_job::pass::{run_pass, PassOptions, PassReport, StopReason};
 use registry_adapter_job::runtime_destination::{activate_destination, check_destination_runtime};
 use registry_adapter_job::store;
@@ -248,6 +249,7 @@ async fn pass(
         );
     }
     let gate = Arc::new(HookPassGate::default());
+    let metrics = Arc::new(JobMetrics::default());
     // The hook credentials resolve before the destination activates, so a
     // credential fault is not hidden behind an unreachable destination.
     #[cfg(feature = "job-hook")]
@@ -256,49 +258,85 @@ async fn pass(
         &runtime,
         &resolver,
         Arc::clone(&gate),
+        Arc::clone(&metrics),
     )
     .map_err(|error| error.to_string())?;
     let destination =
         activate_pass_destination(&program, &runtime, &resolver, fixture, fixture_url, dry_run)
             .await?;
+    // The listeners bind before the first pass, so a port that is taken
+    // refuses the start rather than a later scrape.
     #[cfg(feature = "job-hook")]
-    if let Some(plan) = hook_plan {
-        let server = plan.bind().await.map_err(|error| error.to_string())?;
-        let hook_address = server.local_addr().map_err(|error| error.to_string())?;
-        eprintln!("adapter.job.hook-listening address={hook_address}");
-        let ingress_stop = Arc::new(tokio::sync::Notify::new());
-        let loop_future = run_pass_loop(
-            &program,
-            &pool,
-            &preview,
-            destination
-                .as_deref()
-                .expect("a loop always has a non-preview destination"),
-            &edits,
-            gate,
-            shutdown,
-            refusal_limit,
-            show_values,
+    let hook_server = match hook_plan {
+        Some(plan) => {
+            let server = plan.bind().await.map_err(|error| error.to_string())?;
+            let hook_address = server.local_addr().map_err(|error| error.to_string())?;
+            eprintln!("adapter.job.hook-listening address={hook_address}");
+            Some(server)
+        }
+        None => None,
+    };
+    let metrics_listener = match &runtime.metrics_listener {
+        Some(configured) => {
+            let bound = tokio::net::TcpListener::bind(configured.bind.socket_addr())
+                .await
+                .map_err(|error| format!("adapter.job.metrics-bind: {error}"))?;
+            let address = bound
+                .local_addr()
+                .map_err(|error| format!("adapter.job.metrics-bind: {error}"))?;
+            eprintln!("adapter.job.metrics-listening address={address}");
+            Some(bound)
+        }
+        None => None,
+    };
+    let (stop_sender, stop_receiver) = tokio::sync::watch::channel(false);
+    let metrics_future = {
+        let router = metrics_router(
+            Arc::clone(&metrics),
+            pool.clone(),
+            program.job.job.id.as_str(),
         );
-        let ingress_stop_for_server = Arc::clone(&ingress_stop);
-        let server_future = server.serve(async move {
-            ingress_stop_for_server.notified().await;
-        });
-        tokio::pin!(loop_future);
-        tokio::pin!(server_future);
-        return tokio::select! {
-            result = &mut loop_future => {
-                ingress_stop.notify_one();
-                server_future.await.map_err(|error| error.to_string())?;
-                result
-            }
-            result = &mut server_future => {
-                result.map_err(|error| error.to_string())?;
-                Err("adapter.job.hook-serve".to_string())
-            }
-        };
-    }
-    run_pass_loop(
+        let mut stop = stop_receiver.clone();
+        async move {
+            let Some(bound) = metrics_listener else {
+                // No listener is configured: finish with the stop request so
+                // the join below never waits on a server that does not exist.
+                let _ = stop.wait_for(|stopped| *stopped).await;
+                return Ok(());
+            };
+            axum::serve(bound, router)
+                .with_graceful_shutdown(async move {
+                    let _ = stop.wait_for(|stopped| *stopped).await;
+                })
+                .await
+                .map_err(|error| format!("adapter.job.metrics-serve: {error}"))
+        }
+    };
+    #[cfg(feature = "job-hook")]
+    let hook_future = {
+        let mut stop = stop_receiver.clone();
+        async move {
+            let Some(server) = hook_server else {
+                let _ = stop.wait_for(|stopped| *stopped).await;
+                return Ok(());
+            };
+            server
+                .serve(async move {
+                    let _ = stop.wait_for(|stopped| *stopped).await;
+                })
+                .await
+                .map_err(|error| error.to_string())
+        }
+    };
+    #[cfg(not(feature = "job-hook"))]
+    let hook_future = {
+        let mut stop = stop_receiver.clone();
+        async move {
+            let _ = stop.wait_for(|stopped| *stopped).await;
+            Ok::<(), String>(())
+        }
+    };
+    let loop_future = run_pass_loop(
         &program,
         &pool,
         &preview,
@@ -307,11 +345,25 @@ async fn pass(
             .expect("a loop always has a non-preview destination"),
         &edits,
         gate,
+        &metrics,
         shutdown,
         refusal_limit,
         show_values,
-    )
-    .await
+    );
+    let companions = async { tokio::try_join!(hook_future, metrics_future).map(|_| ()) };
+    tokio::pin!(loop_future);
+    tokio::pin!(companions);
+    tokio::select! {
+        result = &mut loop_future => {
+            stop_sender.send_replace(true);
+            companions.await?;
+            result
+        }
+        result = &mut companions => {
+            result?;
+            Err("adapter.job.listener-ended".to_string())
+        }
+    }
 }
 
 /// A stop request for the long-running loop: SIGTERM, which service managers,
@@ -346,6 +398,7 @@ async fn run_pass_loop(
     destination: &dyn DestinationSeam,
     edits: &Edits,
     gate: Arc<HookPassGate>,
+    metrics: &JobMetrics,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
     refusal_limit: u32,
     show_values: bool,
@@ -362,6 +415,7 @@ async fn run_pass_loop(
         let state = match job_state(pool, &program.job).await {
             Ok(state) => state,
             Err(cause) => {
+                metrics.record_pass_failure("store-unreachable");
                 eprintln!("{}", store_unreachable_line(&cause, delay));
                 tokio::select! {
                     _ = tokio::time::sleep(delay) => {
@@ -400,7 +454,11 @@ async fn run_pass_loop(
         };
         let report = bounded_pass(program, pool, preview, Some(destination), options).await;
         gate.end_pass();
-        let report = report?;
+        let report = report.inspect_err(|_| metrics.record_pass_failure("error"))?;
+        match &report.stopped {
+            None => metrics.record_pass_success(),
+            Some(reason) => metrics.record_pass_failure(stop_reason_name(reason)),
+        }
         print_pass_report(&report, false, show_values, preview);
         if *shutdown.borrow() {
             return Ok(ExitCode::SUCCESS);
