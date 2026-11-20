@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Report held and stuck work as metrics: `coordinator_runs_attention` by
+  reason, `coordinator_runs_restore_review_required`, `coordinator_hold_active`
+  for the restore and admissions holds, and `coordinator_oldest_due_age_seconds`
+  for the oldest pending step a worker can claim. The counts cover every run,
+  not the capped list in `coordinatorctl doctor`.
 - Promise Registry Coordinator at Registry Stack 1.0, as the sixth promised product, instead of
   an experimental surface. The promise covers the `workflow.yaml`, `runtime.yaml` and
   `scenarios.yaml` formats, the HTTP API, and the `coordinator` client namespace. The operations

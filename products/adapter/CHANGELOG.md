@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Serve Prometheus metrics from the facade and from `adapter-job pass --loop`
+  on an optional `metricsListener.bind` in the runtime document, off by default
+  and loopback or private only. An address equal to the serving or hook
+  listener is refused when the document is read. The facade reports requests by
+  route template and status class, upstream failures by class (including
+  status polls and recovery checks), journal write failures and retention sweep
+  failures. The job reports items by state, including `held` and `refused`, the
+  age of its last settled pass, pass failures, hook refusals and failed item
+  samples. Item counts are read one scrape at a time, reused for 5 seconds and
+  bounded by a 4 second statement timeout. A metrics listener closes within 10
+  seconds of a stop signal, even with a stalled client. Held items stay
+  read-only: the owning product resolves them.
+
 ## 0.47.0 - 2026-11-20
 
 - PostgreSQL jobs can project bounded JSONB values, including the geometry

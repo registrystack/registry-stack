@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Serve Prometheus metrics on an optional operator-private listener. Set
+  `metricsListener.bind` to a loopback or private address, distinct from the
+  serving listener. It is off by default, and a link-local address is refused.
+  The series report documents by operation and result, audit write failures,
+  and the seconds until each configured seal certificate expires.
+
 ## 0.47.0 - 2026-11-20
 
 ## 0.46.0 - 2026-11-08
