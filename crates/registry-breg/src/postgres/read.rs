@@ -430,7 +430,13 @@ impl PostgresRecordReadService {
         } else {
             ReadRelations::collection(&plan.entity, query, &selected_fields)?
         };
-        let projection = projection(&plan.entity, &relations, &selected_fields, query)?;
+        let mut projection = projection(&plan.entity, &relations, &selected_fields, query)?;
+        let disclosure = crate::disclosure::plan(&plan.entity, claims.access_profile());
+        let field_conditions = field_withholding_conditions(&disclosure);
+        for (index, condition) in field_conditions.iter().enumerate() {
+            let when = disclosure_when_sql(&plan.entity, &relations, condition)?;
+            projection.push_str(&format!(", {when} AS \"__breg_disclosure_{index}\""));
+        }
         let limit =
             i64::try_from(request.maximum_records).map_err(|_| ReadServiceError::Unavailable)?;
         let mut total_count = None;
@@ -547,8 +553,19 @@ impl PostgresRecordReadService {
         };
         let rows = rows
             .iter()
-            .map(|row| row_to_record(row, &plan.entity, &selected_fields))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|row| {
+                let mut record = row_to_record(row, &plan.entity, &selected_fields)?;
+                withhold_disclosed_fields(
+                    row,
+                    &plan.entity,
+                    &selected_fields,
+                    query.is_some_and(|query| query.order.is_some()),
+                    &field_conditions,
+                    &mut record,
+                )?;
+                Ok(record)
+            })
+            .collect::<Result<Vec<_>, ReadServiceError>>()?;
         crate::subject_access_log::record_reads(
             transaction.transaction(),
             &plan.entity,
@@ -2952,6 +2969,75 @@ fn cursor_sort_value(value: Value) -> Option<String> {
         Value::String(value) => Some(value),
         Value::Array(_) | Value::Object(_) => None,
     }
+}
+
+/// The `fields` conditions that bind the caller's profile.
+fn field_withholding_conditions<'a>(
+    disclosure: &'a crate::disclosure::DisclosurePlan<'a>,
+) -> Vec<&'a crate::model::CompiledDisclosureCondition> {
+    disclosure
+        .conditions()
+        .iter()
+        .copied()
+        .filter(|condition| {
+            matches!(
+                condition.withhold,
+                crate::model::DisclosureWithhold::Fields(_)
+            )
+        })
+        .collect()
+}
+
+/// `when` of one condition over the row the read selects from, two-valued.
+fn disclosure_when_sql(
+    entity: &CompiledEntity,
+    relations: &ReadRelations,
+    condition: &crate::model::CompiledDisclosureCondition,
+) -> Result<String, ReadServiceError> {
+    let failed = std::cell::Cell::new(false);
+    let sql = crate::disclosure::when_sql(entity, &condition.when, &|field| match relations
+        .field_expression(entity, field)
+    {
+        Ok(expression) => expression.sql,
+        Err(_) => {
+            failed.set(true);
+            String::new()
+        }
+    });
+    if failed.get() {
+        return Err(ReadServiceError::Unavailable);
+    }
+    Ok(sql)
+}
+
+/// Remove the members a matching `fields` condition withholds. The members
+/// are dropped, not nulled, so the record reads as if the profile could not
+/// read them. The condition flags follow the projected and sort columns.
+fn withhold_disclosed_fields(
+    row: &tokio_postgres::Row,
+    entity: &CompiledEntity,
+    selected_fields: &[String],
+    ordered: bool,
+    conditions: &[&crate::model::CompiledDisclosureCondition],
+    record: &mut RecordEnvelope,
+) -> Result<(), ReadServiceError> {
+    let first_flag = selected_fields.len() + 2 + usize::from(ordered);
+    for (index, condition) in conditions.iter().enumerate() {
+        let matched = row
+            .try_get::<_, bool>(first_flag + index)
+            .map_err(|_| ReadServiceError::Unavailable)?;
+        let crate::model::DisclosureWithhold::Fields(fields) = &condition.withhold else {
+            continue;
+        };
+        if matched {
+            for field_id in fields {
+                if let Some(api_name) = compiled_api_name(entity, field_id) {
+                    record.data.remove(api_name);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn row_to_record(
