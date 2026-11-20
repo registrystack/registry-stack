@@ -12,8 +12,8 @@ use registry_platform_activation::{self as activation, Layout, NewActivation, Ro
 use registry_platform_audit::{AuditDestination, AuditProfile, AuditWriter, FileDestination};
 use registry_platform_config::{
     package::{write_package, PackageLimits},
-    DatabaseConfig, ListenerConfig, PackageConfig, PrivateListenerConfig, SecretProvidersConfig,
-    SecretReference, TlsTermination,
+    DatabaseConfig, ListenerNetworkExposure, MetricsListenerConfig, PackageConfig,
+    PrivateListenerConfig, SecretProvidersConfig, SecretReference, TlsTermination,
 };
 use registry_platform_yaml::{Diagnostic, Document, Source};
 use serde::{Deserialize, Serialize};
@@ -40,7 +40,7 @@ pub struct DeploymentConfig {
     /// The operator-private socket `/metrics` is served on. When it is
     /// omitted, no metrics are served.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metrics_listener: Option<ListenerConfig>,
+    pub metrics_listener: Option<MetricsListenerConfig>,
     pub authentication: AccessConfig,
     #[serde(rename = "auditFile")]
     #[cfg_attr(feature = "schema", schemars(extend("pattern" = registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN)))]
@@ -158,8 +158,11 @@ impl DeploymentConfig {
             ));
         }
         if let Some(metrics) = &self.metrics_listener {
-            if !valid_metrics_listener(metrics.bind.socket_addr(), self.listener.bind.socket_addr())
-            {
+            if !valid_metrics_listener(
+                metrics.bind.socket_addr(),
+                metrics.network_exposure,
+                self.listener.bind.socket_addr(),
+            ) {
                 errors.push(config_fail(
                     "deployment.metricsListener.bind",
                     "bind metricsListener to a loopback or private address with a nonzero port the listener does not use",
@@ -257,8 +260,13 @@ fn audit_open_refusal(error: registry_platform_audit::AuditError) -> Coordinator
 /// The metrics listener serves operator data, so it binds only a loopback or
 /// private address on its own nonzero port, never a wildcard and never the
 /// socket the public listener already covers. The rule is the platform's.
-fn valid_metrics_listener(metrics: SocketAddr, listener: SocketAddr) -> bool {
-    registry_platform_config::check_metrics_bind(metrics, &[("listener", listener)]).is_ok()
+fn valid_metrics_listener(
+    metrics: SocketAddr,
+    exposure: ListenerNetworkExposure,
+    listener: SocketAddr,
+) -> bool {
+    registry_platform_config::check_metrics_bind(metrics, exposure, &[("listener", listener)])
+        .is_ok()
 }
 
 fn config_fail(field: &str, advice: &str) -> CoordinatorError {
@@ -979,7 +987,10 @@ pub async fn apply(
 
 #[cfg(test)]
 mod tests {
-    use super::{limits, load_package, valid_metrics_listener, write_package, PackageConfig};
+    use super::{
+        limits, load_package, valid_metrics_listener, write_package, ListenerNetworkExposure,
+        PackageConfig,
+    };
     use crate::definition::Definition;
     use std::collections::BTreeMap;
 
@@ -1147,18 +1158,22 @@ mod tests {
     fn the_metrics_listener_may_not_share_a_wildcard_listener_port() {
         assert!(!valid_metrics_listener(
             "10.0.0.5:8108".parse().unwrap(),
+            ListenerNetworkExposure::PrivateAddress,
             "0.0.0.0:8108".parse().unwrap()
         ));
         assert!(!valid_metrics_listener(
             "10.0.0.5:8108".parse().unwrap(),
+            ListenerNetworkExposure::PrivateAddress,
             "[::]:8108".parse().unwrap()
         ));
         assert!(valid_metrics_listener(
             "[fd00::5]:8108".parse().unwrap(),
+            ListenerNetworkExposure::PrivateAddress,
             "0.0.0.0:8108".parse().unwrap()
         ));
         assert!(valid_metrics_listener(
             "10.0.0.5:9108".parse().unwrap(),
+            ListenerNetworkExposure::PrivateAddress,
             "0.0.0.0:8108".parse().unwrap()
         ));
     }

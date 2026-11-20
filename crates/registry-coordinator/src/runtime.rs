@@ -559,7 +559,11 @@ impl RuntimeConfig {
         if let Some(loaded) = &checked.loaded {
             for error in loaded.config.findings() {
                 let pointer = pointer(error.field.as_deref().unwrap_or(""));
-                if !checked.defers_within(&pointer) {
+                // The metrics bind is judged against its network exposure, so
+                // a deferred exposure defers the bind finding.
+                let reads_deferred_exposure = pointer == "/deployment/metricsListener/bind"
+                    && checked.defers("/deployment/metricsListener/networkExposure");
+                if !checked.defers_within(&pointer) && !reads_deferred_exposure {
                     diagnostics.push(
                         checked.error_at(
                             KIND,
@@ -1337,6 +1341,8 @@ fn stand_in(pointer: &str) -> &'static str {
         "coordinator_stand_in"
     } else if pointer.ends_with("/auditFile") {
         "/stand-in/audit.jsonl"
+    } else if pointer.ends_with("/metricsListener/networkExposure") {
+        "private-address"
     } else {
         registry_platform_config::DEFAULT_STAND_IN
     }
