@@ -49,7 +49,9 @@ Four more gauges show holds and attention, all read from the database at scrape 
 - `coordinator_runs_attention{reason}` counts runs needing attention, with `reason` of `definition-refused` or `other`.
 - `coordinator_runs_restore_review_required` counts runs held for review after a restore.
 - `coordinator_hold_active{hold}` is 1 while the `restore` or `admissions` hold is set.
-- `coordinator_oldest_due_age_seconds` is the age of the oldest due pending job.
+- `coordinator_oldest_due_age_seconds` is how long ago the oldest pending step was due, counting only steps the worker can claim.
+  Runs a worker cannot claim, such as runs waiting for restore review or with a refused definition, are not counted.
+  Read `coordinator_runs_attention` and `coordinator_hold_active` beside it.
 
 **Clear.**
 
@@ -208,7 +210,8 @@ Otherwise the service answers that dispatch has started or the message is alread
 Scheduling can also publish metrics on an optional `metricsListener`, which is off by default and must bind a private address.
 These series show stuck work:
 
-- `scheduling_outbox_items{state}` counts delivery intents by state, and `scheduling_outbox_oldest_pending_age_seconds` is the age of the oldest pending one.
+- `scheduling_outbox_items{state}` counts delivery intents by state, and `scheduling_outbox_oldest_pending_age_seconds` is how far the oldest pending one is past its due time.
+  An intent waiting out a retry back-off is not counted.
 - `scheduling_hook_deliveries{state}` counts observer-hook deliveries by state, and `scheduling_hook_oldest_pending_age_seconds` is the age of the oldest pending one.
 - `scheduling_worker_last_success_age_seconds{worker}` is the age of the last completed pass of the `hold-expiry` or `retention` worker.
 - `scheduling_metrics_sample_failures_total{queue}` counts scrapes where a queue could not be read.
@@ -222,7 +225,7 @@ Callers can remove their own holds and cancel their own appointments over HTTP w
 
 **Access.** Host for `intents`. Caller credential for holds and appointments.
 
-**Read more.** [Scheduling operations](../scheduling/), [Read the deployment](../scheduling/#read-the-deployment), [Retention](../scheduling/#retention).
+**Read more.** [Scheduling operations](../scheduling/), [Watch the metrics](../scheduling/#watch-the-metrics), [Read the deployment](../scheduling/#read-the-deployment), [Retention](../scheduling/#retention).
 
 {/* Evidence: crates/registry-schedulingctl/src/lib.rs, intents;
     crates/registry-scheduling/src/http.rs, healthz and readyz. */}
@@ -238,7 +241,8 @@ The signals are:
 - `adapter_job_last_successful_pass_age_seconds` is the age of the last pass this process settled.
   It is absent until the first pass settles.
 - `adapter_job_pass_failures_total{reason}` counts passes that did not settle.
-  The reasons are `lease-held`, `page-fault`, `destination-stop`, `refusal-limit`, `error`, and `store-unreachable`.
+  The reasons are `page-fault`, `destination-stop`, `refusal-limit`, and `store-unreachable`.
+  A standby process that finds the lease held by another process is not counted.
 - `adapter_job_hook_refusals_total{reason}` counts refused hook-trigger requests.
 - `adapter_job_gauge_sample_failures_total` counts scrapes where the store could not be read.
   The items gauge then has no samples.
@@ -273,7 +277,7 @@ The operate page has the full table.
 
 **Access.** Host.
 
-**Read more.** [Adapter operations](../adapter/), [Check the job](../adapter/#check-the-job), [Rescan or run on the interval](../adapter/#rescan-or-run-on-the-interval), [Resolve held job items](../adapter/#resolve-held-job-items).
+**Read more.** [Adapter operations](../adapter/), [Scrape metrics](../adapter/#scrape-metrics), [Check the job](../adapter/#check-the-job), [Rescan or run on the interval](../adapter/#rescan-or-run-on-the-interval), [Resolve held job items](../adapter/#resolve-held-job-items).
 
 {/* Evidence: crates/registry-adapter-job/src/cli.rs, Command;
     crates/registry-adapter-job/src/main.rs, holdGuidance and nextAction. */}
@@ -331,7 +335,7 @@ A stopped audit writer needs a restart.
 
 **Access.** Host.
 
-**Read more.** [Render operations](../registry-render/), [Read readiness](../registry-render/#read-readiness), [Renew the certificate](../registry-render/#renew-the-certificate), [Keep the audit file](../registry-render/#keep-the-audit-file).
+**Read more.** [Render operations](../registry-render/), [Watch the metrics](../registry-render/#watch-the-metrics), [Read readiness](../registry-render/#read-readiness), [Renew the certificate](../registry-render/#renew-the-certificate), [Keep the audit file](../registry-render/#keep-the-audit-file).
 
 {/* Evidence: crates/registry-render/src/server.rs, ready and healthcheck;
     crates/registry-render/src/cli.rs, Healthcheck and environment. */}
