@@ -169,6 +169,8 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_pilot_acceptance",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_tombstone_revision",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_field_encryption",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_disclosure",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_required_filters",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_package",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_migration",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_generated_identifier_migration",
