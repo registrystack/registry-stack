@@ -1,4 +1,7 @@
 {{- if and .Values.evidence.enabled .Values.evidence.serve }}
+{{- if not .Values.evidence.transitProxy.enabled }}
+{{- fail "Evidence cannot serve without the Transit proxy. Set evidence.transitProxy.enabled=true and fill in evidence.transitProxy, or set evidence.serve=false." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

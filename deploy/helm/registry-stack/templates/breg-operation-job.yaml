@@ -36,6 +36,7 @@ spec:
     metadata:
       labels:
         {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "breg-operation") | nindent 8 }}
+        registrystack.org/database-client: "true"
         registry.stack/operation: {{ .Values.breg.operation.kind | quote }}
         registrystack.org/operation-id: {{ .Values.breg.operation.name | quote }}
       annotations:
@@ -127,6 +128,10 @@ spec:
             - /var/lib/breg/package
             - --expected-digest
             - {{ .Values.breg.package.expectedDigest | quote }}
+          {{- with .Values.breg.operation.operatorReference }}
+            - --operator-reference
+            - {{ . | quote }}
+          {{- end }}
           {{- else if eq .Values.breg.operation.kind "apply-successor" }}
             - apply
             - --runtime-config
@@ -135,6 +140,10 @@ spec:
             - {{ $targetPath }}
             - --expected-digest
             - {{ $targetDigest | quote }}
+          {{- with .Values.breg.operation.operatorReference }}
+            - --operator-reference
+            - {{ . | quote }}
+          {{- end }}
           {{- else if eq .Values.breg.operation.kind "claim-status" }}
             - instance-claim
             - status

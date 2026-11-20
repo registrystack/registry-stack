@@ -1,5 +1,16 @@
 # Registry Stack Helm chart
 
+This chart is a public reference. It is not a supported product, is not
+published with Registry Stack releases, and has not been qualified for
+production.
+
+## Supported releases
+
+The chart was tested against the v0.46.0 Registry Stack images and is not part
+of any release artifact. Adopters pin every image by digest from the release
+manifest of the version they run. The chart `appVersion` stays 0.46.0 until a
+later release is tested, so it does not follow newer releases automatically.
+
 This chart deploys four independently controlled workloads:
 
 - Base Registry Engine (BReg) from a Registry Stack release image.
@@ -239,6 +250,11 @@ them. Provision the audit and authority PVC roots as real directories owned by
 UID/GID 65532 with mode `0700`. The package digest annotation is an operator-visible
 binding, while Evidence enforces the digest from `runtime.yaml`.
 
+Evidence cannot serve without the Transit proxy. The chart refuses to render
+`evidence.serve: true` while `evidence.transitProxy.enabled` is false, and the
+error says so. Set `evidence.transitProxy.enabled: true` and fill in
+`evidence.transitProxy`, or keep `evidence.serve: false`.
+
 Production and evidence-grade signing uses the configurable pinned
 `evidence.transitProxy.image`. Its command reads the staged proxy configuration
 at `/etc/registry-evidence/transit-proxy/proxy.hcl`, its scoped credentials are
@@ -268,11 +284,15 @@ Each enabled Ingress requires a host and an existing TLS Secret. Set the
 cluster's `className`, annotations, host, and path independently for BReg, App
 Kit, Casework, and Evidence. BReg's configured `listener.publicOrigin` must match its
 externally visible HTTPS origin. Configure rate limiting in the ingress
-controller. Casework and Evidence always
-use ClusterIP Services behind their optional Ingresses.
+controller. Every Service is ClusterIP only, and the schema refuses other
+types. Expose a component through its Ingress.
 
-NetworkPolicy is enabled by default. An empty ingress peer list denies all
-inbound traffic, so list the ingress controller explicitly. Each item under
+NetworkPolicy is enabled by default. An empty ingress peer list admits no
+other Pod, so list the ingress controller explicitly. On K3s, traffic that
+originates on the Pod's own node is still accepted before policy is applied,
+so host processes and `hostNetwork` Pods on that node can reach the plaintext
+service ports even with an empty list. Treat access to the node as access to
+those ports. Each item under
 `networkPolicy.ingress` is a standard `NetworkPolicyPeer`, for example a
 namespace selector alone or a namespace and Pod selector together.
 
@@ -293,6 +313,16 @@ a digest-pinned image, and any required egress. An endpoint that uses BReg
 calls the HTTPS API with a scoped OAuth client. BReg enforces the token, client,
 scope, access profile, and row boundaries.
 [Workspace endpoint guide](../../examples/intake-status/README.md)
+
+Extension egress rejects an `ipBlock` that opens every address, such as
+`0.0.0.0/0`, `::/0` or any prefix shorter than `/8`. This is a guard against
+mistakes and not a security boundary, because several broader-than-intended
+blocks can still be combined. Review extension egress as you would any
+NetworkPolicy. The core workloads' own egress is not subject to this guard.
+
+The database manifests in `deploy/postgres` admit connections only from Pods
+labelled `registrystack.org/database-client: "true"`, which the chart sets on
+BReg serving and operation Pods.
 
 For a bounded test environment whose real TLS names are not available through
 cluster DNS, `breg.hostAliases` applies standard Pod host aliases to BReg
@@ -337,12 +367,32 @@ policy for another operation name does not admit this Job's egress.
 | `claim-adopt` | Explicitly selects adoption and passes `--acknowledge-original-retired`. |
 | `reconcile` | Runs the read-only migration reconcile assessment. |
 
+Set `breg.operation.operatorReference` to record an operator reference with
+`apply-initial` and `apply-successor`. It is empty by default and the flag is
+then omitted. `reconcile` always passes the fixed read-only reference
+`helm-read-only-inspection` that its command requires. The other kinds do not
+accept the flag.
+
+An operation Job is refused while the same component has `serve: true`. Set
+`serve: false` for BReg, Casework or Evidence before rendering its operation.
+
 For a successor plan or apply, keep `breg.runtimeConfig` and `breg.package`
 bound to the active configuration and package. Bind the target claim and
 digest separately with `breg.operation.candidate.existingClaim` and
 `breg.operation.candidate.expectedDigest`. The operator does this using
 the deployed Helm values and the reviewed successor. Use the product's
-operator procedure for changes that require a BReg `--backup` binding.
+operator procedure for changes that require a BReg `--backup` binding. The
+chart has no path that passes `--backup`, so a destructive BReg migration on
+Kubernetes cannot be run through it.
+
+## Keep an operation report
+
+An operation Job is removed after `ttlSecondsAfterFinished` (24 hours by
+default), and its Pod logs go with it. Save the report before then, for
+example with `kubectl logs job/<job-name> --namespace <namespace> >
+<operation-name>-report.json`. BReg, Casework and `evidence check` write JSON.
+Evidence authority commands write text. Store the file with the change record.
+Raise `ttlSecondsAfterFinished` only when you cannot collect it in time.
 
 ## Render one Casework operation
 
@@ -425,10 +475,13 @@ deny-all NetworkPolicy carry the unique
 `registrystack.org/operation-id: <evidence.operation.name>` selector and have no
 Helm hook annotation.
 
+The Casework operations have no status kind, and BReg exposes no metrics
+port, so neither is wired here.
+
 The v0.46.0 `evidence` binary has no `authority check` subcommand, and the
 released Evidence image contains no `evidencectl`, so the chart does not invent
 either operation. The check Job deliberately omits
-`--require-runtime-dependencies`: a production dependency check needs the
+`--require-runtime-dependencies` and `--require-audit-under`: a production dependency check needs the
 long-running workload-local Transit proxy, which would prevent a standard Job
 sidecar from completing on every Kubernetes version supported by this chart.
 The serving process performs the actual package, authority, secret, signer,
