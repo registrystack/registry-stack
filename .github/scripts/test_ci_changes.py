@@ -344,6 +344,7 @@ class CiChangesTest(unittest.TestCase):
             "docs",
             "client-bindings",
             "release-linux-node-clients",
+            "deployment",
         }
         direct = {
             name
@@ -357,8 +358,9 @@ class CiChangesTest(unittest.TestCase):
         # contracts-journeys lane: they replace the longest serial integration
         # jobs, so the pool trades extra directly-eligible slots for the
         # shorter critical path.
-        self.assertLessEqual(slots, 18)
-        self.assertEqual(18, slots)
+        # The deployment job is one short runner.
+        self.assertLessEqual(slots, 19)
+        self.assertEqual(19, slots)
 
     def test_deferred_ci_work_keeps_its_selector_and_explicit_status_guard(
         self,
@@ -551,6 +553,7 @@ class CiChangesTest(unittest.TestCase):
             "docs-archives",
             "client-bindings",
             "release-linux-node-clients",
+            "deployment",
             "ci-result",
         }
         self.assertEqual(expected_jobs, set(self.workflow_jobs))
@@ -627,6 +630,7 @@ class CiChangesTest(unittest.TestCase):
                 "docs",
                 "client-bindings",
                 "release-linux-node-clients",
+                "deployment",
             ),
         }
         for name, expected in aggregate_needs.items():
@@ -668,12 +672,13 @@ class CiChangesTest(unittest.TestCase):
             "docs",
             "client-bindings",
             "release-linux-node-clients",
+            "deployment",
         }
         self.assertEqual(
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(42, len(final_needs))
+        self.assertEqual(43, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)
@@ -978,6 +983,7 @@ class CiChangesTest(unittest.TestCase):
             "breg-tutorial": "breg_tutorial",
             "casework-tutorial": "casework_tutorial",
             "breg-evidence-composition": "breg_evidence_composition",
+            "deployment": "deployment",
         }
 
         def status(job: str, selected: str, result: str) -> int:

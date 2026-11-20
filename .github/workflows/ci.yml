@@ -63,6 +63,7 @@ jobs:
       platform_assurance: ${{ steps.filter.outputs.platform_assurance }}
       platform_coverage: ${{ steps.filter.outputs.platform_coverage }}
       platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}
+      deployment: ${{ steps.filter.outputs.deployment }}
       config_conformance: ${{ steps.filter.outputs.config_conformance }}
       discovery_contracts: ${{ steps.filter.outputs.discovery_contracts }}
       breg_contracts: ${{ steps.filter.outputs.breg_contracts }}
@@ -128,19 +129,6 @@ jobs:
       - name: Test CI event routing
         run: python3 .github/scripts/test_ci_event_routing.py
 
-      - name: Test deployment contracts
-        if: steps.filter.outputs.deployment == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          tools="${RUNNER_TEMP}/registry-deployment-tools"
-          bash deploy/bin/install-helm.sh "${tools}"
-          python3 -B -m unittest discover -s deploy/tests
-          python3 -B -m unittest discover -s deploy/identity/tests
-          python3 -B -m unittest discover -s deploy/examples/casework-evidence/tests
-          python3 -B -m unittest discover -s deploy/examples/seaweedfs/tests
-          HELM_BIN="${tools}/helm" bash deploy/helm/registry-stack/tests/chart-contract.sh
-
       - name: Test Cargo runtime-library resolution
         run: >-
           python3 -m unittest
@@ -204,6 +192,49 @@ jobs:
 
       - name: Test advisory baseline exposure policy
         run: python3 -m unittest release/scripts/test_check_advisory_baselines.py
+
+  deployment:
+    name: Deployment checks
+    needs: changes
+    if: needs.changes.outputs.deployment == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: false
+
+      - name: Test deployment contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The chart contract reads rendered manifests with mikefarah yq v4,
+          # which the GitHub Ubuntu runner image provides.
+          if ! command -v yq >/dev/null || [[ "$(yq --version)" != *"mikefarah"* ]]; then
+            echo "::error::yq (mikefarah v4) is required by the chart contract test"
+            exit 1
+          fi
+          tools="${RUNNER_TEMP}/registry-deployment-tools"
+          bash deploy/bin/install-helm.sh "${tools}"
+          # Every tests folder under deploy/ runs. A Python folder is
+          # discovered by its test files. The chart folder is a shell contract.
+          mapfile -t test_dirs < <(find deploy -type d -name tests | LC_ALL=C sort)
+          if [[ "${#test_dirs[@]}" -eq 0 ]]; then
+            echo "::error::no tests folder found under deploy/"
+            exit 1
+          fi
+          for test_dir in "${test_dirs[@]}"; do
+            if [[ -f "${test_dir}/chart-contract.sh" ]]; then
+              continue
+            elif compgen -G "${test_dir}/test_*.py" >/dev/null; then
+              python3 -B -m unittest discover -s "${test_dir}"
+            else
+              echo "::error::${test_dir} holds no Python tests and no chart contract"
+              exit 1
+            fi
+          done
+          HELM_BIN="${tools}/helm" bash deploy/helm/registry-stack/tests/chart-contract.sh
 
   secrets:
     name: Secret scan
@@ -3545,6 +3576,7 @@ jobs:
       - docs
       - client-bindings
       - release-linux-node-clients
+      - deployment
     runs-on: ubuntu-slim
     timeout-minutes: 5
     env:
@@ -3575,6 +3607,7 @@ jobs:
               "breg-tutorial": "breg_tutorial",
               "casework-tutorial": "casework_tutorial",
               "breg-evidence-composition": "breg_evidence_composition",
+              "deployment": "deployment",
           }
           selection = jobs["changes"].get("outputs", {})
           for name, output in selected_by.items():
