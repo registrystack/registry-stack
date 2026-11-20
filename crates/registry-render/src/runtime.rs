@@ -15,10 +15,10 @@ use registry_platform_audit::{
     MAX_AUDIT_RETAIN_DAYS, MIN_AUDIT_ROTATE_BYTES,
 };
 use registry_platform_config::{
-    ConfigBlockError, ConfigBlockErrorKind, ListenerBind, ListenerConfig, ListenerNetworkExposure,
-    LoadedRuntimeConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvider, SecretProvidersConfig,
-    SecretReference,
+    ConfigBlockError, ConfigBlockErrorKind, ListenerBind, ListenerNetworkExposure,
+    LoadedRuntimeConfig, MetricsListenerConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig,
+    RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvider,
+    SecretProvidersConfig, SecretReference,
 };
 use registry_platform_yaml::{
     escape_pointer_segment, shape_union, BoundedU32, BoundedU64, Diagnostic, ExternalId, LocalId,
@@ -108,7 +108,7 @@ pub struct RenderRuntime {
     /// no metrics. It must be a loopback or private address on a non-zero
     /// port, apart from `listener`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metrics_listener: Option<ListenerConfig>,
+    pub metrics_listener: Option<MetricsListenerConfig>,
     /// The verified bundle package Render serves.
     pub package: PackageConfig,
     /// Providers for secret references. Omit when the authentication mode uses
@@ -139,17 +139,25 @@ impl RenderRuntime {
     /// document API's listener.
     #[must_use]
     pub fn metrics_listener_allowed(&self) -> bool {
-        self.metrics_listener_address_allowed() && !self.metrics_listener_shares_socket()
+        self.metrics_listener_address_allowed(false) && !self.metrics_listener_shares_socket()
     }
 
     /// Whether `metricsListener`, when declared, binds a loopback or private
     /// address (never link-local) on a non-zero port. This depends on the
-    /// metrics bind alone.
-    fn metrics_listener_address_allowed(&self) -> bool {
+    /// metrics bind and its network exposure alone. A deferred exposure is
+    /// judged as the most permissive value, so only what both values refuse is
+    /// reported.
+    fn metrics_listener_address_allowed(&self, exposure_deferred: bool) -> bool {
         let Some(metrics) = &self.metrics_listener else {
             return true;
         };
-        registry_platform_config::check_metrics_bind_address(metrics.bind.socket_addr()).is_ok()
+        let exposure = if exposure_deferred {
+            ListenerNetworkExposure::ContainerPrivate
+        } else {
+            metrics.network_exposure
+        };
+        registry_platform_config::check_metrics_bind_address(metrics.bind.socket_addr(), exposure)
+            .is_ok()
     }
 
     /// Whether `metricsListener`, when declared, uses a socket the listener
@@ -864,7 +872,11 @@ fn read_runtime(
     let mut seal_capacities = BTreeMap::new();
     if let Some(loaded) = &check.loaded {
         let mut audit_refused = false;
-        for finding in findings(&loaded.config, check.defers("/listener/bind")) {
+        for finding in findings(
+            &loaded.config,
+            check.defers("/listener/bind"),
+            check.defers("/metricsListener/networkExposure"),
+        ) {
             let audit_deferred =
                 finding.pointer.starts_with("/audit") && check.defers("/audit/destination");
             if !check.defers(&finding.pointer) && !audit_deferred {
@@ -1060,7 +1072,11 @@ struct Finding {
 
 /// The findings for a decoded runtime. A deferred listener bind has no value
 /// yet, so the metrics socket comparison with it waits for the environment.
-fn findings(runtime: &RenderRuntime, listener_deferred: bool) -> Vec<Finding> {
+fn findings(
+    runtime: &RenderRuntime,
+    listener_deferred: bool,
+    metrics_exposure_deferred: bool,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     if !runtime.listener.bind_allowed() {
         findings.push(Finding {
@@ -1073,7 +1089,7 @@ fn findings(runtime: &RenderRuntime, listener_deferred: bool) -> Vec<Finding> {
                 .to_owned(),
         });
     }
-    if !runtime.metrics_listener_address_allowed()
+    if !runtime.metrics_listener_address_allowed(metrics_exposure_deferred)
         || (runtime.metrics_listener_shares_socket() && !listener_deferred)
     {
         findings.push(Finding {
@@ -1533,6 +1549,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
     match pointer {
         "/listener/bind" => "127.0.0.1:8080",
         "/metricsListener/bind" => "127.0.0.1:9108",
+        "/metricsListener/networkExposure" => "private-address",
         "/package/root" => "/",
         "/package/expectedDigest" => {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -2530,6 +2547,55 @@ mod tests {
                 .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str())),
             Some(("config.substitution", "/listener/bind"))
         );
+    }
+
+    #[test]
+    fn the_metrics_wildcard_needs_container_private_exposure() {
+        let (_dir, home) = home();
+        let declared = format!(
+            "{}metricsListener:\n  bind: 0.0.0.0:9090\n  networkExposure: container-private\n",
+            minimal(&home)
+        );
+        let runtime = load_text(&home, &declared).expect("container-private permits the wildcard");
+        assert!(runtime.metrics_listener_allowed());
+        let undeclared = format!("{}metricsListener:\n  bind: 0.0.0.0:9090\n", minimal(&home));
+        assert_eq!(
+            codes(&refused(&home, &undeclared)),
+            [(
+                "render.runtime.invalid-metrics-listener",
+                "/metricsListener/bind"
+            )]
+        );
+        for bind in ["203.0.113.4:9090", "169.254.10.4:9090", "0.0.0.0:8080"] {
+            let text = format!(
+                "{}metricsListener:\n  bind: \"{bind}\"\n  networkExposure: container-private\n",
+                minimal(&home)
+            );
+            assert_eq!(
+                codes(&refused(&home, &text)),
+                [(
+                    "render.runtime.invalid-metrics-listener",
+                    "/metricsListener/bind"
+                )],
+                "{bind}"
+            );
+        }
+    }
+
+    #[test]
+    fn cfg_check_1_a_deferred_exposure_defers_the_wildcard_judgement() {
+        let (_dir, home) = home();
+        let file = home.join("runtime.yaml");
+        std::fs::write(
+            &file,
+            format!(
+                "{}metricsListener:\n  bind: 0.0.0.0:9464\n  networkExposure: \"${{RENDER_CHECK_UNSET_EXPOSURE}}\"\n",
+                minimal(&home)
+            ),
+        )
+        .expect("runtime file");
+        let offline = check_runtime(&file, false, None);
+        assert!(offline.diagnostics.is_empty(), "{:?}", offline.diagnostics);
     }
 
     #[test]
