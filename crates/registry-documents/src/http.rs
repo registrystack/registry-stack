@@ -38,6 +38,7 @@ use uuid::Uuid;
 
 use crate::audit::DocumentsAudit;
 use crate::auth::{AuthenticationError, DocumentsAuthenticator};
+use crate::metrics::{serve_metrics, MetricsState, METRICS_PATH};
 use crate::service::{DocumentService, PageRequest};
 use crate::store::PostgresStore;
 
@@ -64,6 +65,18 @@ fn finish(limited: Router, unlimited: Router) -> Router {
         .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn(http_boundary))
         .layer(security_headers(CspBuilder::restrictive()).without_hsts())
+}
+
+/// The operator-private router the metrics listener serves: the series, with
+/// the queues sampled at each scrape. It shares the boundary layers and the
+/// refusals of the serving router, and answers nothing else.
+pub fn metrics_router(state: MetricsState) -> Router {
+    finish(
+        Router::new()
+            .route(METRICS_PATH, get(serve_metrics))
+            .with_state(state),
+        Router::new(),
+    )
 }
 
 async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Next) -> Response {

@@ -38,6 +38,11 @@ path = "tests/postgres_operator.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "postgres_metrics"
+path = "tests/postgres_metrics.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "postgres_journey"
 path = "tests/postgres_journey.rs"
 required-features = ["postgres-test"]
@@ -83,6 +88,7 @@ registry-platform-objectstore.workspace = true
 registry-platform-hooks = { workspace = true, features = ["postgres"] }
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-httputil.workspace = true
+registry-platform-metrics.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-yaml.workspace = true
 rustls.workspace = true

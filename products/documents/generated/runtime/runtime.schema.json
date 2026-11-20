@@ -284,6 +284,19 @@
       "minLength": 1,
       "type": "string"
     },
+    "ListenerConfig": {
+      "additionalProperties": false,
+      "description": "The listener of a runtime that declares no TLS or exposure settings.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
     "ListenerNetworkExposure": {
       "description": "The operator-declared private network placement of an HTTP listener.",
       "enum": [
@@ -780,6 +793,10 @@
     },
     "listener": {
       "$ref": "#/$defs/PrivateListenerConfig"
+    },
+    "metricsListener": {
+      "$ref": "#/$defs/ListenerConfig",
+      "description": "The operator-private listener that serves `/metrics`. Omit it to\nserve no metrics."
     },
     "package": {
       "$ref": "#/$defs/PackageConfig"

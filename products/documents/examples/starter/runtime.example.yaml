@@ -17,6 +17,11 @@ listener:
   bind: 127.0.0.1:8116
   tlsTermination: operator-controlled-upstream
   networkExposure: private-address
+metricsListener:
+  # /metrics is served only here, never on the API listener. The address must
+  # be loopback or private, and must not share the API listener's socket. Omit
+  # the block to serve no metrics at all.
+  bind: 127.0.0.1:9116
 secretProviders:
   file:
     root: /run/secrets/registry-documents

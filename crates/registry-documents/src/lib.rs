@@ -15,6 +15,7 @@ pub mod content;
 pub mod erasure;
 pub mod hooks;
 pub mod http;
+pub mod metrics;
 pub mod package;
 pub mod replay;
 pub mod runtime;

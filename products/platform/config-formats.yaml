@@ -4122,6 +4122,8 @@ formats:
     securityMembers:
       - pointer: /listener/bind
         whenOmitted: refused
+      - pointer: /metricsListener/bind
+        whenOmitted: closed
       - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
       - pointer: /authentication/oidc/allowInsecureHttp
