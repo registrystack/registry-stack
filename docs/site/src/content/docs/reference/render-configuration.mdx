@@ -67,7 +67,7 @@ The address must be a concrete loopback or private address on a non-zero port.
 `metricsListener.networkExposure` defaults to `private-address`.
 `container-private` also permits `0.0.0.0` or `::`, for a container whose private address is not known when the file is written.
 Every other refusal still applies under both values.
-It must not be the `listener` socket, or one that a wildcard `listener` already covers.
+It must not share a socket with the `listener` (a wildcard on the listener's port counts as shared).
 A refused address stops startup and `check` with `render.runtime.invalid-metrics-listener`.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, RenderRuntime::metrics_listener_allowed. */}

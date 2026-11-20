@@ -117,7 +117,7 @@ A public unicast address is refused under every combination.
 
 `metricsListener` is optional.
 When it is present, its `bind` is required and `/metrics` is served on that socket only; when it is absent, no metrics are served.
-The address must be a concrete loopback or private address on a non-zero port, and must not be the public listener's socket or one that a wildcard public listener already covers.
+The address must be a concrete loopback or private address on a non-zero port, and must not share a socket with the public listener (a wildcard on the listener's port counts as shared).
 `metricsListener.networkExposure` defaults to `private-address`.
 `container-private` also permits `0.0.0.0` or `::`, for a container whose private address is not known when the file is written, and every other refusal still applies.
 
