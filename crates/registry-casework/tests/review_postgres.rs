@@ -1626,7 +1626,7 @@ async fn a_review_read_that_waits_on_a_lock_is_cancelled_on_the_server_and_leave
     assert!(text.contains("casework_database_up 0\n"), "{text}");
     assert!(!text.contains("casework_open_review_requests"), "{text}");
     // The stuck read used the whole shared deadline, so the read after it
-    // has no time left: it counts as failed too, once, and never queries.
+    // has no time left: it counts as failed too, once, and never starts.
     assert!(!text.contains("casework_completion_deliveries"), "{text}");
     assert!(
         text.contains("casework_metrics_sample_failures_total{sample=\"review\"} 1\n"),
@@ -1636,6 +1636,31 @@ async fn a_review_read_that_waits_on_a_lock_is_cancelled_on_the_server_and_leave
         text.contains("casework_metrics_sample_failures_total{sample=\"completion-backlog\"} 1\n"),
         "{text}"
     );
+}
+
+#[tokio::test]
+async fn a_scrape_with_no_time_left_fails_each_read_as_no_time_left_without_starting_it() {
+    use tracing::instrument::WithSubscriber as _;
+    let fixture = fixture().await;
+    let logs = registry_platform_testing::CapturedDiagnosticLogs::default();
+    let spent = registry_platform_metrics::ScrapeDeadline::with_budget(
+        std::time::Instant::now(),
+        std::time::Duration::ZERO,
+    );
+    let text = registry_casework::scrape_for_test(fixture.store.clone(), spent)
+        .with_subscriber(logs.subscriber_with_max_level(tracing::Level::WARN))
+        .await;
+    for sample in ["review", "completion-backlog"] {
+        assert!(
+            text.contains(&format!(
+                "casework_metrics_sample_failures_total{{sample=\"{sample}\"}} 1\n"
+            )),
+            "{text}"
+        );
+    }
+    let logged = logs.text();
+    assert_eq!(logged.matches("no-time-left").count(), 2, "{logged}");
+    assert!(!logged.contains("\"timeout\""), "{logged}");
 }
 
 #[tokio::test]

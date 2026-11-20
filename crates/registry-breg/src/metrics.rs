@@ -54,7 +54,7 @@ use axum::{
 
 use registry_platform_metrics::{
     sample_error_class, Exposition, HistogramSnapshot, MetricKind, ScrapeDeadline, SumCountOrder,
-    CLASS_NO_TIME_LEFT, CLASS_POOL, CLASS_TIMEOUT, CONTENT_TYPE as METRICS_MEDIA_TYPE,
+    CLASS_NO_TIME_LEFT, CLASS_POOL, CONTENT_TYPE as METRICS_MEDIA_TYPE,
 };
 
 use crate::postgres::RuntimePool;
@@ -641,17 +641,34 @@ impl Metrics {
     /// reporting an empty queue, and its failure is counted and emits a
     /// closed operational event. The samples fail independently.
     pub(crate) async fn sample_queues(&self) -> Option<QueueSample> {
-        self.sample_queues_before(ScrapeDeadline::from(Instant::now()))
-            .await
+        let pool = self.pool.as_ref()?;
+        Some(
+            self.with_scrape_deadline(|deadline| self.sample_queues_before(pool, deadline))
+                .await,
+        )
+    }
+
+    /// Run `sample` holding the sampling lock, with a deadline that starts
+    /// once the lock is held. A scrape that waited behind another one still
+    /// gets its whole budget, so lock contention never counts as a failed
+    /// read.
+    async fn with_scrape_deadline<T, Fut>(&self, sample: impl FnOnce(ScrapeDeadline) -> Fut) -> T
+    where
+        Fut: std::future::Future<Output = T>,
+    {
+        let _sampling = self.queue_sample.lock().await;
+        sample(ScrapeDeadline::from(Instant::now())).await
     }
 
     /// [`Self::sample_queues`] with every read bounded by one `deadline`,
     /// which also bounds each read's server-side statement timeout. A read
-    /// that starts with no time left fails without querying.
-    async fn sample_queues_before(&self, deadline: ScrapeDeadline) -> Option<QueueSample> {
+    /// that starts with no time left never starts.
+    async fn sample_queues_before(
+        &self,
+        pool: &RuntimePool,
+        deadline: ScrapeDeadline,
+    ) -> QueueSample {
         use crate::startup::OperationalEvent;
-        let pool = self.pool.as_ref()?;
-        let _sampling = self.queue_sample.lock().await;
         // Each sample stands alone: a queue failure leaves out only the queue
         // series, and the timer, hook and import samples still run.
         let mut sample = self
@@ -687,7 +704,7 @@ impl Metrics {
                 read_ingestion_runs(pool, deadline),
             )
             .await;
-        Some(sample)
+        sample
     }
 
     /// Run one read before `deadline`. A failure or a timeout is counted
@@ -700,15 +717,9 @@ impl Metrics {
         deadline: ScrapeDeadline,
         read: impl std::future::Future<Output = Result<T, String>>,
     ) -> Option<T> {
-        let class = match tokio::time::timeout_at(
-            tokio::time::Instant::from_std(deadline.at()),
-            read,
-        )
-        .await
-        {
-            Ok(Ok(value)) => return Some(value),
-            Ok(Err(class)) => class,
-            Err(_) => CLASS_TIMEOUT.to_owned(),
+        let class = match deadline.run(read).await {
+            Ok(value) => return Some(value),
+            Err(class) => class,
         };
         self.note_sample_failure(kind);
         event.emit_metrics_sample_failure(&class);
@@ -731,8 +742,9 @@ fn database_error_class(error: &tokio_postgres::Error) -> String {
 
 /// Start a read-only transaction whose server-side `statement_timeout` is
 /// the time left before `deadline`, so a slow query is cancelled on the
-/// server and not only abandoned by the client. A read with no time left
-/// fails without querying.
+/// server and not only abandoned by the client. A read that starts with no
+/// time left never gets here: `ScrapeDeadline::run` refuses it first. One
+/// that spends the budget waiting for a connection fails here.
 async fn begin_sample(
     client: &mut deadpool_postgres::Client,
     deadline: ScrapeDeadline,
@@ -917,10 +929,10 @@ async fn read_ingestion_runs(
 
 /// Read the timer sample independently from the existing queues. Each scrape
 /// holds at most one pool connection at a time: the queue transaction commits
-/// before this bounded five-second read-only transaction starts. A timer
-/// failure can therefore omit only timer series without erasing healthy queue
-/// observations; the total database statement budget per scrape is ten
-/// seconds, with no public configuration knob.
+/// before this read-only transaction starts. A timer failure can therefore
+/// omit only timer series without erasing healthy queue observations. Every
+/// read of the scrape shares one five-second deadline, with no public
+/// configuration knob.
 async fn read_timer_sample_from_pool(
     pool: &RuntimePool,
     deadline: ScrapeDeadline,
@@ -1555,6 +1567,35 @@ mod tests {
             metrics.record_http(route, method, status, Duration::from_millis(millis));
         }
         metrics
+    }
+
+    /// A scrape that waits behind another one gets its whole budget once it
+    /// holds the sampling lock, so contention between scrapers never spends
+    /// the budget of the database reads.
+    #[tokio::test]
+    async fn a_scrape_that_waited_for_the_sampling_lock_still_has_its_whole_budget() {
+        let metrics = Arc::new(golden_registry());
+        let (held, release) = tokio::sync::oneshot::channel::<()>();
+        let first = {
+            let metrics = Arc::clone(&metrics);
+            tokio::spawn(async move {
+                metrics
+                    .with_scrape_deadline(|_| async move {
+                        let _ = held.send(());
+                        tokio::time::sleep(Duration::from_millis(400)).await;
+                    })
+                    .await;
+            })
+        };
+        release.await.expect("the first scrape holds the lock");
+        let remaining = metrics
+            .with_scrape_deadline(|deadline| async move { deadline.remaining_at(Instant::now()) })
+            .await;
+        first.await.expect("the first scrape finishes");
+        assert!(
+            remaining > Duration::from_millis(4_900),
+            "the second scrape's deadline starts after its wait: {remaining:?}"
+        );
     }
 
     #[test]

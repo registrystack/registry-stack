@@ -65,7 +65,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use registry_platform_metrics::{
-    CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline, CLASS_TIMEOUT,
+    CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline,
     CONTENT_TYPE as METRICS_CONTENT_TYPE,
 };
 
@@ -489,19 +489,18 @@ pub async fn scrape(store: &Store, deadline: ScrapeDeadline) -> String {
 }
 
 /// One read bounded by `deadline` on the client as well as the server, so a
-/// wait for a pooled session cannot outlast the scrape.
+/// wait for a pooled session cannot outlast the scrape. A read that starts
+/// with no time left never starts.
 async fn sample<T>(
     metrics: &Metrics,
     kind: SampleKind,
     deadline: ScrapeDeadline,
     read: impl Future<Output = Result<T, String>>,
 ) -> Option<T> {
-    let class =
-        match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline.at()), read).await {
-            Ok(Ok(value)) => return Some(value),
-            Ok(Err(class)) => class,
-            Err(_) => CLASS_TIMEOUT.to_owned(),
-        };
+    let class = match deadline.run(read).await {
+        Ok(value) => return Some(value),
+        Err(class) => class,
+    };
     metrics.record_sample_failure(kind);
     tracing::warn!(
         sample = kind.as_str(),

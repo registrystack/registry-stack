@@ -12080,7 +12080,7 @@ mod queue_depth {
                 .admin
                 .query_one(
                     "SELECT count(*) FROM pg_stat_activity \
-                     WHERE wait_event_type = 'Lock' AND query LIKE '%scheduling_outbox%' \
+                     WHERE wait_event_type = 'Lock' AND query LIKE '%SELECT state, count(*) FROM scheduling_outbox%' \
                        AND pid <> pg_backend_pid()",
                     &[],
                 )
@@ -12105,6 +12105,34 @@ mod queue_depth {
             "the read after a spent deadline has no time left: {text}"
         );
         assert!(text.contains("scheduling_worker_last_success_age_seconds{worker=\"retention\"}"));
+    }
+
+    /// A read that starts with the budget spent fails as `no-time-left`
+    /// without starting, not as a `timeout` after taking a connection.
+    #[tokio::test]
+    async fn a_scrape_with_no_time_left_fails_each_queue_as_no_time_left() {
+        use tracing::instrument::WithSubscriber as _;
+        let fx = hook_fixture().await;
+        let metrics = registry_scheduling::metrics::Metrics::default();
+        let logs = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let spent = registry_platform_metrics::ScrapeDeadline::with_budget(
+            std::time::Instant::now(),
+            std::time::Duration::ZERO,
+        );
+        let text = registry_scheduling::metrics::scrape(&metrics, &fx.store, spent)
+            .with_subscriber(logs.subscriber_with_max_level(tracing::Level::WARN))
+            .await;
+        for queue in ["outbox", "hook-deliveries"] {
+            assert!(
+                text.contains(&format!(
+                    "scheduling_metrics_sample_failures_total{{queue=\"{queue}\"}} 1"
+                )),
+                "{text}"
+            );
+        }
+        let logged = logs.text();
+        assert_eq!(logged.matches("no-time-left").count(), 2, "{logged}");
+        assert!(!logged.contains("\"timeout\""), "{logged}");
     }
 
     #[tokio::test]

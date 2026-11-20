@@ -37,7 +37,7 @@ use axum::http::{Method, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use registry_platform_metrics::{
-    CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline, CLASS_TIMEOUT,
+    CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline,
     CONTENT_TYPE as METRICS_CONTENT_TYPE,
 };
 
@@ -380,12 +380,10 @@ async fn bounded(
     deadline: ScrapeDeadline,
     read: impl Future<Output = Result<QueueDepth, String>>,
 ) -> Option<QueueDepth> {
-    let class =
-        match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline.at()), read).await {
-            Ok(Ok(depth)) => return Some(depth),
-            Ok(Err(class)) => class,
-            Err(_) => CLASS_TIMEOUT.to_owned(),
-        };
+    let class = match deadline.run(read).await {
+        Ok(depth) => return Some(depth),
+        Err(class) => class,
+    };
     metrics.record_sample_failure(queue);
     tracing::warn!(
         queue = queue.as_str(),

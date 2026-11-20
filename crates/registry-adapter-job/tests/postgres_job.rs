@@ -519,9 +519,6 @@ async fn item(pool: &Pool, key: &str) -> Option<store::ItemRecord> {
         .expect("the item row reads")
 }
 
-/// The invariant the table's shape carries: no column can hold a JSON
-/// item body, and the column set is exactly the identity-and-progress
-/// set of the item contract.
 /// The item count read waits on a lock the test holds. The server cancels it
 /// when the scrape deadline passes, so no session is left waiting, the gauge
 /// is omitted, and the failure is counted once however many scrapes follow.
@@ -552,7 +549,7 @@ async fn an_item_count_read_stuck_on_a_lock_is_cancelled_on_the_server_and_count
         waiting = observer
             .query_one(
                 "SELECT count(*) FROM pg_stat_activity \
-                 WHERE wait_event_type = 'Lock' AND query LIKE '%adapter_job_items%' \
+                 WHERE wait_event_type = 'Lock' AND query LIKE '%SELECT status, count(*) FROM adapter_job_items%' \
                    AND pid <> pg_backend_pid()",
                 &[],
             )
@@ -583,6 +580,35 @@ async fn an_item_count_read_stuck_on_a_lock_is_cancelled_on_the_server_and_count
     );
 }
 
+/// A scrape that starts with the budget spent fails as `no-time-left`
+/// without taking a connection, not as a `timeout` after one.
+#[tokio::test]
+async fn an_item_count_scrape_with_no_time_left_fails_as_no_time_left() {
+    use registry_adapter_job::metrics::{render_scrape, JobMetrics, SampleCache};
+    use registry_platform_metrics::ScrapeDeadline;
+    use tracing::instrument::WithSubscriber as _;
+    let isolated = isolated().await;
+    let metrics = JobMetrics::default();
+    let samples = SampleCache::new(std::time::Duration::from_secs(60));
+    let logs = registry_platform_testing::CapturedDiagnosticLogs::default();
+    let spent =
+        || ScrapeDeadline::with_budget(std::time::Instant::now(), std::time::Duration::ZERO);
+    let text = render_scrape(&metrics, &isolated.pool, "job-a", &samples, spent)
+        .with_subscriber(logs.subscriber_with_max_level(tracing::Level::ERROR))
+        .await;
+    assert!(!text.contains("adapter_job_items{"), "{text}");
+    assert!(
+        text.contains("adapter_job_gauge_sample_failures_total 1"),
+        "{text}"
+    );
+    let logged = logs.text();
+    assert!(logged.contains("no-time-left"), "{logged}");
+    assert!(!logged.contains("\"timeout\""), "{logged}");
+}
+
+/// The invariant the table's shape carries: no column can hold a JSON
+/// item body, and the column set is exactly the identity-and-progress
+/// set of the item contract.
 #[tokio::test]
 async fn the_item_table_holds_no_column_that_can_carry_a_payload() {
     let isolated = isolated().await;
