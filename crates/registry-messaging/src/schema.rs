@@ -838,7 +838,7 @@ mod tests {
             document["$defs"]["OidcConfig"]["additionalProperties"], false,
             "unknown keys are refused"
         );
-        for definition in ["ListenerConfig", "PrivateListenerConfig"] {
+        for definition in ["MetricsListenerConfig", "PrivateListenerConfig"] {
             assert!(
                 document["$defs"][definition].is_object(),
                 "{definition} must be present"
