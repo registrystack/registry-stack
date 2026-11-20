@@ -656,6 +656,10 @@
       "$ref": "#/$defs/ListenerConfig",
       "description": "The facade listener, from the platform shared block."
     },
+    "metricsListener": {
+      "$ref": "#/$defs/ListenerConfig",
+      "description": "The operator-private socket `/metrics` is served on. Absent, no\nmetrics are served. The address is loopback or private, on a non-zero\nport, and never the facade listener's own socket."
+    },
     "oidc": {
       "$ref": "#/$defs/OidcIssuerConfig",
       "description": "The OIDC issuer that authenticates facade callers, from the\nplatform shared block."

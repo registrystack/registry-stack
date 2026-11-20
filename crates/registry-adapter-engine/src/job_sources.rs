@@ -24,8 +24,8 @@ use registry_adapter_core::{
     MAXIMUM_JOB_FILE_BYTES, MAXIMUM_JOB_ROWS_PER_PAGE, MAXIMUM_JOB_ROW_BYTES,
 };
 use registry_platform_config::{
-    PrivateListenerConfig, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
-    SecretResolver, TlsTermination,
+    ListenerConfig, PrivateListenerConfig, RuntimeConfigLoader, RuntimeEnvelope,
+    SecretProvidersConfig, SecretResolver, TlsTermination,
 };
 use registry_platform_yaml::{
     BoundedU32, BoundedU64, Invalid, LocalId, SecretReference, UniqueIdList, UniqueList,
@@ -247,6 +247,9 @@ pub struct JobRuntimeConfig {
     /// The separate authenticated hook ingress. Absent, this job runtime opens
     /// no inbound socket.
     pub hook_ingress: Option<HookIngressConfig>,
+    /// The operator-private socket the loop's `/metrics` is served on.
+    /// Absent, the loop serves no metrics.
+    pub metrics_listener: Option<ListenerConfig>,
 }
 
 impl JobRuntimeConfig {
@@ -597,6 +600,11 @@ struct JobRuntimeDocument {
     secret_providers: Option<SecretProvidersConfig>,
     #[serde(default)]
     hook_ingress: Option<HookIngressConfig>,
+    #[serde(
+        default,
+        deserialize_with = "registry_adapter_core::checked_metrics_listener"
+    )]
+    metrics_listener: Option<ListenerConfig>,
 }
 
 impl<'de> Deserialize<'de> for JobRuntimeConfig {
@@ -604,6 +612,19 @@ impl<'de> Deserialize<'de> for JobRuntimeConfig {
         let document = JobRuntimeDocument::deserialize(deserializer)?;
         if let Some(providers) = &document.secret_providers {
             providers.check().map_err(serde::de::Error::custom)?;
+        }
+        if let (Some(metrics), Some(ingress)) = (&document.metrics_listener, &document.hook_ingress)
+        {
+            if registry_adapter_core::metrics_bind_overlaps(
+                metrics.bind.socket_addr(),
+                ingress.listener.bind.socket_addr(),
+            ) {
+                return Err(Invalid::expected(
+                    "metricsListener.bind to differ from hookIngress.listener.bind",
+                    "Bind the metrics listener to a different port than the hook ingress.",
+                )
+                .into_error());
+            }
         }
         Ok(Self {
             core: AdapterEndpointBindings {
@@ -617,6 +638,7 @@ impl<'de> Deserialize<'de> for JobRuntimeConfig {
             destinations: document.destinations,
             secret_providers: document.secret_providers,
             hook_ingress: document.hook_ingress,
+            metrics_listener: document.metrics_listener,
         })
     }
 }
@@ -1539,6 +1561,54 @@ mod tests {
             assert!(
                 serde_json::from_str::<JobRuntimeConfig>(&runtime(refused)).is_err(),
                 "the hook ingress shape must refuse: {refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_job_metrics_listener_is_private_and_never_the_hook_ingress_socket() {
+        let runtime = |metrics: &str| {
+            format!(
+                r#"{{
+                    "id": "job-deployment",
+                    "endpoints": [],
+                    "metricsListener": {{ "bind": "{metrics}" }},
+                    "hookIngress": {{
+                        "listener": {{
+                            "bind": "127.0.0.1:8091",
+                            "tlsTermination": "operator-controlled-upstream"
+                        }},
+                        "sources": {{
+                            "kobo": {{
+                                "usernameRef": "secret:env/U",
+                                "passwordRef": "secret:env/P",
+                                "requestsPerMinute": 10,
+                                "burst": 1
+                            }}
+                        }}
+                    }}
+                }}"#
+            )
+        };
+        let read = serde_json::from_str::<JobRuntimeConfig>(&runtime("127.0.0.1:9464"))
+            .expect("a distinct loopback metrics socket reads");
+        assert_eq!(
+            read.metrics_listener
+                .expect("the metrics listener reads")
+                .bind
+                .socket_addr()
+                .port(),
+            9464
+        );
+        for refused in [
+            "8.8.8.8:9464",
+            "127.0.0.1:0",
+            "127.0.0.1:8091",
+            "0.0.0.0:8091",
+        ] {
+            assert!(
+                serde_json::from_str::<JobRuntimeConfig>(&runtime(refused)).is_err(),
+                "the metrics bind must refuse: {refused}"
             );
         }
     }

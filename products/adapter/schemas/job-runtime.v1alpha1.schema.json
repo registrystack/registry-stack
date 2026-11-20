@@ -348,6 +348,19 @@
       "minLength": 1,
       "type": "string"
     },
+    "ListenerConfig": {
+      "additionalProperties": false,
+      "description": "The listener of a runtime that declares no TLS or exposure settings.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
     "ListenerNetworkExposure": {
       "description": "The operator-declared private network placement of an HTTP listener.",
       "enum": [
@@ -1040,6 +1053,10 @@
     "kind": {
       "const": "AdapterJobRuntimeConfig",
       "type": "string"
+    },
+    "metricsListener": {
+      "$ref": "#/$defs/ListenerConfig",
+      "description": "The operator-private socket the loop's `/metrics` is served on.\nAbsent, the loop serves no metrics. The address is loopback or\nprivate, on a non-zero port, and never the hook ingress's socket."
     },
     "outboundTls": {
       "$ref": "#/$defs/OutboundTls",

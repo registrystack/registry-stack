@@ -683,3 +683,92 @@ async fn lost_hook_is_reconciled_by_the_real_cli_interval() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// Reserves a loopback port the job's metrics listener is then configured on.
+fn free_loopback_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("reserve a loopback port")
+        .local_addr()
+        .expect("the reserved address")
+        .port()
+}
+
+async fn scrape(port: u16) -> String {
+    reqwest::get(format!("http://127.0.0.1:{port}/metrics"))
+        .await
+        .expect("scrape the job metrics listener")
+        .text()
+        .await
+        .expect("the scrape body is text")
+}
+
+#[tokio::test]
+async fn the_loop_serves_item_state_pass_age_and_hook_refusal_metrics() {
+    let fixture =
+        JobFixture::start(PAGE_SCRIPT, vec![(200, reply_page_end())], Edits::Ordered).await;
+    configure_hook(&fixture, 250, 1);
+    let port = free_loopback_port();
+    let mut runtime: Value =
+        serde_json::from_slice(&std::fs::read(&fixture.runtime).expect("read the runtime"))
+            .expect("the runtime is JSON");
+    runtime["metricsListener"] = json!({"bind": format!("127.0.0.1:{port}")});
+    std::fs::write(
+        &fixture.runtime,
+        serde_json::to_vec_pretty(&runtime).expect("render the runtime"),
+    )
+    .expect("write the runtime");
+    let database_url = isolated_database_url().await;
+    let receiver = FixtureReceiver::start(vec![Scripted::Acknowledge {
+        run_id: Some("metrics-run".to_string()),
+    }])
+    .await;
+    let mut child = ManagedChild::spawn(&database_url, &fixture, &receiver.url);
+    let address = wait_for_listener(&mut child).await;
+    wait_for_pass(&database_url, &receiver).await;
+
+    // An unknown hook path is refused and counted by reason.
+    let refused = reqwest::Client::new()
+        .post(format!("http://{address}/hooks/unknown"))
+        .send()
+        .await
+        .expect("send the unknown hook");
+    assert_eq!(refused.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let body = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let body = scrape(port).await;
+            if body.contains("adapter_job_last_successful_pass_age_seconds ") {
+                return body;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("a settled pass is reported");
+    assert!(
+        body.contains("adapter_job_items{state=\"acknowledged\"} 1"),
+        "{body}"
+    );
+    assert!(
+        body.contains("adapter_job_items{state=\"pending\"} 0"),
+        "{body}"
+    );
+    assert!(
+        body.contains("adapter_job_items{state=\"held\"} 0"),
+        "{body}"
+    );
+    assert!(
+        body.contains("adapter_job_hook_refusals_total{reason=\"not-found\"} 1"),
+        "{body}"
+    );
+
+    child.interrupt();
+    let output = tokio::task::spawn_blocking(move || child.output())
+        .await
+        .expect("join output collection");
+    assert!(
+        output.status.success(),
+        "adapter-job did not stop cleanly: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

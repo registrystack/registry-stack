@@ -363,6 +363,15 @@ pub struct AdapterRuntimeConfig {
     pub allowed_private_cidrs: UniqueList<Cidr>,
     /// The facade listener, from the platform shared block.
     pub listener: ListenerConfig,
+    /// The operator-private socket `/metrics` is served on. Absent, no
+    /// metrics are served. The address is loopback or private, on a non-zero
+    /// port, and never the facade listener's own socket.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "checked_metrics_listener"
+    )]
+    pub metrics_listener: Option<ListenerConfig>,
     /// The PostgreSQL connections, from the platform shared block.
     pub database: DatabaseConfig,
     /// The OIDC issuer that authenticates facade callers, from the
@@ -396,6 +405,51 @@ pub struct AdapterRuntimeConfig {
     /// 900.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_ttl_seconds: Option<BoundedU64<60, 86_400>>,
+}
+
+/// Read an optional `metricsListener` and refuse a bind that is not a
+/// loopback or private address on a non-zero port. Public so every document
+/// that states the member holds the same rule.
+///
+/// # Errors
+///
+/// A bind that is public, unspecified, multicast, or on port zero.
+pub fn checked_metrics_listener<'de, D>(deserializer: D) -> Result<Option<ListenerConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let listener = Option::<ListenerConfig>::deserialize(deserializer)?;
+    if let Some(listener) = &listener {
+        if !metrics_bind_is_private(listener.bind.socket_addr()) {
+            return Err(serde::de::Error::custom(
+                "metricsListener.bind must be a loopback or private address on a non-zero port; bind 127.0.0.1 or a private address",
+            ));
+        }
+    }
+    Ok(listener)
+}
+
+fn metrics_bind_is_private(bind: std::net::SocketAddr) -> bool {
+    use std::net::IpAddr;
+    let address = bind.ip();
+    let private = match address {
+        IpAddr::V4(address) => address.is_loopback() || address.is_private(),
+        IpAddr::V6(address) => address.is_loopback() || (address.segments()[0] & 0xfe00) == 0xfc00,
+    };
+    bind.port() != 0 && private && !address.is_unspecified() && !address.is_multicast()
+}
+
+/// Whether a metrics bind would occupy the same socket as `other`, a
+/// listener the metrics must stay apart from. An IPv6 wildcard is commonly
+/// dual-stack, so it covers both families; an IPv4 wildcard covers only IPv4.
+#[must_use]
+pub fn metrics_bind_overlaps(metrics: std::net::SocketAddr, other: std::net::SocketAddr) -> bool {
+    use std::net::IpAddr;
+    let wildcard_covers_metrics = match other.ip() {
+        IpAddr::V4(other) => other.is_unspecified() && metrics.ip().is_ipv4(),
+        IpAddr::V6(other) => other.is_unspecified(),
+    };
+    (metrics.ip() == other.ip() || wildcard_covers_metrics) && metrics.port() == other.port()
 }
 
 fn checked_secret_providers<'de, D>(
@@ -655,6 +709,7 @@ mod tests {
             ])
             .expect("unique"),
             listener: serde_json::from_str(r#"{ "bind": "127.0.0.1:8080" }"#).expect("listener"),
+            metrics_listener: None,
             database: serde_json::from_str(
                 r#"{
                     "runtimeUrlRef": "secret:env/DB_RUNTIME",
@@ -996,5 +1051,61 @@ mod tests {
         let facade = serde_json::from_str::<AdapterRuntimeConfig>(facade).expect("facade");
         let alone = serde_json::from_str::<AdapterEndpointBindings>(alone).expect("bindings");
         assert_eq!(facade.endpoint_bindings(), alone);
+    }
+
+    #[test]
+    fn metrics_listener_binds_only_a_private_non_zero_socket() {
+        #[derive(Deserialize)]
+        #[allow(dead_code)]
+        struct Holder {
+            #[serde(deserialize_with = "checked_metrics_listener")]
+            metrics_listener: Option<ListenerConfig>,
+        }
+        for bind in [
+            "127.0.0.1:9464",
+            "10.1.2.3:9464",
+            "[::1]:9464",
+            "192.168.0.5:9464",
+        ] {
+            let json = format!(r#"{{ "metrics_listener": {{ "bind": "{bind}" }} }}"#);
+            serde_json::from_str::<Holder>(&json)
+                .unwrap_or_else(|error| panic!("{bind} should be admitted: {error}"));
+        }
+        for bind in [
+            "0.0.0.0:9464",
+            "203.0.113.7:9464",
+            "127.0.0.1:0",
+            "[::]:9464",
+        ] {
+            let json = format!(r#"{{ "metrics_listener": {{ "bind": "{bind}" }} }}"#);
+            let error = serde_json::from_str::<Holder>(&json)
+                .err()
+                .unwrap_or_else(|| panic!("{bind} should be refused"));
+            assert!(
+                error.to_string().contains("loopback or private"),
+                "{bind}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn metrics_bind_overlap_covers_wildcards_and_the_same_socket() {
+        let socket = |text: &str| text.parse::<std::net::SocketAddr>().expect("socket");
+        assert!(metrics_bind_overlaps(
+            socket("127.0.0.1:8080"),
+            socket("127.0.0.1:8080")
+        ));
+        assert!(metrics_bind_overlaps(
+            socket("127.0.0.1:8080"),
+            socket("0.0.0.0:8080")
+        ));
+        assert!(metrics_bind_overlaps(
+            socket("127.0.0.1:8080"),
+            socket("[::]:8080")
+        ));
+        assert!(!metrics_bind_overlaps(
+            socket("127.0.0.1:9464"),
+            socket("127.0.0.1:8080")
+        ));
     }
 }

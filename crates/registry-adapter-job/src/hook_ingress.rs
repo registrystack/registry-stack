@@ -25,6 +25,7 @@ use registry_platform_ratelimit::token_bucket::{
 };
 use zeroize::Zeroizing;
 
+use crate::metrics::JobMetrics;
 use crate::trigger::{HookAdmission, HookPassGate};
 
 /// One authenticated hook body may carry at most 1 MiB. The bytes are streamed
@@ -123,6 +124,7 @@ pub fn activate(
     runtime: &JobRuntimeConfig,
     resolver: &SecretResolver,
     gate: Arc<HookPassGate>,
+    metrics: Arc<JobMetrics>,
 ) -> Result<Option<HookIngressPlan>, HookIngressError> {
     validate_hook_runtime(job, runtime)?;
     let Some(ingress) = runtime.hook_ingress.as_ref() else {
@@ -161,6 +163,7 @@ pub fn activate(
         state: IngressState {
             sources: Arc::new(sources),
             gate,
+            metrics,
         },
     }))
 }
@@ -173,7 +176,14 @@ pub fn preflight(
     runtime: &JobRuntimeConfig,
     resolver: &SecretResolver,
 ) -> Result<(), HookIngressError> {
-    activate(job, runtime, resolver, Arc::new(HookPassGate::default())).map(|_| ())
+    activate(
+        job,
+        runtime,
+        resolver,
+        Arc::new(HookPassGate::default()),
+        Arc::new(JobMetrics::default()),
+    )
+    .map(|_| ())
 }
 
 /// An activated hook ingress whose secrets are captured but whose socket is
@@ -408,6 +418,7 @@ struct HookSource {
 struct IngressState {
     sources: Arc<BTreeMap<String, Arc<HookSource>>>,
     gate: Arc<HookPassGate>,
+    metrics: Arc<JobMetrics>,
 }
 
 async fn receive_hook(State(state): State<IngressState>, request: Request<Body>) -> Response<Body> {
@@ -419,7 +430,37 @@ async fn receive_hook(State(state): State<IngressState>, request: Request<Body>)
     .await
 }
 
+/// Answer one hook request and count a refusal under its closed reason.
 async fn receive_hook_until(
+    State(state): State<IngressState>,
+    request: Request<Body>,
+    body_deadline: impl Future<Output = ()>,
+) -> Response<Body> {
+    let metrics = Arc::clone(&state.metrics);
+    let answer = answer_hook(State(state), request, body_deadline).await;
+    if let Some(reason) = refusal_reason(answer.status()) {
+        metrics.record_hook_refusal(reason);
+    }
+    answer
+}
+
+/// The refusal reason a response status stands for, or `None` for an
+/// accepted hook. Each status is produced by exactly one refusal.
+fn refusal_reason(status: StatusCode) -> Option<&'static str> {
+    match status {
+        StatusCode::NOT_FOUND => Some("not-found"),
+        StatusCode::METHOD_NOT_ALLOWED => Some("method"),
+        StatusCode::UNAUTHORIZED => Some("unauthenticated"),
+        StatusCode::TOO_MANY_REQUESTS => Some("rate-limited"),
+        StatusCode::SERVICE_UNAVAILABLE => Some("unavailable"),
+        StatusCode::REQUEST_TIMEOUT => Some("body-timeout"),
+        StatusCode::PAYLOAD_TOO_LARGE => Some("body-too-large"),
+        StatusCode::BAD_REQUEST => Some("body-unreadable"),
+        _ => None,
+    }
+}
+
+async fn answer_hook(
     State(state): State<IngressState>,
     request: Request<Body>,
     body_deadline: impl Future<Output = ()>,
@@ -592,6 +633,7 @@ mod tests {
         let state = IngressState {
             sources: Arc::new(BTreeMap::from([(path.to_string(), source)])),
             gate: Arc::clone(&gate),
+            metrics: Arc::new(JobMetrics::default()),
         };
         let router = Router::new().fallback(any(receive_hook)).with_state(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -717,7 +759,14 @@ mod tests {
         );
         let (_root, resolver) = secret_resolver();
         assert_eq!(
-            activate(&job, &runtime, &resolver, Arc::new(HookPassGate::default())).err(),
+            activate(
+                &job,
+                &runtime,
+                &resolver,
+                Arc::new(HookPassGate::default()),
+                Arc::new(JobMetrics::default()),
+            )
+            .err(),
             Some(HookIngressError::PathRepeated)
         );
     }
@@ -961,6 +1010,7 @@ mod tests {
         let state = IngressState {
             sources: Arc::new(BTreeMap::from([("/hooks/kobo".to_string(), source)])),
             gate: Arc::clone(&gate),
+            metrics: Arc::new(JobMetrics::default()),
         };
         let stream = futures::stream::once(async {
             Ok::<_, std::convert::Infallible>(axum::body::Bytes::from_static(b"{"))
@@ -983,6 +1033,66 @@ mod tests {
             br#"{"code":"adapter.job.hook-body-timeout"}"#
         );
         assert_eq!(gate.handle_hook(), HookAdmission::Started);
+    }
+
+    #[tokio::test]
+    async fn refused_hook_requests_are_counted_by_reason() {
+        let (_root, resolver) = secret_resolver();
+        let source = Arc::new(HookSource {
+            credential: BasicCredential::resolve("kobo-submissions", &source_config(), &resolver)
+                .expect("the credential resolves"),
+            limiter: TokenBucketLimiter::new(TokenBucketConfig {
+                requests_per_minute: 60,
+                burst: 1,
+            })
+            .expect("a bounded rate limit"),
+        });
+        let metrics = Arc::new(JobMetrics::default());
+        let state = IngressState {
+            sources: Arc::new(BTreeMap::from([("/hooks/kobo".to_string(), source)])),
+            gate: Arc::new(HookPassGate::default()),
+            metrics: Arc::clone(&metrics),
+        };
+        let send = |method: Method, path: &str, password: &str| {
+            let request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header(AUTHORIZATION, basic_header(password))
+                .body(Body::empty())
+                .expect("a hook request");
+            receive_hook_until(State(state.clone()), request, std::future::pending())
+        };
+        let good = "correct horse battery staple";
+        assert_eq!(
+            send(Method::POST, "/hooks/elsewhere", good).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(Method::GET, "/hooks/kobo", good).await.status(),
+            StatusCode::METHOD_NOT_ALLOWED
+        );
+        assert_eq!(
+            send(Method::POST, "/hooks/kobo", "wrong").await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send(Method::POST, "/hooks/kobo", good).await.status(),
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(
+            send(Method::POST, "/hooks/kobo", good).await.status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        let text = metrics.render(None);
+        for reason in ["not-found", "method", "unauthenticated", "rate-limited"] {
+            let line = format!("adapter_job_hook_refusals_total{{reason=\"{reason}\"}} 1");
+            assert!(text.lines().any(|found| found == line), "{reason}: {text}");
+        }
+        assert!(
+            text.lines()
+                .any(|line| line == "adapter_job_hook_refusals_total{reason=\"body-timeout\"} 0"),
+            "an accepted hook is not a refusal"
+        );
     }
 
     #[tokio::test]

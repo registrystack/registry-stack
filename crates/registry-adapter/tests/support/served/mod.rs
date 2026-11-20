@@ -326,6 +326,25 @@ impl Served {
         served
     }
 
+    /// Start over `project` with the metrics listener on `metrics_port`.
+    pub async fn start_with_metrics(upstream_url: &str, project: &Path, metrics_port: u16) -> Self {
+        let cursor_lines = format!(
+            "cursorKeyRef: secret:env/TEST_CURSOR_KEY\nmetricsListener:\n  bind: 127.0.0.1:{metrics_port}\n"
+        );
+        let mut served = Self::spawn_config(
+            upstream_url,
+            project,
+            CURSOR_KEY,
+            &[],
+            &cursor_lines,
+            BASIC_CREDENTIAL,
+            86_400,
+        )
+        .await;
+        served.wait_until_listening();
+        served
+    }
+
     /// Start over `project` with an explicit exact-response custody window.
     pub async fn start_with_project_retention(
         upstream_url: &str,

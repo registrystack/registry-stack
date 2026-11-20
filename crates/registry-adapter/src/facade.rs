@@ -94,6 +94,8 @@ pub struct FacadeState {
     /// Seals and opens pagination cursors; present when the runtime
     /// config declares `cursorKeyRef`, which a paginated operation needs.
     pub codec: Option<ContinuationCodec>,
+    /// Operational counters, served on the metrics listener when configured.
+    pub metrics: Arc<crate::metrics::Metrics>,
 }
 
 /// The served operations of one facade path, by method: the indexes of
@@ -334,21 +336,27 @@ pub fn router(state: Arc<FacadeState>) -> Router {
         }),
     );
     let unmatched = Arc::clone(&state);
-    router.fallback(move |correlation: Option<Extension<RequestCorrelation>>| {
-        let shared = Arc::clone(&unmatched);
-        async move {
-            let request_id = correlation
-                .as_ref()
-                .map_or_else(new_id, |Extension(value)| value.request_id().to_owned());
-            facade_problem(
-                shared.loaded.problems(),
-                ErrorClass::FacadeNotFound,
-                StatusCode::NOT_FOUND,
-                "",
-                &request_id,
-            )
-        }
-    })
+    let metrics = Arc::clone(&state.metrics);
+    router
+        .fallback(move |correlation: Option<Extension<RequestCorrelation>>| {
+            let shared = Arc::clone(&unmatched);
+            async move {
+                let request_id = correlation
+                    .as_ref()
+                    .map_or_else(new_id, |Extension(value)| value.request_id().to_owned());
+                facade_problem(
+                    shared.loaded.problems(),
+                    ErrorClass::FacadeNotFound,
+                    StatusCode::NOT_FOUND,
+                    "",
+                    &request_id,
+                )
+            }
+        })
+        .layer(middleware::from_fn_with_state(
+            metrics,
+            crate::metrics::count_requests,
+        ))
 }
 
 /// The served operation, among those of one method and path, that answers
@@ -656,7 +664,7 @@ async fn answer_async_status(
             event("exchangeCreated", None, SystemTime::now()),
             event(terminal_kind, None, SystemTime::now()),
         ];
-        if let Err(fault) = append_all(&state.journal, events).await {
+        if let Err(fault) = append_all(state, events).await {
             tracing::error!(%fault, "the terminal status replay could not be journaled");
             return facade_problem(
                 profile,
@@ -684,7 +692,7 @@ async fn answer_async_status(
         );
     };
     let Ok(_permit) = Arc::clone(semaphore).try_acquire_owned() else {
-        if let Err(fault) = append_all(&state.journal, vec![created]).await {
+        if let Err(fault) = append_all(state, vec![created]).await {
             tracing::error!(%fault, "the audit journal could not record a busy status lookup");
             return facade_problem(
                 profile,
@@ -716,7 +724,7 @@ async fn answer_async_status(
             if matches!(lease, RecoveryLease::Quarantined) {
                 warn_held_async_write(&operation.binding);
             }
-            if let Err(fault) = append_all(&state.journal, vec![created]).await {
+            if let Err(fault) = append_all(state, vec![created]).await {
                 tracing::error!(%fault, "the audit journal could not record a leased status lookup");
                 return facade_problem(
                     profile,
@@ -780,7 +788,7 @@ async fn answer_async_status(
                     );
                 }
             };
-            if let Err(fault) = append_all(&state.journal, events).await {
+            if let Err(fault) = append_all(state, events).await {
                 tracing::error!(%fault, "the status replay after a lost lease could not be journaled");
                 return facade_problem(
                     profile,
@@ -919,15 +927,7 @@ async fn answer_async_status(
                 None,
                 SystemTime::now(),
             ));
-            match append_all_with_recovery(
-                &state.journal,
-                store,
-                recovery,
-                outcome,
-                response,
-                events,
-            )
-            .await
+            match append_all_with_recovery(state, store, recovery, outcome, response, events).await
             {
                 Ok(response) => response,
                 Err(fault) => {
@@ -1043,7 +1043,7 @@ async fn caller_capabilities(
             )
         })
         .collect();
-    if let Err(fault) = append_all(&state.journal, audit).await {
+    if let Err(fault) = append_all(&state, audit).await {
         tracing::error!(%fault, "the capability discovery audit row could not commit");
         return facade_problem(
             state.loaded.problems(),
@@ -1089,7 +1089,7 @@ async fn journal_capability_refusal(
         route_id: "consultation-capabilities".to_owned(),
         detail: Some(json!({"class": class.class(), "status": status.as_u16()}).to_string()),
     };
-    if let Err(fault) = append_all(&state.journal, vec![(event, SystemTime::now())]).await {
+    if let Err(fault) = append_all(state, vec![(event, SystemTime::now())]).await {
         tracing::error!(%fault, "the capability discovery refusal could not be journaled");
         return facade_problem(
             state.loaded.problems(),
@@ -1750,7 +1750,7 @@ async fn answer(
     // The exchange is on record before the source is called: a call that
     // never completes still leaves its `exchangeCreated` behind.
     let created = vec![(journal_event("exchangeCreated", None), SystemTime::now())];
-    if let Err(fault) = append_all(&state.journal, created).await {
+    if let Err(fault) = append_all(state, created).await {
         tracing::error!(%fault, "the audit journal could not record the exchange");
         return facade_problem(
             profile,
@@ -1823,7 +1823,7 @@ async fn answer(
             ),
             SystemTime::now(),
         ));
-        if let Err(fault) = append_all(&state.journal, events).await {
+        if let Err(fault) = append_all(state, events).await {
             tracing::error!(%fault, "the uncertain-effect journal could not commit");
             return facade_problem(
                 profile,
@@ -2146,7 +2146,7 @@ async fn answer(
                 BindingAsyncCompletion::BoundedWait { .. } => "bounded-wait",
             };
             match append_all_with_acceptance(
-                &state.journal,
+                state,
                 events,
                 acceptance_event,
                 write,
@@ -2247,6 +2247,7 @@ async fn answer(
             } else {
                 route_problem(profile, &failure, &record_type, &request_id)
             };
+            state.metrics.record_route_failure(failure.class);
             warn_exchange_failed(failure.class, response.status());
             (response, Some(TerminalOutcome::Failed))
         }
@@ -2380,9 +2381,9 @@ async fn answer(
     let pending_terminal = pending_write.zip(terminal);
     let committed = match (pending_terminal, stored) {
         (Some((context, terminal)), Some(stored)) => {
-            append_all_with_write(&state.journal, events, context, terminal, stored).await
+            append_all_with_write(state, events, context, terminal, stored).await
         }
-        _ => append_all(&state.journal, events).await,
+        _ => append_all(state, events).await,
     };
     if let Err(fault) = committed {
         tracing::error!(%fault, "the audit journal and response custody could not commit");
@@ -2459,70 +2460,89 @@ enum Finished {
 /// Append `events` in one transaction, each stamped with its own instant.
 /// The error is a fixed account of the fault (the SQLSTATE where the driver
 /// reports one), never the driver's text, which can repeat server detail.
-async fn append_all(pool: &Pool, events: Vec<(JournalEvent, SystemTime)>) -> Result<(), String> {
-    let mut client = pool
-        .get()
-        .await
-        .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
-    let transaction = client
-        .transaction()
-        .await
-        .map_err(|error| journal_fault(&error))?;
-    for (event, occurred_at) in events {
-        journal::append(&transaction, event, occurred_at)
+async fn append_all(
+    state: &FacadeState,
+    events: Vec<(JournalEvent, SystemTime)>,
+) -> Result<(), String> {
+    let pool = &state.journal;
+    let result: Result<(), String> = async {
+        let mut client = pool
+            .get()
             .await
-            .map_err(|error| match error {
-                journal::JournalError::Query(error) => journal_fault(&error),
-                _ => "the journal write failed".to_owned(),
-            })?;
+            .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| journal_fault(&error))?;
+        for (event, occurred_at) in events {
+            journal::append(&transaction, event, occurred_at)
+                .await
+                .map_err(|error| match error {
+                    journal::JournalError::Query(error) => journal_fault(&error),
+                    _ => "the journal write failed".to_owned(),
+                })?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| journal_fault(&error))
     }
-    transaction
-        .commit()
-        .await
-        .map_err(|error| journal_fault(&error))
+    .await;
+    if result.is_err() {
+        state.metrics.record_journal_write_failure();
+    }
+    result
 }
 
 /// Commit the exact terminal response and the route's terminal journal rows
 /// on one PostgreSQL transaction. Neither table can claim a terminal outcome
 /// while the other remains non-terminal.
 async fn append_all_with_write(
-    pool: &Pool,
+    state: &FacadeState,
     events: Vec<(JournalEvent, SystemTime)>,
     context: &WriteExecutionContext,
     outcome: TerminalOutcome,
     response: StoredResponse,
 ) -> Result<(), String> {
-    let mut client = pool
-        .get()
-        .await
-        .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
-    let transaction = client
-        .transaction()
-        .await
-        .map_err(|error| journal_fault(&error))?;
-    context
-        .finish_with_client(&transaction, outcome, response)
-        .await
-        .map_err(|error| error.to_string())?;
-    for (event, occurred_at) in events {
-        journal::append(&transaction, event, occurred_at)
+    let pool = &state.journal;
+    let result: Result<(), String> = async {
+        let mut client = pool
+            .get()
             .await
-            .map_err(|error| match error {
-                journal::JournalError::Query(error) => journal_fault(&error),
-                _ => "the journal write failed".to_owned(),
-            })?;
+            .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| journal_fault(&error))?;
+        context
+            .finish_with_client(&transaction, outcome, response)
+            .await
+            .map_err(|error| error.to_string())?;
+        for (event, occurred_at) in events {
+            journal::append(&transaction, event, occurred_at)
+                .await
+                .map_err(|error| match error {
+                    journal::JournalError::Query(error) => journal_fault(&error),
+                    _ => "the journal write failed".to_owned(),
+                })?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| journal_fault(&error))
     }
-    transaction
-        .commit()
-        .await
-        .map_err(|error| journal_fault(&error))
+    .await;
+    if result.is_err() {
+        state.metrics.record_journal_write_failure();
+    }
+    result
 }
 
 /// Render and atomically commit one profile-owned 202 with the route events
 /// that preceded it and the value-free `exchangeAccepted` event.
 #[allow(clippy::too_many_arguments)]
 async fn append_all_with_acceptance(
-    pool: &Pool,
+    state: &FacadeState,
     events: Vec<(JournalEvent, SystemTime)>,
     mut acceptance_event: JournalEvent,
     context: &WriteExecutionContext,
@@ -2534,72 +2554,81 @@ async fn append_all_with_acceptance(
     retention: Duration,
     mode: &'static str,
 ) -> Result<CommittedAcceptance, String> {
-    let mut client = pool
-        .get()
-        .await
-        .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
-    let transaction = client
-        .transaction()
-        .await
-        .map_err(|error| journal_fault(&error))?;
-    let accepted_at = SystemTime::now();
-    let expires_at = accepted_at
-        .checked_add(retention)
-        .ok_or_else(|| "adapter.async-expiry: retention instant is invalid".to_owned())?;
-    let expires_text = OffsetDateTime::from(expires_at)
-        .format(&Rfc3339)
-        .map_err(|_| "adapter.async-expiry: timestamp could not be formatted".to_owned())?;
-    let declared = operation
-        .async_completion
-        .as_ref()
-        .ok_or_else(|| "adapter.async-acceptance: compiled contract is absent".to_owned())?;
-    let status_link = profile_contract
-        .status_path
-        .as_str()
-        .replace("{statusId}", request_id);
-    let mut slots = BTreeMap::new();
-    slots.insert("statusLink", Value::String(status_link));
-    slots.insert("statusExpiresAt", Value::String(expires_text.clone()));
-    slots.insert("requestId", Value::String(request_id.to_owned()));
-    let envelope = CompiledEnvelope::compile(
-        profile_contract.accepted_envelope.text(),
-        parameterized_parts,
-    )?;
-    let body = envelope.render(&slots)?;
-    let response = json_response(StatusCode::ACCEPTED, &body);
-    let (response, stored) = prepare_write_response(response, request_id).await?;
-    let stored = stored.ok_or_else(|| "adapter.async-acceptance: custody is absent".to_owned())?;
-    context
-        .accept_with_client(&transaction, source_id, stored.clone(), accepted_at)
-        .await
-        .map_err(|error| error.to_string())?;
-    acceptance_event.detail = Some(
-        json!({
-            "mode": mode,
-            "profileOperation": operation.operation,
-            "statusRoute": declared.status.route_id,
-            "recoveryExpiry": expires_text,
-        })
-        .to_string(),
-    );
-    for (event, occurred_at) in events.into_iter().chain([(acceptance_event, accepted_at)]) {
-        journal::append(&transaction, event, occurred_at)
+    let pool = &state.journal;
+    let result: Result<CommittedAcceptance, String> = async {
+        let mut client = pool
+            .get()
             .await
-            .map_err(|error| match error {
-                journal::JournalError::Query(error) => journal_fault(&error),
-                _ => "the journal write failed".to_owned(),
-            })?;
+            .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| journal_fault(&error))?;
+        let accepted_at = SystemTime::now();
+        let expires_at = accepted_at
+            .checked_add(retention)
+            .ok_or_else(|| "adapter.async-expiry: retention instant is invalid".to_owned())?;
+        let expires_text = OffsetDateTime::from(expires_at)
+            .format(&Rfc3339)
+            .map_err(|_| "adapter.async-expiry: timestamp could not be formatted".to_owned())?;
+        let declared = operation
+            .async_completion
+            .as_ref()
+            .ok_or_else(|| "adapter.async-acceptance: compiled contract is absent".to_owned())?;
+        let status_link = profile_contract
+            .status_path
+            .as_str()
+            .replace("{statusId}", request_id);
+        let mut slots = BTreeMap::new();
+        slots.insert("statusLink", Value::String(status_link));
+        slots.insert("statusExpiresAt", Value::String(expires_text.clone()));
+        slots.insert("requestId", Value::String(request_id.to_owned()));
+        let envelope = CompiledEnvelope::compile(
+            profile_contract.accepted_envelope.text(),
+            parameterized_parts,
+        )?;
+        let body = envelope.render(&slots)?;
+        let response = json_response(StatusCode::ACCEPTED, &body);
+        let (response, stored) = prepare_write_response(response, request_id).await?;
+        let stored =
+            stored.ok_or_else(|| "adapter.async-acceptance: custody is absent".to_owned())?;
+        context
+            .accept_with_client(&transaction, source_id, stored.clone(), accepted_at)
+            .await
+            .map_err(|error| error.to_string())?;
+        acceptance_event.detail = Some(
+            json!({
+                "mode": mode,
+                "profileOperation": operation.operation,
+                "statusRoute": declared.status.route_id,
+                "recoveryExpiry": expires_text,
+            })
+            .to_string(),
+        );
+        for (event, occurred_at) in events.into_iter().chain([(acceptance_event, accepted_at)]) {
+            journal::append(&transaction, event, occurred_at)
+                .await
+                .map_err(|error| match error {
+                    journal::JournalError::Query(error) => journal_fault(&error),
+                    _ => "the journal write failed".to_owned(),
+                })?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| journal_fault(&error))?;
+        Ok(CommittedAcceptance {
+            response,
+            stored,
+            accepted_at,
+            expires_at,
+        })
     }
-    transaction
-        .commit()
-        .await
-        .map_err(|error| journal_fault(&error))?;
-    Ok(CommittedAcceptance {
-        response,
-        stored,
-        accepted_at,
-        expires_at,
-    })
+    .await;
+    if result.is_err() {
+        state.metrics.record_journal_write_failure();
+    }
+    result
 }
 
 struct CommittedAcceptance {
@@ -2822,7 +2851,7 @@ async fn run_bounded_wait(
                     )
                     .await;
                 }
-                if let Err(fault) = append_all(&state.journal, events).await {
+                if let Err(fault) = append_all(state, events).await {
                     tracing::error!(%fault, "the bounded-wait journal could not commit");
                     return facade_problem(
                         profile,
@@ -2899,7 +2928,7 @@ async fn run_bounded_wait(
                     SystemTime::now(),
                 ));
                 return match append_all_with_recovery(
-                    &state.journal,
+                    state,
                     store,
                     recovery.take().expect("the recovery lease is live"),
                     outcome,
@@ -3022,7 +3051,7 @@ async fn run_uncertainty_recovery(
         events
     };
     let Ok(_permit) = Arc::clone(semaphore).try_acquire_owned() else {
-        if let Err(fault) = append_all(&state.journal, conflict(events)).await {
+        if let Err(fault) = append_all(state, conflict(events)).await {
             tracing::error!(%fault, "the uncertain-effect journal could not commit");
             return facade_problem(
                 profile,
@@ -3049,7 +3078,7 @@ async fn run_uncertainty_recovery(
             if matches!(lease, RecoveryLease::Quarantined) {
                 warn_held_async_write(&operation.binding);
             }
-            if let Err(fault) = append_all(&state.journal, conflict(events)).await {
+            if let Err(fault) = append_all(state, conflict(events)).await {
                 tracing::error!(%fault, "the uncertain-effect journal could not commit");
                 return facade_problem(
                     profile,
@@ -3170,12 +3199,7 @@ async fn run_uncertainty_recovery(
                     SystemTime::now(),
                 ));
                 return match append_all_with_recovery(
-                    &state.journal,
-                    store,
-                    recovery,
-                    outcome,
-                    response,
-                    events,
+                    state, store, recovery, outcome, response, events,
                 )
                 .await
                 {
@@ -3202,7 +3226,7 @@ async fn run_uncertainty_recovery(
             ));
         }
     }
-    if let Err(fault) = append_all(&state.journal, conflict(events)).await {
+    if let Err(fault) = append_all(state, conflict(events)).await {
         tracing::error!(%fault, "the uncertain-effect journal could not commit");
         return facade_problem(
             profile,
@@ -3240,7 +3264,7 @@ async fn finish_nonterminal_poll(
     record_type: &str,
     physical_request_id: &str,
 ) -> Response {
-    if let Err(fault) = append_all(&state.journal, events).await {
+    if let Err(fault) = append_all(state, events).await {
         tracing::error!(%fault, "the asynchronous status journal could not commit");
         return facade_problem(
             state.loaded.problems(),
@@ -3264,44 +3288,53 @@ async fn finish_nonterminal_poll(
 }
 
 async fn append_all_with_recovery(
-    pool: &Pool,
+    state: &FacadeState,
     store: &PostgresIdempotencyStore,
     recovery: Box<crate::idempotent::RecoveryExecution>,
     outcome: TerminalOutcome,
     response: Response,
     events: Vec<(JournalEvent, SystemTime)>,
 ) -> Result<Response, String> {
-    let response_request_id = recovery.response_request_id().to_owned();
-    let (mut response, stored) = prepare_write_response(response, &response_request_id).await?;
-    let stored = stored.ok_or_else(|| "adapter.async-recovery: custody is absent".to_owned())?;
-    let mut client = pool
-        .get()
-        .await
-        .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
-    let transaction = client
-        .transaction()
-        .await
-        .map_err(|error| journal_fault(&error))?;
-    store
-        .finish_recovery_with_client(&transaction, recovery, outcome, stored, SystemTime::now())
-        .await
-        .map_err(|error| error.to_string())?;
-    for (event, occurred_at) in events {
-        journal::append(&transaction, event, occurred_at)
+    let pool = &state.journal;
+    let result: Result<Response, String> = async {
+        let response_request_id = recovery.response_request_id().to_owned();
+        let (mut response, stored) = prepare_write_response(response, &response_request_id).await?;
+        let stored =
+            stored.ok_or_else(|| "adapter.async-recovery: custody is absent".to_owned())?;
+        let mut client = pool
+            .get()
             .await
-            .map_err(|error| match error {
-                journal::JournalError::Query(error) => journal_fault(&error),
-                _ => "the journal write failed".to_owned(),
-            })?;
+            .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| journal_fault(&error))?;
+        store
+            .finish_recovery_with_client(&transaction, recovery, outcome, stored, SystemTime::now())
+            .await
+            .map_err(|error| error.to_string())?;
+        for (event, occurred_at) in events {
+            journal::append(&transaction, event, occurred_at)
+                .await
+                .map_err(|error| match error {
+                    journal::JournalError::Query(error) => journal_fault(&error),
+                    _ => "the journal write failed".to_owned(),
+                })?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| journal_fault(&error))?;
+        response
+            .extensions_mut()
+            .insert(ReplayedResponseRequestId(response_request_id));
+        Ok(response)
     }
-    transaction
-        .commit()
-        .await
-        .map_err(|error| journal_fault(&error))?;
-    response
-        .extensions_mut()
-        .insert(ReplayedResponseRequestId(response_request_id));
-    Ok(response)
+    .await;
+    if result.is_err() {
+        state.metrics.record_journal_write_failure();
+    }
+    result
 }
 
 fn journal_fault(error: &tokio_postgres::Error) -> String {
@@ -4145,7 +4178,7 @@ async fn audited_internal_failure(
     record_type: &str,
     request_id: &str,
 ) -> Response {
-    if let Err(fault) = append_all(&state.journal, events).await {
+    if let Err(fault) = append_all(state, events).await {
         tracing::error!(%fault, "the invalid source guard journal could not commit");
     }
     facade_problem(
@@ -4479,7 +4512,7 @@ async fn refuse_call(
         route_id: operation.route_id.clone(),
         detail: Some(json!({ "class": class.class(), "status": status.as_u16() }).to_string()),
     };
-    if let Err(fault) = append_all(&state.journal, vec![(event, SystemTime::now())]).await {
+    if let Err(fault) = append_all(state, vec![(event, SystemTime::now())]).await {
         tracing::error!(%fault, "the audit journal could not record the refusal");
         return facade_problem(
             profile,
@@ -4521,7 +4554,7 @@ async fn refuse_contract_pin(
             .to_string(),
         ),
     };
-    if let Err(fault) = append_all(&state.journal, vec![(event, SystemTime::now())]).await {
+    if let Err(fault) = append_all(state, vec![(event, SystemTime::now())]).await {
         tracing::error!(%fault, "the audit journal could not record the contract refusal");
         return contract_unavailable(request_id);
     }
@@ -4649,7 +4682,7 @@ async fn answer_stale_condition(
     if failure == Some(ErrorClass::FacadeConflict) {
         response = retryable_conflict(response);
     }
-    if let Err(fault) = append_all(&state.journal, events).await {
+    if let Err(fault) = append_all(state, events).await {
         tracing::error!(%fault, "the audit journal could not record the stale-guard answer");
         return facade_problem(
             profile,
@@ -4706,7 +4739,7 @@ async fn refuse_request(
         event("exchangeCreated", None),
         event("exchangeFailed", Some(failure)),
     ];
-    if let Err(fault) = append_all(&state.journal, events).await {
+    if let Err(fault) = append_all(state, events).await {
         tracing::error!(%fault, "the audit journal could not record the refusal");
         return facade_problem(
             profile,

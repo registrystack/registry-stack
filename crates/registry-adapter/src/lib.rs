@@ -42,6 +42,7 @@ pub mod facade;
 pub mod govstack;
 pub mod idempotent;
 pub mod journal;
+pub mod metrics;
 pub mod notifier;
 pub mod replay_serve;
 pub mod serve;
