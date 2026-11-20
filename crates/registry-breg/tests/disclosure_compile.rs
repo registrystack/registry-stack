@@ -3,8 +3,12 @@
 //! Compile-time rules for `disclosureConditions`, `requireAccessReason` and
 //! the read-trigger hook.
 
+use registry_breg::contract::ModuleAssetSource;
 use registry_breg::model::DisclosureWithhold;
-use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
+use registry_breg::{
+    compile_project, compile_project_with_assets, parse_project_json, CompileProfile,
+    CompiledRegistry,
+};
 use serde_json::{json, Value};
 
 fn source() -> Value {
@@ -452,4 +456,551 @@ fn refusal_or_empty(value: &Value) -> Vec<(String, String)> {
             .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
             .collect(),
     }
+}
+
+// Surfaces a `fields` condition must not leave open to a profile it binds.
+
+const REGISTRAR: usize = 0;
+const OFFICER: usize = 1;
+
+fn has_code(value: &Value, code: &str) -> bool {
+    refusal_or_empty(value)
+        .iter()
+        .any(|(found, _)| found == code)
+}
+
+fn assert_refused_code(value: &Value, code: &str) {
+    let found = refusal(value);
+    assert!(
+        found.iter().any(|(found, _)| found == code),
+        "expected {code}, got {found:?}"
+    );
+}
+
+fn person_permission(value: &mut Value, profile: usize) -> &mut Value {
+    &mut value["accessProfiles"][profile]["permissions"]["records"][0]
+}
+
+#[test]
+fn a_required_field_or_the_canonical_id_cannot_be_withheld() {
+    let mut required = source();
+    required["recordTypes"][0]["fields"][4]["required"] = json!(true);
+    assert_refused(
+        &required,
+        "breg.disclosure.fields-invalid",
+        &format!("{FIELDS_COND}.fields[field=phone]"),
+    );
+    let mut canonical = source();
+    conditions(&mut canonical)[1]["fields"] = json!(["id"]);
+    assert_refused(
+        &canonical,
+        "breg.disclosure.fields-invalid",
+        &format!("{FIELDS_COND}.fields[field=id]"),
+    );
+}
+
+fn when_probe(field_type: Value) -> Value {
+    let mut value = source();
+    let mut probe = json!({"id":"probe","classification":"internal"});
+    probe
+        .as_object_mut()
+        .unwrap()
+        .extend(field_type.as_object().unwrap().clone());
+    value["recordTypes"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(probe);
+    value["vocabularies"] = json!([{"id":"probe-codes","values":["a","b"]}]);
+    conditions(&mut value).push(json!({"id":"probe-condition",
+        "when":[{"type":"field-is-not-null","field":"probe"}],
+        "withhold":"record","exemptProfiles":["protection-officer"]}));
+    value
+}
+
+#[test]
+fn a_when_field_is_one_of_the_admitted_types() {
+    for field_type in [
+        json!({"type":"boolean"}),
+        json!({"type":"string","maximumLength":16}),
+        json!({"type":"text","maximumLength":64}),
+        json!({"type":"vocabulary-code","vocabulary":"probe-codes"}),
+        json!({"type":"int64"}),
+        json!({"type":"date"}),
+        json!({"type":"uuid"}),
+    ] {
+        let value = when_probe(field_type.clone());
+        assert!(
+            compile(&value).is_ok(),
+            "{field_type} is admitted: {:?}",
+            compile(&value).err().map(|failure| failure
+                .diagnostics()
+                .iter()
+                .map(|d| (d.code.clone(), d.path.clone()))
+                .collect::<Vec<_>>())
+        );
+    }
+    for field_type in [
+        json!({"type":"decimal","precision":10,"scale":2}),
+        json!({"type":"timestamp"}),
+        json!({"type":"reference","target":"person"}),
+    ] {
+        assert_refused(
+            &when_probe(field_type),
+            "breg.disclosure.when-field-invalid",
+            &format!(
+                "{}.when[0].field",
+                "recordTypes[id=person].disclosureConditions[id=probe-condition]"
+            ),
+        );
+    }
+}
+
+fn geometry_source() -> Value {
+    let mut value = source();
+    value["recordTypes"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"id":"location","type":"crs84-point","precision":6,"classification":"internal"}),
+        );
+    value["recordTypes"][0]["geojson"] = json!({"geometryField":"location"});
+    conditions(&mut value)[1]["fields"] = json!(["location"]);
+    for profile in [REGISTRAR, OFFICER] {
+        let permission = person_permission(&mut value, profile);
+        permission["readableFields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("location"));
+        permission["spatialQueries"] = json!({"bbox":{
+            "maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}});
+    }
+    value
+}
+
+#[test]
+fn a_bound_profile_cannot_run_spatial_queries_over_a_withheld_geometry() {
+    let mut value = geometry_source();
+    person_permission(&mut value, OFFICER)
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "spatialQueries".to_owned(),
+            json!({"bbox":{
+            "maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}),
+        );
+    assert_refused(
+        &value,
+        "breg.disclosure.spatial-query-withheld-geometry",
+        &format!("{FIELDS_COND}.fields[field=location]"),
+    );
+    person_permission(&mut value, REGISTRAR)
+        .as_object_mut()
+        .unwrap()
+        .remove("spatialQueries");
+    let found = refusal_or_empty(&value);
+    assert!(
+        !found
+            .iter()
+            .any(|(code, _)| code == "breg.disclosure.spatial-query-withheld-geometry"),
+        "an exempt profile and a profile without the grant stay accepted: {found:?}"
+    );
+}
+
+#[test]
+fn a_row_boundary_cannot_read_a_withheld_field() {
+    let mut value = source();
+    person_permission(&mut value, REGISTRAR)["rowBoundaries"] =
+        json!([{"field":"age","claim":"age","operator":"equals"}]);
+    conditions(&mut value)[1]["fields"] = json!(["age"]);
+    assert_refused(
+        &value,
+        "breg.disclosure.row-boundary-withheld-field",
+        &format!("{FIELDS_COND}.fields[field=age]"),
+    );
+    conditions(&mut value)[1]["exemptProfiles"] = json!(["protection-officer", "registrar"]);
+    assert!(!has_code(
+        &value,
+        "breg.disclosure.row-boundary-withheld-field"
+    ));
+}
+
+#[test]
+fn a_membership_boundary_cannot_read_a_withheld_field() {
+    #[path = "support/membership_fixture.rs"]
+    mod membership_fixture;
+    let mut value = membership_fixture::source("facility");
+    let facility = value["recordTypes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entity| entity["id"] == "facility")
+        .unwrap();
+    facility["fields"][0]["required"] = json!(false);
+    facility["disclosureConditions"] = json!([{"id":"hide-organization",
+        "when":[{"type":"field-is-not-null","field":"label"}],
+        "withhold":"fields","fields":["organization"],"exemptProfiles":["steward"]}]);
+    let found: Vec<String> = membership_fixture::compile(&value)
+        .expect_err("the boundary reads a withheld field")
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code.clone())
+        .collect();
+    assert!(
+        found.contains(&"breg.disclosure.membership-boundary-withheld-field".to_owned()),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_consent_boundary_cannot_read_a_withheld_field() {
+    #[path = "support/consent_fixture.rs"]
+    mod consent_fixture;
+    let mut value = consent_fixture::source();
+    let consenting: Vec<String> = value["accessProfiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|profile| {
+            profile["permissions"]["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|record| {
+                    record["recordType"] == "enrolment" && record.get("requireConsent").is_some()
+                })
+        })
+        .map(|profile| profile["id"].as_str().unwrap().to_owned())
+        .collect();
+    let exempt = value["accessProfiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|profile| profile["id"].as_str().unwrap().to_owned())
+        .find(|id| !consenting.contains(id))
+        .expect("a profile that does not require consent on enrolment");
+    let enrolment = value["recordTypes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entity| entity["id"] == "enrolment")
+        .unwrap();
+    for field in enrolment["fields"].as_array_mut().unwrap() {
+        if field["id"] == "person" {
+            field["required"] = json!(false);
+        }
+    }
+    enrolment["disclosureConditions"] = json!([{"id":"hide-person",
+        "when":[{"type":"field-is-not-null","field":"programme"}],
+        "withhold":"fields","fields":["person"],"exemptProfiles":[exempt]}]);
+    let found = consent_fixture::refusal_codes(&value);
+    assert!(
+        found.contains(&"breg.disclosure.consent-boundary-withheld-field".to_owned()),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_read_path_cannot_run_through_a_withheld_reference() {
+    let mut value = source();
+    value["recordTypes"].as_array_mut().unwrap().extend([
+        json!({"id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","classification":"internal",
+            "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]}),
+        json!({"id":"link","primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","classification":"internal",
+            "fields":[{"id":"person","type":"reference","target":"person","classification":"internal"},
+                      {"id":"child","type":"reference","target":"child","classification":"internal"},
+                      {"id":"sealed","type":"boolean","classification":"internal"}],
+            "disclosureConditions":[{"id":"hide-child",
+              "when":[{"type":"field-equals","field":"sealed","value":true}],
+              "withhold":"fields","fields":["child"],"exemptProfiles":["protection-officer"]}]}),
+    ]);
+    value["recordTypes"][0]["readPaths"] =
+        json!([{"id":"children","through":"link","to":"child","route":"children"}]);
+    person_permission(&mut value, REGISTRAR)["readPaths"] =
+        json!([{"path":"children","readableFields":["code"]}]);
+    let found = refusal_or_empty(&value);
+    assert!(
+        found.contains(&(
+            "breg.disclosure.read-path-withheld-field".to_owned(),
+            "recordTypes[id=link].disclosureConditions[id=hide-child].fields[field=child]"
+                .to_owned()
+        )),
+        "{found:?}"
+    );
+    value["recordTypes"][2]["disclosureConditions"][0]["exemptProfiles"] =
+        json!(["protection-officer", "registrar"]);
+    assert!(!has_code(
+        &value,
+        "breg.disclosure.read-path-withheld-field"
+    ));
+}
+
+fn compile_with_sql(
+    value: &Value,
+    sql: &str,
+) -> Result<CompiledRegistry, registry_breg::CompileFailure> {
+    compile_project_with_assets(
+        &parse_project_json(&serde_json::to_vec(value).unwrap()).unwrap(),
+        &[],
+        &[ModuleAssetSource {
+            module: None,
+            path: "sql/derived.sql".to_owned(),
+            bytes: sql.as_bytes().to_vec(),
+        }],
+        CompileProfile::Authoring,
+    )
+}
+
+fn codes(result: Result<CompiledRegistry, registry_breg::CompileFailure>) -> Vec<String> {
+    result
+        .err()
+        .map(|failure| {
+            failure
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic.code.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_derived_field_cannot_read_a_withheld_field_for_a_bound_profile() {
+    let mut value = source();
+    value["recordTypes"][0]["derived"] = json!([{"id":"phone-state","sql":"sql/derived.sql","key":"id",
+        "fields":[{"id":"has-phone","type":"boolean","classification":"internal"}]}]);
+    person_permission(&mut value, REGISTRAR)["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("has-phone"));
+    let sql = "SELECT p.id AS id, p.phone IS NOT NULL AS has_phone FROM registry_source.person p";
+    assert!(codes(compile_with_sql(&value, sql))
+        .contains(&"breg.disclosure.derived-reads-withheld-field".to_owned()));
+    let unrelated = "SELECT p.id AS id, p.age > 17 AS has_phone FROM registry_source.person p";
+    assert!(!codes(compile_with_sql(&value, unrelated))
+        .contains(&"breg.disclosure.derived-reads-withheld-field".to_owned()));
+    conditions(&mut value)[1]["exemptProfiles"] = json!(["protection-officer", "registrar"]);
+    assert!(!codes(compile_with_sql(&value, sql))
+        .contains(&"breg.disclosure.derived-reads-withheld-field".to_owned()));
+}
+
+const LINKED: &str = r#"
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {id: linked-example, version: "1", defaultLanguage: en, canonicalBaseIri: "https://registry.example.test"}
+datasets: [{id: local-records}]
+recordTypes:
+  - id: local-record
+    primaryDataset: local-records
+    route: local-records
+    mutationMode: mutable
+    classification: internal
+    fields:
+      - {id: subject-key, type: string, maximumLength: 32, classification: internal}
+      - {id: local-title, type: string, maximumLength: 120, classification: internal}
+      - {id: sealed, type: boolean, classification: internal}
+    disclosureConditions:
+      - id: hide-key
+        when: [{type: field-equals, field: sealed, value: true}]
+        withhold: fields
+        fields: [subject-key]
+        exemptProfiles: [officer]
+externalRecordTypes:
+  - id: external-subject
+    authority: urn:example:source
+    identifierScheme: urn:example:subject-key
+    fields:
+      - {id: label, type: string, classification: internal}
+externalProjections:
+  - id: approved-subjects
+    recordType: external-subject
+    sourceRoute: subjects-by-key
+    sourceRouteVersion: "1"
+    purpose: local-consultation
+    scope: approved-subjects
+    mode: indexed
+    cardinality: one
+    cacheTtlSeconds: 600
+    fields: [label]
+externalViews:
+  - id: local-with-subject
+    recordType: local-record
+    links:
+      - id: subject
+        projection: approved-subjects
+        fromField: subject-key
+accessProfiles:
+  - id: reader
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [local-consultation]
+    permissions:
+      records:
+        - recordType: local-record
+          operations: [get, list]
+          readableFields: [local-title]
+          rowBoundaries: unrestricted
+      externalViews:
+        - view: local-with-subject
+          links:
+            - link: subject
+              readableFields: [label]
+  - id: officer
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [local-consultation]
+    permissions:
+      records:
+        - recordType: local-record
+          operations: [get, list]
+          readableFields: [local-title]
+          rowBoundaries: unrestricted
+      externalViews:
+        - view: local-with-subject
+          links:
+            - link: subject
+              readableFields: [label]
+"#;
+
+#[test]
+fn an_external_view_cannot_link_from_a_withheld_field_for_a_bound_profile() {
+    let project = registry_breg::contract::parse_project_yaml(LINKED.as_bytes()).unwrap();
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("the reader is bound and links from the withheld field");
+    assert!(
+        failure
+            .diagnostics()
+            .iter()
+            .any(|d| d.code == "breg.disclosure.external-view-withheld-field"),
+        "{:?}",
+        failure.diagnostics()
+    );
+    let exempt = LINKED.replace(
+        "exemptProfiles: [officer]",
+        "exemptProfiles: [officer, reader]",
+    );
+    let project = registry_breg::contract::parse_project_yaml(exempt.as_bytes()).unwrap();
+    let outcome = compile_project(&project, &[], CompileProfile::Authoring);
+    assert!(
+        outcome.is_ok(),
+        "{:?}",
+        outcome.err().map(|f| f.diagnostics().to_vec())
+    );
+}
+
+fn live_statistics_source() -> Value {
+    let mut value = statistics_source();
+    value["recordTypes"][0]["disclosureConditions"][0]["exemptProfiles"] = json!(["publisher"]);
+    value
+}
+
+#[test]
+fn a_live_statistics_read_is_refused_where_a_record_condition_binds_the_reader() {
+    let mut value = live_statistics_source();
+    assert_refused_code(&value, "breg.disclosure.statistics-live-bound");
+    value["accessProfiles"][0]["permissions"]["datasets"] =
+        json!([{"dataset":"records-by-category","operations":["read-releases"]}]);
+    assert!(
+        !has_code(&value, "breg.disclosure.statistics-live-bound"),
+        "release reads stay allowed: {:?}",
+        refusal_or_empty(&value)
+    );
+}
+
+#[test]
+fn a_dataset_cannot_read_a_withheld_field_of_a_dependency_entity() {
+    let mut value = statistics_source();
+    value["recordTypes"][0]["disclosureConditions"][0]["exemptProfiles"] =
+        json!(["analyst", "publisher"]);
+    value["recordTypes"][0]["derived"] = json!([{
+        "id":"statistics","sql":"sql/derived.sql","key":"id",
+        "fields":[{"id":"evaluated-category","type":"vocabulary-code","vocabulary":"category","values":["a","b"],"classification":"internal"}]
+    }]);
+    value["recordTypes"].as_array_mut().unwrap().push(json!({
+        "id":"lookup","primaryDataset":"statistics-test","route":"lookups","mutationMode":"mutable",
+        "fields":[{"id":"flag","type":"boolean","classification":"internal"}],
+        "disclosureConditions":[{"id":"hide-flag",
+          "when":[{"type":"field-is-not-null","field":"flag"}],
+          "withhold":"fields","fields":["flag"],"exemptProfiles":["publisher"]}]
+    }));
+    value["accessProfiles"][1]["permissions"]["records"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"recordType":"lookup","operations":["list"],"readableFields":["flag"],
+            "allowCount":true,"rowBoundaries":"unrestricted"}),
+        );
+    value["statisticalDatasets"][0]["dimensions"] = json!(["evaluated-category"]);
+    let sql = "SELECT r.id AS id, CASE WHEN l.flag THEN 'a' ELSE 'b' END AS evaluated_category FROM registry_source.record r JOIN registry_source.lookup l ON l.id = r.id";
+    let found = codes(compile_with_sql(&value, sql));
+    assert!(
+        found.contains(&"breg.disclosure.statistics-withheld-field".to_owned()),
+        "{found:?}"
+    );
+    value["recordTypes"][1]["disclosureConditions"][0]["exemptProfiles"] =
+        json!(["analyst", "publisher"]);
+    let found = codes(compile_with_sql(&value, sql));
+    assert!(
+        !found.contains(&"breg.disclosure.statistics-withheld-field".to_owned()),
+        "an exempt reader is accepted: {found:?}"
+    );
+}
+
+fn evidence_options() -> registry_breg::evidence_source::EvidenceSourceOptions {
+    registry_breg::evidence_source::EvidenceSourceOptions {
+        access_profile: "evidence-source".into(),
+        entity: "record".into(),
+        selectors: vec!["by-code".into()],
+        fields: vec!["status".into()],
+        source_id: "registry-status".into(),
+        connection: "registry".into(),
+        authentication:
+            registry_breg::evidence_source::EvidenceSourceAuthentication::StaticAuthorization,
+    }
+}
+
+fn evidence_project(exempt: &str) -> Value {
+    json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+        "project":{"id":"example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
+        "datasets":[{"id":"test-dataset"}],
+        "recordTypes":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","fields":[
+            {"id":"code","type":"string","minimumLength":1,"maximumLength":32,"required":true,"classification":"internal"},
+            {"id":"status","type":"string","maximumLength":16,"classification":"internal"},
+            {"id":"sealed","type":"boolean","classification":"internal"}],
+            "selectorProfiles":[{"id":"by-code","fields":["code"]}],
+            "disclosureConditions":[{"id":"hide-status",
+              "when":[{"type":"field-equals","field":"sealed","value":true}],
+              "withhold":"fields","fields":["status"],"exemptProfiles":[exempt]}]}],
+        "accessProfiles":[
+          {"id":"evidence-source","principalClaim":"principal","requiredScopes":["registry.read"],"permissions":{"records":[{
+            "recordType":"record","operations":["lookup"],"readableFields":["code","status"],
+            "lookups":[{"selector":"by-code","valueOrigin":"request"}],"rowBoundaries":"unrestricted"}]}},
+          {"id":"officer","principalClaim":"principal","requiredScopes":["registry.read"],"permissions":{"records":[{
+            "recordType":"record","operations":["get"],"readableFields":["code","status"],
+            "rowBoundaries":"unrestricted"}]}}]})
+}
+
+#[test]
+fn an_evidence_source_cannot_export_a_withheld_fact() {
+    let refused = compile(&evidence_project("officer")).expect("the project compiles");
+    let Err(diagnostic) =
+        registry_breg::evidence_source::export_evidence_source(&refused, &evidence_options())
+    else {
+        panic!("the profile is bound by a condition that withholds `status`");
+    };
+    assert_eq!(
+        diagnostic.code,
+        "breg.disclosure.evidence-fact-withheld-field"
+    );
+    let exempt = compile(&evidence_project("evidence-source")).expect("the project compiles");
+    registry_breg::evidence_source::export_evidence_source(&exempt, &evidence_options())
+        .expect("an exempt profile exports the fact");
+}
+
+#[test]
+fn the_record_timer_profile_id_is_reserved() {
+    let mut value = source();
+    value["accessProfiles"][1]["id"] = json!("system-record-timer");
+    conditions(&mut value)[0]["exemptProfiles"] = json!(["registrar"]);
+    conditions(&mut value)[1]["exemptProfiles"] = json!(["registrar"]);
+    assert_refused_code(&value, "breg.access-profile.system-id-reserved");
 }

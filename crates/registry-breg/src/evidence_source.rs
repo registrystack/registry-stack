@@ -395,7 +395,19 @@ pub fn export_evidence_source(
     }
     let mut artifacts = Vec::new();
     let mut fact_properties = Map::new();
+    let disclosure = crate::disclosure::plan(entity, &options.access_profile);
+    let withheld = disclosure.named_fields();
     for id in &fields {
+        if withheld.contains(id.as_str()) {
+            return Err(Diagnostic::error(
+                "breg.disclosure.evidence-fact-withheld-field",
+                "fields",
+                &format!(
+                    "fact field `{id}` is withheld from access profile `{}` by a disclosure condition: exempt the profile, or export another field",
+                    options.access_profile
+                ),
+            ));
+        }
         if !local_name(id) || !access.readable_fields.contains(id) {
             return Err(refusal(
                 "fields",

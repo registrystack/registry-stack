@@ -13,6 +13,10 @@ use crate::model::{CompiledDisclosureCondition, CompiledEntity, DisclosureWithho
 
 use super::canonical_field_literal;
 
+mod reach;
+
+pub(super) use reach::{validate_derived_reads, validate_external_views};
+
 /// The most conditions one record type declares.
 const MAX_CONDITIONS: usize = 8;
 /// The most predicates one condition ANDs.
@@ -125,6 +129,10 @@ pub(super) fn validate(
         validate_fields(entity, condition, &root, errors);
         validate_exempt_profiles(condition, &known_profiles, &root, errors);
         validate_exposure(entity, condition, &root, errors);
+        reach::validate_withholdable(entity, condition, &root, errors);
+        reach::validate_spatial_queries(entity, condition, &root, errors);
+        reach::validate_boundaries(entity, condition, &root, errors);
+        reach::validate_read_paths(entity, condition, entities, &root, errors);
     }
 }
 
@@ -158,17 +166,21 @@ fn validate_when(
             continue;
         };
         if source.encrypted
-            || matches!(
+            || !matches!(
                 source.field_type,
-                FieldTypeSource::Crs84Point { .. }
-                    | FieldTypeSource::Crs84Polygon { .. }
-                    | FieldTypeSource::Structured { .. }
+                FieldTypeSource::Boolean
+                    | FieldTypeSource::String { .. }
+                    | FieldTypeSource::Text { .. }
+                    | FieldTypeSource::VocabularyCode { .. }
+                    | FieldTypeSource::Int64
+                    | FieldTypeSource::Date
+                    | FieldTypeSource::Uuid
             )
         {
             errors.push(Diagnostic::error(
                 "breg.disclosure.when-field-invalid",
                 format!("{path}.field"),
-                "a disclosure predicate cannot test an encrypted, geometry or structured field",
+                "a disclosure predicate tests an unencrypted boolean, string, text, vocabulary-code, int64, date or uuid field",
             ));
             continue;
         }
@@ -396,9 +408,13 @@ pub(super) struct DatasetReach<'a> {
     pub dataset_id: &'a str,
     pub entities: &'a BTreeMap<String, CompiledEntity>,
     pub dependency_entities: &'a BTreeSet<String>,
+    /// The derived relations of the unit the dataset's fields read.
+    pub used_relations: &'a BTreeSet<String>,
     pub unit: &'a CompiledEntity,
     pub referenced_fields: &'a BTreeSet<String>,
     pub publisher: Option<&'a str>,
+    /// Every profile that reads the dataset live or exactly, from current records.
+    pub live_readers: &'a BTreeSet<String>,
     /// Every profile that reads the dataset live, exactly or as releases.
     pub readers: &'a BTreeSet<String>,
     pub root: &'a str,
@@ -413,9 +429,11 @@ pub(super) fn validate_dataset(reach: &DatasetReach<'_>, errors: &mut Vec<Diagno
         dataset_id,
         entities,
         dependency_entities,
+        used_relations: _,
         unit,
         referenced_fields,
         publisher,
+        live_readers: _,
         readers,
         root,
     } = *reach;
@@ -461,4 +479,5 @@ pub(super) fn validate_dataset(reach: &DatasetReach<'_>, errors: &mut Vec<Diagno
             }
         }
     }
+    reach::validate_dataset_reads(reach, errors);
 }

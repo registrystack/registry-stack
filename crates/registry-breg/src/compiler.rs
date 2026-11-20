@@ -381,6 +381,15 @@ pub fn compile_project_with_assets(
             "external view compilation",
         )
     })?;
+    let mut view_disclosure = Vec::new();
+    disclosure::validate_external_views(&external_views, &entities, &mut view_disclosure);
+    if !view_disclosure.is_empty() {
+        return Err(stopped_compile_failure(
+            CompileFailure::from_errors(view_disclosure),
+            &findings,
+            "external view compilation",
+        ));
+    }
     crate::external_views::mark_link_fields(&external_views, &mut entities, &mut physical_names);
     crate::membership::compile(&mut entities);
     let recipients = crate::consent::compile(project, &sources, &mut entities);
@@ -7547,6 +7556,7 @@ fn validate_derived_assets(
                 ));
                 continue;
             };
+            let before = errors.len();
             validate_derived_sql(
                 derived,
                 sql,
@@ -7555,6 +7565,16 @@ fn validate_derived_assets(
                 &path,
                 errors,
             );
+            if errors.len() == before {
+                disclosure::validate_derived_reads(
+                    entity,
+                    derived,
+                    sql,
+                    &source_columns,
+                    sources,
+                    errors,
+                );
+            }
         }
     }
 }
@@ -9652,6 +9672,13 @@ fn reject_system_profile_id(id: &str, path: &str, errors: &mut Vec<Diagnostic>) 
             "breg.access-profile.system-id-reserved",
             path,
             "this profile identifier is reserved for the built-in Proposal executor",
+        ));
+    }
+    if id == "system-record-timer" {
+        errors.push(Diagnostic::error(
+            "breg.access-profile.system-id-reserved",
+            path,
+            "this profile identifier is reserved for the built-in record timer executor",
         ));
     }
 }
