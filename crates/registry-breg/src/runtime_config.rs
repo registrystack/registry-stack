@@ -4,7 +4,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt, fs,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     path::{Component, Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -15,9 +15,9 @@ use base64::Engine as _;
 use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
-    AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig,
-    PackageConfig as SharedPackageConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
-    SecretError, SecretReference, SecretResolver, TaskGrantStatusConfig,
+    check_metrics_bind_address, check_metrics_bind_apart, AuditKeyConfig, JwksSource, ListenerBind,
+    OidcIssuerConfig, PackageConfig as SharedPackageConfig, RemovedKey, RuntimeConfigLoader,
+    RuntimeEnvelope, SecretError, SecretReference, SecretResolver, TaskGrantStatusConfig,
     REMOVED_OIDC_JWKS_SOURCE_KIND,
 };
 use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
@@ -1767,17 +1767,7 @@ pub struct MetricsListenerConfig {
 impl MetricsListenerConfig {
     fn from_raw(raw: RawMetricsListenerConfig) -> Result<Self> {
         let bind = raw.bind.socket_addr();
-        if bind.port() == 0 {
-            return Err(RuntimeConfigError::InvalidMetricsListener);
-        }
-        let address = bind.ip();
-        let private = match address {
-            IpAddr::V4(address) => address.is_loopback() || address.is_private(),
-            IpAddr::V6(address) => address.is_loopback() || is_unique_local_ipv6(address),
-        };
-        if !private || address.is_unspecified() || address.is_multicast() {
-            return Err(RuntimeConfigError::InvalidMetricsListener);
-        }
+        check_metrics_bind_address(bind).map_err(|_| RuntimeConfigError::InvalidMetricsListener)?;
         Ok(Self { bind })
     }
 
@@ -1785,22 +1775,8 @@ impl MetricsListenerConfig {
     /// listener the public contract describes, which is the separation this
     /// binding exists to enforce.
     fn validate_separate_binding(&self, listener: &ListenerConfig) -> Result<()> {
-        let metrics_address = self.bind.ip();
-        let listener_address = listener.bind().ip();
-        // Linux commonly creates an IPv6 wildcard socket as dual-stack, so
-        // `[::]:port` can also occupy the corresponding IPv4 port.
-        // Configuration validation must be portable across the hosts on
-        // which the process can run, so treat the IPv6 wildcard as covering
-        // both families; the IPv4 wildcard covers only IPv4.
-        let wildcard_covers_metrics = match listener_address {
-            IpAddr::V4(address) => address.is_unspecified() && metrics_address.is_ipv4(),
-            IpAddr::V6(address) => address.is_unspecified(),
-        };
-        if (metrics_address == listener_address || wildcard_covers_metrics)
-            && self.bind.port() == listener.bind().port()
-        {
-            return Err(RuntimeConfigError::InvalidMetricsListener);
-        }
+        check_metrics_bind_apart(self.bind, &[("listener", listener.bind())])
+            .map_err(|_| RuntimeConfigError::InvalidMetricsListener)?;
         Ok(())
     }
 
@@ -1817,11 +1793,6 @@ impl fmt::Debug for MetricsListenerConfig {
             .field("bind", &"<redacted>")
             .finish()
     }
-}
-
-/// RFC 4193 unique-local IPv6 address check for the metrics listener binding.
-fn is_unique_local_ipv6(address: std::net::Ipv6Addr) -> bool {
-    (address.segments()[0] & 0xfe00) == 0xfc00
 }
 
 /// Operator-configured public base URL for authenticated absolute discovery
