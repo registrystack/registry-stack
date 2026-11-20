@@ -99,8 +99,9 @@ responses are neither persisted nor logged.
   substitution. It also covers release without accountability, hot policy mutation, tenant
   confusion, and leakage through errors, logs, or telemetry. A response-timing difference can still
   reveal membership.
-- Cross-purpose tracking: subject bindings use a keyed, domain-separated derivation over audience,
-  purpose, role, selector profile, key version, and the complete canonical selector bundle.
+- Cross-purpose tracking: subject bindings use a keyed, domain-separated derivation over audience
+  (or the holder's key for a holder-bound answer), purpose, role, selector profile, key version, and
+  the complete canonical selector bundle.
 - Over-collection: callers cannot supply thresholds, expressions, scripts, source fields, paths,
   headers, relationship types, or response projections. Undeclared concepts and values outside
   governed type, codelist, cardinality, precision, or size bounds are rejected.
@@ -139,9 +140,10 @@ configuration. Request schemas expose no caller-supplied expression, script, pat
 projection. Parsers and scripts apply size, count, and operation ceilings so one request cannot buy
 unbounded work.
 
-Nightly and merge-queue fuzz smoke covers platform token and API-key parsing, SD-JWT issuance and
+Nightly fuzz smoke covers platform token and API-key parsing, SD-JWT issuance and
 holder-proof input, reviewed SQLite statement parsing, Evidence verification, authoring readers,
-and Manifest YAML and rendered-artifact JSON. It does not cover every request path or every
+and Manifest YAML and rendered-artifact JSON. The merge queue runs the platform and Evidence
+targets when matching paths change. It does not cover every request path or every
 presentation path behind an otherwise valid signature.
 
 Human review remains load-bearing under sustained probing. It must cover the whole enabled
@@ -170,8 +172,8 @@ does not claim certification of itself.
 
 ## Residual risks and operator duties
 
-- Health, readiness, and offline checks do not certify Transit policy or key custody, as
-  [Known limitations](../known-limitations/) sets out for every product.
+- Health, readiness, and offline checks do not certify Transit policy or key custody.
+  [Known limitations](../known-limitations/) says the same of key custody for every product.
 - Combined disclosure remains a human review. Differently named disclosure families can overlap,
   and rate limits do not make an unsafe bundle safe.
 - Startup does not detect overlapping authority paths. Ambiguity denies at request time but appears
@@ -181,7 +183,7 @@ does not claim certification of itself.
 - Released assertions have no recall, revocation, status list, or presentation-time check. Validity
   windows and key publication determine how long they verify.
 - A wallet presentation passes through the OpenID4VP verifier, which holds it in memory until
-  Evidence reads it and never verifies it. A compromised verifier can withhold or misroute a
+  Evidence reads it or its result lifetime ends, and never verifies it. A compromised verifier can withhold or misroute a
   presentation or read the claims a holder disclosed; it cannot make Evidence accept a forged
   credential, because Evidence checks the issuer, the disclosures, and the holder binding itself.
   A restart discards open sessions. Which relying parties accept a `holder-presented` assertion is

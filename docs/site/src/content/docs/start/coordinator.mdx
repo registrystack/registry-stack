@@ -11,8 +11,8 @@ locale: en
 standards_referenced: []
 ---
 
-[Registry Coordinator](../../reference/glossary/#registry-coordinator) runs a reviewed sequence of calls to other Registry Stack products, and keeps
-it going across waits of days or weeks, service outages, and restarts. Use it when a sequence such
+[Registry Coordinator](../../reference/glossary/#registry-coordinator) runs a reviewed sequence of calls to other Registry Stack products and to
+external HTTP services an operator configured. It keeps the sequence going across waits of days or weeks, service outages, and restarts. Use it when a sequence such
 as "ask a reviewer, wait for the decision, then send the applicant a notice" has to continue
 without a person or a script holding it open.
 
@@ -33,20 +33,24 @@ logical connection name.
 
 Each start of that workflow is a **[run](../../reference/glossary/#run)**, which
 Coordinator keeps in its own PostgreSQL 17 or newer database. A run keeps the definition it was
-admitted under, so a later upgrade never changes a run in flight.
+admitted under, so a later upgrade never changes a run in flight. A later Coordinator version that
+cannot restore that definition holds the run.
 
 A workflow is built from five step types:
 
 - `call` runs one product operation.
-- `choose` routes on a pure [Function](../../reference/glossary/#function) written in bounded
-  [Rhai](../../reference/glossary/#rhai), or on a `compare` of typed values that needs no Function.
-  A value that is missing or of the wrong type fails the run instead of routing to `unmatched`.
+- `choose` routes on one typed value, on a pure [Function](../../reference/glossary/#function)
+  written in bounded [Rhai](../../reference/glossary/#rhai), or on a `compare` of typed values that
+  needs no Function. In a `compare`, a value that is missing or of the wrong type fails the run
+  instead of routing to `unmatched`. The `present` test is the exception, because it reads absence.
 - `wait-until` waits for an instant.
 - `wait-for` waits for a named result, such as a Casework review decision.
 - `finish` ends the run with a declared outcome and the output the workflow chooses to publish.
 
-`coordinatorctl check` compiles the project offline and proves that every mapping reads data that
-exists on every route that reaches it. `coordinatorctl package` freezes the project into an immutable
+`coordinatorctl check` compiles the project offline. It proves that each step a mapping reads has
+run on every route that reaches it, and it checks each path against the declared schemas. Values a
+schema leaves open, and values a Function computes, are left to scenarios and the runtime.
+`coordinatorctl package` freezes the project into an immutable
 [package](../../reference/glossary/#package) whose digest the deployment pins.
 
 {/* Evidence: crates/registry-coordinator/src/authoring.rs, AuthoredStep, CoordinatorProject;
@@ -59,7 +63,8 @@ exists on every route that reaches it. `coordinatorctl package` freezes the proj
 
 An authorised caller starts a run with `POST /v1/runs`, giving the expected workflow revision, its
 input, and an idempotency key. An authored event trigger can also start one from a signed product
-event at `POST /v1/events/{workflow}/{trigger}`. The same key with the same revision and input
+event at `POST /v1/events/{workflow}/{trigger}`, and an authored calendar trigger starts one on a
+schedule with no caller. The same key with the same revision and input
 returns the same run, and the
 [API reference](../../reference/apis/registry-coordinator/) states what a conflicting reuse gets.
 
@@ -85,18 +90,24 @@ wait, retry, or restart never renews an approval or widens its scope.
 
 Coordinator keeps the progress, the prepared commands, the waits, and its own
 [audit journal](../../reference/glossary/#audit-journal). It never writes another product's
-database, and it never reverses an effect a product accepted. It is not a review provider: when a
+database, and it never reverses an effect a product accepted by itself. A workflow can call an
+operation that cancels one, such as `scheduling.cancel-appointment/v1`. It is not a review provider: when a
 workflow needs a human decision, it submits its own request to Casework.
 
-Coordinator does not apply a BReg [Proposal](../../reference/glossary/#proposal). `check` refuses a
-Proposal [Action](../../reference/glossary/#action) with `coordinator.operation.proposal-action`.
-The applicant drives the Proposal in BReg, and a workflow follows it through a product event or a
-later record read.
+Coordinator never approves, rejects, or applies a BReg
+[Proposal](../../reference/glossary/#proposal). BReg and its reviewers decide. A workflow can
+start or submit a Proposal with the `breg.start-proposal/v1` and `breg.submit-proposal/v1`
+operations. It can cancel one that its own run started or submitted, with
+`breg.cancel-proposal/v1`, and it follows the Proposal by reading it. `check`
+refuses a Proposal [Action](../../reference/glossary/#action) bound to `breg.invoke-action/v1`
+with `coordinator.operation.proposal-action`.
 
 A product refusal is a fact about the product's policy. A call whose product declares a no-effect
-refusal may route it through `onDeclaredRefusal`, and any other refusal fails the run with
-`product-refused`. [Author a Coordinator workflow](../../configure/coordinator/) lists which
-operations declare one.
+refusal may route it through `onDeclaredRefusal`. Any other refusal fails the run with a code that
+names it, such as `product-forbidden`, `product-not-found`, or `product-refused`. The exception is
+two records in force on one date, which holds the run for a person to correct the register.
+[Author a Coordinator workflow](../../configure/coordinator/) lists which operations declare a
+no-effect refusal.
 
 {/* Evidence: crates/registry-coordinator/src/contracts.rs, coordinator.operation.proposal-action;
     crates/registry-coordinator/src/breg_action.rs; crates/registry-coordinator/src/adapters.rs;
@@ -106,8 +117,9 @@ operations declare one.
 
 ## Uncertain calls and recovery
 
-When a call might have reached the product but no answer came back, the effect is uncertain, and
-Coordinator puts the run in `attention` for an operator rather than guessing. When the product
+When a call that changes something might have reached the product but no answer came back, the
+effect is uncertain. Coordinator puts the run in `attention` for an operator rather than guessing.
+It reads again by itself when the uncertain call was only a read. When the product
 answers with a definite, retryable failure instead, Coordinator resends the same saved command
 within the original deadline. Three operations have a receipt for the original idempotency key:
 `messaging.submit-message/v1`, `scheduling.create-appointment/v1`, and `scheduling.confirm-hold/v1`.
@@ -115,9 +127,9 @@ within the original deadline. Three operations have a receipt for the original i
 have none, so a record read or an operator's word does not settle them. A decision-evaluation call
 (`evaluation.evaluate/v1`) that may have been sent is never repeated.
 
-A restored database is never handed to an ordinary worker first, because a backup can predate
-effects that products already accepted. The operator starts `coordinator --recovery-only`, which
-admits and dispatches nothing. [Deploy Registry Coordinator](../../operate/coordinator/) covers
+Do not start an ordinary worker on a restored database, because a backup can predate effects that
+products already accepted. Nothing detects a restore, so the operator starts
+`coordinator --recovery-only`, which admits and dispatches nothing. [Deploy Registry Coordinator](../../operate/coordinator/) covers
 `retry-same`, `cancel`, and the restore hold, and the
 [API reference](../../reference/apis/registry-coordinator/) lists the run states.
 

@@ -54,7 +54,7 @@ Product names are always in English, including on future translated pages.
   <dd>The PostgreSQL system of record whose data model and REST API are compiled from a <a href="#registry-project">registry project</a>, with no built-in domain types. Binaries `breg` and `bregctl`.</dd>
 
   <dt id="batch-release">batch release</dt>
-  <dd>One holder-bound Registry Evidence response that carries one credential per distinct <a href="#holder">holder</a> key, up to the ceiling the project declares. The ceiling is at most 16 holder keys, or one when the deployment declares no batch limit. It is one authorisation decision, one acquisition, and one derivation, then a signature for each member. A failure on any member releases nothing. Media type: `application/vnd.registrystack.evidence.batch+json`. The envelope is issuance-only: a verifier checks each member as an ordinary <a href="#holder-bound">holder-bound</a> credential.</dd>
+  <dd>One holder-bound Registry Evidence response that carries one credential per distinct <a href="#holder">holder</a> key, up to the ceiling the project declares. The ceiling is at most 16 holder keys, or one when the project declares none. It is one authorisation decision, one acquisition, and one derivation, then a signature for each member. A failure on any member releases nothing. Media type: `application/vnd.registrystack.evidence.batch+json`. The envelope is issuance-only: a verifier checks each member as an ordinary <a href="#holder-bound">holder-bound</a> credential.</dd>
 
   <dt id="calendar">calendar</dt>
   <dd>In Registry Casework, the working week and time zone a <a href="#clock">clock</a> counts working days against, with a named holiday set whose dates arrive as a separate revision.</dd>
@@ -276,10 +276,10 @@ Product names are always in English, including on future translated pages.
   <dd>One step of a <a href="#review-policy">ReviewPolicy</a>, run in order, naming its <a href="#queue">queue</a>, the profiles that may decide, and how many independent reviewers must approve.</dd>
 
   <dt id="static-discovery-bundle">static discovery bundle</dt>
-  <dd>A directory Registry Manifest generates from a <a href="#metadata-manifest">metadata manifest</a>: `catalog.json`, DCAT, BRegDCAT-AP, CPSV-AP, SHACL, JSON Schema, OGC Records, evidence offering, and policy files, plus an `index.json` that digests the bundle files so consumers can verify them. It can be hosted as static files and grants no runtime authority.</dd>
+  <dd>A directory Registry Manifest generates from a <a href="#metadata-manifest">metadata manifest</a>: `catalog.json`, DCAT, SHACL, JSON Schema, OGC Records, evidence offering, and policy files, the BRegDCAT-AP and CPSV-AP files when the catalogue declares those profiles, plus an `index.json` that digests the bundle files so consumers can verify them. It can be hosted as static files and grants no runtime authority.</dd>
 
   <dt id="statistical-dataset">statistical dataset</dt>
-  <dd>A Base Registry Engine declaration under `statisticalDatasets` that names a unit Record type, a population, a period, up to 12 dimensions, and its measures, with one `count` measure when none is declared. See <a href="../breg-configuration/#statistical-dataset-declarations">Statistical dataset declarations</a>.</dd>
+  <dd>A Base Registry Engine declaration under `statisticalDatasets` that names a unit Record type, a population, a period, up to 12 dimensions (4 with a distinct count, percentile, or released sum), and its measures, with one `count` measure when none is declared. See <a href="../breg-configuration/#statistical-dataset-declarations">Statistical dataset declarations</a>.</dd>
 
   <dt id="subject-binding">subject binding</dt>
   <dd>The opaque value that stands for a subject in a Registry Evidence <a href="#assertion">assertion</a> in place of its identifier. An audience-scoped binding differs for each relying audience, so two cannot join their answers; a <a href="#holder-bound">holder-bound</a> binding derives from the holder's key instead.</dd>

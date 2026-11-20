@@ -22,9 +22,10 @@ free starts for one. A start whose [pool](../../reference/glossary/#resource-poo
 are all taken leaves the list and is never shown with `free: 0`.
 
 The caller takes a [hold](../../reference/glossary/#hold) on a start with `POST /v1/holds`. The hold
-claims capacity from one pool member at once and expires on its own. Confirming it with
+claims capacity at once and expires on its own. For an exact-time offering that is usually one pool
+member, and a quantity or multi-line booking takes more. Confirming the hold with
 `POST /v1/appointments` turns it into an [appointment](../../reference/glossary/#appointment) on the
-same member. A caller that needs no pause can book directly by sending the full request instead of
+same capacity. A caller that needs no pause can book directly by sending the full request instead of
 a hold. Rescheduling and cancelling name the appointment revision they acted on and advance it. The
 [API reference](../../reference/apis/registry-scheduling/#contract-boundary) gives the appointment's
 state and revision.
@@ -50,8 +51,9 @@ Three files, each with its own owner and lifecycle:
 [fixtures](../../reference/glossary/#scheduling-fixture) against them, and packages the policy.
 
 Each activated package gets a policy revision. Callers read the current one from
-`GET /v1/scheduling` and send it with every booking, so a policy change between reading and booking
-is refused with `policy.changed` rather than applied silently.
+`GET /v1/scheduling` and send it when they take a hold, book directly, or reschedule. A hold keeps
+the revision it was taken under. A policy change between reading and booking is refused with `policy.changed`
+rather than applied silently.
 
 {/* Evidence: crates/registry-schedulingctl/src/project.rs, package();
     crates/registry-scheduling/src/store.rs, PolicyPublication::revision();
@@ -64,13 +66,14 @@ from your own OpenID Connect issuer. Every hold and appointment is a claim again
 ledger, made inside one PostgreSQL transaction. Two callers racing for the last station get one
 appointment and one `capacity.exhausted`, never two appointments.
 
-Around the ledger, the service keeps an outbox. A confirmed appointment records the reminder intents
-its offering declares and, when the policy has hooks, the observer events. Workers deliver them
+Around the ledger, the service keeps an outbox. A confirmed appointment records a confirmation
+intent, the reminders its offering declares that are still ahead, and, when the policy has hooks,
+the observer events. Workers deliver them
 after the transaction commits, so a slow receiver never holds a station.
 
 {/* Evidence: crates/registry-scheduling/src/service.rs, commitment();
     crates/registry-scheduling/src/hooks.rs; crates/registry-scheduling/src/audit.rs;
-    products/scheduling/README.md, Events and observers. */}
+    products/scheduling/README.md. */}
 
 ## What Scheduling refuses
 
@@ -85,7 +88,7 @@ approves. A token with read scope but no grant can read availability and is refu
 `403 operation.not-authorized`. [Task grants](../../reference/apis/registry-scheduling/#task-grants) sets out how
 Scheduling matches and re-checks one.
 
-{/* Evidence: products/scheduling/README.md, Boundary and What Scheduling is not;
+{/* Evidence: products/scheduling/README.md, Dependency boundary;
     crates/registry-scheduling/src/auth.rs,
     a_read_caller_with_the_reads_scope_authenticates_without_a_grant;
     crates/registry-scheduling-core/src/problem.rs. */}
@@ -93,12 +96,14 @@ Scheduling matches and re-checks one.
 ## Recovering an unknown outcome
 
 A booking call can time out after it committed. Each create, reschedule, and cancel carries an
-`Idempotency-Key` the caller chooses. The same request under the same key returns the first answer,
-never a second booking. A different request under that key is refused with `idempotency.key-reused`.
+`Idempotency-Key` the caller chooses. The same request under the same key returns the first answer
+while Scheduling keeps the receipt, 7 days by default. It never makes a second booking. A different
+request under that key is refused with `idempotency.key-reused`.
 The Rust client in `registry-scheduling-client` retries this way.
 
-When the grant has expired, a retry would be refused, so read instead. The receipt route takes the
-original key and body under an ordinary read token.
+When the grant has expired, a retry would be refused, so read instead. For a booking, the receipt
+route takes the original key and body under an ordinary read token. Rescheduling and cancelling
+have no receipt route.
 [Recover an unknown outcome](../../reference/apis/registry-scheduling/#recover-an-unknown-outcome)
 gives each request, and
 [Deploy and operate Registry Scheduling](../../operate/scheduling/) covers `schedulingctl status`
@@ -110,13 +115,16 @@ and `schedulingctl intents`.
 
 ## Who owns a booking
 
-Scheduling owns the ledger and nothing beside it. No other product writes a hold or an appointment,
-directly or through a shared database. Each hold and appointment belongs to the token issuer and
-subject that made it. Another caller, even one serving the same product, sees an empty list. The
+Scheduling owns the ledger and nothing beside it. Another product, such as Registry Coordinator,
+books only through the Scheduling API, never through a shared database. A hold or appointment
+belongs to the token issuer and subject that made it, and another caller's own list does not show
+it. A booking made on someone's behalf is managed by the manager that its source's task grant
+names, and operational read profiles can read across owners. The
 appointment carries the `externalReferences` the caller sent, naming the record it was booked for.
 
-{/* Evidence: products/scheduling/README.md, Boundary;
-    crates/registry-scheduling/src/store.rs, ClaimRow::is_owned_by(). */}
+{/* Evidence: products/scheduling/README.md, Dependency boundary;
+    crates/registry-scheduling/src/store.rs, ClaimRow::is_owned_by() and is_managed_by();
+    crates/registry-scheduling/src/auth.rs. */}
 
 ## When it is not the right product
 

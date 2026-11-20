@@ -27,9 +27,10 @@ the reviewer. A retry under the same idempotency key returns the first request, 
 
 You write a [ReviewPolicy](../../reference/glossary/#review-policy) in YAML: the stages a request
 passes through, which people decide each stage and how many must approve, the outcomes a
-[Decision](../../reference/glossary/#decision) may record, what reviewers see, which producers may
-ask, and the deadlines that apply. `caseworkctl` checks the policy offline and pins it to a digest
-before any request uses it.
+[Decision](../../reference/glossary/#decision) may record, what reviewers see, and which clocks
+apply. The Casework project around it declares the queues, teams and clocks, and which producers
+may ask for which policy. `caseworkctl` checks the policy offline and pins it to a digest before any
+request uses it.
 
 ## What runs
 
@@ -51,8 +52,9 @@ whatever system later acts on the answer, under its own authority.
 
 Each party sends its own token and selects one
 [access profile](../../reference/glossary/#access-profile) per request. Casework never combines two
-profiles, and a producer's authority never supplies a reviewer's. A producer may read its result
-but never the human work, and only a staff or supervisor profile can decide.
+profiles, and a producer's authority never supplies a reviewer's. A producer may read its result,
+the request's progress and clocks, and notes meant for the requester. It never reads the tasks or
+the decisions, and only a staff or supervisor profile can decide.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, explain() "authority";
     crates/registry-casework/src/auth.rs; crates/registry-casework-core/src/lifecycle.rs,
@@ -90,15 +92,17 @@ Either way the source keeps its data and its disclosure.
 
 A policy's [stages](../../reference/glossary/#stage) run in order. Each names its
 [queue](../../reference/glossary/#queue), the profiles that may decide, and how many independent
-reviewers must approve. When a stage becomes active, Casework creates a
-[ReviewTask](../../reference/glossary/#review-task). A person reaches it only as a member of a
+reviewers must approve. When a stage becomes active, Casework creates one
+[ReviewTask](../../reference/glossary/#review-task) for each approval the stage requires. A person reaches it only as a member of a
 [team](../../reference/glossary/#team) that serves the queue in the
 [directory](../../reference/glossary/#directory), holding a deciding profile, and not excluded as
-the initiator or an earlier stage's reviewer. The policy declares which queues and teams exist.
+the initiator or an earlier stage's reviewer. The project declares which queues and teams exist.
 The directory, which an administrator keeps at runtime, says who is in each team.
 
 Approvals that meet a stage's threshold advance the request, or settle it as approved at the last
-stage. A rejection, a request for changes, or an answer settles it at once. A decision made on a
+stage. An answer settles it at once. So does a rejection or a request for changes, unless a
+non-final stage sets `negativeDecisions: advise`, which records it and counts it towards the
+threshold. A decision made on a
 stale read of a task is refused, and a [clock](../../reference/glossary/#clock) never decides an
 outcome. [Author a Casework policy](../../configure/casework/) covers claims, fencing and clocks.
 
@@ -111,8 +115,9 @@ outcome. [Author a Casework policy](../../configure/casework/) covers claims, fe
 ## What comes back, and for how long
 
 The ReviewResult repeats the subject, the policy binding, and the `submissionDigest`, so the
-producer can match it to its request. It adds a terminal `status`, the `outcome`, any public reason,
-and any structured result the policy requires. It never carries the reviewer's private reason,
+producer can match it to its request. It adds a terminal `status` and, for a decided request, the `outcome`, any
+public reason, and any structured result the policy requires. A cancelled or superseded request
+carries the status alone. It never carries the reviewer's private reason,
 which stays in Casework's
 [accountability record](../../reference/glossary/#accountability-record).
 

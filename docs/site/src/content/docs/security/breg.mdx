@@ -53,8 +53,12 @@ product can take back.
     crates/registry-breg/tests/postgres_proposal_review_delivery.rs,
     first_acceptance_refuses_wrong_policy_id_or_exact_pin. */}
 
-No runtime API edits access profiles, Record types, or webhook destinations, and a running
-process reloads nothing. Each change is a new package applied under the migration credential.
+No runtime API edits access profiles, Record types, or webhook destinations. A running process
+reloads no package and no runtime file. Of its own settings, it refetches only the token issuer's
+signing keys. An
+access profile or a Record type changes through a new package applied under the migration
+credential. A webhook destination's endpoint and secret change in the runtime file and apply at
+restart.
 
 {/* Evidence: products/breg/generated/facility/generated/openapi.json, paths;
     crates/registry-breg/src/startup.rs, production startup verifies the package once,
@@ -144,11 +148,12 @@ The residuals refer to these obligations by number.
 1. Run split database roles in production.
    `bregctl init` writes a split runtime file.
    Startup refuses a runtime role that is a superuser, has `BYPASSRLS`, `CREATEDB`, `CREATEROLE`,
-   or database `CREATE`, owns any registry object, is a member of the migration role, or holds a
-   write privilege on a registry schema.
-   A write privilege, ownership, superuser, or migration-role membership is answered with a pointer
-   to `bregctl apply --package DIR`, which names the object and the fix.
-   The other refusals (`BYPASSRLS`, `CREATEDB`, `CREATEROLE`, database or schema `CREATE`) answer
+   or database `CREATE`, owns any registry object, or is a member of the migration role.
+   It also refuses one that holds `CREATE` on a registry schema, `TRIGGER` on a registry table, or
+   write access to the activation ledger or registry state.
+   One of those privileges, ownership, superuser, or migration-role membership is answered with a
+   pointer to `bregctl apply --package DIR`, which names the object and the fix.
+   The other refusals (`BYPASSRLS`, `CREATEDB`, `CREATEROLE`, database `CREATE`) answer
    only that the database is not ready for this package, so check those role attributes first when
    startup refuses.
    Single-role mode (used by `rstack dev` and the quickstarts) catches mistakes, not a holder of
@@ -178,6 +183,8 @@ The residuals refer to these obligations by number.
    After any restore, re-run the erasures and discards done since the backup, reopen only the
    import authorities you still need, and resume held timers with an audited timer-operator resume.
    A logical restore is refused at startup until adopted.
+   Where the role cannot read the cluster identity, BReg compares the database oid alone, and a
+   copy restored into a fresh cluster can pass that weaker check.
    `adopt --acknowledge-original-retired` raises the claim epoch, supersedes every open import
    authority, and moves native Record timers into adoption hold in one transaction.
    [Back up, restore, and drill recovery](../../operate/advanced/back-up-and-restore/#restore-base-registry-engine)
@@ -211,7 +218,8 @@ The residuals refer to these obligations by number.
    {/* Evidence: crates/registry-breg/src/compiler.rs, reserved_production_iri,
         deployment_diagnostics. */}
 7. Use TLS to PostgreSQL and an HTTPS issuer.
-   `database.testOnlyPlaintext` is refused in release builds.
+   `database.testOnlyPlaintext` is refused unless BReg was built with its test-only PostgreSQL
+   feature.
    Loopback HTTP is accepted for an issuer; anything else needs
    `authentication.oidc.allowInsecureHttp: true`, which is logged at startup and reported by
    `bregctl doctor` (`BREG-RES-17`).
@@ -739,7 +747,8 @@ Each lists the condition, the consequence, the mitigation, and the related matri
 
 - Condition: a caller reads a statistical aggregate, or sends a HEAD request.
 - Consequence: an aggregate read emits no per-subject access-log hit.
-  A HEAD request is refused as a concealed 404; outside `/v1/statistics/` that refusal writes no
+  A HEAD request to any route but the health and readiness probes is refused as a concealed 404,
+  after sign-in is checked; outside `/v1/statistics/` that refusal writes no
   statistics refusal journal entry, and under it only an authenticated caller's HEAD is journaled.
 - Mitigation: treat statistical output as released content (`BREG-RES-07`); do not rely on the
   subject access log to show who saw an aggregate.
@@ -764,7 +773,8 @@ Each lists the condition, the consequence, the mitigation, and the related matri
   It refuses an `exactReads` profile that declares `actorKind: agent` or a `taskGrant`.
   A profile without an `actorKind` accepts every actor kind by its own declaration, as it does for
   every other operation.
-  So an agent token can publish or read exact values through it.
+  So a standing agent token can publish or read exact values through it.
+  A delegated agent token is admitted only by a profile that declares `actorKind: agent`.
   The publisher's dry run (`versions:dry-run`) belongs to the publisher alone and stores nothing.
   It reserves no version, and writes an audit attempt and one terminal entry.
 - Mitigation: declare `actorKind: human` or `actorKind: service` on every profile that holds

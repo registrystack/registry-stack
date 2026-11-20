@@ -37,13 +37,13 @@ products hold what happens around a record.
 
 | Kind of logic | Holder and mechanism | Interface it declares | Machine-readable catalogue |
 | --- | --- | --- | --- |
-| Field validation and patterns | BReg Record type fields: type, bounds, vocabulary, required, and a `pattern` in PostgreSQL's regular-expression syntax. An Action input can carry a `pattern` too. | The field declaration in `registry.yaml` | `registry-project.schema.json`; `bregctl explain`. A pattern is enforced by the database and is not published in the generated JSON Schema or OpenAPI. |
-| Preconditions on current data | BReg Action `requires` and `commitGuards`, checked inside the transaction | Guard entries on the Action | `bregctl explain actions` |
-| Derived values | BReg generated identifiers (`generate` on a string field) and live derived fields (reviewed SQL compiled to a read-only view) | The field declaration | `registry-project.schema.json` |
-| Rates, thresholds and other parameters that change over time | BReg Record type with `temporal` validity, one record per period, changed through an Action (a Proposal Action when a change needs review). A plan cannot read stored records, so a workflow reads the record in force with `breg.read-in-force/v1` and passes the values to the Action as inputs. | The Record type and the Action that changes it | `registry-project.schema.json`; `generated/operations/catalog.json` |
+| Field validation and patterns | BReg Record type fields: type, bounds, vocabulary, required, and a `pattern` in PostgreSQL's regular-expression syntax. An Action input can carry a `pattern` too. | The field declaration in `registry.yaml` | `registry-project.schema.json`; `bregctl explain model`. A pattern is enforced by the database and is not published in the generated JSON Schema or OpenAPI. |
+| Preconditions on current data | BReg Action `commitGuards`, with `targets` and `evidence` entries, checked when the Action commits | Guard entries on the Action | `bregctl explain actions` |
+| Derived values | BReg generated identifiers (`generate` on a string field) and live derived fields (reviewed SQL compiled to a read-only view) | The field's `generate` entry, or the Record type's `derived` block | `registry-project.schema.json` |
+| Rates, thresholds and other parameters that change over time | BReg Record type with `temporal` validity and a `temporal-non-overlap` constraint, so that one record holds each period, changed through an Action (a Proposal Action when a change needs review). A plan cannot read stored records, so a workflow reads the record in force with `breg.read-in-force/v1` and passes the values to the Action as inputs. | The Record type and the Action that changes it | `registry-project.schema.json`; `generated/operations/catalog.json` |
 | Calculation and branching in an Action | BReg Action `plan`: `fixed`, a Rhai Function, or a Wasm Function | Typed Action `inputs`, declared write slots and declared refusal codes; Function ABI `registry.action-plan/v1` | `bregctl generate actions` writes the `action-contracts/v1` document |
 | Record timers | BReg Record type `timers`, enabled by the root project's `timerGrants`; each timer invokes one non-public immediate Action | The timer declaration on the Record type | `registry-project.schema.json`; a timer-only Action has no portable Action contract |
-| Events and webhooks | BReg `hooks`: a `url`, `rhai` or `wasm` handler that runs after commit; local handlers use ABI `registry.hook-handler/v1` | `trigger`, `projection` and optional `when` on the hook | `bregctl explain events`; `generated/event-schemas/proposal-lifecycle.schema.json` |
+| Events and webhooks | BReg `hooks`: a `url`, `rhai` or `wasm` handler that runs after commit; local handlers use ABI `registry.hook-handler/v1` | `trigger`, `projection` and optional `when` on the hook | `bregctl explain events`; one schema for each hook in `generated/event-schemas/`, and `proposal-lifecycle.schema.json` there |
 | Review, then apply | BReg Proposal Action (`execution.mode: proposal`); Casework supplies the review | The Action's `review` and `application` declarations | `bregctl generate actions` |
 | Multi-step or cross-product process | Registry Coordinator `workflow.yaml`: `call`, `choose`, `wait-until`, `wait-for` and `finish` steps, with pure Rhai Functions | Typed workflow input and named finishes | `generated/operations/catalog.json` and the generated project schema |
 | Calls to systems outside the stack | Adapter pack routes (reviewed, in Camel route YAML, with Rhai mapping scripts), bound to a profile by a project and served as a facade | The profile's operations | The Adapter effective contract |
@@ -69,11 +69,11 @@ products hold what happens around a record.
 
 ## Plans for an Action
 
-A plan runs only when its Action is invoked. It reads no stored record and no clock. The one date it
-can read is `today()`, the registry-local date captured once for the evaluation, and a Function that
-calls `today()` requires `project.timezone`. Where the Action declares Evidence, the plan can also
-call `evidence::resolve`. [Actions and Proposals](../../configure/breg-actions/)
-has the details.
+A plan runs only when its Action is invoked. It reads no stored record and no clock. The one date a
+Rhai plan can read is `today()`, the registry-local date captured once for the evaluation, and a
+Function that calls `today()` requires `project.timezone`. Where the Action declares Evidence, a
+Rhai plan can also call `evidence::resolve`. A Wasm plan reads its inputs only.
+[Actions and Proposals](../../configure/breg-actions/) has the details.
 
 {/* Evidence: crates/registry-breg/src/rhai_planner.rs register_action_helpers (today);
     crates/registry-breg/src/action_handler.rs evaluate_action_at_date;
@@ -100,8 +100,9 @@ lists what a workflow can call.
 Trusted context is information a product takes from a verified credential, reviewed configuration,
 or its own governed state. A caller-supplied field is not trusted because of its name.
 
-- Registry Evidence authenticates the caller and matches one complete entitlement before source
-  access. Requirement, purpose, audience, source binding (its Adapter pack route and connection),
+- For an Evidence request, Registry Evidence authenticates the caller and matches one complete
+  entitlement before source access. The experimental public check, when activated, takes no
+  credential. Requirement, purpose, audience, source binding (its Adapter pack route and connection),
   derivation and output form come from the reviewed bundle. The caller selects only values the
   request contract permits.
 - BReg access profiles bind allowed operations, fields, row constraints, purposes and claims to the

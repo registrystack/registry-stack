@@ -16,7 +16,7 @@ standards_referenced: []
 
 Use this checklist after product configuration is valid and before exposing a deployment to callers.
 It covers Registry Evidence, Base Registry Engine (BReg), and Registry Casework, and the settings
-of the shared audit writer for Registry Evidence and Registry Render.
+of the shared audit writer that these products and Registry Render use.
 
 ## Before you start
 
@@ -77,8 +77,8 @@ of the shared audit writer for Registry Evidence and Registry Render.
 2. Review scopes, access profiles, source requests, and disclosure rules as governed input.
    Verify the exact issuer, audience, admitted clients, scopes, and selected access profiles with
    both permitted and refused synthetic calls.
-3. For BReg, verify the installed package, required package signatures, and current database
-   activation before serving. Test row and field disclosure with a least-privilege caller as well
+3. For BReg, verify the installed package digest and current database activation before serving.
+   A package carries digests, not signatures. Test row and field disclosure with a least-privilege caller as well
    as the administrator.
 4. For Casework, bootstrap only the intended teams and queues. Test requester, reviewer, and
    supervisor separation, initiator exclusion, distinct approvals, and a revoked Directory member.
@@ -130,8 +130,9 @@ Correct the responsible policy, grants, or credentials and rerun the test before
 
 ## Audit destination and retention
 
-- Registry Evidence and Render configure the shared audit writer through their `audit` block. It
-  selects `file` or `stdout`. A file destination also sets `path`, `rotateBytes` (100 MiB by default), and
+- Registry Evidence, Render, BReg and Casework configure the shared audit writer through their
+  `audit` block. It selects `file` or `stdout`. A file destination also sets `path`, `rotateBytes`
+  (100 MiB by default), and
   `retentionDays` (90 by default). Put the path on durable storage in a directory owned by the service
   user and not writable by group or others.
 - Audit is fail-closed. Registry Evidence durably accepts an access-attempt entry before every source
@@ -164,9 +165,11 @@ Correct the responsible policy, grants, or credentials and rerun the test before
   components as well as the runtime.
 - Keep the refusal surface uninformative end to end. Do not let the edge add distinguishing error
   pages, redirects, or timing differences in front of the runtime's closed problem shapes.
-- Do not let an edge cache store an authenticated response. Every product marks such responses
-  `no-store`.
-- Bind Registry Evidence to loopback, a private IPv4 address, or a unique-local IPv6 address. Its
+- Do not let an edge cache store an authenticated response. BReg, Casework and Registry Evidence
+  mark such responses `no-store`. Render marks only its error responses, so set the cache policy for
+  Render at the edge.
+- Bind Registry Evidence to loopback, a private IPv4 address, or a unique-local IPv6 address. A
+  wildcard bind needs `networkExposure: container-private` on a container network. Its
   runtime fixes `tlsTermination` to `operator-controlled-upstream` and
   `trustProxyIdentityHeaders` to `false`, and it validates tokens itself.
 - Leave `metricsListener` unset unless needed. When present, bind it to a distinct private address.
@@ -176,7 +179,8 @@ Correct the responsible policy, grants, or credentials and rerun the test before
   enforce per-client quotas at the gateway.
 - Keep every Evidence source hop on a private network where possible. Give Registry Evidence a
   dedicated source credential scoped to the exact operation the bundle performs.
-- Keep hostname and fixed-origin verification enabled for every Evidence HTTP source. Registry Evidence
+- Use `https` for every Evidence HTTP source. Plain `http` is accepted only to a numeric loopback
+  host, where no certificate is checked. Registry Evidence
   ignores `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`, follows no redirect, and
   has no application proxy setting.
 
@@ -201,9 +205,11 @@ deployments, signers, bundles, and audit boundaries.
 - Rotate a compromised source credential at the source and restart the affected process.
 - Preserve shipped audit copies and copy the entire local audit directory, including sealed files,
   before retention removes them.
-- A `403 evidence.denied` deliberately does not identify the failed authorisation check. Inspect
-  trusted local configuration and the audit refusal phase: audience, matching grant, authority,
-  purpose and subject roles, then response-format permission.
+- A `403 evidence.denied` deliberately does not identify the failed authorisation check, and the
+  audit entry for the refusal is the same whichever check failed. Check trusted local configuration
+  in this order: audience, matching grant, authority, purpose and subject roles, then
+  response-format permission. The request log's `category` field separates an authorisation refusal
+  from a response-format refusal.
 
 ## Verify
 
@@ -229,7 +235,7 @@ expectations, and confirm an audited request reaches the configured durable sink
 | Registry Evidence refuses a non-immutable input | The package, `runtime.yaml`, captured artifact, or CA bundle is writable, or the secret root is reachable by group or other | Freeze the package and target, tighten the secret root to `0700`, and restart |
 | Registry Evidence refuses an invalid bound source extract | The named extract is writable | Make the extract non-writable and restart |
 | A second Registry Evidence process reports a locked audit sink | Two processes share one `audit.path` | Use one writer per path or use distinct paths or `stdout` per replica |
-| Registry Evidence returns `403 evidence.denied` unexpectedly | Audience, grant, authority, purpose, subject, or format authorisation failed | Check local configuration in the incident-response order and inspect the audit refusal phase |
+| Registry Evidence returns `403 evidence.denied` unexpectedly | Audience, grant, authority, purpose, subject, or format authorisation failed | Check local configuration in the incident-response order and read the request log's `category` |
 
 ## Next
 

@@ -37,9 +37,9 @@ creates authority either.
 Every authorisation refusal is durably audited before the generic `403`. If
 that audit fails, the caller receives the generic `503`.
 
-Refusals decided before authorisation write no native audit entry. They cover a
-failed authentication, a malformed request, an invalid selector, and a rate
-limit. Watch for them in operational logs and metrics instead.
+A failed authentication, a malformed request, an invalid selector, and a rate
+limit write no native audit entry, even when Evidence decides them after
+authorisation. Watch for them in operational logs and metrics instead.
 
 An agent acts only inside its task grant. For an institutional agent task,
 Evidence consumes a complete signed grant context issued by an external task
@@ -222,8 +222,8 @@ general wallet lifecycle are outside that assertion format. The separate OID4VCI
 its documented delivery profile without changing those limits.
 
 A requirement in the immutable bundle declares which subject binding mode it issues under. The
-vocabulary is closed at two values and carries no default. A requirement that declares nothing
-issues audience-scoped assertions, and no caller input selects a mode.
+vocabulary is closed at two values. A requirement that declares nothing issues audience-scoped
+assertions, and no caller input selects a mode.
 
 | Boundary | `audience-scoped` (absence of a declaration) | `holder-bound` (declared per requirement) |
 | --- | --- | --- |
@@ -315,8 +315,9 @@ signatures, the expected audience and nonce, and independently pinned expectatio
 - With a cross-device flow, a holder can present into a session someone else started, by relay or by
   cooperation. `possession` proves that a credential from a trusted issuer was presented into the
   session, not that the presenter is the applicant. With `attribute-match`, the requirement's
-  derivation compares the disclosed claims with the one expected record, so another person's
-  credential yields a mismatch, not a match.
+  derivation must compare the disclosed claims with the one expected record. Only that comparison
+  turns another person's credential into a mismatch. Evidence checks only that the wallet
+  configuration names at least one disclosed claim.
   {/* Evidence: crates/registry-evidence/src/wallet_presentation.rs, subject_link,
        AttributeMatchWithoutClaims. */}
 - The relying party that calls Evidence states the session reference and the presenting
@@ -333,8 +334,8 @@ signatures, the expected audience and nonce, and independently pinned expectatio
        unsigned_envelope_is_rejected_by_the_strict_jws_verifier. */}
 - `disclosureGuard` families are operator attestations, not semantic classification. The runtime
   cannot detect two differently named families that disclose equivalent information.
-- There is no cumulative disclosure budget. Rate controls are uniform per principal, in-memory,
-  and per process. Replicas multiply them and a restart resets them. Per-client quotas belong at
+- There is no cumulative disclosure budget. Rate controls are keyed by principal, and
+  the failed-selector budget by principal and authority profile. They are in-memory and per process. Replicas multiply them and a restart resets them. Per-client quotas belong at
   the gateway. A gateway or exchange layer in front of Evidence can add quotas and transport
   controls. It never replaces Evidence's own token check, authorisation and audit.
 - One process serves one token issuer and one set of claim names. Mutually distrustful issuers, or
