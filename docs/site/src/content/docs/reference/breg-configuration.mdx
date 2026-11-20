@@ -155,7 +155,8 @@ same field over the same unit are refused, whatever their dimensions, population
 (`breg.statistical-dataset.sum-field-released-twice`). The contributor joins the definition digest, so changing it
 starts a new release series; `dominancePercent` does not. See [Release sums](../../configure/breg-statistics/#release-sums).
 
-`measure` is a reserved column name, so no dimension may use it (`breg.statistical-dataset.dimension-reserved`).
+`period`, `measure`, `value`, and `status` are reserved column names, so no dimension may use them
+(`breg.statistical-dataset.dimension-reserved`).
 A dataset declares at most 12 dimensions (`breg.statistical-dataset.dimensions-exceeded`). At most one access profile holds `publish`
 on a dataset. Once one does, it and every `read-live` profile must also hold `read-releases`;
 without one, no profile may hold `read-releases`.
