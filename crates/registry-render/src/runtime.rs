@@ -133,8 +133,8 @@ pub struct RenderRuntime {
 }
 
 impl RenderRuntime {
-    /// Whether `metricsListener`, when declared, binds a concrete private
-    /// address on a non-zero port that is not the listener's socket. Sharing
+    /// Whether `metricsListener`, when declared, binds a concrete loopback or
+    /// private address (never link-local) on a non-zero port that is not the listener's socket. Sharing
     /// that socket would publish the series on the document API's listener.
     #[must_use]
     pub fn metrics_listener_allowed(&self) -> bool {
@@ -143,7 +143,11 @@ impl RenderRuntime {
         };
         let metrics = metrics.bind.socket_addr();
         let listener = self.listener.bind.socket_addr();
-        if metrics.port() == 0 || metrics.ip().is_unspecified() || !bind_allowed(metrics) {
+        let private = match metrics.ip() {
+            std::net::IpAddr::V4(ip) => ip.is_loopback() || ip.is_private(),
+            std::net::IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local(),
+        };
+        if metrics.port() == 0 || !private {
             return false;
         }
         // An IPv6 wildcard socket is commonly dual-stack, so it covers both
@@ -858,7 +862,11 @@ fn read_runtime(
         for finding in findings(&loaded.config) {
             let audit_deferred =
                 finding.pointer.starts_with("/audit") && check.defers("/audit/destination");
-            if !check.defers(&finding.pointer) && !audit_deferred {
+            // The metrics socket is compared with the listener's, so a
+            // deferred listener bind defers that comparison too.
+            let metrics_deferred =
+                finding.pointer == "/metricsListener/bind" && check.defers("/listener/bind");
+            if !check.defers(&finding.pointer) && !audit_deferred && !metrics_deferred {
                 audit_refused |= finding.pointer.starts_with("/audit");
                 diagnostics.push(check.error_at(
                     RUNTIME_KIND,
@@ -2306,6 +2314,8 @@ mod tests {
             "203.0.113.4:9090",
             "127.0.0.1:0",
             "[2001:db8::1]:9090",
+            "169.254.10.4:9090",
+            "[fe80::1]:9090",
         ] {
             let text = format!("{}metricsListener:\n  bind: \"{bind}\"\n", minimal(&home));
             let problem = refused(&home, &text);
@@ -2515,6 +2525,22 @@ mod tests {
                 .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str())),
             Some(("config.substitution", "/listener/bind"))
         );
+    }
+
+    #[test]
+    fn cfg_check_1_a_deferred_listener_defers_the_metrics_socket_comparison() {
+        let (_dir, home) = home();
+        let file = home.join("runtime.yaml");
+        std::fs::write(
+            &file,
+            format!(
+                "{}metricsListener:\n  bind: 127.0.0.1:8080\n",
+                minimal(&home).replace("127.0.0.1:8080", "\"${RENDER_CHECK_UNSET_BIND}\"")
+            ),
+        )
+        .expect("runtime file");
+        let offline = check_runtime(&file, false, None);
+        assert!(offline.diagnostics.is_empty(), "{:?}", offline.diagnostics);
     }
 
     #[test]

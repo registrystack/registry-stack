@@ -640,8 +640,8 @@ metricsListener:
   bind: 127.0.0.1:9108
 ```
 
-Without the block, Render serves no metrics. The address must be loopback or private, and must not
-be the `listener` socket. A refused address stops `serve` and fails `check` with
+Without the block, Render serves no metrics. The address must be loopback or private, never link-local, and
+must not be the `listener` socket. A refused address stops `serve` and fails `check` with
 `render.runtime.invalid-metrics-listener`. `GET /metrics` on that socket answers the series below
 and nothing else. The document listener answers `/metrics` with not found.
 
