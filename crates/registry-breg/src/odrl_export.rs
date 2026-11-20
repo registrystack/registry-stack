@@ -348,6 +348,7 @@ fn audit_access_profile(access: &AccessProfileSource) {
         revision_access: _,
         provenance_fields: _,
         allow_data_export: _,
+        require_access_reason: _,
     } = access;
 }
 

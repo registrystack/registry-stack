@@ -222,6 +222,8 @@ pub(crate) async fn insert_configured_events(
         let snapshot = match mutation.trigger {
             EventTrigger::Created | EventTrigger::Patched => mutation.after,
             EventTrigger::Tombstoned => mutation.before,
+            // Read events carry no record state, so a mutation never selects them.
+            EventTrigger::Read => None,
         }
         .ok_or(OutboxError::InvalidProjection)?;
         let values = projected_event_values(&entity.fields, &projection_fields, snapshot)?;
@@ -547,6 +549,7 @@ fn trigger_name(trigger: EventTrigger) -> &'static str {
         EventTrigger::Created => "created",
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
+        EventTrigger::Read => "read",
     }
 }
 

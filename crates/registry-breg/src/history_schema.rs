@@ -847,6 +847,7 @@ mod tests {
             classification: Classification::Restricted,
             access_requirements: None,
             access_log: None,
+            disclosure_conditions: Vec::new(),
             geojson: None,
             physical_table: "e_membership".to_owned(),
             temporal: Some(CompiledTemporal {

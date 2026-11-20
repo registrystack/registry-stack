@@ -3056,7 +3056,7 @@ fn partial_unique_predicate_sql(
     }
 }
 
-fn typed_literal_sql(value: &Value, field_type: &FieldTypeSource) -> String {
+pub(crate) fn typed_literal_sql(value: &Value, field_type: &FieldTypeSource) -> String {
     match field_type {
         FieldTypeSource::Boolean => format!(
             "{}::boolean",

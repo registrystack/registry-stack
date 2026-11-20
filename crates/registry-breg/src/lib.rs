@@ -64,6 +64,7 @@ pub mod cursor;
 pub mod data;
 pub mod derived_sql;
 pub mod diagnostics;
+pub mod disclosure;
 #[cfg(feature = "runtime")]
 pub mod event_destination;
 pub(crate) mod event_record;

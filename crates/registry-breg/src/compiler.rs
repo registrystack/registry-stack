@@ -65,6 +65,7 @@ use crate::physical_names::{
 };
 
 pub(crate) mod attachments;
+mod disclosure;
 pub mod review_context;
 mod statistics;
 #[cfg(feature = "runtime")]
@@ -4097,6 +4098,7 @@ pub(crate) fn expand_project_access(
                 principal_claim: profile.principal_claim.clone(),
                 required_scopes: profile.required_scopes.clone(),
                 required_purposes: profile.required_purposes.clone(),
+                require_access_reason: profile.require_access_reason,
                 operations: grant.operations.clone(),
                 readable_fields: grant.readable_fields.clone(),
                 writable_fields: grant.writable_fields.clone(),
@@ -4311,6 +4313,7 @@ fn validate_entities(
         validate_selector_profiles(entity, errors);
         validate_read_paths(entity, entities, errors);
         validate_profiles(entity, entities, errors);
+        disclosure::validate(entity, entities, errors);
         validate_hooks(
             registry_id,
             entity,
@@ -6641,7 +6644,7 @@ fn validate_hooks(
                 "an entity hook runs after the triggering transaction commits; declare phase: after",
             ));
         }
-        if hook.projection.is_empty() {
+        if hook.projection.is_empty() && hook.trigger != EventTrigger::Read {
             errors.push(Diagnostic::error(
                 "breg.event.projection-empty",
                 format!("{hook_path}.projection"),
@@ -6962,6 +6965,8 @@ fn validate_event_condition(
                 EventTrigger::Tombstoned => {
                     changed.is_empty() && after_equals.is_empty() && after_is_null.is_empty()
                 }
+                // A read has no before or after state to test.
+                EventTrigger::Read => false,
             };
             if !compatible {
                 errors.push(Diagnostic::error(
@@ -8049,6 +8054,7 @@ fn compile_entities(
                 classification: source.classification,
                 access_requirements: source.access_requirements.clone(),
                 access_log: source.access_log.clone(),
+                disclosure_conditions: disclosure::compile_conditions(source),
                 geojson: source
                     .geojson
                     .as_ref()

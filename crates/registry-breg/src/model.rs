@@ -1050,6 +1050,10 @@ pub struct CompiledEntity {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub consent_requirements: BTreeMap<String, Vec<CompiledConsentRequirement>>,
     pub hooks: BTreeMap<String, HookSource>,
+    /// Rules that withhold the record, its history or named fields from the
+    /// profiles they do not exempt, in authored order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disclosure_conditions: Vec<CompiledDisclosureCondition>,
     /// Which module contributed each id in this entity's id-keyed
     /// collections. An id absent from a map was contributed by the project
     /// root. Two modules can never declare the same id (every level is a
@@ -1073,6 +1077,31 @@ pub struct CompiledEntity {
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub external_link_fields: BTreeSet<String>,
     pub definition_revision: String,
+}
+
+/// One compiled disclosure condition. Its literals are type-checked against
+/// the record type's fields.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledDisclosureCondition {
+    pub id: String,
+    /// ANDed tests of the record's current values.
+    pub when: Vec<crate::contract::DisclosureWhenPredicate>,
+    pub withhold: DisclosureWithhold,
+    /// The access profiles the condition never applies to.
+    pub exempt_profiles: BTreeSet<String>,
+}
+
+/// What a matching condition withholds.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DisclosureWithhold {
+    /// The whole record behaves as absent.
+    Record,
+    /// Every revision and snapshot of the record behaves as absent.
+    History,
+    /// The named field identifiers are omitted from reads and history.
+    Fields(BTreeSet<String>),
 }
 
 /// The authored purpose and group of a Record or Action.

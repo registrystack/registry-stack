@@ -2296,6 +2296,7 @@ fn validate_permission_access_requirements(
             principal_claim: profile.principal_claim.clone(),
             required_scopes: profile.required_scopes.clone(),
             required_purposes: profile.required_purposes.clone(),
+            require_access_reason: profile.require_access_reason,
             operations: [Operation::Invoke].into(),
             readable_fields: Default::default(),
             writable_fields: Default::default(),
