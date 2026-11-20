@@ -8,13 +8,15 @@ source_repos:
   - registry-evidence
   - registry-breg
   - registry-casework
-last_reviewed: "2026-10-03"
+last_reviewed: "2026-11-20"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
 Use this checklist after product configuration is valid and before exposing a deployment to callers.
+It covers Registry Evidence, Base Registry Engine (BReg), and Registry Casework, and the settings
+of the shared audit writer for Registry Evidence and Registry Render.
 
 ## Before you start
 
@@ -51,7 +53,7 @@ Use this checklist after product configuration is valid and before exposing a de
   signing. Require P-256, signing enabled, non-exportable key material, plaintext backup
   disabled, and an exact governed public-key match. Local JWK signing is for local assurance. See
   [Configure Transit signing](../../tutorials/move-evidence-to-production-signing/).
-- Escrow the Base Registry Engine (BReg) Transit key before the first encrypted field goes live. The
+- Escrow the BReg Transit key before the first encrypted field goes live. The
   runtime stores only the wrapped data-encryption key, so losing the Transit key irrecoverably loses
   every value sealed with it. A health check does not certify escrow.
 - Keep the BReg base64 local-file DEK out of production. Startup permits it only when
@@ -72,8 +74,9 @@ Use this checklist after product configuration is valid and before exposing a de
 
 1. Use separate migration and runtime database roles with TLS. Run the product's doctor against
    the deployed runtime configuration and confirm the serving credential cannot activate packages.
-2. Bind the service behind your controlled TLS edge. Verify the exact issuer, audience, admitted
-   clients, scopes, and selected access profiles with both permitted and refused synthetic calls.
+2. Review scopes, access profiles, source requests, and disclosure rules as governed input.
+   Verify the exact issuer, audience, admitted clients, scopes, and selected access profiles with
+   both permitted and refused synthetic calls.
 3. For BReg, verify the installed package, required package signatures, and current database
    activation before serving. Test row and field disclosure with a least-privilege caller as well
    as the administrator.
@@ -83,12 +86,11 @@ Use this checklist after product configuration is valid and before exposing a de
 5. Keep current-source human display on the caller's own token and source profile. Give the
    service status credential only its declared read purpose. Deploy BReg and Casework at matching
    versions, and verify that Casework approval alone cannot apply a producer mutation.
-6. Exercise an unavailable audit destination and reconcile a mutation whose response was lost.
-   Archive service and operator audit streams, and test the separate database restore and payload
-   retention procedures with synthetic data.
+6. Reconcile a mutation whose response was lost. Archive service and operator audit streams, and
+   test the separate database restore and payload retention procedures with synthetic data.
 
 Treat a failed negative test as an authorisation or deployment defect.
-Correct the responsible policy, grants, or credentials and rerun it before exposing traffic.
+Correct the responsible policy, grants, or credentials and rerun the test before exposing traffic.
 
 {/* Evidence: crates/registry-breg/src/startup.rs; crates/registry-breg/src/auth.rs;
     crates/registry-breg/tests/http_auth.rs;
@@ -119,7 +121,7 @@ Correct the responsible policy, grants, or credentials and rerun it before expos
   revisions, and relationship combinations. A declared `disclosureGuard` family is an operator
   attestation, not a semantic classifier.
 - Confirm that no two authority paths cover the same requirement, purpose, and subject tuple.
-  Startup does not detect that overlap; request-time evaluation denies the ambiguous request.
+  Startup does not detect that overlap. Request-time evaluation denies the ambiguous request.
 - Keep `responseFormats` at the signed default unless a reviewed decision widens it. Unsigned output
   is transport-authenticated convenience and is never later-verifiable evidence.
 
@@ -128,8 +130,8 @@ Correct the responsible policy, grants, or credentials and rerun it before expos
 
 ## Audit destination and retention
 
-- Registry Evidence and Render use the shared audit writer. Its `audit` block selects `file` or
-  `stdout`; a file destination also sets `path`, `rotateBytes` (100 MiB by default), and
+- Registry Evidence and Render configure the shared audit writer through their `audit` block. It
+  selects `file` or `stdout`. A file destination also sets `path`, `rotateBytes` (100 MiB by default), and
   `retentionDays` (90 by default). Put the path on durable storage in a directory owned by the service
   user and not writable by group or others.
 - Audit is fail-closed. Registry Evidence durably accepts an access-attempt entry before every source
@@ -145,21 +147,30 @@ Correct the responsible policy, grants, or credentials and rerun it before expos
 - The log has no hash chain or signature. Ship sealed files or `stdout` to append-only storage the
   service account cannot change. The products do not prove remote receipt.
 - Before first use of the shared writer, archive older chained audit segments and start with a fresh
-  path so the new retention policy cannot delete the old format unexpectedly.
+  path so the new retention policy cannot delete the old format unexpectedly. The writer refuses an
+  active file whose first entry has the older hash-chained shape.
 - Every Registry Evidence pseudonym carries `audit.hashKeyVersion`. Raise that version when rotating
   the audit master, and retain the old master for as long as older pseudonyms must be recomputable.
 
 {/* Evidence: crates/registry-platform-audit/src/lib.rs;
+    crates/registry-platform-audit/src/writer.rs,
+    open_refuses_a_leftover_hash_chained_journal_file;
     crates/registry-evidence/src/server.rs; crates/registry-render/src/server.rs. */}
 
 ## Transport and edge
 
 - Terminate TLS and manage certificates at a reviewed reverse proxy or load balancer.
+- Take runtime updates on a deliberate cadence. Track advisories against pinned base images and edge
+  components as well as the runtime.
+- Keep the refusal surface uninformative end to end. Do not let the edge add distinguishing error
+  pages, redirects, or timing differences in front of the runtime's closed problem shapes.
+- Do not let an edge cache store an authenticated response. Every product marks such responses
+  `no-store`.
 - Bind Registry Evidence to loopback, a private IPv4 address, or a unique-local IPv6 address. Its
   runtime fixes `tlsTermination` to `operator-controlled-upstream` and
-  `trustProxyIdentityHeaders` to `false`; it validates tokens itself.
+  `trustProxyIdentityHeaders` to `false`, and it validates tokens itself.
 - Leave `metricsListener` unset unless needed. When present, bind it to a distinct private address.
-  It serves only `GET /metrics`; the Evidence listener does not serve metrics.
+  It serves only `GET /metrics`, and the Evidence listener does not serve metrics.
 - Size Registry Evidence `rateLimits` as per-process, in-memory budgets. N replicas multiply each
   limit by N, and restart restores the full budget. Set the failed-selector budget deliberately and
   enforce per-client quotas at the gateway.
@@ -169,26 +180,15 @@ Correct the responsible policy, grants, or credentials and rerun it before expos
   ignores `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`, follows no redirect, and
   has no application proxy setting.
 
-## Authorisation and disclosure
+## Posture and bundle replacement
 
-- Review scopes, access profiles, source requests, and disclosure rules as governed input.
-- Exercise missing, expired, wrongly issued, and insufficiently scoped credentials.
-- Confirm a denied request reaches no protected source.
-- Confirm configuration cannot widen access through an unknown or ignored field.
-
-## Assume an automated adversary
-
-- Take runtime updates on a deliberate cadence. Track advisories against pinned base images and edge
-  components as well as the runtime.
-- Keep the refusal surface uninformative end to end. Do not let the edge add distinguishing error
-  pages, redirects, or timing differences in front of the runtime's closed problem shapes.
 - Rehearse replacement of a governed Evidence bundle. The time to withdraw a disclosure is the
   deployment pipeline's, so measure it before an incident.
 
 Registry Evidence exposes no posture route. Its posture is the exact package and closed runtime file
 it loaded, mounted read-only, with no reload, merge, governed-field override, or fallback. Record
 the package digest and retain the runtime file with the deployment record. One process serves one
-operator-controlled trust domain; mutually distrustful issuers or customers require separate
+operator-controlled trust domain. Mutually distrustful issuers or customers require separate
 deployments, signers, bundles, and audit boundaries.
 
 ## Incident response
@@ -207,16 +207,17 @@ deployments, signers, bundles, and audit boundaries.
 
 ## Verify
 
-Before handoff, record:
+Before handoff, confirm each of the following with synthetic data and record the result.
 
-1. production configuration and package checks;
-2. authenticated and unauthenticated request results;
-3. audit failure behaviour;
-4. source timeout and size-limit behaviour;
-5. backup and restore evidence; and
-6. the rollback trigger and responsible operator.
+1. Exercise valid, missing, invalid, expired, wrongly issued, and insufficiently scoped credentials.
+   Record the authenticated and unauthenticated results.
+2. Confirm that a denial reaches no source.
+3. Confirm that configuration cannot widen access through an unknown or ignored field.
+4. Confirm that an audit failure blocks release.
+5. Test source timeout and size-limit behaviour, backup, restore, and rollback. Record the rollback
+   trigger and the responsible operator.
 
-Also confirm Registry Evidence readiness rechecks the subject-binding key, signer, pinned audit sink,
+Confirm that Registry Evidence readiness rechecks the subject-binding key, signer, pinned audit sink,
 and every source credential. It does not send an evidence-data request, so readiness does not prove
 that a source returns data. Verify a stored assertion offline with independently retained
 expectations, and confirm an audited request reaches the configured durable sink.

@@ -12,12 +12,7 @@ Source:
 Checks one metadata manifest offline. Prints `"metadata manifest valid: <path>"`, the
 canonical `source_manifest_digest`, and a summary line on success. On a refusal it
 prints one sentence and then every finding to standard error, each placed at the
-member it names:
-
-```text
-error[config.unknown-key] metadata.yaml:10:1 /unexpected
-  ...
-```
+member it names.
 
 ```text
 validate <metadata.yaml> [--format human|json] [--deny-warnings]
@@ -100,7 +95,10 @@ such as `manifest.profile.id-mismatch`, `manifest.profile.missing-fixture`, and
 `manifest.profile.claim-missing`.
 
 `render` and `publish` read the manifest the same way and print the same findings
-when they refuse it.
+when they refuse it. None of them makes a network request. `validate` and `render` read only the manifest file.
+`publish` also reads back the files in its output directory to record their digests in
+`index.json`, so publish into an empty directory. The rendered artifacts follow the shapes of the
+standards they name, and the CLI does not validate them against those standards.
 
 JSON Schemas generated from the reader types are published at
 `products/manifest/schemas/metadata.schema.json` and
@@ -109,7 +107,7 @@ authority: a schema cannot express every manifest rule.
 
 ### Render format values
 
-The `--format` flag on `render` accepts:
+The `--artifact-format` flag on `render` accepts:
 Terms used in the table include Data Catalog Vocabulary (DCAT), BRegDCAT-AP, Core Public Service
 Vocabulary Application Profile (CPSV-AP), Shapes Constraint Language (SHACL), Open Digital
 Rights Language (ODRL), OGC API Records, and SKOS-shaped codelist metadata.
@@ -122,15 +120,16 @@ Rights Language (ODRL), OGC API Records, and SKOS-shaped codelist metadata.
 | `policies` | None | ODRL policy collection JSON-LD |
 | `policy` | `--dataset <id>` | Per-dataset ODRL policy document JSON-LD |
 | `dcat` | `--profile <id>` optional | Base DCAT JSON-LD. With `--profile bregdcat-ap`, renders the BRegDCAT-AP variant. `--profile dcat` and `--profile dcat-ap` also render base DCAT. |
-| `bregdcat-ap` | None | BRegDCAT-AP JSON-LD (shorthand; equivalent to `--format dcat --profile bregdcat-ap`) |
+| `bregdcat-ap` | None | BRegDCAT-AP JSON-LD (shorthand; equivalent to `--artifact-format dcat --profile bregdcat-ap`) |
 | `cpsv-ap` | None | CPSV-AP 3.2.0 service catalogue JSON-LD |
 | `shacl` | None | SHACL node shapes JSON-LD |
 | `json-schema` | `--dataset <id>` and `--entity <name>` | JSON Schema Draft 2020-12 |
 | `form-json-schema` | `--form <id>` | Form JSON Schema Draft 2020-12 |
 | `ogc-records` | None | OGC API Records FeatureCollection JSON |
 
-Valid `--profile` values for `--format dcat`: `dcat`, `dcat-ap` (both render base DCAT), and `bregdcat-ap` (renders BRegDCAT-AP JSON-LD).
-Use `--format cpsv-ap` for the service catalogue rather than `--format dcat --profile cpsv-ap`.
+Valid `--profile` values for `--artifact-format dcat`: `dcat`, `dcat-ap` (both render base DCAT), and `bregdcat-ap` (renders BRegDCAT-AP JSON-LD).
+Use `--artifact-format cpsv-ap` for the service catalogue rather than `--artifact-format dcat --profile cpsv-ap`.
+`render --format` is refused: the report flag `--format` applies to `validate`, `validate-profiles`, and `publish`.
 
 ## Manifest top-level keys
 
@@ -155,7 +154,25 @@ Source:
 | `forms` | list of `FormManifest` | No | Local form-profile records linked from public services and channels. |
 | `codelists` | list of `CodelistManifest` | No | Enumerated value schemes with concept URIs. |
 | `evaluation_profiles` | list of `EvaluationProfileManifest` | No | Public profile-to-ruleset bindings for delegated evaluation. |
+| `modules` | list of `ModuleManifest` | No | Static descriptions of adopter-owned modules. See [Adopter-owned modules](#adopter-owned-modules). |
 | `ecosystem_bindings` | list of `EcosystemBindingManifest` | No | Ecosystem-specific integration bindings, such as governed-evidence gateway metadata. See [Ecosystem binding keys](#ecosystem-binding-keys). |
+
+### Collection limits
+
+`validate` refuses a collection that exceeds its limit and reports it before any rule other than the schema version check.
+Source:
+[`crates/registry-manifest-core/src/lib.rs`](../../../crates/registry-manifest-core/src/lib.rs)
+(`validate_collection_limits`).
+
+| Collection | Most items |
+| --- | --- |
+| `profiles`, `catalog.conforms_to` | 64 |
+| `catalog.application_profiles` | 32 |
+| Each other top-level list: `evaluation_profiles`, `ecosystem_bindings`, `requirements`, `evidence_types`, `authorities`, `public_services`, `modules`, `data_services`, `distributions`, `forms`, `datasets`, `codelists` | 256 |
+| `entities` in one dataset | 256 |
+| `fields` or `relationships` in one entity | 512 each |
+| `concepts` in one codelist | 1024 |
+| Each URI list, such as `conforms_to`, `applicable_legislation`, `procedure_contexts`, `information_concepts`, and a field's `concepts` | 128 |
 
 ### CatalogManifest keys
 
@@ -449,7 +466,7 @@ Fields of `OdrlEnforcementProfile`.
 
 | Key | Required | Description |
 | --- | --- | --- |
-| `profile` | Yes | Must equal `registry-evidence-gateway-pdp/v1`. |
+| `profile` | Yes | Must equal `registry-evidence-gateway-pdp/v1`. This is a legacy name, kept from the retired Registry Relay policy decision point. Nothing in the stack enforces these terms. |
 | `constraint_terms` | Yes | At least one term. Each must be `odrl:purpose` or `odrl:spatial`. Terms must be unique. |
 
 Source:
@@ -532,8 +549,7 @@ producer can send it; the schema no longer tolerates a key it does not model.
 
 Before Registry Stack v1.0.0, a minor release may make a breaking Manifest
 change while retaining `registry-manifest/v1`. The affected Manifest changelog
-must mark it `BREAKING:`, give concrete migration steps, and the specification
-version history must record it. Breaking changes include removing or renaming
+must mark it `BREAKING:` and give concrete migration steps. Breaking changes include removing or renaming
 required fields, changing the meaning or type of an existing field, or making
 previously valid V1 manifests invalid except for validation bugs and security
 fixes. From Registry Stack v1.0.0, such a change requires a new manifest schema

@@ -93,7 +93,7 @@ test('archived Notary redirects resolve current retirement and Evidence replacem
 
   assert.equal(
     redirects['/spec/rs-pr-notary/'],
-    'https://docs.registrystack.org/dev/decisions/notary-retirement-2026-08-03/',
+    'https://docs.registrystack.org/dev/decisions/registry-relay-retirement-2026-10-03/',
   );
   assert.equal(
     redirects['/products/registry-notary/source-claim-modeling-guide/'],

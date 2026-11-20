@@ -1,11 +1,11 @@
 ---
 title: Registry Evidence API
-description: "Narrative context for the Registry Evidence OpenAPI reference: what the API answers, authentication, the frozen Version 1 contract, and the response encodings."
+description: "Narrative context for the Registry Evidence OpenAPI reference: what the API answers, authentication, the frozen Version 1 contract, the response encodings, and how to verify a response."
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-11-20"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -27,13 +27,25 @@ values that identify the subject. Evidence returns the smallest assertion that a
 requirement, signed, and never the source records behind it. `POST /v1/evidence/batch` asks the
 same requirement and purpose for one to sixteen ordered subject sets in one request.
 `GET /v1/evidence-definitions` describes the complete request shapes your token may send today,
-and no others; it is not a public catalogue. Each definition carries its handle, Requirement URI,
+and no others. It is not a public catalogue. Each definition carries its handle, Requirement URI,
 configuration revision, evidence type and kind, purpose, response formats, reference frameworks,
 subject roles with their selector profiles, and the output concepts and forms it may return. The
 document also names the deployment's assurance profile, the audience your token was accepted for,
-the issuer and provider identities, and the largest holder-bound batch it accepts. Listing reads
-no source and writes no evidence audit entry.
+the issuer and provider identities, and the largest holder-bound batch it accepts. Listing is rate
+limited per principal, reads no source, and writes no evidence audit entry.
 [How Evidence works](../../../explanation/how-evidence-works/) explains the model.
+
+Each request, and each item of a batch, carries a `requestNonce`: 32 bytes from a cryptographically
+secure random source, in canonical unpadded base64url. A padded, wrong-length, or non-canonical
+nonce fails before any source access, and so does a nonce repeated within one batch. An
+audience-scoped assertion echoes the nonce under its signature. A holder-bound assertion carries
+neither the nonce nor the audience. Subjects form a set keyed by role name, so their order in the
+array carries no meaning.
+
+{/* Evidence: products/evidence/contracts/request.schema.yaml, requestNonce and subjects;
+    products/evidence/contracts/request-batch.schema.yaml, item requestNonce and subjects;
+    products/evidence/contracts/evidence.schema.yaml, audience and requestNonce;
+    crates/registry-evidence/src/runtime.rs, discover (rate limiter check on the principal). */}
 
 The Version 1 contract is frozen: those three versioned operations and their envelopes are the
 complete Evidence request surface. The experimental public check route is outside that contract.
@@ -51,7 +63,32 @@ audience, with an accepted token type and signing algorithm, and it carries the 
 the deployment names. Evidence reads no `client_id`, `azp`, header, or request field in its place.
 `GET /.well-known/oauth-protected-resource` names the issuer to ask.
 [Request an access token from your own code](../../../configure/request-an-access-token/) shows the
-exchange. The other routes take no credential and reveal no definition or entitlement.
+exchange. The other routes take no credential and reveal no definition or entitlement:
+
+- `GET /health` and `GET /ready`
+- `GET /openapi.json`, the OpenAPI document the runtime serves
+- `GET /.well-known/evidence/jwks.json`, the public signing keys
+- `GET /.well-known/jwt-vc-issuer`, the JWT VC Issuer Metadata
+- `GET /catalog.jsonld`, the provider description for [Registry Discovery](../../../start/discovery/)
+
+`GET /catalog.jsonld` returns the exact `catalog.jsonld` bytes sealed in the deployment package, as
+`application/ld+json` with the Registry Discovery profile. It answers `404` with an empty body when
+the package publishes no description. The description holds the service's public identity,
+endpoint, roles, conformance, and jurisdictions, with one entry per Evidence Type and compatible
+response profile. It is built from a closed public allowlist, so it carries no source binding,
+selector configuration, credential, or authorisation policy. Serving it reads no source, signs
+nothing, and writes no audit entry.
+
+Neither the key set nor the issuer metadata is a trust anchor. The key set holds public keys only,
+and a verifier fixes the provider identity and key-set location in its own configuration
+([Manage Evidence verifier trust](../../../tutorials/manage-evidence-verifier-trust/)).
+
+{/* Evidence: crates/registry-evidence/src/server.rs, ROUTE_TEMPLATES and discovery_description;
+    crates/registry-evidence/src/runtime_tests.rs,
+    provider_discovery_description_serves_exact_bytes_without_authentication_or_side_effects;
+    products/evidence/contracts/security-invariant-matrix.yaml, V1-I53;
+    products/evidence/contracts/jws-profile.yaml, key_discovery;
+    products/evidence/contracts/sd-jwt-vc-profile.yaml, key_discovery. */}
 
 One experimental route is also unauthenticated and reads registry data: `POST /v1/public-check`,
 which exists only when the operator activates a public check. It takes a certificate number and its
@@ -81,14 +118,36 @@ A grant may also permit the visibly unsigned envelope
 `application/vnd.registrystack.evidence-unsigned+json`, which is not later-verifiable evidence, and
 a holder-bound requirement offers one more encoding, listed with the [operations](../evidence/).
 `POST /v1/evidence/batch` accepts only
-`application/vnd.registrystack.evidence.request-batch+json` and returns one signed flattened JWS
-per available item. Either route refuses an `Accept` value it does not offer with
+`application/vnd.registrystack.evidence.request-batch+json`. Evidence authorises every item before
+it calls any source. The response holds one member per item, in request order. An available item
+carries its own signed flattened JWS, and an unavailable one carries only
+`evidence-not-available`. Either route refuses an `Accept` value it does not offer with
 `format.unsupported` ([Registry Evidence errors and problems reference](../../evidence-problems/)).
+Both routes answer with `Vary: Accept` and `Cache-Control: no-store`.
 
 {/* Evidence: crates/registry-evidence-verifier/src/lib.rs, EVIDENCE_JWS_MEDIA_TYPE,
     EVIDENCE_SD_JWT_VC_MEDIA_TYPE, EVIDENCE_UNSIGNED_MEDIA_TYPE, and EVIDENCE_REQUEST_BATCH_MEDIA_TYPE;
     products/evidence/contracts/problem-contract.yaml, response_format_rules;
-    products/evidence/contracts/sd-jwt-vc-profile.yaml. */}
+    products/evidence/contracts/sd-jwt-vc-profile.yaml;
+    crates/registry-evidence/src/server.rs, create_evidence, create_evidence_batch, and
+    add_no_store. */}
+
+## Verify a response
+
+The signed flattened JWS follows the frozen profile in
+[`jws-profile.yaml`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/jws-profile.yaml),
+which fixes the protected header members, the algorithm, and the verifier rules. Verify the
+signature against your pinned key set before you read any payload claim. Each assertion carries the
+deployment's assurance profile, so compare it with the profile you expect: an authentic `local`
+assertion fails a `production` expectation. A mismatch on any expected field fails as one generic
+policy error that does not name the field. The portable verifier reports authenticity separately
+from current validity, so an assertion past its exclusive `validUntil` can still verify as
+authentic without being current evidence.
+
+{/* Evidence: products/evidence/contracts/jws-profile.yaml, protected_header and verifier_rules;
+    crates/registry-evidence-verifier/src/verifier.rs, VerificationError::Policy,
+    authentic_local_assertions_fail_deployable_assurance_expectations, and
+    authenticity_is_reported_separately_from_current_validity. */}
 
 ## Next
 

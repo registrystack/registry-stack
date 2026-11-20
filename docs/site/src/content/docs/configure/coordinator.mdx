@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-20"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -305,6 +305,11 @@ size:
 Conditions run in order and stop at the first decisive one, so `present: true` before a numeric test guards an optional value.
 A missing or wrongly typed value in any other test fails the run with `choice-invalid`; it never routes silently to `unmatched`.
 A compare holds no Function and no clock.
+A compare treats the numbers `4` and `4.0` as equal, as JSON Schema does.
+Casework routing uses the same `equals` and `oneOf` names but compares JSON values exactly, so `4` and `4.0` differ there.
+
+{/* Evidence: crates/registry-coordinator/src/compare.rs, numbers_equal;
+    crates/registry-casework-core/src/routing.rs, predicate_values matched with contains. */}
 
 A `choose` step can name its everyday case with optional `expected` metadata, for both compares and mapped strings:
 
@@ -975,9 +980,14 @@ digest is the SHA-256 of `SHA256SUMS`, so it covers the exact bytes; the operato
 The canonical definition snapshot is limited to 393,216 bytes across authoring, packages, and restore;
 `check` and `package` refuse a larger snapshot before writing a package.
 
+Once a run is admitted, Coordinator seals its definition snapshot, input, and prepared commands with AES-256-GCM under the deployment's payload state key.
+Activating a later package leaves an admitted run on the definition it started with.
+
 {/* Evidence: crates/registry-coordinator/src/deployment.rs, package;
     crates/registry-coordinator/src/deployment.rs, package_digest;
-    crates/registry-coordinator/src/definition.rs, MAX_SNAPSHOT_BYTES. */}
+    crates/registry-coordinator/src/definition.rs, MAX_SNAPSHOT_BYTES;
+    crates/registry-coordinator/src/store.rs, seal for snapshot, input and command;
+    crates/registry-platform-crypto/src/sealed_value.rs and field_encryption.rs, aes-256-gcm. */}
 
 ## Export a typed caller
 
@@ -1023,5 +1033,5 @@ an external read, and an appointment. Each runs under `coordinatorctl test` the 
 
 - [deploy registry coordinator](../../operate/coordinator/)
 - [registry coordinator configuration reference](../../reference/coordinator-configuration/)
-- [how registry coordinator works](../../explanation/how-coordinator-works/)
+- [registry coordinator overview](../../start/coordinator/)
 - [configure proposals](../breg-proposals/)

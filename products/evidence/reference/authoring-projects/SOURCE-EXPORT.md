@@ -4,12 +4,12 @@ Source import is an optional authoring convenience for providers which publish
 complete fixed-source artifacts. Existing authored sources and the OpenAPI
 authoring workflow need no manifest, import state, or migration.
 
-An export carries ordinary source, selector, schema, and adapter files. It does
-not contain assertion meaning, caller grants, credentials, installation hooks,
+An export carries ordinary source and selector files plus the Adapter pack that
+the source binds. It does not contain assertion meaning, caller grants, credentials, installation hooks,
 or executable setup commands. Import reads local files only. It never contacts
 the provider, runs external setup commands, creates authority, or starts a
-service. Target validation may execute reviewed bounded adapters against local
-synthetic fixtures through the ordinary Evidence evaluator.
+service. Target validation may execute reviewed bounded Adapter pack scripts against
+local synthetic fixtures through the ordinary Evidence evaluator.
 
 ## Maintained source recipes
 
@@ -17,9 +17,8 @@ The [maintained source recipes](../../source-recipes/README.md) distribute
 ordinary exports for DHIS2 Tracker and OpenCRVS event search. Each recipe carries
 its supported technical contract, exact artifact checksums and a separate
 synthetic fixture-validation project. That project supplies example assertion
-meaning and local target bindings; those files are not imported into an
-institution's project. Run its checks and fixtures, then verify compatibility
-with the exact provider deployment before relying on the source.
+meaning and local target bindings. Those files are not imported into an
+institution's project.
 
 ## Export manifest
 
@@ -52,29 +51,31 @@ written with `formatVersion` or an artifact `sha256` is refused with
 artifact entries are closed objects; unknown fields are refused. The manifest
 is at most 1 MiB and inventories 1 to 256 artifacts, each at most 1 MiB and at
 most 16 MiB together. `provenance` is a map of 1 to 32 nonempty printable string
-pairs, with keys up to 64 bytes and values up to 2048 bytes. Producers should
-record their name, provider revision, and the selected technical contract.
+pairs, with keys up to 64 bytes and values up to 2048 bytes.
 Provenance is attribution and review context, never proof of provider authority.
 
-One export inventories exactly `sources/<sourceId>.yaml` and its auxiliary
-artifacts under `selectors/`, `schemas/`, and `adapters/`. Source, selector, and
-schema files use `.yaml`; adapter files use `.rhai`. YAML files must contain
-mapping objects. A source and a selector carry the `apiVersion` and `kind`
-header of their format; a schema is a foreign JSON Schema file and carries none. Names are bounded lowercase authoring names. Paths have
-exactly two components and cannot be absolute, contain `.` or `..` components,
-backslashes, or symbolic links. Files must be regular files with one hard link.
-The ordinary authoring compiler remains the authority for usable document
-names, types, references, and adapter contracts.
+One export inventories exactly `sources/<sourceId>.yaml`, the Adapter pack the
+source binds, and one `selectors/<selectorId>.yaml` file for each selector
+profile the source inputs use. The pack lives under `adapter-packs/<packId>/`:
+its `pack.yaml` plus every file the pack pins, each digest-checked against the
+pack. An artifact outside that closure is refused. Pack files are limited to
+`scripts/*.rhai`, `schemas/*.json`, and `protocols/*.json`, one subdirectory
+deep. Source and selector files use `.yaml` and must contain mapping objects.
+Each carries the `apiVersion` and `kind` header of its format. Names are
+bounded lowercase authoring names. Paths cannot be absolute, contain `.` or
+`..` components, backslashes, or symbolic links. Files must be regular files
+with one hard link. The ordinary authoring compiler remains the authority for
+usable document names, types, references, and pack contracts.
 
-Import normalizes those transport files into the existing `evidence.yaml`:
-Sources, selector profiles, and named Functions stay in that project, while
-Function programs live under `functions/`. Comparison reports use normalized
-artifact identities: `source-fragments/<sourceId>.json`,
-`selector-fragments/<selectorId>.json`, and `functions/<name>.rhai`. The fragment
-identities describe project entries; they are not separate authored files.
-Response and fact schemas are part of the Source fragment. Use the exact
-normalized identities in the report when resolving a conflict, rather than
-the original export paths.
+Import normalizes those transport files for the existing `evidence.yaml`.
+Sources and selector profiles stay in that project, and the pack files are
+copied unchanged under `adapter-packs/`. The importer adds no Function.
+Comparison reports use normalized artifact identities:
+`source-fragments/<sourceId>.json`, `selector-fragments/<selectorId>.json`, and
+the `adapter-packs/<packId>/...` paths. The fragment identities describe
+project entries. They are not separate authored files. Response and fact
+schemas are part of the Source fragment. Use the exact normalized identities in
+the report when resolving a conflict, rather than the original export paths.
 
 The `sourceId` and all artifact paths are stable identities. They must not
 contain an export directory name, provider revision, or content checksum.
@@ -106,7 +107,7 @@ and refuses application until their definitions agree.
 Comparison uses three separate inputs for each normalized artifact identity:
 
 1. The previously imported upstream content after normalization.
-2. Current project entries or Function bytes, including local changes or deletion.
+2. Current project entries or pack file bytes, including local changes or deletion.
 3. The next upstream content after normalization.
 
 If upstream is unchanged, current customization is preserved. If current bytes
@@ -155,11 +156,11 @@ A file written with `formatVersion` is refused with `config.removed-key`:
   "apiVersion": "id.registrystack.org/formats/evidence/source-resolution/v1alpha1",
   "kind": "EvidenceSourceResolution",
   "artifacts": {
-    "functions/registry-status-extract.rhai": {"type": "keep"},
+    "adapter-packs/registry-status/pack.yaml": {"type": "keep"},
     "source-fragments/registry-status.json": {"type": "adopt"},
-    "functions/registry-status-prepare.rhai": {
+    "adapter-packs/registry-status/scripts/lookup.rhai": {
       "type": "file",
-      "path": "reviewed/registry-status-prepare.rhai"
+      "path": "reviewed/lookup.rhai"
     }
   }
 }
@@ -231,6 +232,5 @@ the recorded before or after content, then retry. The journal remains available
 for recovery; unrelated or conflicting content is never overwritten.
 
 Editors and other tools do not take this lock. Content preconditions detect
-their edits before application; preserve the project from independent writes
-during the short application window. A running Evidence process continues to
+their edits before application. A running Evidence process continues to
 serve its previously built immutable bundle throughout authoring updates.

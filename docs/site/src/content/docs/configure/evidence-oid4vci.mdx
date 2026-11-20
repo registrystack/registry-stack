@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-29"
+last_reviewed: "2026-11-20"
 doc_type: how-to
 persona:
   - operator
@@ -28,8 +28,15 @@ wallet-delivery service speaks the protocol Registry Evidence does not, and turn
 into the credential the wallet stores.
 It never signs, never holds a holder private key, and adds no Evidence semantics, so
 [how Evidence works](../../explanation/how-evidence-works/) still describes every decision.
+It passes each [holder](../../reference/glossary/#holder) public key from the
+[wallet](../../reference/glossary/#wallet)'s proof to Registry Evidence, copying only the key's public
+members. The dependency runs one way: Registry Evidence does not depend on the
+front end and runs without it.
 
-{/* Evidence: crates/registry-evidence-oid4vci/src/lib.rs; AGENTS.md. */}
+{/* Evidence: crates/registry-evidence-oid4vci/src/lib.rs; AGENTS.md;
+    crates/registry-evidence-oid4vci/src/service.rs, holder_public_key;
+    crates/registry-evidence-oid4vci/src/offer.rs, into_spec; no Cargo.toml under crates/registry-evidence
+    names registry-evidence-oid4vci as a dependency. */}
 
 ## What you need
 

@@ -91,6 +91,7 @@ cannot reinterpret a repeated key. A fresh key is a fresh run, so a client that 
 whether a start was admitted resends it under its original key.
 
 {/* Evidence: crates/registry-coordinator/src/http.rs, start-key-invalid;
+    crates/registry-coordinator/src/problem.rs, IDEMPOTENCY_KEY_REUSED_PROBLEM;
     products/coordinator/generated/openapi/coordinator.openapi.json;
     products/coordinator/README.md, Package and deploy. */}
 

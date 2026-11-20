@@ -33,9 +33,8 @@ Keep reviewed Function programs under `functions/`, fixture documents under
 `fixtures/`, and referenced codelists, JSON Schemas and SQL statements as plain
 project assets. Function programs are bounded to 64 KiB. Referenced assets stay
 inside the project and cannot traverse symbolic links. `.generated/` and
-`.evidence/` hold disposable local runtime material and request artifacts;
-keep generated credentials, keys, responses and private source data out of
-version control. A project contains no deployment credential values.
+`.evidence/` hold disposable local runtime material and request artifacts.
+A project contains no deployment credential values.
 
 ## Project and definition identity
 
@@ -116,8 +115,6 @@ acquisition deadline and cannot change source inputs,
 lookup classification, credentials, destinations or authority. A no-match,
 ambiguous or unresolved lookup never runs the projection. A script, budget or
 output-schema failure prevents derivation and never becomes a negative fact.
-The standalone example retains two facts while removing a private canary using
-the same unmodified source pack.
 
 Keep the owned pack at `adapter-packs/<pack-id>/pack.yaml` with its referenced
 scripts and schemas. The compiler captures the reviewed artifact closure,
@@ -216,8 +213,7 @@ Use a matching Evidence compiler and runtime that support pack Sources. The
 The acquisition interfaces are not derivation interfaces: renaming an old
 Function to `assertion-derive/v1` does not migrate its behavior.
 
-1. Keep a copy of your authored project and existing fixture outcomes. Choose a
-   current source export, or author a reviewed pack using the
+1. Choose a current source export, or author a reviewed pack using the
    [Adapter pack contract](https://docs.registrystack.org/configure/adapter-packs/).
    Put provider requests, paging, preparation and extraction in its routes and
    scripts, with closed input and private-fact schemas.
@@ -276,9 +272,7 @@ Function to `assertion-derive/v1` does not migrate its behavior.
    recorded facts with `evidencectl fixtures record-facts PROJECT --target
    TARGET --fixture FIXTURE --write` and review the diff.
 6. Run `evidencectl check PROJECT --target TARGET` and `evidencectl test PROJECT
-   --target TARGET` with the matching runtime. Retain the assertion outcomes and
-   refusal cases, and verify no-match, ambiguity and dependency failure
-   separately. A transport error must not become a false assertion or no-match.
+   --target TARGET` with the matching runtime. A transport error must not become a false assertion or no-match.
 7. Rebuild the package through the normal deployment workflow. Review the new
    definition revisions and update exact revision pins deliberately. A preserved
    Requirement URI does not make old and new behavior revisions interchangeable.
@@ -337,17 +331,15 @@ and `int64` are supported; `int32` requires the entire selector range to fit
 the signed 32-bit range. Date and UUID formats require the corresponding
 selector type. Generation refuses unproven enums,
 constants, patterns and conditional constraints, nonstandard parameter
-serialization, and object constraints outside this subset. Use a reviewed pack route and script for those contracts.
+serialization, and object constraints outside this subset.
 
 Source selector inputs retain the existing complete role/profile field set.
-Use a narrowly reviewed profile when an integration needs fewer fields; only
-explicitly mapped fields enter the generated request. The generated request must fit the pack endpoint and shared-engine request
+Only explicitly mapped fields enter the generated request. The generated request must fit the pack endpoint and shared-engine request
 bounds. Unsupported shapes and bounds need an explicitly reviewed pack route.
 
 The generated preparation and extraction files belong to the owned Adapter
 pack and each receives the Adapter `exchange` argument. They are not Evidence
-Functions. Review the lookup cardinality and returned-record identity rules,
-resolve draft markers and supply assertion semantics before packaging. A run
+Functions. A run
 without `--map-selector` keeps the incomplete mechanical draft workflow.
 
 ## Selector and Output fields
@@ -471,7 +463,7 @@ there names a claim rather than holding an issuer URL.
 Optional `assertionIssuers` maps external client identifiers, preserved exactly,
 to the issuer strings they may assert. A present map has one to 32 clients,
 each within 128 bytes, with one to eight distinct nonempty issuer strings per
-client, each within 512 bytes. Omit the map to add no assertion-issuer rule.
+client, each within 512 bytes.
 
 `listener`, `secretProviders`, `signer`, `subjectBinding`, `audit`, `rateLimits`,
 optional `outboundTls` and `extracts` bind the process. They do not change a
@@ -500,7 +492,7 @@ integer from 1 to 31,536,000 and defaults to 300 when `signing` is omitted. A
 definition whose `validitySeconds` exceeds it is refused at check and build
 time. A longer maximum lets every definition on that target sign for longer,
 and a bearer assertion (one not bound to a holder) stays replayable for its
-whole validity; raise it only for the holder-bound credentials that need it.
+whole validity.
 
 The target authority's `project` and `target` must match the selected project
 and target. Each `accessProfiles` entry matches authenticated requester tags,
@@ -552,15 +544,13 @@ creates one immutable candidate containing `bundle/`, `runtime.yaml` and
 One captured project snapshot supplies every candidate artifact. Runtime-owned
 bundle and authority validation runs even without fixtures. Install the bundle,
 provision referenced secrets, activate the compiled authority and run doctor
-before starting the intended process. The standalone walkthrough exercises
-that sequence and cleanup with synthetic data.
+before starting the intended process.
 
 A schema validates document shape; pure checks add reference and cross-field
 rules; compilation and runtime bundle checks establish the retained security
 and execution contracts. A successful shape check alone is not evidence of a
 working deployment. A refused command identifies the file/field with a
-value-free diagnostic. Preserve that distinction when inspecting machine
-reports or using an editor.
+value-free diagnostic.
 
 ## Complete key-path inventory
 

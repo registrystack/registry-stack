@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-11-20"
 doc_type: how-to
 persona:
   - operator
@@ -415,6 +415,199 @@ The audit master must differ from the subject-binding secret and the signing key
     crates/registry-evidence/src/audit.rs, valid_pseudonym;
     products/evidence/contracts/bundle.schema.yaml, hashKeyRef and hashKeyVersion;
     products/evidence/OPERATOR-CONTRACT.md, "Audit key rotation". */}
+
+## Production decisions
+
+Besides where the audit log is written, a production deployment settles the choices below in its
+deployment target, its Adapter packs, and its runtime file. None of them changes Evidence's public
+schemas. Each key and its bounds are in the
+[Registry Evidence configuration reference](../../reference/evidence-configuration/).
+
+### Caller authentication
+
+`authentication.oidc` names one issuer and one audience, and every inbound token must match both.
+
+- `tokenTypes` admits `at+jwt`, `application/at+jwt`, or both.
+- `algorithms` admits one to three of `EdDSA`, `ES256`, and `RS256`. A token signed with any other
+  algorithm is refused.
+- `principalClaim` names the claim that identifies the caller. A token without that claim is
+  refused, and no other claim stands in for it.
+- `allowedClients` is `unrestricted`, which admits every client the issuer vouches for, or a list
+  that admits exactly those clients.
+- `requiredScopes` is `unrestricted`, which applies no scope gate, or a list of scopes every token
+  must carry. Under `unrestricted`, a correctly signed token for this audience that carries no
+  scopes passes this gate.
+
+{/* Evidence: crates/registry-evidence/src/config.rs, OidcAuthenticationConfig and
+    ADMITTED_ALGORITHM_NAMES; crates/registry-evidence/src/auth.rs, principal extraction in
+    extract_context and claim_paths_are_exact_and_do_not_fallback;
+    products/evidence/contracts/bundle.schema.yaml, oidc-authentication. */}
+
+### Subject authority
+
+Each authority profile declares its basis as `statutory`, `organizational`, `consent`, `delegated`,
+or `explicit-request`, and lists the requester tags a caller's token must carry. Adding a tag
+narrows a profile. A token that carries an actor claim matches only a `delegated` profile, and
+`actorKind` can restrict a profile to `human`, `agent`, or `service` callers.
+
+A grant binds one requirement, one purpose, an audience origin, and the requirement's whole
+subject-role set. Permissions are never combined across grants, so one grant must cover a whole
+request. A request that matches no path, or more than one, is denied. A profile whose subjects use
+`authenticated-grant` must also name its `requesterClients` and the `grantSourceIssuer` it trusts.
+
+{/* Evidence: products/evidence/contracts/bundle.schema.yaml, authority-profile (kind, actorKind,
+    requesterTags, requesterClients, grantSourceIssuer, grants). The deny on zero or multiple paths
+    is stated with its evidence in security/evidence. */}
+
+### Selector profiles and value origins
+
+A selector profile is a closed set of up to 16 fields with a combined size cap of at most 8,192
+bytes. Each field is a `string`, `date`, `uuid`, `integer`, `boolean`, or `controlled-code`. Evidence applies
+no case folding, normalisation, transliteration, or fuzzy matching to a supplied value.
+
+Each grant fixes where a subject role's selector values come from:
+
+- `request` takes them from the caller's request.
+- `authenticated-context` refuses caller values and reads them from the verified token claims the
+  grant names in `valueClaims`.
+- `authenticated-grant` reads the same claims and also requires a verified task grant from the
+  trusted issuer that matches exactly one authority profile.
+
+A requirement's `grantCeiling` caps the origins any deployment target may grant. Every subject role
+has cardinality `one` in Version 1, so a requirement resolves exactly one subject per role.
+
+{/* Evidence: products/evidence/contracts/bundle.schema.yaml, selector-profile, selector-field,
+    grants[].subjects[].valueOrigin, grantCeiling, and subjectRoles[].cardinality. */}
+
+### Source contract and acquisition posture
+
+Each source pins an Adapter pack by id, version, and digest, and names one route. Its acquisition
+posture is the reviewed minimisation claim: `source-derived`, `field-projected`, or
+`record-transformed`, from strongest to weakest. A source cannot claim a stronger posture than the
+pinned route's contract. A source that applies its own projection must claim `record-transformed`.
+
+{/* Evidence: products/evidence/contracts/bundle.schema.yaml, source (pack, route, posture,
+    projection); crates/registry-evidence/src/bundle.rs, source_posture_covers_route and
+    captured_pack_refuses_a_stronger_posture_than_the_selected_route;
+    crates/registry-evidence/src/config.rs, AcquisitionPosture::weakest and SourceConfig validation
+    ("a source projection requires record-transformed posture"). */}
+
+### Source authentication
+
+Each source connection names one authentication kind: `none`, `basic`, `static-authorization`,
+`static-api-key`, `oauth2-client-credentials`, or `oauth2-private-key-jwt`.
+
+- Every secret is a reference, never a value in the bundle.
+- Client credentials travel in the Authorization header or the token request body, never in a
+  query string.
+- `oauth2-private-key-jwt` signs a client assertion with a private key instead of sending a shared
+  secret, and requires `clientAssertionAudience`.
+- The runtime file can bind a client certificate and key to a source endpoint as `mtlsIdentity`.
+- Outside the local assurance profile, a source endpoint with `none` authentication needs an
+  `mtlsIdentity`. Plain HTTP is admitted only under the local profile, at a canonical numeric
+  loopback origin.
+
+[Rotate credentials and trust](../advanced/rotate-credentials-and-trust/#rotate-source-credentials-or-trust)
+covers changing them.
+
+{/* Evidence: products/evidence/contracts/bundle.schema.yaml, source-authentication-policy and
+    secret_policy (prohibited, oauth_placement_rule);
+    crates/registry-adapter-engine/src/auth/token.rs, ClientAuthentication::PrivateKeyJwt and
+    sign_client_assertion; products/evidence/contracts/runtime.schema.yaml, mtlsIdentity;
+    crates/registry-evidence/src/pack_source.rs, SourceBindingReason::Unauthenticated;
+    crates/registry-evidence/src/config.rs, validate_local_unauthenticated_source_origin. */}
+
+### Requirements and Evidence Types
+
+Each enabled requirement names one Evidence Type URI, which every assertion issued for it carries,
+and one to 16 concepts. Two requirements in one bundle cannot share an Evidence Type: a duplicate
+refuses the bundle at startup. The mapping of assertion fields to CCCEV is frozen, so a deployment
+chooses which requirements to enable, not how they map.
+
+{/* Evidence: products/evidence/contracts/bundle.schema.yaml, requirements[].evidenceType;
+    crates/registry-evidence/src/config.rs, RequirementConfig validation and the unique Evidence
+    Type check in check_rules_with_named_map_collisions;
+    products/evidence/contracts/cccev-field-mapping.yaml, status frozen and Evidence.isConformantTo. */}
+
+### Observation time zone
+
+A requirement whose derivation uses `legal_local_date` or `legal_local_time` resolves them from the
+evaluation instant in its `observationTimezone`, an IANA time zone name. Omitting the key resolves
+both in UTC, so near midnight the derived date can differ from the local legal date. An
+unrecognised name refuses the bundle.
+
+{/* Evidence: products/evidence/contracts/bundle.schema.yaml, requirements[].observationTimezone;
+    crates/registry-evidence/src/config.rs, observation timezone check in RequirementConfig
+    validation; crates/registry-evidence/src/kernel.rs, evaluation_context. */}
+
+### Signing key custody
+
+The runtime file's `signer` binds the process to its private key. `local-jwk` reads the key from a
+file secret and is accepted only under the `local` assurance profile. `production` and
+`evidence-grade` require `transit`, which calls a Vault or OpenBao Transit signing proxy over a
+local Unix socket. The runtime passes the proxy no provider token, so token custody and renewal stay
+with the proxy.
+
+A Transit signer pins one exact `keyVersion`, so a provider-side rotation cannot replace the key
+behind an unchanged key id. It keeps no fallback key: a call that exceeds
+`attemptTimeoutMilliseconds` fails the request, and no unsigned assertion is issued.
+[Rotate credentials and trust](../advanced/rotate-credentials-and-trust/#rotate-registry-evidence-signing-material)
+covers key rotation.
+
+{/* Evidence: products/evidence/contracts/runtime.schema.yaml, signer and the signer deployment rule;
+    products/evidence/contracts/bundle.schema.yaml, signing ("no unsigned fallback exists");
+    products/evidence/contracts/jws-profile.yaml, Vault/OpenBao Transit key path;
+    crates/registry-platform-crypto/src/lib.rs,
+    transit_signer_uses_the_common_vault_openbao_es256_wire_contract. */}
+
+### Relying-party trust
+
+Evidence serves its public key set at `/.well-known/evidence/jwks.json`, but that route is not a
+trust anchor. A relying party pins the provider's keys through its own configuration. The
+`evidence verify` command takes the pinned key set as its complete trust set and opens no network
+connection. A deployment may add `signing.certificateChainFile`, a PEM chain certifying the active
+key, so relying parties can validate it against their own trust anchors. Without it, credentials and
+the served key set carry no `x5c`.
+
+After a rotation, the previous public key stays published for at least the maximum assertion
+validity plus the verifier clock skew. Relying parties must add the new key to their pinned set to
+verify assertions it signs.
+
+{/* Evidence: products/evidence/contracts/bundle.schema.yaml, signing.jwksPath,
+    signing.certificateChainFile, and signing.publishedPublicJwkFiles;
+    products/evidence/contracts/verification-policy.schema.yaml, command (jwks, network). */}
+
+### Existence disclosure is fixed
+
+`existenceDisclosure` accepts only `collapse-unresolved` in Version 1. A subject that is absent,
+ambiguous, or found with inconsistent inputs returns one identical public problem, so no
+requirement can be configured to reveal which. The
+[Registry Evidence security model](../../security/evidence/) states the timing limit that remains.
+
+{/* Evidence: products/evidence/contracts/bundle.schema.yaml, requirements[].existenceDisclosure. */}
+
+### SQLite extract publication
+
+A source that reads a SQLite extract declares, in its Adapter pack, a logical extract profile and
+`maximumExtractAgeSeconds`, from one second to 30 days. The runtime file's `sourceExtracts` binds
+each profile to one absolute file path, and startup refuses a missing or unused binding. The extract
+states its own publication time and publisher in a one-row metadata table. Its age is measured from
+that publication time, not from the file's modification time. An extract older than the maximum age
+fails the request as a dependency failure that carries no profile, path, or publisher. The operator
+diagnosis names only the extract profile.
+
+The deployment decides who publishes each extract, how often, and to which path, so that
+publication stays inside that age. It must also ensure that no process changes a mounted extract
+while the source is live.
+
+{/* Evidence: crates/registry-adapter-core/src/pack.rs, SqliteExtractDeclaration (extract_profile,
+    maximum_extract_age_seconds bounded 1 to 2,592,000); crates/registry-evidence/src/bundle.rs,
+    runtime_binding_findings (source-extract-unbound, source-extract-unused);
+    crates/registry-adapter-engine/src/component/sqlite_extract.rs, the one-row metadata query and
+    validate_age; crates/registry-evidence/src/runtime.rs, pack_source_failure (ExtractStale);
+    crates/registry-evidence/tests/statement_source.rs, a_stale_extract_names_only_its_governed_profile;
+    crates/registry-platform-sqlite/src/capture.rs, same_file;
+    products/evidence/contracts/runtime.schema.yaml, sourceExtracts. */}
 
 ## Next
 

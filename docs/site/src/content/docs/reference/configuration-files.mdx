@@ -422,7 +422,7 @@ error[config.invalid-value] /private/tmp/agent-R5-work/my-registry/registry.yaml
 If a project warning describes behaviour you intend, record the decision in
 `check-acceptances.yaml` at the project root. The project check reads this optional file
 automatically. For Registry Render, put it at the bundle root. Registry Manifest reads it beside
-the metadata manifest or at the root passed to `validate-profiles`.
+the [metadata manifest](../glossary/#metadata-manifest) or at the root passed to `validate-profiles`.
 
 Run your project's check with `--format json`, then copy the warning's `code` and `scope` into
 an entry with a reason. For example, a Base Registry Engine project might deliberately allow a

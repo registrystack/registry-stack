@@ -96,7 +96,7 @@ assert.ok(sidebarSource, 'could not isolate the Starlight sidebar configuration'
 // Evaluate the trusted local sidebar expression without loading Astro or
 // requiring generated artifacts. Nested product fixtures exercise the actual
 // config's flattening; the OpenAPI plugin owns its generated tag hierarchy.
-const generatedProducts = new Map(['Manifest', 'Registry Evidence'].map((label) => [
+const generatedProducts = new Map(['Manifest', 'Evidence'].map((label) => [
   label,
   {
     label,
@@ -256,7 +256,6 @@ const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true
 const messagingPageRoutes = [
   '/start/messaging/',
   '/tutorials/first-messaging/',
-  '/explanation/how-messaging-works/',
   '/configure/messaging/',
   '/operate/messaging/',
   '/reference/messaging-configuration/',
@@ -265,7 +264,6 @@ const messagingPageRoutes = [
 ];
 const coordinatorPageRoutes = [
   '/start/coordinator/',
-  '/explanation/how-coordinator-works/',
   '/configure/coordinator/',
   '/operate/coordinator/',
   '/reference/coordinator-configuration/',
@@ -769,7 +767,7 @@ test('seats generated product references directly below Reference without losing
   const reference = section('Reference');
   for (const [label, product] of [
     ['Registry Manifest', 'Manifest'],
-    ['Registry Evidence', 'Registry Evidence'],
+    ['Registry Evidence', 'Evidence'],
   ]) {
     const group = reference.items.find((item) => item.label === label);
     assert.ok(group, `missing generated reference group: ${label}`);
@@ -1170,7 +1168,6 @@ test('keeps the Casework journey in one product lane', () => {
   assert.deepEqual(slugs, [
     'start/casework',
     'tutorials/first-casework',
-    'explanation/how-casework-works',
     'configure/casework',
     'configure/casework-directory',
     'configure/casework-completion-receivers',
@@ -1210,7 +1207,6 @@ test('keeps the Coordinator journey in one product lane', () => {
   assert.deepEqual(slugs, [
     'start/coordinator',
     'tutorials/review-an-application-and-send-a-notice',
-    'explanation/how-coordinator-works',
     'configure/coordinator',
     'operate/coordinator',
     'reference/coordinator-configuration',

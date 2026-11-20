@@ -449,6 +449,8 @@ The two ordered keys accept `int64`, `date`, and `timestamp` fields only, and th
 `bregctl check` refuses a pairing of different types, a field with no order (such as `string` or `decimal`), an undeclared input, and an optional input (`breg.action.commit_guards.targets-value-invalid`).
 A missing input therefore never reaches a guard at commit, and an availability check that lacks it answers `input-required` with `missingInputs`, as for `equalsFromInput`.
 The comparisons use no new operators or expressions.
+A guard cannot express "one of several values". For a rule such as "revoke a licence that is active or suspended", `equals` takes one scalar and `bregctl check` refuses an array literal.
+Declare one Action per allowed state, each guarded on one value and producing the same effect.
 
 Dates compare as calendar dates and timestamps compare as instants, not as text, so `2026-10-30T10:00:00Z`, `2026-10-30T10:00:00+00:00`, and `2026-10-30T12:00:00+02:00` are the same instant.
 A stored `timestamp` is an instant that the registry reads back in UTC with a `+00:00` offset (see [Model event records](../breg-event-records/)); a client never needs to match that text.
@@ -456,7 +458,8 @@ A stored value that is absent fails the guard, so an unset optional field is nev
 A failed guard answers like any other field guard: `412 action.guard_failed` when the guard facts are readable, else `412 precondition.failed`, with no Record changed.
 
 {/* Evidence: crates/registry-breg/src/contract.rs at_least_from_input;
-    crates/registry-breg/src/immediate_actions.rs targets-value-invalid;
+    crates/registry-breg/src/immediate_actions.rs targets-value-invalid (the `choices != 1` check and
+    the array and object refusal in `literal_invalid`);
     crates/registry-breg/tests/immediate_action_requirements.rs targets-value-invalid;
     crates/registry-breg/tests/postgres_proposal_guard_failure.rs submit_names_a_failed_input_comparison_guard. */}
 

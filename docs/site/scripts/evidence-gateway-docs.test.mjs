@@ -77,17 +77,31 @@ test('keeps authoritative sources outside the Registry Evidence product boundary
 // The identifier survives in the manifest schema as a retained name. The Relay
 // policy decision point that once enforced it is gone, so a page that prints the
 // identifier must say so rather than let a reader attach it to Registry Evidence.
+//
+// The Registry Manifest reference is the page that documents the value. It is
+// copied into the site from the product's own documentation, and it is long, so
+// the label must sit on the line that prints the identifier.
 test('labels the old evidence-gateway PDP id as a superseded Relay identifier', () => {
-  const paths = publishedHandAuthoredDocs()
-    .filter(({ source }) => source.includes('registry-evidence-gateway-pdp/v1'));
-  assert.ok(paths.length > 0, 'expected the superseded Relay identifier to remain documented');
+  const identifier = 'registry-evidence-gateway-pdp/v1';
+  const manifestReference = resolve(siteRoot, '../../products/manifest/docs/reference.md');
+  const referenceLines = readFileSync(manifestReference, 'utf8')
+    .split('\n')
+    .filter((line) => line.includes(identifier));
+  assert.ok(referenceLines.length > 0, 'expected the Manifest reference to document the identifier');
 
-  for (const { path, source } of paths) {
-    assert.match(source, /Relay/i, `${relative(siteRoot, path)} must identify the owner as Relay`);
+  const printed = [
+    ...publishedHandAuthoredDocs()
+      .filter(({ source }) => source.includes(identifier))
+      .map(({ path, source }) => ({ where: relative(siteRoot, path), text: source })),
+    ...referenceLines.map((line) => ({ where: 'products/manifest/docs/reference.md', text: line })),
+  ];
+
+  for (const { where, text } of printed) {
+    assert.match(text, /Relay/i, `${where} must identify the owner as Relay`);
     assert.match(
-      source,
+      text,
       /\b(?:legacy|retired)\b/i,
-      `${relative(siteRoot, path)} must mark the identifier legacy or its runtime retired`,
+      `${where} must mark the identifier legacy or its runtime retired`,
     );
   }
 });

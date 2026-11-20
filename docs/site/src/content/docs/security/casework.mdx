@@ -13,7 +13,7 @@ standards_referenced: []
 
 This page states what Registry Casework's security boundaries hold, what they do not, and what
 you must do as the operator.
-The operator obligations are numbered 1 to 9, and each accepted residual risk carries a stable
+The operator obligations are numbered 1 to 10, and each accepted residual risk carries a stable
 identifier from `CASEWORK-RES-01` to `CASEWORK-RES-10`.
 The row-per-invariant contract is the machine-checked Casework security invariant matrix in the
 registry-stack repository, and each row names its executable negative test.
@@ -30,10 +30,7 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
   verified for the configured issuer, audience, `at+jwt` type, allowed clients and signature from
   the configured key source.
   The deployment trusts one issuer.
-  A declared issuer or JWKS address may be a private address, and the operator who writes the file
-  is trusted to name it; cloud metadata and link-local addresses stay refused.
-  With `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute
-  keys (`CASEWORK-RES-08`).
+  Declared issuer and key addresses are trusted on the operator's word (`CASEWORK-RES-08`).
   A key listed in `revokedKeyIds` is refused locally and revoked nowhere else (`CASEWORK-RES-09`).
   {/* Evidence: crates/registry-casework/src/config.rs, allow_insecure_http, revoked_key_ids,
       a_token_signed_by_a_revoked_key_id_is_refused_like_any_other_verification_failure. */}
@@ -340,13 +337,11 @@ identifiers.
 
 - Condition: the runtime file names an issuer or a JWKS URI, or sets
   `authentication.oidc.allowInsecureHttp: true`.
-- Consequence: a declared issuer or JWKS URI may name any private address that is not cloud
-  metadata or link-local; the operator who writes the file is trusted to name it.
-  A discovered key endpoint on another origin stays under the strict public-network policy and must
-  use HTTPS, and redirects are disabled.
+- Consequence: Casework trusts a declared issuer or JWKS URI on the operator's word.
   Under `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute
-  keys and so mint tokens Casework accepts.
+  keys and mint tokens Casework accepts.
   Startup logs a fixed warning when the setting is on.
+  The residual is shared across products and set out in [Token issuer and key endpoints](../#token-issuer-and-key-endpoints).
 - Mitigation: use an HTTPS issuer; leave `allowInsecureHttp` unset; or pin keys with a static
   `jwksSource`
   ([issuer network rules](../../reference/casework-configuration/#issuer-network-rules)).

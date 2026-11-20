@@ -61,7 +61,7 @@ of releases.
 - **Registry Discovery:** one immutable index built offline from an
   operator-approved list of public provider descriptions. It is a catalog, not
   a trust broker, authorization service, protocol adapter, or data proxy.
-  Docs: [Registry Discovery is an index](https://docs.registrystack.org/dev/explanation/discovery-as-an-index/).
+  Docs: [Registry Discovery overview](https://docs.registrystack.org/dev/start/discovery/).
 - **Registry Manifest:** portable metadata that describes what a registry
   exposes, rendered without touching the production source.
   Docs: [Registry Manifest reference](https://docs.registrystack.org/dev/products/registry-manifest/reference/).

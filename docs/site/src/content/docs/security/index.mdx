@@ -8,7 +8,7 @@ source_repos:
   - registry-platform
   - registry-breg
   - registry-evidence
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-20"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -17,25 +17,22 @@ standards_referenced: []
 Registry Stack protects data through product-specific authorisation, closed configuration, bounded
 source access, explicit disclosure, package integrity, and accountable audit.
 
-The normative cross-product security model is [RS-SEC-G](../spec/rs-sec-g/). The
-[threat model](../explanation/threat-model/), [known limitations](../explanation/known-limitations/),
-[security self-assessment](self-assessment/), and [release trust evidence](openssf-evidence/) provide
-review context and public evidence.
+The [threat model](../explanation/threat-model/), [known limitations](../explanation/known-limitations/),
+and [release trust evidence](openssf-evidence/) provide review context and public evidence.
 
 ## At a glance
 
 | What | Where it stands |
 | --- | --- |
-| Evidence authentication on every assertion or definition route | Built in; operational probes, OpenAPI, issuer metadata, and public verification keys are the exceptions |
-| Evidence inbound authentication | OIDC bearer with one governed issuer profile; no API-key or static-credential mode |
+| Evidence authentication on every assertion or definition route | Built in. Operational, discovery, and metadata routes and the activated public check are the exceptions |
+| Evidence inbound authentication | OIDC bearer with one governed issuer profile. No API-key or static-credential mode |
 | Deny-by-default authorisation before source access | Built in |
 | Only public verification material is published | Built in |
 | Evidence person-level access audit | Built in and fail-closed, with no best-effort switch |
-| Evidence disclosure | Fixed by the requirement: only its declared concepts, each in one closed [value form](../explanation/how-evidence-works/); a caller cannot select or widen it |
-| SD-JWT VC assertion serialisation | Built in as an encoding; the assertion format itself is not a credential lifecycle |
+| Evidence disclosure | Fixed by the requirement: only its declared concepts, each in one closed [value form](../explanation/how-evidence-works/). A caller cannot select or widen it |
+| SD-JWT VC assertion serialisation | Built in as an encoding. The assertion format itself is not a credential lifecycle |
 | Holder-bound presentation | Declared per requirement and verified by the relying party |
-| Replay prevention for presentation | Not provided; the relying party owns challenge issuance, retention, and consumption |
-| Hardened HTTP headers and outbound source limits | Recommended by RS-SEC-G; confirm the deployed product applies them |
+| Replay prevention for presentation | Not provided. The relying party owns challenge issuance, retention, and consumption ([replay protection](evidence/#replay-protection)) |
 | Key custody, audit retention, isolation, TLS, and edge quotas | Operator responsibilities |
 | Compliance with cited external standards | Not claimed |
 
@@ -47,91 +44,55 @@ review context and public evidence.
 - **Authorise.** One complete grant and authority path must match the requester, requirement,
   purpose, subject roles, selector profiles, origin, authority, and audience. Authorisation finishes
   before source credential resolution or source access.
-- **Serve.** The core runs only the governed fixed source stages, validates typed concepts, and
+- **Serve.** The core runs only the governed source routes, validates typed concepts, and
   constructs an answer that carries only the requirement's declared concepts, each in its closed
   value form. Caller input cannot add a source request, expression, disclosure field, or output
   projection.
-- **Audit.** An access-attempt record is durably accepted before each acquisition stage and a
+- **Audit.** An access-attempt record is durably accepted before each source acquisition and a
   disclosure-release record before the response leaves. Audit failure blocks the corresponding
-  action. Entries are minimised and value-free; tamper evidence depends on shipping them to
+  action. Entries are minimised and value-free. Tamper evidence depends on shipping them to
   append-only storage.
 
 Every Evidence route returning an assertion or its protected definition requires a verified access
-token. `/health`, `/ready`, `/openapi.json`, the issuer JWKS, and issuer metadata may be public
-because they contain no person-level result or grant inventory. An issuer publishes only the public
-half of an assertion-signing key, so a verifier needs no source or service credential.
+token. `/health`, `/ready`, `/openapi.json`, `/catalog.jsonld`, the issuer JWKS, issuer metadata,
+and protected-resource metadata are public because they contain no person-level result or grant
+inventory. The [public certificate check](evidence/#the-public-certificate-check) is
+unauthenticated and reads registry data. It exists only when the operator activates it. An issuer
+publishes only the public half of an assertion-signing key, so a verifier needs no source or
+service credential.
 
-Evidence can encode an assertion as SD-JWT VC, with digests in place of disclosable values. That is
-a serialisation of the same bounded assertion. Revocation, status, presentation replay state, and a
-general wallet lifecycle are outside that assertion format. The separate OID4VCI adapter provides
-its documented delivery profile without changing those limits.
-
-A requirement chooses one of two subject-binding modes. Audience-scoped binding derives a
-pseudonym over the relying-party audience. An optional holder key in that mode is echoed into `cnf`
-without proof. Holder-bound mode derives from the RFC 7638 holder-key thumbprint and requires a
-key-binding JWT that the relying party verifies at presentation. Evidence issues no key-binding
-JWT, keeps no challenge state, and runs no presentation endpoint. Comparing a challenge nonce does
-not consume it, so the relying party must prevent replay.
-
-The portable verifier library and `evidence verify-presentation` check issuer and key-binding
-signatures, the expected audience and nonce, and independently pinned expectations. A successful
-issuer signature alone does not prove holder possession.
+Subject binding, presentation verification, and replay limits are set out in the
+[Registry Evidence security model](evidence/#subject-binding-and-presentation).
 
 {/* Evidence: crates/registry-evidence/src/auth.rs;
     crates/registry-evidence/src/runtime.rs; crates/registry-evidence/src/audit.rs;
-    crates/registry-evidence-verifier/src/verifier.rs;
+    crates/registry-evidence/src/server.rs, the route table and public_check_active;
+    crates/registry-evidence/src/public_check.rs;
     crates/registry-platform-audit/src/writer.rs. */}
 
 ## An AI assistant acting for a citizen
 
 A citizen can ask an AI chat assistant to read their own Base Registry Engine (BReg) record and
-prepare a correction to it.
-The assistant calls the `breg-mcp` gateway, the gateway acts at the registry as that citizen's
-delegated agent, and BReg decides what the agent may read or change.
-Neither the model's instructions nor a tool argument can widen that decision.
-
-- The agent carries the citizen's identity. Before a tool call reaches the registry, the gateway
-  exchanges the chat host's verified token for a registry token that names the citizen as subject
-  and the gateway as actor, using RFC 8693 token exchange. A call the gateway answers or refuses
-  without a registry request, such as `describe_service`, makes no exchange. The chat host's token
-  never reaches BReg, and BReg refuses an actor it is not configured to trust for that client.
-- The agent reads and drafts under BReg's authorisation. Every registry request the gateway makes
-  carries the delegated token, and BReg admits that token only to an access profile declared for
-  agents. That profile, applied to the citizen, decides what the agent sees and which drafts it
-  may write.
-- The agent Starts and edits an authorised Proposal draft. A standing agent without
-  a task grant cannot submit or apply it, invoke immediate effects, mutate records
-  directly, or publish a statistical release. BReg enforces the grant ceiling;
-  the gateway also restricts its reachable client methods.
-- The agent's drafts point at the citizen's own record. The gateway writes a draft's target from
-  the single record BReg lists for the delegated token, the citizen's own linked record in the
-  reference project, and its owner from the subject of the chat host's verified token. It refuses
-  any tool argument or edit that names either field.
-- The citizen confirms the change. A separate `breg-review` process, with its own client
-  credentials, shows the citizen the draft beside the record it would change and submits it under
-  the citizen's own sign-in. The page calls BReg only to read the registry contract, the draft,
-  and the draft's target, and to submit. BReg keeps the agent from submitting. What the citizen's
-  sign-in may do through the page is whatever the review access profile grants, and the operator
-  declares that profile: the reference project's review profile also grants the independently declared draft and cancellation operations.
-- A reviewer decides where the registry requires one. When the Proposal Action declares
-  `review.type: required`, the review authority it names decides whether BReg applies the exact frozen Proposal.
-  A Proposal Action that declares `review.type: none` has no such step.
-- The audit journal shows who acted for whom. BReg records an agent's calls with keyed pseudonyms
-  for the agent, the citizen it acts for, and the client.
-
-What the assistant says in conversation is outside these controls; the review page shows the
-canonical draft BReg holds, not the assistant's summary of it.
-BReg ties a Proposal's target to the requester only through the `targets` row boundaries its
-access profile declares. The reference project binds the target's owner field to the caller's
-subject, and BReg checks that boundary on every Start, edit, and submit. For this pair of
-services, the gateway also derives the target from the citizen's own Record, the review page reads
-the target under the citizen's own token before it offers submission and again before it submits,
-and a reviewer checks the Proposal where review is required. A profile that declares no such
-boundary gets none of this from BReg.
-A delegated token that leaks stays valid at BReg until it expires, so the authorization server
-must keep exchanged token lifetimes short.
+prepare a correction to it through the `breg-mcp` gateway. BReg decides what the gateway, acting as
+the citizen's delegated agent, may read or change.
 [What the design guarantees](../configure/breg-mcp/#what-the-design-guarantees) states each
-property with its enforcement point.
+property with its enforcement point. These points complete it:
+
+- A call the gateway answers or refuses without a registry request, such as `describe_service`,
+  makes no token exchange.
+- BReg refuses an actor it is not configured to trust for that client.
+- A standing agent without a task grant cannot invoke immediate effects or publish a statistical
+  release.
+- The `breg-review` page calls BReg only to read the registry contract, the draft, and the draft's
+  target, and to submit.
+- BReg records an agent's calls with keyed pseudonyms for the agent, the citizen it acts for, and
+  the client.
+- What the assistant says in conversation is outside these controls. The review page shows the
+  canonical draft BReg holds, not the assistant's summary of it.
+- BReg ties a Proposal's target to the requester only through the `targets` row boundaries its
+  access profile declares. A profile that declares no such boundary gets none of this from BReg.
+- A delegated token that leaks stays valid at BReg until it expires, so the authorization server
+  must keep exchanged token lifetimes short.
 
 {/* Evidence: crates/registry-breg-mcp/src/gateway.rs; crates/registry-breg-mcp/src/contract.rs;
     crates/registry-breg/src/api/proposals.rs; crates/registry-breg/src/compiler.rs;
@@ -194,39 +155,60 @@ and which limits a deployment of it accepts.
 - Registry Discovery returns inert public metadata. The application owns provider trust.
 - Registry Platform supplies shared primitives while each product owns policy and configuration.
 
-## Recommended controls that require confirmation
+{/* Evidence: crates/registry-breg/src/access.rs; crates/registry-evidence/src/auth.rs;
+    crates/registry-platform-oidc/src/lib.rs; crates/registry-platform-audit/src/lib.rs. */}
 
-RS-SEC-G recommends sourcing security-critical authentication, OIDC, audit, HTTP policy,
-cryptography, and SD-JWT helpers from Registry Platform so behaviour stays consistent and reviewable.
-Confirm each deployed service uses those primitives because the specification does not force an
-implementation choice.
+## Token issuer and key endpoints
 
-Security response headers and outbound HTTP limits are also recommended controls. For Evidence,
-confirm fixed-origin and hostname verification, redirect and proxy denial, TLS trust, timeouts,
-response-size bounds, and the one-request-per-stage ceiling. The governed bundle constrains source
-behaviour, while the operator still owns the network path, edge controls, and certificates.
+Every product that validates access tokens fetches the issuer's keys under one shared issuer
+network policy:
+
+- The declared issuer and a declared key set URI may resolve to any private or loopback address.
+  The operator who writes the runtime file is trusted to name them.
+- Cloud metadata and link-local addresses are refused for declared and discovered endpoints alike.
+- A key endpoint discovered on the issuer's own origin inherits the issuer's policy. On another
+  origin it must use HTTPS and is refused when it resolves to a private or loopback address.
+- Redirects are not followed.
+- Plain HTTP beyond loopback needs the product's `allowInsecureHttp: true` setting. The setting
+  never extends plain HTTP to a discovered key endpoint on another origin. Startup logs a fixed
+  warning when it is on.
+- `jwksSource` sets where the keys come from: `discovery` (the default), a declared `uri`, or
+  `static` keys read from a secret for a deployment with no network access to the issuer.
+
+Under `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute keys
+and so mint tokens the product accepts. An HTTPS issuer, an unset `allowInsecureHttp`, or keys
+pinned with a static `jwksSource` each close that path. Each product's security model names its
+own setting path and any stricter rule, such as Coordinator's loopback rule.
+
+Registry Evidence is stricter. It accepts only a declared `uri` key source, and it refuses
+`allowInsecureHttp` outside the local assurance profile. Registry Render logs no startup warning
+when `allowInsecureHttp` is on.
+
+{/* Evidence: crates/registry-evidence/src/config.rs, jwksSource and allowInsecureHttp validation;
+    crates/registry-render/src/auth.rs;
+    crates/registry-platform-oidc/src/lib.rs, IssuerNetworkPolicy,
+    fetch_discovery_for_issuer,
+    non_loopback_http_requires_the_named_opt_in_while_loopback_does_not,
+    declared_loopback_http_jwks_under_an_https_issuer_is_accepted_without_the_opt_in,
+    a_cross_origin_jwks_must_use_https_even_under_the_http_opt_in,
+    discovered_cross_origin_private_or_loopback_jwks_stays_refused,
+    cross_origin_private_jwks_and_metadata_stay_denied,
+    cloud_metadata_is_refused_for_declared_and_discovered_key_endpoints;
+    crates/registry-platform-httputil/src/lib.rs, outbound_client_does_not_follow_redirects;
+    crates/registry-platform-config/src/blocks.rs, JwksSource;
+    crates/registry-breg/src/runtime_config.rs, insecure_http_startup_diagnostic;
+    crates/registry-casework/src/config.rs, insecure_http_startup_diagnostic;
+    crates/registry-coordinator/src/access.rs, http_issuer_opt_in_has_a_startup_diagnostic;
+    crates/registry-documents/src/config.rs, allow_insecure_http;
+    crates/registry-messaging/src/config.rs, insecure_http_startup_diagnostic;
+    crates/registry-scheduling/src/config.rs, insecure_http_startup_diagnostic. */}
 
 ## Operator responsibilities
 
 Operators provide identity issuance, TLS and network controls, secret storage, key rotation, durable
-audit storage, database security, backups, monitoring, and incident response. Product checks do not
-replace these controls.
-
-The software keeps secrets out of distributable artifacts and supplies the enforcement primitives;
-the operator provisions and runs them. Record ownership and recovery paths in the
-[operator handoff checklist](../operate/) before activation.
-
-## Verify before production
-
-1. Run the product's production checks on the exact package and configuration.
-2. Exercise valid, missing, invalid, expired, and insufficient credentials.
-3. Confirm a denial reaches no protected source or mutation.
-4. Confirm required audit failure blocks release of protected output.
-5. Test dependency timeout, size limit, backup, restoration, and rollback.
-6. Record the exact source, package digest, configuration revision, and approval.
-
-{/* Evidence: crates/registry-breg/src/access.rs; crates/registry-evidence/src/auth.rs;
-    crates/registry-platform-oidc/src/lib.rs; crates/registry-platform-audit/src/lib.rs. */}
+audit storage, database security, backups, monitoring, and incident response. The software keeps
+secrets out of distributable artifacts and supplies the enforcement primitives that the operator
+provisions and runs.
 
 ## Continue
 

@@ -13,10 +13,8 @@ tutorial_test:
   toolset: breg
 ---
 
-If you are designing your own Base Registry Engine (BReg) project, start from the questions your
-registry must answer and the changes callers may make, then choose Record types, fields, and
-references to fit. BReg has no built-in facility, business, or permit model: every pattern here is
-ordinary configuration you can read in a starter and adapt.
+Base Registry Engine (BReg) has no built-in facility, business, or permit model. Every pattern
+here is ordinary configuration you can read in a starter and adapt.
 
 ## Start from the facility template
 
@@ -27,35 +25,10 @@ bregctl check facility
 
 The excerpts below come from the template's `registry.yaml`.
 
-## Write down the legal footing
-
-Identify the body or bodies that applicable law mandates for a register. Do not infer ownership or
-joint control from an agency's claim alone; record what the law and the responsible authorities
-establish, or "not stated". For each register, write a short block, and write "not stated"
-wherever your sources are silent; an honest gap is more useful than a guess:
-
-- the law that creates it;
-- the body that law mandates;
-- the data controller;
-- any operator distinct from the rule-maker;
-- the legal effect of an entry: constitutive (the entry creates the status), declaratory (it
-  records a status that exists anyway), or informational.
-
-Fill in a gap when you find the answer. Keep the block beside the register's description, so a reviewer sees who owns the data before
-reading the fields.
-
-## Combine starters by authority
-
-When you combine starters, keep together what one authority keeps, and link the rest by reference.
-A farmer and the land parcels they work belong in one project only if one authority keeps both. If
-a land authority keeps the parcels, the farmer register holds the parcel's identifier with its scheme, not a
-copy of it.
-
 ## Separate an object from its registration
 
-Keep a thing separate from its registration when their lifecycles differ. A facility can change
-operator without becoming a different facility, and a permit's expiry need not end the business
-that held it. The template keeps the link in its own
+A facility can change operator without becoming a different facility, and a permit's expiry need
+not end the business that held it. The template keeps the link in its own
 [Record type](../../reference/glossary/#record-type), written once and never patched:
 
 ```yaml test-excerpt="facility/registry.yaml"
@@ -67,11 +40,10 @@ that held it. The template keeps the link in its own
 
 ## Choose a field kind
 
-Pick the narrowest kind that says what the value is. A `string` carries a bounded line such as a
-name or code; `text` carries long prose. A closed list of states is a `vocabulary-code`, so a
-status cannot drift into spelling variants. A `date` is a full calendar day and a `timestamp` an
-instant; `decimal` takes a declared precision for quantities. When several fields share one shape,
-declare it once as a value type and refer to it with `typeRef`:
+A `string` carries a bounded line such as a name or code, and `text` carries long prose. A closed
+list of states is a `vocabulary-code`. A `date` is a full calendar day and a `timestamp` an
+instant. `decimal` takes a declared precision. When several fields share one shape, declare it once
+as a value type and refer to it with `typeRef`:
 
 ```yaml test-excerpt="facility/registry.yaml"
       - {id: postal-code, apiName: postalCode, typeRef: postal-code, required: true, classification: internal}
@@ -82,9 +54,9 @@ A `string` or `text` field can also declare `pattern`, a PostgreSQL regular expr
 database enforces on every write path. It is not anchored for you: `[0-9]{13}` matches any value
 containing thirteen digits, so write `^[0-9]{13}$` when you mean the whole value. A pattern checks
 one row, so a rule that depends on another record belongs in an Action's `commitGuards`. Adding a
-pattern to a running registry checks every existing row first; changing or removing one is a
+pattern to a running registry checks every existing row first, and changing or removing one is a
 reviewed destructive change. Mark a restricted value `encrypted` when a database reader must not
-see it; [Field encryption](../../configure/breg-field-encryption/) explains what that seals.
+see it. [Field encryption](../../configure/breg-field-encryption/) explains what that seals.
 
 The limits on each kind are in the
 [configuration reference](../../reference/breg-configuration/).
@@ -95,12 +67,7 @@ The limits on each kind are in the
 
 ## Identifiers and uniqueness
 
-Keep a scheme identifier, such as a business registration number, separate from the server's
-record ID. The issuing scheme decides what the number means and whether it can be reassigned. Use
-a `string` for values such as `0017`, since a number type loses the leading zeroes.
-
-For a number that Base Registry Engine (BReg) issues, put `generate` on a stored `string` field.
-Choose `type: sequence` with `minimumDigits` for a padded number, or `type: random` with `length`
+For a number that BReg issues, put `generate` on a stored `string` field. Choose `type: sequence` with `minimumDigits` for a padded number, or `type: random` with `length`
 for a code. Both accept a literal `prefix`. For example, `generate: {type: sequence, prefix:
 "APP-", minimumDigits: 4, scope: [jurisdiction]}` issues `APP-0001` separately within each
 jurisdiction. Only a sequence takes `scope`; leave it out for one namespace across the Record
@@ -113,18 +80,14 @@ issued values with their scopes after erasure. It must be supplied on create and
 after issuance. BReg reserves values transactionally and never reuses an issued value. Proposal
 Submit allocates and freezes the value for review, and Apply and Retry use that frozen value, so a
 rejected or cancelled Proposal still consumes its number. A register that needs gapless numbers
-cannot issue them with a sequence through a Proposal Action. A sequence value is also guessable and
-shows issuance volume, so use a random code for anything people outside the registry see. If you
-enable generation on a field that already exists, a reviewed migration must backfill any missing
+cannot issue them with a sequence through a Proposal Action. If you enable generation on a field
+that already exists, a reviewed migration must backfill any missing
 values before BReg seeds its allocation state and checks retained values for uniqueness. The
 repository's `products/breg/acceptance/generated-identifiers/registry.yaml` shows both strategies
 and a Proposal Action.
 
-Use a separate identifier Record type when one holder can have several identifiers, or assignments
-have their own issuer, validity, or replacement history. Derive uniqueness from the scheme's rules: two authorities may both issue `0017`, while a
-shared namespace may forbid the duplicate. A `unique` constraint can span several fields, such as
-issuer and number, and can apply only when a condition holds. Normalisation is not proof that two
-records describe the same real-world object.
+A `unique` constraint can span several fields, such as issuer and number, and can apply only when
+a condition holds.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, FieldGenerationSource and ConstraintSource::Unique;
     crates/registry-breg/src/compiler.rs, validate_generated_identifier() and generated constraint compilation;
@@ -144,8 +107,7 @@ its assignments without a field of its own:
       - {id: operator, type: reference, target: operator, required: true, classification: internal, relationship: {inverseName: facilityAssignments}}
 ```
 
-Use a relationship record whenever the link has information of its own. A read path follows the
-link in one request; the reader's
+A read path follows the link in one request. The reader's
 [access profile](../../reference/glossary/#access-profile) still decides what it returns:
 
 ```yaml test-excerpt="facility/registry.yaml"
@@ -158,19 +120,13 @@ link in one request; the reader's
 
 ## Dates and validity
 
-The template records the initial assignment and imposes no dated transfer policy. For dated
-assignments, decide separately when a link applies and which concurrent links your policy allows:
-one operator, several, or one primary beside other roles. A Record type's `temporal` declaration
-names its start and end fields; exclusivity needs a separate `temporal-non-overlap` constraint with
-the right `scopeFields`. A date or role field alone imposes nothing.
+A Record type's `temporal` declaration names its start and end fields. Exclusivity needs a separate
+`temporal-non-overlap` constraint with the right `scopeFields`. A date or role field alone imposes
+nothing.
 
-When your source states the last day in force, name it with `temporal.lastDayField` instead of
-`endField`, so a period ending on 31 December includes that day. The
+To name the last day in force, use `temporal.lastDayField` instead of `endField`, so a period
+ending on 31 December includes that day. The
 [API reference](../../reference/breg-api/) describes how the temporal routes read it.
-
-Keep effective time separate from recording time: "who operated the facility on June 1?" differs
-from "what had the registry recorded on June 1?". Test adjacent and open-ended periods and a
-correction to an earlier period.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, TemporalSource;
     crates/registry-breg/tests/compiler_contract.rs,
@@ -183,77 +139,22 @@ directly. An immediate Action commits several effects atomically, such as a faci
 first assignment, and a Proposal Action keeps a durable draft for review and later application.
 [Actions and Proposals](../../configure/breg-actions/) explains how to choose.
 
-## Keep together what must be right together
+## Change several records through one Action
 
-Keep together what must be right together, change it through one Action, and link the rest by
-reference. For example, a household and its memberships must agree about who belongs, so one Action
-changes them together. The person stays a separate Record type that memberships point to, and an
-enrolment in a programme is its own record, because a different body decides it and it changes on
-a different schedule.
-
-Name each Action after what happens in the programme, in the law's words: `register-birth` or
-`decide-eligibility`, not `update-record`.
-
-A short worked example, from a decision process to a recorded decision. Suppose the law says an
-officer decides whether a household is enrolled. The process has three steps: the household applies,
-an officer reviews, and the decision is recorded. Model the officer's decision as an
-[Action](../../reference/glossary/#action), `decide-enrolment`, whose inputs carry the outcome and
-the officer's reference and whose plan writes a decision record either way. If the law requires a
-second look, make it a proposal-mode Action: a reviewer approves or rejects that exact submission
-(a [Proposal](../../reference/glossary/#proposal)), and only applying it writes the record. The
-recorded decision is then an ordinary record that other offices can read under their own access
-profiles.
+An Action changes several Record types in one transaction. For example, a licensing authority can
+model an officer's decision as an [Action](../../reference/glossary/#action),
+`decide-licence-application`, whose inputs carry the outcome and the officer's reference and whose
+plan writes a decision record either way. As a proposal-mode Action, a reviewer approves or rejects
+that exact submission (a [Proposal](../../reference/glossary/#proposal)), and only applying it
+writes the record. The recorded decision is then an ordinary record that other offices can read
+under their own access profiles.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, ActionSource, ActionValueSource, ProposalApplicationSource;
     docs/site/src/content/docs/configure/breg-actions.mdx. */}
 
-## Model the law's lifecycle
+## Attachments
 
-Model the lifecycle the law describes, even when the engine cannot express all of it, and report
-the gap. Never bend a legal lifecycle to fit the engine.
-
-For example, a law may allow revoking a licence that is active or suspended. A commit guard
-compares one field of one record with one literal or one input, so it cannot say "active or
-suspended". The tempting workaround is to force revocation to pass through suspension first, which
-adds a step the law does not have. Instead, keep revocation one step of the lifecycle and build it
-as two Actions with the same effect, one guarded on `active` and one on `suspended`, and note in
-the project that the pair exists only because of the engine gap. A visible, labelled gap can be
-fixed later; a bent lifecycle hides in the data.
-
-## Choose a licensing shape
-
-Licensing has two shapes. Choose by the legal question: does your law issue a new licence at
-renewal, or extend the same one?
-
-- **Extends the same licence.** Keep one stable licence with dated terms, and record regulatory
-  decisions (suspension, renewal, revocation) as separate records.
-- **Issues a new licence.** Create a successor licence for each renewal and link it to the previous
-  one.
-
-If your sources do not say, write "not stated" for the legal question and ask the licensing
-authority.
-
-## Derive roles from the job
-
-Roles come from the programme's job descriptions and the law's purposes, not from the product's
-permissions. Start with who does what in the programme, then grant each role the reads and Actions
-its job needs. Record why each grant exists, in a sentence ("the officer decides enrolment under
-the programme's rules"); write "not stated" if you cannot yet say.
-
-## Declarations, provenance, and documents
-
-Keep a reported claim separate from the object it describes when the claim has its own reporter,
-period, or measurement. An inspection and an operator's declaration can disagree without one
-overwriting the other. Decide whether a correction patches the claim or adds a successor that
-references it.
-
-For imported data, retain the source system, source record ID and version, and mapping revision.
-Record-level provenance cannot explain individual values unless you also keep the source content.
-
-For a document stored elsewhere, keep its identity, immutable version, media type, and digest. A
-digest compares bytes; it does not identify the issuer. Permission to read that metadata does not
-grant retrieval of the file. A document submitted with a Proposal uses a bounded attachment slot,
-not a string field:
+A document submitted with a Proposal uses a bounded attachment slot, not a string field:
 
 ```yaml test-excerpt="facility/registry.yaml"
         attachments:
@@ -262,23 +163,19 @@ not a string field:
 
 {/* Evidence: crates/registry-breg/src/contract.rs, AttachmentSlotSource. */}
 
-## Preserve meaning when values are incomplete
+## Incomplete dates
 
-Missing, unknown, not applicable, and withheld are different answers. Use an explicit reason code
-when the distinction matters, rather than turning absence into zero or `false`: "no declaration
-received" differs from "declared quantity is zero". A known year is not a known January 1; since a
-`date` is a full calendar day, less precise information needs a different representation.
+A `date` is a full calendar day, so a known year is not a known January 1. Less precise
+information needs a different representation.
 
 {/* Evidence: crates/registry-breg/src/data.rs, valid_iso_date(). */}
 
-## Adapt a pattern without inheriting its policy
+## Modules and access
 
-Modules share definitions across projects. An extension adds fields and constraints; it cannot
+Modules share definitions across projects. An extension adds fields and constraints. It cannot
 remove an inherited constraint or replace a field, so change the owning definition when its policy
-does not fit. Review access separately from structure: record reads, Action invocation, and
-Proposal transitions have separate grants, and a classification label is not an authorisation
-boundary. Test the model with allowed and refused operations, including a case your policy permits that a
-stricter model might reject.
+does not fit. Record reads, Action invocation, and Proposal transitions have separate grants, and a
+classification label is not an authorisation boundary.
 
 {/* Evidence: crates/registry-breg/src/compiler.rs, merge_extension();
     crates/registry-breg/tests/compiler_contract.rs,

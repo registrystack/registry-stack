@@ -1,6 +1,6 @@
 ---
 title: What a Render template receives
-description: The envelope Registry Render hands a Typst template as its only input, the rules for labels, assets, the issuance clock and the seal member, and the authoring loop that checks them.
+description: The envelope Registry Render hands a Typst template as its only input, the rules for labels, assets, the issuance clock and the seal member, what fixes a document's bytes, and the authoring loop that checks them.
 status: current
 owner: registry-docs
 source_repos:
@@ -126,6 +126,28 @@ paths, and bundle symlinks are refused before a snapshot is accepted.
 {/* Evidence: crates/registry-render/tests/golden.rs, pdf_bytes_carry_no_renderer_version and
     data_paths_cannot_escape_the_bundle; crates/registry-render/tests/scaffold.rs,
     bundle_with_symlink_cannot_be_packaged. */}
+
+## What fixes the bytes
+
+Each render starts a fresh Typst world, so no state or cached layout passes between requests. The
+world offers three roots: the bundle, the request's assets under a virtual `assets/` path, and the
+vendored packages. A path outside them is refused even when request data supplies it, and error
+messages name virtual paths, never the host's. Fonts load in a fixed order, the binary's baseline
+set and then the bundle's sorted by path, because order decides fallback.
+
+The PDF names a fixed creator with no version, so an upgrade that changes no layout changes no
+bytes. Below Typst, the workspace lockfile pins the compression libraries, because a patch release
+there can re-encode a stream and move every byte after it. The same inputs give the same bytes on
+Linux and macOS. A seal takes its signing time from the host's clock instead of `issuedAt`.
+
+{/* Evidence: crates/registry-render/src/world.rs, module doc (fresh world per render, three roots),
+    normalize_virtual_path and redact_host_paths;
+    crates/registry-render/src/bundle.rs, load_fonts;
+    crates/registry-render/src/lib.rs, PDF_CREATOR; Cargo.lock (exact versions of the compression crates);
+    crates/registry-render/tests/golden.rs, data_paths_cannot_escape_the_bundle,
+    compile_diagnostics_report_virtual_paths_only, pdf_bytes_carry_no_renderer_version,
+    golden_hashes_match; .github/workflows/render-golden.yml (ubuntu and macos matrix);
+    crates/registry-render/src/openapi.rs, render route seal description. */}
 
 ## The signing member
 

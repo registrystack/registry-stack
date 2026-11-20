@@ -1,8 +1,8 @@
 # Validate and render a manifest
 
-Check a `metadata.yaml` file for errors, inspect individual rendered artifacts
-(service catalogues, catalog metadata, validation shapes, JSON Schemas, form schemas, and policies),
-or produce a complete static publication bundle for hosting.
+Check a `metadata.yaml` file for errors, render single artifacts, or publish a complete static bundle for hosting.
+
+The rendered artifacts are service catalogues, catalog metadata, validation shapes, JSON Schemas, form schemas, and policies.
 
 The validator reports every problem at each stage together: first every problem with the
 document's shape, then, once the document reads, every manifest rule it breaks.
@@ -32,7 +32,6 @@ The fixtures of the five `example-*` profiles serve as ready-made manifest input
 Each command below uses
 [`products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml`](../profiles/example-civil-registration/fixtures/metadata.yaml)
 as the example path.
-Substitute your own manifest path as needed.
 
 ## Steps
 
@@ -112,9 +111,8 @@ cargo run --bin registry-manifest -- render \
   --artifact-format cpsv-ap
 ```
 
-To render the BRegDCAT-AP profile variant via `--artifact-format dcat`, pass
-`--profile bregdcat-ap`. Alternatively, use the `--artifact-format
-bregdcat-ap` shorthand:
+To render the BRegDCAT-AP profile variant with `--artifact-format dcat`, pass
+`--profile bregdcat-ap`. The shorthand `--artifact-format bregdcat-ap` renders the same output:
 
 Render BRegDCAT-AP JSON-LD:
 
@@ -143,7 +141,7 @@ The civil-registration fixture has dataset `vital-events` with entities `person`
 ```sh
 cargo run --bin registry-manifest -- render \
   products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
-  --format json-schema \
+  --artifact-format json-schema \
   --dataset vital-events \
   --entity person
 ```
@@ -153,7 +151,7 @@ Render a form JSON Schema Draft 2020-12 document:
 ```sh
 cargo run --bin registry-manifest -- render \
   products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml \
-  --format form-json-schema \
+  --artifact-format form-json-schema \
   --form child-support-review-form
 ```
 
@@ -162,7 +160,7 @@ Render OGC API Records item bodies:
 ```sh
 cargo run --bin registry-manifest -- render \
   products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
-  --format ogc-records
+  --artifact-format ogc-records
 ```
 
 Render the ODRL (Open Digital Rights Language) policy collection:
@@ -170,7 +168,7 @@ Render the ODRL (Open Digital Rights Language) policy collection:
 ```sh
 cargo run --bin registry-manifest -- render \
   products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
-  --format policies
+  --artifact-format policies
 ```
 
 Render a per-dataset ODRL policy document (substitute your dataset ID for `vital-events`):
@@ -178,7 +176,7 @@ Render a per-dataset ODRL policy document (substitute your dataset ID for `vital
 ```sh
 cargo run --bin registry-manifest -- render \
   products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
-  --format policy \
+  --artifact-format policy \
   --dataset vital-events
 ```
 
@@ -188,7 +186,7 @@ CPSV-AP fixture):
 ```sh
 cargo run --bin registry-manifest -- render \
   products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml \
-  --format evidence-offerings
+  --artifact-format evidence-offerings
 ```
 
 Render a single evidence offering by ID (substitute the offering ID defined in your manifest's
@@ -197,7 +195,7 @@ Render a single evidence offering by ID (substitute the offering ID defined in y
 ```sh
 cargo run --bin registry-manifest -- render \
   products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml \
-  --format evidence-offering \
+  --artifact-format evidence-offering \
   --offering health-coverage-evidence-offering
 ```
 
@@ -307,14 +305,14 @@ Profile-level cardinality expectations (`cardinality_expectations` in a profile 
 are a different check, run by `validate-profiles`. See
 [Validate against profile fixtures](./profile-fixtures.md).
 
-### `--format json-schema` produces no output or errors
+### `--artifact-format json-schema` produces no output or errors
 
-The `json-schema` format requires both `--dataset <id>` and `--entity <name>`.
+The `json-schema` artifact format requires both `--dataset <id>` and `--entity <name>`.
 Confirm both flags are present and match IDs defined in your manifest.
 
-### `--format policy` errors on dataset not found
+### `--artifact-format policy` errors on dataset not found
 
-The `policy` format requires `--dataset <id>`.
+The `policy` artifact format requires `--dataset <id>`.
 The ID must match a `DatasetManifest` entry in your manifest.
 
 ### `publish` writes an empty or partial directory

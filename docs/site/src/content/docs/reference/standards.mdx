@@ -9,7 +9,7 @@ source_repos:
   - registry-platform
   - registry-manifest
   - registry-evidence
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-11-20"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -99,12 +99,28 @@ What these levels mean for integrators:
 
 {/* A claim is only as strong as its evidence. When evidence is a README sentence, the claim is at most aligns_with. When evidence is a test, fixture, or generated artifact, the claim can reach emits or implements. A standard appears in the register only when it has all required fields. */}
 
+## Adoption modes
+
+The adoption mode names what kind of relationship a row records. It is separate from the claim level:
+the claim level grades how strongly the relationship is evidenced.
+
+- `adopted`: the standard is used directly, as it intends, for the part used.
+- `profiled`: a constrained or profiled subset of the standard is used.
+- `not adopted`: the standard is referenced, compared against, or a design influence only, with no
+  implemented contract.
+
+A standard can be `not adopted` and still `aligns_with` the stack. The design is then consistent
+with the standard, and the stack does not implement it as a contract.
+
+{/* Evidence: docs/site/src/data/standards.yaml, adoption_mode, which holds only these three values. */}
+
 ## Column guide
 
 - **Standard** links to the official standards body page.
 - **Status** is one of `used`, `referenced`, `evaluated`, `planned`, or `historical`.
 - **Used by** lists the registry stack projects covered by the displayed claim level.
 - **Claim level** uses the six levels defined in [Claim levels](#claim-levels).
+- **Adoption mode** is one of the three modes defined in [Adoption modes](#adoption-modes).
 - **Surface** names the specific output or endpoint that the claim applies to.
 - **Profile and notes** identifies the version or profile in use and any boundary conditions.
 - **Evidence** links to the source code, fixture, or document that supports the claim.

@@ -24,7 +24,7 @@ const projects = YAML.parse(readFileSync(resolve(siteRoot, 'src/data/projects.ya
 const contracts = YAML.parse(readFileSync(resolve(siteRoot, 'src/data/contracts.yaml'), 'utf8'));
 const redirects = buildNotaryRetirementRedirects((target) => target);
 
-const retirementRoute = '/decisions/notary-retirement-2026-08-03/';
+const retirementRoute = '/decisions/registry-relay-retirement-2026-10-03/';
 const authoredNotaryPages = [
   'explanation/evidence-issuance.mdx',
   'reference/apis/registry-notary.mdx',
@@ -103,7 +103,7 @@ test('removes authored Notary pages but publishes the retirement decision', () =
   }
 
   const retirement = readFileSync(
-    resolve(siteRoot, 'src/content/docs/decisions/notary-retirement-2026-08-03.mdx'),
+    resolve(siteRoot, 'src/content/docs/decisions/registry-relay-retirement-2026-10-03.mdx'),
     'utf8',
   );
   assert.match(retirement, /^status: current$/m);
@@ -111,7 +111,7 @@ test('removes authored Notary pages but publishes the retirement decision', () =
 });
 
 test('redirects every removed current Notary route to Registry Evidence or the retirement decision', () => {
-  const allowedTarget = /^(?:\/decisions\/notary-retirement-2026-08-03\/|\/(?:start\/evidence-quickstart|tutorials\/build-and-deploy-evidence-project|reference\/apis\/(?:evidence|registry-evidence)|tutorials\/move-evidence-to-production-signing)\/)$/;
+  const allowedTarget = /^(?:\/decisions\/registry-relay-retirement-2026-10-03\/|\/(?:start\/evidence-quickstart|tutorials\/build-and-deploy-evidence-project|reference\/apis\/(?:evidence|registry-evidence)|tutorials\/move-evidence-to-production-signing)\/)$/;
 
   for (const route of [...authoredNotaryRoutes, ...mirroredNotaryRoutes]) {
     const target = redirects[route];

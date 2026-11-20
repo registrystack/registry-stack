@@ -16,8 +16,7 @@ references, and runtime bindings such as a source path, a table name, a database
 caller allowlist, a credential, or a signing key. Those belong to the runtime that serves the
 registry, so the same manifest stays portable across deployments.
 
-[RS-DM-MANIFEST](https://docs.registrystack.org/spec/rs-dm-manifest/) is the normative data
-model, and the [Registry Manifest reference](./reference.md) documents every field.
+The [Registry Manifest reference](./reference.md) documents the data model and every field.
 
 ## Who writes one
 
@@ -56,8 +55,8 @@ BRegDCAT-AP through the public EU Interoperability Test Bed validators.
 ## What metadata does not do
 
 Published metadata is descriptive. It grants no access, and naming a service in a manifest does
-not make it trusted. BReg and Registry Evidence each keep their own access decisions. Host the published directory as
-static files, and replace the whole directory to publish a new revision.
+not make it trusted. BReg and Registry Evidence each keep their own access decisions.
+Host the published directory as static files, and replace the whole directory to publish a new revision.
 
 Registry Manifest is pre-1.0. The `registry-manifest/v1` schema version is enforced in code, and
 the five `example-*` profiles under `products/manifest/profiles/` are non-normative.

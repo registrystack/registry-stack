@@ -1,61 +1,58 @@
 ---
 title: Accessibility
-description: Accessibility targets for the Registry Docs documentation site.
+description: What the Registry Docs site checks for accessibility, how, and what has not been checked.
 status: current
 owner: registry-docs
 source_repos: []
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-11-20"
 doc_type: reference
 locale: en
 standards_referenced: []
 ---
 
-Registry Docs targets WCAG 2.1 Level AA conformance
-as its accessibility baseline for the v0 launch.
-This page records the targets, keyboard navigation approach, and alt-text policy.
-Contrast values are calculated from design tokens; an external audit has not been performed
-(see [Known limitations](#known-limitations)).
+This site does not claim conformance to a WCAG level. No external accessibility audit has been
+carried out, and no screen-reader test runs. The only automated contrast check covers diagram ink
+against the diagram background, in both colour schemes. This page lists
+the checks that do run and what they leave out.
 
-## WCAG target
+## What is checked
 
-The site targets WCAG 2.1 Level AA.
-All text meets AA contrast ratios against their backgrounds (calculated values; not yet verified by a third-party audit tool).
-Blue France `#000091` on white `#ffffff` passes AA for normal text.
-Blue France on the active-sidebar tint `#eeeefd` also passes AA for normal text.
-Status text uses ink `#161616` on white, at a 21:1 contrast ratio, well past the AA threshold.
+{/* evidence: docs/site/scripts/check-built-accessibility.mjs, criticalPaths and checkPage;
+     docs/site/package.json, check:accessibility:built and check:production;
+     .github/workflows/ci.yml, check:production step. */}
+The built-site check reads the generated HTML of a fixed list of critical-path pages, including
+the home page. For each page it requires:
 
-{/* TODO[evidence]: WCAG 2.1 AA is stated in the design doc (design-registry-docs.md, Accessibility section).
-     No automated contrast-check result has been run against the built site yet.
-     Verify with a tool such as axe-core or Colour Contrast Analyser before marking as audited. */}
+- a non-empty `lang` attribute on the `html` element
+- no duplicate `id` values
+- no positive `tabindex`
+- exactly one `main` landmark, containing exactly one `h1`
+- non-empty `alt` text on every image that is not marked decorative
+- an accessible name on every link, button, form control, and other interactive element
 
-## Keyboard navigation
+The check parses static HTML. It does not run a browser, so it cannot see behaviour that
+JavaScript adds. Continuous integration runs it through `npm run check:production`.
 
-The site is keyboard-navigable end to end.
-A skip-link is present to bypass repeated navigation.
-Focus rings are 2 px Blue France with 2 px offset, square corners.
-Browser focus defaults are not suppressed.
+{/* evidence: docs/site/scripts/check-svg-a11y.mjs;
+     docs/site/package.json, check:svg and check:source. */}
+A second check covers the diagrams in `public/images`. Each named SVG diagram must exist and
+carry a `<title>`, a `<desc>`, and `role="img"`.
 
-The masthead, secondary navigation, sidebar, and footer use semantic HTML landmarks:
-`<header>`, `<nav>`, `<aside>`, and `<footer>`.
-The content column uses `<main>`.
+{/* evidence: docs/site/src/styles/custom.css, :focus-visible;
+     docs/site/scripts/svg-diagram-contrast.test.mjs. */}
+Interactive elements keep a visible focus outline (2 px, with a 2 px offset). A site test checks
+that the background behind the diagrams stays light in both themes, because the diagrams use a
+light-only ink palette. It also asserts that each diagram ink colour meets the WCAG AA contrast
+ratio for normal text (4.5:1) against that background.
 
-## Alt text and image policy
+## What is not checked
 
-Every image has either `alt` text or a visible caption that conveys the essential information
-without requiring the image to be visible.
-Conceptual diagrams use SVG.
-Important labels in a diagram also appear in nearby HTML text,
-so machine contracts are not encoded only inside an image.
+- Colour contrast of page text and interface components is not measured by any tool in this site.
+- Keyboard operation and screen-reader behaviour are not tested.
+- Pages outside the critical-path list are not covered by the built-site check.
+- The site is published in English only.
 
-The site does not use animated GIFs or videos in v0.
+## Report a problem
 
-## Search
-
-The search input has a visible label.
-The placeholder text is not a substitute for a label.
-
-## Known limitations
-
-- The v0 site has not yet undergone an external WCAG audit.
-- French routes are not enabled in v0.
-  When French content is added, translated `alt` text and landmark labels will be required.
+Email [contact@registrystack.org](mailto:contact@registrystack.org) with the page address and
+what you could not use or read.

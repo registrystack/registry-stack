@@ -1,11 +1,11 @@
 ---
 title: Registry Scheduling overview
-description: What Registry Scheduling gives a system that books people into limited capacity, what you define, what it refuses, and where to start.
+description: What Registry Scheduling gives a system that books people into limited capacity, what you define, what it refuses, who owns each part of a booking, and where to start.
 status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-11-20"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -18,48 +18,118 @@ what can be booked and keeps every booking in one ledger.
 ## What a caller gets
 
 A caller reads the [offerings](../../reference/glossary/#offering) a deployment publishes and the
-free starts for one of them. It takes a short [hold](../../reference/glossary/#hold) while a person
-confirms, then turns the hold into an [appointment](../../reference/glossary/#appointment), which
-it can later reschedule or cancel. A retry under the same idempotency key returns the first
-answer, never a second booking.
+free starts for one. A start whose [pool](../../reference/glossary/#resource-pool) members
+are all taken leaves the list and is never shown with `free: 0`.
+
+The caller takes a [hold](../../reference/glossary/#hold) on a start with `POST /v1/holds`. The hold
+claims capacity from one pool member at once and expires on its own. Confirming it with
+`POST /v1/appointments` turns it into an [appointment](../../reference/glossary/#appointment) on the
+same member. A caller that needs no pause can book directly by sending the full request instead of
+a hold. Rescheduling and cancelling name the appointment revision they acted on and advance it. The
+[API reference](../../reference/apis/registry-scheduling/#contract-boundary) gives the appointment's
+state and revision.
+
+{/* Evidence: crates/registry-scheduling/src/service.rs, exact_time_slots(), create_hold(), and
+    create_appointment(); crates/registry-scheduling/tests/postgres_commitments.rs. */}
 
 ## What you define
 
-You write a booking policy in YAML: the services offered, how long each appointment lasts and how
-far ahead it can be booked, the opening hours, public holidays, how long a hold lasts, and when
-reminders are due. Beside it, a records file lists the supply the policy books from: locations,
-[resource pools](../../reference/glossary/#resource-pool) of interchangeable stations or staff, and
-arrival windows. `schedulingctl` checks both offline, replays your
-[fixtures](../../reference/glossary/#scheduling-fixture) against them, and packages the policy under
-a digest.
+Three files, each with its own owner and lifecycle:
+
+- `scheduling.yaml`, the booking policy: services, offerings, openings, holiday sets, the hold
+  policy, reminders, and observer hooks. `schedulingctl package` turns it into a package with a
+  digest, and the runtime refuses to start on any other.
+- `records.yaml`, the supply: locations and their time zones,
+  [resource pools](../../reference/glossary/#resource-pool) of interchangeable stations or staff and
+  their members, arrival windows, and dated closures. The operator applies records to the database
+  while the service runs.
+- The runtime file: the listener, PostgreSQL, the token issuer, the audit log, and where reminders
+  and hook events go.
+
+`schedulingctl` checks the policy and records offline, replays your
+[fixtures](../../reference/glossary/#scheduling-fixture) against them, and packages the policy.
+
+Each activated package gets a policy revision. Callers read the current one from
+`GET /v1/scheduling` and send it with every booking, so a policy change between reading and booking
+is refused with `policy.changed` rather than applied silently.
+
+{/* Evidence: crates/registry-schedulingctl/src/project.rs, package();
+    crates/registry-scheduling/src/store.rs, PolicyPublication::revision();
+    crates/registry-scheduling-core/src/model.rs, AdmissionRequest. */}
 
 ## What runs
 
 `scheduling` is an HTTP service that keeps the ledger in PostgreSQL 17 or newer and verifies tokens
-from your own OpenID Connect issuer. Every hold and appointment is claimed inside one transaction,
-so two callers racing for the last station get one appointment and one refusal. Reminder intents
-and appointment events are delivered afterwards, from an outbox.
+from your own OpenID Connect issuer. Every hold and appointment is a claim against the capacity
+ledger, made inside one PostgreSQL transaction. Two callers racing for the last station get one
+appointment and one `capacity.exhausted`, never two appointments.
+
+Around the ledger, the service keeps an outbox. A confirmed appointment records the reminder intents
+its offering declares and, when the policy has hooks, the observer events. Workers deliver them
+after the transaction commits, so a slow receiver never holds a station.
+
+{/* Evidence: crates/registry-scheduling/src/service.rs, commitment();
+    crates/registry-scheduling/src/hooks.rs; crates/registry-scheduling/src/audit.rs;
+    products/scheduling/README.md, Events and observers. */}
 
 ## What Scheduling refuses
 
 Scheduling refuses a booking without a [task grant](../../reference/glossary/#task-grant) for that
 service, location, and action, a start outside the published hours, a booking made against a policy
 revision that has changed, and a start with no free capacity.
-[How Registry Scheduling works](../../explanation/how-scheduling-works/) explains each boundary.
+
+A task grant is a signed claim in the caller's access token. It names a service, a location, and the
+actions allowed there, such as `hold.create` or `appointment.create`. The system that owns the
+eligibility rule issues it, for example from a Registry Casework task template a staff member
+approves. A token with read scope but no grant can read availability and is refused a booking with
+`403 operation.not-authorized`. [Task grants](../../reference/apis/registry-scheduling/#task-grants) sets out how
+Scheduling matches and re-checks one.
+
+{/* Evidence: products/scheduling/README.md, Boundary and What Scheduling is not;
+    crates/registry-scheduling/src/auth.rs,
+    a_read_caller_with_the_reads_scope_authenticates_without_a_grant;
+    crates/registry-scheduling-core/src/problem.rs. */}
+
+## Recovering an unknown outcome
+
+A booking call can time out after it committed. Each create, reschedule, and cancel carries an
+`Idempotency-Key` the caller chooses. The same request under the same key returns the first answer,
+never a second booking. A different request under that key is refused with `idempotency.key-reused`.
+The Rust client in `registry-scheduling-client` retries this way.
+
+When the grant has expired, a retry would be refused, so read instead. The receipt route takes the
+original key and body under an ordinary read token.
+[Recover an unknown outcome](../../reference/apis/registry-scheduling/#recover-an-unknown-outcome)
+gives each request, and
+[Deploy and operate Registry Scheduling](../../operate/scheduling/) covers `schedulingctl status`
+and `schedulingctl intents`.
+
+{/* Evidence: crates/registry-scheduling/src/http.rs, idempotency_key() and
+    appointment_receipt(); crates/registry-scheduling-client/src/error.rs, is_outcome_unknown;
+    crates/registry-schedulingctl/src/{activation,intents}.rs. */}
+
+## Who owns a booking
+
+Scheduling owns the ledger and nothing beside it. No other product writes a hold or an appointment,
+directly or through a shared database. Each hold and appointment belongs to the token issuer and
+subject that made it. Another caller, even one serving the same product, sees an empty list. The
+appointment carries the `externalReferences` the caller sent, naming the record it was booked for.
+
+{/* Evidence: products/scheduling/README.md, Boundary;
+    crates/registry-scheduling/src/store.rs, ClaimRow::is_owned_by(). */}
 
 ## When it is not the right product
 
-Scheduling does not decide who may have a service; the system that owns that rule does, and
-issues the grant. It is not a work queue, which is [Registry Casework](../casework/), and it sends
-no messages: a reminder leaves as data for a system such as
-[Registry Messaging](../messaging/) to deliver.
+Scheduling does not decide who may have a service, because the system that owns that rule does. It
+is not a work queue, which is [Registry Casework](../casework/). It sends no messages: a reminder or
+an observer event leaves as data, and the message, the channel, and the decision to send anything
+belong to a receiver such as [Registry Messaging](../messaging/).
 
 ## Where to start
 
-[Prove your first booking policy](../../tutorials/first-scheduling/) creates a project, checks it,
-and runs its fixtures offline in about 10 minutes, with no database.
-
-{/* Evidence: products/scheduling/README.md, Boundary and What Scheduling is not;
-    crates/registry-scheduling/src/http.rs routes; crates/registry-scheduling/src/store.rs
-    capacity transaction; crates/registry-schedulingctl/src/project.rs, check(), test() and
-    package(); crates/registry-scheduling-core/src/problem.rs. */}
+- [Prove your first booking policy](../../tutorials/first-scheduling/) creates a project, checks it,
+  and runs its fixtures offline in about 10 minutes, with no database.
+- [Author a Scheduling policy](../../configure/scheduling/) adds holidays, hooks, and arrival
+  windows to the project.
+- [Registry Scheduling API](../../reference/apis/registry-scheduling/) lists the authority profiles,
+  problem codes, and routes.

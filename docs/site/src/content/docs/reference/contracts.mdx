@@ -29,7 +29,7 @@ A contract is a machine-readable surface that integrators can depend on:
 - **Authoring grammar**: a closed YAML shape an adopter writes and a compiler accepts.
 - **Sealed package format**: the versioned directory a compiler produces and a runtime verifies before it activates.
 - **Portable metadata schema**: the `registry-manifest/v1` YAML schema defining datasets, fields, policies, and evidence offerings.
-- **Static discovery bundle**: a manifest-generated directory of catalogue, SHACL, schema, policy, and evidence offering files that can be hosted without running any service.
+- **[Static discovery bundle](../glossary/#static-discovery-bundle)**: a manifest-generated directory of catalogue, SHACL, schema, policy, and evidence offering files that can be hosted without running any service.
 
 Each contract has one owning project. When a contract changes, the owning repo is the source of
 truth. Registry Platform crates provide workspace-internal implementation reuse. Every workspace

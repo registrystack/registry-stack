@@ -64,9 +64,9 @@ maintenance moves to the successor's latest minor.
 
 ## How fixes are delivered
 
-- A security fix ships as a release with signed artifacts and provenance, verifiable as
-  documented in
-  [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.13.0/SECURITY.md).
+- A security fix ships as a release. Its keyless-signed `SHA256SUMS` covers every public release
+  asset, and [SECURITY.md](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md)
+  says how to verify it.
 - Release notes identify security-relevant changes. When a fix required tightening covered
   surface, the notes say so explicitly, per the security exception in the
   [deprecation rules](../../reference/api-stability/#deprecation-and-removal).
@@ -81,8 +81,8 @@ maintenance moves to the successor's latest minor.
 ## Reporting and acknowledgement
 
 Report suspected vulnerabilities privately through GitHub Security Advisories, as described
-in [Report a vulnerability](../report-a-vulnerability/). Private reports are acknowledged
-within 5 business days.
+in [Report a vulnerability](../report-a-vulnerability/). Registry Stack aims to acknowledge
+private reports within 5 business days.
 
 ## Scope notes
 

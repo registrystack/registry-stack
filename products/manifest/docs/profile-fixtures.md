@@ -1,6 +1,6 @@
 # Validate against profile fixtures
 
-Check that a manifest conforms to a named profile's requirements, or run the fixture suite against a new domain profile descriptor. Also useful for reproducing a `validate-profiles` CI failure locally.
+Check a manifest against a profile's requirements, run the fixture suite on a new profile descriptor, or reproduce a CI failure locally.
 
 For basic manifest validation (schema version, field format, reference integrity), use the `validate` subcommand instead. See [Validate and render a manifest](./validate-and-render.md).
 
@@ -19,8 +19,6 @@ The two schema versions govern different files: `registry-manifest/v1` governs t
 `registry-manifest-profile/v1` governs the descriptor. The CLI enforces both.
 
 The five example profiles in the repository are non-normative examples.
-They are not authoritative profiles for OpenCRVS, OpenSPP, OpenIMIS, or SP DCI until reviewed
-against official artifacts.
 
 ## Prerequisites
 
@@ -56,8 +54,7 @@ List the available profiles:
 ls profiles/
 ```
 
-Expected output (subdirectories that contain a `profile.yaml` are active profiles; others are
-placeholders):
+Expected output, the five example profile directories and a `README.md`:
 
 ```text
 example-benefits-sync/
@@ -65,10 +62,7 @@ example-civil-registration/
 example-multi-dataset/
 example-person-schema/
 example-social-benefits/
-opencrvs/
-openimis/
-openspp/
-spdci/
+README.md
 ```
 
 Each subdirectory that contains a `profile.yaml` is a profile entry.
@@ -168,16 +162,8 @@ cargo run --locked -p registry-manifest-cli -- validate-profiles profiles
 echo "exit code: $?"
 ```
 
-Exit code 0 means every profile descriptor and every referenced fixture passed.
-
-To confirm the profile gate also covers all five example profiles, run:
-
-```sh
-cargo run --locked -p registry-manifest-cli -- validate-profiles profiles
-```
-
-This command asserts that all five example profile descriptors and fixtures pass
-manifest validation.
+Exit code 0 means every profile descriptor and every referenced fixture passed, including the
+five example profiles.
 
 ## Troubleshooting
 

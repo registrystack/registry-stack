@@ -565,7 +565,7 @@ process, so the fleet maximum is the per-process endpoint limit multiplied by
 the number of replicas.
 
 For file-secret changes and immediate token replacement, follow
-[Source credential rotation](SOURCE-CREDENTIAL-ROTATION.md).
+[Rotate credentials and trust](https://docs.registrystack.org/operate/advanced/rotate-credentials-and-trust/).
 
 ### Source authentication
 
