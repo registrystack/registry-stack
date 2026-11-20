@@ -12354,6 +12354,18 @@ fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
                     &[("mandatory requirements", entity["requirements"].to_string())],
                 );
             }
+            if entity["disclosureConditions"]
+                .as_array()
+                .is_some_and(|conditions| !conditions.is_empty())
+            {
+                lines.pairs_at(
+                    2,
+                    &[(
+                        "disclosure conditions",
+                        entity["disclosureConditions"].to_string(),
+                    )],
+                );
+            }
             if let Some(profiles) = entity["profiles"].as_array() {
                 for profile in profiles {
                     lines.blank();
@@ -12904,6 +12916,9 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
     }
     for field in ["allowCount", "revisionAccess", "allowDataExport"] {
         fields.push((field, profile[field].as_bool().unwrap_or(false).to_string()));
+    }
+    if profile["requireAccessReason"].as_bool() == Some(true) {
+        fields.push(("requireAccessReason", "true".to_owned()));
     }
     lines.pairs_at(depth + 1, &fields);
 }

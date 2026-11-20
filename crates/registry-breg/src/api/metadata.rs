@@ -4,8 +4,8 @@
 use super::*;
 use crate::artifacts::{field_schema, field_value_schema};
 use crate::contract::{ConstraintSource, ManifestProjectionTextSource};
-use crate::model::CompiledLogicalField;
 use crate::model::CompiledManifestProjection;
+use crate::model::{CompiledLogicalField, DisclosureWithhold};
 
 /// Wrap authentication as well as handlers. Even refusals must not persist in an HTTP cache.
 /// This changes only the cache policy, never held response bytes or replay headers.
@@ -83,7 +83,35 @@ fn operation(
     if let Some(path) = surface.read_path {
         value["readPath"] = json!({"id": path.id, "label": humanize(&path.id)});
     }
+    let disclosure =
+        crate::disclosure::plan(surface.response_entity, surface.context.selected_profile());
+    if !disclosure.is_empty() {
+        value["disclosure"] = disclosure_metadata(surface.response_entity, &disclosure);
+    }
     value
+}
+
+/// The conditions that bind the caller, without the `when` literals: the
+/// caller learns that a value may be withheld, never what withholds it.
+fn disclosure_metadata(
+    entity: &CompiledEntity,
+    disclosure: &crate::disclosure::DisclosurePlan<'_>,
+) -> Value {
+    json!(disclosure
+        .conditions()
+        .iter()
+        .map(|condition| match &condition.withhold {
+            DisclosureWithhold::Record => json!({"id": condition.id, "withhold": "record"}),
+            DisclosureWithhold::History => json!({"id": condition.id, "withhold": "history"}),
+            DisclosureWithhold::Fields(fields) => json!({
+                "id": condition.id, "withhold": "fields",
+                "fields": fields.iter().map(|id| {
+                    logical_field(entity, id)
+                        .map_or_else(|| id.clone(), |field| field.api_name.clone())
+                }).collect::<Vec<_>>(),
+            }),
+        })
+        .collect::<Vec<_>>())
 }
 
 fn required_capabilities(_operation: Operation) -> Vec<&'static str> {
@@ -123,6 +151,12 @@ fn field(
         "required": required, "nullable": !required, "readOnly": stored.is_none(),
         "removable": patch.contains(id) && !required,
     });
+    if crate::disclosure::plan(entity, surface.context.selected_profile())
+        .named_fields()
+        .contains(id)
+    {
+        value["mayBeWithheld"] = json!(true);
+    }
     if let Some(pattern) = entity
         .fields
         .get(id)

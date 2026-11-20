@@ -838,6 +838,10 @@ pub struct EntityAccessExplanation {
     /// Direct grants remain constrained by the Record type mutation policy.
     pub mutation_policy: serde_json::Value,
     pub requirements: Option<AccessRequirementsSource>,
+    /// Every condition in full, `when` literals included. Author inspection
+    /// only: no runtime surface carries them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub disclosure_conditions: Vec<crate::model::CompiledDisclosureCondition>,
     pub profiles: Vec<serde_json::Value>,
 }
 
@@ -1224,6 +1228,7 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
                 classification: entity.classification,
                 mutation_policy: crate::artifacts::render_mutation_policy(entity),
                 requirements: entity.access_requirements.clone(),
+                disclosure_conditions: entity.disclosure_conditions.clone(),
                 profiles: entity
                     .access_profiles
                     .values()

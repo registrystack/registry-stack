@@ -2207,6 +2207,70 @@ async fn metadata_advertises_required_filters_beside_filterable_fields() {
     assert!(list["query"]["filterableFields"].is_array());
 }
 
+/// `case` gains an optional `memo`, withheld from every profile but
+/// `caseworker` when the case is sealed, and withheld whole when it is closed.
+fn disclosure_harness() -> Harness {
+    let source = PROJECT
+        .replace(
+            "      - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: internal}\n  - id: protected-note",
+            "      - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: internal}\n      - {id: memo, type: string, maximumLength: 100, classification: internal}\n    disclosureConditions:\n      - id: hide-memo\n        when: [{type: field-equals, field: label, value: sealed}]\n        withhold: fields\n        fields: [memo]\n        exemptProfiles: [caseworker]\n      - id: hide-case\n        when: [{type: field-equals, field: label, value: closed}]\n        withhold: record\n        exemptProfiles: [caseworker]\n  - id: protected-note",
+        )
+        .replace(
+            "          readableFields: [label]\n          filterableFields: [label]\n          sortableFields: [label]",
+            "          readableFields: [label, memo]\n          filterableFields: [label]\n          sortableFields: [label]",
+        );
+    assert_ne!(source, PROJECT, "the project carries the conditions");
+    Harness::from_project(&source, true)
+}
+
+#[tokio::test]
+async fn metadata_flags_a_field_that_may_be_withheld_without_the_condition_literals() {
+    let harness = disclosure_harness();
+    let metadata = body_json(
+        harness
+            .send(Method::GET, "/v1/registry", Some(public_claims()))
+            .await,
+    )
+    .await;
+    let list = metadata_operation(&metadata, "records.case.list");
+    let flagged = |id: &str| {
+        list["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|field| field["id"] == id)
+            .unwrap_or_else(|| panic!("field {id} in {list}"))
+            .get("mayBeWithheld")
+            .cloned()
+    };
+    assert_eq!(flagged("memo"), Some(json!(true)));
+    assert_eq!(flagged("label"), None);
+    assert_eq!(
+        list["disclosure"],
+        json!([
+            {"id": "hide-memo", "withhold": "fields", "fields": ["memo"]},
+            {"id": "hide-case", "withhold": "record"}
+        ])
+    );
+    let text = metadata.to_string();
+    assert!(
+        !text.contains("sealed") && !text.contains("closed"),
+        "no `when` literal reaches a caller: {text}"
+    );
+    let exempt = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=caseworker",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    let exempt_list = metadata_operation(&exempt, "records.case.list");
+    assert!(exempt_list.get("disclosure").is_none(), "{exempt_list}");
+}
+
 #[tokio::test]
 async fn a_list_that_satisfies_an_alternative_runs() {
     for query in [
