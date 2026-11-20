@@ -36,6 +36,14 @@
 //! `unknown`. When the store cannot be read the gauge has no samples for that
 //! scrape, so the series goes stale rather than reporting an empty queue.
 //!
+//! Held and stuck work is sampled the same way, in one read-only statement
+//! per scrape that counts every row, so a gauge is never capped the way the
+//! doctor report's run list is: runs in `attention` (split into those held
+//! because this version does not restore their retained definition and all
+//! others), runs that wait for restore review, whether the restore and
+//! admission holds are set, and the age of the oldest due pending job. A
+//! failed sample leaves all of them without samples for that scrape.
+//!
 //! Every counter is per process and starts from zero at each start; work done
 //! by `coordinatorctl` is a separate process and is recorded in the journal,
 //! not here.
@@ -233,6 +241,22 @@ pub struct DispatchDepth {
     pub unknown: i64,
 }
 
+/// Held and stuck work, counted in full from the store.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RunHolds {
+    /// Runs in `attention` that are not held for a refused definition.
+    pub attention_other: i64,
+    /// Runs in `attention` because this version does not restore their
+    /// retained definition.
+    pub attention_definition_refused: i64,
+    /// Runs flagged for restore review.
+    pub restore_review_required: i64,
+    pub restore_hold: bool,
+    pub admissions_hold: bool,
+    /// Seconds since the oldest pending job was due, or zero when none is.
+    pub oldest_due_age_seconds: i64,
+}
+
 impl Metrics {
     /// Count one committed admission.
     pub fn record_run_admitted(&self) {
@@ -254,10 +278,10 @@ impl Metrics {
         count(&self.refusals, &[refusal.as_str()]);
     }
 
-    /// Render the Prometheus text exposition, with the dispatch queue when
-    /// it was sampled.
+    /// Render the Prometheus text exposition, with the dispatch queue and
+    /// the held work when each was sampled.
     #[must_use]
-    pub fn render(&self, depth: Option<DispatchDepth>) -> String {
+    pub fn render(&self, depth: Option<DispatchDepth>, holds: Option<RunHolds>) -> String {
         let mut out = Exposition::new();
         for counter in [
             &self.admitted,
@@ -282,6 +306,68 @@ impl Metrics {
                 out.sample("coordinator_dispatch_jobs", &[("state", state)], count)
                     .expect(DECLARATION);
             }
+        }
+        out.header(
+            "coordinator_runs_attention",
+            Some("Runs in attention, by why, sampled at scrape."),
+            MetricKind::Gauge,
+        )
+        .expect(DECLARATION);
+        if let Some(holds) = holds {
+            for (reason, count) in [
+                ("definition-refused", holds.attention_definition_refused),
+                ("other", holds.attention_other),
+            ] {
+                out.sample("coordinator_runs_attention", &[("reason", reason)], count)
+                    .expect(DECLARATION);
+            }
+        }
+        out.header(
+            "coordinator_runs_restore_review_required",
+            Some("Runs flagged for restore review, sampled at scrape."),
+            MetricKind::Gauge,
+        )
+        .expect(DECLARATION);
+        if let Some(holds) = holds {
+            out.sample(
+                "coordinator_runs_restore_review_required",
+                &[],
+                holds.restore_review_required,
+            )
+            .expect(DECLARATION);
+        }
+        out.header(
+            "coordinator_hold_active",
+            Some("1 while the restore or admissions hold is set, sampled at scrape."),
+            MetricKind::Gauge,
+        )
+        .expect(DECLARATION);
+        if let Some(holds) = holds {
+            for (hold, active) in [
+                ("restore", holds.restore_hold),
+                ("admissions", holds.admissions_hold),
+            ] {
+                out.sample(
+                    "coordinator_hold_active",
+                    &[("hold", hold)],
+                    u8::from(active),
+                )
+                .expect(DECLARATION);
+            }
+        }
+        out.header(
+            "coordinator_oldest_due_age_seconds",
+            Some("Seconds since the oldest pending job was due, or 0 when none is overdue, sampled at scrape."),
+            MetricKind::Gauge,
+        )
+        .expect(DECLARATION);
+        if let Some(holds) = holds {
+            out.sample(
+                "coordinator_oldest_due_age_seconds",
+                &[],
+                holds.oldest_due_age_seconds,
+            )
+            .expect(DECLARATION);
         }
         out.finish()
     }
@@ -335,12 +421,22 @@ pub async fn serve_metrics(State(state): State<MetricsState>) -> Response {
             None
         }
     };
+    let holds = match state.store.run_holds().await {
+        Ok(holds) => Some(holds),
+        Err(error) => {
+            tracing::warn!(
+                code = %error.code,
+                "held work could not be sampled; its gauges have no samples this scrape"
+            );
+            None
+        }
+    };
     (
         [
             (CONTENT_TYPE, METRICS_CONTENT_TYPE),
             (CACHE_CONTROL, "no-store"),
         ],
-        state.store.metrics().render(depth),
+        state.store.metrics().render(depth, holds),
     )
         .into_response()
 }
@@ -372,7 +468,7 @@ mod tests {
     #[test]
     fn the_label_set_is_closed_and_every_value_is_exposed_from_zero() {
         let metrics = Metrics::default();
-        let text = metrics.render(Some(DispatchDepth::default()));
+        let text = metrics.render(Some(DispatchDepth::default()), Some(RunHolds::default()));
         let mut expected = vec!["coordinator_runs_admitted_total".to_owned()];
         expected.extend(RunOutcome::ALL.map(|o| {
             format!(
@@ -396,6 +492,17 @@ mod tests {
             ["pending", "leased", "unknown"]
                 .map(|state| format!("coordinator_dispatch_jobs{{state=\"{state}\"}}")),
         );
+        expected.extend(
+            [
+                "coordinator_runs_attention{reason=\"definition-refused\"}",
+                "coordinator_runs_attention{reason=\"other\"}",
+                "coordinator_runs_restore_review_required",
+                "coordinator_hold_active{hold=\"restore\"}",
+                "coordinator_hold_active{hold=\"admissions\"}",
+                "coordinator_oldest_due_age_seconds",
+            ]
+            .map(str::to_owned),
+        );
         assert_eq!(series(&text), expected);
         assert!(text
             .lines()
@@ -413,8 +520,8 @@ mod tests {
         metrics.record_step_attempt(StepAttempt::MaybeSent);
         metrics.record_step_attempt(StepAttempt::Unavailable);
         metrics.record_authentication_refusal(AuthenticationRefusal::Policy);
-        let before = series(&metrics.render(None)).len();
-        let text = metrics.render(None);
+        let before = series(&metrics.render(None, None)).len();
+        let text = metrics.render(None, None);
         assert_eq!(series(&text).len(), before, "recording adds no series");
         for line in [
             "coordinator_runs_admitted_total 2",
@@ -439,11 +546,21 @@ mod tests {
         metrics.record_run_finished(RunOutcome::CancelledAfterEffect);
         metrics.record_step_attempt(StepAttempt::Accepted);
         metrics.record_authentication_refusal(AuthenticationRefusal::Policy);
-        let text = metrics.render(Some(DispatchDepth {
-            pending: 5,
-            leased: 0,
-            unknown: 1,
-        }));
+        let text = metrics.render(
+            Some(DispatchDepth {
+                pending: 5,
+                leased: 0,
+                unknown: 1,
+            }),
+            Some(RunHolds {
+                attention_other: 2,
+                attention_definition_refused: 3,
+                restore_review_required: 4,
+                restore_hold: true,
+                admissions_hold: false,
+                oldest_due_age_seconds: 90,
+            }),
+        );
         assert_eq!(
             text,
             "\
@@ -474,6 +591,20 @@ coordinator_authentication_refusals_total{reason=\"unavailable\"} 0
 coordinator_dispatch_jobs{state=\"pending\"} 5
 coordinator_dispatch_jobs{state=\"leased\"} 0
 coordinator_dispatch_jobs{state=\"unknown\"} 1
+# HELP coordinator_runs_attention Runs in attention, by why, sampled at scrape.
+# TYPE coordinator_runs_attention gauge
+coordinator_runs_attention{reason=\"definition-refused\"} 3
+coordinator_runs_attention{reason=\"other\"} 2
+# HELP coordinator_runs_restore_review_required Runs flagged for restore review, sampled at scrape.
+# TYPE coordinator_runs_restore_review_required gauge
+coordinator_runs_restore_review_required 4
+# HELP coordinator_hold_active 1 while the restore or admissions hold is set, sampled at scrape.
+# TYPE coordinator_hold_active gauge
+coordinator_hold_active{hold=\"restore\"} 1
+coordinator_hold_active{hold=\"admissions\"} 0
+# HELP coordinator_oldest_due_age_seconds Seconds since the oldest pending job was due, or 0 when none is overdue, sampled at scrape.
+# TYPE coordinator_oldest_due_age_seconds gauge
+coordinator_oldest_due_age_seconds 90
 "
         );
     }
@@ -481,17 +612,41 @@ coordinator_dispatch_jobs{state=\"unknown\"} 1
     #[test]
     fn the_dispatch_queue_is_exposed_only_when_it_was_sampled() {
         let metrics = Metrics::default();
-        let unsampled = metrics.render(None);
+        let unsampled = metrics.render(None, None);
         assert!(unsampled.contains("# TYPE coordinator_dispatch_jobs gauge"));
         assert!(!unsampled.contains("coordinator_dispatch_jobs{"));
-        let sampled = metrics.render(Some(DispatchDepth {
-            pending: 3,
-            leased: 1,
-            unknown: 2,
-        }));
+        let sampled = metrics.render(
+            Some(DispatchDepth {
+                pending: 3,
+                leased: 1,
+                unknown: 2,
+            }),
+            None,
+        );
         assert!(sampled.contains("coordinator_dispatch_jobs{state=\"pending\"} 3"));
         assert!(sampled.contains("coordinator_dispatch_jobs{state=\"leased\"} 1"));
         assert!(sampled.contains("coordinator_dispatch_jobs{state=\"unknown\"} 2"));
+    }
+
+    #[test]
+    fn held_work_is_exposed_only_when_it_was_sampled() {
+        let metrics = Metrics::default();
+        let unsampled = metrics.render(None, None);
+        for name in [
+            "coordinator_runs_attention",
+            "coordinator_runs_restore_review_required",
+            "coordinator_hold_active",
+            "coordinator_oldest_due_age_seconds",
+        ] {
+            assert!(
+                unsampled.contains(&format!("# TYPE {name} gauge")),
+                "{name}"
+            );
+            assert!(
+                !series(&unsampled).iter().any(|line| line.starts_with(name)),
+                "{name} has no sample without a read"
+            );
+        }
     }
 
     #[test]

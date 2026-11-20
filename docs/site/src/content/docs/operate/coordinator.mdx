@@ -725,6 +725,10 @@ The metrics are Prometheus text (`text/plain; version=0.0.4`, served with `Cache
 | `coordinator_step_attempts_total` | counter | `outcome`: `accepted`, `transient`, `permanent`, `maybe-sent`, `unavailable` |
 | `coordinator_authentication_refusals_total` | counter | `reason`: `refused`, `policy`, `unavailable` |
 | `coordinator_dispatch_jobs` | gauge | `state`: `pending`, `leased`, `unknown` |
+| `coordinator_runs_attention` | gauge | `reason`: `definition-refused`, `other` |
+| `coordinator_runs_restore_review_required` | gauge | none |
+| `coordinator_hold_active` | gauge | `hold`: `restore`, `admissions` |
+| `coordinator_oldest_due_age_seconds` | gauge | none |
 
 Counters are per process: each service process starts them at zero and counts only its own work, so a restart resets them.
 They expose every label value from the first scrape.
@@ -747,6 +751,19 @@ The count is a read-only query bounded at 2 seconds.
 When the database cannot answer, that scrape has no `coordinator_dispatch_jobs` samples rather than zeros, and the service logs a warning with the failure code.
 Alert on the gauge going absent as well as on its value.
 
+The held-work gauges are read from the database in one read-only query bounded at 2 seconds, on each scrape.
+They count every row.
+Unlike the run list in `coordinatorctl doctor`, which shows at most 100 held runs, the gauges are never capped.
+When the database cannot answer, that scrape has no samples for any of them, and the service logs a warning with the failure code.
+
+- `coordinator_runs_attention` counts runs in the `attention` state, the same state `doctor` reports under `states`.
+  `definition-refused` runs are held because this version does not restore their retained definition, and `other` is every other run that waits for an operator.
+  Runs that `doctor` lists as held but that are not yet in `attention` are not counted until the hold is applied.
+- `coordinator_runs_restore_review_required` counts runs flagged for restore review, as `doctor` reports in `restoreReviewRequired`.
+- `coordinator_hold_active` is 1 while the restore hold or the admissions hold is set, as `doctor` reports in `restoreHold` and `admissionsHold`.
+- `coordinator_oldest_due_age_seconds` is how long ago the oldest pending step was due, from the same time `doctor` reports as `oldestDueAt`.
+  It is 0 when no pending step is overdue, so a steadily rising value means the worker is not keeping up or is not running.
+
 No label carries a workflow, run, input, principal, or other caller text.
 A workflow is configuration, so labelling by it would grow the series with every workflow added and keep series for workflows removed.
 Per-workflow and per-run detail lives in the audit journal and in `coordinatorctl status` and `inspect`.
@@ -755,8 +772,12 @@ Bind the metrics listener where only your monitoring can reach it: the counts de
 
 {/* Evidence: crates/registry-coordinator/src/metrics.rs coordinator_runs_admitted_total,
     coordinator_runs_finished_total, coordinator_step_attempts_total,
-    coordinator_authentication_refusals_total, coordinator_dispatch_jobs;
-    crates/registry-coordinator/tests/deployment_postgres.rs coordinator_dispatch_jobs. */}
+    coordinator_authentication_refusals_total, coordinator_dispatch_jobs,
+    coordinator_runs_attention, coordinator_runs_restore_review_required,
+    coordinator_hold_active, coordinator_oldest_due_age_seconds;
+    crates/registry-coordinator/src/store.rs run_holds;
+    crates/registry-coordinator/tests/deployment_postgres.rs coordinator_dispatch_jobs;
+    crates/registry-coordinator/tests/postgres_state.rs run_holds_count_attention_restore_review_holds_and_the_oldest_due_age. */}
 
 ## Admit and inspect work
 
