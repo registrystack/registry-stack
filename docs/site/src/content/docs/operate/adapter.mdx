@@ -767,7 +767,7 @@ Facade series:
 | Series | Type | Labels | Meaning |
 | --- | --- | --- | --- |
 | `adapter_http_requests_total` | counter | `route` (route template, or `unmatched`), `method`, `status` (`1xx`, `2xx`, `3xx`, `4xx`, `5xx`) | Answered facade requests. |
-| `adapter_upstream_failures_total` | counter | `class` (`upstream`, `upstream.http`, `upstream.timeout`, `upstream.connection`, `upstream.malformed`, `upstream.too-large`, `upstream.redirect`, `breaker.open`, `throttle.rejected`, `credential.rejected`, `egress.refused`) | Calls to the source that failed, by error class. It counts failed exchanges, status polls, bounded-wait polls and recovery checks. | |
+| `adapter_upstream_failures_total` | counter | `class` (`upstream`, `upstream.http`, `upstream.timeout`, `upstream.connection`, `upstream.malformed`, `upstream.too-large`, `upstream.redirect`, `breaker.open`, `throttle.rejected`, `credential.rejected`, `egress.refused`) | Calls to the source that failed, by error class. It counts failed exchanges, status polls, bounded-wait polls and recovery checks. |
 | `adapter_journal_write_failures_total` | counter | none | Audit journal writes that failed, so the exchange answered an internal error. Custody and rendering failures are not counted here. |
 | `adapter_retention_sweep_failures_total` | counter | `store` (`journal`, `idempotency`, `other`) | Retention sweep batches that failed and were left to the next tick. |
 
