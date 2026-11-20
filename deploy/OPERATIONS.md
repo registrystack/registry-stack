@@ -73,7 +73,9 @@ Read the target [Registry Stack release notes](https://github.com/registrystack/
 2. Pause callers and take a new backup. Check its receipt against the encrypted repository. The operator checks that it identifies the active installation and activation and that its capture is inside the backup window. If the operator refuses with a backup-age message, take a newer backup. If your recovery policy allows an older one, pass `--max-backup-age-hours` with that limit to `upgrade`. The default is 26 hours. Pass `--operator-reference` with the change or ticket reference for the upgrade. BReg records a keyed hash of it with the activation, so its runtime audit profile must be keyed. BReg refuses the activation otherwise, after the operator has stopped serving, so check the profile before the window. The reference also appears in the operation Job's arguments until the Job expires, so use a ticket ID, not personal data. An upgrade that keeps the active package, such as a configuration or image change, activates nothing and needs no reference. Supply the target chart values to the operator.
 
    ```bash
-   python3 deploy/state_bundle.py check-snapshot \
+   sudo env RESTIC_REPOSITORY=sftp:backup@backup.example.org:/srv/restic \
+     RESTIC_PASSWORD_FILE=/root/restic-password \
+     python3 deploy/state_bundle.py check-snapshot \
      --receipt /srv/registry-directory/backup-01-receipt.json --max-age-hours 26
    sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 deploy/stack_operator.py \
      --helm-bin /usr/local/lib/registry-stack/helm --kube-context default --namespace directory \

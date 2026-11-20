@@ -131,7 +131,7 @@ in the runtime URL, and `database.roles.migration` names the different role in
 the migration URL. The serving Pod receives no migration URL. Keep
 `identity.databaseId`, `identity.instanceId`, and the role names stable across
 the serving Deployment and every operation Job. One replica plus `Recreate`
-prevents simultaneous chart-managed BReg versions, but it does not authorize
+prevents simultaneous chart-managed BReg versions, but it does not authorise
 an instance-claim adoption: select `claim-adopt` only after every other copy of
 the Registry has stopped and is permanently retired.
 
@@ -276,7 +276,7 @@ NetworkPolicy cannot distinguish their egress, so
 `evidence.networkPolicy.transitEgress` documents and admits the provider path
 at Pod scope, while `dependencyEgress` admits Evidence issuer and source paths.
 Secret separation, the Unix socket, provider policy, and Evidence's fixed
-source bindings remain the authorization boundaries.
+source bindings remain the authorisation boundaries.
 
 ## Ingress and network policy
 
@@ -338,7 +338,7 @@ same deployment values and apply it only after operator review:
 
 ```bash
 helm template operation ./deploy/helm/registry-stack \
-  --namespace registry-pilot \
+  --namespace directory \
   --values deployment-values.yaml \
   --set breg.serve=false \
   --set appKit.serve=false \
@@ -356,7 +356,7 @@ Both resources carry and select the unique
 `registrystack.org/operation-id: <breg.operation.name>` label, so a retained
 policy for another operation name does not admit this Job's egress.
 
-| `breg.operation.kind` | Command behavior |
+| `breg.operation.kind` | Command behaviour |
 | --- | --- |
 | `verify` | Verifies the package without opening the database. |
 | `doctor` | Checks startup dependencies without binding a listener. |
@@ -397,13 +397,17 @@ Raise `ttlSecondsAfterFinished` only when you cannot collect it in time.
 
 ## Render one Casework operation
 
-Normal releases render no Casework Job. Keep serving fenced, render one named
-operation, review both the Job and its unique-operation NetworkPolicy, then
-create them using the product-owned operator procedure:
+Normal releases render no Casework Job. First stop the release with the
+operator's `stop` command (see "Back up a consistent installation" in
+[`deploy/OPERATIONS.md`](../../OPERATIONS.md)). It applies `serve: false` through
+Helm and waits until no Pod of the release is running. Confirm that with
+`sudo k3s kubectl -n directory get pods -l app.kubernetes.io/instance=directory`.
+Then render one named operation, review both the Job and its unique-operation
+NetworkPolicy, and create them using the product-owned operator procedure:
 
 ```bash
 helm template casework-operation ./deploy/helm/registry-stack \
-  --namespace registry-pilot \
+  --namespace directory \
   --values deployment-values.yaml \
   --set breg.serve=false \
   --set appKit.serve=false \
@@ -419,7 +423,7 @@ helm template casework-operation ./deploy/helm/registry-stack \
 Every command uses `/usr/local/bin/caseworkctl --format json` from the pinned
 Casework image and `/etc/registry-casework/runtime.yaml`:
 
-| `casework.operation.kind` | Command behavior |
+| `casework.operation.kind` | Command behaviour |
 | --- | --- |
 | `plan` | Reads runtime state and reports the package activation plan. |
 | `doctor` | Checks the documented startup dependencies without serving. |
@@ -428,7 +432,7 @@ Casework image and `/etc/registry-casework/runtime.yaml`:
 Operation names are part of the Job and NetworkPolicy selector through
 `registrystack.org/operation-id`. Use a unique name for each attempt.
 Operator and backup references are retained in audit records. Do not place
-credentials or personal data in them. Stop the predecessor before `apply`, and
+credentials or personal data in them. Run `stop` before `apply`, as above, and
 do not set `casework.serve: true` until the operation succeeds and its report
 has been reviewed.
 
@@ -440,12 +444,14 @@ source integration.
 ## Render one Evidence operation
 
 Normal releases render no Evidence Job. Install the reviewed bundle and
-runtime inputs, keep `evidence.serve: false`, activate the separately reviewed
-authority, inspect its result or history, then permit serving:
+runtime inputs, then stop the release with the operator's `stop` command and
+confirm that no Pod of the release is running, as for Casework above. Activate
+the separately reviewed authority, inspect its result or history, then permit
+serving:
 
 ```bash
 helm template evidence-operation ./deploy/helm/registry-stack \
-  --namespace registry-pilot \
+  --namespace directory \
   --values deployment-values.yaml \
   --set breg.serve=false \
   --set appKit.serve=false \

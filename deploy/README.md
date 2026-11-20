@@ -63,7 +63,7 @@ Copy [the v0.46.0 example values](examples/local-breg/values.json) into that dir
 | `pg-bootstrap` | A random, owner-only initial PostgreSQL administrative password file |
 | `ingress.crt`, `ingress.key` | HTTPS server certificate chain and key for BReg |
 
-Create the certificates, keys and passwords on the server. You choose the two role passwords. `prepare_local.py` sets them on the PostgreSQL roles. Hexadecimal passwords need no URL encoding. Replace `directory` with your namespace.
+Create the certificates, keys and passwords on the server. You choose the two role passwords. `prepare_local.py` sets them on the PostgreSQL roles. Hexadecimal passwords need no URL encoding. Replace `directory` with your namespace. Run the block as root, for example from `sudo -i`, so that only root can read the files.
 
 ```bash
 IN=/srv/registry-directory/inputs

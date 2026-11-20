@@ -5,7 +5,7 @@ Stack installation. It uses the unmodified upstream chart and image. It does
 not install an operator, admin UI, worker, COSI driver, object-versioning
 workflow, or a Registry Stack-owned storage chart.
 
-The reference layout is a single-node layout for a pilot deployment. It is not an HA storage service. It has
+The reference layout runs on a single node. It is not an HA storage service. It has
 one master, one filer, one volume server, and one S3 gateway. Master metadata,
 filer metadata, and object bytes use separate PVCs. Loss of the node or any one
 PVC can lose the attachment store, so the backup procedure below is part of the
