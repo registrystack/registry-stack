@@ -171,6 +171,71 @@ async fn a_public_base_url_with_a_path_or_plain_http_is_refused() {
     assert!(codes(&harness).contains(&"evidence.oid4vp.https-required".to_owned()));
 }
 
+fn with_metrics(harness: &Harness, metrics: &str, exposure: Option<&str>) {
+    let exposure =
+        exposure.map_or_else(String::new, |value| format!("  networkExposure: {value}\n"));
+    edit(
+        harness,
+        "listener:\n  bind: 127.0.0.1:8095\n",
+        &format!(
+            "listener:\n  bind: 127.0.0.1:8095\nmetricsListener:\n  bind: \"{metrics}\"\n{exposure}"
+        ),
+    );
+}
+
+#[tokio::test]
+async fn metrics_accept_loopback_and_private_addresses_and_refuse_link_local_and_mapped_forms() {
+    for accepted in [
+        "127.0.0.1:9095",
+        "10.0.0.1:9095",
+        "[::1]:9095",
+        "[fd00::1]:9095",
+    ] {
+        let harness = Harness::new(&Options::default()).await;
+        with_metrics(&harness, accepted, None);
+        assert_eq!(codes(&harness), Vec::<String>::new(), "refused {accepted}");
+    }
+    for refused in [
+        "169.254.1.1:9095",
+        "[fe80::1]:9095",
+        "[::ffff:127.0.0.1]:9095",
+        "[::ffff:10.0.0.1]:9095",
+        "8.8.8.8:9095",
+        "0.0.0.0:9095",
+        "[::]:9095",
+    ] {
+        let harness = Harness::new(&Options::default()).await;
+        with_metrics(&harness, refused, None);
+        assert_eq!(
+            codes(&harness),
+            vec!["evidence.oid4vp.metrics-address".to_owned()],
+            "accepted {refused}"
+        );
+        assert!(Oid4vpConfig::load(&harness.config_path).is_err());
+    }
+}
+
+#[tokio::test]
+async fn the_metrics_wildcard_needs_container_private_exposure() {
+    for wildcard in ["0.0.0.0:9095", "[::]:9095"] {
+        let harness = Harness::new(&Options::default()).await;
+        with_metrics(&harness, wildcard, Some("container-private"));
+        assert_eq!(codes(&harness), Vec::<String>::new(), "refused {wildcard}");
+        assert!(Oid4vpConfig::load(&harness.config_path).is_ok());
+    }
+    for (bind, code) in [
+        ("169.254.1.1:9095", "evidence.oid4vp.metrics-address"),
+        ("8.8.8.8:9095", "evidence.oid4vp.metrics-address"),
+        ("[::ffff:10.0.0.1]:9095", "evidence.oid4vp.metrics-address"),
+        ("0.0.0.0:0", "evidence.oid4vp.metrics-port"),
+        ("0.0.0.0:8095", "evidence.oid4vp.metrics-shared-binding"),
+    ] {
+        let harness = Harness::new(&Options::default()).await;
+        with_metrics(&harness, bind, Some("container-private"));
+        assert_eq!(codes(&harness), vec![code.to_owned()], "accepted {bind}");
+    }
+}
+
 #[tokio::test]
 async fn a_secret_reference_to_a_disabled_provider_is_refused() {
     let harness = Harness::new(&Options::default()).await;

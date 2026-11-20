@@ -165,6 +165,7 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: metrics_report_bounded_series_without_disclosing_request_content}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_configured_metrics_listener_serves_beside_the_evidence_listener}
       - {file: crates/registry-evidence/src/config.rs, name: the_optional_metrics_listener_is_absent_by_default_and_stays_operator_private}
+      - {file: crates/registry-evidence/src/config.rs, name: the_metrics_wildcard_needs_container_private_exposure}
       - {file: crates/registry-evidence/src/observability.rs, name: shape_drift_series_stay_bounded_by_the_governed_sources}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_renamed_source_member_warns_once_per_interval_and_counts_every_drifted_response}
   - id: sec-no-entitlement-union
@@ -823,6 +824,8 @@ entries:
       - {file: crates/registry-evidence-oid4vci/src/observability.rs, name: the_metrics_listener_refuses_head_without_rendering_metrics}
       - {file: crates/registry-evidence-oid4vci/src/config.rs, name: metrics_are_absent_by_default_and_the_optional_listener_is_private_and_distinct}
       - {file: crates/registry-evidence-oid4vci/src/config.rs, name: unscoped_ipv6_unicast_link_local_metrics_addresses_are_refused}
+      - {file: crates/registry-evidence-oid4vci/src/config.rs, name: link_local_and_ipv4_mapped_metrics_addresses_are_refused}
+      - {file: crates/registry-evidence-oid4vci/src/config.rs, name: the_metrics_wildcard_needs_container_private_exposure}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_configured_private_metrics_listener_serves_beside_the_delivery_listener}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: serve_revalidates_the_metrics_listener_before_any_socket_is_bound}
   - id: sec-holder-presented-channel-selection

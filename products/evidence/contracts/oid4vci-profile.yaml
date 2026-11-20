@@ -297,7 +297,11 @@ state_model:
 operational_telemetry:
   rule: >-
     Metrics are absent by default. When configured, the process binds a second
-    loopback-or-private listener that serves only GET /metrics. Its route,
+    loopback-or-private listener that serves only GET /metrics. The listener
+    refuses link-local, IPv4-mapped, multicast, and public addresses and the
+    delivery listener's binding. An operator may declare
+    metricsListener.networkExposure: container-private to bind the wildcard
+    address inside a container network it controls. Its route,
     method, status, problem, and outcome labels come from closed vocabularies,
     state pressure and cleanup are unlabeled gauges or counters, and neither
     metrics nor request logs carry a request-derived or deployment-specific

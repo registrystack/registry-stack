@@ -163,12 +163,28 @@ properties:
         description: >-
           Numeric socket address for the optional metrics listener, written `host:port`. The
           host must be a loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6
-          address; unspecified, multicast, public, and hostname values are prohibited, port
-          `0` is refused, and the address must not repeat the evidence listener's binding.
+          address; link-local, IPv4-mapped, multicast, public, and hostname values are
+          prohibited, the unspecified address is prohibited unless `networkExposure` is
+          `container-private`, port `0` is refused, and the address must not repeat the
+          evidence listener's binding.
         $ref: '#/$defs/socket-address'
         x-runtime-validation: >-
           Parsed as a socket address and accepted only when Rust classifies its host as
-          loopback, private IPv4, or unique-local IPv6.
+          loopback, private IPv4, or unique-local IPv6, or as the unspecified address when
+          `networkExposure` is `container-private`.
+      networkExposure:
+        description: >-
+          Declares the operator-owned network boundary around the metrics listener. Absent
+          keeps the private-address rule. container-private additionally permits the
+          unspecified address (`0.0.0.0` or `::`) for a container whose private address is not
+          known when the file is written, and the operator keeps the metrics port off any
+          public or host-published network. It does not permit public, link-local, multicast,
+          or IPv4-mapped addresses, port `0`, or a binding the evidence listener serves.
+        type: string
+        enum:
+          - private-address
+          - container-private
+        default: private-address
     x-runtime-validation: >-
       Rejected at startup when the bind address repeats the evidence listener binding.
   secretProviders:

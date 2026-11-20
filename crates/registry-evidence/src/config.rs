@@ -15,7 +15,8 @@ use registry_adapter_core::{AdapterEndpointBindings, EvidenceConnectionPolicy};
 use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 pub use registry_platform_config::SecretReference;
 use registry_platform_config::{
-    contains_environment_expression, AuditKeyConfig, JwksSource, ListenerBind, LoadedRuntimeConfig,
+    check_metrics_bind_address, check_metrics_bind_apart, contains_environment_expression,
+    AuditKeyConfig, JwksSource, ListenerBind, LoadedRuntimeConfig, MetricsBindError,
     OidcIssuerConfig, PackageConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
     SecretProvidersConfig,
 };
@@ -3156,58 +3157,52 @@ pub enum ListenerNetworkExposure {
 pub struct MetricsListenerConfig {
     /// Numeric `host:port` the metrics endpoint binds.
     pub bind: ListenerBind,
+    /// `container-private` additionally permits the wildcard address, for a
+    /// container whose private address is not known when the file is written.
+    #[serde(default)]
+    pub network_exposure: registry_platform_config::ListenerNetworkExposure,
 }
 
 impl MetricsListenerConfig {
+    /// One finding per failed rule. The address and port rules and the
+    /// separation from the evidence listener are the shared metrics-bind rule.
     fn findings(&self, evidence_listener: &ListenerConfig, findings: &mut Vec<RuntimeFinding>) {
-        for (error, action) in [
-            (
-                validate_private_bind_host(self.bind.ip()),
-                "Bind the metrics listener to a loopback or private address.",
-            ),
-            (
-                validate_listener_port(self.bind.socket_addr().port()),
-                LISTENER_PORT_ACTION,
-            ),
-            (
-                self.validate_separate(evidence_listener),
-                "Bind the metrics listener to a port the evidence listener does not use.",
-            ),
-        ] {
-            if let Err(error) = error {
-                findings.push(RuntimeFinding::at_value(
-                    RUNTIME_METRICS_LISTENER_CODE,
-                    "/metricsListener/bind",
-                    error,
-                    action,
-                ));
-            }
-        }
-    }
-
-    fn validate_separate(&self, evidence_listener: &ListenerConfig) -> Result<(), ConfigError> {
+        let bind = self.bind.socket_addr();
+        let address = match check_metrics_bind_address(bind, self.network_exposure) {
+            Ok(()) => None,
+            Err(MetricsBindError::PortZero) => validate_listener_port(bind.port())
+                .err()
+                .map(|error| (error, LISTENER_PORT_ACTION)),
+            Err(_) => Some((
+                ConfigError::Invalid("listener bind address must be loopback or private"),
+                "Bind the metrics listener to a loopback or private address, or declare \
+                 networkExposure: container-private on a container network.",
+            )),
+        };
         // Sharing the evidence binding would publish the counters on the
         // listener the public contract describes, which is the separation this
         // block exists to enforce.
-        let metrics_ip = self.bind.ip();
-        let evidence_ip = evidence_listener.bind.ip();
-        // Linux commonly creates an IPv6 wildcard socket as dual-stack, so
-        // `[::]:port` can also occupy the corresponding IPv4 port. Evidence
-        // does not force IPV6_V6ONLY, and configuration validation must be
-        // portable across the hosts on which the process can run. Treat the
-        // IPv6 wildcard as covering both families; the IPv4 wildcard covers
-        // only IPv4.
-        let wildcard_covers_metrics = match evidence_ip {
-            IpAddr::V4(ip) => ip.is_unspecified() && metrics_ip.is_ipv4(),
-            IpAddr::V6(ip) => ip.is_unspecified(),
-        };
-        let binding_overlaps = metrics_ip == evidence_ip || wildcard_covers_metrics;
-        if binding_overlaps
-            && self.bind.socket_addr().port() == evidence_listener.bind.socket_addr().port()
-        {
-            return invalid("metricsListener must not share the evidence listener binding");
+        let separate = check_metrics_bind_apart(
+            bind,
+            &[("evidence listener", evidence_listener.bind.socket_addr())],
+        )
+        .err()
+        .map(|_| {
+            (
+                ConfigError::Invalid(
+                    "metricsListener must not share the evidence listener binding",
+                ),
+                "Bind the metrics listener to a port the evidence listener does not use.",
+            )
+        });
+        for (error, action) in address.into_iter().chain(separate) {
+            findings.push(RuntimeFinding::at_value(
+                RUNTIME_METRICS_LISTENER_CODE,
+                "/metricsListener/bind",
+                error,
+                action,
+            ));
         }
-        Ok(())
     }
 }
 
@@ -10154,6 +10149,80 @@ outboundTls:
             format!("{base}metricsListener:\n  bind: 127.0.0.1:9090\n  path: /telemetry\n");
         assert!(RuntimeConfig::parse_yaml(unknown.as_bytes()).is_err());
         assert!(!validator.is_valid(&bundle_contract_instance(unknown.as_bytes())));
+    }
+
+    /// A container whose private address is unknown when the file is written
+    /// declares `networkExposure: container-private` to bind the wildcard.
+    /// Every other refusal holds under both values.
+    #[test]
+    fn the_metrics_wildcard_needs_container_private_exposure() {
+        let base = r#"
+apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
+kind: EvidenceRuntimeConfig
+package:
+  root: /etc/registry-evidence/bundle
+listener:
+  bind: 127.0.0.1:8080
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 64
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+secretProviders:
+  file: {root: /run/secrets/registry-evidence}
+signer:
+  type: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  attemptTimeoutMilliseconds: 2000
+audit:
+  path: /var/lib/registry-evidence/audit/evidence.jsonl
+outboundTls:
+  systemRoots: true
+  trustProfiles: {}
+"#;
+        let validator = runtime_contract_validator();
+        for wildcard in ["0.0.0.0", "::"] {
+            let bind = bind_of(wildcard, 9090);
+            let declared = format!(
+                "{base}metricsListener:\n  bind: {bind}\n  networkExposure: container-private\n"
+            );
+            assert!(validator.is_valid(&bundle_contract_instance(declared.as_bytes())));
+            let parsed = RuntimeConfig::parse_yaml(declared.as_bytes())
+                .expect("container-private permits the wildcard");
+            assert_eq!(
+                parsed.metrics_listener.expect("retained").network_exposure,
+                registry_platform_config::ListenerNetworkExposure::ContainerPrivate
+            );
+
+            let undeclared = format!("{base}metricsListener:\n  bind: {bind}\n");
+            assert!(
+                RuntimeConfig::parse_yaml(undeclared.as_bytes()).is_err(),
+                "the wildcard {wildcard} needs container-private exposure"
+            );
+        }
+        for rejected_host in ["evidence.internal", "8.8.8.8", "ff02::1", "169.254.1.1"] {
+            let candidate = format!(
+                "{base}metricsListener:\n  bind: {}\n  networkExposure: container-private\n",
+                bind_of(rejected_host, 9090)
+            );
+            assert!(
+                RuntimeConfig::parse_yaml(candidate.as_bytes()).is_err(),
+                "container-private accepted {rejected_host}"
+            );
+        }
+        let shared = format!(
+            "{base}metricsListener:\n  bind: 0.0.0.0:8080\n  networkExposure: container-private\n"
+        );
+        assert!(matches!(
+            RuntimeConfig::parse_yaml(shared.as_bytes()),
+            Err(ConfigError::Invalid(
+                "metricsListener must not share the evidence listener binding"
+            ))
+        ));
     }
 
     /// For one release the contract and reader both tolerate an empty retired

@@ -12,13 +12,14 @@
 
 use std::{
     fmt,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
 };
 
 use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 use registry_platform_config::{
-    AuditKeyConfig, ConfigBlockErrorKind, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
+    check_metrics_bind_address, check_metrics_bind_apart, AuditKeyConfig, ConfigBlockErrorKind,
+    ListenerNetworkExposure, MetricsBindError, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
     RuntimeFileCheck, SecretProvidersConfig, SecretReference, DEFAULT_STAND_IN,
 };
 use registry_platform_httputil::client::{
@@ -277,6 +278,8 @@ pub struct ListenerConfig {
 #[derive(Debug, Eq, PartialEq)]
 pub struct MetricsListenerConfig {
     pub bind: SocketAddr,
+    /// `container-private` additionally permits the wildcard address.
+    pub network_exposure: registry_platform_config::ListenerNetworkExposure,
 }
 
 /// The Evidence deployment this service requests credentials from.
@@ -515,7 +518,9 @@ impl DeliveryConfig {
     pub(crate) fn binding_fault(&self) -> Option<&'static str> {
         binding_findings(
             self.listener.bind,
-            self.metrics_listener.as_ref().map(|metrics| metrics.bind),
+            self.metrics_listener
+                .as_ref()
+                .map(|metrics| (metrics.bind, metrics.network_exposure)),
         )
         .first()
         .map(|finding| finding.message)
@@ -610,7 +615,7 @@ pub struct DeliveryDocument {
     /// address the delivery listener does not use. Absent means no metrics
     /// endpoint exists.
     #[serde(default)]
-    pub metrics_listener: Option<registry_platform_config::ListenerConfig>,
+    pub metrics_listener: Option<registry_platform_config::MetricsListenerConfig>,
     /// The secret providers `tokenClient.privateKeyRef` may name.
     pub secret_providers: SecretProvidersConfig,
     /// The required durable audit journal for offer attribution and delivery
@@ -1106,7 +1111,7 @@ impl DeliveryDocument {
         findings.extend(binding_findings(
             self.listener.address.bind.socket_addr(),
             self.metrics_listener
-                .map(|metrics| metrics.bind.socket_addr()),
+                .map(|metrics| (metrics.bind.socket_addr(), metrics.network_exposure)),
         ));
         self.secret_findings(&mut findings);
         self.audit_findings(&mut findings);
@@ -1357,6 +1362,7 @@ impl DeliveryDocument {
             },
             metrics_listener: self.metrics_listener.map(|metrics| MetricsListenerConfig {
                 bind: metrics.bind.socket_addr(),
+                network_exposure: metrics.network_exposure,
             }),
             secret_providers: self.secret_providers,
             audit: AuditConfig {
@@ -1663,35 +1669,15 @@ fn canonical_supervised_local_port(value: &str) -> Option<u16> {
     (value == format!("http://127.0.0.1:{port}")).then_some(port)
 }
 
-fn normalized_bind_address(address: IpAddr) -> IpAddr {
-    match address {
-        IpAddr::V6(address) => address
-            .to_ipv4_mapped()
-            .map_or(IpAddr::V6(address), IpAddr::V4),
-        address => address,
-    }
-}
-
-fn is_private_metrics_address(address: IpAddr) -> bool {
-    let is_private = match address {
-        IpAddr::V4(address) => {
-            address.is_loopback() || address.is_private() || address.is_link_local()
-        }
-        IpAddr::V6(address) => {
-            // `IpAddr` carries no interface scope, so accepting fe80::/10
-            // here would admit an unscoped link-local binding.
-            address.is_loopback() || address.is_unique_local()
-        }
-    };
-    is_private && !address.is_unspecified() && !address.is_multicast()
-}
-
 /// The rules the delivery and metrics listener bindings follow.
 ///
 /// An ephemeral delivery port leaves the service running and reachable by
 /// nobody, because the origin it published names a port it is not on. The
 /// metrics listener is a distinct private binding.
-fn binding_findings(listener: SocketAddr, metrics: Option<SocketAddr>) -> Vec<Finding> {
+fn binding_findings(
+    listener: SocketAddr,
+    metrics: Option<(SocketAddr, ListenerNetworkExposure)>,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     if listener.port() == 0 {
         findings.push(Finding::error(
@@ -1701,30 +1687,28 @@ fn binding_findings(listener: SocketAddr, metrics: Option<SocketAddr>) -> Vec<Fi
             "Bind the listener to the port the credential issuer origin names.",
         ));
     }
-    let Some(metrics) = metrics else {
+    let Some((metrics, exposure)) = metrics else {
         return findings;
     };
-    if metrics.port() == 0 {
-        findings.push(Finding::error(
+    match check_metrics_bind_address(metrics, exposure) {
+        Ok(()) => {}
+        Err(MetricsBindError::PortZero) => findings.push(Finding::error(
             "evidence.oid4vci.metrics-port",
             "/metricsListener/bind",
             "the metrics listener port must be non-zero",
             "Bind the metrics listener to a fixed port the delivery listener does not use.",
-        ));
-    }
-    let address = normalized_bind_address(metrics.ip());
-    if !is_private_metrics_address(address) {
-        findings.push(Finding::error(
+        )),
+        Err(_) => findings.push(Finding::error(
             "evidence.oid4vci.metrics-address",
             "/metricsListener/bind",
             "the metrics listener must bind a loopback or private address",
-            "Bind the metrics listener to a loopback, private IPv4, or unique local IPv6 address.",
-        ));
+            "Bind the metrics listener to a loopback, private IPv4, or unique local IPv6 address. \
+             Declare metricsListener.networkExposure: container-private to bind a wildcard address \
+             inside a container.",
+        )
+        .reading(&["/metricsListener/networkExposure"])),
     }
-    let public_address = normalized_bind_address(listener.ip());
-    if metrics.port() == listener.port()
-        && (public_address.is_unspecified() || public_address == address)
-    {
+    if check_metrics_bind_apart(metrics, &[("delivery listener", listener)]).is_err() {
         findings.push(
             Finding::error(
                 "evidence.oid4vci.metrics-shared-binding",
@@ -1802,6 +1786,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
         | ["offers", "issuer" | "jwksUri"] => "https://deferred.invalid",
         ["listener", "bind"] => "127.0.0.1:8090",
         ["metricsListener", "bind"] => "127.0.0.1:9090",
+        ["metricsListener", "networkExposure"] => "private-address",
         ["validationMode"] => "strict",
         // The list is a set, so each position takes its own algorithm.
         ["offers", "algorithms", index] => {
@@ -2747,7 +2732,6 @@ store:
             "10.0.0.1:9090",
             "172.16.0.1:9090",
             "192.168.0.1:9090",
-            "169.254.1.1:9090",
             "[::1]:9090",
             "[fc00::1]:9090",
             "[fdff:ffff::1]:9090",
@@ -2755,6 +2739,64 @@ store:
             assert!(
                 load_from(&with_metrics("127.0.0.1:8090", address)).is_ok(),
                 "metrics refused {address}"
+            );
+        }
+    }
+
+    #[test]
+    fn link_local_and_ipv4_mapped_metrics_addresses_are_refused() {
+        for address in [
+            "169.254.1.1:9090",
+            "[::ffff:127.0.0.1]:9090",
+            "[::ffff:10.0.0.1]:9090",
+        ] {
+            assert_eq!(
+                refused(&with_metrics("127.0.0.1:8090", address)),
+                ["evidence.oid4vci.metrics-address"],
+                "metrics accepted {address}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_metrics_wildcard_needs_container_private_exposure() {
+        let with_exposure = |bind: &str| {
+            with_metrics("127.0.0.1:8090", bind).replace(
+                &format!("metricsListener:\n  bind: \"{bind}\"\n"),
+                &format!(
+                    "metricsListener:\n  bind: \"{bind}\"\n  networkExposure: container-private\n"
+                ),
+            )
+        };
+        for wildcard in ["0.0.0.0:9090", "[::]:9090"] {
+            assert_eq!(
+                refused(&with_metrics("127.0.0.1:8090", wildcard)),
+                ["evidence.oid4vci.metrics-address"],
+                "metrics accepted {wildcard} without container-private"
+            );
+            let config = load_from(&with_exposure(wildcard))
+                .unwrap_or_else(|_| panic!("container-private refused {wildcard}"));
+            assert_eq!(
+                config
+                    .metrics_listener
+                    .expect("configured")
+                    .network_exposure,
+                registry_platform_config::ListenerNetworkExposure::ContainerPrivate
+            );
+        }
+        // Everything else stays refused, and a wildcard on the served port
+        // overlaps the delivery listener.
+        for (bind, code) in [
+            ("8.8.8.8:9090", "evidence.oid4vci.metrics-address"),
+            ("169.254.1.1:9090", "evidence.oid4vci.metrics-address"),
+            ("[::ffff:10.0.0.1]:9090", "evidence.oid4vci.metrics-address"),
+            ("0.0.0.0:0", "evidence.oid4vci.metrics-port"),
+            ("0.0.0.0:8090", "evidence.oid4vci.metrics-shared-binding"),
+        ] {
+            assert_eq!(
+                refused(&with_exposure(bind)),
+                [code],
+                "container-private metrics accepted {bind}"
             );
         }
     }
@@ -3061,6 +3103,7 @@ store:
         assert_eq!(config.binding_fault(), None);
         config.metrics_listener = Some(MetricsListenerConfig {
             bind: "0.0.0.0:9090".parse().unwrap(),
+            network_exposure: registry_platform_config::ListenerNetworkExposure::PrivateAddress,
         });
         assert_eq!(
             config.binding_fault(),
