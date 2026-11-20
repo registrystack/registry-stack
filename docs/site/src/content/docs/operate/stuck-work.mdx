@@ -246,8 +246,8 @@ The signals are:
   Held and refused items are the ones that need a person.
 - `adapter_job_last_successful_pass_age_seconds` is the age of the last pass this process settled.
   It is absent until the first pass settles.
-  A standby process keeps ageing while another process holds the lease, so alert on the youngest age across processes.
-  Passes can be up to `delayMilliseconds` times `backoffMultiplier` apart, so set the threshold above that gap.
+  A standby process keeps ageing while another process holds the lease, so alert on the youngest age across the processes of one job.
+  Passes are due `delayMilliseconds` times `backoffMultiplier` after the last pass at most, and a pass takes its own time on top, so set the threshold well above that gap.
 - `adapter_job_pass_failures_total{reason}` counts passes that did not settle.
   The reasons are `page-fault`, `destination-stop`, `refusal-limit`, and `store-unreachable`.
   A standby process that finds the lease held by another process is not counted.
@@ -457,6 +457,9 @@ scrape_configs:
 The listener has no authentication.
 Keep every target on a private network that only your monitoring can reach.
 The alert rules below do not filter on `job`, so any job names work.
+The Adapter job stale-pass rule is the exception to that freedom.
+It groups processes by every label except `instance`, so scrape each adapter job under its own `job` name.
+If your service discovery adds another per-process label, such as `pod`, add it to the rule's `without` list.
 
 ## Example alert rules
 
@@ -467,7 +470,8 @@ The `job` label comes from your scrape configuration, so match it to the names y
 Because a failed database sample omits the series, groups that read gauges from the database include an `absent()` rule.
 
 Where you can clear a dead-lettered item with a command, the rule fires while any are left.
-Where no command can clear it, a count above zero would fire until retention erases the item, so the rule fires only when the count rises.
+Where no command can clear it, a count above zero would fire until retention erases the item, so the rule fires when the count rises from one minute to the next.
+Comparing each minute keeps a retention sweep that erases old items from hiding a new one in the same window.
 Check the series itself to see how many are left.
 The Scheduling, Documents, and Render groups need their optional `metricsListener` turned on.
 
@@ -566,11 +570,17 @@ groups:
         annotations:
           summary: Review tasks are past their due time. A supervisor can reassign them.
       - alert: CaseworkCompletionDeadLettered
-        expr: delta(casework_completion_deliveries{state="dead-lettered"}[15m]) > 0
+        expr: max_over_time((casework_completion_deliveries{state="dead-lettered"} - casework_completion_deliveries{state="dead-lettered"} offset 1m)[15m:1m]) > 0
         for: 0m
         labels: {severity: page}
         annotations:
           summary: A completion delivery was dead-lettered. Casework has no command to retry it, so tell the requester the review finished.
+      - alert: CaseworkCompletionExpired
+        expr: max_over_time((casework_completion_deliveries{state="expired"} - casework_completion_deliveries{state="expired"} offset 1m)[15m:1m]) > 0
+        for: 0m
+        labels: {severity: warn}
+        annotations:
+          summary: A completion delivery expired undelivered, so the requester was not told the review finished.
       - alert: CaseworkCompletionUnknown
         expr: casework_completion_deliveries{state="unknown"} > 0
         for: 15m
@@ -666,7 +676,7 @@ groups:
   - name: scheduling
     rules:
       - alert: SchedulingOutboxDeadLettered
-        expr: delta(scheduling_outbox_items{state="dead-lettered"}[15m]) > 0
+        expr: max_over_time((scheduling_outbox_items{state="dead-lettered"} - scheduling_outbox_items{state="dead-lettered"} offset 1m)[15m:1m]) > 0
         for: 0m
         labels: {severity: warn}
         annotations:
@@ -684,7 +694,7 @@ groups:
         annotations:
           summary: The oldest pending delivery intent has waited more than 15 minutes.
       - alert: SchedulingHookDeadLettered
-        expr: delta(scheduling_hook_deliveries{state="dead-lettered"}[15m]) > 0
+        expr: max_over_time((scheduling_hook_deliveries{state="dead-lettered"} - scheduling_hook_deliveries{state="dead-lettered"} offset 1m)[15m:1m]) > 0
         for: 0m
         labels: {severity: warn}
         annotations:
@@ -740,7 +750,7 @@ groups:
         annotations:
           summary: An erasure job was dead-lettered. List it with documentsctl erasure list.
       - alert: DocumentsHookDeadLettered
-        expr: delta(documents_hook_deliveries{state="dead-lettered"}[15m]) > 0
+        expr: max_over_time((documents_hook_deliveries{state="dead-lettered"} - documents_hook_deliveries{state="dead-lettered"} offset 1m)[15m:1m]) > 0
         for: 0m
         labels: {severity: warn}
         annotations:
@@ -856,7 +866,7 @@ groups:
         for: 10m
         labels: {severity: page}
         annotations:
-          summary: No job process has settled a pass for more than 30 minutes. Set the threshold to twice the job's longest interval times its backoffMultiplier.
+          summary: No process of the job has settled a pass for more than 30 minutes.
       - alert: AdapterJobPassFailing
         expr: sum by (reason) (increase(adapter_job_pass_failures_total[15m])) > 0
         for: 15m
