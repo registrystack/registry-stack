@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::contract::{
     DisclosureConditionSource, DisclosureWhenPredicate, DisclosureWithholdSource, EntitySource,
-    EventTrigger, FieldTypeSource,
+    EventTrigger, FieldTypeSource, Operation, ProjectAccessProfileSource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{CompiledDisclosureCondition, CompiledEntity, DisclosureWithhold};
@@ -40,6 +40,55 @@ pub(super) fn compile_conditions(source: &EntitySource) -> Vec<CompiledDisclosur
             exempt_profiles: condition.exempt_profiles.iter().cloned().collect(),
         })
         .collect()
+}
+
+/// Refuse a profile that requires an access reason yet holds a permission whose
+/// route does not check the header. The reason is enforced on record reads and
+/// direct writes only, so every other grant would admit a request with no reason
+/// on record.
+pub(super) fn validate_access_reason_operations(
+    profile: &ProjectAccessProfileSource,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if !profile.require_access_reason {
+        return;
+    }
+    let root = format!("project.accessProfiles[id={}].permissions", profile.id);
+    let mut refuse = |path: String| {
+        errors.push(Diagnostic::error(
+            "breg.access-profile.access-reason-operation-unsupported",
+            path,
+            "a profile that requires an access reason cannot hold this permission, because its route does not check the Registry-Access-Reason header",
+        ));
+    };
+    let permissions = &profile.permissions;
+    for grant in &permissions.entities {
+        if grant.operations.iter().any(|operation| {
+            matches!(
+                operation,
+                Operation::Import | Operation::Invoke | Operation::Start
+            )
+        }) {
+            refuse(format!(
+                "{root}.records[recordType={}].operations",
+                grant.entity
+            ));
+        }
+    }
+    for (name, present) in [
+        ("actions", !permissions.actions.is_empty()),
+        ("proposals", !permissions.proposals.is_empty()),
+        ("datasets", !permissions.datasets.is_empty()),
+        ("externalViews", !permissions.external_views.is_empty()),
+        (
+            "refreshExternalProjections",
+            !permissions.refresh_external_projections.is_empty(),
+        ),
+    ] {
+        if present {
+            refuse(format!("{root}.{name}"));
+        }
+    }
 }
 
 /// Validate one entity's disclosure conditions and read hooks against the

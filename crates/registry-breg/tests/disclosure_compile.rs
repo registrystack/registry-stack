@@ -381,3 +381,75 @@ fn a_dataset_cannot_release_a_field_withheld_from_a_reader() {
         "{found:?}"
     );
 }
+
+#[test]
+fn a_reason_profile_may_hold_enforced_read_operations() {
+    let mut project = source();
+    project["accessProfiles"][0]["permissions"]["records"][0]["allowCount"] = json!(true);
+    assert!(compile(&project).is_ok());
+}
+
+#[test]
+fn a_reason_profile_cannot_hold_an_operation_that_does_not_check_the_reason() {
+    const PROFILE: &str = "project.accessProfiles[id=registrar].permissions";
+    let code = "breg.access-profile.access-reason-operation-unsupported";
+    for operation in ["import", "invoke", "start"] {
+        let mut project = source();
+        project["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
+            json!(["get", operation]);
+        assert_refused(
+            &project,
+            code,
+            &format!("{PROFILE}.records[recordType=person].operations"),
+        );
+    }
+    let mut actions = source();
+    actions["accessProfiles"][0]["permissions"]["actions"] =
+        json!([{"action":"close","operations":["invoke"]}]);
+    assert_refused(&actions, code, &format!("{PROFILE}.actions"));
+    let mut proposals = source();
+    proposals["accessProfiles"][0]["permissions"]["proposals"] =
+        json!([{"action":"close","operations":["get"]}]);
+    assert_refused(&proposals, code, &format!("{PROFILE}.proposals"));
+    let mut datasets = source();
+    datasets["accessProfiles"][0]["permissions"]["datasets"] =
+        json!([{"dataset":"counts","operations":["read-live"]}]);
+    assert_refused(&datasets, code, &format!("{PROFILE}.datasets"));
+    let mut views = source();
+    views["accessProfiles"][0]["permissions"]["externalViews"] =
+        json!([{"view":"directory","links":[]}]);
+    assert_refused(&views, code, &format!("{PROFILE}.externalViews"));
+    let mut refresh = source();
+    refresh["accessProfiles"][0]["permissions"]["refreshExternalProjections"] =
+        json!(["directory"]);
+    assert_refused(
+        &refresh,
+        code,
+        &format!("{PROFILE}.refreshExternalProjections"),
+    );
+}
+
+#[test]
+fn a_profile_without_a_reason_requirement_may_import() {
+    let mut project = source();
+    project["accessProfiles"][1]["permissions"]["records"][0]["operations"] =
+        json!(["get", "import"]);
+    let found = refusal_or_empty(&project);
+    assert!(
+        !found
+            .iter()
+            .any(|(code, _)| code == "breg.access-profile.access-reason-operation-unsupported"),
+        "{found:?}"
+    );
+}
+
+fn refusal_or_empty(value: &Value) -> Vec<(String, String)> {
+    match compile(value) {
+        Ok(_) => Vec::new(),
+        Err(failure) => failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+            .collect(),
+    }
+}
