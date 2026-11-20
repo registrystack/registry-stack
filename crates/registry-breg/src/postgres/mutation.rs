@@ -1945,6 +1945,9 @@ impl PostgresRecordMutationService {
         let Some(readable) = plan_readable_fields(&self.registry, entity_id, profile_id) else {
             return Err(IngestionServiceError::Unavailable);
         };
+        // A receipt stored before a disclosure condition bound the profile
+        // still serves without the members the condition names.
+        let readable = crate::disclosure::plan(entity, profile_id).response_fields(&readable);
         let api_names: std::collections::BTreeMap<&str, &str> = entity
             .stored_fields
             .iter()

@@ -2152,6 +2152,7 @@ impl MutationTransaction {
             &request.plan.entity,
             &current.data,
             &request.response_fields,
+            request.claims.access_profile(),
         )?;
         let etag = strong_record_etag(
             self.audit.profile(),
@@ -2182,6 +2183,7 @@ impl MutationTransaction {
             &request.plan.entity,
             &current.data,
             &request.response_fields,
+            request.claims.access_profile(),
         )?;
         let member = record_profile::record_member(
             current.record_id.clone(),
@@ -3530,11 +3532,20 @@ fn field_id_for_api_name<'a>(
 /// enters a held response body: the idempotency cache stores ciphertext, and
 /// the single authorized HTTP serve edge opens the members for both fresh and
 /// replayed bodies.
+///
+/// A field a bound disclosure condition names is always omitted. The answer
+/// never evaluates the record's state, so a response captured or replayed
+/// after the record is marked cannot carry a value from before. The strong
+/// entity tag still binds the profile's full readable set, so it matches the
+/// tag a read of the record returns.
 fn response_data(
     entity: &CompiledEntity,
     data: &Map<String, Value>,
     response_fields: &BTreeSet<String>,
+    access_profile: &str,
 ) -> Result<Map<String, Value>, MutationError> {
+    let response_fields =
+        &crate::disclosure::plan(entity, access_profile).response_fields(response_fields);
     let mut response = Map::new();
     for (field_id, value) in data {
         if !response_fields.contains(field_id) {
