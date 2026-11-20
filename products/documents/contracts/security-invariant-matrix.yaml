@@ -966,3 +966,25 @@ invariants:
     negativeTest:
       path: crates/registry-documents-core/src/project.rs
       name: profiles_of_one_actor_kind_reading_different_principal_claims_are_refused
+  - id: DOCUMENTS-SEC-55
+    state: enforced
+    threat: >-
+      The operator metrics listener becomes a second disclosure channel: a
+      reachable address, a socket shared with the serving listener, or a sampled
+      value carrying record content lets a reader learn queue state or record
+      values without authentication.
+    enforcementPoint: >-
+      Metrics are absent unless the runtime file configures metricsListener. The
+      bind is read through the shared platform rule: public, link-local,
+      multicast and IPv4-mapped addresses and port 0 are refused, the
+      unspecified address is permitted only under metricsListener.networkExposure
+      container-private, and a bind that shares the serving listener's socket,
+      wildcard included, is refused. The listener has no authentication, so it
+      must stay on a private network. Sampled series carry counts and ages only,
+      never record content.
+    refusal: >-
+      Refuse the runtime file naming the metrics listener's refusal class, never
+      the configured address. Serve no metrics route on the serving listener.
+    negativeTest:
+      path: crates/registry-documents/src/config.rs
+      name: the_metrics_listener_must_be_private_and_apart_from_the_listener

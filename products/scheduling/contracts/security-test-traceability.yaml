@@ -382,3 +382,14 @@ entries:
       - {path: crates/registry-scheduling/src/service.rs, name: a_success_replay_receipt_projects_through_the_same_document}
       - {path: crates/registry-scheduling/src/hooks.rs, name: projections_disclose_only_the_requested_closed_fields}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: fresh_claim_storage_refuses_a_partial_owner, features: [postgres-test]}
+  - id: SCHEDULING-SEC-44
+    tests:
+      - {path: crates/registry-scheduling/src/config.rs, name: the_metrics_listener_must_be_private_and_apart_from_the_listener}
+      - {path: crates/registry-scheduling/src/config.rs, name: the_metrics_wildcard_needs_container_private_exposure}
+      - {path: crates/registry-scheduling/src/config.rs, name: the_metrics_listener_may_not_share_a_wildcard_listener_port}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_metrics_listener_serves_sampled_queues_and_nothing_else}
+      - {path: crates/registry-platform-config/src/metrics_bind.rs, name: each_refused_class_names_its_rule}
+      - {path: crates/registry-platform-config/src/metrics_bind.rs, name: ipv4_mapped_forms_of_refused_addresses_are_refused}
+      - {path: crates/registry-platform-config/src/metrics_bind.rs, name: container_private_permits_the_unspecified_address}
+      - {path: crates/registry-platform-config/src/metrics_bind.rs, name: private_address_refuses_the_unspecified_address}
+      - {path: crates/registry-platform-config/src/metrics_bind.rs, name: a_wildcard_serving_bind_on_the_same_port_overlaps}
