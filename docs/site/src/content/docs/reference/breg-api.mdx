@@ -692,6 +692,18 @@ A starter can explain document requirements before creating a draft.
 A Get-only Action description includes only that profile's readable slots.
 These summaries disclose no bytes or lifecycle links and grant no upload, download, or delete authority.
 
+A Proposal Action's `execution` also carries `review` and `application`, for example `{"mode": "proposal", "review": "required", "application": "automatic"}`.
+`review` is `none` or `required`: whether a submitted request is reviewed before it can be applied.
+`application` is `manual` or `automatic`: whether an approved or review-free submission waits for Apply or the built-in executor applies it.
+An immediate Action carries neither member.
+The values let a host explain what happens after Submit.
+`required` does not say who reviews: a review provider can assess a request automatically, so a host should not promise that a person will read it.
+They name no review authority, source, or policy, and grant no review or Apply authority.
+Rust exposes `review()` and `application()`, Node exposes `review` and `application`, and Python exposes `action["review"]` and `action["application"]`.
+An absent member means an immediate Action or a server that predates these members, so treat it as unknown rather than guessing a default.
+Rust keeps a value this client version does not recognise as `Unknown`, and Node and Python return it as served.
+A member that is not a lowercase identifier string fails the whole metadata document as a protocol error.
+
 `proposals.actions` is a read-only inventory of each visible `actionId` and `accessProfile` pair, its `operations`, and its `readableInputs`.
 Rust exposes `proposal_actions()`, Node exposes `proposalActions`, and Python exposes `proposal_actions`, all from one validated client model.
 Profiles are never unioned.
@@ -699,9 +711,12 @@ Start does not imply Get, and List or Apply can be advertised without a Start ro
 Hosts can use the exact inventory to choose their UI, while per-Proposal links still determine currently available lifecycle operations.
 
 {/* Evidence: crates/registry-breg/src/artifacts.rs "action-contracts/v1", public_action_metadata_entry;
+    crates/registry-breg/src/tests/artifacts_response_schema_tests.rs action_metadata_execution_names_review_and_application_only_for_proposals;
     crates/registry-breg-client/src/metadata_tests.rs;
-    crates/registry-breg-client/src/metadata.rs proposal_actions;
+    crates/registry-breg-client/src/metadata.rs proposal_actions, BRegActionReview, BRegActionApplication;
     crates/registry-breg-client-node/client.d.ts proposalActions;
+    crates/registry-breg-client-node/__test__/proposals.test.js;
+    crates/registry-breg-client-py/tests/python/test_proposals.py test_proposal_review_and_application_are_served_values_or_none;
     crates/registry-breg-client/src/actions.rs. */}
 {/* TODO[evidence]: no named test shows that an omitted, unknown, and unusable profile return the same concealed 404 on an Action route, or the Python proposal_actions name. */}
 

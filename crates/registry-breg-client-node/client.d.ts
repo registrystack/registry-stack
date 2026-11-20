@@ -516,6 +516,18 @@ export interface BRegActionDescriptor {
   readonly revision: string
   readonly display: Readonly<{label?: string; description?: string}>
   readonly mode: 'immediate' | 'proposal'
+  /**
+   * Whether a Proposal request is reviewed before application. `null` for an
+   * immediate Action or a server that predates it; a future value is served
+   * as received.
+   */
+  readonly review: 'none' | 'required' | (string & {}) | null
+  /**
+   * Whether an accepted Proposal request is applied automatically or waits for
+   * a manual Apply. `null` for an immediate Action or a server that predates
+   * it; a future value is served as received.
+   */
+  readonly application: 'manual' | 'automatic' | (string & {}) | null
   readonly id: string
   readonly inputMode: string | null
   readonly maximumInputStringBytes: SafeInteger | null

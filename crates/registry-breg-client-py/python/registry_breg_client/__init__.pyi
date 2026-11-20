@@ -362,7 +362,14 @@ class BRegMetadata:
         """Validated caller-filtered inert descriptions. They never grant entity authority."""
         ...
     @property
-    def actions(self) -> Sequence[dict[str, JsonValue]]: ...
+    def actions(self) -> Sequence[dict[str, JsonValue]]:
+        """Action projections include review and application as str | None.
+
+        A Proposal Action serves review as 'none' or 'required' and application
+        as 'manual' or 'automatic'. None means an immediate Action or a server
+        that predates them; a future value is kept as served.
+        """
+        ...
     @property
     def registry_identifier(self) -> str: ...
     @property

@@ -97,6 +97,12 @@ if (geometry.type === 'Polygon') {
 metadata.actions[0]?.inputs[0]?.schemaJson.toUpperCase()
 metadata.actions[0]?.attachments[0]?.contentTypes[0]?.toUpperCase()
 metadata.actions[0]?.attachments[0]?.maximumBytes.toFixed()
+metadata.actions[0]?.review satisfies 'none' | 'required' | (string & {}) | null | undefined
+metadata.actions[0]?.application satisfies 'manual' | 'automatic' | (string & {}) | null | undefined
+// @ts-expect-error An older server publishes no review, so the value can be null.
+metadata.actions[0]?.review.toUpperCase()
+// @ts-expect-error An older server publishes no application, so the value can be null.
+metadata.actions[0]?.application.toUpperCase()
 metadata.proposalActions[0]?.actionId.toUpperCase()
 metadata.proposalActions[0]?.accessProfile.toUpperCase()
 metadata.proposalActions[0]?.operations[0]?.toUpperCase()

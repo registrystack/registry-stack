@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Runtime Action metadata (`GET /v1/registry`, `metadata/registry.json` and the
+  OpenAPI `x-registry-action` extension) carries `execution.review` (`none` or
+  `required`) and `execution.application` (`manual` or `automatic`) for each
+  Proposal Action, so a host can explain what follows Submit. Immediate Actions
+  carry neither. The review authority, source, policy and attempt limit stay in
+  the build-time Action contracts. The members are additive within
+  `metadataVersion: "2"`, and earlier clients ignore them. The Rust client
+  exposes `BRegActionDescriptor::review()` and `application()`, returning
+  `BRegActionReview` and `BRegActionApplication` with an `Unknown` variant for a
+  value it does not recognise, and the `registry-stack-client` facade re-exports
+  both. The Node.js and Python clients expose `review`
+  and `application` on each Action as the served string, or `null` (`None`) when
+  the server sends none, as an older server does.
+
 ## 0.47.0 - 2026-11-20
 
 - BREAKING: A bearer token that carries a Casework task grant

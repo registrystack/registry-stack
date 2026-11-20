@@ -80,6 +80,53 @@ class ProposalLookupTests(unittest.TestCase):
             thread.join()
             server.server_close()
 
+    def test_proposal_review_and_application_are_served_values_or_none(self):
+        fixture = Path(__file__).resolve().parents[3] / 'registry-breg-client/tests/fixtures/attachments.json'
+        older = json.loads(fixture.read_text())['metadata']
+        document = older
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                payload = json.dumps(document).encode()
+                self.send_response(200)
+                for key, val in [('content-type', 'application/json'), ('cache-control', 'no-store'),
+                                 ('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'),
+                                 ('vary', 'authorization, accept'), ('content-length', str(len(payload)))]:
+                    self.send_header(key, val)
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = BaseRegistryClient(f'http://127.0.0.1:{server.server_port}/')
+            action = client.registry_contract('writer').actions[0]
+            self.assertIsNone(action['review'])
+            self.assertIsNone(action['application'])
+            for review, application in [('required', 'automatic'), ('none', 'manual'),
+                                        ('future-review', 'future-application')]:
+                document = json.loads(json.dumps(older))
+                document['actions'][0]['execution'] = {'mode': 'proposal', 'review': review,
+                                                       'application': application}
+                action = client.registry_contract('writer').actions[0]
+                self.assertEqual(action['review'], review)
+                self.assertEqual(action['application'], application)
+            for execution in [{'mode': 'proposal', 'review': True},
+                              {'mode': 'proposal', 'application': 'Manual'}]:
+                document = json.loads(json.dumps(older))
+                document['actions'][0]['execution'] = execution
+                with self.assertRaises(BaseRegistryClientError) as raised:
+                    client.registry_contract('writer')
+                self.assertEqual(raised.exception.kind, 'protocol')
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
     def test_get_only_capability_retains_origin_prefix_and_projection(self):
         requests = []
 

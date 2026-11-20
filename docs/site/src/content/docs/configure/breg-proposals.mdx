@@ -79,7 +79,12 @@ Such a Proposal has no review outcome: follow it to `applied` or `cancelled`.
 A blocked application is a turn change, not an outcome.
 The caller corrects the work with Retry, Revise or Rebase, or cancels it.
 
-{/* Evidence: crates/registry-breg/src/contract.rs ProposalPolicySource;
+Runtime metadata tells callers only whether review is `none` or `required` and whether application is `manual` or `automatic`, so a form can explain what follows Submit.
+The review authority, source, policy and application attempt limit stay in the build-time Action contracts.
+[Actions in metadata](../../reference/breg-api/#actions-in-metadata) describes the members.
+
+{/* Evidence: crates/registry-breg/src/artifacts.rs public_action_metadata_entry, action_contracts;
+    crates/registry-breg/src/contract.rs ProposalPolicySource;
     crates/registry-breg/src/review_store.rs review-ended;
     crates/registry-breg/tests/postgres_proposal_review_delivery.rs producer-identity-mismatch;
     crates/registry-breg/src/proposal_workflow.rs ProposalState. */}
