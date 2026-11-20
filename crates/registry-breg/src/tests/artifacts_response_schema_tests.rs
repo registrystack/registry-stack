@@ -396,6 +396,47 @@ fn immediate_action_metadata_and_operation_filter_selected_profile() {
 }
 
 #[test]
+fn action_metadata_execution_names_review_and_application_only_for_proposals() {
+    let facility = compiled_facility_registry();
+    let minimal = compiled_registry();
+    for (registry, action_id, execution) in [
+        (
+            &facility,
+            "correct-address",
+            json!({"mode": "proposal", "review": "required", "application": "automatic"}),
+        ),
+        (
+            &facility,
+            "deactivate-facility",
+            json!({"mode": "proposal", "review": "none", "application": "manual"}),
+        ),
+        (
+            &minimal,
+            "register-contact",
+            json!({"mode": "proposal", "review": "none", "application": "automatic"}),
+        ),
+        (&facility, "register-facility", json!({"mode": "immediate"})),
+        (
+            &minimal,
+            "update-contact-email",
+            json!({"mode": "immediate"}),
+        ),
+    ] {
+        let action = registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == action_id)
+            .expect("compiled action exists");
+        let profiles = super::action_profile_ids(action);
+        for selected_profile in [None, profiles.first().map(String::as_str)] {
+            let metadata = super::public_action_metadata_entry(action, selected_profile);
+            assert_eq!(metadata["execution"], execution, "{action_id}");
+        }
+    }
+}
+
+#[test]
 fn immediate_action_input_and_condition_schemas_are_strict_envelopes() {
     let registry = compiled_action_registry();
     let action = registry
@@ -556,6 +597,27 @@ fn compiled_registry() -> CompiledRegistry {
     ))
     .unwrap();
     compile_project(&project, &[], CompileProfile::Authoring).unwrap()
+}
+
+fn compiled_facility_registry() -> CompiledRegistry {
+    let project = crate::contract::parse_project_yaml(include_bytes!(
+        "../../../../products/breg/examples/facility/registry.yaml"
+    ))
+    .unwrap();
+    crate::compiler::compile_project_with_assets(
+        &project,
+        &[],
+        &[crate::contract::ModuleAssetSource {
+            module: None,
+            path: "plans/correct-address.rhai".into(),
+            bytes: include_bytes!(
+                "../../../../products/breg/examples/facility/plans/correct-address.rhai"
+            )
+            .to_vec(),
+        }],
+        CompileProfile::Authoring,
+    )
+    .unwrap()
 }
 
 fn compiled_action_registry() -> CompiledRegistry {

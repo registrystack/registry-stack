@@ -1370,6 +1370,18 @@ pub(crate) fn public_action_metadata_entry(
         }
     });
     if let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution {
+        // Callers learn only whether a request is reviewed and whether an
+        // accepted request is applied automatically. The review authority,
+        // source, policy selection and attempt limit stay in the build-time
+        // Action contracts written by `action_contracts`.
+        metadata["execution"]["review"] = json!(match proposal.review {
+            crate::model::CompiledProposalReview::None => "none",
+            crate::model::CompiledProposalReview::Required { .. } => "required",
+        });
+        metadata["execution"]["application"] = json!(match proposal.application {
+            crate::model::CompiledProposalApplication::Manual => "manual",
+            crate::model::CompiledProposalApplication::Automatic { .. } => "automatic",
+        });
         metadata["attachments"] = json!(proposal
             .attachments
             .values()

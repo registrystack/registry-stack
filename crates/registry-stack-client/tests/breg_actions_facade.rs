@@ -15,12 +15,13 @@ use std::collections::BTreeMap;
 use std::error::Error;
 
 use registry_stack_client::breg::{
-    BRegActionBinding, BRegActionError, BRegActionInvocationRequest, BRegActionReceipt,
-    BRegActionResultReference, BRegActionTargetConditions, BRegActionTargetConditionsRequest,
-    BRegComplete, BRegCreateBinding, BRegCreateRequest, BRegIdempotencyKey, BRegMetadata,
-    BRegMetadataSelectionError, BRegPreparedAction, BRegPreparedCreate, BRegPreparedProposal,
-    BRegProposal, BRegProposalCollection, BRegProposalGetBinding, BRegProposalPage,
-    BRegProposalQuery, BRegRecordFormat, BaseRegistryClient, BaseRegistryClientError, Uuid,
+    BRegActionApplication, BRegActionBinding, BRegActionDescriptor, BRegActionError,
+    BRegActionInvocationRequest, BRegActionReceipt, BRegActionResultReference, BRegActionReview,
+    BRegActionTargetConditions, BRegActionTargetConditionsRequest, BRegComplete, BRegCreateBinding,
+    BRegCreateRequest, BRegIdempotencyKey, BRegMetadata, BRegMetadataSelectionError,
+    BRegPreparedAction, BRegPreparedCreate, BRegPreparedProposal, BRegProposal,
+    BRegProposalCollection, BRegProposalGetBinding, BRegProposalPage, BRegProposalQuery,
+    BRegRecordFormat, BaseRegistryClient, BaseRegistryClientError, Uuid,
 };
 use serde_json::{Map, Value};
 
@@ -102,6 +103,12 @@ async fn every_proposal_method_names_its_types(
     Ok(())
 }
 
+/// The review and application values a Proposal Action's descriptor returns.
+fn every_proposal_mode_value_names_its_type(action: &BRegActionDescriptor) {
+    let _: Option<&BRegActionReview> = action.review();
+    let _: Option<&BRegActionApplication> = action.application();
+}
+
 #[test]
 fn the_facade_names_every_action_type() {
     // Naming the functions is what keeps the signatures above compiled;
@@ -109,4 +116,5 @@ fn the_facade_names_every_action_type() {
     let _ = every_action_method_names_its_types;
     let _ = every_prepared_write_names_its_types;
     let _ = every_proposal_method_names_its_types;
+    let _ = every_proposal_mode_value_names_its_type;
 }

@@ -134,6 +134,36 @@ test('metadata inventory preserves profile boundaries and refuses old or malform
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
 
+test('proposal actions expose served review and application values and null from older servers', async () => {
+  let document = metadata;
+  const server = http.createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+    response.setHeader('cache-control', 'no-store');
+    response.setHeader('vary', 'authorization, accept');
+    response.setHeader('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01');
+    response.end(JSON.stringify(document));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const client = new BaseRegistryClient({baseUrl: `http://127.0.0.1:${server.address().port}/`});
+    const older = (await client.registryContract('author')).actions[0];
+    assert.equal(older.review, null);
+    assert.equal(older.application, null);
+    for (const [review, application] of [['required', 'automatic'], ['none', 'manual'], ['future-review', 'future-application']]) {
+      document = structuredClone(metadata);
+      document.actions[0].execution = {mode: 'proposal', review, application};
+      const action = (await client.registryContract('author')).actions[0];
+      assert.equal(action.review, review);
+      assert.equal(action.application, application);
+    }
+    for (const execution of [{mode: 'proposal', review: true}, {mode: 'proposal', application: 'Manual'}]) {
+      document = structuredClone(metadata);
+      document.actions[0].execution = execution;
+      await assert.rejects(client.registryContract('author'), error => error.kind === 'protocol');
+    }
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
 test('returned Proposal cursors are usable for explicit bounded continuation', async () => {
   let value = {items: []};
   const requests = [];

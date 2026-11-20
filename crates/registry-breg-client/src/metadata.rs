@@ -920,6 +920,85 @@ pub enum BRegActionMode {
     Proposal,
 }
 
+/// Whether a Proposal Action's request is reviewed before it can be applied.
+/// The value is descriptive and grants no review or application authority.
+#[derive(Clone, Eq, PartialEq)]
+pub enum BRegActionReview {
+    None,
+    Required,
+    /// A future review value remains visible as served, so this client
+    /// version never substitutes a guess for it.
+    Unknown(String),
+}
+
+impl BRegActionReview {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::None => "none",
+            Self::Required => "required",
+            Self::Unknown(value) => value,
+        }
+    }
+
+    fn parse(value: String) -> Self {
+        match value.as_str() {
+            "none" => Self::None,
+            "required" => Self::Required,
+            _ => Self::Unknown(value),
+        }
+    }
+}
+
+impl fmt::Debug for BRegActionReview {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unknown(_) => formatter.write_str("Unknown(<redacted>)"),
+            known => formatter.write_str(known.as_str()),
+        }
+    }
+}
+
+/// Whether an accepted Proposal Action request is applied automatically or
+/// waits for a manual Apply. The value is descriptive and grants no
+/// application authority.
+#[derive(Clone, Eq, PartialEq)]
+pub enum BRegActionApplication {
+    Manual,
+    Automatic,
+    /// A future application value remains visible as served, so this client
+    /// version never substitutes a guess for it.
+    Unknown(String),
+}
+
+impl BRegActionApplication {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Manual => "manual",
+            Self::Automatic => "automatic",
+            Self::Unknown(value) => value,
+        }
+    }
+
+    fn parse(value: String) -> Self {
+        match value.as_str() {
+            "manual" => Self::Manual,
+            "automatic" => Self::Automatic,
+            _ => Self::Unknown(value),
+        }
+    }
+}
+
+impl fmt::Debug for BRegActionApplication {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unknown(_) => formatter.write_str("Unknown(<redacted>)"),
+            known => formatter.write_str(known.as_str()),
+        }
+    }
+}
+
 /// Declared document requirement on one caller-visible Proposal Action.
 /// This summary grants no access to a Proposal or its bytes.
 #[derive(Clone, Eq, PartialEq, serde::Serialize)]
@@ -999,6 +1078,8 @@ impl fmt::Debug for BRegProposalActionDescriptor {
 pub struct BRegActionDescriptor {
     id: String,
     mode: BRegActionMode,
+    review: Option<BRegActionReview>,
+    application: Option<BRegActionApplication>,
     api_name: String,
     definition_revision: String,
     display: Value,
@@ -1032,6 +1113,19 @@ impl BRegActionDescriptor {
     #[must_use]
     pub const fn mode(&self) -> BRegActionMode {
         self.mode
+    }
+    /// The served review value of a Proposal Action. `None` means the server
+    /// did not publish one: an immediate Action, or a server that predates it.
+    #[must_use]
+    pub const fn review(&self) -> Option<&BRegActionReview> {
+        self.review.as_ref()
+    }
+    /// The served application value of a Proposal Action. `None` means the
+    /// server did not publish one: an immediate Action, or a server that
+    /// predates it.
+    #[must_use]
+    pub const fn application(&self) -> Option<&BRegActionApplication> {
+        self.application.as_ref()
     }
     #[must_use]
     pub fn identifier(&self) -> &str {
@@ -3253,6 +3347,19 @@ fn parse_actions(value: Value) -> Result<Vec<BRegActionDescriptor>, BRegMetadata
             "proposal" => BRegActionMode::Proposal,
             _ => return Err(metadata_error(BRegMetadataErrorKind::Shape)),
         };
+        let review = execution
+            .remove("review")
+            .map(identifier)
+            .transpose()?
+            .map(BRegActionReview::parse);
+        let application = execution
+            .remove("application")
+            .map(identifier)
+            .transpose()?
+            .map(BRegActionApplication::parse);
+        if mode == BRegActionMode::Immediate && (review.is_some() || application.is_some()) {
+            return Err(metadata_error(BRegMetadataErrorKind::Shape));
+        }
         let required_capabilities =
             optional_identifier_array(&mut action, "requiredCapabilities")?.unwrap_or_default();
         ensure_unique(required_capabilities.iter().map(String::as_str))?;
@@ -3394,6 +3501,8 @@ fn parse_actions(value: Value) -> Result<Vec<BRegActionDescriptor>, BRegMetadata
         parsed.push(BRegActionDescriptor {
             id,
             mode,
+            review,
+            application,
             api_name,
             definition_revision,
             display,

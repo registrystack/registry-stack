@@ -47,7 +47,7 @@ artifacts:
 
 identifier_catalog:
   path: products/identifiers/generated/catalog.v1.json
-  sha256: f9b32ade559a8bde23cea5ea634f2162d1902e85cf35340be43c92a3b3652ed0
+  sha256: a79314e564213d66fc5593e9e0176a56a6bdbe61b54f882c67c0c354115c3055
   entry_count: 331
 
 external:

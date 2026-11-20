@@ -2304,6 +2304,8 @@ fn action_descriptor_value(value: &registry_breg_client::BRegActionDescriptor) -
     let bounds = value.bounds();
     json!({
         "id": value.identifier(), "apiName": value.api_name(), "revision": value.definition_revision(), "display": value.display(), "mode": value.mode(),
+        "review": value.review().map(registry_breg_client::BRegActionReview::as_str),
+        "application": value.application().map(registry_breg_client::BRegActionApplication::as_str),
         "inputMode": value.input_mode(),
         "maximumInputStringBytes": value.maximum_input_string_bytes(),
         "attachments": value.attachments(),

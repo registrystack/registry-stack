@@ -1285,6 +1285,114 @@ fn get_only_proposal_metadata_promotes_get_without_list_or_start() {
 }
 
 #[test]
+fn proposal_review_and_application_are_exposed_as_served_or_absent() {
+    let older = parse(&proposal_action_metadata());
+    assert_eq!(older.actions()[0].review(), None);
+    assert_eq!(older.actions()[0].application(), None);
+
+    for (review, application, expected_review, expected_application) in [
+        (
+            "required",
+            "automatic",
+            BRegActionReview::Required,
+            BRegActionApplication::Automatic,
+        ),
+        (
+            "none",
+            "manual",
+            BRegActionReview::None,
+            BRegActionApplication::Manual,
+        ),
+        (
+            "none",
+            "automatic",
+            BRegActionReview::None,
+            BRegActionApplication::Automatic,
+        ),
+    ] {
+        let mut value = proposal_action_metadata();
+        value["actions"][0]["execution"] =
+            json!({"mode": "proposal", "review": review, "application": application});
+        let metadata = parse(&value);
+        let action = &metadata.actions()[0];
+        assert_eq!(action.review(), Some(&expected_review));
+        assert_eq!(action.application(), Some(&expected_application));
+        assert_eq!(action.review().unwrap().as_str(), review);
+        assert_eq!(action.application().unwrap().as_str(), application);
+    }
+
+    let mut future = proposal_action_metadata();
+    future["actions"][0]["execution"] =
+        json!({"mode": "proposal", "review": "future-review", "application": "future-application"});
+    let metadata = parse(&future);
+    let action = &metadata.actions()[0];
+    assert!(matches!(
+        action.review(),
+        Some(BRegActionReview::Unknown(value)) if value == "future-review"
+    ));
+    assert!(matches!(
+        action.application(),
+        Some(BRegActionApplication::Unknown(value)) if value == "future-application"
+    ));
+    let rendered = format!("{:?} {:?}", action.review(), action.application());
+    assert!(!rendered.contains("future-review"));
+    assert!(!rendered.contains("future-application"));
+
+    for (member, invalid, kind) in [
+        ("review", json!(true), BRegMetadataErrorKind::Shape),
+        ("review", json!(null), BRegMetadataErrorKind::Shape),
+        (
+            "review",
+            json!("Required"),
+            BRegMetadataErrorKind::Identifier,
+        ),
+        (
+            "application",
+            json!({"mode": "automatic"}),
+            BRegMetadataErrorKind::Shape,
+        ),
+        ("application", json!(""), BRegMetadataErrorKind::Identifier),
+    ] {
+        let mut value = proposal_action_metadata();
+        value["actions"][0]["execution"][member] = invalid;
+        assert_eq!(
+            BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap())
+                .unwrap_err()
+                .kind(),
+            kind,
+            "{member}"
+        );
+    }
+
+    let mut immediate = proposal_action_metadata();
+    immediate.as_object_mut().unwrap().remove("proposals");
+    immediate["actions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("attachments");
+    immediate["actions"][0]["execution"] = json!({"mode": "immediate"});
+    immediate["actions"][0]["route"] = json!("/v1/actions/correct-address");
+    immediate["actions"][0]["routes"] = json!({"invoke": {"method": "POST",
+        "path": "/v1/actions/correct-address", "operationId": "actions.correct-address.invoke",
+        "requiresIdempotencyKey": true, "inputSchema": "action-correct-address-invoke-input",
+        "responseSchema": "action-correct-address-invoke-response"}});
+    let metadata = parse(&immediate);
+    assert_eq!(metadata.actions()[0].review(), None);
+    assert_eq!(metadata.actions()[0].application(), None);
+    for member in ["review", "application"] {
+        let mut value = immediate.clone();
+        value["actions"][0]["execution"][member] = json!("none");
+        assert_eq!(
+            BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap())
+                .unwrap_err()
+                .kind(),
+            BRegMetadataErrorKind::Shape,
+            "{member}"
+        );
+    }
+}
+
+#[test]
 fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
     let mut value = fixture();
     let tombstone = operation(

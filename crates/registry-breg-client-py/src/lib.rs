@@ -1222,6 +1222,8 @@ fn action_value(value: &breg_client_sdk::BRegActionDescriptor) -> Value {
     let bounds = value.bounds();
     json!({
         "id": value.identifier(), "api_name": value.api_name(), "revision": value.definition_revision(), "display": value.display(), "mode": value.mode(),
+        "review": value.review().map(breg_client_sdk::BRegActionReview::as_str),
+        "application": value.application().map(breg_client_sdk::BRegActionApplication::as_str),
         "input_mode": value.input_mode(),
         "maximum_input_string_bytes": value.maximum_input_string_bytes(),
         "attachments": value.attachments().iter().map(|slot| json!({
