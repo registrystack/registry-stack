@@ -2160,6 +2160,9 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
             "The review result and application receipt of the submission are no longer retained."
         }
         Code::QueryCursorInvalid => "The query cursor is invalid.",
+        Code::QueryFilterRequired => {
+            "The list did not carry the search criteria its access profile requires."
+        }
         Code::QueryInvalid => "The query request is invalid.",
         Code::RequestInvalid => "The request is invalid.",
         Code::RequestTimeout => "The request timed out.",

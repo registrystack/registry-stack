@@ -336,6 +336,7 @@ fn audit_access_profile(access: &AccessProfileSource) {
         readable_fields: _,
         writable_fields: _,
         filterable_fields: _,
+        required_filters: _,
         sortable_fields: _,
         spatial_queries: _,
         row_boundaries: _,

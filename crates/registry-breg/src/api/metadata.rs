@@ -236,6 +236,19 @@ fn query_metadata(surface: &AuthorizedSurface<'_>, query: &CompiledQueryOperatio
         "pagination": {"parameter": "$skiptoken", "responsePath": "pageInfo.nextCursor", "exclusive": true},
         "temporal": temporal_metadata(query),
     });
+    if !query.required_filters.is_empty() {
+        value["requiredFilters"] = json!(query
+            .required_filters
+            .iter()
+            .map(|alternative| {
+                json!({"fields": alternative.iter().map(|id| {
+                    field_identity(entity, id)
+                        .and_then(|field| field.get("apiName").cloned())
+                        .unwrap_or_else(|| json!(id))
+                }).collect::<Vec<_>>()})
+            })
+            .collect::<Vec<_>>());
+    }
     if let Some(bbox) = query
         .spatial
         .as_ref()

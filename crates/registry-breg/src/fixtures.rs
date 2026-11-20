@@ -1882,6 +1882,7 @@ fn action_profile_from_grant(
         readable_fields: Default::default(),
         writable_fields: Default::default(),
         filterable_fields: Default::default(),
+        required_filters: Vec::new(),
         sortable_fields: Default::default(),
         spatial_queries: None,
         row_boundaries: grant

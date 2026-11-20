@@ -3913,6 +3913,16 @@ pub struct SelectorProfileSource {
     pub fields: Vec<String>,
 }
 
+/// One alternative set of search criteria a caller must supply to `list`.
+/// The `$filter` must carry a top-level `eq` predicate with a non-null
+/// literal for every named field.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RequiredFilterSource {
+    pub fields: Vec<String>,
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -5016,6 +5026,9 @@ pub struct AccessProfileSource {
     pub writable_fields: UniqueSet<String>,
     #[serde(default)]
     pub filterable_fields: UniqueSet<String>,
+    /// Alternative search criteria; a `list` must satisfy at least one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_filters: Vec<RequiredFilterSource>,
     #[serde(default)]
     pub sortable_fields: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5555,6 +5568,9 @@ pub struct EntityPermissionSource {
     pub readable_fields: UniqueSet<String>,
     pub writable_fields: UniqueSet<String>,
     pub filterable_fields: UniqueSet<String>,
+    /// Alternative search criteria; a `list` must satisfy at least one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub required_filters: Vec<RequiredFilterSource>,
     pub sortable_fields: UniqueSet<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spatial_queries: Option<SpatialQueryPermissionSource>,

@@ -271,6 +271,12 @@ const BREG_REFERENCES: &[N] = &[
         "recordTypes/*/accessProfiles/*/filterableFields/*",
         "BReg field",
     ),
+    N::scoped(
+        "recordTypes/*/accessProfiles/*/requiredFilters/*/fields/*",
+        "BReg field",
+        2,
+        "id",
+    ),
     N::rooted(
         "recordTypes/*/accessProfiles/*/sortableFields/*",
         "BReg field",
@@ -311,6 +317,12 @@ const BREG_REFERENCES: &[N] = &[
     ),
     N::scoped(
         "accessProfiles/*/permissions/records/*/filterableFields/*",
+        "BReg field",
+        0,
+        "recordType",
+    ),
+    N::scoped(
+        "accessProfiles/*/permissions/records/*/requiredFilters/*/fields/*",
         "BReg field",
         0,
         "recordType",

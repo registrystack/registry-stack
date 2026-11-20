@@ -644,6 +644,71 @@ fn check_places_temporal_and_duplicate_api_name_errors_at_the_owning_record_and_
 }
 
 #[test]
+fn check_refuses_invalid_required_filters_with_a_next_step() {
+    let baseline = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    let with_required = |filterable: serde_json::Value, required: serde_json::Value| {
+        let mut source = baseline.clone();
+        let grant = &mut source["accessProfiles"][0]["permissions"]["records"][0];
+        grant["filterableFields"] = filterable;
+        grant["requiredFilters"] = required;
+        source
+    };
+
+    for (source, code, setting) in [
+        (
+            with_required(json!(["jurisdiction"]), json!([{"fields": ["name"]}])),
+            "breg.access-profile.required-filters-field-not-filterable",
+            "filterableFields",
+        ),
+        (
+            with_required(
+                json!(["jurisdiction"]),
+                json!([{"fields": ["jurisdiction"]}, {"fields": ["jurisdiction"]}]),
+            ),
+            "breg.access-profile.required-filters-duplicate",
+            "once",
+        ),
+        (
+            with_required(json!(["jurisdiction"]), json!([{"fields": []}])),
+            "breg.access-profile.required-filters-empty",
+            "at least one",
+        ),
+    ] {
+        let project =
+            TestProject::from_registry_source(&serde_json::to_vec_pretty(&source).unwrap());
+        let output = bregctl(&["--format", "json", "check", path(project.path())]);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let report = json_stdout(&output);
+        let diagnostic = report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == code)
+            .unwrap_or_else(|| panic!("{code}: {report}"));
+        assert!(
+            diagnostic["path"]
+                .as_str()
+                .unwrap()
+                .contains("/requiredFilters"),
+            "{diagnostic}"
+        );
+        assert!(
+            diagnostic["suggestedAction"]
+                .as_str()
+                .unwrap()
+                .contains(setting),
+            "{diagnostic}"
+        );
+    }
+}
+
+#[test]
 fn hook_projection_errors_point_to_the_second_hook_in_each_owning_file() {
     let mut source = registry_platform_yaml::Reader::new("registry.yaml")
         .scan(include_bytes!(

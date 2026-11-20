@@ -22,7 +22,8 @@ use super::{
     AccessProfileSource, AccessRequirementsSource, ActorKindSource, CompiledTaskGrantSource,
     ConsentRequirementSource, EntityPermissionSource, LookupPermissionSource,
     MembershipBoundarySource, Operation, PermissionsSource, ProvenanceFieldSource,
-    ReadPathPermissionSource, RowBoundarySource, SpatialQueryPermissionSource, UniqueSet,
+    ReadPathPermissionSource, RequiredFilterSource, RowBoundarySource,
+    SpatialQueryPermissionSource, UniqueSet,
 };
 
 const UNRESTRICTED: &str = "unrestricted";
@@ -457,6 +458,9 @@ pub(super) struct AuthoredModuleProfile {
     writable_fields: UniqueSet<String>,
     #[serde(default)]
     filterable_fields: UniqueSet<String>,
+    /// Alternative search criteria; a `list` must satisfy at least one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    required_filters: Vec<RequiredFilterSource>,
     #[serde(default)]
     sortable_fields: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -510,6 +514,7 @@ impl From<AuthoredModuleProfile> for AccessProfileSource {
             readable_fields: authored.readable_fields,
             writable_fields: authored.writable_fields,
             filterable_fields: authored.filterable_fields,
+            required_filters: authored.required_filters,
             sortable_fields: authored.sortable_fields,
             spatial_queries: authored.spatial_queries,
             row_boundaries: authored.row_boundaries,
@@ -541,6 +546,7 @@ impl From<AccessProfileSource> for AuthoredModuleProfile {
             readable_fields: profile.readable_fields,
             writable_fields: profile.writable_fields,
             filterable_fields: profile.filterable_fields,
+            required_filters: profile.required_filters,
             sortable_fields: profile.sortable_fields,
             spatial_queries: profile.spatial_queries,
             row_boundaries: profile.row_boundaries,
@@ -638,6 +644,9 @@ pub(super) struct AuthoredEntityPermission {
     writable_fields: UniqueSet<String>,
     #[serde(default)]
     filterable_fields: UniqueSet<String>,
+    /// Alternative search criteria; a `list` must satisfy at least one.
+    #[serde(default)]
+    required_filters: Vec<RequiredFilterSource>,
     #[serde(default)]
     sortable_fields: UniqueSet<String>,
     #[serde(default)]
@@ -685,6 +694,7 @@ impl TryFrom<AuthoredEntityPermission> for EntityPermissionSource {
             readable_fields: authored.readable_fields,
             writable_fields: authored.writable_fields,
             filterable_fields: authored.filterable_fields,
+            required_filters: authored.required_filters,
             sortable_fields: authored.sortable_fields,
             spatial_queries: authored.spatial_queries,
             row_boundaries: row_boundaries.into_boundaries(),

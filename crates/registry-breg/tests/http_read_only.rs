@@ -2162,6 +2162,208 @@ async fn count_requires_compiled_permission_and_top_is_bounded() {
     assert_eq!(request.maximum_records, 2);
 }
 
+/// The caseworker grant on `cases` may list only with a `label`, or with a
+/// `jurisdiction`.
+fn required_filters_harness() -> Harness {
+    let source = PROJECT.replace(
+        "filterableFields: [label, jurisdiction]",
+        "filterableFields: [label, jurisdiction]\n          requiredFilters: [{fields: [label]}, {fields: [jurisdiction]}]",
+    );
+    assert_ne!(source, PROJECT, "the project carries the required filters");
+    Harness::from_project(&source, true)
+}
+
+const REQUIRED_FILTERS_LIST: &str = "/v1/records/cases?accessProfile=caseworker";
+
+async fn required_filters_list(harness: &Harness, query: &str) -> axum::response::Response {
+    harness
+        .send(
+            Method::GET,
+            &format!("{REQUIRED_FILTERS_LIST}{query}"),
+            Some(caseworker_claims("case-management")),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn metadata_advertises_required_filters_beside_filterable_fields() {
+    let harness = required_filters_harness();
+    let metadata = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=caseworker",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    let list = metadata_operation(&metadata, "records.case.list");
+    assert_eq!(
+        list["query"]["requiredFilters"],
+        json!([{"fields": ["label"]}, {"fields": ["jurisdiction"]}]),
+        "{list}"
+    );
+    assert!(list["query"]["filterableFields"].is_array());
+}
+
+#[tokio::test]
+async fn a_list_that_satisfies_an_alternative_runs() {
+    for query in [
+        "&$filter=label%20eq%20'Visible'",
+        "&$filter=jurisdiction%20eq%20'area-a'",
+        "&$filter=(label%20eq%20'Visible')",
+        "&$filter=((jurisdiction%20eq%20'area-a'))",
+        "&$filter=label%20eq%20'Visible'%20and%20jurisdiction%20eq%20'area-a'",
+        "&$filter=jurisdiction%20eq%20'area-a'%20and%20startswith(label,'Vis')",
+        "&$filter=label%20eq%20'Visible'%20and%20(jurisdiction%20in%20('area-a','area-b')%20or%20label%20ne%20'x')",
+    ] {
+        let harness = required_filters_harness();
+        let response = required_filters_list(&harness, query).await;
+        assert_eq!(response.status(), StatusCode::OK, "{query}");
+        assert_eq!(harness.records.calls(), 1, "{query}");
+        assert_eq!(harness.records.refusal_calls(), 0, "{query}");
+    }
+}
+
+#[tokio::test]
+async fn a_list_that_pins_no_alternative_is_refused_before_any_query() {
+    for query in [
+        "",
+        "&$top=5",
+        "&$filter=startswith(label,'Vis')",
+        "&$filter=label%20ne%20'x'",
+        "&$filter=label%20eq%20null",
+        "&$filter=jurisdiction%20in%20('area-a')",
+        "&$filter=label%20eq%20'Visible'%20or%20jurisdiction%20eq%20'area-a'",
+        "&$filter=not%20label%20eq%20'Visible'",
+        "&$filter=not%20(label%20eq%20'Visible')%20and%20label%20ne%20'y'",
+        "&$filter=(label%20eq%20'Visible'%20or%20label%20eq%20'Other')",
+        "&$filter=label%20eq%20'Visible'%20or%20label%20eq%20'Other'&$count=true",
+    ] {
+        let harness = required_filters_harness();
+        let response = required_filters_list(&harness, query).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
+        let body = body_json(response).await;
+        assert_eq!(body["code"], "query.filter_required", "{query}");
+        assert_eq!(
+            body["type"],
+            "https://id.registrystack.org/problems/registry-breg/query/filter_required"
+        );
+        assert_eq!(
+            body["requiredFilters"],
+            json!([["label"], ["jurisdiction"]]),
+            "{query}"
+        );
+        assert_eq!(
+            body["detail"],
+            "A list needs an eq filter on every field of at least one of these sets: (label) or (jurisdiction).",
+            "{query}"
+        );
+        assert_eq!(harness.records.calls(), 0, "{query}");
+        assert_eq!(harness.records.refusal_calls(), 1, "{query}");
+    }
+}
+
+#[tokio::test]
+async fn the_refusal_names_no_value_from_the_request() {
+    let harness = required_filters_harness();
+    let response = required_filters_list(&harness, "&$filter=label%20ne%20'CANARY-VALUE'").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(!body_json(response)
+        .await
+        .to_string()
+        .contains("CANARY-VALUE"));
+}
+
+#[tokio::test]
+async fn a_profile_without_required_filters_still_lists_unfiltered() {
+    let harness = required_filters_harness();
+    let response = harness
+        .send(Method::GET, "/v1/records/cases", Some(public_claims()))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(harness.records.calls(), 1);
+}
+
+#[tokio::test]
+async fn count_is_refused_without_the_required_criteria_and_runs_with_them() {
+    let harness = required_filters_harness();
+    let refused = required_filters_list(&harness, "&$count=true").await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(refused).await["code"], "query.filter_required");
+    assert_eq!(harness.records.calls(), 0);
+
+    let allowed =
+        required_filters_list(&harness, "&$count=true&$filter=label%20eq%20'Visible'").await;
+    assert_eq!(allowed.status(), StatusCode::OK);
+    let request = harness.records.last_request();
+    let query = request_query(&request);
+    assert!(query.include_count);
+    assert_eq!(single_filter_predicate(query).field_id, "label");
+}
+
+fn required_filters_cursor(query: &registry_breg::api::CompiledReadQuery) -> String {
+    let codec = cursor_codec();
+    let continuation = serde_json::from_value(json!({
+        "lastRecordId": "00000000-0000-4000-8000-000000000001",
+        "sortValue": null
+    }))
+    .expect("continuation shape");
+    let payload = codec
+        .new_payload(
+            registry_breg::cursor::now_unix_seconds(),
+            query.cursor_binding.clone(),
+            query.cursor_query.clone(),
+            continuation,
+        )
+        .expect("payload builds");
+    codec.encode(&payload).expect("cursor encodes")
+}
+
+/// A cursor carries the filter its first page was admitted with and is bound
+/// to it, so a later page keeps the criteria and cannot drop them.
+#[tokio::test]
+async fn continuation_keeps_the_criteria_and_cannot_drop_them() {
+    let harness = required_filters_harness();
+    let first = required_filters_list(&harness, "&$filter=label%20eq%20'Visible'").await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_request = harness.records.last_request();
+    let first_query = request_query(&first_request);
+    let token = required_filters_cursor(first_query);
+
+    let next = required_filters_list(&harness, &format!("&$skiptoken={token}")).await;
+    assert_eq!(next.status(), StatusCode::OK);
+    let next_request = harness.records.last_request();
+    let next_query = request_query(&next_request);
+    assert!(next_query.continuation.is_some());
+    assert_eq!(single_filter_predicate(next_query).field_id, "label");
+
+    // The same cursor without its filter no longer matches its own binding.
+    let mut stripped = serde_json::to_value(&first_query.cursor_query).expect("query serializes");
+    stripped["filter"] = Value::Null;
+    let codec = cursor_codec();
+    let mut payload = codec
+        .new_payload(
+            registry_breg::cursor::now_unix_seconds(),
+            first_query.cursor_binding.clone(),
+            serde_json::from_value(stripped).expect("query shape"),
+            serde_json::from_value(json!({
+                "lastRecordId": "00000000-0000-4000-8000-000000000001",
+                "sortValue": null
+            }))
+            .expect("continuation shape"),
+        )
+        .expect("payload builds");
+    let _ = &mut payload;
+    let forged = codec.encode(&payload).expect("cursor encodes");
+    let calls = harness.records.calls();
+    let refused = required_filters_list(&harness, &format!("&$skiptoken={forged}")).await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(refused).await["code"], "query.cursor_invalid");
+    assert_eq!(harness.records.calls(), calls);
+}
+
 #[tokio::test]
 async fn desc_ordering_and_field_capability_failures_are_value_free() {
     let harness = Harness::new(true);

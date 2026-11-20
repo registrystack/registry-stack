@@ -159,6 +159,7 @@ pub enum BRegProblemCode {
     ProposalReviewResultMismatch,
     ProposalSubmissionExpired,
     QueryCursorInvalid,
+    QueryFilterRequired,
     QueryInvalid,
     RequestInvalid,
     RequestTimeout,
@@ -176,7 +177,7 @@ pub enum BRegProblemCode {
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 36] = [
         Self::ActionEvidenceFailed,
         Self::ActionGuardFailed,
         Self::ActionHandlerFailed,
@@ -198,6 +199,7 @@ impl BRegProblemCode {
         Self::ProposalReviewResultMismatch,
         Self::ProposalSubmissionExpired,
         Self::QueryCursorInvalid,
+        Self::QueryFilterRequired,
         Self::QueryInvalid,
         Self::RequestInvalid,
         Self::RequestTimeout,
@@ -238,6 +240,7 @@ impl BRegProblemCode {
             Self::ProposalReviewResultMismatch => "proposal.review_result_mismatch",
             Self::ProposalSubmissionExpired => "proposal.submission_expired",
             Self::QueryCursorInvalid => "query.cursor_invalid",
+            Self::QueryFilterRequired => "query.filter_required",
             Self::QueryInvalid => "query.invalid",
             Self::RequestInvalid => "request.invalid",
             Self::RequestTimeout => "request.timeout",
@@ -258,7 +261,10 @@ impl BRegProblemCode {
     #[must_use]
     pub const fn status(self) -> u16 {
         match self {
-            Self::QueryCursorInvalid | Self::QueryInvalid | Self::RequestInvalid => 400,
+            Self::QueryCursorInvalid
+            | Self::QueryFilterRequired
+            | Self::QueryInvalid
+            | Self::RequestInvalid => 400,
             Self::ActionEvidenceFailed => 503,
             Self::ActionHandlerFailed => 500,
             Self::AuthenticationRefused => 401,
@@ -360,6 +366,9 @@ impl BRegProblemCode {
                 "The review result and application receipt of the submission are no longer retained."
             }
             Self::QueryCursorInvalid => "The query cursor is invalid.",
+            Self::QueryFilterRequired => {
+                "The list did not carry the search criteria its access profile requires."
+            }
             Self::QueryInvalid => "The query request is invalid.",
             Self::RequestInvalid => "The request is invalid.",
             Self::RequestTimeout => "The request timed out.",
