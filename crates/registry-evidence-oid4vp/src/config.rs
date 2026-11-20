@@ -1032,7 +1032,7 @@ struct Finding {
     code: &'static str,
     pointer: String,
     message: &'static str,
-    action: &'static str,
+    action: String,
     /// Members besides `pointer` whose value decided the finding.
     reads: &'static [&'static str],
 }
@@ -1042,14 +1042,14 @@ impl Finding {
         code: &'static str,
         pointer: impl Into<String>,
         message: &'static str,
-        action: &'static str,
+        action: impl Into<String>,
     ) -> Self {
         Self {
             severity: Severity::Error,
             code,
             pointer: pointer.into(),
             message,
-            action,
+            action: action.into(),
             reads: &[],
         }
     }
@@ -1602,6 +1602,9 @@ fn did_web_host(did: &str) -> Result<&str, DidWebFault> {
     Ok(host)
 }
 
+/// The exposure key a wildcard metrics refusal names.
+const METRICS_NETWORK_EXPOSURE_KEY: &str = "metricsListener.networkExposure";
+
 /// The rules the service and metrics listener bindings follow.
 fn binding_findings(
     listener: SocketAddr,
@@ -1619,25 +1622,29 @@ fn binding_findings(
             "the metrics listener port must be non-zero",
             "Bind the metrics listener to a fixed port the service listener does not use.",
         )),
-        Err(_) => findings.push(
+        Err(cause) => findings.push(
             Finding::error(
                 "evidence.oid4vp.metrics-address",
                 "/metricsListener/bind",
                 "the metrics listener must bind a loopback or private address",
-                "Bind the metrics listener to a loopback, private IPv4, or unique local IPv6 address. \
-                 Declare metricsListener.networkExposure: container-private to bind a wildcard \
-                 address inside a container.",
+                format!(
+                    "The metrics bind is refused: {cause}. {}",
+                    cause.remedy(METRICS_NETWORK_EXPOSURE_KEY)
+                ),
             )
             .reading(&["/metricsListener/networkExposure"]),
         ),
     }
-    if check_metrics_bind_apart(metrics, &[("service listener", listener)]).is_err() {
+    if let Err(cause) = check_metrics_bind_apart(metrics, &[("service listener", listener)]) {
         findings.push(
             Finding::error(
                 "evidence.oid4vp.metrics-shared-binding",
                 "/metricsListener/bind",
                 "the metrics listener must not share the service listener binding",
-                "Bind the metrics listener to a port the service listener does not use.",
+                format!(
+                    "The metrics bind is refused: {cause}. {}",
+                    cause.remedy(METRICS_NETWORK_EXPOSURE_KEY)
+                ),
             )
             .reading(&["/listener/bind"]),
         );
@@ -1669,7 +1676,7 @@ fn positioned(check: &RuntimeFileCheck<VerifierDocument>, finding: &Finding) -> 
         finding.code,
         &finding.pointer,
         finding.message,
-        finding.action,
+        &finding.action,
     );
     diagnostic.severity = finding.severity;
     let mut located = finding.pointer.as_str();

@@ -817,10 +817,15 @@ pub async fn run(
     let metrics_listener = match &loaded.runtime.metrics_listener {
         Some(configured) => {
             let metrics_address = configured.bind.socket_addr();
-            if registry_adapter_core::metrics_bind_overlaps(metrics_address, address) {
-                return Err(ServeError::Configuration(
-                    "metricsListener.bind must differ from listener.bind. Bind a different port, or a loopback or private address the facade does not use.".to_owned(),
-                ));
+            if let Some(cause) = registry_adapter_core::metrics_bind_overlap(
+                metrics_address,
+                "facade listener",
+                address,
+            ) {
+                return Err(ServeError::Configuration(format!(
+                    "metricsListener.bind must differ from listener.bind. {}",
+                    cause.remedy(registry_adapter_core::METRICS_NETWORK_EXPOSURE_KEY)
+                )));
             }
             let bound = TcpListener::bind(metrics_address)
                 .await

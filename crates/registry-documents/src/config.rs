@@ -60,6 +60,8 @@ const DOCUMENTS_REMOVED_KEYS: &[registry_platform_config::RemovedKey] =
     &[REMOVED_OIDC_JWKS_URI, REMOVED_OIDC_JWKS_SOURCE_KIND];
 
 const METRICS_LISTENER_CODE: &str = "documents.runtime.invalid-metrics-listener";
+/// The config path of the exposure key a wildcard metrics refusal names.
+const METRICS_NETWORK_EXPOSURE_KEY: &str = "metricsListener.networkExposure";
 const METRICS_OVERLAP_CODE: &str = "documents.runtime.metrics-listener-overlaps-listener";
 
 /// The media type an access token must declare (RFC 9068).
@@ -457,7 +459,7 @@ pub struct Finding {
     pub code: &'static str,
     pub pointer: String,
     pub message: String,
-    pub suggested_action: &'static str,
+    pub suggested_action: String,
 }
 
 impl Finding {
@@ -465,13 +467,13 @@ impl Finding {
         code: &'static str,
         pointer: &str,
         message: impl Into<String>,
-        suggested_action: &'static str,
+        suggested_action: impl Into<String>,
     ) -> Self {
         Self {
             code,
             pointer: pointer.to_owned(),
             message: message.into(),
-            suggested_action,
+            suggested_action: suggested_action.into(),
         }
     }
 
@@ -681,19 +683,19 @@ impl RuntimeConfig {
         };
         let exposure = metrics.network_exposure;
         let metrics = metrics.bind.socket_addr();
-        if !is_private_metrics_bind(metrics, exposure) {
+        if let Err(cause) = check_metrics_address(metrics, exposure) {
             findings.push(Finding::new(
                 METRICS_LISTENER_CODE,
                 "/metricsListener/bind",
-                "metricsListener.bind must be a loopback or private address on a non-zero port",
-                "Bind metricsListener to a loopback or private address with a nonzero port, or declare metricsListener.networkExposure: container-private on a container network.",
+                format!("metricsListener.bind is refused: {cause}"),
+                cause.remedy(METRICS_NETWORK_EXPOSURE_KEY),
             ));
-        } else if shares_socket(metrics, self.listener.bind.socket_addr()) {
+        } else if let Err(cause) = check_metrics_apart(metrics, self.listener.bind.socket_addr()) {
             findings.push(Finding::new(
                 METRICS_OVERLAP_CODE,
                 "/metricsListener/bind",
-                "metricsListener.bind shares a socket with listener.bind",
-                "Bind metricsListener to an address and port the serving listener does not use.",
+                format!("metricsListener.bind is refused: {cause}"),
+                cause.remedy(METRICS_NETWORK_EXPOSURE_KEY),
             ));
         }
     }
@@ -961,17 +963,20 @@ fn is_deferred(check: &RuntimeFileCheck<RuntimeConfig>, finding: &Finding) -> bo
 /// non-zero port. Link-local, public, and multicast addresses are refused, and
 /// a wildcard only under `container-private`, so the series are never
 /// published on a routable interface by accident.
-fn is_private_metrics_bind(
+fn check_metrics_address(
     metrics: SocketAddr,
     exposure: registry_platform_config::ListenerNetworkExposure,
-) -> bool {
-    registry_platform_config::check_metrics_bind_address(metrics, exposure).is_ok()
+) -> Result<(), registry_platform_config::MetricsBindError> {
+    registry_platform_config::check_metrics_bind_address(metrics, exposure)
 }
 
-/// Whether binding `metrics` would take the socket the serving `listener`
-/// holds.
-fn shares_socket(metrics: SocketAddr, listener: SocketAddr) -> bool {
-    registry_platform_config::check_metrics_bind_apart(metrics, &[("listener", listener)]).is_err()
+/// Check that binding `metrics` would not take the socket the serving
+/// `listener` holds.
+fn check_metrics_apart(
+    metrics: SocketAddr,
+    listener: SocketAddr,
+) -> Result<(), registry_platform_config::MetricsBindError> {
+    registry_platform_config::check_metrics_bind_apart(metrics, &[("listener", listener)])
 }
 
 /// The report `documents serve` prints when it refuses the runtime document
@@ -999,7 +1004,7 @@ fn positioned(check: &RuntimeFileCheck<RuntimeConfig>, finding: &Finding) -> Dia
         finding.code,
         &finding.pointer,
         finding.message.clone(),
-        finding.suggested_action,
+        finding.suggested_action.clone(),
     );
     let mut located = finding.pointer.as_str();
     while diagnostic
@@ -1608,9 +1613,44 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_metrics_refusal_names_its_cause_and_remedy() {
+        let refusal = |bind: &str| {
+            let text = with_metrics("127.0.0.1:8116", bind);
+            let RuntimeConfigError::Refused(mut findings) = parse(&text).expect_err(bind) else {
+                panic!("a runtime refusal for {bind}");
+            };
+            findings.remove(0)
+        };
+        let public = refusal("203.0.113.4:9090");
+        assert!(
+            public.message.contains("must be loopback or private"),
+            "{}",
+            public.message
+        );
+        assert!(
+            public
+                .suggested_action
+                .contains("keep metrics off public addresses"),
+            "{}",
+            public.suggested_action
+        );
+        assert!(!public.suggested_action.contains("container-private"));
+        let port_zero = refusal("127.0.0.1:0");
+        assert!(port_zero.suggested_action.contains("non-zero port"));
+        assert!(!port_zero.suggested_action.contains("container-private"));
+        let overlap = refusal("127.0.0.1:8116");
+        assert!(overlap.suggested_action.contains("its own port"));
+        assert!(!overlap.suggested_action.contains("container-private"));
+        let wildcard = refusal("0.0.0.0:9090");
+        assert!(wildcard
+            .suggested_action
+            .contains("metricsListener.networkExposure: container-private"));
+    }
+
+    #[test]
     fn the_metrics_listener_may_not_share_a_wildcard_listener_port() {
         let shares = |metrics: &str, listener: &str| {
-            shares_socket(metrics.parse().unwrap(), listener.parse().unwrap())
+            check_metrics_apart(metrics.parse().unwrap(), listener.parse().unwrap()).is_err()
         };
         assert!(shares("10.0.0.5:8100", "0.0.0.0:8100"));
         assert!(shares("10.0.0.5:8100", "[::]:8100"));

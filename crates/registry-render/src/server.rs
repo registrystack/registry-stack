@@ -149,10 +149,13 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
             "listener.bind is outside the declared private network exposure",
         ));
     }
-    if !runtime.metrics_listener_allowed() {
+    if let Err(cause) = runtime.check_metrics_listener() {
         return Err(RenderProblem::new(
             ProblemKind::RuntimeInvalid,
-            "metricsListener.bind must be a loopback or private address on a non-zero port, apart from the listener. Bind a loopback or private address, or declare metricsListener.networkExposure: container-private on a container network.",
+            format!(
+                "metricsListener.bind is refused: {cause}. {}",
+                cause.remedy(runtime::METRICS_NETWORK_EXPOSURE_KEY)
+            ),
         ));
     }
     let bundle = runtime::load_package(&runtime)?;

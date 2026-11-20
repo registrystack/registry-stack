@@ -1057,7 +1057,7 @@ struct Finding {
     code: &'static str,
     pointer: String,
     message: &'static str,
-    action: &'static str,
+    action: String,
     /// Members besides `pointer` whose value decided the finding.
     reads: &'static [&'static str],
 }
@@ -1067,14 +1067,14 @@ impl Finding {
         code: &'static str,
         pointer: impl Into<String>,
         message: &'static str,
-        action: &'static str,
+        action: impl Into<String>,
     ) -> Self {
         Self {
             severity: Severity::Error,
             code,
             pointer: pointer.into(),
             message,
-            action,
+            action: action.into(),
             reads: &[],
         }
     }
@@ -1083,7 +1083,7 @@ impl Finding {
         code: &'static str,
         pointer: impl Into<String>,
         message: &'static str,
-        action: &'static str,
+        action: impl Into<String>,
     ) -> Self {
         Self {
             severity: Severity::Warning,
@@ -1669,6 +1669,9 @@ fn canonical_supervised_local_port(value: &str) -> Option<u16> {
     (value == format!("http://127.0.0.1:{port}")).then_some(port)
 }
 
+/// The exposure key a wildcard metrics refusal names.
+const METRICS_NETWORK_EXPOSURE_KEY: &str = "metricsListener.networkExposure";
+
 /// The rules the delivery and metrics listener bindings follow.
 ///
 /// An ephemeral delivery port leaves the service running and reachable by
@@ -1698,23 +1701,29 @@ fn binding_findings(
             "the metrics listener port must be non-zero",
             "Bind the metrics listener to a fixed port the delivery listener does not use.",
         )),
-        Err(_) => findings.push(Finding::error(
-            "evidence.oid4vci.metrics-address",
-            "/metricsListener/bind",
-            "the metrics listener must bind a loopback or private address",
-            "Bind the metrics listener to a loopback, private IPv4, or unique local IPv6 address. \
-             Declare metricsListener.networkExposure: container-private to bind a wildcard address \
-             inside a container.",
-        )
-        .reading(&["/metricsListener/networkExposure"])),
+        Err(cause) => findings.push(
+            Finding::error(
+                "evidence.oid4vci.metrics-address",
+                "/metricsListener/bind",
+                "the metrics listener must bind a loopback or private address",
+                format!(
+                    "The metrics bind is refused: {cause}. {}",
+                    cause.remedy(METRICS_NETWORK_EXPOSURE_KEY)
+                ),
+            )
+            .reading(&["/metricsListener/networkExposure"]),
+        ),
     }
-    if check_metrics_bind_apart(metrics, &[("delivery listener", listener)]).is_err() {
+    if let Err(cause) = check_metrics_bind_apart(metrics, &[("delivery listener", listener)]) {
         findings.push(
             Finding::error(
                 "evidence.oid4vci.metrics-shared-binding",
                 "/metricsListener/bind",
                 "the metrics listener must not share the delivery listener binding",
-                "Bind the metrics listener to a port the delivery listener does not use.",
+                format!(
+                    "The metrics bind is refused: {cause}. {}",
+                    cause.remedy(METRICS_NETWORK_EXPOSURE_KEY)
+                ),
             )
             .reading(&["/listener/bind"]),
         );
@@ -1747,7 +1756,7 @@ fn positioned(check: &RuntimeFileCheck<DeliveryDocument>, finding: &Finding) -> 
         finding.code,
         &finding.pointer,
         finding.message,
-        finding.action,
+        &finding.action,
     );
     diagnostic.severity = finding.severity;
     let mut located = finding.pointer.as_str();
@@ -2716,6 +2725,36 @@ store:
         ] {
             let refused = refused(&with_metrics("127.0.0.1:8090", metrics));
             assert_eq!(refused, [code], "metrics accepted {metrics}");
+        }
+    }
+
+    /// Each metrics refusal carries its own cause and remedy, and only the
+    /// wildcard refusal points at `container-private`.
+    #[test]
+    fn a_metrics_refusal_names_its_cause_and_remedy() {
+        let listener: SocketAddr = "127.0.0.1:8090".parse().unwrap();
+        for (metrics, remedy, names_container_private) in [
+            ("0.0.0.0:9090", "container-private", true),
+            ("[::]:9090", "container-private", true),
+            ("8.8.8.8:9090", "keep metrics off public addresses", false),
+            ("169.254.1.1:9090", "link-local", false),
+            ("127.0.0.1:8090", "its own port", false),
+        ] {
+            let findings = binding_findings(
+                listener,
+                Some((
+                    metrics.parse().unwrap(),
+                    ListenerNetworkExposure::PrivateAddress,
+                )),
+            );
+            assert_eq!(findings.len(), 1, "{metrics}");
+            let action = &findings[0].action;
+            assert!(action.contains(remedy), "{metrics}: {action}");
+            assert_eq!(
+                action.contains("container-private"),
+                names_container_private,
+                "{metrics}: {action}"
+            );
         }
     }
 

@@ -16,9 +16,9 @@ use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
     check_metrics_bind_address, check_metrics_bind_apart, AuditKeyConfig, JwksSource,
-    OidcIssuerConfig, PackageConfig as SharedPackageConfig, RemovedKey, RuntimeConfigLoader,
-    RuntimeEnvelope, SecretError, SecretReference, SecretResolver, TaskGrantStatusConfig,
-    REMOVED_OIDC_JWKS_SOURCE_KIND,
+    MetricsBindError, OidcIssuerConfig, PackageConfig as SharedPackageConfig, RemovedKey,
+    RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
+    TaskGrantStatusConfig, REMOVED_OIDC_JWKS_SOURCE_KIND,
 };
 use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
@@ -345,8 +345,8 @@ pub enum RuntimeConfigError {
     EnvironmentIdentityConflict,
     #[error("runtime configuration contains an invalid listener binding")]
     InvalidListener,
-    #[error("runtime configuration contains an invalid metrics listener binding")]
-    InvalidMetricsListener,
+    #[error("runtime configuration contains an invalid metrics listener binding: {0}")]
+    InvalidMetricsListener(MetricsBindError),
     #[error("runtime configuration contains an invalid secret provider binding")]
     InvalidSecretProvider,
     #[error("the configured file secret provider root is missing or is not a readable directory")]
@@ -410,6 +410,9 @@ pub enum RuntimeConfigError {
     Secret,
 }
 
+/// The config path of the exposure key a wildcard metrics refusal names.
+const METRICS_NETWORK_EXPOSURE_KEY: &str = "metricsListener.networkExposure";
+
 impl RuntimeConfigError {
     /// The code of the refusal: the deciding reader diagnostic's code, or
     /// this runtime's code for a rule the reader cannot state.
@@ -423,7 +426,7 @@ impl RuntimeConfigError {
             Self::InvalidInstanceId => "breg.runtime.invalid-instance-id",
             Self::EnvironmentIdentityConflict => "breg.runtime.environment-identity-conflict",
             Self::InvalidListener => "breg.runtime.invalid-listener",
-            Self::InvalidMetricsListener => "breg.runtime.invalid-metrics-listener",
+            Self::InvalidMetricsListener(_) => "breg.runtime.invalid-metrics-listener",
             Self::InvalidSecretProvider => "breg.runtime.invalid-secret-provider",
             Self::SecretProviderRootUnavailable => "breg.runtime.secret-provider-root-unavailable",
             Self::UnsafeSecretProviderRoot => "breg.runtime.unsafe-secret-provider-root",
@@ -465,7 +468,7 @@ impl RuntimeConfigError {
             Self::InvalidInstanceId => "/identity/instanceId",
             Self::EnvironmentIdentityConflict => "/identity/databaseInitializationEnvironment",
             Self::InvalidListener => "/listener",
-            Self::InvalidMetricsListener => "/metricsListener",
+            Self::InvalidMetricsListener(_) => "/metricsListener",
             Self::InvalidSecretProvider => "/secretProviders",
             Self::SecretProviderRootUnavailable | Self::UnsafeSecretProviderRoot => {
                 "/secretProviders/file/root"
@@ -519,9 +522,8 @@ impl RuntimeConfigError {
             Self::InvalidListener => {
                 "Set listener.bind to a numeric address and port, and listener.publicOrigin, when given, to an https origin (http only on loopback) with no query, fragment, or user information."
             }
-            Self::InvalidMetricsListener => {
-                "Set metricsListener.bind to a loopback or private numeric address with a named port, on a socket the Registry listener does not also bind, or declare metricsListener.networkExposure: container-private on a container network."
-            }
+            // The remedy depends on the cause, which `diagnostics` states.
+            Self::InvalidMetricsListener(_) => "",
             Self::InvalidSecretProvider => {
                 "Declare each secret provider once, with the file provider's root an absolute normal path."
             }
@@ -600,12 +602,11 @@ impl RuntimeConfigError {
         if let Self::Reader(refusal) = self {
             return refusal.diagnostics().to_vec();
         }
-        let mut diagnostic = Diagnostic::error(
-            self.code(),
-            self.path(),
-            self.to_string(),
-            self.suggested_action(),
-        );
+        let action = match self {
+            Self::InvalidMetricsListener(cause) => cause.remedy(METRICS_NETWORK_EXPOSURE_KEY),
+            other => other.suggested_action().to_owned(),
+        };
+        let mut diagnostic = Diagnostic::error(self.code(), self.path(), self.to_string(), action);
         diagnostic.source = file.map(|file| Source {
             file: file.display().to_string(),
             line: None,
@@ -759,7 +760,11 @@ pub fn check_runtime_config(
             Err(error) => {
                 for refusal in error.diagnostics(None) {
                     let overlap_deferred = metrics_overlap_deferred
-                        && refusal.path == RuntimeConfigError::InvalidMetricsListener.path();
+                        && refusal.path
+                            == RuntimeConfigError::InvalidMetricsListener(
+                                MetricsBindError::PortZero,
+                            )
+                            .path();
                     diagnostics.push(if overlap_deferred || check.defers_within(&refusal.path) {
                         // The rule read a stand-in, so its refusal says
                         // nothing about the file; the rules after it did
@@ -1783,7 +1788,7 @@ impl MetricsListenerConfig {
     fn from_raw(raw: registry_platform_config::MetricsListenerConfig) -> Result<Self> {
         let bind = raw.bind.socket_addr();
         check_metrics_bind_address(bind, raw.network_exposure)
-            .map_err(|_| RuntimeConfigError::InvalidMetricsListener)?;
+            .map_err(RuntimeConfigError::InvalidMetricsListener)?;
         Ok(Self { bind })
     }
 
@@ -1792,7 +1797,7 @@ impl MetricsListenerConfig {
     /// binding exists to enforce.
     fn validate_separate_binding(&self, listener: &ListenerConfig) -> Result<()> {
         check_metrics_bind_apart(self.bind, &[("listener", listener.bind())])
-            .map_err(|_| RuntimeConfigError::InvalidMetricsListener)?;
+            .map_err(RuntimeConfigError::InvalidMetricsListener)?;
         Ok(())
     }
 

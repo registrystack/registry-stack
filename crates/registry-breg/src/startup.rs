@@ -2254,7 +2254,7 @@ pub fn map_runtime_config_error(error: RuntimeConfigError) -> StartupError {
         RuntimeConfigError::Secret => {
             StartupError::DatabaseConnection(DatabaseConnectionCause::Secret)
         }
-        RuntimeConfigError::InvalidMetricsListener => StartupError::Listener,
+        RuntimeConfigError::InvalidMetricsListener(_) => StartupError::Listener,
         RuntimeConfigError::InvalidAudit => StartupError::Audit,
         RuntimeConfigError::InvalidCursor => StartupError::Cursor,
         RuntimeConfigError::InvalidOidc => StartupError::Oidc,

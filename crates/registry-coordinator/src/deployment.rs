@@ -158,14 +158,17 @@ impl DeploymentConfig {
             ));
         }
         if let Some(metrics) = &self.metrics_listener {
-            if !valid_metrics_listener(
+            if let Err(cause) = check_metrics_listener(
                 metrics.bind.socket_addr(),
                 metrics.network_exposure,
                 self.listener.bind.socket_addr(),
             ) {
                 errors.push(config_fail(
                     "deployment.metricsListener.bind",
-                    "bind metricsListener to a loopback or private address with a nonzero port the listener does not use, or declare deployment.metricsListener.networkExposure: container-private on a container network",
+                    format!(
+                        "metricsListener.bind is refused because {cause}. {}",
+                        cause.remedy("deployment.metricsListener.networkExposure")
+                    ),
                 ));
             }
         }
@@ -261,16 +264,15 @@ fn audit_open_refusal(error: registry_platform_audit::AuditError) -> Coordinator
 /// private address on its own nonzero port, a wildcard only under
 /// `container-private`, and never the socket the public listener already
 /// covers. The rule is the platform's.
-fn valid_metrics_listener(
+fn check_metrics_listener(
     metrics: SocketAddr,
     exposure: ListenerNetworkExposure,
     listener: SocketAddr,
-) -> bool {
+) -> std::result::Result<(), registry_platform_config::MetricsBindError> {
     registry_platform_config::check_metrics_bind(metrics, exposure, &[("listener", listener)])
-        .is_ok()
 }
 
-fn config_fail(field: &str, advice: &str) -> CoordinatorError {
+fn config_fail(field: &str, advice: impl Into<String>) -> CoordinatorError {
     CoordinatorError::new(
         "coordinator.deployment.configuration",
         "the deployment configuration was refused",
@@ -361,7 +363,7 @@ pub fn load_workflows(config: &DeploymentConfig) -> Result<Workflows> {
         if packages.contains_key(&workflow) {
             return Err(config_fail(
                 &field,
-                &format!(
+                format!(
                     "list one package per workflow; an earlier package already serves workflow {workflow}"
                 ),
             ));
@@ -989,7 +991,7 @@ pub async fn apply(
 #[cfg(test)]
 mod tests {
     use super::{
-        limits, load_package, valid_metrics_listener, write_package, ListenerNetworkExposure,
+        check_metrics_listener, limits, load_package, write_package, ListenerNetworkExposure,
         PackageConfig,
     };
     use crate::definition::Definition;
@@ -1157,25 +1159,29 @@ mod tests {
 
     #[test]
     fn the_metrics_listener_may_not_share_a_wildcard_listener_port() {
-        assert!(!valid_metrics_listener(
+        assert!(check_metrics_listener(
             "10.0.0.5:8108".parse().unwrap(),
             ListenerNetworkExposure::PrivateAddress,
             "0.0.0.0:8108".parse().unwrap()
-        ));
-        assert!(!valid_metrics_listener(
+        )
+        .is_err());
+        assert!(check_metrics_listener(
             "10.0.0.5:8108".parse().unwrap(),
             ListenerNetworkExposure::PrivateAddress,
             "[::]:8108".parse().unwrap()
-        ));
-        assert!(valid_metrics_listener(
+        )
+        .is_err());
+        assert!(check_metrics_listener(
             "[fd00::5]:8108".parse().unwrap(),
             ListenerNetworkExposure::PrivateAddress,
             "0.0.0.0:8108".parse().unwrap()
-        ));
-        assert!(valid_metrics_listener(
+        )
+        .is_ok());
+        assert!(check_metrics_listener(
             "10.0.0.5:9108".parse().unwrap(),
             ListenerNetworkExposure::PrivateAddress,
             "0.0.0.0:8108".parse().unwrap()
-        ));
+        )
+        .is_ok());
     }
 }
