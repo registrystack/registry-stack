@@ -118,6 +118,7 @@ def upgrade_inputs_sha256(chart, target):
 
 
 def verify_backup_receipt(receipt, namespace, release, database_id, digest, activation_id, max_age_hours=26):
+    """Check that the receipt names this activation and, unless max_age_hours is None, that it is recent."""
     if (
         receipt.get("namespace") != namespace or receipt.get("release") != release
         or receipt.get("databaseId") != database_id or receipt.get("packageDigest") != digest
@@ -126,6 +127,8 @@ def verify_backup_receipt(receipt, namespace, release, database_id, digest, acti
         or not re.fullmatch(r"[0-9a-f]{64}", receipt.get("manifestSha256", ""))
     ):
         raise OperationError("The backup receipt does not identify the current installation and activation.")
+    if max_age_hours is None:
+        return
     try:
         verify_capture_age(receipt, datetime.now(timezone.utc), timedelta(hours=max_age_hours))
     except BundleError as error:
@@ -416,14 +419,14 @@ class Installation:
         self.job("doctor", digest)
         return status
 
-    def verify_backup(self, digest, activation_id):
+    def verify_backup(self, digest, activation_id, check_age=True):
         try:
             receipt = decode_json(self.args.backup_receipt.read_text(), "Backup receipt")
         except OSError as error:
             raise OperationError("Cannot read the required backup receipt.") from error
         verify_backup_receipt(
             receipt, self.args.namespace, self.args.release, self.args.database_id, digest, activation_id,
-            self.args.max_backup_age_hours,
+            self.args.max_backup_age_hours if check_age else None,
         )
         return receipt
 
@@ -484,7 +487,9 @@ class Installation:
         committed = previous != digest and status.get("activePackageDigest") == digest
         verify_active(status, digest if committed else previous, self.args.database_id)
         activation_id = previous_activation(status, previous) if committed else status["activationId"]
-        backup_sha256 = json_sha256(self.verify_backup(previous, activation_id))
+        # A pending upgrade checked the receipt's age when it started, and the
+        # recorded digest below binds the retry to that same receipt.
+        backup_sha256 = json_sha256(self.verify_backup(previous, activation_id, check_age=record is None))
         if committed and record is None:
             raise OperationError("BReg committed a successor with no recorded upgrade. Use reviewed recovery with the original inputs.")
         if record is not None:
@@ -502,6 +507,11 @@ class Installation:
             action = activation_action(plan, digest, "upgrade")
             if plan.get("activePackageDigest") != previous:
                 raise OperationError("The database's active package differs from the serving Helm release.")
+            if action and not getattr(self.args, "operator_reference", None):
+                raise OperationError(
+                    "Activating the successor package needs --operator-reference. "
+                    "An upgrade that keeps the active package does not."
+                )
             if action == "apply-successor" and record is None:
                 record = self.create_upgrade_record({
                     **identity, "previousPackageDigest": previous, "previousActivationId": activation_id,
@@ -594,11 +604,11 @@ def main():
     upgrade = commands.add_parser("upgrade", help="Quiesce and apply a reviewed successor.")
     upgrade.add_argument("--backup-receipt", type=Path, required=True)
     upgrade.add_argument("--max-backup-age-hours", type=int, default=26)
-    for command, required in ((install, False), (upgrade, True)):
+    for command in (install, upgrade):
         command.add_argument(
-            "--operator-reference", type=operator_reference, required=required,
+            "--operator-reference", type=operator_reference,
             help="Change or ticket reference that BReg records, as a keyed hash, with a package activation. "
-            "Install needs it only when it activates a package.",
+            "Needed only when the command activates a package.",
         )
     restore = commands.add_parser("adopt-restored", help="Adopt a logical restore after permanently fencing the source.")
     restore.add_argument("--confirm-original-fenced", action="store_true", required=True)
