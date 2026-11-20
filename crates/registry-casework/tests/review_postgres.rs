@@ -15,8 +15,8 @@ use chrono::{TimeDelta, Utc};
 use registry_casework::{
     claim_review_completion_for_test, dispatch_review_completions_once_for_test,
     finish_review_completion_for_test, validate_retained_completion_destinations_for_test,
-    CaseworkService, DatabaseConfig, PostgresStore, ReviewResultRead, ReviewRuntimeError,
-    ReviewTaskDecisionRequest, RuntimeError, StoreError,
+    CaseworkService, CompletionBacklog, DatabaseConfig, PostgresStore, ReviewResultRead,
+    ReviewRuntimeError, ReviewTaskDecisionRequest, RuntimeError, StoreError,
 };
 use registry_casework_core::*;
 use registry_platform_config::{SecretProvider, SecretResolver};
@@ -1478,6 +1478,75 @@ async fn an_interrupted_final_completion_attempt_dead_letters_without_another_se
             .await
             .expect("claim after the dead letter")
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn the_completion_backlog_counts_every_undelivered_state_and_the_oldest_age() {
+    let fixture = fixture().await;
+    let empty = fixture.store.completion_backlog().await.expect("sample");
+    assert_eq!(empty, CompletionBacklog::default());
+
+    let dead = settle_review_for_completion(&fixture, "backlog-dead-lettered").await;
+    claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 1)
+        .await
+        .expect("lease the only attempt")
+        .expect("the delivery");
+    lapse_completion_lease(&fixture, dead).await;
+    assert!(
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 1)
+            .await
+            .expect("recover the interrupted attempt")
+            .is_none()
+    );
+
+    settle_review_for_completion(&fixture, "backlog-retrying").await;
+    let lease = claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+        .await
+        .expect("lease the delivery")
+        .expect("the delivery");
+    finish_review_completion_for_test(
+        fixture.store.clone(),
+        "registry-completion",
+        3,
+        &lease,
+        false,
+    )
+    .await
+    .expect("fail the first attempt");
+
+    settle_review_for_completion(&fixture, "backlog-pending").await;
+    settle_review_for_completion(&fixture, "backlog-leased").await;
+    claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+        .await
+        .expect("lease a delivery")
+        .expect("the delivery");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET updated_at=now() - interval '2 hours' WHERE request_id=$1",
+            &[&dead],
+        )
+        .await
+        .expect("age the dead-lettered delivery");
+
+    let backlog = fixture.store.completion_backlog().await.expect("sample");
+    assert_eq!(
+        (
+            backlog.pending,
+            backlog.retrying,
+            backlog.leased,
+            backlog.unknown,
+            backlog.dead_lettered,
+            backlog.expired
+        ),
+        (1, 1, 1, 0, 1, 0)
+    );
+    assert!(
+        (7200..7260).contains(&backlog.oldest_undelivered_seconds),
+        "the oldest undelivered delivery is the aged dead letter: {}",
+        backlog.oldest_undelivered_seconds
     );
 }
 
