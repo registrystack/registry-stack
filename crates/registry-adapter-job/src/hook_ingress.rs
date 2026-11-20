@@ -1051,34 +1051,44 @@ mod tests {
             gate: Arc::new(HookPassGate::default()),
             metrics: Arc::clone(&metrics),
         };
-        let send = |method: Method, path: &str, password: &str| {
+        let send = |method: Method, path: &str, authorization: String| {
             let request = Request::builder()
                 .method(method)
                 .uri(path)
-                .header(AUTHORIZATION, basic_header(password))
+                .header(AUTHORIZATION, authorization)
                 .body(Body::empty())
                 .expect("a hook request");
             receive_hook_until(State(state.clone()), request, std::future::pending())
         };
-        let good = "correct horse battery staple";
+        let good = basic_header("correct horse battery staple");
         assert_eq!(
-            send(Method::POST, "/hooks/elsewhere", good).await.status(),
+            send(Method::POST, "/hooks/elsewhere", good.clone())
+                .await
+                .status(),
             StatusCode::NOT_FOUND
         );
         assert_eq!(
-            send(Method::GET, "/hooks/kobo", good).await.status(),
+            send(Method::GET, "/hooks/kobo", good.clone())
+                .await
+                .status(),
             StatusCode::METHOD_NOT_ALLOWED
         );
         assert_eq!(
-            send(Method::POST, "/hooks/kobo", "wrong").await.status(),
+            send(Method::POST, "/hooks/kobo", basic_header("wrong"))
+                .await
+                .status(),
             StatusCode::UNAUTHORIZED
         );
         assert_eq!(
-            send(Method::POST, "/hooks/kobo", good).await.status(),
+            send(Method::POST, "/hooks/kobo", good.clone())
+                .await
+                .status(),
             StatusCode::ACCEPTED
         );
         assert_eq!(
-            send(Method::POST, "/hooks/kobo", good).await.status(),
+            send(Method::POST, "/hooks/kobo", good.clone())
+                .await
+                .status(),
             StatusCode::TOO_MANY_REQUESTS
         );
         let text = metrics.render(None);
