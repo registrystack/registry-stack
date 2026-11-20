@@ -16,7 +16,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use chrono::Utc;
@@ -87,6 +87,14 @@ const HTTP_REQUEST_MILLISECONDS: u64 = 30_000;
 /// A replica with a mutation checkpoint also holds its writer at the barrier,
 /// so its budget adds the longest hold to the ordinary exchange budget.
 const MUTATION_CHECKPOINT_HTTP_REQUEST_MILLISECONDS: u64 = 45_000;
+
+/// A scrape taken while a relation was locked.
+#[allow(dead_code)]
+pub struct LockedScrape {
+    pub body: String,
+    pub elapsed: Duration,
+    pub waiting_sessions: i64,
+}
 
 pub struct NativeTimerHarness {
     database: Option<TestDatabase>,
@@ -1350,6 +1358,55 @@ impl NativeTimerHarness {
             (_, Err(error)) => Err(error),
             (result, Ok(())) => result,
         }
+    }
+
+    /// Scrape while `relation` is held under an exclusive lock, so every read
+    /// of it waits. Returns the body, how long the scrape took, and how many
+    /// runtime sessions were still waiting on a lock after it returned: a
+    /// read the server cancelled leaves none, a read the client merely
+    /// abandoned leaves one.
+    #[allow(dead_code)] // Consumed by the metrics target alone.
+    pub async fn scrape_with_relation_locked(
+        &self,
+        replica: usize,
+        relation: &str,
+    ) -> Result<LockedScrape, String> {
+        let admin = &self.database().admin;
+        admin
+            .batch_execute(&format!(
+                "BEGIN; LOCK TABLE {relation} IN ACCESS EXCLUSIVE MODE;"
+            ))
+            .await
+            .map_err(|_| "metrics fixture could not lock the relation".to_owned())?;
+        let started = Instant::now();
+        let scrape = self.scrape_metrics(replica).await;
+        let elapsed = started.elapsed();
+        let role = self.database().runtime_role.as_str();
+        let mut waiting = i64::MAX;
+        for _ in 0..60 {
+            waiting = admin
+                .query_one(
+                    "SELECT count(*) FROM pg_stat_activity
+                     WHERE usename = $1 AND wait_event_type = 'Lock'",
+                    &[&role],
+                )
+                .await
+                .map_err(|_| "metrics fixture could not count waiting sessions".to_owned())?
+                .get(0);
+            if waiting == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        admin
+            .batch_execute("ROLLBACK")
+            .await
+            .map_err(|_| "metrics fixture could not release the lock".to_owned())?;
+        Ok(LockedScrape {
+            body: scrape?,
+            elapsed,
+            waiting_sessions: waiting,
+        })
     }
 
     /// Wait for one exact operator session to be blocked by one exact native

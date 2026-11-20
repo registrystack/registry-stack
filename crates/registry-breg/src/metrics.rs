@@ -21,8 +21,10 @@
 //! [`ProgressWorker`] and [`PendingQueue`]. A worker's age is read from the
 //! handle its loop notes successes on. Queue ages and Record-timer state are
 //! read independently on each scrape, through at most one pool connection at
-//! a time and separate read-only transactions under short statement
-//! timeouts. A failed sample is omitted rather than rendered as an empty
+//! a time and separate read-only transactions. They share one five-second
+//! scrape deadline, and each transaction's server-side statement timeout is the
+//! time left, so a slow query is cancelled on the server. A sample that starts
+//! with no time left counts as failed. A failed sample is omitted rather than rendered as an empty
 //! queue, and emits a closed operational event without erasing an independent
 //! successful sample. The hook delivery and import run counts are sampled the
 //! same way, each in its own read-only transaction, and are counted by state
@@ -51,16 +53,14 @@ use axum::{
 };
 
 use registry_platform_metrics::{
-    Exposition, HistogramSnapshot, MetricKind, SumCountOrder, CONTENT_TYPE as METRICS_MEDIA_TYPE,
+    sample_error_class, Exposition, HistogramSnapshot, MetricKind, ScrapeDeadline, SumCountOrder,
+    CLASS_NO_TIME_LEFT, CLASS_POOL, CLASS_TIMEOUT, CONTENT_TYPE as METRICS_MEDIA_TYPE,
 };
 
 use crate::postgres::RuntimePool;
 
 /// Route label used when no registered route template matched the request.
 pub(crate) const UNMATCHED_ROUTE: &str = "unmatched";
-
-/// The bound on the one statement that samples the queue ages.
-const QUEUE_SAMPLE_STATEMENT_TIMEOUT: &str = "5s";
 
 /// One database instant for runnable ages and package-blocked application work.
 pub(crate) struct QueueSample {
@@ -641,49 +641,119 @@ impl Metrics {
     /// reporting an empty queue, and its failure is counted and emits a
     /// closed operational event. The samples fail independently.
     pub(crate) async fn sample_queues(&self) -> Option<QueueSample> {
+        self.sample_queues_before(ScrapeDeadline::from(Instant::now()))
+            .await
+    }
+
+    /// [`Self::sample_queues`] with every read bounded by one `deadline`,
+    /// which also bounds each read's server-side statement timeout. A read
+    /// that starts with no time left fails without querying.
+    async fn sample_queues_before(&self, deadline: ScrapeDeadline) -> Option<QueueSample> {
+        use crate::startup::OperationalEvent;
         let pool = self.pool.as_ref()?;
         let _sampling = self.queue_sample.lock().await;
         // Each sample stands alone: a queue failure leaves out only the queue
         // series, and the timer, hook and import samples still run.
-        let mut sample = match read_queues(pool).await {
-            Ok(sample) => sample,
-            Err(()) => {
-                self.note_sample_failure(SampleKind::Queue);
-                crate::startup::OperationalEvent::MetricsQueueSampleFailed.emit();
-                QueueSample::unsampled()
-            }
-        };
-        sample.timer =
-            match read_timer_sample_from_pool(pool, self.active_package_digest.as_deref()).await {
-                Ok(timer) => Some(timer),
-                Err(()) => {
-                    self.note_sample_failure(SampleKind::Timer);
-                    crate::startup::OperationalEvent::MetricsTimerSampleFailed.emit();
-                    None
-                }
-            };
-        sample.hook_deliveries = match read_hook_deliveries(pool).await {
-            Ok(counts) => Some(counts),
-            Err(()) => {
-                self.note_sample_failure(SampleKind::HookDelivery);
-                crate::startup::OperationalEvent::MetricsHookDeliverySampleFailed.emit();
-                None
-            }
-        };
-        sample.ingestion_runs = match read_ingestion_runs(pool).await {
-            Ok(counts) => Some(counts),
-            Err(()) => {
-                self.note_sample_failure(SampleKind::IngestionRun);
-                crate::startup::OperationalEvent::MetricsIngestionRunSampleFailed.emit();
-                None
-            }
-        };
+        let mut sample = self
+            .sample(
+                SampleKind::Queue,
+                OperationalEvent::MetricsQueueSampleFailed,
+                deadline,
+                read_queues(pool, deadline),
+            )
+            .await
+            .unwrap_or_else(QueueSample::unsampled);
+        sample.timer = self
+            .sample(
+                SampleKind::Timer,
+                OperationalEvent::MetricsTimerSampleFailed,
+                deadline,
+                read_timer_sample_from_pool(pool, deadline, self.active_package_digest.as_deref()),
+            )
+            .await;
+        sample.hook_deliveries = self
+            .sample(
+                SampleKind::HookDelivery,
+                OperationalEvent::MetricsHookDeliverySampleFailed,
+                deadline,
+                read_hook_deliveries(pool, deadline),
+            )
+            .await;
+        sample.ingestion_runs = self
+            .sample(
+                SampleKind::IngestionRun,
+                OperationalEvent::MetricsIngestionRunSampleFailed,
+                deadline,
+                read_ingestion_runs(pool, deadline),
+            )
+            .await;
         Some(sample)
+    }
+
+    /// Run one read before `deadline`. A failure or a timeout is counted
+    /// once and logged by its error class, never by query text or row data,
+    /// and leaves the sample without a value.
+    async fn sample<T>(
+        &self,
+        kind: SampleKind,
+        event: crate::startup::OperationalEvent,
+        deadline: ScrapeDeadline,
+        read: impl std::future::Future<Output = Result<T, String>>,
+    ) -> Option<T> {
+        let class = match tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline.at()),
+            read,
+        )
+        .await
+        {
+            Ok(Ok(value)) => return Some(value),
+            Ok(Err(class)) => class,
+            Err(_) => CLASS_TIMEOUT.to_owned(),
+        };
+        self.note_sample_failure(kind);
+        event.emit_metrics_sample_failure(&class);
+        None
     }
 
     fn note_sample_failure(&self, kind: SampleKind) {
         self.sample_failures[kind as usize].fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// The error class of a driver error: never its text, which can carry query
+/// text or row data.
+fn database_error_class(error: &tokio_postgres::Error) -> String {
+    sample_error_class(
+        error.code().map(tokio_postgres::error::SqlState::code),
+        error.is_closed(),
+    )
+}
+
+/// Start a read-only transaction whose server-side `statement_timeout` is
+/// the time left before `deadline`, so a slow query is cancelled on the
+/// server and not only abandoned by the client. A read with no time left
+/// fails without querying.
+async fn begin_sample(
+    client: &mut deadpool_postgres::Client,
+    deadline: ScrapeDeadline,
+) -> Result<deadpool_postgres::Transaction<'_>, String> {
+    let transaction = client
+        .build_transaction()
+        .read_only(true)
+        .start()
+        .await
+        .map_err(|error| database_error_class(&error))?;
+    let milliseconds = deadline
+        .statement_timeout_milliseconds()
+        .ok_or_else(|| CLASS_NO_TIME_LEFT.to_owned())?;
+    transaction
+        .execute(
+            "SELECT set_config('statement_timeout', $1, true)",
+            &[&format!("{milliseconds}ms")],
+        )
+        .await
+        .map_err(|error| database_error_class(&error))?;
+    Ok(transaction)
 }
 
 /// Read every queue age in one bounded, read-only statement. The due
@@ -693,21 +763,9 @@ impl Metrics {
 /// extends its lease without advancing `next_attempt_at`, so a claimable
 /// submission has waited since the later of the two; `GREATEST` ignores a
 /// NULL lease.
-async fn read_queues(pool: &RuntimePool) -> Result<QueueSample, ()> {
-    let mut client = pool.get().await.map_err(|_| ())?;
-    let transaction = client
-        .build_transaction()
-        .read_only(true)
-        .start()
-        .await
-        .map_err(|_| ())?;
-    transaction
-        .execute(
-            "SELECT set_config('statement_timeout', $1, true)",
-            &[&QUEUE_SAMPLE_STATEMENT_TIMEOUT],
-        )
-        .await
-        .map_err(|_| ())?;
+async fn read_queues(pool: &RuntimePool, deadline: ScrapeDeadline) -> Result<QueueSample, String> {
+    let mut client = pool.get().await.map_err(|_| CLASS_POOL.to_owned())?;
+    let transaction = begin_sample(&mut client, deadline).await?;
     let row = transaction
         .query_one(
             &format!(
@@ -746,15 +804,21 @@ async fn read_queues(pool: &RuntimePool) -> Result<QueueSample, ()> {
             &[],
         )
         .await
-        .map_err(|_| ())?;
+        .map_err(|error| database_error_class(&error))?;
     let ages = PendingQueue::ALL
         .into_iter()
         .enumerate()
         .map(|(column, queue)| Ok((queue, row.try_get::<_, f64>(column)?)))
         .collect::<Result<Vec<_>, tokio_postgres::Error>>()
-        .map_err(|_| ())?;
-    let blocked_application_jobs = Some(row.try_get::<_, i64>(3).map_err(|_| ())?);
-    transaction.commit().await.map_err(|_| ())?;
+        .map_err(|error| database_error_class(&error))?;
+    let blocked_application_jobs = Some(
+        row.try_get::<_, i64>(3)
+            .map_err(|error| database_error_class(&error))?,
+    );
+    transaction
+        .commit()
+        .await
+        .map_err(|error| database_error_class(&error))?;
     Ok(QueueSample {
         ages,
         blocked_application_jobs,
@@ -767,21 +831,12 @@ async fn read_queues(pool: &RuntimePool) -> Result<QueueSample, ()> {
 /// Count every outbound hook delivery by state in one bounded, read-only
 /// statement. Delivered, dead-lettered, and expired rows stay until the
 /// retention worker removes them, so the count is of retained deliveries.
-async fn read_hook_deliveries(pool: &RuntimePool) -> Result<[i64; HOOK_DELIVERY_STATES.len()], ()> {
-    let mut client = pool.get().await.map_err(|_| ())?;
-    let transaction = client
-        .build_transaction()
-        .read_only(true)
-        .start()
-        .await
-        .map_err(|_| ())?;
-    transaction
-        .execute(
-            "SELECT set_config('statement_timeout', $1, true)",
-            &[&QUEUE_SAMPLE_STATEMENT_TIMEOUT],
-        )
-        .await
-        .map_err(|_| ())?;
+async fn read_hook_deliveries(
+    pool: &RuntimePool,
+    deadline: ScrapeDeadline,
+) -> Result<[i64; HOOK_DELIVERY_STATES.len()], String> {
+    let mut client = pool.get().await.map_err(|_| CLASS_POOL.to_owned())?;
+    let transaction = begin_sample(&mut client, deadline).await?;
     let row = transaction
         .query_one(
             &format!(
@@ -796,12 +851,17 @@ async fn read_hook_deliveries(pool: &RuntimePool) -> Result<[i64; HOOK_DELIVERY_
             &[],
         )
         .await
-        .map_err(|_| ())?;
+        .map_err(|error| database_error_class(&error))?;
     let mut counts = [0_i64; HOOK_DELIVERY_STATES.len()];
     for (column, count) in counts.iter_mut().enumerate() {
-        *count = row.try_get::<_, i64>(column).map_err(|_| ())?;
+        *count = row
+            .try_get::<_, i64>(column)
+            .map_err(|error| database_error_class(&error))?;
     }
-    transaction.commit().await.map_err(|_| ())?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| database_error_class(&error))?;
     Ok(counts)
 }
 
@@ -810,21 +870,12 @@ async fn read_hook_deliveries(pool: &RuntimePool) -> Result<[i64; HOOK_DELIVERY_
 /// open run whose package binding is no longer the active one counts as
 /// blocked, the state its run document renders. A run with no active binding
 /// to compare with counts as blocked too, so no run is dropped from the total.
-async fn read_ingestion_runs(pool: &RuntimePool) -> Result<[i64; INGESTION_RUN_STATES.len()], ()> {
-    let mut client = pool.get().await.map_err(|_| ())?;
-    let transaction = client
-        .build_transaction()
-        .read_only(true)
-        .start()
-        .await
-        .map_err(|_| ())?;
-    transaction
-        .execute(
-            "SELECT set_config('statement_timeout', $1, true)",
-            &[&QUEUE_SAMPLE_STATEMENT_TIMEOUT],
-        )
-        .await
-        .map_err(|_| ())?;
+async fn read_ingestion_runs(
+    pool: &RuntimePool,
+    deadline: ScrapeDeadline,
+) -> Result<[i64; INGESTION_RUN_STATES.len()], String> {
+    let mut client = pool.get().await.map_err(|_| CLASS_POOL.to_owned())?;
+    let transaction = begin_sample(&mut client, deadline).await?;
     let row = transaction
         .query_one(
             "WITH effective AS (
@@ -850,12 +901,17 @@ async fn read_ingestion_runs(pool: &RuntimePool) -> Result<[i64; INGESTION_RUN_S
             &[],
         )
         .await
-        .map_err(|_| ())?;
+        .map_err(|error| database_error_class(&error))?;
     let mut counts = [0_i64; INGESTION_RUN_STATES.len()];
     for (column, count) in counts.iter_mut().enumerate() {
-        *count = row.try_get::<_, i64>(column).map_err(|_| ())?;
+        *count = row
+            .try_get::<_, i64>(column)
+            .map_err(|error| database_error_class(&error))?;
     }
-    transaction.commit().await.map_err(|_| ())?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| database_error_class(&error))?;
     Ok(counts)
 }
 
@@ -867,31 +923,23 @@ async fn read_ingestion_runs(pool: &RuntimePool) -> Result<[i64; INGESTION_RUN_S
 /// seconds, with no public configuration knob.
 async fn read_timer_sample_from_pool(
     pool: &RuntimePool,
+    deadline: ScrapeDeadline,
     process_package_digest: Option<&str>,
-) -> Result<TimerSample, ()> {
-    let mut client = pool.get().await.map_err(|_| ())?;
-    let transaction = client
-        .build_transaction()
-        .read_only(true)
-        .start()
-        .await
-        .map_err(|_| ())?;
-    transaction
-        .execute(
-            "SELECT set_config('statement_timeout', $1, true)",
-            &[&QUEUE_SAMPLE_STATEMENT_TIMEOUT],
-        )
-        .await
-        .map_err(|_| ())?;
+) -> Result<TimerSample, String> {
+    let mut client = pool.get().await.map_err(|_| CLASS_POOL.to_owned())?;
+    let transaction = begin_sample(&mut client, deadline).await?;
     let sample = read_timer_sample(&*transaction, process_package_digest).await?;
-    transaction.commit().await.map_err(|_| ())?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| database_error_class(&error))?;
     Ok(sample)
 }
 
 async fn read_timer_sample(
     client: &impl tokio_postgres::GenericClient,
     process_package_digest: Option<&str>,
-) -> Result<TimerSample, ()> {
+) -> Result<TimerSample, String> {
     let row = client
         .query_one(
             "WITH requested_state(value) AS (
@@ -1057,75 +1105,91 @@ async fn read_timer_sample(
             ],
         )
         .await
-        .map_err(|_| ())?;
-    let sampled_count = row.try_get::<_, i64>("sampled_count").map_err(|_| ())?;
-    let retained_attempts = row.try_get::<_, i64>("retained_attempts").map_err(|_| ())?;
+        .map_err(|error| database_error_class(&error))?;
+    let sampled_count = row
+        .try_get::<_, i64>("sampled_count")
+        .map_err(|error| database_error_class(&error))?;
+    let retained_attempts = row
+        .try_get::<_, i64>("retained_attempts")
+        .map_err(|error| database_error_class(&error))?;
     let occurrence_counts = [
         row.try_get::<_, i64>("category_pending")
-            .map_err(|_| ())?
+            .map_err(|error| database_error_class(&error))?
             .min(TIMER_STATUS_SCAN_MAXIMUM),
         row.try_get::<_, i64>("category_leased")
-            .map_err(|_| ())?
+            .map_err(|error| database_error_class(&error))?
             .min(TIMER_STATUS_SCAN_MAXIMUM),
         row.try_get::<_, i64>("category_completed")
-            .map_err(|_| ())?
+            .map_err(|error| database_error_class(&error))?
             .min(TIMER_STATUS_SCAN_MAXIMUM),
         row.try_get::<_, i64>("category_refused")
-            .map_err(|_| ())?
+            .map_err(|error| database_error_class(&error))?
             .min(TIMER_STATUS_SCAN_MAXIMUM),
         row.try_get::<_, i64>("category_blocked")
-            .map_err(|_| ())?
+            .map_err(|error| database_error_class(&error))?
             .min(TIMER_STATUS_SCAN_MAXIMUM),
         row.try_get::<_, i64>("category_cancelled")
-            .map_err(|_| ())?
+            .map_err(|error| database_error_class(&error))?
             .min(TIMER_STATUS_SCAN_MAXIMUM),
         row.try_get::<_, i64>("category_superseded")
-            .map_err(|_| ())?
+            .map_err(|error| database_error_class(&error))?
             .min(TIMER_STATUS_SCAN_MAXIMUM),
         row.try_get::<_, i64>("category_missed")
-            .map_err(|_| ())?
+            .map_err(|error| database_error_class(&error))?
             .min(TIMER_STATUS_SCAN_MAXIMUM),
     ];
     let block_counts = [
         row.try_get::<_, i64>("category_technical")
-            .map_err(|_| ())?
+            .map_err(|error| database_error_class(&error))?
             .min(TIMER_STATUS_SCAN_MAXIMUM),
         row.try_get::<_, i64>("category_configuration")
-            .map_err(|_| ())?
+            .map_err(|error| database_error_class(&error))?
             .min(TIMER_STATUS_SCAN_MAXIMUM),
     ];
     let category_counts_truncated = row
         .try_get::<_, bool>("category_counts_truncated")
-        .map_err(|_| ())?;
+        .map_err(|error| database_error_class(&error))?;
     let sampled_lease_count = row
         .try_get::<_, i64>("sampled_lease_count")
-        .map_err(|_| ())?;
-    let observed_live_lease_owners = row.try_get::<_, i64>("owner_count").map_err(|_| ())?;
+        .map_err(|error| database_error_class(&error))?;
+    let observed_live_lease_owners = row
+        .try_get::<_, i64>("owner_count")
+        .map_err(|error| database_error_class(&error))?;
     let oldest_due_lag_seconds = row
         .try_get::<_, Option<f64>>("lag_seconds")
-        .map_err(|_| ())?;
-    let protocol_version = row.try_get::<_, i32>("protocol_version").map_err(|_| ())?;
+        .map_err(|error| database_error_class(&error))?;
+    let protocol_version = row
+        .try_get::<_, i32>("protocol_version")
+        .map_err(|error| database_error_class(&error))?;
     let control_state = match row
         .try_get::<_, String>("control_state")
-        .map_err(|_| ())?
+        .map_err(|error| database_error_class(&error))?
         .as_str()
     {
         "running" => "running",
         "paused" => "paused",
         "adoption-hold" => "adoption-hold",
-        _ => return Err(()),
+        _ => return Err("control-state".to_owned()),
     };
-    let instance_matches = row.try_get::<_, bool>("instance_matches").map_err(|_| ())?;
-    let package_matches = row.try_get::<_, bool>("package_matches").map_err(|_| ())?;
+    let instance_matches = row
+        .try_get::<_, bool>("instance_matches")
+        .map_err(|error| database_error_class(&error))?;
+    let package_matches = row
+        .try_get::<_, bool>("package_matches")
+        .map_err(|error| database_error_class(&error))?;
 
     Ok(TimerSample {
         observed_live_lease_owners: observed_live_lease_owners.min(TIMER_STATUS_SCAN_MAXIMUM),
         oldest_due_lag_seconds,
         occurrence_counts,
         block_counts,
-        current_executed_attempts: row.try_get("executed_attempts").map_err(|_| ())?,
+        current_executed_attempts: row
+            .try_get("executed_attempts")
+            .map_err(|error| database_error_class(&error))?,
         retained_attempts: retained_attempts.min(TIMER_STATUS_SCAN_MAXIMUM),
-        stale_current_occurrences: row.try_get("stale_current").map_err(|_| ())?,
+        stale_current_occurrences: row
+            .try_get("stale_current")
+            .map_err(|error| database_error_class(&error))?,
         control_state,
         control_compatible: protocol_version == crate::postgres::SUPPORTED_TIMER_PROTOCOL_VERSION
             && instance_matches

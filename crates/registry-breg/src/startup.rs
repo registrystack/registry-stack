@@ -693,6 +693,15 @@ impl OperationalEvent {
         }
     }
 
+    /// Emit one of the metrics sample failure events with the error class of
+    /// the failed read (a closed token such as `timeout`, `pool` or
+    /// `sqlstate-<code>`, never query text or row data).
+    pub fn emit_metrics_sample_failure(&self, class: &str) {
+        let record = self.record();
+        let code = record.code.expect("metrics warning records have a code");
+        tracing::warn!(target: "registry_breg::metrics", code, class, message = record.message);
+    }
+
     /// Emit one record through the production JSON tracing subscriber. This is
     /// the entry point for the closed operational event vocabulary. It is not
     /// the only production tracing call in Base Registry Engine: some modules

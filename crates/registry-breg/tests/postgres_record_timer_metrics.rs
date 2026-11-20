@@ -45,6 +45,115 @@ async fn timer_metric_sample_failure_is_omitted_and_diagnosed() {
     finish_result(harness, result).await;
 }
 
+/// One scrape shares one deadline, so a relation that never answers costs the
+/// scrape the deadline once, not once per read. Every read after the stuck
+/// one has no time left and counts as failed, and the server cancels the
+/// stuck reads instead of leaving them waiting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stuck_sample_read_spends_the_scrape_deadline_once_and_is_cancelled_on_the_server() {
+    let mut harness = NativeTimerHarness::start().await;
+    let result = stuck_hook_deliveries(&mut harness).await;
+    finish_result(harness, result).await;
+}
+
+/// A stuck last read fails alone: the reads before it publish normally.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stuck_import_run_read_omits_only_the_import_run_gauge() {
+    let mut harness = NativeTimerHarness::start().await;
+    let result = stuck_ingestion_runs(&mut harness).await;
+    finish_result(harness, result).await;
+}
+
+fn failure_count(body: &str, sample: &str) -> Result<f64, String> {
+    metric_value(
+        body,
+        &format!("breg_metrics_sample_failures_total{{sample=\"{sample}\"}}"),
+    )
+}
+
+fn has_family(body: &str, family: &str) -> bool {
+    body.lines().any(|line| {
+        line.strip_prefix(family)
+            .is_some_and(|suffix| suffix.starts_with(' ') || suffix.starts_with('{'))
+    })
+}
+
+async fn stuck_hook_deliveries(harness: &mut NativeTimerHarness) -> Result<(), String> {
+    harness.enable_metrics_for_new_replicas()?;
+    harness.start_replicas(1).await?;
+    for code in [
+        "metrics.queue_sample.failed",
+        "metrics.timer_sample.failed",
+        "metrics.hook_delivery_sample.failed",
+        "metrics.ingestion_run_sample.failed",
+    ] {
+        harness.expect_non_info_code(0, code, 1)?;
+    }
+    // The hook worker reads the same locked relation, so it fails too.
+    for code in ["hook.claim.recovery_failed", "hook.worker.iteration_failed"] {
+        harness.expect_non_info_code_range(0, code, 0, 100)?;
+    }
+    let locked = harness
+        .scrape_with_relation_locked(0, "registry_internal.registry_webhook_delivery_state")
+        .await?;
+    if locked.elapsed > Duration::from_secs(8) {
+        return Err(format!(
+            "the scrape took {:?}; its reads must share one 5 second deadline",
+            locked.elapsed
+        ));
+    }
+    if locked.waiting_sessions != 0 {
+        return Err(format!(
+            "{} sessions still waited on the lock; the server must cancel the reads",
+            locked.waiting_sessions
+        ));
+    }
+    for sample in ["queue", "record-timer", "hook-delivery", "ingestion-run"] {
+        if failure_count(&locked.body, sample)? != 1.0 {
+            return Err(format!("sample {sample} was not counted as failed once"));
+        }
+    }
+    for family in ["breg_hook_deliveries", "breg_ingestion_runs"] {
+        if has_family(&locked.body, family) {
+            return Err(format!("the failed sample rendered {family}"));
+        }
+    }
+    if !locked.body.contains("breg_pool_connections") {
+        return Err("a failed sample suppressed an independent family".to_owned());
+    }
+    Ok(())
+}
+
+async fn stuck_ingestion_runs(harness: &mut NativeTimerHarness) -> Result<(), String> {
+    harness.enable_metrics_for_new_replicas()?;
+    harness.start_replicas(1).await?;
+    harness.expect_non_info_code(0, "metrics.ingestion_run_sample.failed", 1)?;
+    let locked = harness
+        .scrape_with_relation_locked(0, "registry_internal.registry_ingestion_runs")
+        .await?;
+    if locked.waiting_sessions != 0 {
+        return Err(format!(
+            "{} sessions still waited on the lock; the server must cancel the read",
+            locked.waiting_sessions
+        ));
+    }
+    if failure_count(&locked.body, "ingestion-run")? != 1.0 {
+        return Err("the stuck import run read was not counted once".to_owned());
+    }
+    for sample in ["queue", "record-timer", "hook-delivery"] {
+        if failure_count(&locked.body, sample)? != 0.0 {
+            return Err(format!("sample {sample} was counted as failed"));
+        }
+    }
+    if has_family(&locked.body, "breg_ingestion_runs") {
+        return Err("the failed sample rendered breg_ingestion_runs".to_owned());
+    }
+    if !has_family(&locked.body, "breg_hook_deliveries") {
+        return Err("the stuck read erased an independent sample".to_owned());
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn timer_worker_progress_is_registered_only_for_a_real_worker() {
     let mut harness = NativeTimerHarness::start().await;
