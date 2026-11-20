@@ -23,8 +23,8 @@ use registry_platform_config::{
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
-    JwksSource, ListenerConfig as MetricsListenerConfig, ListenerNetworkExposure,
-    OidcClientsConfig, OidcIssuerConfig, PackageConfig, PrivateListenerConfig as ListenerConfig,
+    JwksSource, ListenerNetworkExposure, MetricsListenerConfig, OidcClientsConfig,
+    OidcIssuerConfig, PackageConfig, PrivateListenerConfig as ListenerConfig,
     SecretProvidersConfig, TaskGrantStatusConfig, TlsTermination, UrlHookDestinationConfig,
 };
 use registry_platform_httputil::destination::validate_fixed_destination_path;
@@ -952,8 +952,9 @@ impl RuntimeConfig {
             findings.push(RuntimeConfigError::InvalidListener);
         }
         if let Some(metrics) = &self.metrics_listener {
+            let exposure = metrics.network_exposure;
             let metrics = metrics.bind.socket_addr();
-            if !valid_metrics_address(metrics) {
+            if !valid_metrics_address(metrics, exposure) {
                 findings.push(RuntimeConfigError::InvalidMetricsListener);
             } else if metrics_shares_socket(metrics, self.listener.bind.socket_addr()) {
                 findings.push(RuntimeConfigError::MetricsListenerSharesSocket);
@@ -1485,14 +1486,18 @@ fn positioned(check: &RuntimeFileCheck<RuntimeConfig>, finding: &RuntimeConfigEr
 /// and never shares the public listener's socket: sharing it would publish
 /// the series on the listener the public contract describes.
 #[cfg(test)]
-fn valid_metrics_listener(metrics: SocketAddr, listener: SocketAddr) -> bool {
-    valid_metrics_address(metrics) && !metrics_shares_socket(metrics, listener)
+fn valid_metrics_listener(
+    metrics: SocketAddr,
+    exposure: ListenerNetworkExposure,
+    listener: SocketAddr,
+) -> bool {
+    valid_metrics_address(metrics, exposure) && !metrics_shares_socket(metrics, listener)
 }
 
 /// Whether the metrics bind is a loopback or private address on a non-zero
 /// port. This depends on the metrics bind alone.
-fn valid_metrics_address(metrics: SocketAddr) -> bool {
-    registry_platform_config::check_metrics_bind_address(metrics).is_ok()
+fn valid_metrics_address(metrics: SocketAddr, exposure: ListenerNetworkExposure) -> bool {
+    registry_platform_config::check_metrics_bind_address(metrics, exposure).is_ok()
 }
 
 /// Whether the metrics bind uses a socket the listener already holds.
@@ -1508,6 +1513,7 @@ fn reads_deferred_value(
 ) -> bool {
     let reads: &[&str] = match finding {
         RuntimeConfigError::InvalidListener => &["/listener"],
+        RuntimeConfigError::InvalidMetricsListener => &["/metricsListener/networkExposure"],
         RuntimeConfigError::MetricsListenerSharesSocket => &["/listener/bind"],
         RuntimeConfigError::InvalidTaskGrantStatus => &["/authentication/oidc/audience"],
         RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
@@ -1533,6 +1539,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
     match segments.as_slice() {
         ["listener", "bind"] => "127.0.0.1:8100",
         ["metricsListener", "bind"] => "127.0.0.1:9100",
+        ["metricsListener", "networkExposure"] => "private-address",
         ["listener", "tlsTermination"] => "development-loopback",
         ["listener", "networkExposure"] => "private-address",
         ["audit", "destination"] => "file",
@@ -4231,17 +4238,62 @@ holdPolicy:
     }
 
     #[test]
+    fn the_metrics_wildcard_needs_container_private_exposure() {
+        let root = canonical_tempdir();
+        let load = |metrics: serde_json::Value| {
+            let (_, mut document) = development(root.path());
+            document["metricsListener"] = metrics;
+            RuntimeConfig::load(write_operator(root.path(), document))
+        };
+        assert!(matches!(
+            load(serde_json::json!({"bind": "0.0.0.0:9100"})),
+            Err(RuntimeConfigError::InvalidMetricsListener)
+        ));
+        assert!(load(
+            serde_json::json!({"bind": "0.0.0.0:9100", "networkExposure": "container-private"})
+        )
+        .is_ok());
+        assert!(matches!(
+            load(
+                serde_json::json!({"bind": "203.0.113.4:9100", "networkExposure": "container-private"})
+            ),
+            Err(RuntimeConfigError::InvalidMetricsListener)
+        ));
+        assert!(matches!(
+            load(
+                serde_json::json!({"bind": "0.0.0.0:8105", "networkExposure": "container-private"})
+            ),
+            Err(RuntimeConfigError::MetricsListenerSharesSocket)
+        ));
+    }
+
+    #[test]
+    fn cfg_check_1_a_deferred_exposure_defers_the_wildcard_judgement() {
+        let root = canonical_tempdir();
+        let mut document = operator_value(&root.path().join("package"), "development-loopback");
+        document["metricsListener"] = serde_json::json!({
+            "bind": "0.0.0.0:9464",
+            "networkExposure": "${SCHEDULING_OFFLINE_CHECK_UNSET_EXPOSURE}"
+        });
+        let path = write_operator(root.path(), document);
+        assert!(check_runtime(&path, None, false).diagnostics.is_empty());
+    }
+
+    #[test]
     fn the_metrics_listener_may_not_share_a_wildcard_listener_port() {
         assert!(!valid_metrics_listener(
             "10.0.0.5:8100".parse().unwrap(),
+            ListenerNetworkExposure::PrivateAddress,
             "0.0.0.0:8100".parse().unwrap()
         ));
         assert!(!valid_metrics_listener(
             "10.0.0.5:8100".parse().unwrap(),
+            ListenerNetworkExposure::PrivateAddress,
             "[::]:8100".parse().unwrap()
         ));
         assert!(valid_metrics_listener(
             "[fd00::5]:8100".parse().unwrap(),
+            ListenerNetworkExposure::PrivateAddress,
             "0.0.0.0:8100".parse().unwrap()
         ));
     }
