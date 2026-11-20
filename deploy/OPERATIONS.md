@@ -4,17 +4,31 @@ Use the installation's named Kubernetes context, Helm release and approved value
 
 ## Check health and diagnose failures
 
-- Monitor the external HTTPS `/ready` of each BReg and Evidence instance and the App Kit `/health`. Check Casework's configured readiness route. Alert on a TLS error, non-200 response, or approaching certificate expiry. Monitor from outside the node so ingress and DNS failures are visible.
+- Monitor the external HTTPS `/ready` of each Base Registry Engine (BReg) and Evidence instance and the App Kit `/health`. Check Casework's `/ready` endpoint. Alert on a TLS error, a non-200 response or approaching certificate expiry. Monitor from outside the node so ingress and DNS failures are visible.
 - Run the operator's `status` command with the same arguments as `install` to check the ready database, active package and split-role activation ledger. Check Pod readiness, recent events and failed operation Job logs with `kubectl -n <namespace> get pods,jobs`, `kubectl -n <namespace> events` and `kubectl -n <namespace> logs job/<name> -c bregctl`. Keep diagnostics that name infrastructure or users within the operator environment.
 - Monitor disk space and persistent-volume capacity, PostgreSQL replication and archive status if used, and app audit freshness. Use the installation's existing alerting channel and nominate a responder. The checks below can be called by the same scheduler.
 
 ## Back up a consistent installation
 
-Choose a recovery point and backup cadence with the service owner. The reference uses a brief maintenance window and encrypted Restic storage on a separate host or account. Install Restic on the backup host and initialize that repository before the first capture. For a larger or continuously written database, use an institution-operated PostgreSQL point-in-time recovery service and rehearse a consistent restore of all participating state.
+Choose a recovery point and backup cadence with the service owner. The reference uses a brief maintenance window and encrypted Restic storage on a separate host or account. Restic runs on the server that holds the bundle, not on the backup host. Install it on the server and initialise the repository once with `restic init`. Set `RESTIC_REPOSITORY` to the repository location and `RESTIC_PASSWORD_FILE` to an owner-only file holding the repository password. Export both in the environment of every `snapshot`, `check-snapshot` and `restic restore` command. For a larger or continuously written database, use an institution-operated PostgreSQL point-in-time recovery service. Rehearse a consistent restore of all participating state.
 
-1. Drain callers, scheduled jobs, imports, outstanding notifications and partner endpoints that can write. Pause Casework, Evidence and other participants whose state you capture. Freeze identity administration if taking an identity backup. Get the BReg `status` JSON while it is ready, then run the operator's `stop`. Confirm serving Pods have terminated.
-2. Assemble a private directory with the exact chart bindings, packaged code, runtime files, credential recovery material, and audit and authority stores. Copy the files from their owning storage, using its consistent snapshot or copy procedure. Keep TLS material, the App Kit PostgreSQL state and encryption key, and the issuer's signing keys and database in the recovery set when you operate them. For an external issuer, record who owns its recovery and verify it will preserve the issuer URL and subject mapping. Preserve the signer key versions through the signer's backup procedure. Back up the attachment bucket and its versions if used.
-3. Dump each application database into the bundle. Include one `--database` per database. Record the role names and permissions to recreate before restore. In this example, run with a Kubeconfig that can administer the reference PostgreSQL Pod.
+1. Drain callers, scheduled jobs, imports, outstanding notifications and partner endpoints that can write. Pause Casework, Evidence and other participants whose state you capture. Freeze identity administration if taking an identity backup. Write the BReg `status` JSON to a file while the release is ready, then run the operator's `stop`. Confirm serving Pods have terminated.
+
+   `stop` applies the Helm release with serving turned off, which removes the serving Deployments. A stopped release therefore stays stopped when you retry a command. Reopening is a separate, explicit step. `capture` refuses to run while serving Pods exist and tells you how to stop them. <!-- operator-check -->
+
+   ```bash
+   sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 deploy/stack_operator.py \
+     --helm-bin /usr/local/lib/registry-stack/helm --kube-context default --namespace directory \
+     --release directory --database-id directory-db \
+     --values /srv/registry-directory/inputs/values.json status \
+     | sudo tee /srv/registry-directory/backup-status.json >/dev/null
+   sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 deploy/stack_operator.py \
+     --helm-bin /usr/local/lib/registry-stack/helm --kube-context default --namespace directory \
+     --release directory --database-id directory-db \
+     --values /srv/registry-directory/inputs/values.json stop
+   ```
+2. Assemble a private directory with the exact chart bindings, packaged code, runtime files, credential recovery material, and audit and authority stores. Copy the files from their owning storage, using its consistent snapshot or copy procedure. When you operate them, keep TLS material, the App Kit PostgreSQL state and encryption key, and the issuer's signing keys and database in the recovery set. For an external issuer, record who owns its recovery and verify it will preserve the issuer URL and subject mapping. Preserve the signer key versions through the signer's backup procedure. Back up the attachment bucket if used. BReg refuses a versioned bucket.
+3. Dump each application database into the bundle. Include one `--database` per database. Record the role names and permissions to recreate before restore. In this example, run with a Kubeconfig that can administer the reference PostgreSQL Pod. The bundle is readable only by root, so run `snapshot` with the same privilege.
 
    ```bash
    sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 deploy/state_bundle.py \
@@ -25,16 +39,20 @@ Choose a recovery point and backup cadence with the service owner. The reference
      --output /srv/registry-directory/backup-01
    ```
 
-4. Archive the verified bundle to the already configured Restic repository. Supply its credentials through protected files or the institution's secret manager. Keep the receipt off-host with the installation record.
+4. Archive the verified bundle to the Restic repository you initialised. Supply its credentials through protected files or the institution's secret manager. Keep the receipt off-host with the installation record.
 
    ```bash
-   python3 deploy/state_bundle.py snapshot --bundle /srv/registry-directory/backup-01 \
+   sudo env RESTIC_REPOSITORY=sftp:backup@backup.example.org:/srv/restic \
+     RESTIC_PASSWORD_FILE=/root/restic-password \
+     python3 deploy/state_bundle.py snapshot --bundle /srv/registry-directory/backup-01 \
      --receipt /srv/registry-directory/backup-01-receipt.json
-   python3 deploy/state_bundle.py check-snapshot \
+   sudo env RESTIC_REPOSITORY=sftp:backup@backup.example.org:/srv/restic \
+     RESTIC_PASSWORD_FILE=/root/restic-password \
+     python3 deploy/state_bundle.py check-snapshot \
      --receipt /srv/registry-directory/backup-01-receipt.json --max-age-hours 26
    ```
 
-5. Reopen the same deployment with the same inputs when the backup is for routine operations. Configure the freshness check with your backup window. It reads the archived manifest, checks its digest and verifies when the database was captured. Re-archiving a bundle keeps its original capture time. A restore drill also reads and verifies the archived data.
+5. Reopen the same deployment with the same inputs when the backup is for routine operations. Use the operator's explicit reopen step, because `stop` does not undo itself. <!-- operator-check --> Configure the freshness check with your backup window. It reads the archived manifest, checks its digest and verifies when the database was captured. Re-archiving a bundle keeps its original capture time. A restore drill also reads and verifies the archived data.
 
 For K3s control-plane recovery, take and export an embedded-etcd snapshot and protect the matching K3s server token. The application bundle separately protects the PostgreSQL data and mounted volumes. [K3s backup and restore](https://docs.k3s.io/datastore/backup-restore)
 
@@ -43,7 +61,7 @@ For K3s control-plane recovery, take and export an embedded-etcd snapshot and pr
 Read the target [Registry Stack release notes](https://github.com/registrystack/registry-stack/releases) and rehearse on an isolated restored copy before the maintenance window. Rebuild product packages against the exact active baseline and rebuild App Kit with the matching client. For Casework or Scheduling versions that require a fresh database, follow the product's cutover procedure and preserve the source database for reconciliation.
 
 1. Retain the previous chart, exact image digests, package claim, config and Secrets. Stage the successor package in a new read-only claim, with versioned runtime inputs that name the successor digest.
-2. Pause callers and take a new backup. Check its receipt against the encrypted repository. The operator checks that it identifies the active installation and activation and that its capture is inside the backup window. Set `--max-backup-age-hours` to match your recovery policy. Supply the target chart values to the operator.
+2. Pause callers and take a new backup. Check its receipt against the encrypted repository. The operator checks that it identifies the active installation and activation and that its capture is inside the backup window. If the operator refuses with a backup-age message, take a newer backup. If your recovery policy allows an older one, pass `--max-backup-age-hours` with that limit to `upgrade`. The default is 26 hours. <!-- operator-check --> Pass `--operator-reference` with the change or ticket reference for the upgrade. The operator records it with the BReg activation. <!-- operator-check --> Supply the target chart values to the operator.
 
    ```bash
    python3 deploy/state_bundle.py check-snapshot \
@@ -52,10 +70,11 @@ Read the target [Registry Stack release notes](https://github.com/registrystack/
      --helm-bin /usr/local/lib/registry-stack/helm --kube-context default --namespace directory \
      --release directory --database-id directory-db \
      --values /srv/registry-directory/successor-values.json \
-     upgrade --backup-receipt /srv/registry-directory/backup-01-receipt.json
+     upgrade --backup-receipt /srv/registry-directory/backup-01-receipt.json \
+     --operator-reference CHANGE-1235
    ```
 
-3. Verify the intended ledger transition, HTTPS readiness, and a previously known authorized record or transaction. Exercise an allowed and a denied request. Resume callers when each participating component is ready.
+3. Verify the intended ledger transition, HTTPS readiness, and a previously known authorised record or transaction. Exercise an allowed and a denied request. Resume callers when each participating component is ready.
 
 The operator supplies the active runtime config and package to BReg, mounts the candidate separately, and checks the exact successor plan before stopping old Pods. It runs apply with the candidate digest, then starts the target workloads after the ledger and doctor checks pass. It refuses migrations that require product-specific backup bindings. Use the [BReg reviewed migration procedure](https://docs.registrystack.org/operate/breg-changes/) for those changes.
 
@@ -63,42 +82,43 @@ The operator supplies the active runtime config and package to BReg, mounts the 
 
 Before a BReg successor can change the database, the operator saves an immutable ConfigMap named `<release>-operator-upgrade` in the release namespace. It records the database, predecessor activation, candidate package and digests of the local chart with effective values and the backup receipt. Grant the operator ConfigMap get, create and delete permissions in the release namespace. Helm readiness completes the operation and clears the record.
 
-If the upgrade stops with a record still present, inspect the Job, the BReg ledger and Helm's status. If Helm reports a pending operation, resolve it with traffic closed before retrying. Run `upgrade` again with the original chart, values and predecessor backup receipt, even if Helm already recorded the successor. The operator checks the recorded inputs and, after a completed BReg activation, verifies the direct successor in the ledger and resumes Helm without repeating the migration. If the record is already gone and Helm reports the successor deployed, verify the completed release and ledger. Use a backup of the current activation for a separate configuration or image upgrade.
+If the upgrade stops with a record still present, inspect the Job, the BReg ledger and Helm's status. If Helm reports a pending operation, resolve it with traffic closed before retrying. Run `upgrade` again with the original chart, values and predecessor backup receipt, even if Helm already recorded the successor. The operator checks the recorded inputs. After a completed BReg activation, it verifies the direct successor in the ledger and resumes Helm without repeating the migration. If the record is already gone and Helm reports the successor deployed, verify the completed release and ledger. Use a backup of the current activation for a separate configuration or image upgrade.
 
-If BReg already committed before this operator recorded its inputs, keep traffic closed and use your reviewed recovery procedure with the original verified chart and values or the paired backup. Finish any interrupted upgrades before switching to this operator.
+If BReg already committed before this operator recorded its inputs, keep traffic closed. Use your reviewed recovery procedure with the original verified chart and values, or the paired backup. Finish any interrupted upgrades before switching to this operator.
 
 If BReg still holds a maintenance target, keep traffic closed. Run the product's read-only `bregctl migration reconcile` for the exact pinned target and inspect the result before taking the product's prescribed transition. A manual Job render uses `breg.operation.kind=reconcile` and the same `breg.operation.candidate` claim and digest as the failed apply. Verify that the Job finished and the activation ledger is ready before removing an abandoned operator Lease. Inspect its exact identity and Jobs before deleting it.
 
-To abandon an upgrade before any database change, match the ready ledger activation to the predecessor in the upgrade record. Verify that Helm is still on the predecessor and no Job or Helm operation is running or uncertain. With other operator activity stopped, remove only that release's upgrade ConfigMap and use the previous verified package and values. A Helm revision only restores Kubernetes objects. For an incompatible committed database change, recover the paired application, database, authority and audit state from the chosen snapshot and account for writes made after that point.
+To abandon an upgrade before any database change, match the ready ledger activation to the predecessor in the upgrade record. Verify that Helm is still on the predecessor and no Job or Helm operation is running or uncertain. With other operator activity stopped, remove only that release's upgrade ConfigMap and use the previous verified package and values. A Helm revision only restores Kubernetes objects. For an incompatible committed database change, recover the paired application, database, authority and audit state from the chosen snapshot. Account for writes made after that point.
 
 ## Restore to a clean target
 
 1. Fence the original installation and all writers. Keep its data available for reconciliation and remove its ability to serve or reconnect to the protected database. Record who confirmed fencing and how.
-2. Restore the chosen snapshot into a private directory with `restic restore <snapshot-id> --target <directory>`. Run `python3 deploy/state_bundle.py verify --bundle <restored-bundle>`. Prepare storage and the same versioned chart inputs on the target. On the reference single server use `prepare_local.py --for-restore` to prepare an empty database and the roles. For an existing cluster, prepare a new empty database and recreate the exact roles there. Keep ingress traffic closed.
+2. Restore the chosen snapshot into a private directory with `restic restore <snapshot-id> --target /srv/registry-directory/restored`, with `RESTIC_REPOSITORY` and `RESTIC_PASSWORD_FILE` set. Restic keeps the bundle's original absolute path under the target. A bundle captured at `/srv/registry-directory/backup-01` therefore restores to `/srv/registry-directory/restored/srv/registry-directory/backup-01`. Run `python3 deploy/state_bundle.py verify --bundle` with that path. Prepare storage and the same versioned chart inputs on the target. On the reference single server use `prepare_local.py --for-restore` to prepare an empty database and the roles. For an existing cluster, prepare a new empty database and recreate the exact roles there. Keep ingress traffic closed.
 3. Restore each dump into its empty target. The tool refuses a database with existing application objects and restores each dump in one transaction.
 
    ```bash
    sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 deploy/state_bundle.py \
      restore-database --kube-context default --namespace directory \
-     --bundle /srv/registry-directory/restored/backup-01 --database registry_breg --target registry_breg
+     --bundle /srv/registry-directory/restored/srv/registry-directory/backup-01 --database registry_breg --target registry_breg
    ```
 
 4. Restore authority, TLS, identity and application state from the recovery set. Preserve the full surviving audit stream and shipped archive, including entries newer than the database backup. Continue the audit from that history and append the adoption and recovery entries. If the original host and unexported audit tail are lost, retain the available checkpoint audit and document the missing interval. Verify the issuer origin, signing-key continuity and OIDC client registration. Keep App Kit's state encryption key with its database. Use the same package digest and logical database and instance IDs. Restore filesystem ownership before starting a workload.
-5. Run the operator's `claim-status` command with the restored values. A logical restore shows the prior claim. Adopt the copy after the original is permanently fenced. On the isolated target, point DNS or a staging resolver at the new ingress for validation.
+5. Run the operator's `claim-status` command with the restored values. A logical restore shows the prior claim. Adopt the copy after the original is permanently fenced. Pass `--operator-reference` with the change or ticket reference for the recovery. <!-- operator-check --> On the isolated target, point DNS or a staging resolver at the new ingress for validation.
 
    ```bash
    sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 deploy/stack_operator.py \
      --helm-bin /usr/local/lib/registry-stack/helm --kube-context default --namespace directory \
      --release directory --database-id directory-db \
      --values /srv/registry-directory/restored/values.json \
-     adopt-restored --confirm-original-fenced
+     adopt-restored --confirm-original-fenced \
+     --operator-reference CHANGE-1236
    ```
 
-6. Verify HTTPS, sign-in, an authorized record and a denied request, previous audit entries, and one post-restore write and readback. Open ingress and callers after acceptance. Record measured recovery time and the recovered point in time.
+6. Verify HTTPS, sign-in, an authorised record and a denied request, previous audit entries, and one post-restore write and readback. Open ingress and callers after acceptance. Record measured recovery time and the recovered point in time.
 
 ## Renew certificates
 
-Use a new versioned application TLS Secret and update the Helm values through the guarded upgrade path. For the reference PostgreSQL workload, put the renewed leaf and key in the input directory, then rerun preparation with `--postgres-tls-secret registry-postgres-tls-v2` and the original namespace and release. The StatefulSet starts a Pod with the new certificate. Keep the chosen Secret name in the preparation command for that installation. Allow for a short database interruption on one server. When changing the CA, first deploy client trust for both roots, renew the leaf, and remove the previous root after every client verifies the new chain.
+Use a new versioned application TLS Secret and update the Helm values through the guarded upgrade path. For the reference PostgreSQL workload, put the renewed leaf and key in the input directory, then rerun preparation with `--postgres-tls-secret registry-postgres-tls-v2` and the original namespace and release. The StatefulSet starts a Pod with the new certificate. Keep the chosen Secret name in the preparation command for that installation. Allow for a short database interruption on one server. When changing the CA, first deploy client trust for both roots and renew the leaf. Remove the previous root after every client verifies the new chain.
 
 ## Isolate customers
 

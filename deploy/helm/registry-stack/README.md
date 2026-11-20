@@ -35,7 +35,7 @@ identity provider, certificates and backups. The chart references those
 inputs so their lifecycle follows the installation's retention policy.
 Supply credential references by name.
 
-The [workspace endpoint profile](../../examples/intake-status/README.md) uses
+The [extension endpoint profile](../../examples/intake-status/README.md) uses
 the same chart as a separate release in its own namespace. Its reviewed
 images get their own Services, HTTPS routes and NetworkPolicies.
 
@@ -312,7 +312,7 @@ namespace and HTTPS hostname. The extension values define an exact public path,
 a digest-pinned image, and any required egress. An endpoint that uses BReg
 calls the HTTPS API with a scoped OAuth client. BReg enforces the token, client,
 scope, access profile, and row boundaries.
-[Workspace endpoint guide](../../examples/intake-status/README.md)
+[Extension endpoint guide](../../examples/intake-status/README.md)
 
 Extension egress rejects an `ipBlock` that opens every address, such as
 `0.0.0.0/0`, `::/0` or any prefix shorter than `/8`. This is a guard against

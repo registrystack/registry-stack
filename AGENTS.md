@@ -123,7 +123,7 @@ not products of their own.
 | `crates/registry-cli-report` | Shared CLI report serialization, result classes, and value-free internal-error reporting; products retain payload and failure policy |
 | `products/` | Product-owned specs, schemas, examples, fixtures, and check scripts (not crates). Prose stays here only when a machine reads, parses, embeds, or ships that exact file, or as a short companion README beside consumed examples, fixtures, or packs. Each product keeps its `README.md`, `AGENTS.md`, and `CHANGELOG.md`. Adopter and operator documentation is written in `docs/site/` |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
-| `deploy/` | Helm chart, K3s bootstrap, workspace handover, and installation and recovery contracts |
+| `deploy/` | Reference Helm chart (unsupported, not released), K3s bootstrap, and installation and recovery contracts |
 | `tools/payment-simulator` | Synthetic payment simulator (Python, SQLite): a test double for G2P and P2G payment APIs that never moves money and refuses non-loopback serving without `--allow-network`; run from its directory with `uv` |
 | `release/` | Release manifests, schemas, notes, validation and conformance tooling, and the release source-model proof |
 | `external/` | Historical external-input records and policy for reviewing any reintroduction |
