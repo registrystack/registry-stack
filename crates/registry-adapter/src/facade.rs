@@ -870,6 +870,7 @@ async fn answer_async_status(
             .await;
         }
         Err(failure) => {
+            state.metrics.record_route_failure(failure.class);
             events.push(event(
                 "recoveryCheckFailed",
                 Some(json!({"class": failure.class.class(), "certainty": "uncertain"})),
@@ -2466,31 +2467,35 @@ async fn append_all(
 ) -> Result<(), String> {
     let pool = &state.journal;
     let result: Result<(), String> = async {
-        let mut client = pool
-            .get()
-            .await
-            .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
+        let mut client = pool.get().await.map_err(|_| {
+            journal_failure(
+                &state.metrics,
+                "the journal connection pool gave no connection".to_owned(),
+            )
+        })?;
         let transaction = client
             .transaction()
             .await
-            .map_err(|error| journal_fault(&error))?;
+            .map_err(|error| journal_failure(&state.metrics, journal_fault(&error)))?;
         for (event, occurred_at) in events {
             journal::append(&transaction, event, occurred_at)
                 .await
-                .map_err(|error| match error {
-                    journal::JournalError::Query(error) => journal_fault(&error),
-                    _ => "the journal write failed".to_owned(),
+                .map_err(|error| {
+                    journal_failure(
+                        &state.metrics,
+                        match error {
+                            journal::JournalError::Query(error) => journal_fault(&error),
+                            _ => "the journal write failed".to_owned(),
+                        },
+                    )
                 })?;
         }
         transaction
             .commit()
             .await
-            .map_err(|error| journal_fault(&error))
+            .map_err(|error| journal_failure(&state.metrics, journal_fault(&error)))
     }
     .await;
-    if result.is_err() {
-        state.metrics.record_journal_write_failure();
-    }
     result
 }
 
@@ -2506,14 +2511,16 @@ async fn append_all_with_write(
 ) -> Result<(), String> {
     let pool = &state.journal;
     let result: Result<(), String> = async {
-        let mut client = pool
-            .get()
-            .await
-            .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
+        let mut client = pool.get().await.map_err(|_| {
+            journal_failure(
+                &state.metrics,
+                "the journal connection pool gave no connection".to_owned(),
+            )
+        })?;
         let transaction = client
             .transaction()
             .await
-            .map_err(|error| journal_fault(&error))?;
+            .map_err(|error| journal_failure(&state.metrics, journal_fault(&error)))?;
         context
             .finish_with_client(&transaction, outcome, response)
             .await
@@ -2521,20 +2528,22 @@ async fn append_all_with_write(
         for (event, occurred_at) in events {
             journal::append(&transaction, event, occurred_at)
                 .await
-                .map_err(|error| match error {
-                    journal::JournalError::Query(error) => journal_fault(&error),
-                    _ => "the journal write failed".to_owned(),
+                .map_err(|error| {
+                    journal_failure(
+                        &state.metrics,
+                        match error {
+                            journal::JournalError::Query(error) => journal_fault(&error),
+                            _ => "the journal write failed".to_owned(),
+                        },
+                    )
                 })?;
         }
         transaction
             .commit()
             .await
-            .map_err(|error| journal_fault(&error))
+            .map_err(|error| journal_failure(&state.metrics, journal_fault(&error)))
     }
     .await;
-    if result.is_err() {
-        state.metrics.record_journal_write_failure();
-    }
     result
 }
 
@@ -2556,14 +2565,16 @@ async fn append_all_with_acceptance(
 ) -> Result<CommittedAcceptance, String> {
     let pool = &state.journal;
     let result: Result<CommittedAcceptance, String> = async {
-        let mut client = pool
-            .get()
-            .await
-            .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
+        let mut client = pool.get().await.map_err(|_| {
+            journal_failure(
+                &state.metrics,
+                "the journal connection pool gave no connection".to_owned(),
+            )
+        })?;
         let transaction = client
             .transaction()
             .await
-            .map_err(|error| journal_fault(&error))?;
+            .map_err(|error| journal_failure(&state.metrics, journal_fault(&error)))?;
         let accepted_at = SystemTime::now();
         let expires_at = accepted_at
             .checked_add(retention)
@@ -2608,15 +2619,20 @@ async fn append_all_with_acceptance(
         for (event, occurred_at) in events.into_iter().chain([(acceptance_event, accepted_at)]) {
             journal::append(&transaction, event, occurred_at)
                 .await
-                .map_err(|error| match error {
-                    journal::JournalError::Query(error) => journal_fault(&error),
-                    _ => "the journal write failed".to_owned(),
+                .map_err(|error| {
+                    journal_failure(
+                        &state.metrics,
+                        match error {
+                            journal::JournalError::Query(error) => journal_fault(&error),
+                            _ => "the journal write failed".to_owned(),
+                        },
+                    )
                 })?;
         }
         transaction
             .commit()
             .await
-            .map_err(|error| journal_fault(&error))?;
+            .map_err(|error| journal_failure(&state.metrics, journal_fault(&error)))?;
         Ok(CommittedAcceptance {
             response,
             stored,
@@ -2625,9 +2641,6 @@ async fn append_all_with_acceptance(
         })
     }
     .await;
-    if result.is_err() {
-        state.metrics.record_journal_write_failure();
-    }
     result
 }
 
@@ -2863,6 +2876,7 @@ async fn run_bounded_wait(
                 }
             }
             Err(failure) => {
+                state.metrics.record_route_failure(failure.class);
                 events.push(event(
                     "recoveryCheckFailed",
                     Some(json!({"class": failure.class.class(), "certainty": "uncertain"})),
@@ -3166,6 +3180,7 @@ async fn run_uncertainty_recovery(
             ));
         }
         Err(failure) => {
+            state.metrics.record_route_failure(failure.class);
             events.push(recovery_event(
                 "recoveryCheckFailed",
                 Some(json!({"class": failure.class.class(), "certainty": "uncertain"})),
@@ -3301,14 +3316,16 @@ async fn append_all_with_recovery(
         let (mut response, stored) = prepare_write_response(response, &response_request_id).await?;
         let stored =
             stored.ok_or_else(|| "adapter.async-recovery: custody is absent".to_owned())?;
-        let mut client = pool
-            .get()
-            .await
-            .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
+        let mut client = pool.get().await.map_err(|_| {
+            journal_failure(
+                &state.metrics,
+                "the journal connection pool gave no connection".to_owned(),
+            )
+        })?;
         let transaction = client
             .transaction()
             .await
-            .map_err(|error| journal_fault(&error))?;
+            .map_err(|error| journal_failure(&state.metrics, journal_fault(&error)))?;
         store
             .finish_recovery_with_client(&transaction, recovery, outcome, stored, SystemTime::now())
             .await
@@ -3316,25 +3333,35 @@ async fn append_all_with_recovery(
         for (event, occurred_at) in events {
             journal::append(&transaction, event, occurred_at)
                 .await
-                .map_err(|error| match error {
-                    journal::JournalError::Query(error) => journal_fault(&error),
-                    _ => "the journal write failed".to_owned(),
+                .map_err(|error| {
+                    journal_failure(
+                        &state.metrics,
+                        match error {
+                            journal::JournalError::Query(error) => journal_fault(&error),
+                            _ => "the journal write failed".to_owned(),
+                        },
+                    )
                 })?;
         }
         transaction
             .commit()
             .await
-            .map_err(|error| journal_fault(&error))?;
+            .map_err(|error| journal_failure(&state.metrics, journal_fault(&error)))?;
         response
             .extensions_mut()
             .insert(ReplayedResponseRequestId(response_request_id));
         Ok(response)
     }
     .await;
-    if result.is_err() {
-        state.metrics.record_journal_write_failure();
-    }
     result
+}
+
+/// Count one failed journal write and hand its fixed account back. Only the
+/// journal's own connection, transaction, append and commit steps pass through
+/// here, so a failure to render or store a response is not counted as one.
+fn journal_failure(metrics: &crate::metrics::Metrics, message: String) -> String {
+    metrics.record_journal_write_failure();
+    message
 }
 
 fn journal_fault(error: &tokio_postgres::Error) -> String {

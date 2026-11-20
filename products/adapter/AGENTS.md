@@ -26,7 +26,9 @@ product or any `registry-adapter*` crate.
 
 The platform reuse is fixed: the runtime reaches
 `registry-platform-script`, `-oidc`, `-httputil`, `-ratelimit`,
-`-config`, `-yaml`, `-authcommon`, `-crypto`, and `-canonical-json`, and never another
+`-config`, `-yaml`, `-authcommon`, `-crypto`, `-canonical-json`, `-metrics`
+(the operator-private metrics listeners), `-buildinfo`, `-httpsec`,
+`-resilience`, `-hooks`, and `-sqlite`, and never another
 product's runtime, tooling, or protocol types. Product logic (routes, EIP
 processors, mapping, disclosure) never moves into a platform crate. The
 generic primitives under `throttle`, `circuitBreaker`, and redelivery live in

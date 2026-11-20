@@ -4457,8 +4457,10 @@ formats:
     securityMembers:
       - pointer: /listener/bind
         whenOmitted: refused
-      - pointer: /metricsListener/bind
+      - pointer: /metricsListener
         whenOmitted: closed
+      - pointer: /metricsListener/bind
+        whenOmitted: refused
       - pointer: /database/runtimeUrlRef
         whenOmitted: refused
       - pointer: /database/testOnlyPlaintext

@@ -20,6 +20,7 @@
 //! Every counter is per process and starts from zero at each start.
 
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use axum::extract::{MatchedPath, State};
@@ -164,11 +165,18 @@ impl Metrics {
     }
 }
 
-/// Count one event. A series the space refuses is not added; the refusal is
-/// logged by metric name alone, never by label value.
+/// Set once the first refused series has been logged, so a full series table
+/// does not log at request rate.
+static REFUSAL_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// Count one event. A series the space refuses is not added; the first
+/// refusal is logged by metric name alone, never by label value, and later
+/// ones are not logged again.
 fn count(counter: &CounterVec, values: &[&str]) {
     if let Err(error) = counter.inc(values) {
-        tracing::warn!(error = %error, "a metric series was refused");
+        if !REFUSAL_LOGGED.swap(true, Ordering::Relaxed) {
+            tracing::warn!(error = %error, "a metric series was refused; further refusals are not logged");
+        }
     }
 }
 
@@ -186,12 +194,12 @@ fn method_label(method: &Method) -> &'static str {
 }
 
 fn status_class(status: StatusCode) -> &'static str {
-    if status.is_server_error() {
-        "5xx"
-    } else if status.is_client_error() {
-        "4xx"
-    } else {
-        "2xx"
+    match status.as_u16() {
+        0..=199 => "1xx",
+        200..=299 => "2xx",
+        300..=399 => "3xx",
+        400..=499 => "4xx",
+        _ => "5xx",
     }
 }
 
@@ -225,6 +233,47 @@ pub fn metrics_router(metrics: Arc<Metrics>) -> Router {
         .with_state(metrics)
 }
 
+/// How long open metrics connections get to drain once shutdown starts.
+pub const METRICS_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Serve the metrics router until `shutdown` resolves, then give open
+/// connections `shutdown_timeout` to drain. A client that sends a partial
+/// request head never finishes its connection, so without the deadline it
+/// would hold the facade's shutdown.
+///
+/// # Errors
+///
+/// A serving fault, or connections that outlive the deadline.
+pub async fn serve(
+    listener: tokio::net::TcpListener,
+    metrics: Arc<Metrics>,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    shutdown_timeout: std::time::Duration,
+) -> std::io::Result<()> {
+    let (shutdown_started, shutdown_started_rx) = tokio::sync::oneshot::channel();
+    let server = std::future::IntoFuture::into_future(
+        axum::serve(listener, metrics_router(metrics)).with_graceful_shutdown(async move {
+            shutdown.await;
+            let _ = shutdown_started.send(());
+        }),
+    );
+    tokio::pin!(server);
+    tokio::select! {
+        result = &mut server => result,
+        started = shutdown_started_rx => {
+            started.map_err(std::io::Error::other)?;
+            tokio::time::timeout(shutdown_timeout, &mut server)
+                .await
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "metrics listener connections outlived the shutdown deadline",
+                    )
+                })?
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,6 +292,26 @@ mod tests {
             "adapter_http_requests_total{route=\"/records/{id}\",method=\"GET\",status=\"4xx\"} 1"
         ));
         assert!(text.contains("method=\"other\""));
+    }
+
+    #[test]
+    fn each_status_class_has_its_own_label() {
+        let metrics = Metrics::default();
+        for status in [
+            StatusCode::CONTINUE,
+            StatusCode::OK,
+            StatusCode::NOT_MODIFIED,
+            StatusCode::NOT_FOUND,
+            StatusCode::BAD_GATEWAY,
+        ] {
+            metrics.record_request("/records", &Method::GET, status);
+        }
+        for class in ["1xx", "2xx", "3xx", "4xx", "5xx"] {
+            let line = format!(
+                "adapter_http_requests_total{{route=\"/records\",method=\"GET\",status=\"{class}\"}} 1"
+            );
+            assert!(text_has(&metrics, &line), "{class}");
+        }
     }
 
     #[test]
@@ -284,5 +353,55 @@ mod tests {
 
     fn text_has(metrics: &Metrics, line: &str) -> bool {
         metrics.render().lines().any(|found| found == line)
+    }
+
+    #[tokio::test]
+    async fn partial_request_head_cannot_hold_metrics_shutdown_past_the_deadline() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback test listener");
+        let address = listener.local_addr().expect("the bound address");
+        let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(serve(
+            listener,
+            Arc::new(Metrics::default()),
+            async move {
+                let _ = shutdown_rx.await;
+            },
+            std::time::Duration::from_millis(25),
+        ));
+
+        let mut partial = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("a client connects to the metrics listener");
+        partial
+            .write_all(b"GET /metrics HTTP/1.1\r\nHost: loopback\r\nX-Stalled: ")
+            .await
+            .expect("write an intentionally incomplete request head");
+        let mut barrier = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("the accept loop continues past the partial connection");
+        barrier
+            .write_all(b"GET /metrics HTTP/1.1\r\nHost: loopback\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("write a complete request");
+        let mut answer = String::new();
+        barrier
+            .read_to_string(&mut answer)
+            .await
+            .expect("the barrier response drains");
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+
+        shutdown.send(()).expect("signal metrics-server shutdown");
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .expect("the shutdown bound completes")
+            .expect("the metrics server task joins");
+        assert!(
+            result.is_err(),
+            "the stalled client is cut off at the deadline"
+        );
+        drop(partial);
     }
 }

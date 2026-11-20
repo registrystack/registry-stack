@@ -1774,3 +1774,46 @@ async fn an_unknown_effect_without_source_recovery_stays_spent_and_never_repeats
         "uncertainty never grants authority to repeat the mutation"
     );
 }
+
+#[tokio::test]
+async fn a_failed_status_poll_counts_as_an_upstream_failure() {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![
+        Response::json(202, &json!({"operationId": "source-19"}).to_string()),
+        Response::json(500, r#"{"status":"ERROR"}"#),
+    ]);
+    let directory = tempfile::tempdir().expect("an asynchronous project directory");
+    async_project(directory.path());
+    let metrics_port = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("bind a probe port")
+        .local_addr()
+        .expect("the probe port")
+        .port();
+    let served =
+        Served::start_with_metrics(&upstream.url(""), directory.path(), metrics_port).await;
+    let token = served.token("records.write");
+    let accepted = post(&served, &token, "async-create-metrics", &request_body());
+    assert_eq!(accepted.status, 202);
+    let accepted_json: Value = serde_json::from_slice(&accepted.body).expect("accepted JSON");
+    let status_path = accepted_json["statusLink"].as_str().expect("status link");
+
+    let pending = served.get(status_path, Some(&token));
+    assert_eq!(
+        pending.0, 202,
+        "a failed poll leaves the write unfinished: {}",
+        pending.2
+    );
+
+    let mut stream =
+        TcpStream::connect(("127.0.0.1", metrics_port)).expect("connect the metrics port");
+    stream
+        .write_all(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .expect("write the scrape");
+    let mut body = String::new();
+    stream.read_to_string(&mut body).expect("read the scrape");
+    assert!(
+        body.lines()
+            .any(|line| line == "adapter_upstream_failures_total{class=\"upstream.http\"} 1"),
+        "{body}"
+    );
+}
