@@ -36,6 +36,12 @@
 //! `unknown`. When the store cannot be read the gauge has no samples for that
 //! scrape, so the series goes stale rather than reporting an empty queue.
 //!
+//! Every database read of one scrape shares one five-second deadline, and each
+//! read's server-side statement timeout is the time left, so a slow query is
+//! cancelled on the server. A failed read is logged by its error class (timeout,
+//! pool, or the SQLSTATE) and counted once in
+//! `coordinator_metrics_sample_failures_total`.
+//!
 //! Held and stuck work is sampled the same way, in one read-only statement
 //! per scrape that counts every row, so a gauge is never capped the way the
 //! doctor report's run list is: runs in `attention` (split into those held
@@ -49,7 +55,9 @@
 //! not here.
 
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::extract::State;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
@@ -57,7 +65,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use registry_platform_metrics::{
-    CounterVec, Exposition, LabelSpace, MetricKind, CONTENT_TYPE as METRICS_CONTENT_TYPE,
+    CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline, CLASS_TIMEOUT,
+    CONTENT_TYPE as METRICS_CONTENT_TYPE,
 };
 
 use crate::store::Store;
@@ -74,6 +83,7 @@ pub struct Metrics {
     finished: CounterVec,
     attempts: CounterVec,
     refusals: CounterVec,
+    sample_failures: CounterVec,
 }
 
 impl fmt::Debug for Metrics {
@@ -108,6 +118,12 @@ impl Default for Metrics {
                 "Bearer credentials refused before a caller was resolved.",
                 "reason",
                 AuthenticationRefusal::ALL.map(AuthenticationRefusal::as_str),
+            ),
+            sample_failures: closed_counter(
+                "coordinator_metrics_sample_failures_total",
+                "Scrape-time database reads that failed, by which read. A failed read leaves its gauges without samples.",
+                "sample",
+                SampleKind::ALL.map(SampleKind::as_str),
             ),
         }
     }
@@ -233,6 +249,30 @@ impl AuthenticationRefusal {
     }
 }
 
+/// The scrape-time database reads, the closed label of
+/// `coordinator_metrics_sample_failures_total`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SampleKind {
+    /// The dispatch queue gauge.
+    DispatchQueue,
+    /// The held and stuck work gauges.
+    RunHolds,
+}
+
+impl SampleKind {
+    /// Every read, in the order the exposition lists them.
+    pub const ALL: [Self; 2] = [Self::DispatchQueue, Self::RunHolds];
+
+    /// The read's label value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DispatchQueue => "dispatch-queue",
+            Self::RunHolds => "run-holds",
+        }
+    }
+}
+
 /// The dispatch jobs waiting in each state work waits in.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DispatchDepth {
@@ -278,6 +318,11 @@ impl Metrics {
         count(&self.refusals, &[refusal.as_str()]);
     }
 
+    /// Count one scrape-time read that failed.
+    pub fn record_sample_failure(&self, sample: SampleKind) {
+        count(&self.sample_failures, &[sample.as_str()]);
+    }
+
     /// Render the Prometheus text exposition, with the dispatch queue and
     /// the held work when each was sampled.
     #[must_use]
@@ -288,6 +333,7 @@ impl Metrics {
             &self.finished,
             &self.attempts,
             &self.refusals,
+            &self.sample_failures,
         ] {
             counter.write(&mut out).expect(DECLARATION);
         }
@@ -407,38 +453,62 @@ pub struct MetricsState {
     pub store: Arc<Store>,
 }
 
-/// Serve the counters and the sampled dispatch queue on the metrics
-/// listener. A queue that cannot be sampled is logged by its problem code
-/// alone and leaves the gauge without samples.
+/// Serve the counters and the sampled gauges on the metrics listener. Every
+/// read of one scrape shares one deadline. A read that fails is logged by its
+/// error class alone, counted once, and leaves its gauges without samples.
 pub async fn serve_metrics(State(state): State<MetricsState>) -> Response {
-    let depth = match state.store.dispatch_depth().await {
-        Ok(depth) => Some(depth),
-        Err(error) => {
-            tracing::warn!(
-                code = %error.code,
-                "the dispatch queue could not be sampled; its gauge has no samples this scrape"
-            );
-            None
-        }
-    };
-    let holds = match state.store.run_holds().await {
-        Ok(holds) => Some(holds),
-        Err(error) => {
-            tracing::warn!(
-                code = %error.code,
-                "held work could not be sampled; its gauges have no samples this scrape"
-            );
-            None
-        }
-    };
+    let body = scrape(&state.store, ScrapeDeadline::from(Instant::now())).await;
     (
         [
             (CONTENT_TYPE, METRICS_CONTENT_TYPE),
             (CACHE_CONTROL, "no-store"),
         ],
-        state.store.metrics().render(depth, holds),
+        body,
     )
         .into_response()
+}
+
+/// The exposition of one scrape whose database reads must finish before
+/// `deadline`.
+pub async fn scrape(store: &Store, deadline: ScrapeDeadline) -> String {
+    let depth = sample(
+        store.metrics(),
+        SampleKind::DispatchQueue,
+        deadline,
+        store.dispatch_depth(deadline),
+    )
+    .await;
+    let holds = sample(
+        store.metrics(),
+        SampleKind::RunHolds,
+        deadline,
+        store.run_holds(deadline),
+    )
+    .await;
+    store.metrics().render(depth, holds)
+}
+
+/// One read bounded by `deadline` on the client as well as the server, so a
+/// wait for a pooled session cannot outlast the scrape.
+async fn sample<T>(
+    metrics: &Metrics,
+    kind: SampleKind,
+    deadline: ScrapeDeadline,
+    read: impl Future<Output = Result<T, String>>,
+) -> Option<T> {
+    let class =
+        match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline.at()), read).await {
+            Ok(Ok(value)) => return Some(value),
+            Ok(Err(class)) => class,
+            Err(_) => CLASS_TIMEOUT.to_owned(),
+        };
+    metrics.record_sample_failure(kind);
+    tracing::warn!(
+        sample = kind.as_str(),
+        class = %class,
+        "a scrape-time read failed; its gauges have no samples this scrape"
+    );
+    None
 }
 
 /// The operator-private router the metrics listener serves, with the public
@@ -486,6 +556,12 @@ mod tests {
             format!(
                 "coordinator_authentication_refusals_total{{reason=\"{}\"}}",
                 r.as_str()
+            )
+        }));
+        expected.extend(SampleKind::ALL.map(|sample| {
+            format!(
+                "coordinator_metrics_sample_failures_total{{sample=\"{}\"}}",
+                sample.as_str()
             )
         }));
         expected.extend(
@@ -586,6 +662,10 @@ coordinator_step_attempts_total{outcome=\"unavailable\"} 0
 coordinator_authentication_refusals_total{reason=\"refused\"} 0
 coordinator_authentication_refusals_total{reason=\"policy\"} 1
 coordinator_authentication_refusals_total{reason=\"unavailable\"} 0
+# HELP coordinator_metrics_sample_failures_total Scrape-time database reads that failed, by which read. A failed read leaves its gauges without samples.
+# TYPE coordinator_metrics_sample_failures_total counter
+coordinator_metrics_sample_failures_total{sample=\"dispatch-queue\"} 0
+coordinator_metrics_sample_failures_total{sample=\"run-holds\"} 0
 # HELP coordinator_dispatch_jobs Steps waiting to run, running, or held unknown, sampled at scrape.
 # TYPE coordinator_dispatch_jobs gauge
 coordinator_dispatch_jobs{state=\"pending\"} 5

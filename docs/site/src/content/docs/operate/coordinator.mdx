@@ -724,6 +724,7 @@ The metrics are Prometheus text (`text/plain; version=0.0.4`, served with `Cache
 | `coordinator_runs_finished_total` | counter | `state`: `finished`, `failed`, `cancelled`, `cancelled-after-effect`, `expired` |
 | `coordinator_step_attempts_total` | counter | `outcome`: `accepted`, `transient`, `permanent`, `maybe-sent`, `unavailable` |
 | `coordinator_authentication_refusals_total` | counter | `reason`: `refused`, `policy`, `unavailable` |
+| `coordinator_metrics_sample_failures_total` | counter | `sample`: `dispatch-queue`, `run-holds` |
 | `coordinator_dispatch_jobs` | gauge | `state`: `pending`, `leased`, `unknown` |
 | `coordinator_runs_attention` | gauge | `reason`: `definition-refused`, `other` |
 | `coordinator_runs_restore_review_required` | gauge | none |
@@ -747,14 +748,14 @@ They expose every label value from the first scrape.
 
 `coordinator_dispatch_jobs` is read from the database on each scrape.
 `pending` steps wait for their next attempt, `leased` steps are being attempted, and `unknown` steps wait for an operator to settle an uncertain effect.
-The count is a read-only query bounded at 2 seconds.
-When the database cannot answer, that scrape has no `coordinator_dispatch_jobs` samples rather than zeros, and the service logs a warning with the failure code.
+The count is a read-only query. Every database read of one scrape shares one 5 second deadline, and the server cancels a query that outlasts the time left.
+When the database cannot answer, that scrape has no `coordinator_dispatch_jobs` samples rather than zeros, `coordinator_metrics_sample_failures_total{sample="dispatch-queue"}` rises by one, and the service logs a warning with the failure class: `timeout`, `pool`, `no-time-left`, or the SQLSTATE.
 Alert on the gauge going absent as well as on its value.
 
-The held-work gauges are read from the database in one read-only query bounded at 2 seconds, on each scrape.
+The held-work gauges are read from the database in one read-only query on each scrape, within the same 5 second deadline. A read that starts after a slower one has used the deadline fails with `no-time-left`.
 They count every row.
 Unlike the run list in `coordinatorctl doctor`, which shows at most 100 held runs, the gauges are never capped.
-When the database cannot answer, that scrape has no samples for any of them, and the service logs a warning with the failure code.
+When the database cannot answer, that scrape has no samples for any of them, `coordinator_metrics_sample_failures_total{sample="run-holds"}` rises by one, and the service logs a warning with the failure class.
 
 - `coordinator_runs_attention` counts runs in the `attention` state, the same state `doctor` reports under `states`.
   `definition-refused` runs are held because this version does not restore their retained definition, and `other` is every other run that waits for an operator.
@@ -775,7 +776,8 @@ Bind the metrics listener where only your monitoring can reach it: the counts de
 
 {/* Evidence: crates/registry-coordinator/src/metrics.rs coordinator_runs_admitted_total,
     coordinator_runs_finished_total, coordinator_step_attempts_total,
-    coordinator_authentication_refusals_total, coordinator_dispatch_jobs,
+    coordinator_authentication_refusals_total, coordinator_metrics_sample_failures_total,
+    coordinator_dispatch_jobs,
     coordinator_runs_attention, coordinator_runs_restore_review_required,
     coordinator_hold_active, coordinator_oldest_due_age_seconds;
     crates/registry-coordinator/src/store.rs run_holds;

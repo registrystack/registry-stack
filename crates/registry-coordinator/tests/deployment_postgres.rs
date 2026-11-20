@@ -4888,15 +4888,19 @@ async fn the_metrics_listener_counts_closed_series_and_leaves_the_gauge_stale_in
     );
     assert!(body.contains("# TYPE coordinator_dispatch_jobs gauge"));
     assert_eq!(sample(&body, "coordinator_runs_admitted_total"), Some(1));
-    await_line(
-        &mut lines,
-        &mut seen,
-        "the dispatch queue could not be sampled",
-    )
-    .await;
+    await_line(&mut lines, &mut seen, "a scrape-time read failed").await;
+    let failure = seen.last().unwrap();
     assert!(
-        seen.last().unwrap().contains("store-unavailable"),
-        "{seen:#?}"
+        failure.contains("\"sample\":\"dispatch-queue\"") && failure.contains("\"class\":\"pool\""),
+        "the failure is logged by its read and error class: {seen:#?}"
+    );
+    assert_eq!(
+        sample(
+            &body,
+            "coordinator_metrics_sample_failures_total{sample=\"dispatch-queue\"}"
+        ),
+        Some(1),
+        "the failed read is counted once: {body}"
     );
 
     f.admin
