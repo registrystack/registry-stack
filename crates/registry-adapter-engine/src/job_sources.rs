@@ -24,7 +24,7 @@ use registry_adapter_core::{
     MAXIMUM_JOB_FILE_BYTES, MAXIMUM_JOB_ROWS_PER_PAGE, MAXIMUM_JOB_ROW_BYTES,
 };
 use registry_platform_config::{
-    ListenerConfig, PrivateListenerConfig, RuntimeConfigLoader, RuntimeEnvelope,
+    MetricsListenerConfig, PrivateListenerConfig, RuntimeConfigLoader, RuntimeEnvelope,
     SecretProvidersConfig, SecretResolver, TlsTermination,
 };
 use registry_platform_yaml::{
@@ -249,7 +249,7 @@ pub struct JobRuntimeConfig {
     pub hook_ingress: Option<HookIngressConfig>,
     /// The operator-private socket the loop's `/metrics` is served on.
     /// Absent, the loop serves no metrics.
-    pub metrics_listener: Option<ListenerConfig>,
+    pub metrics_listener: Option<MetricsListenerConfig>,
 }
 
 impl JobRuntimeConfig {
@@ -604,7 +604,7 @@ struct JobRuntimeDocument {
         default,
         deserialize_with = "registry_adapter_core::checked_metrics_listener"
     )]
-    metrics_listener: Option<ListenerConfig>,
+    metrics_listener: Option<MetricsListenerConfig>,
 }
 
 impl<'de> Deserialize<'de> for JobRuntimeConfig {
@@ -1611,6 +1611,41 @@ mod tests {
                 "the metrics bind must refuse: {refused}"
             );
         }
+    }
+
+    #[test]
+    fn the_job_metrics_wildcard_needs_container_private_exposure() {
+        let read = |member: &str| {
+            serde_json::from_str::<JobRuntimeConfig>(&format!(
+                r#"{{
+                    "id": "job-deployment",
+                    "endpoints": [],
+                    "metricsListener": {member},
+                    "hookIngress": {{
+                        "listener": {{
+                            "bind": "127.0.0.1:8091",
+                            "tlsTermination": "operator-controlled-upstream"
+                        }},
+                        "sources": {{
+                            "kobo": {{
+                                "usernameRef": "secret:env/U",
+                                "passwordRef": "secret:env/P",
+                                "requestsPerMinute": 10,
+                                "burst": 1
+                            }}
+                        }}
+                    }}
+                }}"#
+            ))
+        };
+        assert!(read(r#"{ "bind": "0.0.0.0:9464" }"#).is_err());
+        assert!(
+            read(r#"{ "bind": "0.0.0.0:9464", "networkExposure": "container-private" }"#).is_ok()
+        );
+        // A wildcard on the hook ingress port is an overlap.
+        assert!(
+            read(r#"{ "bind": "0.0.0.0:8091", "networkExposure": "container-private" }"#).is_err()
+        );
     }
 
     #[test]
