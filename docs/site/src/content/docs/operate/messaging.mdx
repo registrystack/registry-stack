@@ -453,7 +453,9 @@ The table lists outcome records. Each audited request writes a request record fi
 `messaging.package.activation.requested`. An operation that stops before its outcome is written
 leaves a record with outcome `unfinished`, under its request event or `messaging.operation`.
 
-With `metricsListener` set, `GET /metrics` on that socket answers Prometheus text:
+With `metricsListener` set, `GET /metrics` on that socket answers Prometheus text. In a container whose private address is not known when you write the file, set `metricsListener.networkExposure: container-private` to bind `0.0.0.0`: see [Scrape metrics from a container](../stuck-work/#scrape-metrics-from-a-container).
+
+The series are:
 
 | Series | Labels | Counts |
 | --- | --- | --- |

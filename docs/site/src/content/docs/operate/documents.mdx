@@ -570,7 +570,7 @@ old entry until its events are dead-lettered or expire.
 
 Add a `metricsListener` block to `runtime.yaml` to serve Prometheus text. The starter runtime file
 carries one on `127.0.0.1:9116`. Without the block, the Document Store serves no metrics. The socket
-must be loopback or private, and must not be the `listener` socket. `GET /metrics` on that socket
+must be loopback or private, and must not be the `listener` socket. In a container whose private address is not known when you write the file, set `metricsListener.networkExposure: container-private` to bind `0.0.0.0`: see [Scrape metrics from a container](../stuck-work/#scrape-metrics-from-a-container). `GET /metrics` on that socket
 answers the series below and nothing else. The document listener does not route `/metrics`.
 
 | Series | Labels | Meaning |
