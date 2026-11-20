@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Serve Prometheus metrics on an optional operator-private listener. Set
+  `metricsListener.bind` in `runtime.yaml` to a loopback or private address,
+  distinct from the serving listener. It is off by default, and the serving
+  listener never answers `/metrics`. The series report content verification,
+  erasure and hook delivery jobs by state, the age of the oldest overdue item
+  of each, the last success of the cleanup pass, and requests by route and
+  status class. A failed sample is logged and counted in
+  `documents_metrics_sample_failures_total` and its gauges are left out, never
+  reported as zero.
+
 - Each access profile may carry an optional `label` and `description`, accepted for authoring and tooling; the Document Store does not serve them until a view exists. Neither is matched against a caller, and a profile that writes neither reads as before.
 
 - BREAKING: Document Store access profiles rename `role` to `actsAs`; the values are unchanged; the schema definition `AccessRole` is now `ActsAs`. Migration: in each `accessProfiles` entry, write `actsAs: VALUE` where the file wrote `role: VALUE`. A file that still writes `role` is refused with `config.removed-key` naming `actsAs`.
