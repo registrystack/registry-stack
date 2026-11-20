@@ -59,19 +59,15 @@ pub struct CompletionBacklog {
 }
 
 impl PostgresStore {
-    /// Count the completion outbox by state in one read-only statement.
-    pub async fn completion_backlog(&self) -> Result<CompletionBacklog, StoreError> {
-        let mut client = self.client().await?;
-        let transaction = client
-            .build_transaction()
-            .read_only(true)
-            .start()
-            .await
-            .map_err(|_| StoreError::Unavailable)?;
-        transaction
-            .batch_execute("SET LOCAL statement_timeout = '2s'")
-            .await
-            .map_err(|_| StoreError::Unavailable)?;
+    /// Count the completion outbox by state in one read-only statement
+    /// bounded by the scrape `deadline`, or return the error class of why
+    /// it could not.
+    pub async fn completion_backlog(
+        &self,
+        deadline: registry_platform_metrics::ScrapeDeadline,
+    ) -> Result<CompletionBacklog, String> {
+        let mut client = self.sample_client().await?;
+        let transaction = crate::metrics::begin_sample(&mut client, deadline).await?;
         let row = transaction
             .query_one(
                 &format!(
@@ -95,11 +91,11 @@ impl PostgresStore {
                 &[],
             )
             .await
-            .map_err(|_| StoreError::Unavailable)?;
+            .map_err(|error| crate::metrics::database_error_class(&error))?;
         transaction
             .commit()
             .await
-            .map_err(|_| StoreError::Unavailable)?;
+            .map_err(|error| crate::metrics::database_error_class(&error))?;
         Ok(CompletionBacklog {
             pending: row.get(0),
             retrying: row.get(1),
