@@ -1037,13 +1037,14 @@ impl PostgresStore {
     }
 
     /// How many reminder and notice intents wait in each outbox state, and
-    /// how long overdue the oldest pending one is at `now`. An intent that is
-    /// waiting out a retry back-off is not overdue, so it is left out of the
-    /// age. The read is bounded so a slow store cannot hold a scrape open.
+    /// how long the oldest pending one has been eligible for pickup at `now`.
+    /// An intent that is waiting out a retry back-off is not eligible, so it is
+    /// left out, and a retried intent is measured from the end of its back-off.
+    /// The read is bounded so a slow store cannot hold a scrape open.
     pub async fn outbox_depth(&self, now: DateTime<Utc>) -> Result<QueueDepth, StoreError> {
         self.queue_depth(
             "SELECT state, count(*) FROM scheduling_outbox GROUP BY state",
-            "SELECT min(due_at) FROM scheduling_outbox \
+            "SELECT min(next_attempt_at) FROM scheduling_outbox \
              WHERE state = 'pending' AND next_attempt_at <= $1",
             &[&now],
             now,

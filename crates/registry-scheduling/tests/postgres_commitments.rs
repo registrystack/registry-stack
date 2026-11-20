@@ -11966,6 +11966,22 @@ mod queue_depth {
             )
             .await
             .unwrap();
+        // A retried intent whose back-off has just ended is measured from the
+        // end of the back-off, not from its original due time.
+        fx.admin
+            .execute(
+                "INSERT INTO scheduling_outbox
+         (outbox_id,purpose,generation,state,attempt,next_attempt_at,claim_id,
+          appointment_revision,due_at,payload,created_at)
+         VALUES (gen_random_uuid(),'change',3,'pending',2,$2,$1,1,$3,'{}'::jsonb,$3)",
+                &[
+                    &claim,
+                    &(now - TimeDelta::seconds(30)),
+                    &(earliest - TimeDelta::hours(5)),
+                ],
+            )
+            .await
+            .unwrap();
         let outbox = fx.store.outbox_depth(now).await.expect("sample the outbox");
         let count = |state: &str| {
             outbox

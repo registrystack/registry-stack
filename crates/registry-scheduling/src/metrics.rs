@@ -205,7 +205,7 @@ impl Metrics {
             "scheduling_outbox_items",
             "Reminder and notice intents in the delivery outbox, by state, sampled at scrape.",
             "scheduling_outbox_oldest_pending_age_seconds",
-            "Seconds the oldest pending outbox intent is past its due time, zero when none is overdue, sampled at scrape.",
+            "Seconds the oldest pending outbox intent has been eligible for pickup, zero when none is overdue, sampled at scrape.",
             &OUTBOX_STATES,
             sampled.outbox.as_ref(),
         );

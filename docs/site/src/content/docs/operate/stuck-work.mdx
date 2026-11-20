@@ -210,7 +210,7 @@ Otherwise the service answers that dispatch has started or the message is alread
 Scheduling can also publish metrics on an optional `metricsListener`, which is off by default and must bind a private address.
 These series show stuck work:
 
-- `scheduling_outbox_items{state}` counts delivery intents by state, and `scheduling_outbox_oldest_pending_age_seconds` is how far the oldest pending one is past its due time.
+- `scheduling_outbox_items{state}` counts delivery intents by state, and `scheduling_outbox_oldest_pending_age_seconds` is how long the oldest pending one has been eligible for pickup (its due time, or the end of its last retry back-off).
   An intent waiting out a retry back-off is not counted.
 - `scheduling_hook_deliveries{state}` counts observer-hook deliveries by state, and `scheduling_hook_oldest_pending_age_seconds` is the age of the oldest pending one.
 - `scheduling_worker_last_success_age_seconds{worker}` is the age of the last completed pass of the `hold-expiry` or `retention` worker.

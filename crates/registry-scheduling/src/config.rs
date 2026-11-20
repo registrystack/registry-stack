@@ -952,9 +952,11 @@ impl RuntimeConfig {
             findings.push(RuntimeConfigError::InvalidListener);
         }
         if let Some(metrics) = &self.metrics_listener {
-            if !valid_metrics_listener(metrics.bind.socket_addr(), self.listener.bind.socket_addr())
-            {
+            let metrics = metrics.bind.socket_addr();
+            if !valid_metrics_address(metrics) {
                 findings.push(RuntimeConfigError::InvalidMetricsListener);
+            } else if metrics_shares_socket(metrics, self.listener.bind.socket_addr()) {
+                findings.push(RuntimeConfigError::MetricsListenerSharesSocket);
             }
         }
     }
@@ -1482,22 +1484,32 @@ fn positioned(check: &RuntimeFileCheck<RuntimeConfig>, finding: &RuntimeConfigEr
 /// The metrics listener binds a concrete private address on a non-zero port
 /// and never shares the public listener's socket: sharing it would publish
 /// the series on the listener the public contract describes.
+#[cfg(test)]
 fn valid_metrics_listener(metrics: SocketAddr, listener: SocketAddr) -> bool {
+    valid_metrics_address(metrics) && !metrics_shares_socket(metrics, listener)
+}
+
+/// Whether the metrics bind is a loopback or private address on a non-zero
+/// port. This depends on the metrics bind alone.
+fn valid_metrics_address(metrics: SocketAddr) -> bool {
     let address = metrics.ip();
     let private = match address {
         IpAddr::V4(address) => address.is_loopback() || address.is_private(),
         IpAddr::V6(address) => address.is_loopback() || is_unique_local(address),
     };
-    if metrics.port() == 0 || !private || address.is_unspecified() || address.is_multicast() {
-        return false;
-    }
+    metrics.port() != 0 && private && !address.is_unspecified() && !address.is_multicast()
+}
+
+/// Whether the metrics bind uses a socket the listener already holds.
+fn metrics_shares_socket(metrics: SocketAddr, listener: SocketAddr) -> bool {
+    let address = metrics.ip();
     // An IPv6 wildcard socket is commonly dual-stack, so it covers both
     // families; the IPv4 wildcard covers only IPv4.
     let wildcard_covers_metrics = match listener.ip() {
         IpAddr::V4(listener) => listener.is_unspecified() && address.is_ipv4(),
         IpAddr::V6(listener) => listener.is_unspecified(),
     };
-    !((address == listener.ip() || wildcard_covers_metrics) && metrics.port() == listener.port())
+    (address == listener.ip() || wildcard_covers_metrics) && metrics.port() == listener.port()
 }
 
 fn is_unique_local(address: Ipv6Addr) -> bool {
@@ -1512,7 +1524,7 @@ fn reads_deferred_value(
 ) -> bool {
     let reads: &[&str] = match finding {
         RuntimeConfigError::InvalidListener => &["/listener"],
-        RuntimeConfigError::InvalidMetricsListener => &["/listener/bind"],
+        RuntimeConfigError::MetricsListenerSharesSocket => &["/listener/bind"],
         RuntimeConfigError::InvalidTaskGrantStatus => &["/authentication/oidc/audience"],
         RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
             &["/listener/tlsTermination"]
@@ -1619,6 +1631,14 @@ pub enum RuntimeConfigError {
          listener"
     )]
     InvalidMetricsListener,
+    /// The same refusal as `InvalidMetricsListener`, for a metrics bind that
+    /// is acceptable alone but shares the listener's socket. It is separate so
+    /// the offline check can defer it while the listener bind is an expression.
+    #[error(
+        "metricsListener.bind must be a private address on a non-zero port, apart from the \
+         listener"
+    )]
+    MetricsListenerSharesSocket,
     #[error("{path} {reason}")]
     InvalidOidcClaim {
         path: &'static str,
@@ -1710,7 +1730,9 @@ impl RuntimeConfigError {
             Self::MissingTaskGrantStatus | Self::InvalidTaskGrantStatus => "taskGrantStatus",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
             Self::InvalidListener => "listener.bind",
-            Self::InvalidMetricsListener => "metricsListener.bind",
+            Self::InvalidMetricsListener | Self::MetricsListenerSharesSocket => {
+                "metricsListener.bind"
+            }
             Self::InvalidDatabaseReference => "database",
             Self::PlaintextDatabase => "database.testOnlyPlaintext",
             Self::InvalidAuditDestination(error) => audit_field(error),
@@ -1762,7 +1784,9 @@ impl RuntimeConfigError {
             Self::PackageContents { .. } => "scheduling.package.unexpected-contents",
             Self::PolicyChanged => "scheduling.package.file-changed",
             Self::InvalidListener => "scheduling.runtime.invalid-listener",
-            Self::InvalidMetricsListener => "scheduling.runtime.invalid-metrics-listener",
+            Self::InvalidMetricsListener | Self::MetricsListenerSharesSocket => {
+                "scheduling.runtime.invalid-metrics-listener"
+            }
             Self::InvalidOidcClaim { .. } => "scheduling.runtime.invalid-oidc-claim",
             Self::InvalidOperationalReadProfile { .. } => {
                 "scheduling.runtime.invalid-operational-read-profile"
@@ -1819,7 +1843,7 @@ impl RuntimeConfigError {
             Self::InvalidListener => {
                 "Bind to a loopback address under development-loopback; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
             }
-            Self::InvalidMetricsListener => {
+            Self::InvalidMetricsListener | Self::MetricsListenerSharesSocket => {
                 "Bind metricsListener to a loopback or private address with a nonzero port the API listener does not use."
             }
             Self::InvalidOidcClaim { .. } => {
@@ -4203,7 +4227,11 @@ holdPolicy:
             let error = RuntimeConfig::load(write_operator(root.path(), document))
                 .expect_err("the metrics listener is refused");
             assert!(
-                matches!(error, RuntimeConfigError::InvalidMetricsListener),
+                matches!(
+                    error,
+                    RuntimeConfigError::InvalidMetricsListener
+                        | RuntimeConfigError::MetricsListenerSharesSocket
+                ),
                 "{bind}: {error}"
             );
             assert!(!format!("{error:?}").contains(bind));
@@ -4520,6 +4548,36 @@ holdPolicy:
         assert_eq!(diagnostic.code, "scheduling.runtime.missing-identity");
         assert_eq!(diagnostic.path, "/identity");
         assert_eq!(diagnostic.source.as_ref().unwrap().line, Some(1));
+    }
+
+    #[test]
+    fn cfg_check_1_a_deferred_listener_defers_only_the_metrics_socket_comparison() {
+        let root = canonical_tempdir();
+        let check = |bind: &str| {
+            let mut document = operator_value(&root.path().join("package"), "development-loopback");
+            document["listener"]["bind"] =
+                serde_json::json!("${SCHEDULING_OFFLINE_CHECK_UNSET_BIND}");
+            document["metricsListener"] = serde_json::json!({"bind": bind});
+            let path = write_operator(root.path(), document);
+            check_runtime(&path, None, false)
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+                .collect::<Vec<_>>()
+        };
+        // The stand-in listener is 127.0.0.1:8100: a metrics bind on it is not
+        // judged until the environment supplies the real listener.
+        assert!(check("127.0.0.1:8100").is_empty());
+        for bind in ["169.254.1.1:9464", "203.0.113.4:9464", "0.0.0.0:9464"] {
+            assert_eq!(
+                check(bind),
+                [(
+                    "scheduling.runtime.invalid-metrics-listener".to_owned(),
+                    "/metricsListener/bind".to_owned()
+                )],
+                "{bind}"
+            );
+        }
     }
 
     #[test]

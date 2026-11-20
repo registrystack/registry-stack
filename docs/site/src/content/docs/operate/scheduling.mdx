@@ -327,7 +327,7 @@ the series below and nothing else. The public listener does not route `/metrics`
 | --- | --- | --- |
 | `scheduling_http_requests_total` | `route`, `method`, `status`: `1xx`, `2xx`, `3xx`, `4xx`, `5xx`, `other` | Answered HTTP requests, by route template and status class |
 | `scheduling_outbox_items` | `state`: `pending`, `leased`, `delivered`, `dead-lettered`, `expired`, `unknown`, `cancelled` | Gauge of reminder and notice intents by stored state, read from the database at each scrape |
-| `scheduling_outbox_oldest_pending_age_seconds` | none | Gauge of how many seconds the oldest pending intent is past its due time. An intent that is waiting out a retry back-off is not counted. Zero when none is overdue |
+| `scheduling_outbox_oldest_pending_age_seconds` | none | Gauge of how many seconds the oldest pending intent has been eligible for pickup, which is its due time, or the end of its last retry back-off. An intent that is still waiting out a back-off is not counted. Zero when none is overdue |
 | `scheduling_hook_deliveries` | `state`: `pending`, `leased`, `delivered`, `dead-lettered`, `expired` | Gauge of observer-hook deliveries by stored state, read at each scrape |
 | `scheduling_hook_oldest_pending_age_seconds` | none | Gauge of how many seconds ago the oldest pending hook delivery's event was captured. Zero when none is pending |
 | `scheduling_worker_last_success_age_seconds` | `worker`: `hold-expiry`, `retention` | Gauge of seconds since the worker last finished a pass |
