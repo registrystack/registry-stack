@@ -1011,7 +1011,6 @@ export default defineConfig({
           items: [
             { label: 'Architecture', slug: 'explanation/architecture' },
             { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
-            { label: 'Plan a register', slug: 'explanation/plan-a-register' },
             { label: 'Where each rule lives', slug: 'explanation/where-each-rule-lives' },
             { label: 'Records stay home', slug: 'explanation/records-stay-home' },
             { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },

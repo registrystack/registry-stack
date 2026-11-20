@@ -1,6 +1,6 @@
 ---
 title: How the products fit together
-description: The model every Registry Stack product shares, what you define, what runs, what a product owns, what none of them owns, how they compose, and where the stack sits beside an exchange layer.
+description: The model every Registry Stack product shares, what you define, what runs, what a product owns, what none of them owns, how they compose, which product serves which exchange, and where the stack sits beside an exchange layer.
 status: current
 owner: registry-docs
 source_repos:
@@ -55,7 +55,15 @@ institutions. A signed assertion states what a source held at one moment; whethe
 for a decision is the relying party's call. A review result records what reviewers decided; what
 happens next stays with the producer that asked for the review.
 
-{/* Evidence: AGENTS.md, "Registry Stack Agent Guidance"; products/casework/README.md. */}
+No maintained product is a payment product, and none has an operation specific to payments.
+Payment policy and provider contracts stay with the institution. A Registry Coordinator workflow
+step can send one configured POST command to a provider through the generic
+[`external.command/v1`](../../configure/coordinator/) operation. Coordinator repeats the command
+with the same `Idempotency-Key` when the provider answers 429 or 503.
+
+{/* Evidence: AGENTS.md, "Registry Stack Agent Guidance"; products/casework/README.md;
+    crates/registry-coordinator/src/operations.rs, operation_catalog;
+    crates/registry-coordinator/src/external_http.rs, external.command/v1. */}
 
 ## How products compose
 
@@ -68,6 +76,30 @@ to another product's database.
 
 {/* Evidence: AGENTS.md, "The products compose without merging their boundaries" and the
     Scheduling, Messaging, and Coordinator paragraphs. */}
+
+## Which product serves which exchange
+
+The products serve these exchanges with another institution, another system, or a person.
+The table does not list every exchange that a product serves.
+
+| Exchange | Product | What the product does |
+| --- | --- | --- |
+| Another institution needs one fact about your records | [Registry Evidence](../../explanation/how-evidence-works/) | Signs an answer to one predefined question, with only the outputs its assertion definition declares and not the record |
+| A partner reads or changes your records | [Base Registry Engine](../../explanation/configuration-defined-registry/) | Serves a record API and decides every call under your access profiles |
+| You need a fact from an institution that runs Registry Evidence | [Registry Evidence, with your application as the caller](../../tutorials/request-evidence-from-an-application/) | Returns a signed answer that your application verifies and keeps |
+| You load data from another system | [Registry Adapter ingestion job](../../configure/adapter-jobs/) | Reads bounded source pages and delivers a reviewed projection to a destination |
+| A standard or a national system fixes the API you must serve | [Registry Adapter facade](../../configure/adapter/) | Serves a declared API by translating each request to the source system |
+| A person carries the proof themselves | [Evidence with OID4VCI delivery](../../configure/evidence-oid4vci/) | Delivers a holder-bound credential to the person's wallet |
+
+The job host that runs an Adapter ingestion job, `adapter-job`, is not in a numbered release.
+You [build it from source](../../operate/adapter/#build-the-job-host).
+
+{/* Evidence: crates/registry-evidence/src/runtime.rs;
+    crates/registry-breg/src/access.rs;
+    products/adapter/README.md, adapter-job;
+    crates/registry-adapter-engine/src/effective_contract.rs, EffectiveContract;
+    docs/site/src/content/docs/configure/evidence-oid4vci.mdx, OID4VCI;
+    docs/site/src/data/cli-reference.yaml, source_build_only_binaries. */}
 
 ## Where the stack sits
 
