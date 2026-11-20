@@ -146,7 +146,8 @@ pub(crate) async fn install(
 /// its lookahead row. Failure refuses the complete read, never just the entry.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn record_reads(
-    transaction: &impl GenericClient,
+    transaction: &tokio_postgres::Transaction<'_>,
+    alerts: Option<&crate::outbox::ReadAlerts>,
     entity: &CompiledEntity,
     authority_entity: &str,
     context: &AuthorizedRequestContext,
@@ -258,6 +259,32 @@ pub(crate) async fn record_reads(
         )
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
+    let reads = record_ids
+        .iter()
+        .zip(&event_ids)
+        .map(
+            |(record_id, access_log_event_id)| crate::outbox::LoggedRead {
+                record_id,
+                access_log_event_id,
+            },
+        )
+        .collect::<Vec<_>>();
+    crate::outbox::insert_read_events(
+        transaction,
+        alerts,
+        entity,
+        identity,
+        &crate::outbox::ReadAccess {
+            profile: context.selected_profile(),
+            operation_id,
+            requester,
+            purpose,
+            access_reason,
+        },
+        &reads,
+    )
+    .await
+    .map_err(|_| ReadServiceError::Unavailable)?;
     Ok(())
 }
 

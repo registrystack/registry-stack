@@ -1807,6 +1807,10 @@ async fn finish_prepared_server(
                 audit.clone(),
                 Arc::clone(&cursor_codec),
                 sources,
+            )
+            .with_event_destinations(
+                Some(Arc::clone(&event_destinations)),
+                config.identity().instance_id(),
             );
             // A check binds and rolls back, so it never rotates a serving scope.
             external
@@ -1841,6 +1845,10 @@ async fn finish_prepared_server(
         config.operational_timeouts().record_lock,
         audit.clone(),
         Arc::clone(&cursor_codec),
+    )
+    .with_event_destinations(
+        Some(Arc::clone(&event_destinations)),
+        config.identity().instance_id(),
     );
     let records = Arc::new(match field_encryption.clone() {
         Some(field_encryption) => records.with_field_encryption(field_encryption),
@@ -1857,6 +1865,10 @@ async fn finish_prepared_server(
         lock_key,
         config.operational_timeouts().record_lock,
         audit.clone(),
+    )
+    .with_event_destinations(
+        Some(Arc::clone(&event_destinations)),
+        config.identity().instance_id(),
     );
     let revisions = Arc::new(match field_encryption.clone() {
         Some(field_encryption) => revisions.with_field_encryption(field_encryption),
@@ -1870,6 +1882,10 @@ async fn finish_prepared_server(
         config.operational_timeouts().record_lock,
         audit.clone(),
         Arc::clone(&cursor_codec),
+    )
+    .with_event_destinations(
+        Some(Arc::clone(&event_destinations)),
+        config.identity().instance_id(),
     );
     let snapshots = Arc::new(match field_encryption.clone() {
         Some(field_encryption) => snapshots.with_field_encryption(field_encryption),

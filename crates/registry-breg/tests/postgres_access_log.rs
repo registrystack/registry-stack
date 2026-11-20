@@ -59,6 +59,29 @@ fn compiled_with_access_reason() -> CompiledRegistry {
 }
 
 fn compiled_with_profiles(with_reasoned: bool) -> CompiledRegistry {
+    compile_access_source(access_source(with_reasoned))
+}
+
+/// The same registry as `compiled_with_access_reason`, with a read-triggered
+/// hook that alerts on every read under the `reasoned` profile.
+fn compiled_with_read_alert() -> CompiledRegistry {
+    let mut source = access_source(true);
+    source["recordTypes"][0]["hooks"] = json!([
+        {"id":"reasoned-read","phase":"after","trigger":"read","profiles":["reasoned"],"projection":[]}
+    ]);
+    compile_access_source(source)
+}
+
+fn compile_access_source(source: Value) -> CompiledRegistry {
+    compile_project(
+        &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
+        &[],
+        CompileProfile::Authoring,
+    )
+    .unwrap()
+}
+
+fn access_source(with_reasoned: bool) -> Value {
     let permission = json!({"recordType":"entry", "operations":["get","list","lookup"],
         "readableFields":["label"], "lookups":[{"selector":"by-subject","valueOrigin":"request"}],
         "rowBoundaries":"unrestricted"});
@@ -82,12 +105,7 @@ fn compiled_with_profiles(with_reasoned: bool) -> CompiledRegistry {
             json!({"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"requireAccessReason":true,"permissions":{"records":[permission]}}),
         );
     }
-    compile_project(
-        &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
-        &[],
-        CompileProfile::Authoring,
-    )
-    .unwrap()
+    source
 }
 
 fn compiled_relationships() -> CompiledRegistry {
@@ -235,7 +253,8 @@ async fn setup_relationships() -> (TestDatabase, Router, MockIdp) {
         Duration::from_secs(2),
         database.audit(AuditProfile::production_from_secret_bytes(vec![0x52; 32].into()).unwrap()),
         cursors.clone(),
-    );
+    )
+    .with_event_destinations(None, "access-instance");
     let service = HttpService::new(
         registry,
         ReadRuntimeIdentity {
@@ -277,6 +296,14 @@ async fn setup_registry(registry: CompiledRegistry) -> (TestDatabase, Router, Mo
         database.admin.execute(&format!("INSERT INTO registry_data.\"{}\" (record_id,record_revision,record_lifecycle,active_package_revision,\"{}\",\"{}\") VALUES ($1::text::uuid,1,'active',$3,$2,'protected-label')",
             entity.physical_table, entity.fields["subject"].physical_name, entity.fields["label"].physical_name), &[&id,&subject,&identity.activation_id]).await.unwrap();
     }
+    // The seeded records carry a retained revision, as every written record does.
+    for id in [RECORD_A, RECORD_B] {
+        database.admin.execute("INSERT INTO registry_internal.registry_revisions
+                (entity_id,record_id,record_reference,record_revision,record_lifecycle,package_revision,
+                 operation_id,mutation_kind,principal_reference,request_reference,erased_at)
+             VALUES ('entry',$1::text::uuid,$2,1,'active',$3,'seed','create','principal','request',now())",
+            &[&id, &format!("reference-{id}"), &identity.activation_id]).await.unwrap();
+    }
     drop(migration);
     task.abort();
     let idp = MockIdp::start().await;
@@ -307,7 +334,8 @@ async fn setup_registry(registry: CompiledRegistry) -> (TestDatabase, Router, Mo
         Duration::from_secs(2),
         database.audit(AuditProfile::production_from_secret_bytes(vec![0x52; 32].into()).unwrap()),
         cursors.clone(),
-    );
+    )
+    .with_event_destinations(None, "access-instance");
     let service = HttpService::new(
         registry,
         ReadRuntimeIdentity {
@@ -1015,7 +1043,8 @@ async fn setup_with_history() -> (TestDatabase, Router, MockIdp, Arc<CompiledReg
         Duration::from_secs(2),
         audit.clone(),
         cursors.clone(),
-    );
+    )
+    .with_event_destinations(None, "access-instance");
     let revisions = PostgresRevisionReadService::new(
         pool.clone(),
         registry.clone(),
@@ -1498,6 +1527,179 @@ async fn a_profile_without_the_flag_needs_no_reason_and_logs_none() {
     let events = page["events"].as_array().unwrap();
     assert_eq!(events.len(), 1);
     assert!(events[0]["accessReason"].is_null());
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+/// Every outbox row a read alert captured, as `(event type, envelope)`.
+async fn read_alerts(db: &TestDatabase) -> Vec<(String, Value)> {
+    db.admin
+        .query(
+            "SELECT event_type, convert_from(payload, 'UTF8') FROM registry_internal.registry_outbox
+              WHERE trigger = 'read' ORDER BY created_at, event_id",
+            &[],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| {
+            let payload: String = row.get(1);
+            (row.get(0), serde_json::from_str(&payload).unwrap())
+        })
+        .collect()
+}
+
+async fn logged_event_ids(db: &TestDatabase) -> Vec<String> {
+    db.admin
+        .query(
+            "SELECT event_id::text FROM registry_internal.registry_subject_access_log ORDER BY event_id",
+            &[],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_read_under_an_alerting_profile_emits_one_event_per_access_log_entry() {
+    let (db, app, idp) = setup_registry(compiled_with_read_alert()).await;
+    let agency = token(&idp, "agency", "officer");
+    let reason = "welfare check, case 42";
+    let (status, _) = send_reasoned(
+        &app,
+        &agency,
+        Method::GET,
+        &format!("/v1/records/entries/{RECORD_A}?accessProfile=reasoned"),
+        None,
+        Some(&reason_header(reason)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let alerts = read_alerts(&db).await;
+    assert_eq!(alerts.len(), 1, "{alerts:?}");
+    let (event_type, envelope) = &alerts[0];
+    assert_eq!(event_type, "reasoned-read");
+    let data = &envelope["data"];
+    assert_eq!(data["recordType"], "entry");
+    assert_eq!(data["recordId"], RECORD_A);
+    assert_eq!(data["revision"], 1);
+    assert_eq!(data["trigger"], "read");
+    assert_eq!(data["values"], json!({}));
+    let logged = logged_event_ids(&db).await;
+    assert_eq!(logged.len(), 1);
+    assert_eq!(
+        data["access"],
+        json!({
+            "accessProfile": "reasoned",
+            "operationId": data["access"]["operationId"],
+            "requester": "agency",
+            "purpose": PURPOSE,
+            "accessReason": reason,
+            "accessLogEventId": logged[0],
+        })
+    );
+    assert!(data["access"]["operationId"]
+        .as_str()
+        .is_some_and(|id| !id.is_empty()));
+
+    let (status, _) = send_reasoned(
+        &app,
+        &agency,
+        Method::GET,
+        "/v1/records/entries?accessProfile=reasoned&$top=2",
+        None,
+        Some(&reason_header(reason)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let alerts = read_alerts(&db).await;
+    assert_eq!(alerts.len(), 3, "a list of two records adds two events");
+    let mut alerted = alerts
+        .iter()
+        .map(|(_, envelope)| {
+            envelope["data"]["access"]["accessLogEventId"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    alerted.sort();
+    assert_eq!(alerted, logged_event_ids(&db).await);
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_read_alert_carries_no_record_values() {
+    let (db, app, idp) = setup_registry(compiled_with_read_alert()).await;
+    let agency = token(&idp, "agency", "officer");
+    let (status, record) = send_reasoned(
+        &app,
+        &agency,
+        Method::GET,
+        &format!("/v1/records/entries/{RECORD_A}?accessProfile=reasoned"),
+        None,
+        Some(&reason_header("welfare check")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{record}");
+    let rendered = json!(read_alerts(&db).await).to_string();
+    for value in ["protected-label", SUBJECT] {
+        assert!(!rendered.contains(value), "{value} leaked into {rendered}");
+    }
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_read_under_a_profile_the_hook_does_not_name_emits_none() {
+    let (db, app, idp) = setup_registry(compiled_with_read_alert()).await;
+    let agency = token(&idp, "agency", "officer");
+    for uri in [
+        format!("/v1/records/entries/{RECORD_A}"),
+        "/v1/records/entries?$top=2".to_owned(),
+    ] {
+        let (status, _) = send_reasoned(&app, &agency, Method::GET, &uri, None, None).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    assert_eq!(access_log_rows(&db).await, 3, "the reads were logged");
+    assert!(read_alerts(&db).await.is_empty());
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_failed_read_emits_no_alert() {
+    let (db, app, idp) = setup_registry(compiled_with_read_alert()).await;
+    let agency = token(&idp, "agency", "officer");
+    let (status, _) = send_reasoned(
+        &app,
+        &agency,
+        Method::GET,
+        &format!("/v1/records/entries/{RECORD_A}?accessProfile=reasoned"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "no reason");
+    let (status, _) = send_reasoned(
+        &app,
+        &agency,
+        Method::GET,
+        "/v1/records/entries/00000000-0000-4000-8000-0000000000ff?accessProfile=reasoned",
+        None,
+        Some(&reason_header("welfare check")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "no such record");
+    assert!(read_alerts(&db).await.is_empty());
+    assert_eq!(access_log_rows(&db).await, 0);
     drop(app);
     drop(idp);
     db.cleanup().await;
