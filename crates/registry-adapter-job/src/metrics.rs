@@ -25,7 +25,8 @@ use axum::routing::get;
 use axum::Router;
 use deadpool_postgres::Pool;
 use registry_platform_metrics::{
-    CounterVec, Exposition, LabelSpace, MetricKind, CONTENT_TYPE as METRICS_CONTENT_TYPE,
+    CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline, CLASS_NO_TIME_LEFT,
+    CLASS_TIMEOUT, CONTENT_TYPE as METRICS_CONTENT_TYPE,
 };
 
 use crate::pass::StopReason;
@@ -219,10 +220,17 @@ fn count(counter: &CounterVec, values: &[&str]) {
 
 /// Read the item count by state for `job_id`, in the gauge's declared order.
 ///
-/// The count runs in a read-only transaction with a server-side statement
-/// timeout, so a query the scrape abandons stops on the server instead of
-/// holding a connection the pass needs.
-pub async fn sample_items(pool: &Pool, job_id: &str) -> Result<[(ItemStatus, u64); 4], String> {
+/// The count runs in a read-only transaction whose server-side statement
+/// timeout is the time left before `deadline`, so a query the scrape abandons
+/// stops on the server instead of holding a connection the pass needs. A
+/// read that starts with no time left fails without querying. A failure is
+/// returned as its error class: `timeout`, `no-time-left`, or the closed
+/// cause token of the store error.
+pub async fn sample_items(
+    pool: &Pool,
+    job_id: &str,
+    deadline: ScrapeDeadline,
+) -> Result<[(ItemStatus, u64); 4], String> {
     let mut client = pool
         .get()
         .await
@@ -232,16 +240,17 @@ pub async fn sample_items(pool: &Pool, job_id: &str) -> Result<[(ItemStatus, u64
         .read_only(true)
         .start()
         .await
-        .map_err(|error| store::StoreError::from(error).cause())?;
+        .map_err(|error| sample_class(store::StoreError::from(error).cause()))?;
+    let milliseconds = deadline
+        .statement_timeout_milliseconds()
+        .ok_or_else(|| CLASS_NO_TIME_LEFT.to_owned())?;
     transaction
-        .batch_execute(&format!(
-            "SET LOCAL statement_timeout = {SAMPLE_STATEMENT_TIMEOUT_MILLISECONDS}"
-        ))
+        .batch_execute(&format!("SET LOCAL statement_timeout = {milliseconds}"))
         .await
-        .map_err(|error| store::StoreError::from(error).cause())?;
+        .map_err(|error| sample_class(store::StoreError::from(error).cause()))?;
     let counts = store::item_status_counts(&transaction, job_id)
         .await
-        .map_err(|error| error.cause())?;
+        .map_err(|error| sample_class(error.cause()))?;
     Ok(ITEM_STATES.map(|state| {
         let count = match state {
             ItemStatus::Pending => counts.pending,
@@ -253,12 +262,15 @@ pub async fn sample_items(pool: &Pool, job_id: &str) -> Result<[(ItemStatus, u64
     }))
 }
 
-/// How long a scrape may wait for the store before the gauge is omitted.
-const SAMPLE_DEADLINE: Duration = Duration::from_secs(5);
-
-/// The server-side limit on the item count, a little under the scrape's own
-/// deadline so an abandoned query stops on the server too.
-const SAMPLE_STATEMENT_TIMEOUT_MILLISECONDS: u32 = 4_000;
+/// The error class of a store cause token: a statement the server cancelled
+/// for its timeout is `timeout`, as in every product's samplers.
+fn sample_class(cause: String) -> String {
+    if cause == "57014" {
+        CLASS_TIMEOUT.to_owned()
+    } else {
+        cause
+    }
+}
 
 /// How long a sampled result answers later scrapes without another query.
 const SAMPLE_CACHE: Duration = Duration::from_secs(5);
@@ -369,16 +381,39 @@ where
 }
 
 async fn scrape(State(state): State<ScrapeState>) -> impl IntoResponse {
-    let items = sampled_items(&state.samples, &state.metrics, || async {
-        tokio::time::timeout(SAMPLE_DEADLINE, sample_items(&state.pool, &state.job_id))
-            .await
-            .unwrap_or_else(|_| Err("the item count read timed out".to_owned()))
+    let body = render_scrape(
+        &state.metrics,
+        &state.pool,
+        &state.job_id,
+        &state.samples,
+        || ScrapeDeadline::from(Instant::now()),
+    )
+    .await;
+    ([(CONTENT_TYPE, METRICS_CONTENT_TYPE)], body)
+}
+
+/// The exposition of one scrape. `deadline` is called when the store is read,
+/// not when the scrape arrives, so a scrape that waited behind another read
+/// still gets its whole budget, and a scrape served from the cache never
+/// starts one. The read is bounded on the client as well as the server.
+pub async fn render_scrape(
+    metrics: &JobMetrics,
+    pool: &Pool,
+    job_id: &str,
+    samples: &SampleCache,
+    deadline: impl FnOnce() -> ScrapeDeadline,
+) -> String {
+    let items = sampled_items(samples, metrics, || async {
+        let deadline = deadline();
+        tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline.at()),
+            sample_items(pool, job_id, deadline),
+        )
+        .await
+        .unwrap_or_else(|_| Err(CLASS_TIMEOUT.to_owned()))
     })
     .await;
-    (
-        [(CONTENT_TYPE, METRICS_CONTENT_TYPE)],
-        state.metrics.render(items),
-    )
+    metrics.render(items)
 }
 
 #[cfg(test)]

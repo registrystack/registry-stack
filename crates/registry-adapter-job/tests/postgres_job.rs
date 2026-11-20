@@ -522,6 +522,67 @@ async fn item(pool: &Pool, key: &str) -> Option<store::ItemRecord> {
 /// The invariant the table's shape carries: no column can hold a JSON
 /// item body, and the column set is exactly the identity-and-progress
 /// set of the item contract.
+/// The item count read waits on a lock the test holds. The server cancels it
+/// when the scrape deadline passes, so no session is left waiting, the gauge
+/// is omitted, and the failure is counted once however many scrapes follow.
+#[tokio::test]
+async fn an_item_count_read_stuck_on_a_lock_is_cancelled_on_the_server_and_counted_once() {
+    use registry_adapter_job::metrics::{render_scrape, JobMetrics, SampleCache};
+    use registry_platform_metrics::ScrapeDeadline;
+    let isolated = isolated().await;
+    let holder = isolated.pool.get().await.expect("a lock holder");
+    holder
+        .batch_execute("BEGIN; LOCK TABLE adapter_job_items IN ACCESS EXCLUSIVE MODE;")
+        .await
+        .expect("lock the item table");
+    let metrics = JobMetrics::default();
+    let samples = SampleCache::new(std::time::Duration::from_secs(60));
+    let short = || {
+        ScrapeDeadline::with_budget(
+            std::time::Instant::now(),
+            std::time::Duration::from_millis(600),
+        )
+    };
+    let started = std::time::Instant::now();
+    let text = render_scrape(&metrics, &isolated.pool, "job-a", &samples, short).await;
+    assert!(started.elapsed() < std::time::Duration::from_secs(3));
+    let observer = connect(&isolated.url).await;
+    let mut waiting = i64::MAX;
+    for _ in 0..60 {
+        waiting = observer
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE wait_event_type = 'Lock' AND query LIKE '%adapter_job_items%' \
+                   AND pid <> pg_backend_pid()",
+                &[],
+            )
+            .await
+            .expect("count waiting sessions")
+            .get(0);
+        if waiting == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    holder.batch_execute("ROLLBACK").await.expect("release");
+    assert_eq!(waiting, 0, "the server cancelled the read");
+    assert!(!text.contains("adapter_job_items{"), "{text}");
+    assert!(
+        text.contains("adapter_job_gauge_sample_failures_total 1"),
+        "{text}"
+    );
+    let again = render_scrape(&metrics, &isolated.pool, "job-a", &samples, short).await;
+    assert!(
+        again.contains("adapter_job_gauge_sample_failures_total 1"),
+        "a scrape served from the cache does not count again: {again}"
+    );
+    let spent = ScrapeDeadline::with_budget(std::time::Instant::now(), std::time::Duration::ZERO);
+    assert_eq!(
+        registry_adapter_job::metrics::sample_items(&isolated.pool, "job-a", spent).await,
+        Err("no-time-left".to_owned())
+    );
+}
+
 #[tokio::test]
 async fn the_item_table_holds_no_column_that_can_carry_a_payload() {
     let isolated = isolated().await;
