@@ -407,6 +407,16 @@ impl PostgresStore {
     pub(crate) async fn client(&self) -> Result<deadpool_postgres::Client, StoreError> {
         self.pool.get().await.map_err(|_| StoreError::Unavailable)
     }
+    /// A pooled connection for a metrics sample, or the error class of why
+    /// there is none.
+    pub(crate) async fn sample_client(&self) -> Result<deadpool_postgres::Client, String> {
+        self.pool.get().await.map_err(|error| match error {
+            deadpool_postgres::PoolError::Backend(error) => {
+                crate::metrics::database_error_class(&error)
+            }
+            _ => registry_platform_metrics::CLASS_POOL.to_owned(),
+        })
+    }
     pub async fn bootstrap_directory(
         &self,
         actor: &ActorContext,

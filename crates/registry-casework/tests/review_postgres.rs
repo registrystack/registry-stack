@@ -1484,7 +1484,11 @@ async fn an_interrupted_final_completion_attempt_dead_letters_without_another_se
 #[tokio::test]
 async fn the_completion_backlog_counts_every_undelivered_state_and_the_oldest_age() {
     let fixture = fixture().await;
-    let empty = fixture.store.completion_backlog().await.expect("sample");
+    let empty = fixture
+        .store
+        .completion_backlog(deadline())
+        .await
+        .expect("sample");
     assert_eq!(empty, CompletionBacklog::default());
 
     let dead = settle_review_for_completion(&fixture, "backlog-dead-lettered").await;
@@ -1531,7 +1535,11 @@ async fn the_completion_backlog_counts_every_undelivered_state_and_the_oldest_ag
         .await
         .expect("age the dead-lettered delivery");
 
-    let backlog = fixture.store.completion_backlog().await.expect("sample");
+    let backlog = fixture
+        .store
+        .completion_backlog(deadline())
+        .await
+        .expect("sample");
     assert_eq!(
         (
             backlog.pending,
@@ -1547,6 +1555,106 @@ async fn the_completion_backlog_counts_every_undelivered_state_and_the_oldest_ag
         (7200..7260).contains(&backlog.oldest_undelivered_seconds),
         "the oldest undelivered delivery is the aged dead letter, aged from when it was dead-lettered and not from its last touch: {}",
         backlog.oldest_undelivered_seconds
+    );
+}
+
+fn deadline() -> registry_platform_metrics::ScrapeDeadline {
+    registry_platform_metrics::ScrapeDeadline::from(std::time::Instant::now())
+}
+
+/// Hold an exclusive lock on `table` in an open transaction, so any read of
+/// it waits on the lock until `release_lock`.
+async fn hold_lock(fixture: &Fixture, table: &str) {
+    fixture
+        .database
+        .batch_execute(&format!(
+            "BEGIN; LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE;"
+        ))
+        .await
+        .expect("lock the table");
+}
+
+async fn release_lock(fixture: &Fixture) {
+    fixture
+        .database
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("release the lock");
+}
+
+/// The store's sessions still waiting on a lock. A query the client merely
+/// abandoned keeps waiting on the server; one the server cancelled does not.
+async fn sessions_waiting_on_a_lock(fixture: &Fixture) -> i64 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let waiting: i64 = fixture
+            .database
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity
+                 WHERE application_name=$1 AND wait_event_type='Lock'",
+                &[&fixture.application_name],
+            )
+            .await
+            .expect("count waiting sessions")
+            .get(0);
+        if waiting == 0 || std::time::Instant::now() >= deadline {
+            return waiting;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+fn short_deadline() -> registry_platform_metrics::ScrapeDeadline {
+    registry_platform_metrics::ScrapeDeadline::with_budget(
+        std::time::Instant::now(),
+        std::time::Duration::from_millis(600),
+    )
+}
+
+#[tokio::test]
+async fn a_review_read_that_waits_on_a_lock_is_cancelled_on_the_server_and_leaves_the_backlog_no_time(
+) {
+    let fixture = fixture().await;
+    hold_lock(&fixture, "casework_review_requests").await;
+    let text = registry_casework::scrape_for_test(fixture.store.clone(), short_deadline()).await;
+    let waiting = sessions_waiting_on_a_lock(&fixture).await;
+    release_lock(&fixture).await;
+    assert_eq!(
+        waiting, 0,
+        "the server cancels the review read; the client only abandoning it leaves it waiting"
+    );
+    assert!(text.contains("casework_database_up 0\n"), "{text}");
+    assert!(!text.contains("casework_open_review_requests"), "{text}");
+    // The stuck read used the whole shared deadline, so the read after it
+    // has no time left: it counts as failed too, once, and never queries.
+    assert!(!text.contains("casework_completion_deliveries"), "{text}");
+    assert!(
+        text.contains("casework_metrics_sample_failures_total{sample=\"review\"} 1\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("casework_metrics_sample_failures_total{sample=\"completion-backlog\"} 1\n"),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn a_backlog_read_that_waits_on_a_lock_is_cancelled_on_the_server_and_counted_once() {
+    let fixture = fixture().await;
+    hold_lock(&fixture, "casework_review_completion_outbox").await;
+    let text = registry_casework::scrape_for_test(fixture.store.clone(), short_deadline()).await;
+    let waiting = sessions_waiting_on_a_lock(&fixture).await;
+    release_lock(&fixture).await;
+    assert_eq!(waiting, 0, "the server cancels the backlog read");
+    assert!(text.contains("casework_open_review_requests 0\n"), "{text}");
+    assert!(!text.contains("casework_completion_deliveries"), "{text}");
+    assert!(
+        text.contains("casework_metrics_sample_failures_total{sample=\"review\"} 0\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("casework_metrics_sample_failures_total{sample=\"completion-backlog\"} 1\n"),
+        "{text}"
     );
 }
 

@@ -1,7 +1,10 @@
 //! Optional operator-private telemetry. Labels contain no caller or subject values.
 use crate::{CompletionBacklog, PostgresStore};
 use axum::{extract::State, http::header::CONTENT_TYPE, routing::get, Json, Router};
-use registry_platform_metrics::{Exposition, MetricKind, CONTENT_TYPE as METRICS_CONTENT_TYPE};
+use registry_platform_metrics::{
+    sample_error_class, Exposition, MetricKind, ScrapeDeadline, CLASS_NO_TIME_LEFT, CLASS_TIMEOUT,
+    CONTENT_TYPE as METRICS_CONTENT_TYPE,
+};
 use serde_json::json;
 use std::sync::Arc;
 /// One sample of the database. Each part is sampled on its own, so a failing
@@ -31,33 +34,34 @@ impl SampleKind {
     }
 }
 
-/// How long one scrape may spend on all of its samples together. Two serial
-/// samples share it, so an unreachable database still answers within one
-/// timeout, well inside a scraper's own timeout.
-const SAMPLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
 /// Failed samples since the process started, by sample.
 #[derive(Default)]
 struct SampleFailures([std::sync::atomic::AtomicU64; SampleKind::ALL.len()]);
 
 impl SampleFailures {
     /// Run one sample before `deadline`. A failure or a timeout is logged
-    /// with its cause and counted, and leaves the sample without a value.
-    async fn sample<T, E: std::fmt::Display>(
+    /// by its error class, counted once, and leaves the sample without a
+    /// value. The class never carries query text or row data.
+    async fn sample<T>(
         &self,
         kind: SampleKind,
-        deadline: tokio::time::Instant,
-        read: impl std::future::Future<Output = Result<T, E>>,
+        deadline: ScrapeDeadline,
+        read: impl std::future::Future<Output = Result<T, String>>,
     ) -> Option<T> {
-        let cause = match tokio::time::timeout_at(deadline, read).await {
+        let class = match tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline.at()),
+            read,
+        )
+        .await
+        {
             Ok(Ok(value)) => return Some(value),
-            Ok(Err(error)) => error.to_string(),
-            Err(_) => "the sample timed out".to_owned(),
+            Ok(Err(class)) => class,
+            Err(_) => CLASS_TIMEOUT.to_owned(),
         };
         self.0[kind as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         tracing::warn!(
             sample = kind.label(),
-            error = %cause,
+            class = %class,
             "a metrics sample failed; its series are left out of this scrape"
         );
         None
@@ -100,36 +104,101 @@ impl MetricsState {
                 return *value;
             }
         }
+        let value = self
+            .sample(ScrapeDeadline::from(std::time::Instant::now()))
+            .await;
+        *cached = Some((tokio::time::Instant::now(), value));
+        value
+    }
+    /// Read every sample before `deadline`.
+    async fn sample(&self, deadline: ScrapeDeadline) -> Readings {
         let failures = &self.inner.failures;
-        let deadline = tokio::time::Instant::now() + SAMPLE_TIMEOUT;
         // The review connection is released before the backlog read takes
         // its own, so one scrape holds one pool connection at a time.
         let review = failures
-            .sample(SampleKind::Review, deadline, async {
-                let client = self
-                    .inner
-                    .store
-                    .client()
-                    .await
-                    .map_err(|error| error.to_string())?;
-                let row = client.query_one("SELECT (SELECT count(*) FROM casework_review_requests WHERE lifecycle='reviewing'),(SELECT count(*) FROM casework_review_tasks WHERE state IN('open','claimed')),(SELECT count(*) FROM casework_review_tasks WHERE state IN('open','claimed') AND deadline_at<=now())",&[]).await.map_err(|error| error.to_string())?;
-                Ok::<_, String>([row.get(0), row.get(1), row.get(2)])
-            })
+            .sample(
+                SampleKind::Review,
+                deadline,
+                read_review_counts(&self.inner.store, deadline),
+            )
             .await;
         let completions = failures
             .sample(
                 SampleKind::CompletionBacklog,
                 deadline,
-                self.inner.store.completion_backlog(),
+                self.inner.store.completion_backlog(deadline),
             )
             .await;
-        let value = Readings {
+        Readings {
             review,
             completions,
-        };
-        *cached = Some((tokio::time::Instant::now(), value));
-        value
+        }
     }
+}
+
+/// The open requests, open tasks and due tasks, read in one read-only
+/// transaction bounded by the scrape deadline.
+async fn read_review_counts(
+    store: &PostgresStore,
+    deadline: ScrapeDeadline,
+) -> Result<[i64; 3], String> {
+    let mut client = store.sample_client().await?;
+    let transaction = begin_sample(&mut client, deadline).await?;
+    let row = transaction
+        .query_one(
+            "SELECT (SELECT count(*) FROM casework_review_requests WHERE lifecycle='reviewing'),(SELECT count(*) FROM casework_review_tasks WHERE state IN('open','claimed')),(SELECT count(*) FROM casework_review_tasks WHERE state IN('open','claimed') AND deadline_at<=now())",
+            &[],
+        )
+        .await
+        .map_err(|error| database_error_class(&error))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| database_error_class(&error))?;
+    Ok([row.get(0), row.get(1), row.get(2)])
+}
+
+/// The error class of a driver error: never its text, which can carry query
+/// text or row data.
+pub(crate) fn database_error_class(error: &tokio_postgres::Error) -> String {
+    sample_error_class(
+        error.code().map(tokio_postgres::error::SqlState::code),
+        error.is_closed(),
+    )
+}
+
+/// Start a read-only transaction whose server-side `statement_timeout` is
+/// the time left before `deadline`, so a slow query is cancelled on the
+/// server and not only abandoned by the client. A sample with no time left
+/// fails without querying.
+pub(crate) async fn begin_sample<'a>(
+    client: &'a mut deadpool_postgres::Client,
+    deadline: ScrapeDeadline,
+) -> Result<deadpool_postgres::Transaction<'a>, String> {
+    let transaction = client
+        .build_transaction()
+        .read_only(true)
+        .start()
+        .await
+        .map_err(|error| database_error_class(&error))?;
+    let milliseconds = deadline
+        .statement_timeout_milliseconds()
+        .ok_or_else(|| CLASS_NO_TIME_LEFT.to_owned())?;
+    transaction
+        .batch_execute(&format!("SET LOCAL statement_timeout = {milliseconds}"))
+        .await
+        .map_err(|error| database_error_class(&error))?;
+    Ok(transaction)
+}
+
+/// The exposition of one scrape read before `deadline`, with a fresh
+/// failure count.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn scrape_for_test(store: PostgresStore, deadline: ScrapeDeadline) -> String {
+    let state = MetricsState::new(store, Vec::new(), "sha256:test".to_owned());
+    let readings = state.sample(deadline).await;
+    render(readings, &state.inner.failures)
 }
 pub(crate) fn metrics_router(state: MetricsState) -> Router {
     Router::new()
@@ -228,6 +297,7 @@ fn render(readings: Readings, failures: &SampleFailures) -> String {
 mod tests {
     use super::{render, Readings, SampleFailures, SampleKind};
     use crate::CompletionBacklog;
+    use registry_platform_metrics::ScrapeDeadline;
 
     fn backlog() -> CompletionBacklog {
         CompletionBacklog {
@@ -305,7 +375,7 @@ mod tests {
     #[tokio::test]
     async fn a_failing_sample_is_counted_and_a_working_one_is_not() {
         let failures = SampleFailures::default();
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = ScrapeDeadline::from(std::time::Instant::now());
         let review = failures
             .sample(SampleKind::Review, deadline, async {
                 Ok::<_, String>([4, 9, 2])
@@ -325,8 +395,8 @@ mod tests {
     #[tokio::test]
     async fn two_unreachable_samples_share_one_deadline() {
         let failures = SampleFailures::default();
-        let started = tokio::time::Instant::now();
-        let deadline = started + std::time::Duration::from_millis(100);
+        let started = std::time::Instant::now();
+        let deadline = ScrapeDeadline::with_budget(started, std::time::Duration::from_millis(100));
         let review = failures
             .sample(
                 SampleKind::Review,

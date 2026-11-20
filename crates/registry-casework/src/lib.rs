@@ -25,6 +25,9 @@ pub use audit::{CaseworkAudit, CASEWORK_AUDIT_SCHEMA};
 pub use auth::*;
 pub use config::*;
 pub use http::*;
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub use metrics::scrape_for_test;
 pub use pinned_work::*;
 pub use review::*;
 pub use runtime::*;
