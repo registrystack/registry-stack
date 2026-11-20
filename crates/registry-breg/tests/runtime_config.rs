@@ -2224,6 +2224,69 @@ fn metrics_listener_refuses_unknown_members() {
     );
 }
 
+/// The offline check of a runtime file whose `metricsListener` follows `base`
+/// and whose `listener.bind` is replaced by `listener_bind`.
+fn check_metrics_listener_file(
+    fixture: &RuntimeFixture,
+    listener_bind: &str,
+    metrics: &str,
+) -> Vec<registry_platform_yaml::Diagnostic> {
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace("bind: 127.0.0.1:8080", &format!("bind: {listener_bind}"));
+    let path = fixture.path("runtime-metrics.yaml");
+    fs::write(&path, format!("{base}metricsListener:\n{metrics}")).expect("runtime fixture writes");
+    check_runtime_config(&path, false, None).diagnostics
+}
+
+#[test]
+fn a_deferred_network_exposure_does_not_stop_the_offline_check() {
+    let fixture = RuntimeFixture::new();
+    let diagnostics = check_metrics_listener_file(
+        &fixture,
+        "127.0.0.1:8080",
+        "  bind: 127.0.0.1:9100\n  networkExposure: ${METRICS_EXPOSURE}\n",
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != registry_platform_yaml::Severity::Error
+                && diagnostic.code != registry_platform_config::INCOMPLETE_CODE),
+        "a deferred exposure reads as private-address, not as an undecodable value: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn a_deferred_listener_bind_defers_only_the_metrics_overlap_check() {
+    let fixture = RuntimeFixture::new();
+    // The wildcard overlaps the stand-in the deferred listener bind reads as,
+    // which says nothing about the file.
+    let diagnostics = check_metrics_listener_file(
+        &fixture,
+        "${LISTEN}",
+        "  bind: 0.0.0.0:8080\n  networkExposure: container-private\n",
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "breg.runtime.invalid-metrics-listener"),
+        "the overlap is not judged against a stand-in: {diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == registry_platform_config::INCOMPLETE_CODE),
+        "the check says it stopped: {diagnostics:?}"
+    );
+    // A bind that is refused on its own is still a definite refusal.
+    let diagnostics = check_metrics_listener_file(&fixture, "${LISTEN}", "  bind: 8.8.8.8:9100\n");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "breg.runtime.invalid-metrics-listener"),
+        "the address refusal does not wait for the listener: {diagnostics:?}"
+    );
+}
+
 /// Every bound, attempt timeout, and retention member is read under the
 /// shared spelling, and the spelling it replaced is refused with the key to
 /// write instead.

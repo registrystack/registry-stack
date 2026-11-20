@@ -774,6 +774,23 @@
       ],
       "type": "string"
     },
+    "MetricsListenerConfig": {
+      "additionalProperties": false,
+      "description": "The operator-private metrics listener of a runtime. `networkExposure`\nhas the meaning it has on the serving listener: `private-address` (the\ndefault) requires a loopback or private address, and `container-private`\nalso permits the unspecified address inside a private container network.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "networkExposure": {
+          "$ref": "#/$defs/ListenerNetworkExposure",
+          "default": "private-address"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
     "MtlsIdentity": {
       "additionalProperties": false,
       "description": "The mTLS client identity of an endpoint, orthogonal to the\nauthentication kind. It is\none way a `none` endpoint reaches a non-loopback source. An operator may\ninstead acknowledge a credential-free HTTPS source on its fixed runtime\nbinding.",
@@ -1466,24 +1483,6 @@
           "type": "integer"
         }
       },
-      "type": "object"
-    },
-    "RawMetricsListenerConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "bind": {
-          "$ref": "#/$defs/ListenerBind",
-          "description": "Operator-private loopback or private numeric address and named port,\nfor example `127.0.0.1:9100`."
-        },
-        "networkExposure": {
-          "$ref": "#/$defs/ListenerNetworkExposure",
-          "default": "private-address",
-          "description": "`private-address` (the default) requires a loopback or private\naddress. `container-private` also permits the unspecified address\n(`0.0.0.0` or `::`) for a container on a private network."
-        }
-      },
-      "required": [
-        "bind"
-      ],
       "type": "object"
     },
     "RawOidcVerifierConfig": {
@@ -2342,7 +2341,7 @@
       "description": "Operational log level when `BREG_LOG` is not set. Defaults to `info`;\naccepted values are `error`, `warn`, and `info`."
     },
     "metricsListener": {
-      "$ref": "#/$defs/RawMetricsListenerConfig",
+      "$ref": "#/$defs/MetricsListenerConfig",
       "description": "Optional operator-private metrics listener. Absent by default, which\nserves no metrics surface at all."
     },
     "operationalTimeouts": {

@@ -900,7 +900,7 @@ The reader refuses unknown keys in the same positions (CFG-SCHEMA-8).
 defines `ListenerConfig`, `PrivateListenerConfig`, `DatabaseConfig`,
 `OidcIssuerConfig`, `OidcClientsConfig`, `JwksSource`, `AuditKeyConfig`,
 `SecretProvidersConfig`, `SecretReference`, `TaskGrantStatusConfig`,
-`ObjectStorageConfig`, `AttachmentVerifierConfig`,
+`MetricsListenerConfig`, `ObjectStorageConfig`, `AttachmentVerifierConfig`,
 `UrlHookDestinationConfig`, `IdentityConfig`, `ProjectIdentity`, `Url`,
 `LocalId`, `ExternalId`, and `Digest`. A product
 embeds a shared definition unchanged under its shared name, or flattens a
@@ -920,6 +920,16 @@ full-policy configuration is outside the simple block's scope and remains
 product-owned. Both use the platform delivery primitives. A product needing
 only the fixed policy must use the shared block; a different name or field
 shape alone is never a reason to copy it.
+
+Evidence keeps its own `MetricsListenerConfig` struct in
+`crates/registry-evidence/src/config.rs`, with the same `bind` and
+`networkExposure` members, defaults and unknown-key refusal as the shared
+block, because its runtime contract
+(`products/evidence/contracts/runtime.schema.yaml`) is frozen and hand-written
+and the struct is a public type of the Evidence crate. It applies the shared
+`check_metrics_bind_address` and `check_metrics_bind_apart` rules. A change to
+the shared block's members reaches Evidence only through a reviewed contract
+change.
 
 **CFG-SCHEMA-6 (MUST). A released adopter tool's editor mapping covers every
 registered file pattern for each schema the tool maps.** Tool-specific tests
