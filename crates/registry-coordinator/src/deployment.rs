@@ -19,7 +19,7 @@ use registry_platform_yaml::{Diagnostic, Document, Source};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    net::{IpAddr, Ipv6Addr, SocketAddr},
+    net::SocketAddr,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -256,27 +256,9 @@ fn audit_open_refusal(error: registry_platform_audit::AuditError) -> Coordinator
 }
 /// The metrics listener serves operator data, so it binds only a loopback or
 /// private address on its own nonzero port, never a wildcard and never the
-/// socket the public listener already covers. The rule is Messaging's.
+/// socket the public listener already covers. The rule is the platform's.
 fn valid_metrics_listener(metrics: SocketAddr, listener: SocketAddr) -> bool {
-    let address = metrics.ip();
-    let private = match address {
-        IpAddr::V4(address) => address.is_loopback() || address.is_private(),
-        IpAddr::V6(address) => address.is_loopback() || is_unique_local(address),
-    };
-    if metrics.port() == 0 || !private || address.is_unspecified() || address.is_multicast() {
-        return false;
-    }
-    // An IPv6 wildcard socket is commonly dual-stack, so it covers both
-    // families; the IPv4 wildcard covers only IPv4.
-    let wildcard_covers_metrics = match listener.ip() {
-        IpAddr::V4(listener) => listener.is_unspecified() && address.is_ipv4(),
-        IpAddr::V6(listener) => listener.is_unspecified(),
-    };
-    !((address == listener.ip() || wildcard_covers_metrics) && metrics.port() == listener.port())
-}
-
-fn is_unique_local(address: Ipv6Addr) -> bool {
-    address.segments()[0] & 0xfe00 == 0xfc00
+    registry_platform_config::check_metrics_bind(metrics, &[("listener", listener)]).is_ok()
 }
 
 fn config_fail(field: &str, advice: &str) -> CoordinatorError {
