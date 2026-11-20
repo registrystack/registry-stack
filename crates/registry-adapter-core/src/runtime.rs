@@ -449,26 +449,14 @@ where
 }
 
 fn metrics_bind_is_private(bind: std::net::SocketAddr) -> bool {
-    use std::net::IpAddr;
-    let address = bind.ip();
-    let private = match address {
-        IpAddr::V4(address) => address.is_loopback() || address.is_private(),
-        IpAddr::V6(address) => address.is_loopback() || (address.segments()[0] & 0xfe00) == 0xfc00,
-    };
-    bind.port() != 0 && private && !address.is_unspecified() && !address.is_multicast()
+    registry_platform_config::check_metrics_bind_address(bind).is_ok()
 }
 
 /// Whether a metrics bind would occupy the same socket as `other`, a
-/// listener the metrics must stay apart from. An IPv6 wildcard is commonly
-/// dual-stack, so it covers both families; an IPv4 wildcard covers only IPv4.
+/// listener the metrics must stay apart from.
 #[must_use]
 pub fn metrics_bind_overlaps(metrics: std::net::SocketAddr, other: std::net::SocketAddr) -> bool {
-    use std::net::IpAddr;
-    let wildcard_covers_metrics = match other.ip() {
-        IpAddr::V4(other) => other.is_unspecified() && metrics.ip().is_ipv4(),
-        IpAddr::V6(other) => other.is_unspecified(),
-    };
-    (metrics.ip() == other.ip() || wildcard_covers_metrics) && metrics.port() == other.port()
+    registry_platform_config::check_metrics_bind_apart(metrics, &[("other", other)]).is_err()
 }
 
 fn checked_secret_providers<'de, D>(
@@ -1140,6 +1128,38 @@ mod tests {
                 .contains("metricsListener.bind to differ from listener.bind"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn an_ipv4_mapped_facade_listener_cannot_hide_a_metrics_overlap() {
+        let socket = |text: &str| text.parse::<std::net::SocketAddr>().expect("socket");
+        assert!(metrics_bind_overlaps(
+            socket("127.0.0.1:8080"),
+            socket("[::ffff:127.0.0.1]:8080")
+        ));
+        assert!(metrics_bind_overlaps(
+            socket("10.0.0.1:8080"),
+            socket("[::ffff:0.0.0.0]:8080")
+        ));
+    }
+
+    #[test]
+    fn link_local_and_mapped_metrics_binds_are_refused() {
+        #[derive(Deserialize)]
+        #[allow(dead_code)]
+        struct Holder {
+            #[serde(deserialize_with = "checked_metrics_listener")]
+            metrics_listener: Option<ListenerConfig>,
+        }
+        for bind in [
+            "169.254.1.1:9464",
+            "[fe80::1]:9464",
+            "224.0.0.1:9464",
+            "[::ffff:127.0.0.1]:9464",
+        ] {
+            let json = format!(r#"{{ "metrics_listener": {{ "bind": "{bind}" }} }}"#);
+            assert!(serde_json::from_str::<Holder>(&json).is_err(), "{bind}");
+        }
     }
 
     #[test]
