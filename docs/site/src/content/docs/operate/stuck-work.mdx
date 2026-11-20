@@ -231,6 +231,22 @@ Callers can remove their own holds and cancel their own appointments over HTTP w
 
 **Job.** The job reports held work and does not release it.
 This is by design, because the action belongs to the product that owns the data.
+The signals are:
+
+- `adapter_job_items{state}` counts items in `pending`, `acknowledged`, `refused`, or `held`.
+  Held and refused items are the ones that need a person.
+- `adapter_job_last_successful_pass_age_seconds` is the age of the last pass this process settled.
+  It is absent until the first pass settles.
+- `adapter_job_pass_failures_total{reason}` counts passes that did not settle.
+  The reasons are `lease-held`, `page-fault`, `destination-stop`, `refusal-limit`, `error`, and `store-unreachable`.
+- `adapter_job_hook_refusals_total{reason}` counts refused hook-trigger requests.
+- `adapter_job_gauge_sample_failures_total` counts scrapes where the store could not be read.
+  The items gauge then has no samples.
+
+The job serves these only under `adapter-job pass --loop`, on an optional `metricsListener.bind` in its runtime document.
+It is off by default and must be loopback or private.
+Counters restart from zero with the process.
+The commands are:
 
 - `adapter-job status <job> --runtime` shows each held item with the product that owns the action and the next step.
 - `adapter-job inspect <job> --runtime --key` shows one item.
@@ -241,15 +257,23 @@ This is by design, because the action belongs to the product that owns the data.
 
 There is no release or unhold command.
 Resolve the held item in the owning product, then let the next pass pick up the change.
-The job publishes no metrics.
 It is a source-build binary, so it runs wherever you build it, with host access to its own store.
 
-**Facade.** The facade has no operator surface for stuck work and publishes no metrics.
+**Facade.** The facade has no operator surface for stuck work.
 `adapterctl` runs offline checks only.
+It can publish metrics on an optional `metricsListener.bind`, off by default and loopback or private only:
+
+- `adapter_upstream_failures_total{class}` counts failed calls to a source.
+  The classes are `upstream`, `upstream.http`, `upstream.timeout`, `upstream.connection`, `upstream.malformed`, `upstream.too-large`, `upstream.redirect`, `breaker.open`, `throttle.rejected`, `credential.rejected`, and `egress.refused`.
+- `adapter_journal_write_failures_total` counts audit journal writes that failed.
+- `adapter_retention_sweep_failures_total{store}` counts failed retention sweeps of the `journal`, `idempotency`, or `other` store.
+- `adapter_http_requests_total{route,method,status}` counts answered requests.
+
+The operate page has the full table.
 
 **Access.** Host.
 
-**Read more.** [Check the job](../adapter/#check-the-job), [Rescan or run on the interval](../adapter/#rescan-or-run-on-the-interval), [Resolve held job items](../adapter/#resolve-held-job-items).
+**Read more.** [Adapter operations](../adapter/), [Check the job](../adapter/#check-the-job), [Rescan or run on the interval](../adapter/#rescan-or-run-on-the-interval), [Resolve held job items](../adapter/#resolve-held-job-items).
 
 {/* Evidence: crates/registry-adapter-job/src/cli.rs, Command;
     crates/registry-adapter-job/src/main.rs, holdGuidance and nextAction. */}
@@ -592,6 +616,56 @@ groups:
         labels: {severity: warn}
         annotations:
           summary: More than a tenth of render or seal calls are failing.
+```
+
+### Adapter
+
+```yaml
+groups:
+  - name: adapter
+    rules:
+      - alert: AdapterJobItemsHeld
+        expr: adapter_job_items{state="held"} > 0
+        for: 30m
+        labels: {severity: warn}
+        annotations:
+          summary: Items are held. Run adapter-job status to see the owning product, which acts on them.
+      - alert: AdapterJobItemsRefused
+        expr: adapter_job_items{state="refused"} > 0
+        for: 30m
+        labels: {severity: warn}
+        annotations:
+          summary: The destination refused items. Run adapter-job status to see why.
+      - alert: AdapterJobPassStale
+        expr: adapter_job_last_successful_pass_age_seconds > 1800
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: The job has not settled a pass for more than 30 minutes.
+      - alert: AdapterJobPassFailing
+        expr: sum by (reason) (increase(adapter_job_pass_failures_total[15m])) > 0
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: Passes are failing to settle. The reason label names why.
+      - alert: AdapterJournalWriteFailing
+        expr: increase(adapter_journal_write_failures_total[15m]) > 0
+        for: 0m
+        labels: {severity: page}
+        annotations:
+          summary: The facade failed to write its audit journal, so exchanges answered an internal error.
+      - alert: AdapterJobGaugeSampleFailing
+        expr: increase(adapter_job_gauge_sample_failures_total[15m]) > 0
+        for: 0m
+        labels: {severity: warn}
+        annotations:
+          summary: The job store could not be read at scrape time.
+      - alert: AdapterJobMetricsAbsent
+        expr: absent(adapter_job_items)
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: The job items gauge is missing. The store may be unreadable or the loop may be down.
 ```
 
 ### Messaging
