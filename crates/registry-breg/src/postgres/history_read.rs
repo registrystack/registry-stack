@@ -22,12 +22,13 @@ use crate::audit::{
     begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
     PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
 };
-use crate::contract::{FieldTypeSource, Operation};
+use crate::contract::{DisclosureWhenPredicate, FieldTypeSource, Operation};
 use crate::cursor::{
     now_unix_seconds, CursorAdapter, CursorBinding, CursorCodec, CursorContinuation,
     CursorFilterExpr, CursorFilterOperator, CursorLogicalOp, CursorOrderClause,
     CursorProjectionField, CursorQueryScope, CursorRepresentation,
 };
+use crate::disclosure::{plan as disclosure_plan, when_sql, DisclosurePlan};
 use crate::field_encryption::{FieldEncryptionService, SharedFieldEncryptionService};
 use crate::history_commit::{
     capture_latest_snapshot_reference, resolve_snapshot_reference, ResolvedSnapshot,
@@ -40,7 +41,7 @@ use crate::history_schema::{
 use crate::history_store::load_descriptor;
 use crate::model::{
     CompiledEntity, CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection,
-    CompiledRegistry, HttpMethod,
+    CompiledRegistry, DisclosureWithhold, HttpMethod,
 };
 use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
 use crate::record_profile::{self, RecordRepresentation};
@@ -405,6 +406,7 @@ impl PostgresSnapshotReadService {
                     &selected_fields,
                     &descriptors,
                     &plan.entity,
+                    request.context.selected_profile(),
                     self.field_encryption.as_deref(),
                 )
             })
@@ -715,12 +717,18 @@ impl SnapshotReadPlan {
             entity,
             request.context.selected_profile(),
         ));
+        // A disclosure condition reads the record's state, so its fields are
+        // decoded and authorize the row like a row boundary does.
+        let disclosure_fields =
+            disclosure_when_fields(&disclosure_plan(entity, request.context.selected_profile()));
+        required_fields.extend(disclosure_fields.iter().cloned());
         let mut authorizing_fields: BTreeSet<String> = request
             .context
             .row_boundaries()
             .iter()
             .map(|boundary| boundary.field().to_owned())
             .collect();
+        authorizing_fields.extend(disclosure_fields);
         authorizing_fields.extend(crate::membership::fields(
             entity,
             request.context.selected_profile(),
@@ -1169,6 +1177,22 @@ fn snapshot_where_sql(
         let field = fields.field(&probe.field)?;
         predicates.push(probe.sql(&field_typed_sql(field)?));
     }
+    // A record whose latest revision matches a `record` or `history` condition
+    // is absent from every snapshot, and from its count.
+    let disclosure = disclosure_plan(entity, claims.access_profile());
+    for condition in disclosure.conditions() {
+        if matches!(condition.withhold, DisclosureWithhold::Fields(_)) {
+            continue;
+        }
+        let mut typed = BTreeMap::new();
+        for field_id in condition.when.iter().map(disclosure_when_field) {
+            typed.insert(field_id, field_typed_sql(fields.field(field_id)?)?);
+        }
+        predicates.push(format!(
+            "NOT {}",
+            when_sql(entity, &condition.when, &|field| typed[field].clone())
+        ));
+    }
     if let Some(instant) = &query.temporal_instant {
         let temporal = entity
             .temporal
@@ -1405,11 +1429,42 @@ impl RecordEnvelope {
     }
 }
 
+/// The field identifiers the bound disclosure conditions test.
+pub(super) fn disclosure_when_fields(plan: &DisclosurePlan<'_>) -> BTreeSet<String> {
+    plan.conditions()
+        .iter()
+        .flat_map(|condition| condition.when.iter().map(disclosure_when_field))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn disclosure_when_field(predicate: &DisclosureWhenPredicate) -> &str {
+    match predicate {
+        DisclosureWhenPredicate::FieldEquals { field, .. }
+        | DisclosureWhenPredicate::FieldIn { field, .. }
+        | DisclosureWhenPredicate::FieldIsNull { field }
+        | DisclosureWhenPredicate::FieldIsNotNull { field } => field,
+    }
+}
+
+/// The fields a `fields` condition omits from `state`. A state the evaluator
+/// cannot read withholds every field a condition names.
+pub(super) fn withheld_fields(
+    plan: &DisclosurePlan<'_>,
+    state: &Map<String, Value>,
+) -> BTreeSet<String> {
+    match plan.withheld_fields(state) {
+        Ok(fields) => fields.into_iter().map(str::to_owned).collect(),
+        Err(_) => plan.named_fields().into_iter().map(str::to_owned).collect(),
+    }
+}
+
 fn row_to_record(
     row: &tokio_postgres::Row,
     selected_fields: &[String],
     descriptors: &BTreeMap<String, CompatibleDescriptor>,
     entity: &CompiledEntity,
+    profile: &str,
     field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<RecordEnvelope, ReadServiceError> {
     let id = row
@@ -1435,7 +1490,13 @@ fn row_to_record(
         .descriptor
         .decode_snapshot_for_fields(&descriptor.compatibility, &snapshot, Some(&id))
         .map_err(|_| ReadServiceError::Unavailable)?;
-    let mut data = projected_data(&decoded, &descriptor.compatibility, selected_fields)?;
+    let withheld = withheld_fields(&disclosure_plan(entity, profile), &decoded.by_field_id);
+    let visible_fields = selected_fields
+        .iter()
+        .filter(|field| !withheld.contains(field.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut data = projected_data(&decoded, &descriptor.compatibility, &visible_fields)?;
     // Open at the response edge while this row's descriptor compatibility is
     // still available. The retained snapshot itself remains byte-identical.
     open_history_row_members(
