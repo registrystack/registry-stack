@@ -565,8 +565,9 @@ async fn partial_head_shutdown_case(terminate: bool) {
         .await
         .expect("join output collection");
     assert!(
-        !output.status.success(),
-        "the forced ingress shutdown reports its closed fault"
+        output.status.success(),
+        "a forced ingress shutdown is logged and the process still exits with status 0: {:?}",
+        output.status
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(

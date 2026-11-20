@@ -304,7 +304,7 @@ async fn pass(
                 let _ = stop.wait_for(|stopped| *stopped).await;
                 return Ok(());
             };
-            registry_adapter_job::metrics::serve(
+            let served = registry_adapter_job::metrics::serve(
                 bound,
                 router,
                 async move {
@@ -312,7 +312,8 @@ async fn pass(
                 },
                 registry_adapter_job::serve::SHUTDOWN_TIMEOUT,
             )
-            .await
+            .await;
+            tolerate_shutdown_timeout(served)
         }
     };
     #[cfg(feature = "job-hook")]
@@ -323,12 +324,13 @@ async fn pass(
                 let _ = stop.wait_for(|stopped| *stopped).await;
                 return Ok(());
             };
-            server
+            let served = server
                 .serve(async move {
                     let _ = stop.wait_for(|stopped| *stopped).await;
                 })
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string());
+            tolerate_shutdown_timeout(served)
         }
     };
     #[cfg(not(feature = "job-hook"))]
@@ -366,6 +368,24 @@ async fn pass(
             result?;
             Err("adapter.job.listener-ended".to_string())
         }
+    }
+}
+
+/// Codes a companion listener returns when open connections outlive the
+/// shutdown deadline. The loop has already ended by then, so the stalled
+/// client is logged and the process still exits with status 0.
+const SHUTDOWN_TIMEOUT_CODES: [&str; 2] = [
+    "adapter.job.metrics-shutdown-timeout",
+    "adapter.job.hook-shutdown-timeout",
+];
+
+fn tolerate_shutdown_timeout(result: Result<(), String>) -> Result<(), String> {
+    match result {
+        Err(code) if SHUTDOWN_TIMEOUT_CODES.contains(&code.as_str()) => {
+            eprintln!("{code}: open connections were cut off at the shutdown deadline");
+            Ok(())
+        }
+        other => other,
     }
 }
 
@@ -1252,6 +1272,57 @@ mod tests {
     use super::*;
     use registry_adapter_job::store::ItemStatus;
     use std::time::UNIX_EPOCH;
+
+    #[tokio::test]
+    async fn a_stalled_metrics_client_at_shutdown_is_logged_and_not_fatal() {
+        use std::io::Write;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback test listener");
+        let address = listener.local_addr().expect("the bound address");
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(registry_adapter_job::metrics::serve(
+            listener,
+            axum::Router::new(),
+            async move {
+                let _ = stopped.await;
+            },
+            Duration::from_millis(25),
+        ));
+        let mut partial = std::net::TcpStream::connect(address).expect("a stalled client");
+        partial
+            .write_all(b"GET /metrics HTTP/1.1\r\nHost: loopback\r\nX-Stalled: ")
+            .expect("an incomplete request head");
+        // Let the accept loop take the stalled connection before shutdown.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        stop.send(()).expect("signal shutdown");
+        let served = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("the shutdown bound completes")
+            .expect("the metrics server task joins");
+        assert_eq!(
+            served,
+            Err("adapter.job.metrics-shutdown-timeout".to_owned())
+        );
+        assert_eq!(tolerate_shutdown_timeout(served), Ok(()));
+        drop(partial);
+    }
+
+    #[cfg(feature = "job-hook")]
+    #[test]
+    fn a_hook_shutdown_timeout_is_not_fatal_but_other_listener_faults_are() {
+        use registry_adapter_job::hook_ingress::HookIngressError;
+        assert_eq!(
+            tolerate_shutdown_timeout(Err(HookIngressError::ShutdownTimeout.to_string())),
+            Ok(())
+        );
+        for fault in [
+            HookIngressError::Serve.to_string(),
+            "adapter.job.metrics-serve".to_owned(),
+        ] {
+            assert_eq!(tolerate_shutdown_timeout(Err(fault.clone())), Err(fault));
+        }
+    }
 
     fn example_job(file: &str) -> AdapterJob {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
