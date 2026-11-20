@@ -36,7 +36,7 @@ use crate::idempotent::{
     self, PostgresIdempotencyStore, MAX_CALLER_IDENTITY_BYTES, MAX_CALLER_ISSUER_BYTES,
 };
 use crate::journal;
-use crate::metrics::{metrics_router, Metrics};
+use crate::metrics::Metrics;
 
 /// The access token media type the facade admits (RFC 9068).
 const ACCESS_TOKEN_TYPE: &str = "at+jwt";
@@ -854,11 +854,15 @@ pub async fn run(
     let metrics_serving = async move {
         match metrics_listener {
             Some(bound) => {
-                axum::serve(bound, metrics_router(Arc::clone(&metrics_for_server)))
-                    .with_graceful_shutdown(async move {
+                crate::metrics::serve(
+                    bound,
+                    Arc::clone(&metrics_for_server),
+                    async move {
                         let _closed = metrics_shutdown.changed().await;
-                    })
-                    .await
+                    },
+                    crate::metrics::METRICS_SHUTDOWN_TIMEOUT,
+                )
+                .await
             }
             None => Ok(()),
         }

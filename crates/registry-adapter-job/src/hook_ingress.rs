@@ -26,6 +26,7 @@ use registry_platform_ratelimit::token_bucket::{
 use zeroize::Zeroizing;
 
 use crate::metrics::JobMetrics;
+use crate::serve::ServeEnd;
 use crate::trigger::{HookAdmission, HookPassGate};
 
 /// One authenticated hook body may carry at most 1 MiB. The bytes are streamed
@@ -35,7 +36,7 @@ pub const MAX_HOOK_BODY_BYTES: usize = 1_048_576;
 pub const HOOK_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// Once shutdown starts, the host gives every accepted connection ten seconds
 /// to drain before it cancels the ingress server and returns a closed fault.
-pub const HOOK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+pub const HOOK_SHUTDOWN_TIMEOUT: Duration = crate::serve::SHUTDOWN_TIMEOUT;
 const MAX_BASIC_USERNAME_BYTES: usize = 256;
 const MAX_BASIC_PASSWORD_BYTES: usize = 4_096;
 const MAX_BASIC_PAYLOAD_BYTES: usize = 6_000;
@@ -235,25 +236,17 @@ impl HookIngressServer {
         shutdown: impl Future<Output = ()> + Send + 'static,
         shutdown_timeout: Duration,
     ) -> Result<(), HookIngressError> {
-        let (shutdown_started, shutdown_started_rx) = tokio::sync::oneshot::channel();
-        let graceful_shutdown = async move {
-            shutdown.await;
-            let _ = shutdown_started.send(());
-        };
-        let server = std::future::IntoFuture::into_future(
-            axum::serve(self.listener, self.router).with_graceful_shutdown(graceful_shutdown),
-        );
-        tokio::pin!(server);
-        tokio::select! {
-            result = &mut server => result.map_err(|_| HookIngressError::Serve),
-            started = shutdown_started_rx => {
-                started.map_err(|_| HookIngressError::Serve)?;
-                tokio::time::timeout(shutdown_timeout, &mut server)
-                    .await
-                    .map_err(|_| HookIngressError::ShutdownTimeout)?
-                    .map_err(|_| HookIngressError::Serve)
-            }
-        }
+        crate::serve::serve_with_shutdown_timeout(
+            self.listener,
+            self.router,
+            shutdown,
+            shutdown_timeout,
+        )
+        .await
+        .map_err(|end| match end {
+            ServeEnd::Serve => HookIngressError::Serve,
+            ServeEnd::ShutdownTimeout => HookIngressError::ShutdownTimeout,
+        })
     }
 }
 
@@ -1007,10 +1000,11 @@ mod tests {
             .expect("a bounded rate limit"),
         });
         let gate = Arc::new(HookPassGate::default());
+        let metrics = Arc::new(JobMetrics::default());
         let state = IngressState {
             sources: Arc::new(BTreeMap::from([("/hooks/kobo".to_string(), source)])),
             gate: Arc::clone(&gate),
-            metrics: Arc::new(JobMetrics::default()),
+            metrics: Arc::clone(&metrics),
         };
         let stream = futures::stream::once(async {
             Ok::<_, std::convert::Infallible>(axum::body::Bytes::from_static(b"{"))
@@ -1033,6 +1027,10 @@ mod tests {
             br#"{"code":"adapter.job.hook-body-timeout"}"#
         );
         assert_eq!(gate.handle_hook(), HookAdmission::Started);
+        assert!(metrics
+            .render(None)
+            .lines()
+            .any(|line| line == "adapter_job_hook_refusals_total{reason=\"body-timeout\"} 1"));
     }
 
     #[tokio::test]
@@ -1093,6 +1091,34 @@ mod tests {
                 .any(|line| line == "adapter_job_hook_refusals_total{reason=\"body-timeout\"} 0"),
             "an accepted hook is not a refusal"
         );
+    }
+
+    #[test]
+    fn every_refusal_status_maps_to_its_own_counted_reason() {
+        let table = [
+            (StatusCode::NOT_FOUND, "not-found"),
+            (StatusCode::METHOD_NOT_ALLOWED, "method"),
+            (StatusCode::UNAUTHORIZED, "unauthenticated"),
+            (StatusCode::TOO_MANY_REQUESTS, "rate-limited"),
+            (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+            (StatusCode::REQUEST_TIMEOUT, "body-timeout"),
+            (StatusCode::PAYLOAD_TOO_LARGE, "body-too-large"),
+            (StatusCode::BAD_REQUEST, "body-unreadable"),
+        ];
+        let metrics = JobMetrics::default();
+        for (status, reason) in table {
+            assert_eq!(refusal_reason(status), Some(reason), "{status}");
+            metrics.record_hook_refusal(reason);
+        }
+        assert_eq!(refusal_reason(StatusCode::ACCEPTED), None);
+        let declared: BTreeSet<&str> = crate::metrics::HOOK_REFUSALS.into_iter().collect();
+        let mapped: BTreeSet<&str> = table.iter().map(|(_, reason)| *reason).collect();
+        assert_eq!(mapped, declared, "the table covers every declared reason");
+        let text = metrics.render(None);
+        for (_, reason) in table {
+            let line = format!("adapter_job_hook_refusals_total{{reason=\"{reason}\"}} 1");
+            assert!(text.lines().any(|found| found == line), "{reason}: {text}");
+        }
     }
 
     #[tokio::test]

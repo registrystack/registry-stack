@@ -31,6 +31,7 @@ pub mod projection;
 #[cfg(feature = "job-rabbitmq")]
 pub mod rabbitmq_source;
 pub mod runtime_destination;
+pub mod serve;
 #[cfg(feature = "job-sftp")]
 pub mod sftp_source;
 #[cfg(feature = "signed-coordinator-event")]

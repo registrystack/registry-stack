@@ -389,6 +389,8 @@ Use either one scheduler that invokes bounded passes or one `--loop` process for
 `SIGTERM` (what `systemctl stop`, `docker stop`, and Kubernetes send) and `Ctrl+C` stop the loop
 the same way.
 A loop that is waiting exits at once with status 0.
+The process stops after its listeners drain. The metrics listener and the hook ingress each wait
+at most 10 seconds for open connections, then close them.
 A pass already in progress finishes first (it ends at its page deadline at the latest), releases its
 lease, and then the process exits with status 0.
 Give the supervisor a stop timeout longer than the job's `pageDeadlineMilliseconds`: a process
@@ -764,20 +766,20 @@ Facade series:
 
 | Series | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `adapter_http_requests_total` | counter | `route` (route template, or `unmatched`), `method`, `status` (`success`, `client-error`, `server-error`, and the other status classes) | Answered facade requests. |
-| `adapter_upstream_failures_total` | counter | `class` (`upstream`, `upstream-http`, `upstream-timeout`, `upstream-connection`, `upstream-malformed`, `upstream-too-large`, `upstream-redirect`, `breaker-open`, `throttle-rejected`, `credential-rejected`, `egress-refused`) | Exchanges that failed on a call to the source, by error class. |
-| `adapter_journal_write_failures_total` | counter | none | Audit journal writes that failed, so the exchange answered an internal error. |
+| `adapter_http_requests_total` | counter | `route` (route template, or `unmatched`), `method`, `status` (`1xx`, `2xx`, `3xx`, `4xx`, `5xx`) | Answered facade requests. |
+| `adapter_upstream_failures_total` | counter | `class` (`upstream`, `upstream.http`, `upstream.timeout`, `upstream.connection`, `upstream.malformed`, `upstream.too-large`, `upstream.redirect`, `breaker.open`, `throttle.rejected`, `credential.rejected`, `egress.refused`) | Calls to the source that failed, by error class. It counts failed exchanges, status polls, bounded-wait polls and recovery checks. | |
+| `adapter_journal_write_failures_total` | counter | none | Audit journal writes that failed, so the exchange answered an internal error. Custody and rendering failures are not counted here. |
 | `adapter_retention_sweep_failures_total` | counter | `store` (`journal`, `idempotency`, `other`) | Retention sweep batches that failed and were left to the next tick. |
 
 Job host series:
 
 | Series | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `adapter_job_items` | gauge | `state` (`pending`, `acknowledged`, `refused`, `held`) | Items in the job store by state, read at each scrape. |
+| `adapter_job_items` | gauge | `state` (`pending`, `acknowledged`, `refused`, `held`) | Items in the job store by state. The read runs in a read-only transaction with a 4 second statement timeout, one at a time, and a result is reused for 5 seconds. |
 | `adapter_job_last_successful_pass_age_seconds` | gauge | none | Seconds since a pass in this process settled its page. Absent until the first such pass. |
-| `adapter_job_pass_failures_total` | counter | `reason` (`lease-held`, `page-fault`, `destination-stop`, `refusal-limit`, `error`, `store-unreachable`) | Passes that did not settle, and passes that could not reach the store. |
+| `adapter_job_pass_failures_total` | counter | `reason` (`page-fault`, `destination-stop`, `refusal-limit`, `store-unreachable`) | Passes that did not settle, and passes that could not reach the store. A pass that finds another process holding the lease is not a failure and is not counted. |
 | `adapter_job_hook_refusals_total` | counter | `reason` (`not-found`, `method`, `unauthenticated`, `rate-limited`, `unavailable`, `body-timeout`, `body-too-large`, `body-unreadable`) | Hook requests the ingress refused. |
-| `adapter_job_gauge_sample_failures_total` | counter | none | Scrapes where the item counts could not be read. |
+| `adapter_job_gauge_sample_failures_total` | counter | none | Item count reads that failed or timed out. |
 
 When the store cannot be read at scrape time, `adapter_job_items` carries no samples and
 `adapter_job_gauge_sample_failures_total` rises. It never reports zero for an unread store. The job

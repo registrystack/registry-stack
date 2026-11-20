@@ -304,12 +304,15 @@ async fn pass(
                 let _ = stop.wait_for(|stopped| *stopped).await;
                 return Ok(());
             };
-            axum::serve(bound, router)
-                .with_graceful_shutdown(async move {
+            registry_adapter_job::metrics::serve(
+                bound,
+                router,
+                async move {
                     let _ = stop.wait_for(|stopped| *stopped).await;
-                })
-                .await
-                .map_err(|error| format!("adapter.job.metrics-serve: {error}"))
+                },
+                registry_adapter_job::serve::SHUTDOWN_TIMEOUT,
+            )
+            .await
         }
     };
     #[cfg(feature = "job-hook")]
@@ -454,11 +457,8 @@ async fn run_pass_loop(
         };
         let report = bounded_pass(program, pool, preview, Some(destination), options).await;
         gate.end_pass();
-        let report = report.inspect_err(|_| metrics.record_pass_failure("error"))?;
-        match &report.stopped {
-            None => metrics.record_pass_success(),
-            Some(reason) => metrics.record_pass_failure(stop_reason_name(reason)),
-        }
+        let report = report?;
+        metrics.record_pass_outcome(report.stopped.as_ref());
         print_pass_report(&report, false, show_values, preview);
         if *shutdown.borrow() {
             return Ok(ExitCode::SUCCESS);

@@ -337,7 +337,7 @@ pub struct AdapterEndpointBindings {
 /// The operator runtime configuration artifact (`AdapterRuntimeConfig`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdapterRuntimeConfig {
     /// The deployment this config binds.
     pub id: LocalId,
@@ -405,6 +405,25 @@ pub struct AdapterRuntimeConfig {
     /// 900.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_ttl_seconds: Option<BoundedU64<60, 86_400>>,
+}
+
+/// The derived reader is the inner step; reading the artifact also refuses a
+/// metrics bind that would occupy the facade listener's own socket.
+impl<'de> Deserialize<'de> for AdapterRuntimeConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let config = Self::deserialize(deserializer)?;
+        if let Some(metrics) = &config.metrics_listener {
+            if metrics_bind_overlaps(
+                metrics.bind.socket_addr(),
+                config.listener.bind.socket_addr(),
+            ) {
+                return Err(serde::de::Error::custom(
+                    "expected metricsListener.bind to differ from listener.bind; bind the metrics listener to a different port than the facade listener",
+                ));
+            }
+        }
+        Ok(config)
+    }
 }
 
 /// Read an optional `metricsListener` and refuse a bind that is not a
@@ -1086,6 +1105,41 @@ mod tests {
                 "{bind}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn a_metrics_bind_on_the_facade_listener_socket_is_refused_when_read() {
+        let runtime = |metrics: &str| {
+            format!(
+                r#"{{
+                    "id": "case-deployment",
+                    "endpoints": [],
+                    "allowedPrivateCidrs": ["10.0.0.0/8"],
+                    "listener": {{ "bind": "127.0.0.1:8080" }},
+                    "metricsListener": {{ "bind": "{metrics}" }},
+                    "database": {{
+                        "runtimeUrlRef": "secret:env/DB_RUNTIME",
+                        "migrationUrlRef": "secret:env/DB_MIGRATION"
+                    }},
+                    "oidc": {{
+                        "issuer": "https://issuer.example.invalid",
+                        "audience": "case-api"
+                    }},
+                    "allowedClients": ["case-portal"],
+                    "audit": {{ "retentionDays": 90 }}
+                }}"#
+            )
+        };
+        serde_json::from_str::<AdapterRuntimeConfig>(&runtime("127.0.0.1:9464"))
+            .expect("a distinct metrics socket is read");
+        let error = serde_json::from_str::<AdapterRuntimeConfig>(&runtime("127.0.0.1:8080"))
+            .expect_err("the facade listener's own socket is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("metricsListener.bind to differ from listener.bind"),
+            "{error}"
+        );
     }
 
     #[test]
