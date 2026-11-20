@@ -680,12 +680,12 @@ Each lists the condition, the consequence, the mitigation, and the related matri
 - Condition: a reader reaches `metricsListener.bind`.
 - Consequence: they can read the active package digest, which identifies the deployed bytes and not
   their content.
-  A scrape holds one runtime pool connection for up to the 5-second statement timeout and takes no
-  row locks.
+  A scrape holds one runtime pool connection at a time under one 5-second deadline, each read has a
+  server-side statement timeout of the time left, and it takes no row locks.
 - Mitigation: the bind is refused unless loopback or private; firewall it.
 - Related: `BREG-SEC-146`.
 
-{/* Evidence: crates/registry-breg/src/metrics.rs, QUEUE_SAMPLE_STATEMENT_TIMEOUT;
+{/* Evidence: crates/registry-breg/src/metrics.rs, ScrapeDeadline;
     crates/registry-breg/src/runtime_config.rs, InvalidMetricsListener. */}
 
 ### `BREG-RES-19`: a failing worker stops the process, and readiness does not show it
