@@ -14,6 +14,13 @@
   bounded by a 4 second statement timeout. A metrics listener closes within 10
   seconds of a stop signal, even with a stalled client. Held items stay
   read-only: the owning product resolves them.
+- The facade and job metrics listeners accept
+  `metricsListener.networkExposure`. Set `metricsListener.networkExposure:
+  container-private` to also allow the unspecified address (for example
+  `0.0.0.0`), for a container whose network is private to the deployment. The
+  default, `private-address`, keeps the loopback-or-private rule.
+- The job's item counts take their statement timeout from one 5 second scrape
+  deadline. Failed reads are logged by error class.
 
 ## 0.47.0 - 2026-11-20
 

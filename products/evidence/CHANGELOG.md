@@ -15,6 +15,17 @@
   cases it must accept or refuse. See
   [Verify an Evidence answer](https://docs.registrystack.org/configure/verify-an-evidence-answer/).
 
+- BREAKING: the metrics listeners of the OID4VCI and OID4VP services refuse
+  link-local and IPv4-mapped IPv6 addresses. Migration: a deployment that
+  bound metrics to an address such as `169.254.1.1:9090` moves it to a
+  loopback or private address, or sets `networkExposure: container-private`.
+- The Evidence, OID4VCI and OID4VP metrics listeners accept
+  `metricsListener.networkExposure`, and all three apply the address rule the
+  other products use. Set `metricsListener.networkExposure: container-private`
+  to also allow the unspecified address (for example `0.0.0.0`), for a
+  container whose network is private to the deployment. The default,
+  `private-address`, keeps the loopback-or-private rule.
+
 ## 0.47.0 - 2026-11-20
 
 - `rstack dev` runs Evidence projects, alone or with BReg. An Evidence project

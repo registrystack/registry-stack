@@ -11,6 +11,14 @@
   and requests by route and status class. A failed sample is logged and counted
   in `scheduling_metrics_sample_failures_total` and its gauges are left out,
   never reported as zero.
+- The metrics listener accepts `metricsListener.networkExposure`. Set
+  `metricsListener.networkExposure: container-private` to also allow the
+  unspecified address (for example `0.0.0.0`), for a container whose network
+  is private to the deployment. The default, `private-address`, keeps the
+  loopback-or-private rule.
+- Every database-sampled gauge is read under one 5 second scrape deadline,
+  with a server-side statement timeout set to the time left, so the server
+  cancels a slow read. Failed reads are logged by error class.
 
 ## 0.47.0 - 2026-11-20
 

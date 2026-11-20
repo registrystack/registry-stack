@@ -11,6 +11,11 @@
   status class. A failed sample is logged and counted in
   `documents_metrics_sample_failures_total` and its gauges are left out, never
   reported as zero.
+- The metrics listener accepts `metricsListener.networkExposure`. Set
+  `metricsListener.networkExposure: container-private` to also allow the
+  unspecified address (for example `0.0.0.0`), for a container whose network
+  is private to the deployment. The default, `private-address`, keeps the
+  loopback-or-private rule.
 
 - Each access profile may carry an optional `label` and `description`, accepted for authoring and tooling; the Document Store does not serve them until a view exists. Neither is matched against a caller, and a profile that writes neither reads as before.
 

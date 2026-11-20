@@ -7,6 +7,11 @@
   serving listener. It is off by default, and a link-local address is refused.
   The series report documents by operation and result, audit write failures,
   and the seconds until each configured seal certificate expires.
+- The metrics listener accepts `metricsListener.networkExposure`. Set
+  `metricsListener.networkExposure: container-private` to also allow the
+  unspecified address (for example `0.0.0.0`), for a container whose network
+  is private to the deployment. The default, `private-address`, keeps the
+  loopback-or-private rule.
 
 ## 0.47.0 - 2026-11-20
 
