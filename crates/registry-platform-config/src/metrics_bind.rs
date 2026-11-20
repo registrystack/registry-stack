@@ -55,6 +55,36 @@ impl fmt::Display for MetricsBindError {
 
 impl std::error::Error for MetricsBindError {}
 
+impl MetricsBindError {
+    /// What an operator changes to clear this refusal. `exposure_key` is the
+    /// config path of the product's `networkExposure` key, which only the
+    /// wildcard refusal names.
+    #[must_use]
+    pub fn remedy(&self, exposure_key: &str) -> String {
+        match self {
+            Self::PortZero => "Name a fixed non-zero port in the metrics bind address.".to_owned(),
+            Self::Unspecified => format!(
+                "Bind a loopback or private address, or declare {exposure_key}: container-private when the container address is not known ahead of time."
+            ),
+            Self::Multicast => {
+                "Use a unicast loopback or private address, not a multicast group.".to_owned()
+            }
+            Self::LinkLocal => {
+                "Use a loopback or private address (RFC 1918 or IPv6 unique local), not a link-local one.".to_owned()
+            }
+            Self::Ipv4Mapped => {
+                "Write the IPv4 address itself, for example 10.0.0.5, instead of the ::ffff: form.".to_owned()
+            }
+            Self::NotPrivate => {
+                "Use a loopback or private address (RFC 1918 or IPv6 unique local) and keep metrics off public addresses.".to_owned()
+            }
+            Self::OverlapsServedSocket(name) => {
+                format!("Give metrics its own port, apart from the {name} socket.")
+            }
+        }
+    }
+}
+
 /// Check a metrics bind against the address and port rules alone.
 ///
 /// [`ListenerNetworkExposure::PrivateAddress`] requires a loopback or private
@@ -411,5 +441,60 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn each_refusal_names_its_own_remedy() {
+        let key = "metricsListener.networkExposure";
+        let cases = [
+            (
+                MetricsBindError::PortZero,
+                "Name a fixed non-zero port in the metrics bind address.",
+            ),
+            (
+                MetricsBindError::Unspecified,
+                "Bind a loopback or private address, or declare metricsListener.networkExposure: container-private when the container address is not known ahead of time.",
+            ),
+            (
+                MetricsBindError::Multicast,
+                "Use a unicast loopback or private address, not a multicast group.",
+            ),
+            (
+                MetricsBindError::LinkLocal,
+                "Use a loopback or private address (RFC 1918 or IPv6 unique local), not a link-local one.",
+            ),
+            (
+                MetricsBindError::Ipv4Mapped,
+                "Write the IPv4 address itself, for example 10.0.0.5, instead of the ::ffff: form.",
+            ),
+            (
+                MetricsBindError::NotPrivate,
+                "Use a loopback or private address (RFC 1918 or IPv6 unique local) and keep metrics off public addresses.",
+            ),
+            (
+                MetricsBindError::OverlapsServedSocket("listener"),
+                "Give metrics its own port, apart from the listener socket.",
+            ),
+        ];
+        for (error, remedy) in cases {
+            assert_eq!(error.remedy(key), remedy, "{error}");
+        }
+    }
+
+    #[test]
+    fn only_the_wildcard_remedy_mentions_container_private() {
+        for error in [
+            MetricsBindError::PortZero,
+            MetricsBindError::Multicast,
+            MetricsBindError::LinkLocal,
+            MetricsBindError::Ipv4Mapped,
+            MetricsBindError::NotPrivate,
+            MetricsBindError::OverlapsServedSocket("listener"),
+        ] {
+            assert!(!error.remedy("k").contains("container-private"), "{error}");
+        }
+        assert!(MetricsBindError::Unspecified
+            .remedy("k")
+            .contains("k: container-private"));
     }
 }
