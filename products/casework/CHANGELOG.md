@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Report the review completion backlog as metrics:
+  `casework_completion_deliveries` by state, including `dead-lettered`, and
+  `casework_completion_oldest_undelivered_age_seconds`. Review counts and the
+  backlog are sampled separately, so one failing read does not hide the other
+  or set `casework_database_up` to 0. Failed samples are logged and counted in
+  `casework_metrics_sample_failures_total`.
+
 ## 0.47.0 - 2026-11-20
 
 - BREAKING: Casework refuses a `casework.yaml` whose access profiles for people

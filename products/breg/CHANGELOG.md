@@ -16,6 +16,13 @@
   and `application` on each Action as the served string, or `null` (`None`) when
   the server sends none, as an older server does.
 
+- Report hook deliveries and ingestion runs as metrics:
+  `breg_hook_deliveries` by state, including `dead-lettered`, and
+  `breg_ingestion_runs` by state, including `blocked`. A failed sample is logged
+  and counted in `breg_metrics_sample_failures_total`, and does not stop the
+  other samples. The monitor page now lists all seven background workers,
+  including `record-timer`.
+
 ## 0.47.0 - 2026-11-20
 
 - BREAKING: A bearer token that carries a Casework task grant

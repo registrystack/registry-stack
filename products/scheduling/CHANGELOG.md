@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Serve Prometheus metrics on an optional operator-private listener. Set
+  `metricsListener.bind` in `runtime.yaml` to a loopback or private address,
+  distinct from the serving listener. It is off by default, and the serving
+  listener never answers `/metrics`. The series report outbox and observer-hook
+  work by state, including `dead-lettered`, how far the oldest pending item is
+  past its due time, the last success of the hold-expiry and retention workers,
+  and requests by route and status class. A failed sample is logged and counted
+  in `scheduling_metrics_sample_failures_total` and its gauges are left out,
+  never reported as zero.
+
 ## 0.47.0 - 2026-11-20
 
 - BREAKING: `schedulingctl api --client` is removed. Pass `--url URL --header @FILE`
