@@ -868,7 +868,10 @@ caller `tracestate`.
 Telemetry is off by default. Setting `metricsListener` in `runtime.yaml` serves
 `GET /metrics` in Prometheus text format on a second private binding, which must
 differ from the evidence listener binding and is subject to the same
-loopback-or-private-address rule. The evidence listener never serves `/metrics`,
+loopback-or-private-address rule. Link-local, IPv4-mapped, multicast, and
+public addresses are refused. A container deployment may declare
+`metricsListener.networkExposure: container-private` to bind `0.0.0.0` or `::`.
+The evidence listener never serves `/metrics`,
 and the metrics listener never serves evidence. Series carry only the registered
 route template, request method, status category, and reviewed problem code, or
 for the source series a governed source identifier from the bundle, so series
@@ -1011,7 +1014,11 @@ unique-local IPv6 binding. A container deployment may explicitly declare
 an operator assertion about the container network and upstream TLS boundary;
 it does not enable public serving. Concrete public addresses, hostnames, and
 multicast addresses remain invalid. The optional metrics listener does not
-inherit this exception and remains private-address-only.
+inherit the listener's declaration. It takes its own
+`metricsListener.networkExposure`, which defaults to `private-address`, and
+`container-private` there permits only the unspecified address in addition.
+Do not publish the metrics port or use host networking, because that exposes the
+counters on the host.
 
 ## Metrics reference
 

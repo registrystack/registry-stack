@@ -10,14 +10,15 @@
 
 use std::{
     fmt,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     path::{Path, PathBuf},
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 use registry_platform_config::{
-    AuditKeyConfig, ConfigBlockErrorKind, JwksSource, OidcIssuerConfig, RemovedKey,
+    check_metrics_bind_address, check_metrics_bind_apart, AuditKeyConfig, ConfigBlockErrorKind,
+    JwksSource, ListenerNetworkExposure, MetricsBindError, OidcIssuerConfig, RemovedKey,
     RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvidersConfig, SecretReference,
     DEFAULT_STAND_IN,
 };
@@ -177,6 +178,8 @@ pub struct ListenerConfig {
 #[derive(Debug, Eq, PartialEq)]
 pub struct MetricsListenerConfig {
     pub bind: SocketAddr,
+    /// `container-private` additionally permits the wildcard address.
+    pub network_exposure: registry_platform_config::ListenerNetworkExposure,
 }
 
 /// The durable audit destination and keyed-pseudonym secret.
@@ -540,7 +543,7 @@ pub struct VerifierDocument {
     /// address the service listener does not use. Absent means no metrics
     /// endpoint exists.
     #[serde(default)]
-    pub metrics_listener: Option<registry_platform_config::ListenerConfig>,
+    pub metrics_listener: Option<registry_platform_config::MetricsListenerConfig>,
     /// The secret providers the `*Ref` members may name.
     pub secret_providers: SecretProvidersConfig,
     /// The required durable audit journal.
@@ -1050,7 +1053,7 @@ impl VerifierDocument {
         binding_findings(
             self.listener.address.bind.socket_addr(),
             self.metrics_listener
-                .map(|metrics| metrics.bind.socket_addr()),
+                .map(|metrics| (metrics.bind.socket_addr(), metrics.network_exposure)),
             &mut findings,
         );
         self.secret_findings(&mut findings);
@@ -1440,6 +1443,7 @@ impl VerifierDocument {
             },
             metrics_listener: self.metrics_listener.map(|metrics| MetricsListenerConfig {
                 bind: metrics.bind.socket_addr(),
+                network_exposure: metrics.network_exposure,
             }),
             secret_providers: self.secret_providers,
             audit: AuditConfig {
@@ -1581,55 +1585,36 @@ fn did_web_host(did: &str) -> Result<&str, DidWebFault> {
     Ok(host)
 }
 
-fn normalized_bind_address(address: IpAddr) -> IpAddr {
-    match address {
-        IpAddr::V6(address) => address
-            .to_ipv4_mapped()
-            .map_or(IpAddr::V6(address), IpAddr::V4),
-        address => address,
-    }
-}
-
-fn is_private_metrics_address(address: IpAddr) -> bool {
-    let is_private = match address {
-        IpAddr::V4(address) => {
-            address.is_loopback() || address.is_private() || address.is_link_local()
-        }
-        IpAddr::V6(address) => address.is_loopback() || address.is_unique_local(),
-    };
-    is_private && !address.is_unspecified() && !address.is_multicast()
-}
-
 /// The rules the service and metrics listener bindings follow.
 fn binding_findings(
     listener: SocketAddr,
-    metrics: Option<SocketAddr>,
+    metrics: Option<(SocketAddr, ListenerNetworkExposure)>,
     findings: &mut Vec<Finding>,
 ) {
-    let Some(metrics) = metrics else {
+    let Some((metrics, exposure)) = metrics else {
         return;
     };
-    if metrics.port() == 0 {
-        findings.push(Finding::error(
+    match check_metrics_bind_address(metrics, exposure) {
+        Ok(()) => {}
+        Err(MetricsBindError::PortZero) => findings.push(Finding::error(
             "evidence.oid4vp.metrics-port",
             "/metricsListener/bind",
             "the metrics listener port must be non-zero",
             "Bind the metrics listener to a fixed port the service listener does not use.",
-        ));
+        )),
+        Err(_) => findings.push(
+            Finding::error(
+                "evidence.oid4vp.metrics-address",
+                "/metricsListener/bind",
+                "the metrics listener must bind a loopback or private address",
+                "Bind the metrics listener to a loopback, private IPv4, or unique local IPv6 address. \
+                 Declare metricsListener.networkExposure: container-private to bind a wildcard \
+                 address inside a container.",
+            )
+            .reading(&["/metricsListener/networkExposure"]),
+        ),
     }
-    let address = normalized_bind_address(metrics.ip());
-    if !is_private_metrics_address(address) {
-        findings.push(Finding::error(
-            "evidence.oid4vp.metrics-address",
-            "/metricsListener/bind",
-            "the metrics listener must bind a loopback or private address",
-            "Bind the metrics listener to a loopback, private IPv4, or unique local IPv6 address.",
-        ));
-    }
-    let public_address = normalized_bind_address(listener.ip());
-    if metrics.port() == listener.port()
-        && (public_address.is_unspecified() || public_address == address)
-    {
+    if check_metrics_bind_apart(metrics, &[("service listener", listener)]).is_err() {
         findings.push(
             Finding::error(
                 "evidence.oid4vp.metrics-shared-binding",
@@ -1705,6 +1690,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
         }
         ["listener", "bind"] => "127.0.0.1:8095",
         ["metricsListener", "bind"] => "127.0.0.1:9095",
+        ["metricsListener", "networkExposure"] => "private-address",
         ["applicantTokens" | "evidenceCredentials", "algorithms", index] => {
             const ALGORITHMS: [&str; 5] = ["EdDSA", "ES256", "ES384", "RS256", "RS384"];
             ALGORITHMS[index.parse::<usize>().unwrap_or(0) % ALGORITHMS.len()]

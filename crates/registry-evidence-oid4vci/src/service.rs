@@ -5300,6 +5300,7 @@ mod tests {
             let mut config = load_deployment(directory.path());
             config.metrics_listener = Some(crate::config::MetricsListenerConfig {
                 bind: bind.parse().expect("a socket address"),
+                network_exposure: registry_platform_config::ListenerNetworkExposure::PrivateAddress,
             });
             let (service, _) = wired_service_over(config);
 
