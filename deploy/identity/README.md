@@ -163,10 +163,9 @@ deploy/identity/prepare-restricted-chart.sh \
 
 Review the restricted render, then apply only inside the new namespace.
 The material includes the namespace-scoped ConfigMaps and Secrets. The
-NetworkPolicy admits only the ingress controller and the Registry Stack Pods in
-the `directory` namespace to ThunderID's plain-HTTP port 8090. Edit its
-namespace and Pod selectors if your ingress controller or Registry Stack
-namespace differs. Apply it before the first install. The additive
+NetworkPolicy admits only the ingress controller to ThunderID's plain-HTTP port
+8090. Registry Stack Pods reach ThunderID through its HTTPS origin at the
+ingress. Edit the selectors if your ingress controller differs. Apply it before the first install. The additive
 `postgres-network-policy.yaml` admits the identity namespace to the reference
 PostgreSQL workload in `directory`, which otherwise admits only Registry Stack
 database clients.

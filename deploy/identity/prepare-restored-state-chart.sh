@@ -78,7 +78,7 @@ staging="$(mktemp -d "$output_dir.partial.XXXXXX")"
 report_partial() {
 	local status=$?
 	if [[ "$status" -ne 0 ]]; then
-		printf 'failed. Partial output remains in %s. Delete it before rerunning.\n' "$staging" >&2
+		printf 'failed. Partial output remains in %s. Delete it, because it may contain secrets.\n' "$staging" >&2
 	fi
 }
 trap report_partial EXIT
