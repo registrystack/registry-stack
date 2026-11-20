@@ -709,7 +709,7 @@ async fn a_dispatch_queue_read_stuck_on_a_lock_is_cancelled_on_the_server_and_co
         waiting = admin
             .query_one(
                 "SELECT count(*) FROM pg_stat_activity \
-                 WHERE wait_event_type = 'Lock' AND query LIKE '%messaging_dispatch_jobs%' \
+                 WHERE wait_event_type = 'Lock' AND query LIKE '%SELECT (SELECT count(*) FROM messaging_dispatch_jobs%' \
                    AND pid <> pg_backend_pid()",
                 &[],
             )
@@ -739,6 +739,30 @@ async fn a_dispatch_queue_read_stuck_on_a_lock_is_cancelled_on_the_server_and_co
         healthy.contains("messaging_metrics_sample_failures_total{sample=\"dispatch-queue\"} 1"),
         "the count stays: {healthy}"
     );
+}
+
+/// A read that starts with the budget spent fails as `no-time-left` without
+/// starting, not as a `timeout` after taking a connection.
+#[tokio::test]
+async fn a_scrape_with_no_time_left_fails_the_queue_read_as_no_time_left() {
+    use tracing::instrument::WithSubscriber as _;
+    let harness = Harness::start().await;
+    let logs = registry_platform_testing::CapturedDiagnosticLogs::default();
+    let spent = registry_platform_metrics::ScrapeDeadline::with_budget(
+        std::time::Instant::now(),
+        Duration::ZERO,
+    );
+    let body = registry_messaging::metrics::scrape(&harness.metrics, Some(&harness.store), spent)
+        .with_subscriber(logs.subscriber_with_max_level(tracing::Level::WARN))
+        .await;
+    assert!(!body.contains("messaging_dispatch_jobs{"), "{body}");
+    assert!(
+        body.contains("messaging_metrics_sample_failures_total{sample=\"dispatch-queue\"} 1"),
+        "{body}"
+    );
+    let logged = logs.text();
+    assert_eq!(logged.matches("no-time-left").count(), 1, "{logged}");
+    assert!(!logged.contains("\"timeout\""), "{logged}");
 }
 
 /// A provider whose send timeout fills the whole attempt timeout leaves

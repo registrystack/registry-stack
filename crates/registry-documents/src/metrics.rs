@@ -421,7 +421,8 @@ impl Sampler {
     /// row, in one read-only transaction whose server-side statement
     /// timeout is the time left before `deadline`, so a slow query is
     /// cancelled on the server and not only abandoned by the client. A read
-    /// that spent the budget getting a connection fails without querying.
+    /// that starts with no time left never starts, and one that spent the budget
+    /// getting a connection fails before it queries.
     async fn queue_depth(
         &self,
         table: &str,

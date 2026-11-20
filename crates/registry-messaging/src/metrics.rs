@@ -50,7 +50,7 @@ use axum::http::{Method, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use registry_platform_metrics::{
-    CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline, CLASS_TIMEOUT,
+    CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline,
     CONTENT_TYPE as METRICS_CONTENT_TYPE,
 };
 
@@ -465,19 +465,10 @@ pub async fn scrape(
     let Some(store) = store else {
         return metrics.render(None);
     };
-    let read = tokio::time::timeout_at(
-        tokio::time::Instant::from_std(deadline.at()),
-        store.dispatch_depth(deadline),
-    )
-    .await;
-    let depth = match read {
-        Ok(Ok(depth)) => Some(depth),
-        Ok(Err(class)) => {
+    let depth = match deadline.run(store.dispatch_depth(deadline)).await {
+        Ok(depth) => Some(depth),
+        Err(class) => {
             metrics.record_sample_failure(&class);
-            None
-        }
-        Err(_) => {
-            metrics.record_sample_failure(CLASS_TIMEOUT);
             None
         }
     };

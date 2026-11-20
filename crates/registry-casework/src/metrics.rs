@@ -2,7 +2,7 @@
 use crate::{CompletionBacklog, PostgresStore};
 use axum::{extract::State, http::header::CONTENT_TYPE, routing::get, Json, Router};
 use registry_platform_metrics::{
-    sample_error_class, Exposition, MetricKind, ScrapeDeadline, CLASS_NO_TIME_LEFT, CLASS_TIMEOUT,
+    sample_error_class, Exposition, MetricKind, ScrapeDeadline, CLASS_NO_TIME_LEFT,
     CONTENT_TYPE as METRICS_CONTENT_TYPE,
 };
 use serde_json::json;
@@ -48,15 +48,9 @@ impl SampleFailures {
         deadline: ScrapeDeadline,
         read: impl std::future::Future<Output = Result<T, String>>,
     ) -> Option<T> {
-        let class = match tokio::time::timeout_at(
-            tokio::time::Instant::from_std(deadline.at()),
-            read,
-        )
-        .await
-        {
-            Ok(Ok(value)) => return Some(value),
-            Ok(Err(class)) => class,
-            Err(_) => CLASS_TIMEOUT.to_owned(),
+        let class = match deadline.run(read).await {
+            Ok(value) => return Some(value),
+            Err(class) => class,
         };
         self.0[kind as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         tracing::warn!(
@@ -169,8 +163,9 @@ pub(crate) fn database_error_class(error: &tokio_postgres::Error) -> String {
 
 /// Start a read-only transaction whose server-side `statement_timeout` is
 /// the time left before `deadline`, so a slow query is cancelled on the
-/// server and not only abandoned by the client. A sample with no time left
-/// fails without querying.
+/// server and not only abandoned by the client. A sample that starts with no
+/// time left never gets here: `ScrapeDeadline::run` refuses it first. One
+/// that spends the budget waiting for a connection fails here.
 pub(crate) async fn begin_sample<'a>(
     client: &'a mut deadpool_postgres::Client,
     deadline: ScrapeDeadline,
@@ -396,7 +391,8 @@ mod tests {
     async fn two_unreachable_samples_share_one_deadline() {
         let failures = SampleFailures::default();
         let started = std::time::Instant::now();
-        let deadline = ScrapeDeadline::with_budget(started, std::time::Duration::from_millis(100));
+        let budget = std::time::Duration::from_millis(500);
+        let deadline = ScrapeDeadline::with_budget(started, budget);
         let review = failures
             .sample(
                 SampleKind::Review,
@@ -413,7 +409,7 @@ mod tests {
             .await;
         assert_eq!((review, completions), (None, None));
         assert!(
-            started.elapsed() < std::time::Duration::from_millis(190),
+            started.elapsed() < budget * 2 - std::time::Duration::from_millis(100),
             "the second sample must not get a fresh timeout: {:?}",
             started.elapsed()
         );

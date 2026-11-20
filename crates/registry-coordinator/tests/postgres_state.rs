@@ -5913,6 +5913,23 @@ async fn one_stuck_read_spends_the_scrape_deadline_and_the_later_read_has_no_tim
 }
 
 #[tokio::test]
+async fn a_scrape_with_no_time_left_fails_each_read_as_no_time_left_without_starting_it() {
+    use tracing::instrument::WithSubscriber as _;
+    let h = harness().await;
+    h.admit().await;
+    let logs = registry_platform_testing::CapturedDiagnosticLogs::default();
+    let spent = ScrapeDeadline::with_budget(std::time::Instant::now(), std::time::Duration::ZERO);
+    let body = scrape(&h.store, spent)
+        .with_subscriber(logs.subscriber_with_max_level(tracing::Level::WARN))
+        .await;
+    assert!(body.contains("coordinator_metrics_sample_failures_total{sample=\"dispatch-queue\"} 1"));
+    assert!(body.contains("coordinator_metrics_sample_failures_total{sample=\"run-holds\"} 1"));
+    let logged = logs.text();
+    assert_eq!(logged.matches("no-time-left").count(), 2, "{logged}");
+    assert!(!logged.contains("\"timeout\""), "{logged}");
+}
+
+#[tokio::test]
 async fn run_holds_count_attention_restore_review_holds_and_the_oldest_due_age() {
     use registry_coordinator::metrics::RunHolds;
 

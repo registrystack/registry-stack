@@ -634,8 +634,9 @@ fn database_error_class(error: &tokio_postgres::Error) -> String {
 
 /// Start a read-only transaction whose server-side `statement_timeout` is the
 /// time left before `deadline`, so a slow query is cancelled on the server
-/// and not only abandoned by the client. A sample with no time left fails
-/// without querying.
+/// and not only abandoned by the client. A sample that starts with no time
+/// left never gets here: `ScrapeDeadline::run` refuses it first. One that
+/// spends the budget waiting for a connection fails here.
 async fn begin_sample(
     client: &mut tokio_postgres::Client,
     deadline: ScrapeDeadline,

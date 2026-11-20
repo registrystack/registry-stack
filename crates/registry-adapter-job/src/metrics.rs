@@ -25,7 +25,7 @@ use axum::routing::get;
 use axum::Router;
 use deadpool_postgres::Pool;
 use registry_platform_metrics::{
-    CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline, CLASS_NO_TIME_LEFT,
+    CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline, CLASS_NO_TIME_LEFT, CLASS_POOL,
     CLASS_TIMEOUT, CONTENT_TYPE as METRICS_CONTENT_TYPE,
 };
 
@@ -223,9 +223,11 @@ fn count(counter: &CounterVec, values: &[&str]) {
 /// The count runs in a read-only transaction whose server-side statement
 /// timeout is the time left before `deadline`, so a query the scrape abandons
 /// stops on the server instead of holding a connection the pass needs. A
-/// read that starts with no time left fails without querying. A failure is
-/// returned as its error class: `timeout`, `no-time-left`, or the closed
-/// cause token of the store error.
+/// read that starts with no time left is refused by
+/// `ScrapeDeadline::run` before it takes a connection. A failure is returned
+/// as its platform error class: `timeout`, `no-time-left`, `pool`,
+/// `sqlstate-<code>`, `connection-closed`, or `query`, or the closed cause
+/// token of any other store error.
 pub async fn sample_items(
     pool: &Pool,
     job_id: &str,
@@ -251,6 +253,10 @@ pub async fn sample_items(
     let counts = store::item_status_counts(&transaction, job_id)
         .await
         .map_err(|error| sample_class(error.cause()))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| sample_class(store::StoreError::from(error).cause()))?;
     Ok(ITEM_STATES.map(|state| {
         let count = match state {
             ItemStatus::Pending => counts.pending,
@@ -262,13 +268,15 @@ pub async fn sample_items(
     }))
 }
 
-/// The error class of a store cause token: a statement the server cancelled
-/// for its timeout is `timeout`, as in every product's samplers.
+/// The error class of a store cause token. Its `sqlstate-<code>`,
+/// `connection-closed` and `query` tokens are already the platform classes.
+/// A statement the server cancelled for its timeout is `timeout`, and a pool
+/// that gave no connection is `pool`, as in every product's samplers.
 fn sample_class(cause: String) -> String {
-    if cause == "57014" {
-        CLASS_TIMEOUT.to_owned()
-    } else {
-        cause
+    match cause.as_str() {
+        "sqlstate-57014" => CLASS_TIMEOUT.to_owned(),
+        "pool-timeout" => CLASS_POOL.to_owned(),
+        _ => cause,
     }
 }
 
@@ -405,12 +413,7 @@ pub async fn render_scrape(
 ) -> String {
     let items = sampled_items(samples, metrics, || async {
         let deadline = deadline();
-        tokio::time::timeout_at(
-            tokio::time::Instant::from_std(deadline.at()),
-            sample_items(pool, job_id, deadline),
-        )
-        .await
-        .unwrap_or_else(|_| Err(CLASS_TIMEOUT.to_owned()))
+        deadline.run(sample_items(pool, job_id, deadline)).await
     })
     .await;
     metrics.render(items)
@@ -431,6 +434,21 @@ mod tests {
 
     fn has(text: &str, line: &str) -> bool {
         text.lines().any(|found| found == line)
+    }
+
+    #[test]
+    fn store_causes_map_onto_the_platform_error_classes() {
+        // The server cancelling a statement at its timeout is `timeout`,
+        // and a pool that gave no connection is `pool`, as in every
+        // product's samplers.
+        assert_eq!(sample_class("sqlstate-57014".to_owned()), "timeout");
+        assert_eq!(sample_class("pool-timeout".to_owned()), "pool");
+        assert_eq!(sample_class("pool".to_owned()), "pool");
+        assert_eq!(sample_class("sqlstate-42501".to_owned()), "sqlstate-42501");
+        assert_eq!(
+            sample_class("connection-closed".to_owned()),
+            "connection-closed"
+        );
     }
 
     #[test]
