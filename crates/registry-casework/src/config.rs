@@ -602,12 +602,14 @@ fn validate_metrics_listener(
     metrics: MetricsListenerConfig,
     listener: &ListenerConfig,
 ) -> Result<(), RuntimeConfigError> {
-    registry_platform_config::check_metrics_bind(
-        metrics.bind.socket_addr(),
-        metrics.network_exposure,
+    let bind = metrics.bind.socket_addr();
+    registry_platform_config::check_metrics_bind_address(bind, metrics.network_exposure)
+        .map_err(|_| RuntimeConfigError::InvalidMetricsListener)?;
+    registry_platform_config::check_metrics_bind_apart(
+        bind,
         &[("listener", listener.bind.socket_addr())],
     )
-    .map_err(|_| RuntimeConfigError::InvalidMetricsListener)
+    .map_err(|_| RuntimeConfigError::MetricsListenerSharesSocket)
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2059,9 +2061,8 @@ fn reads_deferred_value(
 ) -> bool {
     let reads: &[&str] = match finding {
         RuntimeConfigError::InvalidListener => &["/listener"],
-        RuntimeConfigError::InvalidMetricsListener => {
-            &["/listener/bind", "/metricsListener/networkExposure"]
-        }
+        RuntimeConfigError::InvalidMetricsListener => &["/metricsListener/networkExposure"],
+        RuntimeConfigError::MetricsListenerSharesSocket => &["/listener/bind"],
         RuntimeConfigError::AllowedClientsRequired => &["/listener/tlsTermination"],
         RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
             &["/listener/tlsTermination"]
@@ -2756,6 +2757,35 @@ mod tests {
     }
 
     #[test]
+    fn a_deferred_listener_bind_defers_only_the_metrics_socket_comparison() {
+        let directory = tempfile::tempdir().unwrap();
+        let check = |bind: &str| {
+            let mut value = operator_value(directory.path(), directory.path());
+            value["listener"]["bind"] = json!("${CASEWORK_OFFLINE_CHECK_UNSET_BIND}");
+            value["metricsListener"] = json!({"bind": bind});
+            let path = write_operator(&value, directory.path());
+            check_runtime(&path, None, false)
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+                .collect::<Vec<_>>()
+        };
+        // The stand-in listener is 127.0.0.1:8100: a metrics bind on it is not
+        // judged until the environment supplies the real listener.
+        assert!(check("127.0.0.1:8100").is_empty());
+        for bind in ["169.254.1.1:9464", "203.0.113.4:9464", "0.0.0.0:9464"] {
+            assert_eq!(
+                check(bind),
+                [(
+                    "casework.runtime.invalid-metrics-listener".to_owned(),
+                    "/metricsListener/bind".to_owned()
+                )],
+                "{bind}"
+            );
+        }
+    }
+
+    #[test]
     fn human_source_verifier_binds_logical_provider_through_exact_deployment_reference() {
         let directory = tempfile::tempdir().unwrap();
         let mut value = operator_value(directory.path(), directory.path());
@@ -3112,6 +3142,14 @@ pub enum RuntimeConfigError {
         "metricsListener.bind must be a loopback or private address with a nonzero port that the API listener does not also occupy"
     )]
     InvalidMetricsListener,
+    /// The same refusal as `InvalidMetricsListener`, for a metrics bind that
+    /// is acceptable alone but shares the API listener's socket. It is
+    /// separate so the offline check can defer it while the listener bind is
+    /// an expression.
+    #[error(
+        "metricsListener.bind must be a loopback or private address with a nonzero port that the API listener does not also occupy"
+    )]
+    MetricsListenerSharesSocket,
     #[error("{path} {reason}")]
     InvalidOidcClaim {
         path: &'static str,
@@ -3200,7 +3238,9 @@ impl RuntimeConfigError {
             Self::AllowedClientsRequired => "authentication.oidc.allowedClients",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
             Self::InvalidListener => "listener.bind",
-            Self::InvalidMetricsListener => "metricsListener.bind",
+            Self::InvalidMetricsListener | Self::MetricsListenerSharesSocket => {
+                "metricsListener.bind"
+            }
             Self::InvalidDatabaseReference => "database",
             Self::PlaintextDatabase => "database.testOnlyPlaintext",
             Self::InvalidAuditDestination(error) => audit_field(error),
@@ -3272,7 +3312,9 @@ impl RuntimeConfigError {
             Self::ContextExport => "casework.package.context-export-mismatch",
             Self::Invalid => "casework.runtime.invalid",
             Self::InvalidListener => "casework.runtime.invalid-listener",
-            Self::InvalidMetricsListener => "casework.runtime.invalid-metrics-listener",
+            Self::InvalidMetricsListener | Self::MetricsListenerSharesSocket => {
+                "casework.runtime.invalid-metrics-listener"
+            }
             Self::InvalidOidcClaim { .. } => "casework.runtime.invalid-oidc-claim",
             Self::PrincipalClaimConflict => "casework.runtime.principal-claim-conflict",
             Self::AllowedClientsRequired => "casework.runtime.allowed-clients-required",
@@ -3338,8 +3380,8 @@ impl RuntimeConfigError {
             Self::InvalidListener => {
                 "Bind to a loopback address under development-loopback; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
             }
-            Self::InvalidMetricsListener => {
-                "Bind metricsListener to a loopback or private address with a nonzero port the API listener does not use."
+            Self::InvalidMetricsListener | Self::MetricsListenerSharesSocket => {
+                "Bind metricsListener to a loopback or private address with a nonzero port the API listener does not use, or declare metricsListener.networkExposure: container-private on a container network."
             }
             Self::InvalidOidcClaim { .. } => {
                 "Name a non-empty claim distinct from authentication.oidc.scopeClaim, or remove the member to use its default."
