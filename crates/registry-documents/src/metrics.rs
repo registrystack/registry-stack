@@ -16,10 +16,12 @@
 //!
 //! The job and hook-delivery series are gauges sampled from PostgreSQL when
 //! the metrics are scraped, never per request. Each scrape's reads share one
-//! deadline. When a read fails, its gauges have no samples for that scrape,
-//! so the series goes stale rather than reporting an empty queue, and the
-//! failure is counted in `documents_metrics_sample_failures_total` and
-//! logged with its cause.
+//! deadline, and each runs in a read-only transaction whose server-side
+//! statement timeout is the time left. When a read fails, its gauges have no
+//! samples for that scrape, so the series goes stale rather than reporting
+//! an empty queue, and the failure is counted in
+//! `documents_metrics_sample_failures_total` and logged by its error class
+//! alone, never by the driver's message.
 //!
 //! The cleanup worker reports the age of the last pass that completed. Until
 //! it completes one it reports the age of the process, so a worker that never
@@ -38,10 +40,11 @@ use axum::http::{Method, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use registry_platform_metrics::{
-    CounterVec, Exposition, LabelSpace, MetricKind, CONTENT_TYPE as METRICS_CONTENT_TYPE,
+    sample_error_class, CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline,
+    CLASS_NO_TIME_LEFT, CLASS_POOL, CONTENT_TYPE as METRICS_CONTENT_TYPE,
 };
 
-use crate::store::{PostgresStore, StoreError};
+use crate::store::PostgresStore;
 
 /// The path the metrics listener serves.
 pub const METRICS_PATH: &str = "/metrics";
@@ -51,7 +54,7 @@ pub const UNMATCHED_ROUTE: &str = "unmatched";
 
 /// How long one scrape may spend reading from PostgreSQL, all reads
 /// together.
-pub const SCRAPE_BUDGET: Duration = Duration::from_secs(5);
+pub use registry_platform_metrics::SCRAPE_BUDGET;
 
 /// The most request series the registry holds: the route table times the
 /// method and status vocabularies a route can answer with stays well under
@@ -361,15 +364,13 @@ pub async fn count_requests(
     response
 }
 
-/// Why one sample could not be read.
-#[derive(Debug, thiserror::Error)]
-enum SampleError {
-    #[error("{0}")]
-    Store(#[from] StoreError),
-    #[error("the query failed: {0}")]
-    Query(#[from] tokio_postgres::Error),
-    #[error("the scrape's database deadline passed")]
-    Deadline,
+/// The error class of a driver error: never its text, which can carry query
+/// text or row data.
+fn database_error_class(error: &tokio_postgres::Error) -> String {
+    sample_error_class(
+        error.code().map(tokio_postgres::error::SqlState::code),
+        error.is_closed(),
+    )
 }
 
 /// Reads the queues from PostgreSQL for one scrape.
@@ -387,10 +388,10 @@ impl Sampler {
     }
 
     /// Read every queue, all of them within one `budget`. A read that
-    /// fails is logged with its cause and counted once, its queue is left
-    /// out, and the other reads still run.
+    /// fails is logged by its error class and counted once, its queue is
+    /// left out, and the other reads still run.
     pub async fn sample(&self, metrics: &Metrics, budget: Duration) -> Sampled {
-        let deadline = tokio::time::Instant::now() + budget;
+        let deadline = ScrapeDeadline::with_budget(Instant::now(), budget);
         let mut sampled = Sampled::default();
         for sample in Sample::ALL {
             let slot = match sample {
@@ -398,14 +399,17 @@ impl Sampler {
                 Sample::ErasureJobs => &mut sampled.erasure_jobs,
                 Sample::HookDeliveries => &mut sampled.hook_deliveries,
             };
-            match self.queue_depth(sample.table(), deadline).await {
+            match deadline
+                .run(self.queue_depth(sample.table(), deadline))
+                .await
+            {
                 Ok(depth) => *slot = Some(depth),
-                Err(error) => {
+                Err(class) => {
                     metrics.record_sample_failure(sample);
                     tracing::warn!(
                         sample = sample.as_str(),
-                        error = %error,
-                        "a Document Store metrics sample could not be read"
+                        class = %class,
+                        "a Document Store metrics sample failed; its series are left out of this scrape"
                     );
                 }
             }
@@ -414,61 +418,77 @@ impl Sampler {
     }
 
     /// The rows of `table` by state and the age of the oldest due pending
-    /// row, in one read-only transaction that gives up at `deadline`.
+    /// row, in one read-only transaction whose server-side statement
+    /// timeout is the time left before `deadline`, so a slow query is
+    /// cancelled on the server and not only abandoned by the client. A read
+    /// that spent the budget getting a connection fails without querying.
     async fn queue_depth(
         &self,
         table: &str,
-        deadline: tokio::time::Instant,
-    ) -> Result<QueueDepth, SampleError> {
-        let remaining = deadline
-            .checked_duration_since(tokio::time::Instant::now())
-            .filter(|remaining| !remaining.is_zero())
-            .ok_or(SampleError::Deadline)?;
-        let read = async {
-            let mut client = self.store.client().await?;
-            let transaction = client.build_transaction().read_only(true).start().await?;
-            transaction
-                .batch_execute(&format!(
-                    "SET LOCAL statement_timeout = {}",
-                    remaining.as_millis().max(1)
-                ))
-                .await?;
-            let mut by_state = Vec::new();
-            for row in transaction
-                .query(
-                    &format!(
-                        "SELECT state, count(*) FROM {}.{table} GROUP BY state",
-                        self.schema
-                    ),
-                    &[],
-                )
-                .await?
-            {
-                by_state.push((row.try_get::<_, String>(0)?, row.try_get::<_, i64>(1)?));
+        deadline: ScrapeDeadline,
+    ) -> Result<QueueDepth, String> {
+        let mut client = self.store.client().await.map_err(|error| match error {
+            crate::store::StoreError::Pool(deadpool_postgres::PoolError::Backend(error)) => {
+                database_error_class(&error)
             }
-            let oldest: i64 = transaction
-                .query_one(
-                    &format!(
-                        "SELECT coalesce(floor(extract(epoch FROM
-                                    transaction_timestamp() - min(next_attempt_at)))::bigint, 0)
-                           FROM {}.{table}
-                          WHERE state = 'pending'
-                            AND next_attempt_at <= transaction_timestamp()",
-                        self.schema
-                    ),
-                    &[],
-                )
-                .await?
-                .try_get(0)?;
-            transaction.commit().await?;
-            Ok::<_, SampleError>(QueueDepth {
-                by_state,
-                oldest_overdue_age_seconds: oldest.max(0),
-            })
-        };
-        tokio::time::timeout(remaining, read)
+            _ => CLASS_POOL.to_owned(),
+        })?;
+        let transaction = client
+            .build_transaction()
+            .read_only(true)
+            .start()
             .await
-            .map_err(|_| SampleError::Deadline)?
+            .map_err(|error| database_error_class(&error))?;
+        let milliseconds = deadline
+            .statement_timeout_milliseconds()
+            .ok_or_else(|| CLASS_NO_TIME_LEFT.to_owned())?;
+        transaction
+            .batch_execute(&format!("SET LOCAL statement_timeout = {milliseconds}"))
+            .await
+            .map_err(|error| database_error_class(&error))?;
+        let mut by_state = Vec::new();
+        for row in transaction
+            .query(
+                &format!(
+                    "SELECT state, count(*) FROM {}.{table} GROUP BY state",
+                    self.schema
+                ),
+                &[],
+            )
+            .await
+            .map_err(|error| database_error_class(&error))?
+        {
+            by_state.push((
+                row.try_get::<_, String>(0)
+                    .map_err(|error| database_error_class(&error))?,
+                row.try_get::<_, i64>(1)
+                    .map_err(|error| database_error_class(&error))?,
+            ));
+        }
+        let oldest: i64 = transaction
+            .query_one(
+                &format!(
+                    "SELECT coalesce(floor(extract(epoch FROM
+                                transaction_timestamp() - min(next_attempt_at)))::bigint, 0)
+                       FROM {}.{table}
+                      WHERE state = 'pending'
+                        AND next_attempt_at <= transaction_timestamp()",
+                    self.schema
+                ),
+                &[],
+            )
+            .await
+            .map_err(|error| database_error_class(&error))?
+            .try_get(0)
+            .map_err(|error| database_error_class(&error))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| database_error_class(&error))?;
+        Ok(QueueDepth {
+            by_state,
+            oldest_overdue_age_seconds: oldest.max(0),
+        })
     }
 }
 
@@ -478,11 +498,13 @@ impl Sampler {
 pub struct MetricsState {
     pub metrics: Arc<Metrics>,
     pub sampler: Sampler,
+    /// How long one scrape may spend on all of its database reads.
+    pub budget: Duration,
 }
 
 /// Serve the series and the sampled queues on the metrics listener.
 pub async fn serve_metrics(State(state): State<MetricsState>) -> Response {
-    let sampled = state.sampler.sample(&state.metrics, SCRAPE_BUDGET).await;
+    let sampled = state.sampler.sample(&state.metrics, state.budget).await;
     (
         [(CONTENT_TYPE, METRICS_CONTENT_TYPE)],
         state.metrics.render(&sampled),
