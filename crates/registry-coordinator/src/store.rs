@@ -4,7 +4,7 @@
 use crate::{
     calendar_trigger::{CalendarSchedule, CalendarTriggerError},
     definition::{Definition, DefinitionCache, Step, DEFINITION_REFUSED, HELD_RUN_ADVICE},
-    metrics::{DispatchDepth, Metrics, RunOutcome},
+    metrics::{DispatchDepth, Metrics, RunHolds, RunOutcome},
     protected_state::StateKeys,
     protocol::{CallRequest, HoldDetail, ProposalObservation},
     CoordinatorError, Result,
@@ -818,6 +818,52 @@ impl Store {
             pending: row.get(0),
             leased: row.get(1),
             unknown: row.get(2),
+        })
+    }
+
+    /// Held and stuck work, counted over every row in one read-only
+    /// statement. The attention count is the doctor report's `attention`
+    /// state count, split by whether the run is held for a refused
+    /// definition; unlike the doctor's run list it is never capped.
+    pub async fn run_holds(&self) -> Result<RunHolds> {
+        let mut client = self.client().await.map_err(unavailable)?;
+        let tx = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(unavailable)?;
+        tx.batch_execute("SET LOCAL statement_timeout = '2s'")
+            .await
+            .map_err(unavailable)?;
+        let row = tx
+            .query_one(
+                &format!(
+                    "SELECT \
+                       (SELECT count(*) FROM {schema}.runs WHERE state='attention' \
+                          AND failure_code IS DISTINCT FROM '{DEFINITION_REFUSED}'), \
+                       (SELECT count(*) FROM {schema}.runs WHERE state='attention' \
+                          AND failure_code = '{DEFINITION_REFUSED}'), \
+                       (SELECT count(*) FROM {schema}.runs WHERE restore_review_required), \
+                       (SELECT restore_hold FROM {schema}.control WHERE id), \
+                       (SELECT admissions_hold FROM {schema}.control WHERE id), \
+                       COALESCE((SELECT floor(extract(epoch FROM greatest( \
+                          transaction_timestamp() - min(next_attempt_at), interval '0'))) \
+                          FROM {schema}.jobs WHERE state='pending'), 0)::bigint",
+                    schema = self.namespace
+                ),
+                &[],
+            )
+            .await
+            .map_err(unavailable)?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(RunHolds {
+            attention_other: row.get(0),
+            attention_definition_refused: row.get(1),
+            restore_review_required: row.get(2),
+            restore_hold: row.get(3),
+            admissions_hold: row.get(4),
+            oldest_due_age_seconds: row.get(5),
         })
     }
 

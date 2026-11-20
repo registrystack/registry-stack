@@ -5636,7 +5636,7 @@ async fn retention_rejects_a_cutoff_after_database_transaction_time() {
 fn sample(store: &Store, series: &str) -> u64 {
     store
         .metrics()
-        .render(None)
+        .render(None, None)
         .lines()
         .find_map(|line| line.strip_prefix(series)?.strip_prefix(' '))
         .unwrap_or_else(|| panic!("{series} is exposed"))
@@ -5775,6 +5775,70 @@ async fn metrics_count_committed_admissions_attempts_and_terminal_runs_by_closed
     assert_eq!(
         withdrawn.store.dispatch_depth().await.expect("sampled"),
         DispatchDepth::default()
+    );
+}
+
+#[tokio::test]
+async fn run_holds_count_attention_restore_review_holds_and_the_oldest_due_age() {
+    use registry_coordinator::metrics::RunHolds;
+
+    let h = harness().await;
+    assert_eq!(
+        h.store.run_holds().await.expect("sampled"),
+        RunHolds::default(),
+        "an empty store holds nothing"
+    );
+
+    let first = h.admit().await;
+    let second = h
+        .store
+        .admit(
+            &h.definition,
+            input(Utc::now() - Duration::seconds(1)),
+            "synthetic-producer",
+            "second-start",
+            "binding-a",
+        )
+        .await
+        .expect("second admission");
+    h.sql(
+        "UPDATE {schema}.jobs SET next_attempt_at=now()-interval '2 hours' WHERE state='pending'",
+    )
+    .await;
+    let holds = h.store.run_holds().await.expect("sampled");
+    assert!(
+        (7200..7260).contains(&holds.oldest_due_age_seconds),
+        "the oldest pending job was due two hours ago: {}",
+        holds.oldest_due_age_seconds
+    );
+    assert_eq!(
+        (holds.attention_other, holds.attention_definition_refused),
+        (0, 0)
+    );
+
+    let worker = Worker::new(h.store.clone(), Fake::new(vec![uncertain(), uncertain()]));
+    while worker.tick().await.expect("tick") {}
+    assert_eq!(h.store.status(first).await.unwrap().state, "attention");
+    assert_eq!(h.store.status(second).await.unwrap().state, "attention");
+    h.sql(&format!(
+        "UPDATE {{schema}}.runs SET failure_code='definition-refused' WHERE run_id='{second}'"
+    ))
+    .await;
+    h.sql("UPDATE {schema}.runs SET restore_review_required=true")
+        .await;
+    h.sql("UPDATE {schema}.control SET restore_hold=true,admissions_hold=true")
+        .await;
+    assert_eq!(
+        h.store.run_holds().await.expect("sampled"),
+        RunHolds {
+            attention_other: 1,
+            attention_definition_refused: 1,
+            restore_review_required: 2,
+            restore_hold: true,
+            admissions_hold: true,
+            oldest_due_age_seconds: 0,
+        },
+        "held jobs are not due work, so nothing is overdue"
     );
 }
 
