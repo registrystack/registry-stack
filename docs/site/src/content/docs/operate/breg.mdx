@@ -97,7 +97,7 @@ the release tag you run. Security fixes land only in the latest release; see
 [API stability](../../reference/api-stability/) and the
 [support window](../../security/support-window/). A deployment meets three conditions: run `breg` under
 a supervisor that restarts it, treat the holder of the migration credential as the activation gate,
-and qualify the installation and its recovery procedure.
+and stay inside the verified deployment profile, which leaves out Kubernetes.
 
 {/* Evidence: crates/registry-breg/src/postgres/roles.rs, verify_postgres_17_or_newer and MIN_POSTGIS_MAJOR;
     crates/registry-breg/src/postgres/schema.rs; crates/registry-breg/src/runtime_config.rs,
@@ -815,15 +815,13 @@ secret directory. Give UID 65532 that directory and its files the same way as th
 container's. `apply` writes audit entries beside `audit.path`, which is why the audit directory is
 writable here too.
 
-For Kubernetes, use the Helm deployment guide at `deploy/README.md` in the Registry Stack source
-tree. The chart stages the runtime and secret inputs as owner-only regular files. When assembling
-your own Pod, stage those files before starting BReg. A default ConfigMap or Secret projection
-presents each key as a symbolic link, which the runtime refuses for these inputs.
+Kubernetes is outside the verified deployment profile. A ConfigMap or Secret volume mounted the
+default way presents each key as a symbolic link, which the runtime refuses for both the runtime
+file and secret files; inject secrets through `secret:env/<NAME>` instead.
 
 {/* Evidence: release/docker/Dockerfile.breg, the bregctl install line and the breg ENTRYPOINT;
     crates/registry-breg/src/audit.rs, RegistryAudit::open_companion();
     crates/registry-platform-config/src/loader.rs, reject_symlink_components();
-    deploy/helm/registry-stack/templates/breg-deployment.yaml, the stage-runtime-inputs init container;
     release/READINESS.md, the deployment profile item. */}
 
 ## Next
