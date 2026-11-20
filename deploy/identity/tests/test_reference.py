@@ -251,6 +251,18 @@ class ReferenceIdentityContract(unittest.TestCase):
         runbook = (ROOT / "README.md").read_text()
         self.assertIn("deploy/identity/network-policy.yaml", runbook)
 
+    def test_postgres_network_policy_admits_only_the_identity_namespace(self) -> None:
+        policy = (ROOT / "postgres-network-policy.yaml").read_text()
+        self.assertIn("kind: NetworkPolicy", policy)
+        self.assertIn("namespace: directory", policy)
+        self.assertIn("app.kubernetes.io/name: registry-postgres", policy)
+        self.assertIn("policyTypes:\n    - Ingress", policy)
+        self.assertIn("kubernetes.io/metadata.name: registry-identity-qualification", policy)
+        self.assertEqual(policy.count("port: 5432"), 1)
+        self.assertNotIn("ipBlock", policy)
+        runbook = (ROOT / "README.md").read_text()
+        self.assertEqual(runbook.count("deploy/identity/postgres-network-policy.yaml"), 2)
+
     def test_dead_post_renderer_is_not_referenced(self) -> None:
         for path in ROOT.iterdir():
             if path.is_file() and path.suffix in {".md", ".py", ".sh", ".yaml"}:

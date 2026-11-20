@@ -1,0 +1,23 @@
+# The reference PostgreSQL workload admits only Pods labelled as Registry Stack
+# database clients. This additive policy also admits the identity namespace's
+# Pods to PostgreSQL's port 5432. Apply it in the namespace that runs
+# PostgreSQL, and adjust the namespace names if your installation differs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: registry-postgres-identity
+  namespace: directory
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: registry-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: registry-identity-qualification
+      ports:
+        - protocol: TCP
+          port: 5432
