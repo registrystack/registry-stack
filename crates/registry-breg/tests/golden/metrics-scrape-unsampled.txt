@@ -95,6 +95,16 @@ breg_pool_connections{state="waiting"} 0
 # TYPE breg_record_timer_control_compatible gauge
 # HELP breg_record_timer_counts_truncated Whether current occurrence, attempt, or lease-owner counts reached the bounded sample ceiling.
 # TYPE breg_record_timer_counts_truncated gauge
+# HELP breg_hook_deliveries Outbound hook deliveries by state, sampled at scrape; dead-lettered deliveries wait for an operator.
+# TYPE breg_hook_deliveries gauge
+# HELP breg_ingestion_runs Import runs by state across every creator, sampled at scrape.
+# TYPE breg_ingestion_runs gauge
+# HELP breg_metrics_sample_failures_total Scrape-time database samples that failed since this process started, by sample.
+# TYPE breg_metrics_sample_failures_total counter
+breg_metrics_sample_failures_total{sample="queue"} 0
+breg_metrics_sample_failures_total{sample="record-timer"} 0
+breg_metrics_sample_failures_total{sample="hook-delivery"} 0
+breg_metrics_sample_failures_total{sample="ingestion-run"} 0
 # HELP breg_active_package_info The package this process verified at startup, by digest.
 # TYPE breg_active_package_info gauge
 breg_active_package_info{package_digest="sha256:abababababababababababababababababababababababababababababababab"} 1
