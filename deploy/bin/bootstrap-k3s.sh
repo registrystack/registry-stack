@@ -17,6 +17,18 @@ require_supported_ubuntu() {
 	return 1
 }
 
+# K3s registers the node under this exact name, so the script passes it to K3s
+# and waits on it. Kubernetes accepts a lowercase DNS name of up to 253 characters.
+node_name_from_hostname() {
+	local name
+	name=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+	if [[ ${#name} -gt 253 || ! "$name" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
+		printf 'Set the server hostname to a DNS name of lowercase letters, digits, hyphens and dots, then retry.\n' >&2
+		return 1
+	fi
+	printf '%s\n' "$name"
+}
+
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
 	return 0
 fi
@@ -62,6 +74,7 @@ if [[ -n "$api_name" && ! "$api_name" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; th
 	printf 'Use a lowercase DNS name for the private Kubernetes API address.\n' >&2
 	exit 2
 fi
+node_name=$(node_name_from_hostname "$(hostname)") || exit 1
 if [[ "$mode" == --join ]]; then
 	if [[ ! "$server_url" =~ ^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?:6443$ ]]; then
 		printf 'Use the private K3s API URL on HTTPS port 6443.\n' >&2
@@ -98,6 +111,7 @@ expected_config() {
 		printf 'server: "%s"\ntoken-file: "%s"\n' "$server_url" "$token_file"
 	fi
 	printf '%s\n' 'secrets-encryption: true' 'write-kubeconfig-mode: "0600"'
+	printf 'node-name: "%s"\n' "$node_name"
 	if [[ -n "$api_name" ]]; then
 		printf 'tls-san:\n  - "%s"\n' "$api_name"
 	fi
@@ -114,7 +128,7 @@ if [[ ! -f "$bootstrap_record/version" ]]; then
 	printf '%s\n' "$version" >"$bootstrap_record/version"
 fi
 if [[ "$(<"$bootstrap_record/version")" != "$version" ]] || ! expected_config | cmp -s - "$bootstrap_record/config.yaml"; then
-	printf 'Bootstrap inputs differ from the recorded version or API address. Review the existing installation.\n' >&2
+	printf 'Bootstrap inputs differ from the recorded version, API address or node name. Review the existing installation.\n' >&2
 	exit 1
 fi
 if [[ -e "$config" || -L "$config" ]]; then
@@ -144,7 +158,6 @@ if ! systemctl is-active --quiet k3s.service; then
 fi
 
 printf '%s  %s\n' "$binary_sha" "$binary" | sha256sum --check
-node_name=$(hostname -s)
 "$binary" kubectl wait "node/$node_name" --for=create --timeout=300s
 "$binary" kubectl wait "node/$node_name" --for=condition=Ready --timeout=300s
 printf 'K3s is ready. Check the Traefik deployment in kube-system before routing HTTPS.\n'

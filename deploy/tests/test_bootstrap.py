@@ -40,3 +40,37 @@ class BootstrapTest(unittest.TestCase):
     def test_rejects_other_ubuntu_releases_and_distributions(self):
         self.assert_host_release("ubuntu", "22.04", supported=False)
         self.assert_host_release("debian", "13", supported=False)
+
+    def node_name(self, hostname):
+        command = 'source "$1"; node_name_from_hostname "$2"'
+        return subprocess.run(
+            ["bash", "-c", command, "bootstrap-test", BOOTSTRAP, hostname],
+            capture_output=True,
+            text=True,
+        )
+
+    def test_node_name_is_the_lowercased_full_hostname(self):
+        for hostname, expected in (
+            ("reg1", "reg1"),
+            ("Reg1.Ministry.Example", "reg1.ministry.example"),
+            ("node-7.internal", "node-7.internal"),
+        ):
+            with self.subTest(hostname=hostname):
+                result = self.node_name(hostname)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected + "\n")
+
+    def test_node_name_rejects_names_kubernetes_would_refuse(self):
+        for hostname in ("", "-reg1", "reg1-", "reg_1", "reg 1", "a" * 254):
+            with self.subTest(hostname=hostname):
+                result = self.node_name(hostname)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("DNS name", result.stderr)
+
+    def test_k3s_is_given_the_node_name_the_wait_uses(self):
+        script = BOOTSTRAP.read_text(encoding="utf-8")
+        self.assertIn("node-name: \"%s\"", script)
+        self.assertIn('kubectl wait "node/$node_name" --for=create', script)
+        self.assertIn('kubectl wait "node/$node_name" --for=condition=Ready', script)
+        self.assertNotIn("hostname -s", script)

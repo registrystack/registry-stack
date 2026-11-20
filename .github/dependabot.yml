@@ -346,3 +346,19 @@ updates:
         update-types:
           - "version-update:semver-major"
           - "version-update:semver-minor"
+
+  # Base image of the intake-status example, pinned by digest.
+  - package-ecosystem: docker
+    directory: "/deploy/examples/intake-status"
+    patterns:
+      - "*"
+    multi-ecosystem-group: registry-stack-dependencies
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "10:15"
+      timezone: Etc/UTC
+    groups:
+      docker-images:
+        patterns:
+          - "*"
