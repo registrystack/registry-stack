@@ -31,7 +31,9 @@ impl SampleKind {
     }
 }
 
-/// How long one sample may take before it counts as failed.
+/// How long one scrape may spend on all of its samples together. Two serial
+/// samples share it, so an unreachable database still answers within one
+/// timeout, well inside a scraper's own timeout.
 const SAMPLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Failed samples since the process started, by sample.
@@ -39,14 +41,15 @@ const SAMPLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 struct SampleFailures([std::sync::atomic::AtomicU64; SampleKind::ALL.len()]);
 
 impl SampleFailures {
-    /// Run one sample under the timeout. A failure or a timeout is logged
+    /// Run one sample before `deadline`. A failure or a timeout is logged
     /// with its cause and counted, and leaves the sample without a value.
     async fn sample<T, E: std::fmt::Display>(
         &self,
         kind: SampleKind,
+        deadline: tokio::time::Instant,
         read: impl std::future::Future<Output = Result<T, E>>,
     ) -> Option<T> {
-        let cause = match tokio::time::timeout(SAMPLE_TIMEOUT, read).await {
+        let cause = match tokio::time::timeout_at(deadline, read).await {
             Ok(Ok(value)) => return Some(value),
             Ok(Err(error)) => error.to_string(),
             Err(_) => "the sample timed out".to_owned(),
@@ -98,10 +101,11 @@ impl MetricsState {
             }
         }
         let failures = &self.inner.failures;
+        let deadline = tokio::time::Instant::now() + SAMPLE_TIMEOUT;
         // The review connection is released before the backlog read takes
         // its own, so one scrape holds one pool connection at a time.
         let review = failures
-            .sample(SampleKind::Review, async {
+            .sample(SampleKind::Review, deadline, async {
                 let client = self
                     .inner
                     .store
@@ -115,6 +119,7 @@ impl MetricsState {
         let completions = failures
             .sample(
                 SampleKind::CompletionBacklog,
+                deadline,
                 self.inner.store.completion_backlog(),
             )
             .await;
@@ -300,17 +305,49 @@ mod tests {
     #[tokio::test]
     async fn a_failing_sample_is_counted_and_a_working_one_is_not() {
         let failures = SampleFailures::default();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let review = failures
-            .sample(SampleKind::Review, async { Ok::<_, String>([4, 9, 2]) })
+            .sample(SampleKind::Review, deadline, async {
+                Ok::<_, String>([4, 9, 2])
+            })
             .await;
         let completions = failures
-            .sample(SampleKind::CompletionBacklog, async {
+            .sample(SampleKind::CompletionBacklog, deadline, async {
                 Err::<CompletionBacklog, _>("the statement timed out".to_owned())
             })
             .await;
         assert_eq!(review, Some([4, 9, 2]));
         assert_eq!(completions, None);
         assert_eq!(failures.count(SampleKind::Review), 0);
+        assert_eq!(failures.count(SampleKind::CompletionBacklog), 1);
+    }
+
+    #[tokio::test]
+    async fn two_unreachable_samples_share_one_deadline() {
+        let failures = SampleFailures::default();
+        let started = tokio::time::Instant::now();
+        let deadline = started + std::time::Duration::from_millis(100);
+        let review = failures
+            .sample(
+                SampleKind::Review,
+                deadline,
+                std::future::pending::<Result<[i64; 3], String>>(),
+            )
+            .await;
+        let completions = failures
+            .sample(
+                SampleKind::CompletionBacklog,
+                deadline,
+                std::future::pending::<Result<CompletionBacklog, String>>(),
+            )
+            .await;
+        assert_eq!((review, completions), (None, None));
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(190),
+            "the second sample must not get a fresh timeout: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(failures.count(SampleKind::Review), 1);
         assert_eq!(failures.count(SampleKind::CompletionBacklog), 1);
     }
 }
