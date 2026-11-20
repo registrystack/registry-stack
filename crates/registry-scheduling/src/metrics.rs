@@ -17,13 +17,16 @@
 //! the metrics are scraped. When a queue cannot be read its gauges have no
 //! samples for that scrape, so the series goes stale rather than reporting an
 //! empty queue, and the failure is counted in
-//! `scheduling_metrics_sample_failures_total` and logged.
+//! `scheduling_metrics_sample_failures_total` and logged by its error class
+//! (timeout, pool, or the SQLSTATE). Both reads share one five-second scrape
+//! deadline, and each read's server-side statement timeout is the time left.
 //!
 //! Worker series report the age of the last pass that completed. A worker
 //! that has not yet completed a pass reports the age of the process, so a
 //! worker that never succeeds still grows an age.
 
 use std::fmt;
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -34,7 +37,8 @@ use axum::http::{Method, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use registry_platform_metrics::{
-    CounterVec, Exposition, LabelSpace, MetricKind, CONTENT_TYPE as METRICS_CONTENT_TYPE,
+    CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline, CLASS_TIMEOUT,
+    CONTENT_TYPE as METRICS_CONTENT_TYPE,
 };
 
 use crate::store::{PostgresStore, QueueDepth};
@@ -334,29 +338,61 @@ pub struct MetricsState {
 
 /// Serve the series and the sampled queues on the metrics listener.
 pub async fn serve_metrics(State(state): State<MetricsState>) -> Response {
-    let now = state.store.observed_now();
-    let mut sampled = Sampled::default();
-    match state.store.outbox_depth(now).await {
-        Ok(depth) => sampled.outbox = Some(depth),
-        Err(error) => {
-            state.metrics.record_sample_failure(SampledQueue::Outbox);
-            tracing::warn!(error = %error, "the Scheduling outbox could not be sampled");
-        }
-    }
-    match state.store.hook_delivery_depth(now).await {
-        Ok(depth) => sampled.hook_deliveries = Some(depth),
-        Err(error) => {
-            state
-                .metrics
-                .record_sample_failure(SampledQueue::HookDeliveries);
-            tracing::warn!(error = %error, "the Scheduling hook deliveries could not be sampled");
-        }
-    }
-    (
-        [(CONTENT_TYPE, METRICS_CONTENT_TYPE)],
-        state.metrics.render(&sampled),
+    let body = scrape(
+        &state.metrics,
+        &state.store,
+        ScrapeDeadline::from(Instant::now()),
     )
-        .into_response()
+    .await;
+    ([(CONTENT_TYPE, METRICS_CONTENT_TYPE)], body).into_response()
+}
+
+/// The exposition of one scrape whose database reads share `deadline`. A read
+/// that fails is logged by its error class alone, counted once, and leaves
+/// its gauges without samples. Each read is bounded on the client as well as
+/// the server, so a wait for a pooled session cannot outlast the scrape.
+pub async fn scrape(metrics: &Metrics, store: &PostgresStore, deadline: ScrapeDeadline) -> String {
+    let now = store.observed_now();
+    let outbox = bounded(
+        metrics,
+        SampledQueue::Outbox,
+        deadline,
+        store.outbox_depth(now, deadline),
+    )
+    .await;
+    let hook_deliveries = bounded(
+        metrics,
+        SampledQueue::HookDeliveries,
+        deadline,
+        store.hook_delivery_depth(now, deadline),
+    )
+    .await;
+    let sampled = Sampled {
+        outbox,
+        hook_deliveries,
+    };
+    metrics.render(&sampled)
+}
+
+async fn bounded(
+    metrics: &Metrics,
+    queue: SampledQueue,
+    deadline: ScrapeDeadline,
+    read: impl Future<Output = Result<QueueDepth, String>>,
+) -> Option<QueueDepth> {
+    let class =
+        match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline.at()), read).await {
+            Ok(Ok(depth)) => return Some(depth),
+            Ok(Err(class)) => class,
+            Err(_) => CLASS_TIMEOUT.to_owned(),
+        };
+    metrics.record_sample_failure(queue);
+    tracing::warn!(
+        queue = queue.as_str(),
+        class = %class,
+        "a Scheduling queue could not be sampled; its gauges have no samples this scrape"
+    );
+    None
 }
 
 #[cfg(test)]

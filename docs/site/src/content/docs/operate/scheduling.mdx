@@ -341,8 +341,11 @@ A growing `scheduling_outbox_oldest_pending_age_seconds` or
 The outbox age leaves out intents that are waiting for a retry back-off to end, so it measures
 overdue work only.
 
-The queue gauges are read from PostgreSQL in a read-only transaction with a two-second statement
-timeout. When a read fails, the runtime logs a warning, adds one to
+The queue gauges are read from PostgreSQL in read-only transactions. Both reads of one scrape share
+one 5 second deadline, and each read's statement timeout is the time left, so the server cancels a
+slow query. A read that starts after a slower one has used the deadline fails without querying.
+When a read fails, the runtime logs a warning with the error class (`timeout`, `pool`,
+`no-time-left`, or the SQLSTATE), adds one to
 `scheduling_metrics_sample_failures_total` for that queue, and leaves that queue's series out of
 the scrape. A missing series is therefore a failed read, never a zero. Alert on
 `absent(scheduling_outbox_items)` as well as on the values.
