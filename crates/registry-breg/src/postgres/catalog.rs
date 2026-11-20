@@ -106,6 +106,7 @@ struct ManagedPolicy {
     table: String,
     name: String,
     command: String,
+    permissive: bool,
     role: ManagedPolicyRole,
     has_using: bool,
     has_check: bool,
@@ -491,6 +492,7 @@ impl ExpectedManagedCatalog {
                 table: policy.table,
                 name: policy.name,
                 command: policy.command.to_owned(),
+                permissive: true,
                 role: ManagedPolicyRole::Runtime,
                 has_using: policy.has_using,
                 has_check: policy.has_check,
@@ -632,6 +634,7 @@ impl ExpectedManagedCatalog {
                     table: name.clone(),
                     name: policy.to_owned(),
                     command: command.to_owned(),
+                    permissive: true,
                     role: ManagedPolicyRole::Runtime,
                     has_using: true,
                     has_check,
@@ -662,6 +665,7 @@ impl ExpectedManagedCatalog {
                     table: format!("registry_internal.{table}"),
                     name: name.to_owned(),
                     command: "*".to_owned(),
+                    permissive: true,
                     role,
                     has_using: true,
                     has_check: true,
@@ -693,6 +697,7 @@ impl ExpectedManagedCatalog {
                     table: name.clone(),
                     name: policy.name.clone(),
                     command: policy_command_code(policy.command).to_owned(),
+                    permissive: policy.permissive,
                     role: managed_policy_role(policy.applies_to),
                     has_using: policy.using_expression.is_some(),
                     has_check: policy.check_expression.is_some(),
@@ -888,6 +893,7 @@ fn policy_command_code(command: PolicyCommand) -> &'static str {
         PolicyCommand::Select => "r",
         PolicyCommand::Insert => "a",
         PolicyCommand::Update => "w",
+        PolicyCommand::All => "*",
     }
 }
 
@@ -1737,11 +1743,6 @@ async fn verify_policies(
     let actual: BTreeSet<ManagedPolicy> = rows
         .into_iter()
         .map(|row| {
-            if !row.get::<_, bool>(3) {
-                return Err(PostgresKernelError::CatalogInvariant(
-                    "managed policy mode differs from the closed catalog",
-                ));
-            }
             let role = match row.get::<_, String>(4).as_str() {
                 "public" => ManagedPolicyRole::Public,
                 "runtime" => ManagedPolicyRole::Runtime,
@@ -1756,6 +1757,7 @@ async fn verify_policies(
                 table: row.get(0),
                 name: row.get(1),
                 command: row.get(2),
+                permissive: row.get(3),
                 role,
                 has_using: row.get(5),
                 has_check: row.get(6),

@@ -17,7 +17,7 @@ use crate::contract::{
 use crate::model::{
     CompiledAction, CompiledActionInventory, CompiledActionTargetUse,
     CompiledActionTargetUseSource, CompiledEntity, CompiledLogicalField, CompiledPlanEffect,
-    CompiledPlanMutation, REFERENCE_INDEX_PREFIX,
+    CompiledPlanMutation, DisclosureWithhold, REFERENCE_INDEX_PREFIX,
 };
 use crate::physical_names::{
     hex_prefix, spatial_candidate_view_name, spatial_geometry_column_name,
@@ -73,6 +73,7 @@ pub enum PolicyCommand {
     Select,
     Insert,
     Update,
+    All,
 }
 
 impl PolicyCommand {
@@ -81,6 +82,7 @@ impl PolicyCommand {
             Self::Select => "SELECT",
             Self::Insert => "INSERT",
             Self::Update => "UPDATE",
+            Self::All => "ALL",
         }
     }
 }
@@ -104,6 +106,10 @@ impl DdlPolicyRole {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DdlPolicy {
     pub name: String,
+    /// Permissive policies are ORed. A restrictive policy is ANDed with them,
+    /// so no permissive grant can reach a row it hides.
+    #[serde(default = "permissive_default", skip_serializing_if = "is_true")]
+    pub permissive: bool,
     pub command: PolicyCommand,
     pub access_profile: String,
     #[serde(default, skip_serializing_if = "DdlPolicyRole::is_public")]
@@ -112,6 +118,14 @@ pub struct DdlPolicy {
     pub using_expression: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub check_expression: Option<String>,
+}
+
+fn permissive_default() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -1594,8 +1608,10 @@ fn policies(
                         Some(format!("({authority}) AND {lifecycle_check}")),
                     )
                 }
+                PolicyCommand::All => unreachable!("profile policies are per command"),
             };
             policies.push(DdlPolicy {
+                permissive: true,
                 name: policy_name(&entity.id, &profile.id, command),
                 command,
                 access_profile: profile.id.clone(),
@@ -1609,6 +1625,7 @@ fn policies(
         {
             let authority = policy_authority_expression(entity, profile);
             policies.push(DdlPolicy {
+                permissive: true,
                 name: create_returning_policy_name(&entity.id, &profile.id),
                 command: PolicyCommand::Select,
                 access_profile: profile.id.clone(),
@@ -1627,7 +1644,37 @@ fn policies(
     policies.extend(immediate_action_target_policies_for_table(entity, actions));
     policies.extend(proposal::target_policies(entity, actions));
     policies.extend(spatial_bbox_select_policies(entity));
+    policies.extend(disclosure_record_policies(entity));
     policies
+}
+
+/// One restrictive policy per `record` disclosure condition. It names no role,
+/// so it binds every role that reads the table, the spatial bbox role included.
+fn disclosure_record_policies(entity: &CompiledEntity) -> Vec<DdlPolicy> {
+    entity
+        .disclosure_conditions
+        .iter()
+        .filter(|condition| condition.withhold == DisclosureWithhold::Record)
+        .map(|condition| DdlPolicy {
+            name: disclosure_policy_name(&entity.id, &condition.id),
+            permissive: false,
+            command: PolicyCommand::All,
+            access_profile: String::new(),
+            applies_to: DdlPolicyRole::Public,
+            using_expression: Some(crate::disclosure::record_guard_sql(entity, condition)),
+            check_expression: None,
+        })
+        .collect()
+}
+
+fn disclosure_policy_name(entity_id: &str, condition_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"breg/disclosure-rls-policy/v1");
+    for value in [entity_id, condition_id] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value.as_bytes());
+    }
+    format!("registry_disclosure_{}", hex_prefix(&hasher.finalize(), 20))
 }
 
 fn membership_source_policies(
@@ -1642,6 +1689,7 @@ fn membership_source_policies(
                     continue;
                 }
                 policies.push(DdlPolicy {
+                    permissive: true,
                     name: format!(
                         "registry_{}",
                         crate::membership::function_name(&root.id, profile, index)
@@ -1680,6 +1728,7 @@ fn consent_source_policies(
                     continue;
                 }
                 policies.push(DdlPolicy {
+                    permissive: true,
                     name: format!(
                         "registry_{}",
                         crate::consent::function_name(&root.id, profile, index)
@@ -1719,6 +1768,7 @@ fn spatial_bbox_select_policies(entity: &CompiledEntity) -> Vec<DdlPolicy> {
         let geometry_field = &geojson.geometry_field;
         let spatial = spatial_bbox_predicate(entity, geometry_field, bbox);
         policies.push(DdlPolicy {
+            permissive: true,
             name: spatial_bbox_policy_name(&entity.id, &profile.id),
             command: PolicyCommand::Select,
             access_profile: profile.id.clone(),
@@ -1855,6 +1905,7 @@ fn profile_supports_command(operations: &BTreeSet<Operation>, command: PolicyCom
         PolicyCommand::Update => operations
             .iter()
             .any(|operation| matches!(operation, Operation::Patch | Operation::Tombstone)),
+        PolicyCommand::All => true,
     }
 }
 
@@ -1936,6 +1987,7 @@ fn read_path_source_policy(
         )
     };
     DdlPolicy {
+        permissive: true,
         name: read_path_policy_name(&source.id, &source.id, &profile.id, &path.id, "source"),
         command: PolicyCommand::Select,
         access_profile: profile.id.clone(),
@@ -1956,6 +2008,7 @@ fn read_path_through_policy(
     let source_authority =
         policy_authority_expression_for_alias(source, profile, Some("path_source"));
     DdlPolicy {
+        permissive: true,
         name: read_path_policy_name(&through.id, &source.id, &profile.id, &path.id, "through"),
         command: PolicyCommand::Select,
         access_profile: profile.id.clone(),
@@ -1993,6 +2046,7 @@ fn read_path_target_policy(
     let source_authority =
         policy_authority_expression_for_alias(source, profile, Some("path_source"));
     DdlPolicy {
+        permissive: true,
         name: read_path_policy_name(&target.id, &source.id, &profile.id, &path.id, "target"),
         command: PolicyCommand::Select,
         access_profile: profile.id.clone(),
@@ -2063,6 +2117,7 @@ fn immediate_action_target_policies_for_table(
                 .collect::<Vec<_>>()
                 .join(" OR ");
             policies.push(DdlPolicy {
+                permissive: true,
                 name: immediate_action_policy_name(
                     &action.id,
                     &target_entity.id,
@@ -2089,6 +2144,7 @@ fn immediate_action_target_policies_for_table(
                 .collect::<Vec<_>>();
             if !create_expressions.is_empty() {
                 policies.push(DdlPolicy {
+                    permissive: true,
                     name: immediate_action_policy_name(
                         &action.id,
                         &target_entity.id,
@@ -2133,6 +2189,7 @@ fn immediate_action_target_policies_for_table(
                     .collect::<Vec<_>>()
                     .join(" OR ");
                 policies.push(DdlPolicy {
+                    permissive: true,
                     name: immediate_action_policy_name(
                         &action.id,
                         &target_entity.id,
@@ -2175,6 +2232,7 @@ fn immediate_action_target_policies_for_table(
                     &grant.profile_id,
                 );
                 policies.push(DdlPolicy {
+                    permissive: true,
                     name: immediate_action_link_policy_name(
                         &action.id,
                         &target_entity.id,
@@ -2188,6 +2246,7 @@ fn immediate_action_target_policies_for_table(
                     check_expression: None,
                 });
                 policies.push(DdlPolicy {
+                    permissive: true,
                     name: immediate_action_link_lock_policy_name(
                         &action.id,
                         &target_entity.id,
@@ -2837,8 +2896,15 @@ pub(crate) fn policy_sql(table: &str, policy: &DdlPolicy, role: Option<&str>) ->
 
 pub(crate) fn policy_definition_sql(table: &str, policy: &DdlPolicy, role: Option<&str>) -> String {
     let mut sql = format!(
-        "CREATE POLICY {} ON registry_data.{table} FOR {}",
+        "CREATE POLICY {} ON registry_data.{table}{} FOR {}",
         quote_identifier(&policy.name),
+        // PERMISSIVE is PostgreSQL's default and stays implicit so a
+        // permissive policy keeps its definition marker.
+        if policy.permissive {
+            ""
+        } else {
+            " AS RESTRICTIVE"
+        },
         policy.command.as_sql()
     );
     if let Some(role) = role {
