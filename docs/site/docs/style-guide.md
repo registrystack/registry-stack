@@ -30,6 +30,29 @@ The principles above pull against each other on real pages. These are the tie-br
 - **Fewer pages over more.** Consolidate before splitting. A split is justified by a different reader or a different altitude, never by length alone; a long page is usually carrying another page's content, and the fix is to move that content home, not to mint a page for it.
 - **Publish or delete.** A page that cannot be published as it stands goes, with its useful lines moved to a page that can. `draft: true` is for a page days from publication, not a parking place for one nobody will finish.
 
+## What belongs in the docs
+
+The docs hold what a reader needs to use a product. General guidance on how to design a register, and on law or policy, does not belong here. No code can confirm it, so nobody can keep it true.
+
+A page stays when one of these holds:
+
+- A reader needs it to install, configure, operate, integrate with, or verify a product.
+- It is the one home of a product concept or a product limit.
+
+Inside a page that stays, a sentence stays when one of these holds:
+
+1. A change to code, a schema, a test, or a release could make it false.
+2. It sets out a decision the product forces, with the consequence of each option and no recommended answer.
+3. It states in one line what stays with the institution. That statement lives on one home page.
+4. It gives the reason for a product behaviour, in the form "the product assumes X because Y", or the reason for a step the reader runs.
+
+Everything else is advice, and it goes. Two checks find it:
+
+- Swap the product name for another product's. If the sentence is still true, it is not about this product.
+- For each imperative, ask what the reader configures or runs. If the answer is nothing, the sentence is advice.
+
+Before a page goes, move its product facts to the page that owns them. Advice worth keeping belongs in an article under its author's name, where a reader can weigh it as an opinion.
+
 ## Voice and tone
 
 - Use second person (`you`) for actions the reader takes, and keep using it to the end. A procedure that addresses the reader in the prerequisites and then goes impersonal for nine steps has stopped talking to anyone.
