@@ -62,7 +62,8 @@ use crate::config::{
     ReminderDestinationConfig, RuntimeConfig, RuntimeConfigError, TaskGrantStatus,
 };
 use crate::hooks::{ActivatedHooks, HookActivationError, HookRuntimeIdentity};
-use crate::http::{router, HttpState};
+use crate::http::{metrics_router, router, HttpState};
+use crate::metrics::{count_requests, Metrics, Worker};
 use crate::service::SchedulingService;
 use crate::store::{OutboxRow, PostgresStore, RoleMode, StoreError, SINGLE_ROLE_STATEMENT};
 
@@ -300,8 +301,10 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
 
     let (worker_stopped, worker_stops) = mpsc::channel(WORKER_STOP_CAPACITY);
     let mut workers = Vec::new();
+    let metrics = Arc::new(Metrics::default());
 
     let expiry_store = store.clone();
+    let expiry_metrics = Arc::clone(&metrics);
     workers.push(supervise(
         "hold expiry",
         worker_stopped.clone(),
@@ -311,10 +314,15 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
                 interval.tick().await;
                 let now = expiry_store.observed_now();
                 match expiry_store.expire_due_holds(now, HOLD_EXPIRY_BATCH).await {
-                    Ok(expired) if expired > 0 => {
-                        tracing::info!(expired, "Scheduling hold expiry pass retired due holds");
+                    Ok(expired) => {
+                        expiry_metrics.record_worker_success(Worker::HoldExpiry);
+                        if expired > 0 {
+                            tracing::info!(
+                                expired,
+                                "Scheduling hold expiry pass retired due holds"
+                            );
+                        }
                     }
-                    Ok(_) => {}
                     Err(error) => tracing::warn!(
                         error = %error,
                         "Scheduling hold expiry pass did not complete"
@@ -371,6 +379,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let claim_owner_retention_days = config.retention.claim_owner_retention_days;
     let receipt_retention_days = config.retention.receipt_retention_days;
     let retention_store = store.clone();
+    let retention_metrics = Arc::clone(&metrics);
     workers.push(supervise("retention", worker_stopped, async move {
         let mut interval = worker_timer();
         let mut ticks = 0_u8;
@@ -381,23 +390,31 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
                 continue;
             }
             let now = retention_store.observed_now();
+            let mut completed = true;
             if let Err(error) = retention_store.erase_expired_cursors(now).await {
+                completed = false;
                 tracing::warn!(error = %error, "Scheduling cursor retention pass did not complete");
             }
             if let Err(error) = retention_store
                 .erase_expired_claim_owners(now, claim_owner_retention_days)
                 .await
             {
+                completed = false;
                 tracing::warn!(error = %error, "Scheduling claim owner retention pass did not complete");
             }
             if let Err(error) = retention_store.erase_terminal_dispatch(now, receipt_retention_days).await {
+                completed = false;
                 tracing::warn!(error = %error, "Scheduling terminal dispatch retention pass did not complete");
             }
             if let Err(error) = retention_store.erase_expired_attempts(now).await {
+                completed = false;
                 tracing::warn!(
                     error = %error,
                     "Scheduling attempt receipt retention pass did not complete"
                 );
+            }
+            if completed {
+                retention_metrics.record_worker_success(Worker::Retention);
             }
         }
     }));
@@ -405,9 +422,26 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let app = router(HttpState {
         service,
         authenticator,
-    });
+    })
+    .layer(axum::middleware::from_fn_with_state(
+        Arc::clone(&metrics),
+        count_requests,
+    ));
     let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr()).await?;
-    let served = serve_until_worker_stops(listener, app, worker_stops).await;
+    // Both sockets bind before either serves, so a metrics address already in
+    // use refuses startup rather than leaving a runtime nobody can scrape.
+    let metrics_listener = match &config.metrics_listener {
+        Some(metrics_listener) => Some((
+            tokio::net::TcpListener::bind(metrics_listener.bind.socket_addr()).await?,
+            metrics_router(metrics, store.clone()),
+        )),
+        None => None,
+    };
+    tracing::info!(
+        metrics_listener = metrics_listener.is_some(),
+        "Scheduling listeners bound"
+    );
+    let served = serve_until_worker_stops(listener, app, metrics_listener, worker_stops).await;
     for worker in workers {
         worker.abort();
     }
@@ -481,11 +515,34 @@ impl RuntimeError {
 async fn serve_until_worker_stops(
     listener: tokio::net::TcpListener,
     app: axum::Router,
+    metrics: Option<(tokio::net::TcpListener, axum::Router)>,
     stops: mpsc::Receiver<&'static str>,
 ) -> Result<(), RuntimeError> {
-    axum::serve(listener, app)
+    let (stopped, mut metrics_stop) = tokio::sync::watch::channel(());
+    let metrics = metrics.map(|(listener, app)| {
+        tokio::spawn(async move {
+            // A listener that fails while the runtime serves is reported when
+            // it fails, not at shutdown. The API listener keeps serving.
+            if let Err(error) = axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = metrics_stop.changed().await;
+                })
+                .await
+            {
+                tracing::error!(error = %error, "the Scheduling metrics listener failed");
+            }
+        })
+    });
+    let served = axum::serve(listener, app)
         .with_graceful_shutdown(worker_stop(stops))
-        .await?;
+        .await;
+    drop(stopped);
+    if let Some(metrics) = metrics {
+        if let Err(error) = metrics.await {
+            tracing::error!(error = %error, "the Scheduling metrics listener stopped unexpectedly");
+        }
+    }
+    served?;
     Err(RuntimeError::WorkerStopped)
 }
 

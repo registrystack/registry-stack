@@ -43,6 +43,11 @@ listener:
   # non-loopback bind. `networkExposure: container-private` additionally
   # permits an unspecified bind for a listener kept on a private container
   # network.
+metricsListener:
+  # /metrics is served only here, never on the API listener. The address must
+  # be loopback or private, and must not share the API listener's socket. Omit
+  # the block to serve no metrics at all.
+  bind: 127.0.0.1:9105
 secretProviders:
   file:
     # Every secret:file reference resolves under this root. A secret file must

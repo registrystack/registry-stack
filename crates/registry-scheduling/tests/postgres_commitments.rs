@@ -11904,3 +11904,117 @@ mod terminal_retention {
         );
     }
 }
+
+/// The queue depths the metrics listener samples, read from real rows.
+mod queue_depth {
+    use super::*;
+
+    #[tokio::test]
+    async fn outbox_and_hook_depths_report_stored_states_and_the_oldest_pending_age() {
+        let fx = hook_fixture().await;
+        let slot = first_slot(&fx, OFFERING, 90, 200).await;
+        let booking = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+        let (status, appointment) = fx
+            .post("/v1/appointments", &fx.agent, "queue-depth-0", booking)
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{appointment}");
+        let claim = Uuid::parse_str(appointment["appointmentId"].as_str().unwrap()).unwrap();
+        let earliest: DateTime<Utc> = fx
+            .admin
+            .query_one(
+                "SELECT min(due_at) FROM scheduling_outbox WHERE state='pending'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        let now = earliest + TimeDelta::seconds(120);
+        fx.admin
+            .execute(
+                "INSERT INTO scheduling_outbox
+         (outbox_id,purpose,generation,state,attempt,claim_id,appointment_revision,due_at,
+          payload,created_at,dead_lettered_at,last_failure_class)
+         VALUES (gen_random_uuid(),'change',1,'dead-lettered',3,$1,1,$2,'{}'::jsonb,$2,$2,
+                 'superseded')",
+                &[&claim, &earliest],
+            )
+            .await
+            .unwrap();
+        fx.admin
+            .execute(
+                "UPDATE registry_webhook_delivery_state SET state='dead-lettered', attempt=1,
+                 next_attempt_at=NULL, dead_lettered_at=$1, dead_letter_reason='http-non-success',
+                 updated_at=$1",
+                &[&now],
+            )
+            .await
+            .unwrap();
+
+        let outbox = fx.store.outbox_depth(now).await.expect("sample the outbox");
+        let count = |state: &str| {
+            outbox
+                .by_state
+                .iter()
+                .find(|(stored, _)| stored == state)
+                .map_or(0, |(_, count)| *count)
+        };
+        assert_eq!(count("dead-lettered"), 1);
+        assert!(count("pending") >= 1);
+        assert_eq!(outbox.oldest_pending_age_seconds, 120);
+
+        let hooks = fx
+            .store
+            .hook_delivery_depth(now)
+            .await
+            .expect("sample the hook deliveries");
+        let dead: i64 = hooks
+            .by_state
+            .iter()
+            .filter(|(state, _)| state == "dead-lettered")
+            .map(|(_, count)| *count)
+            .sum();
+        assert!(dead >= 1, "{hooks:?}");
+        assert!(hooks.by_state.iter().all(|(state, _)| state != "pending"));
+        assert_eq!(hooks.oldest_pending_age_seconds, 0);
+    }
+
+    #[tokio::test]
+    async fn the_metrics_listener_serves_sampled_queues_and_nothing_else() {
+        use tower::ServiceExt;
+        let fx = hook_fixture().await;
+        let metrics = Arc::new(registry_scheduling::metrics::Metrics::default());
+        let app = registry_scheduling::http::metrics_router(metrics, fx.store.clone());
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/metrics")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            text.contains("scheduling_outbox_items{state=\"dead-lettered\"} 0"),
+            "{text}"
+        );
+        assert!(
+            text.contains("scheduling_hook_deliveries{state=\"pending\"}"),
+            "{text}"
+        );
+        assert!(text.contains("scheduling_worker_last_success_age_seconds{worker=\"retention\"}"));
+        let other = app
+            .oneshot(
+                axum::http::Request::get("/v1/appointments")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(other.status(), StatusCode::NOT_FOUND);
+    }
+}

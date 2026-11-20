@@ -370,6 +370,52 @@ fn serve_health_and_ready() {
     let _ = home;
 }
 
+/// `/metrics` is served on the metricsListener socket and nowhere else. A
+/// refused render is counted by result, and the API listener answers the
+/// metrics path with the same not-found as any unknown route.
+#[test]
+fn the_metrics_listener_serves_the_series_and_the_api_listener_does_not() {
+    let (home, runtime, _) = deployment(
+        DEFAULT_LIMITS,
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    let metrics_port = free_port();
+    let text = std::fs::read_to_string(&runtime).unwrap();
+    std::fs::write(
+        &runtime,
+        text.replace(
+            "package:\n",
+            &format!("metricsListener:\n  bind: 127.0.0.1:{metrics_port}\npackage:\n"),
+        ),
+    )
+    .unwrap();
+    let server = start_server(&runtime);
+    let refused = request(
+        server.port,
+        "POST",
+        "/v1/render/receipt",
+        &[("Content-Type", "application/json")],
+        Some("{}"),
+    );
+    assert_eq!(refused.status, 401);
+    let scraped = request(metrics_port, "GET", "/metrics", &[], None);
+    assert_eq!(scraped.status, 200);
+    let body = String::from_utf8(scraped.body).expect("text exposition");
+    assert!(
+        body.contains("render_documents_total{operation=\"render\",result=\"refused\"} 1"),
+        "{body}"
+    );
+    assert!(
+        body.contains("\nrender_audit_write_failures_total 0\n"),
+        "{body}"
+    );
+    assert!(body.contains("# TYPE render_seal_certificate_expiry_seconds gauge"));
+    let on_the_api = request(server.port, "GET", "/metrics", &[], None);
+    assert_eq!(on_the_api.status, 404);
+    drop(server);
+    let _ = home;
+}
+
 /// `serve` marks itself non-dumpable before it reads any secret, so another
 /// process of the serving user, a render worker included, cannot read its
 /// environment. Removing the mark from `serve` fails this test; the control

@@ -37,6 +37,7 @@ use crate::audit::{RenderAudit, RenderAuditEvent};
 use crate::auth::{RENDER_SCOPE, SEAL_SCOPE};
 use crate::bundle::Bundle;
 use crate::hash::sha256_label;
+use crate::metrics::{Metrics, Operation, METRICS_PATH};
 use crate::problem::{ProblemKind, RenderProblem, PROBLEM_TYPE_BASE};
 use crate::runtime;
 use crate::seal::{Seal, SealedDocument, Seals};
@@ -148,6 +149,12 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
             "listener.bind is outside the declared private network exposure",
         ));
     }
+    if !runtime.metrics_listener_allowed() {
+        return Err(RenderProblem::new(
+            ProblemKind::RuntimeInvalid,
+            "metricsListener.bind must be a private address on a non-zero port, apart from the listener",
+        ));
+    }
     let bundle = runtime::load_package(&runtime)?;
     crate::check::check_labels(&bundle)?;
     for warning in runtime::validate_seal_bindings(&runtime, &bundle.manifest)? {
@@ -230,7 +237,31 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     let listener = tokio::net::TcpListener::bind(bind).await.map_err(|err| {
         RenderProblem::new(ProblemKind::RuntimeInvalid, format!("bind {bind}: {err}"))
     })?;
-    let app = router(Arc::clone(&service)).layer(axum::middleware::from_fn(lifecycle_log));
+    let metrics = Arc::new(Metrics::default());
+    // Both sockets bind before either serves, so a metrics address already
+    // in use refuses startup rather than leaving a runtime nobody can scrape.
+    let metrics_listener = match &runtime.metrics_listener {
+        Some(metrics_listener) => {
+            let metrics_bind = metrics_listener.bind.socket_addr();
+            Some(
+                tokio::net::TcpListener::bind(metrics_bind)
+                    .await
+                    .map_err(|err| {
+                        RenderProblem::new(
+                            ProblemKind::RuntimeInvalid,
+                            format!("bind metrics listener {metrics_bind}: {err}"),
+                        )
+                    })?,
+            )
+        }
+        None => None,
+    };
+    let app = router(Arc::clone(&service))
+        .layer(axum::middleware::from_fn(lifecycle_log))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&metrics),
+            count_documents,
+        ));
     let grace = runtime.listener.shutdown_grace();
     let drain_service = Arc::clone(&service);
     // The stop signal is observed once and broadcast, so the drain and the
@@ -273,15 +304,43 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     // waits for open connections; that wait gets one more grace. Dropping
     // the serve future at the bound is what actually abandons stragglers —
     // their request futures drop, which kills their workers (kill_on_drop).
+    let stop_for_bound_metrics = stop_rx.clone();
     let mut stop_for_bound = stop_rx;
     let bound = async move {
         let _ = stop_for_bound.changed().await;
         tokio::time::sleep(grace + grace).await;
     };
+    // The metrics listener stops on the same signal. It holds no render, so
+    // it needs no drain, and a scrape in flight is not worth a grace period.
+    let metrics_server = metrics_listener.map(|listener| {
+        let app = metrics_router(Arc::clone(&service), metrics);
+        let mut stop_for_metrics = stop_for_bound_metrics;
+        tokio::spawn(async move {
+            // A listener that fails while the runtime serves is reported when
+            // it fails, not at shutdown. The document listener keeps serving.
+            if let Err(err) = axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = stop_for_metrics.changed().await;
+                })
+                .await
+            {
+                tracing::error!(error = %err, "the metrics listener failed");
+            }
+        })
+    });
     let outcome = tokio::select! {
         result = axum::serve(listener, app).with_graceful_shutdown(shutdown) => Some(result),
         _ = bound => None,
     };
+    if let Some(metrics_server) = metrics_server {
+        match tokio::time::timeout(grace, metrics_server).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                tracing::error!(error = %err, "the metrics listener stopped unexpectedly");
+            }
+            Err(_) => tracing::warn!("the metrics listener did not stop within the grace"),
+        }
+    }
     match outcome {
         Some(Ok(())) => {}
         Some(Err(err)) => {
@@ -561,6 +620,55 @@ async fn lifecycle_log(
         "request completed"
     );
     response
+}
+
+/// Count every call to the render and seal routes under its status class.
+async fn count_documents(
+    State(metrics): State<Arc<Metrics>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let operation = match route_template(request.uri().path()) {
+        "/v1/render/{type}" => Some(Operation::Render),
+        "/v1/seal/{type}" => Some(Operation::Seal),
+        _ => None,
+    };
+    let response = next.run(request).await;
+    if let Some(operation) = operation {
+        metrics.record_document(operation, response.status());
+    }
+    response
+}
+
+#[derive(Clone)]
+struct MetricsState {
+    metrics: Arc<Metrics>,
+    service: Arc<Service>,
+}
+
+/// The operator-private router the metrics listener serves: the series, with
+/// the seal certificate lifetimes read at each scrape.
+pub fn metrics_router(service: Arc<Service>, metrics: Arc<Metrics>) -> Router {
+    Router::new()
+        .route(METRICS_PATH, get(serve_metrics))
+        .with_state(MetricsState { metrics, service })
+        .layer(security_headers(CspBuilder::restrictive()))
+}
+
+async fn serve_metrics(State(state): State<MetricsState>) -> Response {
+    let text = state.metrics.render(
+        state.service.audit.write_failures(),
+        &state.service.seals,
+        time::OffsetDateTime::now_utc(),
+    );
+    (
+        [(
+            header::CONTENT_TYPE,
+            registry_platform_metrics::CONTENT_TYPE,
+        )],
+        text,
+    )
+        .into_response()
 }
 
 fn operational_method(method: &axum::http::Method) -> &'static str {
@@ -2183,6 +2291,132 @@ mod tests {
             "no response entry follows a refused request entry"
         );
         assert!(lines.accepted().is_empty());
+    }
+
+    /// The series the metrics listener serves for `service` after `metrics`
+    /// counted whatever the test sent through the counting layer.
+    async fn scraped(service: &Arc<Service>, metrics: &Arc<Metrics>) -> String {
+        let response = metrics_router(Arc::clone(service), Arc::clone(metrics))
+            .oneshot(
+                axum::http::Request::get("/metrics")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("router");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("metrics body");
+        String::from_utf8(body.to_vec()).expect("text exposition")
+    }
+
+    #[tokio::test]
+    async fn a_failed_audit_write_is_counted_and_the_call_is_a_failed_render() {
+        let lines = AuditLines::new(Some(1));
+        let service = service(&lines, 1);
+        let metrics = Arc::new(Metrics::default());
+        let app = router(Arc::clone(&service)).layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&metrics),
+            count_documents,
+        ));
+        let response = app.oneshot(render_request(None)).await.expect("router");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let text = scraped(&service, &metrics).await;
+        assert!(
+            text.contains("\nrender_audit_write_failures_total 1\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("render_documents_total{operation=\"render\",result=\"failed\"} 1"),
+            "{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn only_the_document_routes_are_counted_and_the_listener_serves_nothing_else() {
+        let lines = AuditLines::new(None);
+        let service = service(&lines, 1);
+        let metrics = Arc::new(Metrics::default());
+        let app = router(Arc::clone(&service)).layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&metrics),
+            count_documents,
+        ));
+        let health = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/health")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("router");
+        assert_eq!(health.status(), StatusCode::OK);
+        let unauthenticated = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/render/receipt")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("router");
+        assert!(unauthenticated.status().is_client_error());
+        let text = scraped(&service, &metrics).await;
+        assert!(
+            text.contains("render_documents_total{operation=\"render\",result=\"refused\"} 1"),
+            "{text}"
+        );
+        assert!(
+            text.contains("render_documents_total{operation=\"render\",result=\"ok\"} 0"),
+            "{text}"
+        );
+        let elsewhere = metrics_router(Arc::clone(&service), metrics)
+            .oneshot(
+                axum::http::Request::get("/health")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("router");
+        assert_eq!(elsewhere.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn each_loaded_seal_reports_its_certificate_lifetime() {
+        use registry_platform_crypto::document_signature::test_support::TestPki;
+        use registry_platform_crypto::SigningAlgorithm;
+        let lines = AuditLines::new(None);
+        let mut service = service(&lines, 1);
+        let pki = TestPki::generate().expect("test PKI");
+        let test_seal = pki.issue_seal(SigningAlgorithm::Es256).expect("test seal");
+        let seal = Arc::new(Seal::for_test(
+            "ministry",
+            &test_seal,
+            Arc::new(test_seal.signer().expect("test signer")),
+        ));
+        Arc::get_mut(&mut service)
+            .expect("fixture owns service")
+            .seals
+            .insert("ministry".to_owned(), seal);
+        let text = scraped(&service, &Arc::new(Metrics::default())).await;
+        let sample = text
+            .lines()
+            .find(|line| {
+                line.starts_with("render_seal_certificate_expiry_seconds{seal=\"ministry\"} ")
+            })
+            .unwrap_or_else(|| panic!("no expiry sample: {text}"));
+        let seconds: i64 = sample
+            .rsplit(' ')
+            .next()
+            .unwrap()
+            .parse()
+            .expect("whole seconds");
+        assert!(
+            seconds > 0,
+            "a freshly issued test certificate is valid: {sample}"
+        );
     }
 
     #[tokio::test]

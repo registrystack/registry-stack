@@ -3,6 +3,11 @@ apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1
 kind: RenderRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
+metricsListener:
+  # /metrics is served only here, never on the document API listener. The
+  # address must be loopback or private, and must not share that listener's
+  # socket. Omit the block to serve no metrics at all.
+  bind: 127.0.0.1:9108
 package:
   root: /var/lib/registry-render/package
 secretProviders:

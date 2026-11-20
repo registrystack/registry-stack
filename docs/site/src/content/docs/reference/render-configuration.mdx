@@ -60,6 +60,15 @@ another value, such as `audit.path` on `audit.destination`. `audit.rotateBytes` 
 {/* Evidence: crates/registry-platform-audit/src/writer.rs, DEFAULT_AUDIT_ROTATE_BYTES and
     DEFAULT_AUDIT_RETAIN_DAYS. */}
 
+`metricsListener` is optional and absent by default.
+When it is present, `metricsListener.bind` is required and `/metrics` is served on that socket only.
+When it is absent, no metrics are served.
+The address must be a concrete loopback or private address on a non-zero port.
+It must not be the `listener` socket, or one that a wildcard `listener` already covers.
+A refused address stops startup and `check` with `render.runtime.invalid-metrics-listener`.
+
+{/* Evidence: crates/registry-render/src/runtime.rs, RenderRuntime::metrics_listener_allowed. */}
+
 ## Seal documents
 
 The tables above list the `signing.seals.<id>` keys and the manifest's per-document `seal`. These

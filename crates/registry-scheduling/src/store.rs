@@ -358,6 +358,15 @@ impl StoreError {
     }
 }
 
+/// The work waiting in one queue: a count per stored state, and the age in
+/// seconds of the oldest pending item (zero when none is pending or the
+/// oldest is not yet due).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct QueueDepth {
+    pub by_state: Vec<(String, i64)>,
+    pub oldest_pending_age_seconds: i64,
+}
+
 #[derive(Clone)]
 pub struct PostgresStore {
     pool: Pool,
@@ -1025,6 +1034,54 @@ impl PostgresStore {
         &self,
     ) -> Result<deadpool_postgres::Client, StoreError> {
         self.client().await
+    }
+
+    /// How many reminder and notice intents wait in each outbox state, and
+    /// how long overdue the oldest pending one is at `now`. The read is
+    /// bounded so a slow store cannot hold a scrape open.
+    pub async fn outbox_depth(&self, now: DateTime<Utc>) -> Result<QueueDepth, StoreError> {
+        self.queue_depth(
+            "SELECT state, count(*) FROM scheduling_outbox GROUP BY state",
+            "SELECT min(due_at) FROM scheduling_outbox WHERE state = 'pending'",
+            now,
+        )
+        .await
+    }
+
+    /// How many observer-hook deliveries wait in each delivery state, and
+    /// how long ago the oldest pending one's event was captured, at `now`.
+    pub async fn hook_delivery_depth(&self, now: DateTime<Utc>) -> Result<QueueDepth, StoreError> {
+        self.queue_depth(
+            "SELECT state, count(*) FROM registry_webhook_delivery_state GROUP BY state",
+            "SELECT min(o.created_at) FROM registry_webhook_delivery_state s \
+             JOIN registry_outbox o USING (event_id) WHERE s.state = 'pending'",
+            now,
+        )
+        .await
+    }
+
+    async fn queue_depth(
+        &self,
+        counts: &str,
+        oldest: &str,
+        now: DateTime<Utc>,
+    ) -> Result<QueueDepth, StoreError> {
+        let mut client = self.client().await?;
+        let transaction = client.build_transaction().read_only(true).start().await?;
+        transaction
+            .batch_execute("SET LOCAL statement_timeout = '2s'")
+            .await?;
+        let mut by_state = Vec::new();
+        for row in transaction.query(counts, &[]).await? {
+            by_state.push((row.try_get::<_, String>(0)?, row.try_get::<_, i64>(1)?));
+        }
+        let oldest: Option<DateTime<Utc>> = transaction.query_one(oldest, &[]).await?.try_get(0)?;
+        transaction.commit().await?;
+        let oldest_pending_age_seconds = oldest.map_or(0, |at| (now - at).num_seconds().max(0));
+        Ok(QueueDepth {
+            by_state,
+            oldest_pending_age_seconds,
+        })
     }
 
     /// The schema this store's connections work in.

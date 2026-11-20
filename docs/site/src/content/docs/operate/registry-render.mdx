@@ -631,6 +631,49 @@ verdict on the issuer, not a failure of the file's integrity.
     and an_unreadable_or_invalid_chain_refuses_startup_by_position;
     crates/registry-render/tests/check_seals.rs, check_with_the_environment_reads_each_seal_certificate_chain. */}
 
+## Watch the metrics
+
+Add a `metricsListener` block to `runtime.yaml` to serve Prometheus text:
+
+```yaml
+metricsListener:
+  bind: 127.0.0.1:9108
+```
+
+Without the block, Render serves no metrics. The address must be loopback or private, and must not
+be the `listener` socket. A refused address stops `serve` and fails `check` with
+`render.runtime.invalid-metrics-listener`. `GET /metrics` on that socket answers the series below
+and nothing else. The document listener answers `/metrics` with not found.
+
+| Series | Labels | Meaning |
+| --- | --- | --- |
+| `render_documents_total` | `operation`: `render`, `seal`. `result`: `ok`, `refused`, `failed` | Calls to the render and seal routes. `ok` is a 2xx answer, `refused` a 4xx answer, and `failed` a 5xx answer |
+| `render_audit_write_failures_total` | none | Audit entries that could not be written |
+| `render_seal_certificate_expiry_seconds` | `seal`: each seal id from your `signing.seals` | Gauge of seconds until the seal's certificate stops being valid. Negative once it has |
+
+Every operation and result starts at zero. A call that fails closed on an audit write answers 503
+with `audit-failed`, so it also counts under `result="failed"`. Alert on any increase in
+`render_audit_write_failures_total`, because renders are refused until the writer recovers.
+Authentication and validation refusals count under `refused`, so a rising `refused` rate with no
+change in your callers usually means a wrong key or a bad payload.
+
+The expiry gauge is worked out from each loaded certificate chain at the moment of the scrape. It
+reads no database and calls no timestamp authority or signer. Alert before it reaches zero, for
+example when it is under 30 days, which matches the `check --environment` warning. With no `signing`
+block the gauge has a header and no samples. The `seal` label is the id you wrote in the runtime
+file, so the set of values is bounded by that file.
+
+The audit counter counts writes that failed while the call was in flight. With
+`audit.destination: stdout`, a dropped call hands its entry to the stream to finish later. A failure
+at that point is not counted. The `/ready` route still reports a stopped writer.
+
+Counters restart at zero when the process restarts.
+
+{/* Evidence: crates/registry-render/src/metrics.rs, Metrics and render;
+    crates/registry-render/src/audit.rs, RenderAudit write_failures;
+    crates/registry-render/src/server.rs, count_documents and metrics_router;
+    crates/registry-render/tests/serve.rs, the_metrics_listener_serves_the_series_and_the_api_listener_does_not. */}
+
 ## Keep the audit file
 
 Each line is one entry with `schema` (`render.registrystack.org/audit/v1`), `eventId`, `time`,
