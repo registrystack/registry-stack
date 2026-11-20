@@ -91,6 +91,22 @@
 - The Evidence starter `evidence/starter/definitions.yaml.fragment` writes
   `functions` as a map keyed by the Function id, the shape `EvidenceProject`
   reads. Merge its entries into the project's `functions` map.
+- An access profile record permission can set `requiredFilters`, a list of
+  alternative `fields` sets that a `list` must pin with top-level `eq`
+  predicates carrying a non-null value. A list or `$count` that does not is
+  refused with `400 query.filter_required` before any query runs. The problem
+  carries a `requiredFilters` member and a `detail` that name the acceptable
+  sets. A continuation page cannot drop the criteria, because the signed cursor
+  binds the first page's filter. `bregctl check` refuses a `requiredFilters`
+  that is empty, repeats a field or an alternative, has more than eight
+  alternatives, names a field outside the same grant's `filterableFields` or one
+  that cannot take `eq`, or sits on a grant without `list`. Runtime metadata
+  lists the alternatives beside `filterableFields`, the Rust client exposes
+  `BRegQueryDescriptor::required_filters` and
+  `BRegProblemCode::QueryFilterRequired`, and the OpenAPI problem enum gains
+  `query.filter_required`, so a package's revision changes on rebuild. The
+  key governs `list` only. Lookups, get, read paths, bulk export and `snapshot`
+  are unchanged.
 - Runtime Action metadata (`GET /v1/registry`, `metadata/registry.json` and the
   OpenAPI `x-registry-action` extension) carries `execution.review` (`none` or
   `required`) and `execution.application` (`manual` or `automatic`) for each
