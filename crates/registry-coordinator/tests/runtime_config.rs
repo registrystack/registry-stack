@@ -1297,6 +1297,34 @@ fn the_metrics_listener_is_optional_private_and_apart_from_the_listener() {
         assert!(!format!("{error}").contains(bind), "{bind}");
         assert!(!format!("{error:?}").contains(bind), "{bind}");
     }
+    // `container-private` permits the wildcard and nothing else.
+    let container = json!({"bind": "0.0.0.0:9108", "networkExposure": "container-private"});
+    let wildcard = with_metrics(container);
+    let deployment = load(&serde_norway::to_string(&wildcard).unwrap())
+        .expect("container-private permits the wildcard")
+        .deployment
+        .expect("deployment");
+    assert!(deployment.metrics_listener.is_some());
+    for bind in [
+        "203.0.113.4:9108",
+        "169.254.1.1:9108",
+        "0.0.0.0:0",
+        "0.0.0.0:8108",
+    ] {
+        let error = refused(
+            &serde_norway::to_string(&with_metrics(
+                json!({"bind": bind, "networkExposure": "container-private"}),
+            ))
+            .unwrap(),
+        );
+        assert_eq!(
+            error.field.as_deref(),
+            Some("/deployment/metricsListener/bind"),
+            "{bind}"
+        );
+    }
+    #[cfg(feature = "schema")]
+    assert!(validator.is_valid(&wildcard));
     let private = with_metrics(json!({"bind": "127.0.0.1:9108"}));
     let deployment = load(&serde_norway::to_string(&private).unwrap())
         .unwrap()
