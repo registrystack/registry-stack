@@ -16,9 +16,12 @@ from pathlib import Path
 
 
 KEY_NAME = "evidence-signing"
+KEY_PATH = f"/v1/transit/keys/{KEY_NAME}"
+SIGN_PATH = f"/v1/transit/sign/{KEY_NAME}/sha2-256"
+# Maps each allowed (method, request path) to the constant path sent to Vault.
 ALLOWED = {
-    ("GET", f"/v1/transit/keys/{KEY_NAME}"),
-    ("POST", f"/v1/transit/sign/{KEY_NAME}/sha2-256"),
+    ("GET", KEY_PATH): KEY_PATH,
+    ("POST", SIGN_PATH): SIGN_PATH,
 }
 MAXIMUM_REQUEST_BYTES = 64 * 1024
 MAXIMUM_RESPONSE_BYTES = 1024 * 1024
@@ -26,6 +29,11 @@ MAXIMUM_RESPONSE_BYTES = 1024 * 1024
 
 def is_allowed(method, path):
     return (method, path) in ALLOWED
+
+
+def upstream_path(method, path):
+    """Return the constant Vault path for an allowed request, else None."""
+    return ALLOWED.get((method, path))
 
 
 def handler_factory(vault_host, vault_port, vault_token):
@@ -48,7 +56,8 @@ def handler_factory(vault_host, vault_port, vault_token):
             self.forward()
 
         def forward(self):
-            if not is_allowed(self.command, self.path):
+            target = upstream_path(self.command, self.path)
+            if target is None:
                 self.send_json_error(403, "qualification proxy refused the operation")
                 return
             try:
@@ -69,7 +78,7 @@ def handler_factory(vault_host, vault_port, vault_token):
 
             connection = http.client.HTTPConnection(vault_host, vault_port, timeout=2)
             try:
-                connection.request(self.command, self.path, body=body, headers=headers)
+                connection.request(self.command, target, body=body, headers=headers)
                 upstream = connection.getresponse()
                 response = upstream.read(MAXIMUM_RESPONSE_BYTES + 1)
                 if len(response) > MAXIMUM_RESPONSE_BYTES:
@@ -113,6 +122,7 @@ def main():
         try:
             server.serve_forever()
         except KeyboardInterrupt:
+            # Ctrl-C is the intended way to stop this development fixture.
             pass
 
 

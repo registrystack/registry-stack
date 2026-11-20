@@ -36,7 +36,7 @@ spec:
             - |
               set -euo pipefail
               for _attempt in {1..60}; do
-                if exec 3<>/dev/tcp/registry-postgres.registry-k3s-proof.svc.cluster.local/5432; then
+                if exec 3<>/dev/tcp/registry-postgres.directory.svc.cluster.local/5432; then
                   exec 3>&-
                   exit 0
                 fi
@@ -129,7 +129,7 @@ spec:
               readOnly: true
             - name: agents
               mountPath: /opt/thunderid/bootstrap/80-registry-agent.yaml
-              subPath: e5800b87-0f79-73df-88c1-1216b97768ba.yaml
+              subPath: agent.yaml
               readOnly: true
       volumes:
         - name: tmp

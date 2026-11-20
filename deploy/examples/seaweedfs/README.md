@@ -5,11 +5,15 @@ Stack installation. It uses the unmodified upstream chart and image. It does
 not install an operator, admin UI, worker, COSI driver, object-versioning
 workflow, or a Registry Stack-owned storage chart.
 
-The reference layout is a single-node pilot, not an HA storage service. It has
+The reference layout is a single-node layout for a pilot deployment. It is not an HA storage service. It has
 one master, one filer, one volume server, and one S3 gateway. Master metadata,
 filer metadata, and object bytes use separate PVCs. Loss of the node or any one
 PVC can lose the attachment store, so the backup procedure below is part of the
 operating contract.
+
+The commands use the same invocations as the [main guide](../../README.md).
+`sudo k3s kubectl` reads the root-only K3s kubeconfig. Helm lives in
+`/usr/local/lib/registry-stack`, which is not on `PATH`.
 
 ## Pinned upstream inputs
 
@@ -26,14 +30,14 @@ The upstream sources for this profile are the [4.53 release](https://github.com/
 Verify the downloaded chart before rendering it:
 
 ```bash
-helm repo add seaweedfs https://seaweedfs.github.io/seaweedfs/helm
-helm repo update seaweedfs
-helm pull seaweedfs/seaweedfs --version 4.53.0 \
+/usr/local/lib/registry-stack/helm repo add seaweedfs https://seaweedfs.github.io/seaweedfs/helm
+/usr/local/lib/registry-stack/helm repo update seaweedfs
+/usr/local/lib/registry-stack/helm pull seaweedfs/seaweedfs --version 4.53.0 \
   --destination /absolute/private/seaweedfs-chart
 printf '%s  %s\n' \
   778f079cfbdf026a1a523569d385816d00df51ac049b1383db0cfaf6a094656c \
   /absolute/private/seaweedfs-chart/seaweedfs-4.53.0.tgz | shasum -a 256 -c -
-helm template registry-seaweedfs \
+/usr/local/lib/registry-stack/helm template registry-seaweedfs \
   /absolute/private/seaweedfs-chart/seaweedfs-4.53.0.tgz \
   --namespace registry-storage \
   --values deploy/examples/seaweedfs/values.reference.yaml \
@@ -41,9 +45,9 @@ helm template registry-seaweedfs \
 ```
 
 Review the render before applying it. Confirm every master, filer, volume, and
-S3 container uses the digest above; only three PVCs are rendered; no
-ClusterRole, admin, worker, COSI, all-in-one, resize-hook, or extra image is
-present.
+S3 container uses the digest above. Confirm that only three PVCs are rendered.
+Confirm that no ClusterRole, admin, worker, COSI, all-in-one, resize-hook, or
+extra image is present.
 
 ## Authority and secret split
 
@@ -82,21 +86,21 @@ Generate them with the institution's secret manager. The following commands
 read the files and do not print their values:
 
 ```bash
-kubectl create namespace registry-storage
-kubectl -n registry-storage create secret generic registry-breg-s3 \
+sudo k3s kubectl create namespace registry-storage
+sudo k3s kubectl -n registry-storage create secret generic registry-breg-s3 \
   --from-file=access-key-id=/absolute/private/seaweedfs-secrets/app-access-key-id \
   --from-file=secret-access-key=/absolute/private/seaweedfs-secrets/app-secret-access-key \
-  --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n registry-storage create secret generic registry-seaweedfs-bootstrap \
+  --dry-run=client -o yaml | sudo k3s kubectl apply -f -
+sudo k3s kubectl -n registry-storage create secret generic registry-seaweedfs-bootstrap \
   --from-file=access-key-id=/absolute/private/seaweedfs-secrets/bootstrap-access-key-id \
   --from-file=secret-access-key=/absolute/private/seaweedfs-secrets/bootstrap-secret-access-key \
-  --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n registry-storage apply \
+  --dry-run=client -o yaml | sudo k3s kubectl apply -f -
+sudo k3s kubectl -n registry-storage apply \
   -f deploy/examples/seaweedfs/s3-config-bootstrap-secret.yaml
 ```
 
 `values.reference.yaml` admits only the chart's own workload traffic. The
-stable HTTPS overlay below admits Traefik to S3; BReg reaches only that TLS
+stable HTTPS overlay below admits Traefik to S3. BReg reaches only that TLS
 endpoint. The S3 Service remains `ClusterIP`.
 
 ## Install and create the bucket
@@ -104,13 +108,14 @@ endpoint. The S3 Service remains `ClusterIP`.
 Install once with the bootstrap overlay:
 
 ```bash
-helm install registry-seaweedfs \
+sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \
+  /usr/local/lib/registry-stack/helm install registry-seaweedfs \
   /absolute/private/seaweedfs-chart/seaweedfs-4.53.0.tgz \
   --namespace registry-storage \
   --values deploy/examples/seaweedfs/values.reference.yaml \
   --values deploy/examples/seaweedfs/values.bootstrap.yaml \
   --wait --timeout 10m
-kubectl -n registry-storage rollout status deployment/registry-seaweedfs-s3 \
+sudo k3s kubectl -n registry-storage rollout status deployment/registry-seaweedfs-s3 \
   --timeout=5m
 ```
 
@@ -120,7 +125,7 @@ loopback-only port-forward in a second terminal, then create only the named
 bucket. This operator-only loopback HTTP probe is not the BReg binding:
 
 ```bash
-kubectl -n registry-storage port-forward \
+sudo k3s kubectl -n registry-storage port-forward \
   service/registry-seaweedfs-s3 18333:8333
 curl --config /absolute/private/bootstrap.curl \
   --aws-sigv4 'aws:amz:us-east-1:s3' \
@@ -132,16 +137,17 @@ Apply the steady-state config, upgrade without the bootstrap overlay, wait for
 the S3 rollout, and only then delete the bootstrap Secret:
 
 ```bash
-kubectl -n registry-storage apply \
+sudo k3s kubectl -n registry-storage apply \
   -f deploy/examples/seaweedfs/s3-config-secret.yaml
-helm upgrade registry-seaweedfs \
+sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \
+  /usr/local/lib/registry-stack/helm upgrade registry-seaweedfs \
   /absolute/private/seaweedfs-chart/seaweedfs-4.53.0.tgz \
   --namespace registry-storage \
   --values deploy/examples/seaweedfs/values.reference.yaml \
   --wait --timeout 10m
-kubectl -n registry-storage rollout status deployment/registry-seaweedfs-s3 \
+sudo k3s kubectl -n registry-storage rollout status deployment/registry-seaweedfs-s3 \
   --timeout=5m
-kubectl -n registry-storage delete secret registry-seaweedfs-bootstrap
+sudo k3s kubectl -n registry-storage delete secret registry-seaweedfs-bootstrap
 ```
 
 Retest the old bootstrap credential through the loopback port-forward. It must
@@ -170,7 +176,7 @@ example hostname only before the first activation. The example is the exact
 v0.46.0 `attachmentStorage` shape. BReg rejects non-loopback HTTP, including a
 plain Kubernetes Service DNS URL. Cluster-local BReg pods must therefore use
 the same stable HTTPS hostname as every other caller. The certificate leaf
-must contain the exact SAN `DNS:storage.registry.example.gov`, and `s3-ca.pem`
+must contain the exact SAN `DNS:storage.registry.example.org`, and `s3-ca.pem`
 must contain the exact issuing CA bundle selected by `caBundleRef`.
 
 BReg checks `GET ?versioning` at startup and verifies every write by reading
@@ -185,8 +191,8 @@ recoverable older object.
 ### Stable HTTPS at the existing K3s edge
 
 Use the chart's standard S3 Ingress with the existing K3s Traefik controller
-for both cluster-local and external callers. TLS terminates at that Ingress;
-its backend remains the NetworkPolicy-isolated ClusterIP service. Create the
+for both cluster-local and external callers. TLS terminates at that Ingress.
+Its backend remains the NetworkPolicy-isolated ClusterIP service. Create the
 TLS Secret from an institution-controlled leaf whose SAN is the stable
 hostname, then add a private values overlay like this:
 
@@ -195,10 +201,10 @@ s3:
   ingress:
     enabled: true
     className: traefik
-    host: storage.registry.example.gov
+    host: storage.registry.example.org
     tls:
       - secretName: registry-seaweedfs-s3-tls
-        hosts: [storage.registry.example.gov]
+        hosts: [storage.registry.example.org]
 networkPolicy:
   extraIngress:
     - from:
@@ -223,16 +229,17 @@ the Ingress:
 
 ```bash
 openssl verify -CAfile /absolute/private/s3-ca.pem \
-  -verify_hostname storage.registry.example.gov \
+  -verify_hostname storage.registry.example.org \
   /absolute/private/registry-seaweedfs-s3-tls.crt
 ```
 
 ## Qualification
 
-The fast local check runs the exact pinned multi-architecture image on OrbStack,
-creates the dedicated bucket through the bootstrap identity, proves the app
+The fast local check runs the exact pinned image in a local Docker container.
+It needs `docker`, `curl` and `grep`. It creates the dedicated bucket through the bootstrap identity, proves the app
 identity can probe versioning and put, read, and delete one object, then proves
-it cannot create another bucket:
+it cannot create another bucket. It exits with an error when any check cannot
+run:
 
 ```bash
 deploy/examples/seaweedfs/qualify-s3.sh
@@ -262,24 +269,45 @@ evidence.
 
 A valid backup contains all of the following from the same quiesced point:
 
-- the master PVC, including topology and volume assignment state;
-- the filer PVC, including file metadata and S3 bucket state;
-- the volume PVC, containing attachment bytes and indexes;
-- `registry-seaweedfs-s3-config` and the `registry-breg-s3` credential input;
-- any S3 Ingress TLS leaf, key, and issuing CA;
-- this exact chart archive, lock, values, and the BReg runtime binding;
-- the BReg database backup from the same application maintenance window;
+- the master PVC, including topology and volume assignment state.
+- the filer PVC, including file metadata and S3 bucket state.
+- the volume PVC, containing attachment bytes and indexes.
+- `registry-seaweedfs-s3-config` and the `registry-breg-s3` credential input.
+- any S3 Ingress TLS leaf, key, and issuing CA.
+- this exact chart archive, lock, values, and the BReg runtime binding.
+- the BReg database backup from the same application maintenance window.
 - the exact `attachmentStorage.url`, bucket, and region, plus BReg's logical
   `databaseId` and `registryId` for every retained attachment scope.
 
-Do not snapshot the three PVCs independently while writes continue. Stop BReg
-attachment writers first, wait for in-flight requests to finish, scale the S3
-Deployment to zero, then the filer, volume, and master StatefulSets to zero.
-Confirm every pod is gone before taking CSI VolumeSnapshots or the storage
-provider's equivalent crash-consistent copies. Record the exact PVC names,
-snapshot identifiers, chart digest, image digest, namespace, bucket, URL,
-region, `databaseId`, `registryId`, and time. Resume master, volume, filer, S3,
-then BReg, and perform a fresh write-read-delete check.
+Do not copy the three PVCs independently while writes continue. Stop BReg
+attachment writers first and wait for in-flight requests to finish. Scale the S3
+Deployment to zero, then the filer, volume and master StatefulSets to zero.
+Confirm every Pod is gone.
+
+Single-server K3s stores these claims with the `local-path` provisioner. It has
+no CSI snapshot class, so `VolumeSnapshot` objects are not available. Copy each
+claim's directory on the node as an archive that keeps numeric ownership and
+modes. List the claims, then repeat for each one:
+
+```bash
+sudo k3s kubectl -n registry-storage get pvc
+volume=$(sudo k3s kubectl -n registry-storage get pvc CLAIM_NAME \
+  -o jsonpath='{.spec.volumeName}')
+path=$(sudo k3s kubectl get pv "$volume" \
+  -o jsonpath='{.spec.hostPath.path}{.spec.local.path}')
+sudo tar --numeric-owner -C "$path" -cpf /absolute/private/backup/CLAIM_NAME.tar .
+shasum -a 256 /absolute/private/backup/CLAIM_NAME.tar
+```
+
+Move the archives to the encrypted backup destination on another system. On a
+cluster whose storage class supports CSI snapshots, snapshots of the same
+quiesced claims are an alternative to the archives.
+
+Back up the bucket and its objects only. Bucket versioning must stay disabled,
+so there are no object versions to keep. Record the exact PVC names, archive
+checksums or snapshot identifiers, chart digest, image digest, namespace,
+bucket, URL, region, `databaseId`, `registryId` and time. Resume master,
+volume, filer, S3, then BReg. Perform a fresh write-read-delete check.
 
 BReg's attachment binding digest commits to the bucket URL, region, and the
 hash of the logical scope `["databaseId", "registryId"]`. Recovery must use the
@@ -294,13 +322,13 @@ holds attachment references and state, not the attachment bytes.
 
 Exercise restore in a clean namespace, never over the only retained copy:
 
-1. Restore the three PVC snapshots under the exact names recorded at backup.
+1. Restore the three PVC copies under the exact names recorded at backup. Create each claim, extract its archive into the claim's node directory with `sudo tar --numeric-owner -xpf`, or restore the snapshot where the cluster has them.
 2. Restore the steady-state S3 config, application credential, and TLS inputs.
    Do not restore the revoked bootstrap identity or Secret.
 3. Install the exact verified chart with `values.reference.yaml`, adjusted only
    for the clean namespace and restored claim names if the storage provider
    requires explicit existing claims. The Kubernetes namespace or backend may
-   change behind that stable HTTPS identity; the BReg URL must not change.
+   change behind that stable HTTPS identity. The BReg URL must not change.
 4. Wait for master, volume, filer, and S3 readiness in that order, then route
    the unchanged stable hostname to the recovered TLS endpoint. Require the
    leaf SAN and issuing CA bundle to verify that same hostname.
@@ -310,8 +338,8 @@ Exercise restore in a clean namespace, never over the only retained copy:
 6. Restore BReg from its matching backup with the original `databaseId`,
    activate the original `registryId`, and keep the recorded URL, bucket, and
    region in its runtime. Require the computed attachment binding digest to
-   match the recorded digest, BReg readiness, and one authorized attachment
-   download. A mismatch fails the exercise; it is not a new recovery binding.
+   match the recorded digest, BReg readiness, and one authorised attachment
+   download. A mismatch fails the exercise. It is not a new recovery binding.
 7. Create, read, and delete a new synthetic attachment. Separately prove the
    revoked bootstrap credential and a second bucket remain denied.
 

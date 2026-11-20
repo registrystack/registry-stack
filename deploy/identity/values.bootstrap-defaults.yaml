@@ -25,7 +25,7 @@ setup:
   extraVolumes:
     - name: postgres-ca
       configMap:
-        name: registry-proof-postgres-ca
+        name: registry-identity-postgres-ca
         items:
           - key: postgres-ca.pem
             path: postgres-ca.pem

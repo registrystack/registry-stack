@@ -1,0 +1,30 @@
+# ThunderID serves plain HTTP on 8090 inside its namespace and TLS ends at the
+# ingress controller. Admit only that controller and the Registry Stack Pods
+# that call the identity service. Egress is unchanged. Adjust the controller
+# and Registry Stack namespace selectors to your installation.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: thunderid-ingress
+  namespace: registry-identity-qualification
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: directory
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: registry-stack
+      ports:
+        - protocol: TCP
+          port: 8090

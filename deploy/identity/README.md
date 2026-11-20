@@ -36,7 +36,7 @@ references them and never creates their values.
   `qualification-officer-password`. Use synthetic values only.
   File-backed values must not contain a trailing newline or other surrounding
   whitespace. Kubernetes preserves those bytes in an environment variable,
-  while an HTML password input cannot submit a newline. Normalize and compare
+  while an HTML password input cannot submit a newline. Normalise and compare
   byte digests before creating both the identity and App Kit Secrets.
 - `registry-identity-tls`, keys `tls.crt` and `tls.key`. The leaf must have the
   issuer DNS SAN, critical `CA:FALSE`, and `serverAuth`, and must be signed by
@@ -46,8 +46,11 @@ references them and never creates their values.
   available as `qualification-root-ca.pem` to Registry Stack workloads and
   local qualification clients.
 - PostgreSQL serving a certificate for
-  `registry-postgres.registry-k3s-proof.svc.cluster.local`. Its CA becomes the
-  `postgres-ca.pem` member of `registry-identity-material`.
+  `registry-postgres.directory.svc.cluster.local`, the service in the
+  `directory` namespace used by the [main guide](../README.md). If your
+  PostgreSQL service has another name, replace it in `values.reference.yaml`
+  and `schema-bootstrap-job.yaml`. Its CA becomes the `postgres-ca.pem` member
+  of both `registry-identity-material` and `registry-identity-postgres-ca`.
 - The database owner has applied each matching upstream schema from ThunderID
   commit `12f517c4384004e360e26eb7eb1ab0501b678bb2`: `backend/dbscripts/configdb/postgres.sql`
   to `thunderid_config`, `backend/dbscripts/runtime_transient/postgres.sql` to
@@ -98,20 +101,24 @@ node deploy/identity/augment-app-kit-resources.mjs \
 Use `resources.app-kit.yaml` as the `resources` key prepared below. The narrow
 augmentation adds the App Kit-only `registry_role=contact-editor` and
 `registry_scopes=registry:directory:write` user attributes to ThunderID's
-upstream declarative input and token attributes. App Kit v0.44 selects the
+upstream declarative input and token attributes. App Kit selects the
 configured role from the former and checks the configured BReg scope against
 the latter. BReg facts remain the authority for principal, purpose, scope and
 row claims.
 
-`identity-receipt.json` must pin the beta-58 image digest and list only
+`identity-receipt.json` must pin the image digest in `chart-lock.json` and list only
 `APP_KIT_CLIENT_SECRET` and `QUALIFICATION_OFFICER_PASSWORD` under
 `requiredEnvironment`. Preserve the receipt as deployment evidence. The
 database, TLS and key custody remain environment-owned.
 
 Prepare Kubernetes material from the generated public resources and PostgreSQL
-CA. This command prints no value. Treat its output as private deployment
-material even though the generated identities contain only public keys and
-secret placeholders.
+CA. This command prints no value. It writes the two ConfigMaps (the resources
+with the CA, and the CA alone for the first install) and the two Secrets for
+the registry schema. It needs `kubectl` or `k3s`. Treat its output as private
+deployment material even though the generated identities contain only public
+keys and secret placeholders. The output folder must not exist. The command
+writes into a temporary folder beside it and moves it into place only on
+success, so a failed run can be repeated.
 
 ```bash
 deploy/identity/prepare-material.sh \
@@ -125,12 +132,12 @@ deploy/identity/prepare-material.sh \
 Verify the exact OCI chart content before rendering:
 
 ```bash
-helm pull oci://ghcr.io/thunder-id/helm-charts/thunderid \
+/usr/local/lib/registry-stack/helm pull oci://ghcr.io/thunder-id/helm-charts/thunderid \
   --version 1.0.1 --destination /absolute/private/chart
 printf '%s  %s\n' \
   f6fd424047932405d3d8f50d6ef69798f10626563828c1d1bed186efba99dc4d \
   /absolute/private/chart/thunderid-1.0.1.tgz | shasum -a 256 -c -
-helm template thunderid /absolute/private/chart/thunderid-1.0.1.tgz \
+/usr/local/lib/registry-stack/helm template thunderid /absolute/private/chart/thunderid-1.0.1.tgz \
   --namespace registry-identity-qualification \
   --values deploy/identity/values.reference.yaml \
   >/absolute/private/thunderid-rendered.yaml
@@ -140,28 +147,40 @@ ThunderID chart 1.0.1 spells the dropped capability as lowercase `all`.
 Restricted Pod Security requires canonical `ALL`. Helm 4 no longer accepts an
 executable post-renderer, so prepare a reviewed local chart directory. The
 script first verifies the exact upstream content digest, then changes only the
-two lowercase scalars in the Deployment and setup Job templates.
+two lowercase scalars in the Deployment and setup Job templates. It needs
+`grep`, `perl`, `tar` and `shasum`. It writes into a temporary folder beside
+the output and moves it into place only on success.
 
 ```bash
 deploy/identity/prepare-restricted-chart.sh \
   /absolute/private/chart/thunderid-1.0.1.tgz \
   /absolute/private/chart-restricted
-helm template thunderid /absolute/private/chart-restricted/thunderid \
+/usr/local/lib/registry-stack/helm template thunderid /absolute/private/chart-restricted/thunderid \
   --namespace registry-identity-qualification \
   --values deploy/identity/values.reference.yaml \
   >/absolute/private/thunderid-rendered-restricted.yaml
 ```
 
-Review the restricted render, then apply only inside the new namespace:
+Review the restricted render, then apply only inside the new namespace.
+The material includes the namespace-scoped ConfigMaps and Secrets. The
+NetworkPolicy admits only the ingress controller and the Registry Stack Pods in
+the `directory` namespace to ThunderID's plain-HTTP port 8090. Edit its
+namespace and Pod selectors if your ingress controller or Registry Stack
+namespace differs. Apply it before the first install.
 
 ```bash
-sudo -n k3s kubectl apply -f /absolute/private/identity-k8s-material/
-helm install thunderid /absolute/private/chart-restricted/thunderid \
+sudo k3s kubectl apply -f /absolute/private/identity-k8s-material/
+sudo k3s kubectl apply -f deploy/identity/network-policy.yaml
+sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \
+  /usr/local/lib/registry-stack/helm install thunderid \
+  /absolute/private/chart-restricted/thunderid \
   --namespace registry-identity-qualification \
   --values deploy/identity/values.reference.yaml \
   --values deploy/identity/values.bootstrap-defaults.yaml \
   --wait --wait-for-jobs --timeout 10m
-helm upgrade thunderid /absolute/private/chart-restricted/thunderid \
+sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \
+  /usr/local/lib/registry-stack/helm upgrade thunderid \
+  /absolute/private/chart-restricted/thunderid \
   --namespace registry-identity-qualification \
   --values deploy/identity/values.reference.yaml \
   --wait --timeout 10m
@@ -169,7 +188,8 @@ helm upgrade thunderid /absolute/private/chart-restricted/thunderid \
 
 The first install deliberately requests zero serving replicas, disables
 declarative resources, makes the explicit stores mutable, and mounts only the
-PostgreSQL CA into the setup Job. This creates ThunderID's built-in password
+PostgreSQL CA into the setup Job from the `registry-identity-postgres-ca`
+ConfigMap that `prepare-material.sh` created. This creates ThunderID's built-in password
 flow before the upgrade starts the declarative App Kit application. Combining
 both stages on a fresh database fails because the application references that
 flow before it exists.
@@ -177,18 +197,22 @@ flow before it exists.
 The generator's `registry-schema/` output needs one additional stateful setup
 that the 1.0.1 chart does not run. Stop serving, mount the generated agent
 documents alongside ThunderID's shipped bootstrap bundle, run the pinned
-upstream `setup.sh` Job once, then resume one replica. Do not rerun it against
-retained state without reviewing upstream bootstrap semantics.
+upstream `setup.sh` Job once, then resume one replica. The prepare script
+stores the single generated agent document under the key `agent.yaml` in the
+`registry-identity-agents` Secret, so the Job needs no edit when the issuer or
+client changes. The script stops if the generator produced more than one agent
+document. Do not rerun the Job against retained state without reviewing
+upstream bootstrap semantics.
 
 ```bash
-sudo -n k3s kubectl -n registry-identity-qualification scale deployment/thunderid-deployment --replicas=0
-sudo -n k3s kubectl -n registry-identity-qualification rollout status deployment/thunderid-deployment --timeout=2m
-sudo -n k3s kubectl apply -f deploy/identity/schema-bootstrap-job.yaml
-sudo -n k3s kubectl -n registry-identity-qualification wait \
+sudo k3s kubectl -n registry-identity-qualification scale deployment/thunderid-deployment --replicas=0
+sudo k3s kubectl -n registry-identity-qualification rollout status deployment/thunderid-deployment --timeout=2m
+sudo k3s kubectl apply -f deploy/identity/schema-bootstrap-job.yaml
+sudo k3s kubectl -n registry-identity-qualification wait \
   --for=condition=complete job/thunderid-registry-schema --timeout=5m
-sudo -n k3s kubectl -n registry-identity-qualification scale deployment/thunderid-deployment --replicas=1
-sudo -n k3s kubectl apply -f deploy/identity/edge.yaml
-sudo -n k3s kubectl -n registry-identity-qualification rollout status deployment/thunderid-deployment --timeout=5m
+sudo k3s kubectl -n registry-identity-qualification scale deployment/thunderid-deployment --replicas=1
+sudo k3s kubectl apply -f deploy/identity/edge.yaml
+sudo k3s kubectl -n registry-identity-qualification rollout status deployment/thunderid-deployment --timeout=5m
 ```
 
 ## Qualify a real token and browser session
@@ -227,8 +251,8 @@ APPKIT_SYNTHETIC_PASSWORD_FILE=/absolute/private/qualification-officer-password 
 node deploy/identity/browser-login.mjs
 ```
 
-For a private lab reachable only through SSH, start a scoped SOCKS proxy and
-set `APPKIT_PROXY_SERVER`, `APPKIT_HOST_RESOLVER_RULES`, and
+When the stable hostnames are not in DNS, start a scoped SOCKS proxy to the
+cluster and set `APPKIT_PROXY_SERVER`, `APPKIT_HOST_RESOLVER_RULES`, and
 `APPKIT_TLS_SPKI`. The SPKI value is the base64 SHA-256 digest of the exact
 qualification leaf public key. Chromium then accepts only that pinned private
 certificate, rather than disabling certificate validation globally. The
@@ -244,6 +268,20 @@ create. This mode intentionally writes one synthetic permitted record. Its
 diagnostics contain only the retained and created record IDs and fixed phase
 results, never URLs, cookies, authorization codes, state, tokens, response
 bodies or raw Playwright errors.
+
+## Before a pilot
+
+This profile is a qualification fixture. It keeps a synthetic password login
+for `qualification-officer` with directory write access, and injects its
+password into the serving Deployment. Before a pilot, change the following.
+
+- Remove the `qualification-officer` user and its `QUALIFICATION_OFFICER_PASSWORD`
+  reference from `identity-deployment.yaml`, then regenerate the resources.
+- Remove the `QUALIFICATION_OFFICER_PASSWORD` entry from both `secretEnv`
+  blocks in `values.reference.yaml` and from `schema-bootstrap-job.yaml`.
+- Delete the `qualification-officer-password` key from the fixture Secret.
+- Replace the qualification hostnames, CA and App Kit client secret with your
+  own. Connect staff sign-in to your institutional identity provider.
 
 ## Backup and restore inputs
 
@@ -268,11 +306,12 @@ App Kit state before performing the fresh login.
 
 Wait until the PostgreSQL owner confirms all four identity databases are
 restored and reachable with `sslmode=verify-full`. Recreate the referenced
-Secrets and ConfigMaps from normalized fixture inputs, the PostgreSQL CA, the
+Secrets and ConfigMaps from normalised fixture inputs, the PostgreSQL CA, the
 augmented declarative bundle and the CA-signed issuer leaf. Preserve the
 issuer hostname and callback exactly.
 
-Prepare the digest-verified Restricted chart as above, then make a restore-only
+Prepare the digest-verified Restricted chart as above, apply
+`deploy/identity/network-policy.yaml`, then make a restore-only
 copy. This prepares both durable claims and their runtime mounts independently
 of `setup.enabled`. Keep the setup Job disabled during recovery.
 
@@ -287,7 +326,9 @@ Its pre-install hooks create the two empty claims without changing restored
 database state:
 
 ```bash
-helm install thunderid /absolute/private/chart-restored-state \
+sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \
+  /usr/local/lib/registry-stack/helm install thunderid \
+  /absolute/private/chart-restored-state \
   --namespace registry-identity-qualification \
   --values deploy/identity/values.reference.yaml \
   --values deploy/identity/values.restore-create.yaml \
@@ -304,12 +345,14 @@ Start the retained state with setup still disabled, then expose only the
 HTTPS Ingress:
 
 ```bash
-helm upgrade thunderid /absolute/private/chart-restored-state \
+sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \
+  /usr/local/lib/registry-stack/helm upgrade thunderid \
+  /absolute/private/chart-restored-state \
   --namespace registry-identity-qualification \
   --values deploy/identity/values.reference.yaml \
   --values deploy/identity/values.restored-state.yaml \
   --wait --timeout 5m
-sudo -n k3s kubectl apply -f deploy/identity/edge.yaml
+sudo k3s kubectl apply -f deploy/identity/edge.yaml
 ```
 
 Before connecting App Kit, verify HTTPS discovery, the exact issuer, HTTP

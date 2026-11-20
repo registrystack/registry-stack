@@ -44,6 +44,17 @@ class QualificationTransitProxyTest(unittest.TestCase):
             with self.subTest(method=method, path=path):
                 self.assertFalse(self.module.is_allowed(method, path))
 
+    def test_forwards_the_allowlisted_constant_path(self):
+        key_path = "/v1/transit/keys/evidence-signing"
+        self.assertIs(self.module.upstream_path("GET", key_path), self.module.KEY_PATH)
+        self.assertEqual(self.module.KEY_PATH, key_path)
+        self.assertEqual(
+            self.module.upstream_path("POST", "/v1/transit/sign/evidence-signing/sha2-256"),
+            self.module.SIGN_PATH,
+        )
+        self.assertIsNone(self.module.upstream_path("GET", key_path + "?version=1"))
+        self.assertIsNone(self.module.upstream_path("POST", key_path))
+
 
 if __name__ == "__main__":
     unittest.main()

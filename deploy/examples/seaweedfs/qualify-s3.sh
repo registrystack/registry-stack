@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+command -v grep >/dev/null 2>&1 || {
+	printf '%s\n' 'grep is required.' >&2
+	exit 1
+}
+
 image='chrislusf/seaweedfs@sha256:ccad23e18639c8b98cee17e7100b95830a06077b56d8e5b006d6dcf8ec5e94a0'
 bucket='registry-breg-attachments'
 other_bucket='registry-breg-other'
@@ -88,8 +93,13 @@ curl --fail --silent --show-error --config "$scratch/bootstrap.curl" \
 curl --fail --silent --show-error --config "$scratch/app.curl" \
 	--aws-sigv4 "aws:amz:us-east-1:s3" \
 	"$endpoint/$bucket?versioning" >"$scratch/versioning"
-if rg -q '<Status>(Enabled|Suspended)</Status>' "$scratch/versioning"; then
+versioning_status=0
+grep -E -q '<Status>(Enabled|Suspended)</Status>' "$scratch/versioning" || versioning_status=$?
+if [[ "$versioning_status" -eq 0 ]]; then
 	printf '%s\n' 'Disposable bucket unexpectedly has versioning configured.' >&2
+	exit 1
+elif [[ "$versioning_status" -ne 1 ]]; then
+	printf 'Could not check the versioning response (grep exited %s).\n' "$versioning_status" >&2
 	exit 1
 fi
 

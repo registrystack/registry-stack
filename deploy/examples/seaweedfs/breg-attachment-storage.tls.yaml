@@ -1,6 +1,6 @@
 attachmentStorage:
   type: s3
-  url: https://storage.registry.example.gov
+  url: https://storage.registry.example.org
   bucket: registry-breg-attachments
   region: us-east-1
   accessKeyIdRef: secret:file/s3-access-key-id

@@ -54,7 +54,7 @@ configuration:
     config:
       type: postgres
       postgres:
-        hostname: registry-postgres.registry-k3s-proof.svc.cluster.local
+        hostname: registry-postgres.directory.svc.cluster.local
         port: "5432"
         name: thunderid_config
         username: registry_identity
@@ -67,7 +67,7 @@ configuration:
     runtime_transient:
       type: postgres
       postgres:
-        hostname: registry-postgres.registry-k3s-proof.svc.cluster.local
+        hostname: registry-postgres.directory.svc.cluster.local
         port: "5432"
         name: thunderid_runtime_transient
         username: registry_identity
@@ -80,7 +80,7 @@ configuration:
     entity:
       type: postgres
       postgres:
-        hostname: registry-postgres.registry-k3s-proof.svc.cluster.local
+        hostname: registry-postgres.directory.svc.cluster.local
         port: "5432"
         name: thunderid_entity
         username: registry_identity
@@ -93,7 +93,7 @@ configuration:
     runtime_persistent:
       type: postgres
       postgres:
-        hostname: registry-postgres.registry-k3s-proof.svc.cluster.local
+        hostname: registry-postgres.directory.svc.cluster.local
         port: "5432"
         name: thunderid_runtime_persistent
         username: registry_identity
