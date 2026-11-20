@@ -3,7 +3,6 @@
 //! The operator runtime configuration document and the package it names.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -1001,9 +1000,9 @@ fn dotted(pointer: &str) -> String {
 /// the counters on the listener the public contract describes.
 #[cfg(test)]
 fn valid_metrics_listener(
-    metrics: SocketAddr,
+    metrics: std::net::SocketAddr,
     exposure: ListenerNetworkExposure,
-    listener: SocketAddr,
+    listener: std::net::SocketAddr,
 ) -> bool {
     registry_platform_config::check_metrics_bind(metrics, exposure, &[("listener", listener)])
         .is_ok()
