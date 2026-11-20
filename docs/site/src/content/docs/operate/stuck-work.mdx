@@ -13,8 +13,9 @@ standards_referenced: []
 
 Use this page when something has not finished and you need to know where to look and what you can do about it.
 It goes product by product.
-For each one it names the signal that shows the work, the command or route that clears it, and whether that action needs access to the host.
-It says plainly where a product gives you no way to clear something.
+For each one it names the signal that shows the work and the command or route that clears it.
+It also says whether that action needs access to the host.
+Where a product gives you no way to clear something, it says so.
 
 ## Two kinds of access
 
@@ -28,7 +29,8 @@ Treat that access as an operator privilege and keep it off shared laptops.
 Metrics are served on a separate listener from the API.
 Bind it to loopback or a private interface and scrape it from there.
 Gauges that count queued work are read from the database at scrape time.
-When the database cannot answer, the series is omitted rather than reported as zero, so alert on a missing series as well as a high value.
+When the database cannot answer, the series is omitted rather than reported as zero.
+Alert on a missing series as well as a high value.
 
 {/* Evidence: crates/registry-coordinator/src/metrics.rs, coordinator_dispatch_jobs;
     crates/registry-coordinator/src/cli.rs, DeploymentStatus, RetrySame;
@@ -42,6 +44,12 @@ The doctor report lists held runs with `heldRunCount`, the oldest due step with 
 It shows the first 100 held runs.
 For the full list, run `coordinatorctl deployment-status --runtime-config` on the host.
 The metrics series `coordinator_dispatch_jobs` carries a `state` label of `pending`, `leased`, or `unknown`.
+Four more gauges show holds and attention, all read from the database at scrape time:
+
+- `coordinator_runs_attention{reason}` counts runs needing attention, with `reason` of `definition-refused` or `other`.
+- `coordinator_runs_restore_review_required` counts runs held for review after a restore.
+- `coordinator_hold_active{hold}` is 1 while the `restore` or `admissions` hold is set.
+- `coordinator_oldest_due_age_seconds` is the age of the oldest due pending job.
 
 **Clear.**
 
@@ -74,6 +82,11 @@ Fix the definition and apply it instead.
 - `breg_proposal_application_blocked_jobs` counts Proposal applications that cannot proceed.
 - `breg_record_timer_oldest_due_lag_seconds` is how long the oldest due Record timer has waited.
   `breg_record_timer_control_compatible` is 0 when the timer protocol does not match this process.
+- `breg_hook_deliveries{state}` counts webhook deliveries in `pending`, `leased`, `delivered`, `dead-lettered`, or `expired`.
+  Retention deletes delivered and expired rows, so watch the first three.
+- `breg_ingestion_runs{state}` counts durable ingestion runs in `open`, `complete`, `cancelled`, or `blocked`.
+- `breg_metrics_sample_failures_total{sample}` counts scrapes where a database sample failed.
+  The `sample` label is `queue`, `record-timer`, `hook-delivery`, or `ingestion-run`.
 - `bregctl status` and `bregctl doctor` take `--runtime-config`.
   Doctor reports `external-refresh.status` and `external-projection.status`.
 
@@ -91,7 +104,7 @@ Fix the definition and apply it instead.
 **Access.** Host with `--runtime-config` for everything except `data runs`.
 BReg has no operator token API for the rest.
 
-**Read more.** [Watch the background workers](../breg-monitor/#watch-the-background-workers), [Recover a blocked Proposal](../breg-changes/#recover-a-blocked-proposal), [Inspect and recover deliveries](../breg-webhooks/#inspect-and-recover-deliveries), [Recover a run](../breg-data/#recover-a-run), [Operate Record timers](../breg/#operate-record-timers).
+**Read more.** [Watch the background workers](../breg-monitor/#watch-the-background-workers), [Scrape metrics](../breg-monitor/#scrape-metrics), [Recover a blocked Proposal](../breg-changes/#recover-a-blocked-proposal), [Inspect and recover deliveries](../breg-webhooks/#inspect-and-recover-deliveries), [Recover a run](../breg-data/#recover-a-run), [Operate Record timers](../breg/#operate-record-timers).
 
 {/* Evidence: crates/registry-breg/src/metrics.rs, ProgressWorker, PendingQueue and breg_proposal_application_blocked_jobs;
     crates/registry-bregctl/src/lib.rs, HookCommand, ReviewRecoveryCommand, ImportAuthorityCommand;
@@ -134,6 +147,8 @@ Use the metrics.
 - `casework_due_review_tasks` counts open tasks past their due time.
   It is the overdue signal.
 - `casework_database_up` is 0 when the database cannot answer.
+- `casework_completion_deliveries{state}` counts completion deliveries in `pending`, `retrying`, `leased`, `unknown`, `dead-lettered`, or `expired`.
+- `casework_completion_oldest_undelivered_age_seconds` is how long the oldest undelivered completion has waited.
 - `caseworkctl status` and `caseworkctl doctor` take `--runtime-config`.
 - The metrics listener also serves `/version`.
 
@@ -143,7 +158,7 @@ The routes are `POST /v1/review-tasks/{task_id}/assign`, `release`, `claim`, and
 A producer withdraws a request with `POST /v1/review-requests/{request_id}/cancel`.
 These are caller actions under a role, not an operator token API.
 
-Casework has no command, route, or metric for a completion delivery that was dead-lettered.
+A dead-lettered completion delivery shows in `casework_completion_deliveries`, but Casework has no command or route to retry or discard it.
 The row stays in the database.
 See the retention guide for what is kept.
 
@@ -189,7 +204,15 @@ Otherwise the service answers that dispatch has started or the message is alread
 ## Registry Scheduling
 
 **Signal.** `schedulingctl intents --runtime-config` lists delivery intents that are undelivered or dead-lettered, with `--limit` (default 50, maximum 200).
-Scheduling publishes no metrics.
+Scheduling can also publish metrics on an optional `metricsListener`, which is off by default and must bind a private address.
+These series show stuck work:
+
+- `scheduling_outbox_items{state}` counts delivery intents by state, and `scheduling_outbox_oldest_pending_age_seconds` is the age of the oldest pending one.
+- `scheduling_hook_deliveries{state}` counts observer-hook deliveries by state, and `scheduling_hook_oldest_pending_age_seconds` is the age of the oldest pending one.
+- `scheduling_worker_last_success_age_seconds{worker}` is the age of the last completed pass of the `hold-expiry` or `retention` worker.
+- `scheduling_metrics_sample_failures_total{queue}` counts scrapes where a queue could not be read.
+
+The operate page lists the states and the other series.
 Its probes are `/healthz` and `/readyz`.
 
 **Clear.** Scheduling has no command to retry or discard a dead-lettered delivery.
@@ -198,7 +221,7 @@ Callers can remove their own holds and cancel their own appointments over HTTP w
 
 **Access.** Host for `intents`. Caller credential for holds and appointments.
 
-**Read more.** [Read the deployment](../scheduling/#read-the-deployment), [Retention](../scheduling/#retention).
+**Read more.** [Scheduling operations](../scheduling/), [Read the deployment](../scheduling/#read-the-deployment), [Retention](../scheduling/#retention).
 
 {/* Evidence: crates/registry-schedulingctl/src/lib.rs, intents;
     crates/registry-scheduling/src/http.rs, healthz and readyz. */}
@@ -267,7 +290,13 @@ If it misbehaves, rebuild the index and restart it on the new package.
 When a seal is configured it adds a `signing` member per seal, `ready` or `not-ready`, with the reason `certificate-expired`, `certificate-not-yet-valid`, or `signer-not-ready`.
 Readiness also fails when the audit writer has stopped.
 `registry-render check --environment` warns 30 days before a certificate expires.
-Render publishes no metrics.
+Render can also publish metrics on an optional `metricsListener`, which is off by default and must bind a private address.
+
+- `render_documents_total{operation,result}` counts calls, with `operation` of `render` or `seal` and `result` of `ok`, `refused`, or `failed`.
+- `render_audit_write_failures_total` counts failed audit writes.
+- `render_seal_certificate_expiry_seconds{seal}` is the time until each seal certificate stops being valid, negative once it has.
+
+The operate page has the full table.
 
 **Clear.** Render has no work queue and no clearing command.
 Renew the certificate and restart.
@@ -277,18 +306,19 @@ A stopped audit writer needs a restart.
 
 **Access.** Host.
 
-**Read more.** [Read readiness](../registry-render/#read-readiness), [Renew the certificate](../registry-render/#renew-the-certificate), [Keep the audit file](../registry-render/#keep-the-audit-file).
+**Read more.** [Render operations](../registry-render/), [Read readiness](../registry-render/#read-readiness), [Renew the certificate](../registry-render/#renew-the-certificate), [Keep the audit file](../registry-render/#keep-the-audit-file).
 
 {/* Evidence: crates/registry-render/src/server.rs, ready and healthcheck;
     crates/registry-render/src/cli.rs, Healthcheck and environment. */}
 
 ## Example alert rules
 
-These rules use only series that the products publish today.
+These rules use only series that the products publish.
 Adjust the thresholds to your volumes.
 The `job` label comes from your scrape configuration, so match it to the names you use.
 
-Because a failed database sample omits the series, each product group ends with an `absent()` rule.
+Because a failed database sample omits the series, groups that read gauges from the database include an `absent()` rule.
+The Scheduling and Render groups need their optional `metricsListener` turned on.
 
 To cover a new series, add one rule to that product's group.
 Keep one `groups` entry per product, with the product name as the `name`.
@@ -323,12 +353,36 @@ groups:
         labels: {severity: warn}
         annotations:
           summary: A run ended in the failed state. List it with coordinatorctl list --attention.
+      - alert: CoordinatorRunsNeedAttention
+        expr: coordinator_runs_attention > 0
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: Runs need attention. The reason label says whether the definition was refused.
+      - alert: CoordinatorRestoreReviewRequired
+        expr: coordinator_runs_restore_review_required > 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: Runs are held for review after a restore.
+      - alert: CoordinatorHoldActive
+        expr: coordinator_hold_active == 1
+        for: 30m
+        labels: {severity: warn}
+        annotations:
+          summary: A restore or admissions hold has stayed set. Release it when recovery is complete.
+      - alert: CoordinatorOldestDueJob
+        expr: coordinator_oldest_due_age_seconds > 900
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: The oldest due job has waited more than 15 minutes.
       - alert: CoordinatorMetricsAbsent
-        expr: absent(coordinator_dispatch_jobs)
+        expr: absent(coordinator_dispatch_jobs) or absent(coordinator_hold_active)
         for: 10m
         labels: {severity: page}
         annotations:
-          summary: Coordinator dispatch gauge is missing. The database may be unreachable.
+          summary: Coordinator gauges are missing. The database may be unreachable.
 ```
 
 ### Casework
@@ -349,6 +403,24 @@ groups:
         labels: {severity: warn}
         annotations:
           summary: Review tasks are past their due time. A supervisor can reassign them.
+      - alert: CaseworkCompletionDeadLettered
+        expr: casework_completion_deliveries{state="dead-lettered"} > 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: A completion delivery was dead-lettered. Casework has no command to retry it.
+      - alert: CaseworkCompletionUnknown
+        expr: casework_completion_deliveries{state="unknown"} > 0
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: A completion delivery has an unknown outcome.
+      - alert: CaseworkCompletionBacklog
+        expr: casework_completion_oldest_undelivered_age_seconds > 1800
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: The oldest undelivered completion has waited more than 30 minutes.
       - alert: CaseworkMetricsAbsent
         expr: absent(casework_database_up)
         for: 10m
@@ -387,12 +459,132 @@ groups:
         labels: {severity: warn}
         annotations:
           summary: A due Record timer has not run. Check bregctl timer list.
+      - alert: BregHookDeadLettered
+        expr: breg_hook_deliveries{state="dead-lettered"} > 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: A webhook delivery was dead-lettered. Replay or discard it with bregctl hook.
+      - alert: BregHookDeliveriesBacklog
+        expr: breg_hook_deliveries{state=~"pending|leased"} > 0
+        for: 30m
+        labels: {severity: warn}
+        annotations:
+          summary: Webhook deliveries have stayed pending or leased.
+      - alert: BregIngestionRunBlocked
+        expr: breg_ingestion_runs{state="blocked"} > 0
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: An ingestion run is blocked because a successor package retired its binding.
+      - alert: BregMetricsSampleFailing
+        expr: increase(breg_metrics_sample_failures_total[15m]) > 0
+        for: 0m
+        labels: {severity: warn}
+        annotations:
+          summary: A BReg database sample failed. The sample label names it.
       - alert: BregRecordTimerIncompatible
         expr: breg_record_timer_control_compatible == 0
         for: 5m
         labels: {severity: page}
         annotations:
           summary: The Record timer protocol does not match this process.
+```
+
+### Scheduling
+
+```yaml
+groups:
+  - name: scheduling
+    rules:
+      - alert: SchedulingOutboxDeadLettered
+        expr: scheduling_outbox_items{state="dead-lettered"} > 0
+        for: 5m
+        labels: {severity: warn}
+        annotations:
+          summary: A delivery intent was dead-lettered. List it with schedulingctl intents.
+      - alert: SchedulingOutboxUnknown
+        expr: scheduling_outbox_items{state="unknown"} > 0
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: A delivery intent has an unknown outcome.
+      - alert: SchedulingOutboxOldestPending
+        expr: scheduling_outbox_oldest_pending_age_seconds > 900
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: The oldest pending delivery intent has waited more than 15 minutes.
+      - alert: SchedulingHookDeadLettered
+        expr: scheduling_hook_deliveries{state="dead-lettered"} > 0
+        for: 5m
+        labels: {severity: warn}
+        annotations:
+          summary: An observer-hook delivery was dead-lettered. Scheduling has no command to retry it.
+      - alert: SchedulingHookOldestPending
+        expr: scheduling_hook_oldest_pending_age_seconds > 900
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: The oldest pending observer-hook delivery has waited more than 15 minutes.
+      - alert: SchedulingWorkerStalled
+        expr: scheduling_worker_last_success_age_seconds > 900
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: A Scheduling worker has not completed a pass. The worker label names it.
+      - alert: SchedulingMetricsSampleFailing
+        expr: increase(scheduling_metrics_sample_failures_total[15m]) > 0
+        for: 0m
+        labels: {severity: warn}
+        annotations:
+          summary: A queue could not be read at scrape time. The queue label names it.
+      - alert: SchedulingServerErrors
+        expr: sum(rate(scheduling_http_requests_total{status="5xx"}[5m])) > 0.05
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: Scheduling is answering with server errors.
+      - alert: SchedulingMetricsAbsent
+        expr: absent(scheduling_outbox_items)
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: Scheduling outbox gauges are missing. The database may be unreachable.
+```
+
+### Render
+
+```yaml
+groups:
+  - name: render
+    rules:
+      - alert: RenderSealCertificateExpiring
+        expr: render_seal_certificate_expiry_seconds < 14 * 24 * 3600
+        for: 1h
+        labels: {severity: warn}
+        annotations:
+          summary: A seal certificate expires within 14 days. Renew it. The seal label names it.
+      - alert: RenderSealCertificateExpiringSoon
+        expr: render_seal_certificate_expiry_seconds < 3 * 24 * 3600
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: A seal certificate expires within three days or has expired.
+      - alert: RenderAuditWriteFailing
+        expr: increase(render_audit_write_failures_total[15m]) > 0
+        for: 0m
+        labels: {severity: page}
+        annotations:
+          summary: Render failed to write an audit entry. A stopped audit writer needs a restart.
+      - alert: RenderCallsFailing
+        expr: |
+          sum by (operation) (rate(render_documents_total{result="failed"}[5m]))
+            / sum by (operation) (rate(render_documents_total[5m])) > 0.1
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: More than a tenth of render or seal calls are failing.
 ```
 
 ### Messaging
