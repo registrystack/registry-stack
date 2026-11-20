@@ -684,6 +684,63 @@ async fn the_metrics_sample_the_queue_and_count_attempts_by_outcome() {
     assert!(!scraped.contains(RECIPIENT), "{scraped}");
 }
 
+/// A dispatch-queue read that waits on a lock is cancelled by the server when
+/// the scrape deadline passes, the gauge is omitted, the failure is counted
+/// once, and the other series still render.
+#[tokio::test]
+async fn a_dispatch_queue_read_stuck_on_a_lock_is_cancelled_on_the_server_and_counted_once() {
+    let harness = Harness::start().await;
+    harness.accepted(&email_submission()).await;
+    let admin = &harness.isolated.admin;
+    admin
+        .batch_execute("BEGIN; LOCK TABLE messaging_dispatch_jobs IN ACCESS EXCLUSIVE MODE;")
+        .await
+        .unwrap();
+    let deadline = registry_platform_metrics::ScrapeDeadline::with_budget(
+        std::time::Instant::now(),
+        Duration::from_millis(600),
+    );
+    let started = std::time::Instant::now();
+    let body =
+        registry_messaging::metrics::scrape(&harness.metrics, Some(&harness.store), deadline).await;
+    let elapsed = started.elapsed();
+    let mut waiting = i64::MAX;
+    for _ in 0..60 {
+        waiting = admin
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE wait_event_type = 'Lock' AND query LIKE '%messaging_dispatch_jobs%' \
+                   AND pid <> pg_backend_pid()",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if waiting == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    admin.batch_execute("ROLLBACK").await.unwrap();
+    assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+    assert_eq!(waiting, 0, "the server cancelled the read");
+    assert!(!body.contains("messaging_dispatch_jobs{"), "{body}");
+    assert!(
+        body.contains("messaging_metrics_sample_failures_total{sample=\"dispatch-queue\"} 1"),
+        "{body}"
+    );
+    assert!(body.contains("messaging_provider_attempts_total{outcome=\"accepted\"} 0"));
+    let healthy = harness.scrape().await;
+    assert!(
+        healthy.contains("messaging_dispatch_jobs{state=\"pending\"} 1"),
+        "the next scrape reads again: {healthy}"
+    );
+    assert!(
+        healthy.contains("messaging_metrics_sample_failures_total{sample=\"dispatch-queue\"} 1"),
+        "the count stays: {healthy}"
+    );
+}
+
 /// A provider whose send timeout fills the whole attempt timeout leaves
 /// pacing no allowance: an attempt that finds no send slot is counted as a
 /// pacing refusal and waits to be retried, without a send.

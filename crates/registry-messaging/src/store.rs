@@ -17,10 +17,22 @@ use std::time::Duration;
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use registry_platform_config::SecretResolver;
+use registry_platform_metrics::{
+    sample_error_class, ScrapeDeadline, CLASS_NO_TIME_LEFT, CLASS_POOL,
+};
 use thiserror::Error;
 use tokio_postgres::Config as PgConfig;
 
 use crate::config::{describe_secret_failure, DatabaseConfig};
+
+/// The error class of a driver error: never its text, which can carry query
+/// text or row data.
+fn database_error_class(error: &tokio_postgres::Error) -> String {
+    sample_error_class(
+        error.code().map(tokio_postgres::error::SqlState::code),
+        error.is_closed(),
+    )
+}
 
 const MESSAGING_MIGRATION: &str = include_str!("../migrations/0100_messaging.sql");
 const DISPATCH_LEASE_EXPIRY_MIGRATION: &str =
@@ -270,14 +282,26 @@ impl PostgresStore {
     }
 
     /// How many dispatch jobs wait in each state work waits in. Each count
-    /// reads its state's partial index, and the read is bounded so a slow
-    /// store cannot hold a scrape open.
-    pub async fn dispatch_depth(&self) -> Result<DispatchDepth, StoreError> {
-        let mut client = self.client().await?;
-        let transaction = client.build_transaction().read_only(true).start().await?;
+    /// reads its state's partial index. The read runs in a read-only
+    /// transaction whose server-side statement timeout is the time left
+    /// before `deadline`, so a slow store cannot hold a scrape open and the
+    /// server cancels the query. A failed read returns its error class
+    /// alone: never query text, values or rows.
+    pub async fn dispatch_depth(&self, deadline: ScrapeDeadline) -> Result<DispatchDepth, String> {
+        let mut client = self.client().await.map_err(|_| CLASS_POOL.to_owned())?;
+        let transaction = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|error| database_error_class(&error))?;
+        let milliseconds = deadline
+            .statement_timeout_milliseconds()
+            .ok_or_else(|| CLASS_NO_TIME_LEFT.to_owned())?;
         transaction
-            .batch_execute("SET LOCAL statement_timeout = '2s'")
-            .await?;
+            .batch_execute(&format!("SET LOCAL statement_timeout = {milliseconds}"))
+            .await
+            .map_err(|error| database_error_class(&error))?;
         let row = transaction
             .query_one(
                 "SELECT \
@@ -286,13 +310,23 @@ impl PostgresStore {
                    (SELECT count(*) FROM messaging_dispatch_jobs WHERE state = 'unknown')",
                 &[],
             )
-            .await?;
+            .await
+            .map_err(|error| database_error_class(&error))?;
         let depth = DispatchDepth {
-            pending: row.try_get(0)?,
-            leased: row.try_get(1)?,
-            unknown: row.try_get(2)?,
+            pending: row
+                .try_get(0)
+                .map_err(|error| database_error_class(&error))?,
+            leased: row
+                .try_get(1)
+                .map_err(|error| database_error_class(&error))?,
+            unknown: row
+                .try_get(2)
+                .map_err(|error| database_error_class(&error))?,
         };
-        transaction.commit().await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| database_error_class(&error))?;
         Ok(depth)
     }
 

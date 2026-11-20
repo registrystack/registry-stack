@@ -463,7 +463,12 @@ With `metricsListener` set, `GET /metrics` on that socket answers Prometheus tex
 | `messaging_provider_callbacks_total` | `outcome`: `unverified`, `unreadable`, `ignored`, `applied`, `unchanged`, `unmatched`, `ambiguous`, `unavailable` | Provider callbacks, by what became of them |
 | `messaging_limit_refusals_total` | `limit`: `rate`, `daily`, `pacing`, `callback` | Submissions, attempts, and callbacks a limit refused |
 | `messaging_retention_runs_total` | `outcome`: `erased`, `idle`, `failed` | Retention sweeps this process ran |
+| `messaging_metrics_sample_failures_total` | `sample`: `dispatch-queue` | Scrapes in which the database read failed, since the process started |
 | `messaging_dispatch_jobs` | `state`: `pending`, `leased`, `unknown` | Gauge read from the database at each scrape |
+
+The database read runs in a read-only transaction inside a 5 second scrape deadline, and the server
+cancels a query that outlasts it. A failed read is logged with its error class (`timeout`, `pool`,
+`no-time-left`, or the SQLSTATE) and leaves the gauge without samples for that scrape.
 
 Counters are per process and restart at zero. Watch `messaging_dispatch_jobs{state="unknown"}`, the
 messages waiting for you to settle, and `messaging_provider_callbacks_total{outcome="unverified"}`,
