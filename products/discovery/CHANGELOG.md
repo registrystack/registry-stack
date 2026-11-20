@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - BREAKING: `discoveryctl api --client` is removed. Pass `--url URL --header @FILE`
   with a bearer header file, or use a saved `--connection`.
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - Update Wasmtime LTS to 48.0.9 for RUSTSEC-2026-0566 to RUSTSEC-2026-0573.
 - `rstack dev check|start|status|token|stop` runs a checkout's BReg, Casework,
   Evidence and Messaging projects, one alone or several together, from a
@@ -31,7 +33,7 @@
   because a backend this administrator may not signal still uses the database
   is retried until the cleanup deadline, and a final refusal counts the
   remaining backends by type.
-- With `--json`, refusals and startup failures from `rstack dev` print a
+- With `--format json`, refusals and startup failures from `rstack dev` print a
   `registry.rstack.error.v1` object, published as
   `schemas/rstack-dev-error.v1.schema.json`. Its `error.class` is `domain`
   (exit 1), `usage` (exit 2) or `operational` (exit 3). If the run still holds

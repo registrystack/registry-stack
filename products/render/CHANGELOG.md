@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 ## 0.46.0 - 2026-11-08
 
 - The serving adapter installs its SIGTERM and Ctrl-C handlers together before

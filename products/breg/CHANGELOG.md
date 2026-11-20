@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - BREAKING: A bearer token that carries a Casework task grant
   (`registry_grant_*` claims) must carry `iat` and `exp`, and `exp - iat` must be
   at most 900 seconds, and `iat` must not be later than BReg's clock plus

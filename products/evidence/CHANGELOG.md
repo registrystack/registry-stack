@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - `rstack dev` runs Evidence projects, alone or with BReg. An Evidence project
   with its own `local-target.yaml` runs on that target, with the development
   secrets it references generated for the run. See
