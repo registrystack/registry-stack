@@ -905,6 +905,17 @@ async fn revision_from_row(
         field_encryption,
         &compatibility,
     )?;
+    // A withheld member reads as null, like a member the record never set.
+    for field_id in selected_fields
+        .iter()
+        .filter(|field| disclosure.withheld_fields.contains(*field))
+    {
+        let field = compatibility
+            .fields
+            .get(field_id)
+            .ok_or(ReadServiceError::Unavailable)?;
+        data.insert(field.active_api_name.clone(), Value::Null);
+    }
     let change_context = revision_change_context(
         transaction,
         row,

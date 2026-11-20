@@ -3031,9 +3031,10 @@ fn disclosure_when_sql(
     Ok(sql)
 }
 
-/// Remove the members a matching `fields` condition withholds. The members
-/// are dropped, not nulled, so the record reads as if the profile could not
-/// read them. The condition flags follow the projected and sort columns.
+/// Null the members a matching `fields` condition withholds, so a withheld
+/// member reads like one the record never set and the response shape does not
+/// reveal the condition. A member the profile does not select stays absent.
+/// The condition flags follow the projected and sort columns.
 fn withhold_disclosed_fields(
     row: &tokio_postgres::Row,
     entity: &CompiledEntity,
@@ -3052,8 +3053,10 @@ fn withhold_disclosed_fields(
         };
         if matched {
             for field_id in fields {
-                if let Some(api_name) = compiled_api_name(entity, field_id) {
-                    record.data.remove(api_name);
+                if let Some(member) = compiled_api_name(entity, field_id)
+                    .and_then(|api_name| record.data.get_mut(api_name))
+                {
+                    *member = Value::Null;
                 }
             }
         }
