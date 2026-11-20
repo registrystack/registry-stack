@@ -138,6 +138,8 @@ postgres_targets=(
   postgres_event_record_reader
   postgres_action_handlers
   postgres_field_encryption
+  postgres_disclosure
+  postgres_required_filters
   postgres_generated_identifier_batch_import
   postgres_package
   postgres_migration
