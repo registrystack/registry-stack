@@ -1594,7 +1594,12 @@ def classify(
 
     outputs = {
         "full_sweep": full_sweep,
-        "deployment": complete or any(path.startswith("deploy/") for path in paths),
+        # The operator tests read the successor warnings bregctl prints.
+        "deployment": complete
+        or any(
+            path.startswith("deploy/") or path == "crates/registry-bregctl/src/apply_lifecycle.rs"
+            for path in paths
+        ),
         "rust": bool(affected),
         "rust_matrix": {"include": matrix},
         "rust_packages": sorted(affected),
