@@ -1,0 +1,483 @@
+---
+title: Find and clear stuck work
+description: Where stuck, held, failed, and overdue work shows up in each Registry Stack product, how to clear it today, and example Prometheus alert rules for the metrics that exist.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-20"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Use this page when something has not finished and you need to know where to look and what you can do about it.
+It goes product by product.
+For each one it names the signal that shows the work, the command or route that clears it, and whether that action needs access to the host.
+It says plainly where a product gives you no way to clear something.
+
+## Two kinds of access
+
+Only Coordinator offers operator actions over HTTP with an operator token.
+`coordinatorctl` calls that API with `--url` and `--token-file`, so you can run it from any machine that can reach the service.
+
+Every other product clears work with its own control command on the host.
+These commands open PostgreSQL directly with `--runtime-config`, so they run where the runtime file and the database credentials are.
+Treat that access as an operator privilege and keep it off shared laptops.
+
+Metrics are served on a separate listener from the API.
+Bind it to loopback or a private interface and scrape it from there.
+Gauges that count queued work are read from the database at scrape time.
+When the database cannot answer, the series is omitted rather than reported as zero, so alert on a missing series as well as a high value.
+
+{/* Evidence: crates/registry-coordinator/src/metrics.rs, coordinator_dispatch_jobs;
+    crates/registry-coordinator/src/cli.rs, DeploymentStatus, RetrySame;
+    crates/registry-breg/src/metrics.rs, breg_worker_last_success_age_seconds;
+    crates/registry-casework/src/metrics.rs, casework_due_review_tasks. */}
+
+## Coordinator
+
+**Signal.** Run `coordinatorctl status`, `coordinatorctl list --attention`, or `coordinatorctl doctor` against the HTTP API.
+The doctor report lists held runs with `heldRunCount`, the oldest due step with `oldestDueAt`, and `uncertain` steps.
+It shows the first 100 held runs.
+For the full list, run `coordinatorctl deployment-status --runtime-config` on the host.
+The metrics series `coordinator_dispatch_jobs` carries a `state` label of `pending`, `leased`, or `unknown`.
+
+**Clear.**
+
+- `coordinatorctl inspect --run` shows one run before you act.
+- `coordinatorctl retry-same`, `coordinatorctl reconcile`, and `coordinatorctl cancel` each take `--run` and `--reason`.
+- `coordinatorctl check-now` takes `--run` and `--step` and reads a waiting step now.
+- `coordinatorctl release-restore-hold`, `coordinatorctl release-admission-hold`, and `coordinatorctl complete-execution-recovery` lift the matching hold.
+- `coordinatorctl retain` erases ended payloads, with `--before` and `--limit` (default and maximum 100).
+
+A run held as `definition-refused` cannot be ended with retry-same, reconcile, or cancel.
+The service answers 409 `run.definition-incompatible`.
+Fix the definition and apply it instead.
+
+**Access.** HTTP with an operator token for everything above except `deployment-status`, which needs the host.
+
+**Read more.** [Held runs](../coordinator/#held-runs), [Recover a run](../coordinator/#recover-a-run), [Watch metrics](../coordinator/#watch-metrics).
+
+{/* Evidence: crates/registry-coordinator/src/http.rs, retry-same and restore-hold routes;
+    crates/registry-coordinator/src/cli.rs, Command, CheckNow and Retain;
+    crates/registry-coordinator/src/metrics.rs, coordinator_dispatch_jobs. */}
+
+## Base Registry Engine (BReg)
+
+**Signal.** Four sources, all on the metrics listener unless noted.
+
+- `breg_worker_last_success_age_seconds{worker}` is the age of each background worker's last success.
+  The `worker` label is one of `hook`, `record-timer`, `attachment-verification`, `review`, `subject-access-log-retention`, `external-projection-retention`, or `external-refresh`.
+  A worker that has not yet succeeded has no series.
+- `breg_queue_oldest_pending_age_seconds{queue}` is the age of the oldest pending item in `hook-delivery`, `review-submission`, or `review-application`.
+- `breg_proposal_application_blocked_jobs` counts Proposal applications that cannot proceed.
+- `breg_record_timer_oldest_due_lag_seconds` is how long the oldest due Record timer has waited.
+  `breg_record_timer_control_compatible` is 0 when the timer protocol does not match this process.
+- `bregctl status` and `bregctl doctor` take `--runtime-config`.
+  Doctor reports `external-refresh.status` and `external-projection.status`.
+
+**Clear.** All of these take `--runtime-config` and run on the host.
+
+- Webhook deliveries: `bregctl hook list`, `hook drain`, `hook replay`, and `hook discard`.
+  Replay and discard take `--event-id`, `--delivery-id`, and `--expected-generation`.
+- Review recovery: `bregctl` review recovery subcommands resubmit a review, close one the authority lost, or retry its application.
+- Import windows: `bregctl import-authority list`, `open`, `close`, and `close-expired`.
+- Record timers: `bregctl timer status`, `list`, `show`, `retry`, `pause`, and `resume`.
+  Retry takes `--occurrence-id`, `--expected-attempt-count`, `--operator-reference`, and `--reason`.
+  Pause and resume take `--expected-control-epoch`, `--operator-reference`, and `--reason`.
+- Durable ingestion runs: `bregctl data runs list` and `data runs cancel` go over HTTP, and only the creator of a run can use them.
+
+**Access.** Host with `--runtime-config` for everything except `data runs`.
+BReg has no operator token API for the rest.
+
+**Read more.** [Watch the background workers](../breg-monitor/#watch-the-background-workers), [Recover a blocked Proposal](../breg-changes/#recover-a-blocked-proposal), [Inspect and recover deliveries](../breg-webhooks/#inspect-and-recover-deliveries), [Recover a run](../breg-data/#recover-a-run), [Operate Record timers](../breg/#operate-record-timers).
+
+{/* Evidence: crates/registry-breg/src/metrics.rs, ProgressWorker, PendingQueue and breg_proposal_application_blocked_jobs;
+    crates/registry-bregctl/src/lib.rs, HookCommand, ReviewRecoveryCommand, ImportAuthorityCommand;
+    crates/registry-bregctl/src/timer_operator_lifecycle.rs. */}
+
+## Registry Evidence
+
+**Signal.** Evidence keeps no queue of work, so nothing is stuck inside it.
+The signals show a failing dependency instead.
+
+- `evidence_source_requests_total{source,outcome}` counts calls to each governed source.
+  Outcomes other than `success` are failures, for example `timeout`, `transport`, `credential`, and `rate-limited`.
+- `evidence_signer_requests_total{signer,outcome}` does the same for the signer.
+- `evidence_source_shape_drift_total{source}` rises when a source starts answering in a shape the bundle does not describe.
+- `evidence_rate_limiter_tracked_keys` rises toward its ceiling of 100,000 keys.
+- With OID4VCI enabled, `evidence_oid4vci_store_entries` approaches `evidence_oid4vci_store_capacity`, and `evidence_oid4vci_outcomes_total{outcome}` counts `store-saturated` and `store-fault`.
+- `evidencectl doctor --runtime-config` is a preflight of the runtime file and, with `--require-audit-under`, of the audit path.
+  It reports readiness and does not list work.
+
+**Clear.** There is nothing to clear.
+Evidence has no operator HTTP API and no command that releases work.
+Fix the source or signer, and callers retry.
+Readiness does not depend on sources, so `/ready` stays green while a source is down.
+Use the metrics.
+
+**Access.** Host for the preflight. No operator API.
+
+**Read more.** [Preflight the audit path](../evidence-audit/), [OID4VCI metrics](../../configure/evidence-oid4vci/#metrics).
+
+{/* Evidence: crates/registry-evidence/src/observability/golden-scrape.txt;
+    crates/registry-evidence/src/observability.rs, evidence_source_shape_drift_total;
+    crates/registry-evidence-oid4vci/src/observability.rs, evidence_oid4vci_store_capacity;
+    crates/registry-evidencectl/src/runtime.rs, DoctorArgs. */}
+
+## Registry Casework
+
+**Signal.**
+
+- `casework_open_review_requests` and `casework_open_review_tasks` count open work.
+- `casework_due_review_tasks` counts open tasks past their due time.
+  It is the overdue signal.
+- `casework_database_up` is 0 when the database cannot answer.
+- `caseworkctl status` and `caseworkctl doctor` take `--runtime-config`.
+- The metrics listener also serves `/version`.
+
+**Clear.** Supervisors move overdue tasks over HTTP with their own credentials.
+The routes are `POST /v1/review-tasks/{task_id}/assign`, `release`, `claim`, and `delegate`.
+`GET /v1/review-tasks/supervision` lists tasks for a supervisor.
+A producer withdraws a request with `POST /v1/review-requests/{request_id}/cancel`.
+These are caller actions under a role, not an operator token API.
+
+Casework has no command, route, or metric for a completion delivery that was dead-lettered.
+The row stays in the database.
+See the retention guide for what is kept.
+
+**Access.** HTTP with a caller credential for tasks and requests. Host for `caseworkctl`.
+
+**Read more.** [Scrape metrics and the running version](../casework/#scrape-metrics-and-the-running-version), [Check readiness with doctor](../casework/#check-readiness-with-doctor), [Troubleshooting](../casework/#troubleshooting), [Casework retention](../casework-retention/).
+
+{/* Evidence: crates/registry-casework/src/metrics.rs, casework_due_review_tasks;
+    crates/registry-casework/src/http.rs, review-tasks routes;
+    crates/registry-caseworkctl/src/lib.rs, OperatorArgs;
+    crates/registry-casework/src/runtime/completion.rs, dead_lettered_at. */}
+
+## Registry Messaging
+
+**Signal.**
+
+- `messaging_dispatch_jobs{state}` with `state` of `pending`, `leased`, or `unknown`.
+  `unknown` means a provider attempt whose outcome is not known.
+- `messaging_provider_attempts_total{outcome}` counts `accepted`, `transient`, `permanent`, and `maybe-sent`.
+- `messaging_provider_callbacks_total{outcome}` counts callbacks, including `unmatched` and `ambiguous`.
+- `messagingctl messages list --status` filters by status, with `--limit` (default 50).
+
+**Clear.** All of these take `--runtime-config` and run on the host.
+
+- `messagingctl messages show` reads one message.
+- `messagingctl messages retry` and `messagingctl messages cancel` change a message.
+- `messagingctl messages settle --outcome sent` or `--outcome not-sent` records the truth for an unknown outcome.
+- The state-changing commands take `--apply`.
+- `messagingctl retention erase-expired` erases expired data on demand.
+
+Over HTTP, `POST /v1/messages/{message_id}/cancel` cancels a message with an operator or owner profile.
+It works only before dispatch has leased the message.
+Otherwise the service answers that dispatch has started or the message is already terminal.
+
+**Access.** Host for retry, settle, and erase. HTTP for cancel before dispatch.
+
+**Read more.** [Operate messages](../messaging/#operate-messages), [Settle an unknown outcome](../messaging/#settle-an-unknown-outcome), [Watch the journal and metrics](../messaging/#watch-the-journal-and-metrics).
+
+{/* Evidence: crates/registry-messaging/src/metrics.rs, messaging_dispatch_jobs;
+    crates/registry-messagingctl/src/lib.rs, messages and retention commands;
+    crates/registry-messaging/src/http.rs, cancel route. */}
+
+## Registry Scheduling
+
+**Signal.** `schedulingctl intents --runtime-config` lists delivery intents that are undelivered or dead-lettered, with `--limit` (default 50, maximum 200).
+Scheduling publishes no metrics.
+Its probes are `/healthz` and `/readyz`.
+
+**Clear.** Scheduling has no command to retry or discard a dead-lettered delivery.
+The list is read-only.
+Callers can remove their own holds and cancel their own appointments over HTTP with `DELETE` on a hold and `POST` on an appointment cancel.
+
+**Access.** Host for `intents`. Caller credential for holds and appointments.
+
+**Read more.** [Read the deployment](../scheduling/#read-the-deployment), [Retention](../scheduling/#retention).
+
+{/* Evidence: crates/registry-schedulingctl/src/lib.rs, intents;
+    crates/registry-scheduling/src/http.rs, healthz and readyz. */}
+
+## Registry Adapter
+
+**Job.** The job reports held work and does not release it.
+This is by design, because the action belongs to the product that owns the data.
+
+- `adapter-job status <job> --runtime` shows each held item with the product that owns the action and the next step.
+- `adapter-job inspect <job> --runtime --key` shows one item.
+- `adapter-job rescan <job> --pack --runtime` makes the job read the source again.
+- `adapter-job rebind-identity <job> --pack --runtime` repairs an identity binding.
+  It stops a fault and does not release a held item.
+- `adapter-job check` and `adapter-job pass` (with `--loop`, `--dry-run`, and `--refusal-limit`) check and run the job.
+
+There is no release or unhold command.
+Resolve the held item in the owning product, then let the next pass pick up the change.
+The job publishes no metrics.
+It is a source-build binary, so it runs wherever you build it, with host access to its own store.
+
+**Facade.** The facade has no operator surface for stuck work and publishes no metrics.
+`adapterctl` runs offline checks only.
+
+**Access.** Host.
+
+**Read more.** [Check the job](../adapter/#check-the-job), [Rescan or run on the interval](../adapter/#rescan-or-run-on-the-interval), [Resolve held job items](../adapter/#resolve-held-job-items).
+
+{/* Evidence: crates/registry-adapter-job/src/cli.rs, Command;
+    crates/registry-adapter-job/src/main.rs, holdGuidance and nextAction. */}
+
+## Registry Documents
+
+**Signal.** `documentsctl verification list`, `documentsctl erasure status`, and `documentsctl erasure list` show pending verification and erasure jobs.
+All take `--runtime-config`.
+Documents publishes no metrics, and its probes are `/health` and `/ready`.
+
+**Clear.** `documentsctl verification replay` and `documentsctl erasure replay` rerun a job.
+They take `--version-id` and `--expected-generation`.
+No HTTP route lists or replays jobs.
+
+Hook deliveries have no command.
+A pending delivery pins its destination binding, so moving a hook needs the steps in the operate guide.
+
+**Access.** Host.
+
+**Read more.** [Replay a stuck verification](../documents/#replay-a-stuck-verification), [Removal and erasure](../documents/#removal-and-erasure), [Move a hook](../documents/#move-a-hook).
+
+{/* Evidence: crates/registry-documentsctl/src/lib.rs, verification and erasure commands;
+    crates/registry-documents-core/src/naming.rs, HEALTH_PATH and READY_PATH. */}
+
+## Registry Discovery
+
+Discovery has no stuck work.
+It holds no queue, publishes no metrics, and has no operator command.
+Its probes are `/health` and `/ready`, and `/ready` is a static answer.
+If it misbehaves, rebuild the index and restart it on the new package.
+
+**Read more.** [Restart on the new package](../../configure/discovery/#restart-on-the-new-package), [Maintain the index](../../configure/discovery/#maintain-the-index), [Troubleshooting](../../configure/discovery/#troubleshooting).
+
+{/* Evidence: crates/registry-discovery/src/server.rs, health and ready routes. */}
+
+## Registry Render
+
+**Signal.** `GET /ready` reports `{"status":"ready"}`.
+When a seal is configured it adds a `signing` member per seal, `ready` or `not-ready`, with the reason `certificate-expired`, `certificate-not-yet-valid`, or `signer-not-ready`.
+Readiness also fails when the audit writer has stopped.
+`registry-render check --environment` warns 30 days before a certificate expires.
+Render publishes no metrics.
+
+**Clear.** Render has no work queue and no clearing command.
+Renew the certificate and restart.
+A seal outage with Transit needs no restart.
+A stopped audit writer needs a restart.
+`registry-render healthcheck --runtime-config` runs the readiness probe for a supervisor.
+
+**Access.** Host.
+
+**Read more.** [Read readiness](../registry-render/#read-readiness), [Renew the certificate](../registry-render/#renew-the-certificate), [Keep the audit file](../registry-render/#keep-the-audit-file).
+
+{/* Evidence: crates/registry-render/src/server.rs, ready and healthcheck;
+    crates/registry-render/src/cli.rs, Healthcheck and environment. */}
+
+## Example alert rules
+
+These rules use only series that the products publish today.
+Adjust the thresholds to your volumes.
+The `job` label comes from your scrape configuration, so match it to the names you use.
+
+Because a failed database sample omits the series, each product group ends with an `absent()` rule.
+
+To cover a new series, add one rule to that product's group.
+Keep one `groups` entry per product, with the product name as the `name`.
+
+### Coordinator
+
+```yaml
+groups:
+  - name: coordinator
+    rules:
+      - alert: CoordinatorUnknownDispatchJobs
+        expr: coordinator_dispatch_jobs{state="unknown"} > 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: A step attempt has an unknown outcome. Reconcile the run.
+      - alert: CoordinatorDispatchBacklog
+        expr: coordinator_dispatch_jobs{state="pending"} > 0
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: Dispatch jobs have stayed pending. Check the worker and the target service.
+      - alert: CoordinatorAuthenticationRefusals
+        expr: sum(rate(coordinator_authentication_refusals_total[5m])) > 0.1
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: Callers are presenting credentials Coordinator refuses.
+      - alert: CoordinatorRunsFailing
+        expr: sum(increase(coordinator_runs_finished_total{state="failed"}[15m])) > 0
+        for: 0m
+        labels: {severity: warn}
+        annotations:
+          summary: A run ended in the failed state. List it with coordinatorctl list --attention.
+      - alert: CoordinatorMetricsAbsent
+        expr: absent(coordinator_dispatch_jobs)
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: Coordinator dispatch gauge is missing. The database may be unreachable.
+```
+
+### Casework
+
+```yaml
+groups:
+  - name: casework
+    rules:
+      - alert: CaseworkDatabaseDown
+        expr: casework_database_up == 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: Casework cannot reach its database.
+      - alert: CaseworkOverdueReviewTasks
+        expr: casework_due_review_tasks > 0
+        for: 30m
+        labels: {severity: warn}
+        annotations:
+          summary: Review tasks are past their due time. A supervisor can reassign them.
+      - alert: CaseworkMetricsAbsent
+        expr: absent(casework_database_up)
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: Casework metrics are missing.
+```
+
+### BReg
+
+```yaml
+groups:
+  - name: breg
+    rules:
+      - alert: BregWorkerStalled
+        expr: breg_worker_last_success_age_seconds > 900
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: A BReg background worker has not succeeded recently. The worker label names it.
+      - alert: BregProposalApplicationBlocked
+        expr: breg_proposal_application_blocked_jobs > 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: A Proposal application is blocked. Recover it with bregctl.
+      - alert: BregQueueOldestPendingAge
+        expr: breg_queue_oldest_pending_age_seconds > 900
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: The oldest item in a BReg queue has waited too long. The queue label names it.
+      - alert: BregRecordTimerOverdue
+        expr: breg_record_timer_oldest_due_lag_seconds > 900
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: A due Record timer has not run. Check bregctl timer list.
+      - alert: BregRecordTimerIncompatible
+        expr: breg_record_timer_control_compatible == 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: The Record timer protocol does not match this process.
+```
+
+### Messaging
+
+```yaml
+groups:
+  - name: messaging
+    rules:
+      - alert: MessagingUnknownOutcome
+        expr: messaging_dispatch_jobs{state="unknown"} > 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: A message has an unknown provider outcome. Settle it with messagingctl.
+      - alert: MessagingDispatchBacklog
+        expr: messaging_dispatch_jobs{state="pending"} > 0
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: Messages have stayed pending.
+      - alert: MessagingPermanentFailures
+        expr: increase(messaging_provider_attempts_total{outcome="permanent"}[15m]) > 0
+        for: 0m
+        labels: {severity: warn}
+        annotations:
+          summary: The provider refused messages permanently.
+      - alert: MessagingMetricsAbsent
+        expr: absent(messaging_dispatch_jobs)
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: Messaging dispatch gauge is missing. The database may be unreachable.
+```
+
+### Evidence
+
+```yaml
+groups:
+  - name: evidence
+    rules:
+      - alert: EvidenceSourceFailing
+        expr: |
+          sum by (source) (rate(evidence_source_requests_total{outcome!="success"}[5m]))
+            / sum by (source) (rate(evidence_source_requests_total[5m])) > 0.2
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: More than a fifth of calls to a governed source are failing.
+      - alert: EvidenceSignerFailing
+        expr: |
+          sum by (signer) (rate(evidence_signer_requests_total{outcome!="success"}[5m]))
+            / sum by (signer) (rate(evidence_signer_requests_total[5m])) > 0.05
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: Signer calls are failing.
+      - alert: EvidenceSourceShapeDrift
+        expr: increase(evidence_source_shape_drift_total[1h]) > 0
+        for: 0m
+        labels: {severity: warn}
+        annotations:
+          summary: A source answered in a shape the bundle does not describe.
+      - alert: EvidenceRateLimiterNearCeiling
+        expr: evidence_rate_limiter_tracked_keys > 80000
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: The rate limiter is nearing its ceiling of 100,000 tracked keys.
+      - alert: EvidenceOid4vciStoreNearCapacity
+        expr: evidence_oid4vci_store_entries / evidence_oid4vci_store_capacity > 0.8
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: The OID4VCI store is above 80 percent of its capacity.
+```
+
+{/* Evidence: crates/registry-coordinator/src/metrics.rs, RunOutcome;
+    crates/registry-casework/src/metrics.rs, casework_database_up;
+    crates/registry-breg/src/metrics.rs, breg_record_timer_control_compatible and breg_queue_oldest_pending_age_seconds;
+    crates/registry-messaging/src/metrics.rs, messaging_provider_attempts_total;
+    crates/registry-evidence/src/observability.rs, evidence_rate_limiter_tracked_keys;
+    crates/registry-evidence-oid4vci/src/observability.rs, evidence_oid4vci_store_entries. */}
+
+## Next
+
+- [Operator handoff](../)
+- [Inspect and diagnose a running deployment](../advanced/inspect-and-diagnose/)
+- [Retention and persistent state](../retention-and-persistent-state/)

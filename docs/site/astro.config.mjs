@@ -987,6 +987,7 @@ export default defineConfig({
             { label: 'Back up and restore', slug: 'operate/advanced/back-up-and-restore' },
             { label: 'Upgrade and retire', slug: 'operate/advanced/upgrade-and-retire' },
             { label: 'Retention and persistent state', slug: 'operate/retention-and-persistent-state' },
+            { label: 'Find and clear stuck work', slug: 'operate/stuck-work' },
             { label: 'Generated files and ownership', slug: 'generated-artifacts' },
             { label: 'Production hardening', slug: 'security/hardening-checklist' },
             {
