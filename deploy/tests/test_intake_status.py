@@ -6,7 +6,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
-from unittest import mock
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples" / "intake-status"))
 from intake_status import make_server, status_payload
@@ -32,7 +32,7 @@ class IntakeStatusTest(unittest.TestCase):
 class IntakeStatusServerTest(unittest.TestCase):
     def setUp(self):
         self.log = io.StringIO()
-        patcher = mock.patch("sys.stderr", self.log)
+        patcher = patch("sys.stderr", self.log)
         patcher.start()
         self.addCleanup(patcher.stop)
         self.server = make_server(("127.0.0.1", 0), "/extensions/intake-status", b'{"a":1}\n')

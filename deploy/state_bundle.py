@@ -269,13 +269,15 @@ def restore_database(args):
     target = valid_database(args.target)
     if source not in manifest.get("databases", []):
         raise BundleError("The snapshot has no dump for the requested database.")
-    user_objects = checked_run([
-        *pg_command(args), "psql", "-XAt", "--no-password", "--username=postgres", f"--dbname={target}",
-        "-v", "ON_ERROR_STOP=1", "-c",
+    user_object_count = (
         "SELECT (SELECT count(*) FROM pg_namespace WHERE nspname NOT IN "
         "('pg_catalog','pg_toast','public','information_schema') AND nspname NOT LIKE 'pg_temp_%') "
         "+ (SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace) "
-        "+ (SELECT count(*) FROM pg_extension WHERE extname <> 'plpgsql');",
+        "+ (SELECT count(*) FROM pg_extension WHERE extname <> 'plpgsql');"
+    )
+    user_objects = checked_run([
+        *pg_command(args), "psql", "-XAt", "--no-password", "--username=postgres", f"--dbname={target}",
+        "-v", "ON_ERROR_STOP=1", "-c", user_object_count,
     ], f"Check clean target {target}")
     if user_objects.strip() != b"0":
         raise BundleError("The restore target must be a clean database. Preserve the original for reconciliation.")
