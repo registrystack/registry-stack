@@ -284,18 +284,17 @@ async fn items(
         }
         Some(Err(_)) | None => return concealed(),
     };
-    if authorized
+    if let Err(binding) = authorized
         .surface
         .context
         .bind_access_attribution(authorized.surface.response_entity, &headers)
-        .is_err()
     {
         return audited_read_refusal(
             &service,
             authorized.route,
             &authorized.surface,
             None,
-            concealed(),
+            super::access_binding_refusal(binding),
             &correlation,
         )
         .await;

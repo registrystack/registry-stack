@@ -47,7 +47,8 @@ async fn read(
             .await;
         }
     };
-    let surface = match super::authorize_route_with_reason(&service, &route, &claims, &options) {
+    let mut surface = match super::authorize_route_with_reason(&service, &route, &claims, &options)
+    {
         Ok(surface) => surface,
         Err(reason) => {
             return audited_read_concealment(
@@ -63,6 +64,20 @@ async fn read(
         }
     };
     let record_id = path.get("record_id");
+    if let Err(binding) = surface
+        .context
+        .bind_access_attribution(surface.response_entity, &headers)
+    {
+        return audited_read_refusal(
+            &service,
+            &route,
+            &surface,
+            record_id,
+            access_binding_refusal(binding),
+            &correlation,
+        )
+        .await;
+    }
     if claims.principal().is_none()
         || record_id.is_none_or(|id| !valid_canonical_record_uuid(id))
         || headers.contains_key(crate::subject_access_log::REQUESTER_HEADER)

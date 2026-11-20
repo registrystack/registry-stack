@@ -225,9 +225,12 @@ fn problem_code(code: &BRegProblemCode) -> ToolErrorCode {
         | BRegProblemCode::SourceUnavailable
         | BRegProblemCode::RequestTimeout
         | BRegProblemCode::RuntimeFieldEncryptionUnavailable => ToolErrorCode::RegistryUnavailable,
+        // The gateway forwards no Registry-Access-Reason header, so a profile
+        // that requires one is a profile this gateway may not act under.
         BRegProblemCode::ActionEvidenceFailed
         | BRegProblemCode::ActionHandlerFailed
-        | BRegProblemCode::ActionRefused => ToolErrorCode::NotPermitted,
+        | BRegProblemCode::ActionRefused
+        | BRegProblemCode::RequestAccessReasonRequired => ToolErrorCode::NotPermitted,
         // Ingestion problems cannot answer an operation this gateway sends,
         // and a code a later client version adds is not one this gateway knows.
         _ => ToolErrorCode::UnexpectedResponse,
@@ -347,6 +350,10 @@ mod tests {
             (BRegProblemCode::ActionEvidenceFailed, "not-permitted"),
             (BRegProblemCode::ActionHandlerFailed, "not-permitted"),
             (BRegProblemCode::ActionRefused, "not-permitted"),
+            (
+                BRegProblemCode::RequestAccessReasonRequired,
+                "not-permitted",
+            ),
             (BRegProblemCode::IngestionRunBlocked, "unexpected-response"),
         ];
         for (code, tool_code) in expected {

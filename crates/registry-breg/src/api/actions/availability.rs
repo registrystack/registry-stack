@@ -209,12 +209,8 @@ pub(in crate::api) async fn observe_target(
         // Do not even probe the record when any required fact is undisclosed.
         return Ok(None);
     }
-    if surface
-        .context
-        .bind_access_attribution(entity, headers)
-        .is_err()
-    {
-        return Err(concealed());
+    if let Err(binding) = surface.context.bind_access_attribution(entity, headers) {
+        return Err(access_binding_refusal(binding));
     }
     if let Some(refusal) = field_encryption_refusal(service, entity) {
         return Err(refusal);

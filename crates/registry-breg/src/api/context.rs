@@ -332,12 +332,23 @@ impl fmt::Debug for VerifiedRowBoundary {
     }
 }
 
+/// Why the access headers of a request were refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AccessBindingRefusal {
+    /// The forwarded requester or purpose headers are not admitted.
+    Attribution,
+    /// The profile requires a valid `Registry-Access-Reason` header.
+    ReasonRequired,
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct AuthorizedRequestContext {
     principal: Option<String>,
     purpose: Option<String>,
     requester_client: Option<String>,
     forwarded_access_attribution: Option<crate::subject_access_log::ForwardedAccessAttribution>,
+    requires_access_reason: bool,
+    access_reason: Option<String>,
     selected_profile: String,
     row_boundaries: Vec<VerifiedRowBoundary>,
     task_grant: Option<TaskGrantBinding>,
@@ -358,6 +369,8 @@ impl AuthorizedRequestContext {
             purpose,
             requester_client: None,
             forwarded_access_attribution: None,
+            requires_access_reason: false,
+            access_reason: None,
             selected_profile,
             row_boundaries,
             task_grant: None,
@@ -395,13 +408,42 @@ impl AuthorizedRequestContext {
         self.forwarded_access_attribution.as_ref()
     }
 
+    /// Mark the selected profile as one that requires a `Registry-Access-Reason`
+    /// header on every request.
+    pub(crate) fn with_access_reason_requirement(mut self, required: bool) -> Self {
+        self.requires_access_reason = required;
+        self
+    }
+
+    /// The caller's validated reason, present only under a profile that requires one.
+    pub(crate) fn access_reason(&self) -> Option<&str> {
+        self.access_reason.as_deref()
+    }
+
+    /// Validate the request's access headers once, at profile admission and
+    /// before any record is touched.
     pub(crate) fn bind_access_attribution(
         &mut self,
         entity: &crate::model::CompiledEntity,
         headers: &axum::http::HeaderMap,
-    ) -> Result<(), ()> {
+    ) -> Result<(), AccessBindingRefusal> {
         self.forwarded_access_attribution =
-            crate::subject_access_log::forwarded_attribution(entity, self, headers)?;
+            crate::subject_access_log::forwarded_attribution(entity, self, headers)
+                .map_err(|()| AccessBindingRefusal::Attribution)?;
+        self.bind_access_reason(headers)
+    }
+
+    /// Validate only the access reason, for surfaces that never log reads.
+    pub(crate) fn bind_access_reason(
+        &mut self,
+        headers: &axum::http::HeaderMap,
+    ) -> Result<(), AccessBindingRefusal> {
+        if self.requires_access_reason {
+            self.access_reason = Some(
+                crate::subject_access_log::access_reason(headers)
+                    .map_err(|()| AccessBindingRefusal::ReasonRequired)?,
+            );
+        }
         Ok(())
     }
     pub(crate) fn audit_context(&self) -> Option<&crate::audit::RequestAuditContext> {

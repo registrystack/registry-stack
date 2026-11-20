@@ -45,6 +45,7 @@ pub enum ProblemCode {
     QueryCursorInvalid,
     QueryFilterRequired,
     QueryInvalid,
+    RequestAccessReasonRequired,
     RequestInvalid,
     RequestTimeout,
     ResourceNotFound,
@@ -86,6 +87,7 @@ impl ProblemCode {
         Self::QueryCursorInvalid,
         Self::QueryFilterRequired,
         Self::QueryInvalid,
+        Self::RequestAccessReasonRequired,
         Self::RequestInvalid,
         Self::RequestTimeout,
         Self::ResourceNotFound,
@@ -129,6 +131,7 @@ impl ProblemCode {
         Self::QueryCursorInvalid,
         Self::QueryFilterRequired,
         Self::QueryInvalid,
+        Self::RequestAccessReasonRequired,
         Self::RequestInvalid,
         Self::RequestTimeout,
         Self::ResourceNotFound,
@@ -169,6 +172,7 @@ impl ProblemCode {
             Self::QueryCursorInvalid => "query.cursor_invalid",
             Self::QueryFilterRequired => "query.filter_required",
             Self::QueryInvalid => "query.invalid",
+            Self::RequestAccessReasonRequired => "request.access_reason_required",
             Self::RequestInvalid => "request.invalid",
             Self::RequestTimeout => "request.timeout",
             Self::ResourceNotFound => "resource.not_found",
@@ -192,6 +196,7 @@ impl ProblemCode {
             Self::QueryCursorInvalid
             | Self::QueryFilterRequired
             | Self::QueryInvalid
+            | Self::RequestAccessReasonRequired
             | Self::RequestInvalid => 400,
             Self::AuthenticationRefused => 401,
             Self::IngestionProfileMismatch | Self::WriteOutsideBoundary => 403,
@@ -287,6 +292,9 @@ impl ProblemCode {
                 "The list did not carry the search criteria its access profile requires."
             }
             Self::QueryInvalid => "The query request is invalid.",
+            Self::RequestAccessReasonRequired => {
+                "The access profile requires a valid Registry-Access-Reason header."
+            }
             Self::RequestInvalid => "The request is invalid.",
             Self::RequestTimeout => "The request timed out.",
             Self::ResourceNotFound => "The requested resource was not found.",
