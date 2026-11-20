@@ -532,6 +532,16 @@ path = "tests/proposal_hooks.rs"
 required-features = ["runtime"]
 
 [[test]]
+name = "postgres_disclosure"
+path = "tests/postgres_disclosure.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_required_filters"
+path = "tests/postgres_required_filters.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "postgres_access_log"
 path = "tests/postgres_access_log.rs"
 required-features = ["postgres-test"]

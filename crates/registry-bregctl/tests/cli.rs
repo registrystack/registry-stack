@@ -709,6 +709,48 @@ fn check_refuses_invalid_required_filters_with_a_next_step() {
 }
 
 #[test]
+fn check_refuses_invalid_disclosure_conditions_with_a_next_step() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    source["recordTypes"][0]["disclosureConditions"] = json!([{
+        "id": "hide-contact",
+        "when": [{"type": "field-equals", "field": "jurisdiction", "value": "protected"}],
+        "withhold": "fields",
+        "fields": ["email"],
+        "exemptProfiles": ["no-such-profile"]
+    }]);
+    let project = TestProject::from_registry_source(&serde_json::to_vec_pretty(&source).unwrap());
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.disclosure.exempt-profiles-invalid")
+        .unwrap_or_else(|| panic!("{report}"));
+    assert!(
+        diagnostic["path"]
+            .as_str()
+            .unwrap()
+            .contains("/exemptProfiles"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic["suggestedAction"]
+            .as_str()
+            .unwrap()
+            .contains("exemptProfiles"),
+        "{diagnostic}"
+    );
+}
+
+#[test]
 fn hook_projection_errors_point_to_the_second_hook_in_each_owning_file() {
     let mut source = registry_platform_yaml::Reader::new("registry.yaml")
         .scan(include_bytes!(
