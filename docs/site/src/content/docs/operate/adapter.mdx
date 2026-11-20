@@ -776,7 +776,7 @@ Job host series:
 
 | Series | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `adapter_job_items` | gauge | `state` (`pending`, `acknowledged`, `refused`, `held`) | Items in the job store by state. The read runs in a read-only transaction with a 4 second statement timeout, one at a time, and a result is reused for 5 seconds. |
+| `adapter_job_items` | gauge | `state` (`pending`, `acknowledged`, `refused`, `held`) | Items in the job store by state. The read runs in a read-only transaction whose server-side statement timeout is the time left of one 5 second scrape deadline, so the server cancels a slow count, and a result is reused for 5 seconds. |
 | `adapter_job_last_successful_pass_age_seconds` | gauge | none | Seconds since a pass in this process settled its page. Absent until the first such pass. |
 | `adapter_job_pass_failures_total` | counter | `reason` (`page-fault`, `destination-stop`, `refusal-limit`, `store-unreachable`) | Passes that did not settle, and passes that could not reach the store. A pass that finds another process holding the lease is not a failure and is not counted. |
 | `adapter_job_hook_refusals_total` | counter | `reason` (`not-found`, `method`, `unauthenticated`, `rate-limited`, `unavailable`, `body-timeout`, `body-too-large`, `body-unreadable`) | Hook requests the ingress refused. |
