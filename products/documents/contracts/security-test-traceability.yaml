@@ -322,3 +322,16 @@ entries:
     tests:
       - {path: crates/registry-documents-core/src/project.rs, name: profiles_of_one_actor_kind_reading_different_principal_claims_are_refused}
       - {path: crates/registry-documents-core/src/project.rs, name: profiles_of_different_actor_kinds_may_read_different_principal_claims}
+  - id: DOCUMENTS-SEC-55
+    tests:
+      - {path: crates/registry-documents/src/config.rs, name: the_metrics_listener_is_off_unless_named}
+      - {path: crates/registry-documents/src/config.rs, name: the_metrics_listener_must_be_private_and_apart_from_the_listener}
+      - {path: crates/registry-documents/src/config.rs, name: the_metrics_wildcard_needs_container_private_exposure}
+      - {path: crates/registry-documents/src/config.rs, name: the_metrics_listener_may_not_share_a_wildcard_listener_port}
+      - {path: crates/registry-documents/tests/postgres_metrics.rs, name: the_serving_router_counts_by_template_and_never_answers_metrics}
+      - {path: crates/registry-documents/tests/postgres_metrics.rs, name: the_metrics_listener_answers_over_a_socket_and_the_serving_listener_does_not}
+      - {path: crates/registry-platform-config/src/metrics_bind.rs, name: each_refused_class_names_its_rule}
+      - {path: crates/registry-platform-config/src/metrics_bind.rs, name: ipv4_mapped_forms_of_refused_addresses_are_refused}
+      - {path: crates/registry-platform-config/src/metrics_bind.rs, name: container_private_permits_the_unspecified_address}
+      - {path: crates/registry-platform-config/src/metrics_bind.rs, name: private_address_refuses_the_unspecified_address}
+      - {path: crates/registry-platform-config/src/metrics_bind.rs, name: a_wildcard_serving_bind_on_the_same_port_overlaps}
