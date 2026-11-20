@@ -21,10 +21,10 @@ use registry_platform_audit::{
 };
 use registry_platform_config::JwksSource;
 pub use registry_platform_config::{
-    AttachmentVerifierConfig, AuditKeyConfig, DatabaseConfig,
-    ListenerConfig as MetricsListenerConfig, ObjectStorageConfig, OidcClientsConfig,
-    OidcIssuerConfig, PackageConfig, PrivateListenerConfig as ListenerConfig,
-    SecretProvidersConfig, TlsTermination, UrlHookDestinationConfig,
+    AttachmentVerifierConfig, AuditKeyConfig, DatabaseConfig, MetricsListenerConfig,
+    ObjectStorageConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig,
+    PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TlsTermination,
+    UrlHookDestinationConfig,
 };
 use registry_platform_config::{
     ConfigBlockError, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretResolver,
@@ -679,8 +679,9 @@ impl RuntimeConfig {
         let Some(metrics) = &self.metrics_listener else {
             return;
         };
+        let exposure = metrics.network_exposure;
         let metrics = metrics.bind.socket_addr();
-        if !is_private_metrics_bind(metrics) {
+        if !is_private_metrics_bind(metrics, exposure) {
             findings.push(Finding::new(
                 METRICS_LISTENER_CODE,
                 "/metricsListener/bind",
@@ -952,14 +953,19 @@ pub fn check_runtime_file(
 fn is_deferred(check: &RuntimeFileCheck<RuntimeConfig>, finding: &Finding) -> bool {
     check.defers_within(&finding.pointer)
         || (finding.code == METRICS_OVERLAP_CODE && check.defers("/listener/bind"))
+        || (finding.code == METRICS_LISTENER_CODE
+            && check.defers("/metricsListener/networkExposure"))
 }
 
 /// The metrics listener binds a concrete loopback or private address on a
 /// non-zero port. Link-local, public, multicast, and wildcard addresses are
 /// refused, so the series are never published on a routable interface by
 /// accident.
-fn is_private_metrics_bind(metrics: SocketAddr) -> bool {
-    registry_platform_config::check_metrics_bind_address(metrics).is_ok()
+fn is_private_metrics_bind(
+    metrics: SocketAddr,
+    exposure: registry_platform_config::ListenerNetworkExposure,
+) -> bool {
+    registry_platform_config::check_metrics_bind_address(metrics, exposure).is_ok()
 }
 
 /// Whether binding `metrics` would take the socket the serving `listener`
@@ -1017,6 +1023,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
     match segments.as_slice() {
         ["listener", "bind"] => DEFAULT_LISTENER_BIND,
         ["metricsListener", "bind"] => DEFAULT_METRICS_BIND,
+        ["metricsListener", "networkExposure"] => "private-address",
         ["listener", "tlsTermination"] => "development-loopback",
         ["listener", "networkExposure"] => "private-address",
         ["audit", "destination"] => "file",
@@ -1572,6 +1579,32 @@ pub(crate) mod tests {
             let config = parse(&with_metrics("127.0.0.1:8116", bind)).expect(bind);
             assert!(config.metrics_listener.is_some(), "{bind}");
         }
+    }
+
+    #[test]
+    fn the_metrics_wildcard_needs_container_private_exposure() {
+        let declared = |listener: &str, bind: &str| {
+            with_metrics(listener, bind).replace(
+                &format!("bind: \"{bind}\""),
+                &format!("bind: \"{bind}\"\n  networkExposure: container-private"),
+            )
+        };
+        assert!(parse(&with_metrics("127.0.0.1:8116", "0.0.0.0:9100")).is_err());
+        let config = parse(&declared("127.0.0.1:8116", "0.0.0.0:9100"))
+            .expect("container-private permits the wildcard");
+        assert!(config.metrics_listener.is_some());
+        let RuntimeConfigError::Refused(findings) =
+            parse(&declared("127.0.0.1:8116", "203.0.113.4:9100")).unwrap_err()
+        else {
+            panic!("a runtime refusal");
+        };
+        assert_eq!(findings[0].code, METRICS_LISTENER_CODE);
+        let RuntimeConfigError::Refused(findings) =
+            parse(&declared("127.0.0.1:8116", "0.0.0.0:8116")).unwrap_err()
+        else {
+            panic!("a runtime refusal");
+        };
+        assert_eq!(findings[0].code, METRICS_OVERLAP_CODE);
     }
 
     #[test]
