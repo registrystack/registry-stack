@@ -74,6 +74,7 @@ pub struct PostgresSnapshotReadService {
     audit: RegistryAudit,
     cursors: Arc<CursorCodec>,
     field_encryption: Option<SharedFieldEncryptionService>,
+    read_alerts: Option<crate::outbox::ReadAlerts>,
     fault: SnapshotReadFaultControl,
 }
 
@@ -97,6 +98,7 @@ impl PostgresSnapshotReadService {
             audit,
             cursors,
             field_encryption: None,
+            read_alerts: None,
             fault: SnapshotReadFaultControl::Disabled,
         }
     }
@@ -107,6 +109,24 @@ impl PostgresSnapshotReadService {
     #[must_use]
     pub fn with_field_encryption(mut self, service: Arc<FieldEncryptionService>) -> Self {
         self.field_encryption = Some(service);
+        self
+    }
+
+    /// Bind the destinations read alerts are captured under, and the runtime
+    /// instance they name as their source. A read by a profile a `read` hook
+    /// names is refused when this is not bound.
+    #[must_use]
+    pub fn with_event_destinations(
+        mut self,
+        destinations: Option<Arc<crate::event_destination::ActivatedEventDestinationRegistry>>,
+        instance_id: &str,
+    ) -> Self {
+        self.read_alerts = Some(crate::outbox::ReadAlerts::new(
+            Arc::clone(&self.registry),
+            destinations,
+            &self.expected.package_id,
+            instance_id,
+        ));
         self
     }
 
@@ -413,6 +433,7 @@ impl PostgresSnapshotReadService {
             .collect::<Result<Vec<_>, _>>()?;
         crate::subject_access_log::record_reads(
             transaction,
+            self.read_alerts.as_ref(),
             &plan.entity,
             &request.entity_id,
             &request.context,

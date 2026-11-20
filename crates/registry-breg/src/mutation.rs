@@ -542,7 +542,7 @@ fn temporal_exclusion_constraints(
     Ok(constraints)
 }
 
-fn exact_entity_event_deliveries(
+pub(crate) fn exact_entity_event_deliveries(
     registry: &CompiledRegistry,
     entity: &CompiledEntity,
 ) -> Result<Vec<CompiledEventDelivery>, MutationError> {

@@ -407,12 +407,43 @@ pub(crate) fn event_data_schema_binding(
             "required": event.projection,
         }),
     );
+    let mut required = vec![
+        "recordType",
+        "recordId",
+        "revision",
+        "trigger",
+        "packageRevision",
+        "values",
+    ];
+    if event.trigger == EventTrigger::Read {
+        // A read alert names who read and why, and carries no record values.
+        properties.insert(
+            "access".to_owned(),
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "accessProfile": {"type": "string"},
+                    "operationId": {"type": "string"},
+                    "requester": {"type": "string"},
+                    "purpose": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "accessReason": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "accessLogEventId": {"type": "string", "format": "uuid"},
+                },
+                "required": [
+                    "accessProfile", "operationId", "requester", "purpose",
+                    "accessReason", "accessLogEventId"
+                ],
+            }),
+        );
+        required.push("access");
+    }
     let schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "additionalProperties": false,
         "properties": properties,
-        "required": ["recordType", "recordId", "revision", "trigger", "packageRevision", "values"]
+        "required": required,
     });
     let bytes = canonicalize_json(&schema).map_err(|_| canonicalization_error())?;
     let digest = Sha256::digest(&bytes);

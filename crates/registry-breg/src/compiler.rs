@@ -7098,6 +7098,28 @@ pub(crate) fn valid_logical_destination_id(value: &str) -> bool {
 /// it against the compiled bound, so the compile-time proof measures the same
 /// document: the `data` object below plus the envelope wrapper
 /// [`maximum_envelope_wrapper_bytes`] covers.
+/// The worst-case canonical bytes of a read event's `access` member, key
+/// included, with the comma that precedes it. Requester, purpose and reason are
+/// each bounded to 512 bytes, the profile and operation ids to 256, and every
+/// string takes six bytes per byte plus quotes, which covers JSON's longest
+/// escape.
+fn maximum_read_access_bytes() -> u64 {
+    let keys = [
+        "accessProfile",
+        "operationId",
+        "requester",
+        "purpose",
+        "accessReason",
+        "accessLogEventId",
+    ];
+    let key_bytes: u64 = keys.iter().map(|key| key.len() as u64 + 3).sum();
+    let string = |bytes: u64| bytes * 6 + 2;
+    // `"access":` and its leading comma, then the object braces and the commas
+    // between its six members.
+    let member = ",\"access\":".len() as u64 + 2 + (keys.len() as u64 - 1);
+    member + key_bytes + string(256) + string(256) + string(512) + string(512) + string(512) + 38
+}
+
 fn maximum_event_payload_bytes<'a>(
     registry_id: &str,
     entity_id: &str,
@@ -7136,6 +7158,9 @@ fn maximum_event_payload_bytes<'a>(
             .checked_add(2)?,
     )?;
     total = total.checked_add(values)?;
+    if event.trigger == EventTrigger::Read {
+        total = total.checked_add(maximum_read_access_bytes())?;
+    }
     total.checked_add(maximum_envelope_wrapper_bytes(
         registry_id,
         entity_id,
