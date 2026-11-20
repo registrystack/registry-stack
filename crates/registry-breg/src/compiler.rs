@@ -325,6 +325,7 @@ pub fn compile_project_with_assets(
     );
     validate_project_entity_access_profiles(project, &mut diagnostics);
     validate_module_access_profile_task_grants(&sources, &mut diagnostics);
+    disclosure::validate_module_access_reason_operations(&sources, &mut diagnostics);
     let module_profiles = crate::access::module_profile_keys(&sources);
     expand_project_access(project, &mut sources, &mut diagnostics);
     resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);

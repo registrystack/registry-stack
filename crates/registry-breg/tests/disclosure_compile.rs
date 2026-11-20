@@ -434,6 +434,77 @@ fn a_reason_profile_cannot_hold_an_operation_that_does_not_check_the_reason() {
 }
 
 #[test]
+fn a_reason_profile_cannot_export_data() {
+    let code = "breg.access-profile.access-reason-operation-unsupported";
+    let mut project = source();
+    // The export client sends no Registry-Access-Reason header, so the list
+    // route would refuse every page.
+    person_permission(&mut project, REGISTRAR)["allowDataExport"] = json!(true);
+    assert_refused(
+        &project,
+        code,
+        "project.accessProfiles[id=registrar].permissions.records[recordType=person].allowDataExport",
+    );
+    let mut without_reason = source();
+    person_permission(&mut without_reason, OFFICER)["allowDataExport"] = json!(true);
+    assert!(
+        !has_code(&without_reason, code),
+        "a profile without a reason requirement may export"
+    );
+}
+
+/// A module contributes `profile` to `person` by extension.
+fn with_module_profile(profile: Value) -> Result<CompiledRegistry, registry_breg::CompileFailure> {
+    let module = registry_breg::contract::parse_module_yaml(
+        &serde_json::to_vec(&json!({
+            "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
+            "id":"extra","version":"1",
+            "extendRecordTypes":[{"recordType":"person","accessProfiles":[profile]}]}))
+        .unwrap(),
+    )
+    .unwrap();
+    compile_project(
+        &parse_project_json(&serde_json::to_vec(&source()).unwrap()).unwrap(),
+        &[module],
+        CompileProfile::Authoring,
+    )
+}
+
+fn module_profile(operations: Value, export: bool, reason: bool) -> Value {
+    json!({"id":"module-reader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+        "requireAccessReason":reason,"operations":operations,"readableFields":["family-name"],
+        "rowBoundaries":"unrestricted","allowDataExport":export})
+}
+
+#[test]
+fn a_module_reason_profile_cannot_hold_an_operation_that_does_not_check_the_reason() {
+    let code = "breg.access-profile.access-reason-operation-unsupported";
+    for operation in ["import", "invoke", "start"] {
+        let found = codes(with_module_profile(module_profile(
+            json!(["get", operation]),
+            false,
+            true,
+        )));
+        assert!(found.contains(&code.to_owned()), "{operation}: {found:?}");
+    }
+    let found = codes(with_module_profile(module_profile(
+        json!(["get", "list"]),
+        true,
+        true,
+    )));
+    assert!(found.contains(&code.to_owned()), "export: {found:?}");
+    let found = codes(with_module_profile(module_profile(
+        json!(["get", "import"]),
+        false,
+        false,
+    )));
+    assert!(
+        !found.contains(&code.to_owned()),
+        "a profile without a reason requirement is unaffected: {found:?}"
+    );
+}
+
+#[test]
 fn a_profile_without_a_reason_requirement_may_import() {
     let mut project = source();
     project["accessProfiles"][1]["permissions"]["records"][0]["operations"] =
