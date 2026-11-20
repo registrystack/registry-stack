@@ -310,6 +310,8 @@ formats:
         whenOmitted: refused
       - pointer: /metricsListener/bind
         whenOmitted: closed
+      - pointer: /metricsListener/networkExposure
+        whenOmitted: closed
       - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
       - pointer: /authentication/oidc/allowInsecureHttp
@@ -1594,6 +1596,8 @@ formats:
         whenOmitted: refused
       - pointer: /metricsListener/bind
         whenOmitted: closed
+      - pointer: /metricsListener/networkExposure
+        whenOmitted: closed
       - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
       - pointer: /authentication/oidc/allowInsecureHttp
@@ -1866,6 +1870,8 @@ formats:
         whenOmitted: refused
       - pointer: /metricsListener/bind
         whenOmitted: closed
+      - pointer: /metricsListener/networkExposure
+        whenOmitted: closed
       - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
       - pointer: /authentication/oidc/allowInsecureHttp
@@ -2060,6 +2066,8 @@ formats:
       - pointer: /listener/bind
         whenOmitted: refused
       - pointer: /metricsListener/bind
+        whenOmitted: closed
+      - pointer: /metricsListener/networkExposure
         whenOmitted: closed
       - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
@@ -2485,6 +2493,8 @@ formats:
         whenOmitted: refused
       - pointer: /metricsListener/bind
         whenOmitted: closed
+      - pointer: /metricsListener/networkExposure
+        whenOmitted: closed
       - pointer: /authentication/apiKeyRef
         whenOmitted: refused
       - pointer: /authentication/oidc/allowedClients
@@ -2658,6 +2668,8 @@ formats:
       - pointer: /listener/bind
         whenOmitted: refused
       - pointer: /metricsListener/bind
+        whenOmitted: closed
+      - pointer: /metricsListener/networkExposure
         whenOmitted: closed
       - pointer: /package/expectedDigest
         whenOmitted: open
@@ -3172,6 +3184,8 @@ formats:
         whenOmitted: refused
       - pointer: /metricsListener/bind
         whenOmitted: closed
+      - pointer: /metricsListener/networkExposure
+        whenOmitted: closed
       - pointer: /offers/allowedClients
         whenOmitted: refused
       - pointer: /offers/allowInsecureHttp
@@ -3223,6 +3237,8 @@ formats:
       - pointer: /listener/bind
         whenOmitted: refused
       - pointer: /metricsListener/bind
+        whenOmitted: closed
+      - pointer: /metricsListener/networkExposure
         whenOmitted: closed
       - pointer: /applicantTokens/allowInsecureHttp
         whenOmitted: closed
@@ -3932,6 +3948,8 @@ formats:
         whenOmitted: refused
       - pointer: /deployment/metricsListener/bind
         whenOmitted: closed
+      - pointer: /deployment/metricsListener/networkExposure
+        whenOmitted: closed
       - pointer: /deployment/authentication/policies
         whenOmitted: refused
       - pointer: /deployment/authentication/assertionIssuers
@@ -4123,6 +4141,8 @@ formats:
       - pointer: /listener/bind
         whenOmitted: refused
       - pointer: /metricsListener/bind
+        whenOmitted: closed
+      - pointer: /metricsListener/networkExposure
         whenOmitted: closed
       - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
@@ -4463,6 +4483,8 @@ formats:
         whenOmitted: closed
       - pointer: /metricsListener/bind
         whenOmitted: refused
+      - pointer: /metricsListener/networkExposure
+        whenOmitted: closed
       - pointer: /database/runtimeUrlRef
         whenOmitted: refused
       - pointer: /database/testOnlyPlaintext
@@ -4562,6 +4584,8 @@ formats:
         whenOmitted: closed
       - pointer: /metricsListener/bind
         whenOmitted: refused
+      - pointer: /metricsListener/networkExposure
+        whenOmitted: closed
       - pointer: /sources/rabbitmq/*/host
         whenOmitted: refused
       - pointer: /sources/rabbitmq/*/user
