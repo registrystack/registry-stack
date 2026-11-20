@@ -376,6 +376,21 @@ class PreparerScripts(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("grep is required", result.stderr)
 
+    def test_grep_failure_while_checking_the_setup_job_stops_the_preparer(self) -> None:
+        chart = self.fake_chart()
+        grep = self.bin / "grep"
+        grep.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [[ "$1" == "-c" && "${*: -1}" == *setup-job.yaml ]]; then exit 2; fi\n'
+            f'exec {shutil.which("grep")} "$@"\n'
+        )
+        grep.chmod(0o755)
+        out = self.scratch / "restored"
+        result = self.run_script("prepare-restored-state-chart.sh", chart, out)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("grep failed on", result.stderr)
+        self.assertFalse(out.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
