@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - `rstack dev` runs Messaging projects. An `smtp` provider sends to a Mailpit
   container and an `http` SMS provider to a mock gateway; the run report names
   both under `sinks`. `messagingctl init` points at `rstack dev start`.

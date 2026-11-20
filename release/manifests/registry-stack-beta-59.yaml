@@ -1,0 +1,106 @@
+stack:
+  release: beta-59
+  version: 0.47.0
+  source_repo: registrystack/registry-stack
+  source_tag: v0.47.0
+
+artifacts:
+  registry-manifest: 0.47.0
+  evidence: 0.47.0
+  evidencectl: 0.47.0
+  evidence-oid4vci: 0.47.0
+  evidencectl-installer: 0.47.0
+  registry-docs: 0.47.0
+  discovery: 0.47.0
+  discoveryctl: 0.47.0
+  discovery-installer: 0.47.0
+  breg: 0.47.0
+  bregctl: 0.47.0
+  breg-mcp: 0.47.0
+  breg-mcp-installer: 0.47.0
+  breg-review: 0.47.0
+  breg-review-installer: 0.47.0
+  breg-installer: 0.47.0
+  casework: 0.47.0
+  caseworkctl: 0.47.0
+  casework-installer: 0.47.0
+  scheduling: 0.47.0
+  schedulingctl: 0.47.0
+  scheduling-installer: 0.47.0
+  messaging: 0.47.0
+  messagingctl: 0.47.0
+  messaging-installer: 0.47.0
+  registry-render: 0.47.0
+  registry-render-installer: 0.47.0
+  registry-manifest-installer: 0.47.0
+  coordinator: 0.47.0
+  coordinatorctl: 0.47.0
+  coordinator-installer: 0.47.0
+  adapter: 0.47.0
+  adapterctl: 0.47.0
+  adapter-installer: 0.47.0
+  rstack: 0.47.0
+  rstack-installer: 0.47.0
+  registry-language-server: 0.47.0
+  registry-client-node: 0.47.0
+  registry-client-python: 0.47.0
+
+identifier_catalog:
+  path: products/identifiers/generated/catalog.v1.json
+  sha256: f9b32ade559a8bde23cea5ea634f2162d1902e85cf35340be43c92a3b3652ed0
+  entry_count: 331
+
+external:
+  thunderid:
+    kind: image-pin
+    repo: thunder-id/thunderid
+    ref: 12f517c4384004e360e26eb7eb1ab0501b678bb2
+    version: 1.0.1
+    images:
+      thunderid: ghcr.io/thunder-id/thunderid:1.0.1@sha256:d3c0613ff447a551fd440768a15bdfb6668948e80809cbb50f82d6752f22ab3e
+  esignet-relay-authenticator:
+    kind: image-pin
+    repo: registrystack/esignet-relay-authenticator
+    ref: 9030f38aac2c85b2e7a2980ec23e2f8e72da97ff
+    version: 0.6.1
+    images:
+      authenticator: ghcr.io/registrystack/esignet-relay-authenticator:0.6.1@sha256:826ff864a981379dbbdd9bff0f663cd4c1952a1f1fa7c84a076bccce58931dd4
+      oidc-ui: ghcr.io/registrystack/esignet-oidc-ui:0.6.1@sha256:2629150e0733ad443d1e563d48790922c88968e93bbf5989a1b9c1974bc109c7
+
+warnings:
+  - code: breg-statistics-measures
+    classification: breaking-change
+    detail: BReg statistical datasets require disclosure.type minimum-count-and-rounding, every cell names its measure (JSON dataset.measures and cell measure, a CSV measure column), sum and mean values can be decimal strings or null with status not-applicable, and a dataset declares at most 12 dimensions. Every dataset's definition digest changes once, so earlier releases are no longer served. Update definitions and readers, then republish the periods you need. See release/notes/v0.47.0.md.
+  - code: private-key-jwt-audience
+    classification: breaking-change
+    detail: Every private_key_jwt client must state its client assertion audience, with no default, in BReg, breg-mcp, Casework, Coordinator, Evidence, evidence-oid4vci, Adapter, saved CLI connections and the Node.js and Python clients. A configuration or client without it is refused. Set it to the authorization server's issuer identifier as its metadata publishes it. See release/notes/v0.47.0.md.
+  - code: coordinator-fresh-namespace
+    classification: breaking-change
+    detail: Coordinator protected state schema version 6 refuses version 5 namespaces, and the connection audience joins each connection binding. Settle open Runs with the v0.46.0 binaries, then apply v0.47.0 to a fresh namespace and database identity. See release/notes/v0.47.0.md.
+  - code: breg-task-grant-limits
+    classification: breaking-change
+    detail: BReg refuses a Casework task-grant token without iat and exp, with a lifetime over 900 seconds, or issued in the future beyond the leeway. Reads, statistics and the Proposal review-record read admit a task grant only before its deadline and only for the principal and purpose it names. Issue task-grant tokens for at most 900 seconds with the profile's principal and purpose claims. See release/notes/v0.47.0.md.
+  - code: scheduling-appointment-grant-reads
+    classification: breaking-change
+    detail: A Scheduling appointment detail read admitted only through an appointment.read task grant is held to the grant's service, location and current status, even for the subject's own booking. Give clients that read their own bookings the reads scope. See release/notes/v0.47.0.md.
+  - code: evidence-deadline-and-grant-expiry
+    classification: breaking-change
+    detail: Evidence refuses an acquisition deadline above 300000 milliseconds, releases no acquisition result after the caller's task grant expires (403 evidence.denied), and evidence-oid4vci refuses unrestricted offer clients or scopes outside supervised local development. Lower deadlines, issue longer grants, and list offer clients and scopes. See release/notes/v0.47.0.md.
+  - code: casework-principal-claim
+    classification: breaking-change
+    detail: Casework refuses a casework.yaml whose access profiles for people name different principalClaim values (casework.access-profile.mixed-principal-claims). Set one principalClaim on every person's profile and issue it in every person's token. See release/notes/v0.47.0.md.
+  - code: adapter-async-write-origin
+    classification: breaking-change
+    detail: The Adapter facade polls an asynchronous write only at the source origin it was sent to. After a baseUrl change an unfinished write is held until the original baseUrl returns or the write expires, and rows from earlier versions are quarantined. Let asynchronous writes settle before upgrading. See release/notes/v0.47.0.md.
+  - code: adapter-job-revised-items
+    classification: breaking-change
+    detail: adapter-job store schema 104, which the previous binary refuses, holds possibly admitted items as adapter.job.revised-item, and the direct BReg receiver identity now includes clientAssertionAudience. Back up the store, run passes with the previous binary until no items are pending, check BReg or the Coordinator for admissions of legacy refused items, then run init-store. See release/notes/v0.47.0.md.
+  - code: rstack-dev-replaces-sessions
+    classification: breaking-change
+    detail: rstack dev replaces the per-product development sessions. api --client is removed from the product CLIs, as are caseworkctl dev, evidencectl dev, bregctl examples review, evidencectl access client, evidencectl audit show and evidencectl source add, and evidencectl request prepare no longer takes --client. Use rstack dev, rstack dev token header files or saved connections. See release/notes/v0.47.0.md.
+  - code: editor-integration-removed
+    classification: breaking-change
+    detail: evidencectl tooling language-server and the VS Code and Zed extensions are removed with no desktop replacement. The standalone registry-language-server ships as a release asset. Schema validation through a stock YAML language server is unchanged. See release/notes/v0.47.0.md.
+  - code: breg-explain-and-geometry
+    classification: breaking-change
+    detail: bregctl explain access emits v1alpha9 and explain model emits v1alpha8 with new required members. A BReg client GeoJSON Feature geometry is a union of Point, Polygon and MultiPolygon in Rust, TypeScript and the Python stubs. Accept the new apiVersion values and match the geometry type before reading coordinates. See release/notes/v0.47.0.md.

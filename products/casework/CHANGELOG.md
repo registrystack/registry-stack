@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - BREAKING: Casework refuses a `casework.yaml` whose access profiles for people
   (staff, supervisor, administrator, an initiator profile and any other requester
   profile) name different `principalClaim` values, with
