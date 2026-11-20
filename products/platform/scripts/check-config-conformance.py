@@ -293,6 +293,8 @@ ROWS: tuple[Row, ...] = (
             "FileSecretProviderConfig",
             "JwksSource",
             "ListenerBind",
+            "ListenerNetworkExposure",
+            "MetricsListenerConfig",
             "SecretProvidersConfig",
             "SecretReference",
             "TaskGrantStatusConfig",
@@ -321,12 +323,6 @@ ROWS: tuple[Row, ...] = (
                 "RawRegistryListener",
                 "listener",
                 "ListenerConfig",
-            ),
-            RustBlock(
-                "crates/registry-breg/src/runtime_config.rs",
-                "RawMetricsListenerConfig",
-                "bind",
-                "ListenerBind",
             ),
             RustBlock(
                 "crates/registry-breg/src/runtime_config.rs",

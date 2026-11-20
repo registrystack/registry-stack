@@ -15,10 +15,10 @@ use base64::Engine as _;
 use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
-    check_metrics_bind_address, check_metrics_bind_apart, AuditKeyConfig, JwksSource, ListenerBind,
-    ListenerNetworkExposure, OidcIssuerConfig, PackageConfig as SharedPackageConfig, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
-    TaskGrantStatusConfig, REMOVED_OIDC_JWKS_SOURCE_KIND,
+    check_metrics_bind_address, check_metrics_bind_apart, AuditKeyConfig, JwksSource,
+    OidcIssuerConfig, PackageConfig as SharedPackageConfig, RemovedKey, RuntimeConfigLoader,
+    RuntimeEnvelope, SecretError, SecretReference, SecretResolver, TaskGrantStatusConfig,
+    REMOVED_OIDC_JWKS_SOURCE_KIND,
 };
 use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
@@ -520,7 +520,7 @@ impl RuntimeConfigError {
                 "Set listener.bind to a numeric address and port, and listener.publicOrigin, when given, to an https origin (http only on loopback) with no query, fragment, or user information."
             }
             Self::InvalidMetricsListener => {
-                "Set metricsListener.bind to a loopback or private numeric address with a named port, on a socket the Registry listener does not also bind."
+                "Set metricsListener.bind to a loopback or private numeric address with a named port, on a socket the Registry listener does not also bind, or declare metricsListener.networkExposure: container-private on a container network."
             }
             Self::InvalidSecretProvider => {
                 "Declare each secret provider once, with the file provider's root an absolute normal path."
@@ -743,10 +743,24 @@ pub fn check_runtime_config(
     }
     let mut diagnostics = std::mem::take(&mut check.diagnostics);
     if let Some(loaded) = check.loaded.take() {
+        // A metrics bind that passes the address rules alone can only fail the
+        // overlap rule, which reads the listener bind. While that bind is an
+        // expression the overlap is judged against a stand-in, so it defers.
+        let metrics_overlap_deferred = check.defers("/listener/bind")
+            && loaded
+                .config
+                .metrics_listener
+                .as_ref()
+                .is_some_and(|metrics| {
+                    check_metrics_bind_address(metrics.bind.socket_addr(), metrics.network_exposure)
+                        .is_ok()
+                });
         match RuntimeConfig::from_raw(loaded.config) {
             Err(error) => {
                 for refusal in error.diagnostics(None) {
-                    diagnostics.push(if check.defers_within(&refusal.path) {
+                    let overlap_deferred = metrics_overlap_deferred
+                        && refusal.path == RuntimeConfigError::InvalidMetricsListener.path();
+                    diagnostics.push(if overlap_deferred || check.defers_within(&refusal.path) {
                         // The rule read a stand-in, so its refusal says
                         // nothing about the file; the rules after it did
                         // not run, and the check says so.
@@ -950,6 +964,7 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
     match segments.as_slice() {
         ["listener", "bind"] => "127.0.0.1:8080",
         ["metricsListener", "bind"] => "127.0.0.1:9100",
+        ["metricsListener", "networkExposure"] => "private-address",
         ["listener", "publicOrigin"] => "https://registry.invalid",
         ["authentication", "oidc", "issuer"] => "https://issuer.invalid",
         ["authentication", "oidc", "jwksSource", "uri"] => "https://issuer.invalid/jwks",
@@ -1765,7 +1780,7 @@ pub struct MetricsListenerConfig {
 }
 
 impl MetricsListenerConfig {
-    fn from_raw(raw: RawMetricsListenerConfig) -> Result<Self> {
+    fn from_raw(raw: registry_platform_config::MetricsListenerConfig) -> Result<Self> {
         let bind = raw.bind.socket_addr();
         check_metrics_bind_address(bind, raw.network_exposure)
             .map_err(|_| RuntimeConfigError::InvalidMetricsListener)?;
@@ -3208,7 +3223,7 @@ struct RawRuntimeConfig {
     /// Optional operator-private metrics listener. Absent by default, which
     /// serves no metrics surface at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    metrics_listener: Option<RawMetricsListenerConfig>,
+    metrics_listener: Option<registry_platform_config::MetricsListenerConfig>,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -3228,20 +3243,6 @@ struct RawRegistryListener {
     /// absolute discovery or paging links.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     public_origin: Option<Url>,
-}
-
-#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RawMetricsListenerConfig {
-    /// Operator-private loopback or private numeric address and named port,
-    /// for example `127.0.0.1:9100`.
-    bind: ListenerBind,
-    /// `private-address` (the default) requires a loopback or private
-    /// address. `container-private` also permits the unspecified address
-    /// (`0.0.0.0` or `::`) for a container on a private network.
-    #[serde(default)]
-    network_exposure: ListenerNetworkExposure,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
