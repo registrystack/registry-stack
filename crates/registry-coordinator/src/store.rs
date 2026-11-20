@@ -67,6 +67,16 @@ const POOL_SIZE: usize = 32;
 /// and an idle session takes to prove it still answers before it is replaced.
 const POOL_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The run-level terms of the claim predicate, as `run` columns. The worker's
+/// claim and the oldest-due gauge both use them, so the gauge measures only
+/// work the worker can pick up. A run held for a refused definition is never
+/// claimed and never expires. The restore hold is reported separately.
+macro_rules! claimable_run {
+    () => {
+        "NOT run.restore_review_required AND NOT run.cancel_requested AND run.payload_erased_at IS NULL AND run.failure_code IS DISTINCT FROM 'definition-refused'"
+    };
+}
+
 const JOIN: &str = "JOIN {schema}.runs AS run ON run.run_id = state.run_id JOIN {schema}.control AS control ON control.id";
 const SELECT: SelectSql = SelectSql {
     columns: "run.snapshot, run.input, run.outputs, run.deadline_at, run.binding_digest, state.command, state.uncertain, state.receipt_expired, run.deadline_at > transaction_timestamp(), state.pure, run.start_identity, run.cancel_requested, control.restore_hold, run.owner_hash, run.restore_review_required, run.authored_cancel_requested, run.authored_cancel_pending_step, run.service_deadline_at",
@@ -839,17 +849,24 @@ impl Store {
         let row = tx
             .query_one(
                 &format!(
-                    "SELECT \
-                       (SELECT count(*) FROM {schema}.runs WHERE state='attention' \
-                          AND failure_code IS DISTINCT FROM '{DEFINITION_REFUSED}'), \
-                       (SELECT count(*) FROM {schema}.runs WHERE state='attention' \
-                          AND failure_code = '{DEFINITION_REFUSED}'), \
-                       (SELECT count(*) FROM {schema}.runs WHERE restore_review_required), \
+                    concat!(
+                        "SELECT \
+                       count(*) FILTER (WHERE state='attention' \
+                          AND failure_code IS DISTINCT FROM 'definition-refused'), \
+                       count(*) FILTER (WHERE state='attention' \
+                          AND failure_code = 'definition-refused'), \
+                       count(*) FILTER (WHERE restore_review_required), \
                        (SELECT restore_hold FROM {schema}.control WHERE id), \
                        (SELECT admissions_hold FROM {schema}.control WHERE id), \
                        COALESCE((SELECT floor(extract(epoch FROM greatest( \
-                          transaction_timestamp() - min(next_attempt_at), interval '0'))) \
-                          FROM {schema}.jobs WHERE state='pending'), 0)::bigint",
+                          transaction_timestamp() - min(job.next_attempt_at), interval '0'))) \
+                          FROM {schema}.jobs job JOIN {schema}.runs run \
+                            ON run.run_id = job.run_id \
+                          WHERE job.state='pending' AND ",
+                        claimable_run!(),
+                        "), 0)::bigint \
+                     FROM {schema}.runs"
+                    ),
                     schema = self.namespace
                 ),
                 &[],
@@ -857,13 +874,15 @@ impl Store {
             .await
             .map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)?;
+        // A missing control row reads as NULL: refuse it as a failed
+        // sample instead of panicking.
         Ok(RunHolds {
-            attention_other: row.get(0),
-            attention_definition_refused: row.get(1),
-            restore_review_required: row.get(2),
-            restore_hold: row.get(3),
-            admissions_hold: row.get(4),
-            oldest_due_age_seconds: row.get(5),
+            attention_other: row.try_get(0).map_err(unavailable)?,
+            attention_definition_refused: row.try_get(1).map_err(unavailable)?,
+            restore_review_required: row.try_get(2).map_err(unavailable)?,
+            restore_hold: row.try_get(3).map_err(unavailable)?,
+            admissions_hold: row.try_get(4).map_err(unavailable)?,
+            oldest_due_age_seconds: row.try_get(5).map_err(unavailable)?,
         })
     }
 
@@ -2263,7 +2282,7 @@ impl Store {
                     // A run held because its retained definition does not
                     // restore is never claimed and never expires: it stays
                     // as it is until an operator acts.
-                    claim: SelectSql {predicate:"NOT control.restore_hold AND NOT run.restore_review_required AND NOT run.cancel_requested AND run.payload_erased_at IS NULL AND run.failure_code IS DISTINCT FROM 'definition-refused'",..SELECT},
+                    claim: SelectSql {predicate:concat!("NOT control.restore_hold AND ", claimable_run!()),..SELECT},
                     lapsed: SELECT,
                     expiry: Some(ExpirySql {
                         states: &[JobState::Pending],
