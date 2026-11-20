@@ -44,7 +44,7 @@ async fn million_unit_three_dimension_statistics_measurement() {
     let source = json!({"datasets":[{"id": "load"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"statistics-load","version":"1","defaultLanguage":"en",
-            "canonicalBaseIri":"https://load.example.test"},
+            "canonicalBaseIri":"https://load.example.test","timezone":"UTC"},
         "recordTypes":[{"id":"unit","route":"units","primaryDataset":"load","mutationMode":"mutable",
             "fields":[
                 {"id":"active","type":"boolean","required":true,"classification":"internal"},
