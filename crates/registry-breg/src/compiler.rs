@@ -3931,6 +3931,7 @@ pub(crate) fn expand_project_access(
                 "an access profile identifier is duplicated",
             ));
         }
+        disclosure::validate_access_reason_operations(profile, errors);
         if profile.principal_claim.is_empty() {
             errors.push(Diagnostic::error(
                 "breg.access-profile.principal-claim-required",

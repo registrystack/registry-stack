@@ -1705,6 +1705,7 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
         "breg.disclosure.fields-invalid" => "List each withheld stored field once under fields when withhold is fields, and omit fields for record and history.",
         "breg.disclosure.exempt-profiles-invalid" => "Name at least one access profile under exemptProfiles, and only profiles the project declares.",
         "breg.disclosure.withheld-field-exposed" => "Remove the withheld field from the profile's filterableFields, sortableFields, lookups, data export, hook projections or statistical dataset, or add the profile to exemptProfiles.",
+        "breg.access-profile.access-reason-operation-unsupported" => "Remove import, invoke and start grants, and the actions, proposals, datasets, externalViews and refreshExternalProjections permissions, from this profile, or drop requireAccessReason. The reason is checked on record reads and direct writes only.",
         "breg.disclosure.statistics-publisher-bound" => "Add the publishing profile to exemptProfiles of the record condition, so releases include every record.",
         "breg.hook.read-trigger-invalid" => "For trigger read, name at least one declared access profile under profiles and write projection: []. Use profiles with no other trigger.",
         "breg.compile.later-checks-skipped" => "Correct the reported errors, then run bregctl check again to run the skipped checks.",
