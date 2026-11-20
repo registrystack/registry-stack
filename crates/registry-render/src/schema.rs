@@ -229,7 +229,7 @@ fn set_signing_constraints(schema: &mut Value) {
         .and_then(Value::as_object_mut)
     {
         member.remove("anyOf");
-        member.insert("$ref".to_owned(), json!("#/$defs/ListenerConfig"));
+        member.insert("$ref".to_owned(), json!("#/$defs/MetricsListenerConfig"));
     }
     if let Some(member) = schema
         .pointer_mut("/properties/assuranceProfile")
