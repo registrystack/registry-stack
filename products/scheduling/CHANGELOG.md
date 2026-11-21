@@ -14,7 +14,8 @@
   likewise for the other four. Items are held sorted by id. Check findings
   report the item's id in place of its position, for example
   `/offerings/registry-update-30/exactTime/durationMinutes`, and the
-  `schedulingctl check` report lists ids in sorted order. The authoring schema
+  `schedulingctl check` report lists ids in sorted order, so duplicate-label
+  warnings now come in id order. The authoring schema
   states each mapping's entry count as `minProperties` and `maxProperties` in
   place of `minItems` and `maxItems`. The policy digest changes with the
   rewritten `scheduling.yaml`, so rebuild packages with
