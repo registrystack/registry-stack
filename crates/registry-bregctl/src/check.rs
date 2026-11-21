@@ -1711,6 +1711,7 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
         "breg.disclosure.row-boundary-withheld-field" => "Bound the profile's rows by a field no condition withholds from it, or add the profile to exemptProfiles.",
         "breg.disclosure.membership-boundary-withheld-field" => "Bound the profile's rows by a membership on a field no condition withholds from it, or add the profile to exemptProfiles.",
         "breg.disclosure.consent-boundary-withheld-field" => "Point requireConsent on at a field no condition withholds from the profile, or add the profile to exemptProfiles.",
+        "breg.disclosure.timer-creates-readable-record" => "Have the timer's Action change only its own record, remove every read of the created Record type from the profile, or add the profile to exemptProfiles.",
         "breg.disclosure.timer-reads-withheld-field" => "Time the Record timer, hold it and map its inputs from fields the condition does not withhold, or add every profile that reads the record type to exemptProfiles.",
         "breg.disclosure.read-path-withheld-field" => "Remove the read path from the profile's permission, or add the profile to exemptProfiles of the condition that withholds the path's reference field.",
         "breg.disclosure.evidence-fact-withheld-field" => "Export a fact field the condition does not withhold from the Evidence access profile, or add the profile to exemptProfiles.",

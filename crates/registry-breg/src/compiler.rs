@@ -805,6 +805,14 @@ fn compile_timers(
                 }
             }
 
+            let created = action
+                .effects
+                .iter()
+                .filter(|effect| effect.operation == Operation::Create)
+                .map(|effect| effect.target.entity_id.as_str())
+                .collect::<BTreeSet<_>>();
+            disclosure::validate_timer_creates(source_entity, &timer.id, &created, sources, errors);
+
             let anchor_read_fields = control_fields
                 .iter()
                 .chain(&predicate_fields)
