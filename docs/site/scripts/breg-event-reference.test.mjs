@@ -20,7 +20,7 @@ test('event fields reuse both complete native schema selections without changing
   const selected = eventConfiguration(configuration);
   const cases = [
     ['module', 'recordTypes.*.hooks[].'],
-    ['project', 'actions[].execution.proposal.hooks[].'],
+    ['project', 'actions.*.execution.proposal.hooks[].'],
   ];
   assert.equal(selected.length, cases.length);
   for (const [index, [contractId, prefix]] of cases.entries()) {

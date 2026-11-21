@@ -11,6 +11,6 @@ export function eventConfiguration(reference) {
   };
   return [
     select('module', 'recordTypes.*.hooks[].', 'record-event', 'Record type hooks[]'),
-    select('project', 'actions[].execution.proposal.hooks[].', 'proposal-event', 'Proposal hooks[]'),
+    select('project', 'actions.*.execution.proposal.hooks[].', 'proposal-event', 'Proposal hooks[]'),
   ];
 }
