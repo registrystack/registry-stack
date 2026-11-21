@@ -3923,7 +3923,7 @@ pub struct SelectorProfileSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RequiredFilterSource {
-    pub fields: Vec<String>,
+    pub fields: UniqueSet<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -4997,8 +4997,8 @@ pub struct DisclosureConditionSource {
     pub when: Vec<DisclosureWhenPredicate>,
     pub withhold: DisclosureWithholdSource,
     /// The optional stored fields to omit. Required for `withhold: fields` and refused otherwise.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    pub fields: UniqueSet<String>,
     /// The access profiles that see the record whatever `when` says. At least one.
     #[serde(default)]
     pub exempt_profiles: UniqueSet<String>,
@@ -5257,7 +5257,7 @@ pub struct HookSource {
     pub display: PresentationSource,
     /// When the hook runs relative to the triggering transaction.
     pub phase: HookPhase,
-    /// Committed record change that can produce this hook.
+    /// The committed record change, or the logged read, that can produce this hook.
     #[serde(deserialize_with = "record_event_trigger")]
     pub trigger: EventTrigger,
     /// Optional field tests, combined with AND. Omit to run on every matching trigger.

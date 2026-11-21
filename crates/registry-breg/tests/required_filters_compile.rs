@@ -53,9 +53,10 @@ fn alternatives_compile_onto_the_list_family_only() {
         .unwrap()
         .remove("temporal");
     let registry = compile(&value).expect("valid alternatives compile");
+    // An alternative is a set, so it compiles in field order.
     let expected = vec![
         vec!["national-id".to_owned()],
-        vec!["family-name".to_owned(), "birth-date".to_owned()],
+        vec!["birth-date".to_owned(), "family-name".to_owned()],
     ];
     let lists = registry
         .queries()
@@ -125,12 +126,6 @@ fn invalid_required_filters_are_refused_with_a_code_and_path() {
             format!("{base}[0].fields"),
         ),
         (
-            json!([{"fields":["national-id","national-id"]}]),
-            json!(["list"]),
-            "breg.access-profile.required-filters-duplicate",
-            format!("{base}[0].fields[field=national-id]"),
-        ),
-        (
             json!([{"fields":["national-id","family-name"]},{"fields":["family-name","national-id"]}]),
             json!(["list"]),
             "breg.access-profile.required-filters-duplicate",
@@ -152,6 +147,29 @@ fn invalid_required_filters_are_refused_with_a_code_and_path() {
             "expected {code} at {path}, got {found:?}"
         );
     }
+}
+
+#[test]
+fn a_repeated_field_inside_an_alternative_is_refused_by_the_reader() {
+    let value = source(
+        json!([{"fields":["national-id","national-id"]}]),
+        json!(["list"]),
+    );
+    let failure = parse_project_json(&serde_json::to_vec(&value).unwrap())
+        .expect_err("a repeated field is refused rather than collapsed");
+    let found = failure
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        found,
+        vec![(
+            "config.duplicate-item",
+            "project.accessProfiles[0].permissions.records[0].requiredFilters[0].fields[1]"
+        )],
+        "{failure:?}"
+    );
 }
 
 #[test]

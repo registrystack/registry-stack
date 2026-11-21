@@ -262,9 +262,12 @@ cannot drop or change it.
   (`breg.access-profile.required-filters-field-not-equality-filterable`);
 - sits on a grant without `list`
   (`breg.access-profile.required-filters-list-required`);
-- is empty, has an empty alternative, repeats a field, repeats an alternative, or has more than
-  eight alternatives (`breg.access-profile.required-filters-empty`,
-  `breg.access-profile.required-filters-duplicate`, `breg.access-profile.required-filters-too-many`).
+- is empty, has an empty alternative, repeats an alternative, or has more than eight alternatives
+  (`breg.access-profile.required-filters-empty`, `breg.access-profile.required-filters-duplicate`,
+  `breg.access-profile.required-filters-too-many`).
+
+A field repeated within one alternative is refused when the file is read, with
+`config.duplicate-item` at the repeat.
 
 Check the edited project:
 
@@ -550,8 +553,9 @@ A condition that leaves a withheld value reachable through another surface fails
 guarantee does not rest on remembering every route. For a profile a condition binds, the check
 refuses:
 
-- a `fields` condition that names a required field, `id`, or a field twice, or a condition with
-  `fields` and a mode other than `fields` (`breg.disclosure.fields-invalid`);
+- a `fields` condition that names a required field or `id`, or a condition with `fields` and a mode
+  other than `fields` (`breg.disclosure.fields-invalid`). A field named twice is refused when the
+  file is read, with `config.duplicate-item`;
 - a withheld field in the profile's `filterableFields`, `sortableFields`, lookups, data export, hook
   projections or statistical dataset (`breg.disclosure.withheld-field-exposed`);
 - a `when` field of an unsupported type, or a literal that does not fit it

@@ -30,11 +30,12 @@ fn bound<'a>(
         .filter(|profile| !condition.exempt_profiles.contains(&profile.id))
 }
 
-fn withheld(condition: &DisclosureConditionSource) -> &[String] {
+fn withheld(condition: &DisclosureConditionSource) -> &BTreeSet<String> {
+    static NONE: BTreeSet<String> = BTreeSet::new();
     if condition.withhold == DisclosureWithholdSource::Fields {
-        &condition.fields
+        condition.fields.as_set()
     } else {
-        &[]
+        &NONE
     }
 }
 

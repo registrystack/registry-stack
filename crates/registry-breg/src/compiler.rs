@@ -6331,15 +6331,12 @@ fn validate_required_filters(
             ));
             continue;
         }
-        let mut fields = BTreeSet::new();
-        for field in &alternative.fields {
-            if !fields.insert(field.as_str()) {
-                errors.push(Diagnostic::error(
-                    "breg.access-profile.required-filters-duplicate",
-                    format!("{alternative_path}.fields[field={field}]"),
-                    "a required filter alternative names this field more than once",
-                ));
-            }
+        let fields = alternative
+            .fields
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        for field in alternative.fields.iter() {
             if !access.filterable_fields.contains(field) {
                 errors.push(Diagnostic::error(
                     "breg.access-profile.required-filters-field-not-filterable",
@@ -8929,7 +8926,7 @@ fn required_filter_alternatives(
     profile
         .required_filters
         .iter()
-        .map(|alternative| alternative.fields.clone())
+        .map(|alternative| alternative.fields.iter().cloned().collect())
         .collect()
 }
 
