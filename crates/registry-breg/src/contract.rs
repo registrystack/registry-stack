@@ -5695,6 +5695,14 @@ const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
 /// Members a module no longer accepts, each with the member that replaced it.
 const MODULE_REMOVED_KEYS: &[RemovedKey<'static>] = &[
     RemovedKey {
+        pointer: "/recordTypes/*/accessProfiles/*/id",
+        replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {PROFILE_ID: {principalClaim: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/extendRecordTypes/*/accessProfiles/*/id",
+        replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {PROFILE_ID: {principalClaim: ...}}, with no id member.",
+    },
+    RemovedKey {
         pointer: "/actions/*/requires",
         replacement: "Use `commitGuards` for conditions checked when the Action commits. Declare target revision guards under `commitGuards.targets`.",
     },

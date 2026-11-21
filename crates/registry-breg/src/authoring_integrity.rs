@@ -249,8 +249,8 @@ fn add_value_type_diagnostics(
     }
 }
 
-/// Lookalike ids across two groups: `first` holds ids written as mapping
-/// keys (the project's access profiles), `second` ids written as values.
+/// Lookalike ids across two groups of mapping keys: `first` holds the
+/// project's access profiles, `second` a record type's own.
 fn add_cross_group_collisions(
     document: &registry_platform_yaml::Document,
     errors: &mut Vec<registry_platform_yaml::Diagnostic>,
@@ -265,13 +265,7 @@ fn add_cross_group_collisions(
         if (left < boundary) == (right < boundary) {
             continue;
         }
-        let site = |index: usize| {
-            if index < boundary {
-                AuthoredId::at_key(&values[index].0, &values[index].1)
-            } else {
-                AuthoredId::at_value(&values[index].0, &values[index].1)
-            }
-        };
+        let site = |index: usize| AuthoredId::at_key(&values[index].0, &values[index].1);
         let pair = [site(left), site(right)];
         errors.extend(local_id_collision_diagnostics(document, code, &pair));
     }
@@ -366,14 +360,6 @@ fn entity_integrity(
             indexed_ids(&format!("{base}/indexes"), &entity.indexes, |item| &item.id),
         ),
         (
-            "breg.access-profile.id-collision",
-            indexed_ids(
-                &format!("{base}/accessProfiles"),
-                &entity.access_profiles,
-                |item| &item.id,
-            ),
-        ),
-        (
             "breg.selector-profile.id-collision",
             indexed_ids(
                 &format!("{base}/selectorProfiles"),
@@ -394,6 +380,16 @@ fn entity_integrity(
     ] {
         add_collisions(document, errors, code, &values);
     }
+    add_key_collisions(
+        document,
+        errors,
+        "breg.access-profile.id-collision",
+        &keyed_ids(
+            &format!("{base}/accessProfiles"),
+            &entity.access_profiles,
+            |item| &item.id,
+        ),
+    );
 }
 
 #[allow(clippy::too_many_lines)]
@@ -445,7 +441,7 @@ fn extension_integrity(
             &entity.indexes,
             |item| &item.id,
         ));
-        target.profiles.extend(indexed_ids(
+        target.profiles.extend(keyed_ids(
             &format!("{base}/accessProfiles"),
             &entity.access_profiles,
             |item| &item.id,
@@ -495,7 +491,7 @@ fn extension_integrity(
             &extension.indexes,
             |item| &item.id,
         ));
-        target.profiles.extend(indexed_ids(
+        target.profiles.extend(keyed_ids(
             &format!("{base}/accessProfiles"),
             &extension.access_profiles,
             |item| &item.id,
@@ -522,13 +518,18 @@ fn extension_integrity(
             ("breg.derived.id-collision", &target.derived),
             ("breg.constraint.id-collision", &target.constraints),
             ("breg.index.id-collision", &target.indexes),
-            ("breg.access-profile.id-collision", &target.profiles),
             ("breg.selector-profile.id-collision", &target.selectors),
             ("breg.timer.id-collision", &target.timers),
             ("breg.read-path.id-collision", &target.read_paths),
         ] {
             add_collisions(document, errors, code, values);
         }
+        add_key_collisions(
+            document,
+            errors,
+            "breg.access-profile.id-collision",
+            &target.profiles,
+        );
     }
 }
 
@@ -788,7 +789,7 @@ pub(crate) fn project_diagnostics(
             &format!("/recordTypes/{index}"),
             entity,
         );
-        let entity_profiles = indexed_ids(
+        let entity_profiles = keyed_ids(
             &format!("/recordTypes/{index}/accessProfiles"),
             &entity.access_profiles,
             |profile| &profile.id,
@@ -1173,12 +1174,15 @@ fn add_profile_and_hook_display_warnings(
             )
         }));
     for (entity, base, local_profiles, local_hooks) in members {
-        profiles.entry(entity).or_default().extend(display_labels(
-            &format!("{base}/accessProfiles"),
-            local_profiles,
-            |profile| &profile.id,
-            |profile| profile.display.label.as_deref(),
-        ));
+        profiles
+            .entry(entity)
+            .or_default()
+            .extend(keyed_display_labels(
+                &format!("{base}/accessProfiles"),
+                local_profiles,
+                |profile| &profile.id,
+                |profile| profile.display.label.as_deref(),
+            ));
         hooks.entry(entity).or_default().extend(display_labels(
             &format!("{base}/hooks"),
             local_hooks,
