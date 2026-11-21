@@ -88,8 +88,8 @@ schedulingctl check ./scheduling --format json
   "offerings": {
     "count": 2,
     "ids": [
-      "registry-update-30",
-      "fold-day-update-30"
+      "fold-day-update-30",
+      "registry-update-30"
     ]
   },
   "projectId": "registry-updates"
@@ -99,7 +99,7 @@ schedulingctl check ./scheduling --format json
 The report's `effective` section also prints a `policyDigest`, which changes whenever the booking
 behaviour changes, while `databaseAccess` and `networkAccess` are both `false`: the check touched neither. An
 [offering](../../reference/glossary/#offering) is one thing a caller can book. Ask
-`schedulingctl` what the first one means:
+`schedulingctl` what `registry-update-30` means:
 
 ```sh
 schedulingctl explain ./scheduling --format json
