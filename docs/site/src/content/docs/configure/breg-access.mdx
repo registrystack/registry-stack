@@ -557,12 +557,14 @@ leaves the record unchanged and ends `blocked` at that attempt, with the recover
 The reason is `attempts-exhausted` when that was its last attempt, and `application-refused`
 otherwise.
 
-An automatic application still reads and writes its targets under `system-proposal-apply`. A target
-that a `record` condition hides from that profile is absent to it, so an automatic Proposal cannot
-apply to such a record, whoever submitted it. Nor can an automatic Proposal set a `record` mark,
-even when its submitter is exempt: the condition's row policy refuses the marked record under
-`system-proposal-apply`, so the Proposal ends `blocked` and the record is unchanged. For either
-case, use an immediate Action or apply the Proposal by hand, under an exempt profile.
+The check against the submitter does not change who writes. An automatic application still reads and
+writes its targets under `system-proposal-apply`, which no condition can exempt. So an automatic
+Proposal cannot change a record that a `record` condition matches, even when its submitter is exempt:
+the target is absent to `system-proposal-apply`. Nor can it set a `record` mark: the condition's row
+policy refuses the marked record under that profile. Either way the attempt is refused as above. The
+Proposal ends `blocked` at that attempt with no retry scheduled, and the record is unchanged. Use an
+immediate Action instead, or have an exempt profile that holds the Proposal's `apply` operation apply
+it by hand.
 
 ### What `bregctl check` refuses
 
