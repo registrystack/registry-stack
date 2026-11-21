@@ -45,8 +45,7 @@ fn project_source(definition: Value, use_site: &str) -> Value {
         other => panic!("unknown use site {other}"),
     }
     let actions = if uses_action {
-        json!([{
-            "id": "set-value",
+        json!({"set-value": {
             "execution": {"mode": "immediate"},
             "inputs": inputs,
             "plan": {"type": "fixed", "effects": [{
@@ -55,9 +54,9 @@ fn project_source(definition: Value, use_site: &str) -> Value {
                 "operation": "create",
                 "set": {"value": {"fromInput": "value"}}
             }]}
-        }])
+        }})
     } else {
-        json!([])
+        json!({})
     };
     let access_profiles = if uses_action {
         json!({"operator": {
@@ -257,7 +256,7 @@ fn unknown_value_type_uses_name_the_record_field_or_action_input_in_both_formats
     let scalar = json!({"type": "string", "maximumLength": 24});
     for (use_site, path) in [
         ("field", "/recordTypes/entry/fields/0/typeRef"),
-        ("action", "/actions/0/inputs/0/typeRef"),
+        ("action", "/actions/set-value/inputs/0/typeRef"),
     ] {
         let mut project = project_source(scalar.clone(), use_site);
         set_type_reference(&mut project, use_site, "missing-value");
@@ -277,7 +276,7 @@ fn set_type_reference(source: &mut Value, use_site: &str, reference: &str) {
     let field = if use_site == "field" {
         &mut source["recordTypes"]["entry"]["fields"][0]
     } else {
-        &mut source["actions"][0]["inputs"][0]
+        &mut source["actions"]["set-value"]["inputs"][0]
     };
     field["typeRef"] = json!(reference);
 }
@@ -474,7 +473,7 @@ fn authoring_schemas_expose_scalar_aliases_without_hiding_direct_compound_fields
                 if use_site == "field" {
                     direct_compound["recordTypes"]["entry"]["fields"][0] = declaration;
                 } else {
-                    direct_compound["actions"][0]["inputs"][0] = declaration;
+                    direct_compound["actions"]["set-value"]["inputs"][0] = declaration;
                 }
                 assert!(
                     schema.is_valid(&direct_compound),

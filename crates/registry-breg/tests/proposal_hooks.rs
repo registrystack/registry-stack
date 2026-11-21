@@ -185,7 +185,7 @@ fn proposal_local_handlers_use_existing_abi_asset_and_build_admission() {
     #[cfg(not(feature = "wasm"))]
     {
         let mut source = source;
-        source["actions"][0]["execution"]["proposal"]["hooks"][0]["handler"] =
+        source["actions"]["correct-name"]["execution"]["proposal"]["hooks"][0]["handler"] =
             json!({"type":"wasm","module":"hooks/local.wasm","abi":"registry.hook-handler/v1"});
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         let error =

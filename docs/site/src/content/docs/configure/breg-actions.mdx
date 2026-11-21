@@ -37,7 +37,7 @@ An [Action](../../reference/glossary/#action) has typed `inputs`, an `execution`
 of effects, and optional `commitGuards`. `deactivate-facility` holds all four:
 
 ```yaml title="registry.yaml" test-excerpt="facility/registry.yaml"
-  - id: deactivate-facility
+  deactivate-facility:
     display:
       label: Deactivate facility
       description: Submit a durable deactivation that requires no external review.
@@ -269,7 +269,7 @@ A plan fragment looks like this; use the complete facility project for required 
 
 ```yaml
 actions:
-  - id: register-facility
+  register-facility:
     execution:
       mode: immediate
     inputs:

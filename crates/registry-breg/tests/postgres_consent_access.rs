@@ -1614,9 +1614,7 @@ async fn frozen_review_changes_require_current_consent_for_each_snapshot_subject
         {"recordType":"enrolment","rowBoundaries":"unrestricted"},
         {"recordType":"person","rowBoundaries":"unrestricted"}
     ]);
-    source["actions"].as_array_mut().unwrap().push(json!({
-        "id":"reassign-enrolment",
-        "execution":{"mode":"proposal","proposal":{
+    source["actions"]["reassign-enrolment"] = json!({"execution":{"mode":"proposal","proposal":{
             "review":{"type":"none"},"application":{"mode":"manual"},
             "retention":{"mode":"retain"},
             "reviewContext":{"id":"reassignment","fields":{
@@ -1631,7 +1629,7 @@ async fn frozen_review_changes_require_current_consent_for_each_snapshot_subject
             "id":"reassignment","target":{"fromInput":"enrolment"},"operation":"patch",
             "set":{"person":{"fromInput":"person"},"programme":{"value":"proposed-programme-canary"}}
         }]}
-    }));
+    });
     let profiles = source["accessProfiles"].as_array_mut().unwrap();
     let steward = profiles
         .iter_mut()

@@ -56,7 +56,7 @@
     ],
     "distributions": []
   },
-  "modules": {"household-contact-actions-core":{"digest":"sha256:110d3414912de8288d86f78da202d780dfb489ad370075a29bd5ada43725f4e4","version":"0.1.0"}},
+  "modules": {"household-contact-actions-core":{"digest":"sha256:9dfc0358c216bc95d30adfa4abe47a71599589a1823302674f2b00995c4c98ad","version":"0.1.0"}},
   "recordTypes": {},
   "accessProfiles": {
     "household-operator": {

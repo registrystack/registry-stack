@@ -29,7 +29,7 @@ recordTypes:
       - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
 
 actions:
-  - id: update-contact-email
+  update-contact-email:
     display: {label: Update contact email, description: Replace one contact's email address as soon as the Action is invoked.}
     execution: {mode: immediate}
     inputs:
@@ -43,7 +43,7 @@ actions:
           operation: patch
           set:
             email: {fromInput: email}
-  - id: register-contact
+  register-contact:
     display: {label: Register contact, description: Create one contact through a Proposal that applies on submit without external review.}
     execution:
       mode: proposal

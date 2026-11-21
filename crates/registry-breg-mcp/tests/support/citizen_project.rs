@@ -49,7 +49,7 @@ pub fn project() -> Value {
         "package":{"sourceRevision":"native-citizen-proof"},"datasets":[{"id":"addresses"}],
         "recordTypes":{"person-address": {"route":"person-addresses","primaryDataset":"addresses","mutationMode":"mutable",
             "classification":"internal","fields":fields.into_iter().map(|id|json!({"id":id,"apiName":match id {"address-line"=>"addressLine", "postal-code"=>"postalCode", other=>other},"type":"string","required":true,"maximumLength":200,"classification":"internal"})).collect::<Vec<_>>()}},
-        "actions":[{"id":"correct-address","execution":{"mode":"proposal","proposal":{
+        "actions":{"correct-address": {"execution":{"mode":"proposal","proposal":{
             "review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}},
             "inputs":[{"id":"address","type":"reference","target":"person-address","required":true,"classification":"internal"},
                 {"id":"new-address-line","apiName":"newAddressLine","type":"string","required":true,"maximumLength":200,"classification":"internal"},
@@ -57,6 +57,6 @@ pub fn project() -> Value {
                 {"id":"new-postal-code","apiName":"newPostalCode","type":"string","required":true,"maximumLength":200,"classification":"internal"}],
             "commitGuards":{"targets":[{"input":"address","revision":"unchanged"}]},
             "plan":{"type":"fixed","effects":[{"id":"address","target":{"fromInput":"address"},"operation":"patch",
-                "set":{"address-line":{"fromInput":"new-address-line"},"locality":{"fromInput":"new-locality"},"postal-code":{"fromInput":"new-postal-code"}}}]}}],
+                "set":{"address-line":{"fromInput":"new-address-line"},"locality":{"fromInput":"new-locality"},"postal-code":{"fromInput":"new-postal-code"}}}]}}},
         "accessProfiles":profiles})
 }

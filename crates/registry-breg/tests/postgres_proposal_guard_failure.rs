@@ -64,7 +64,7 @@ fn registry_with_current_date_offset(
                 {"id":"status","type":"string","required":true,"maximumLength":16,"classification":"internal"},
                 {"id":"capacity","type":"int64","required":true,"classification":"internal"},
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}},
-        "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{
+        "actions":{"correct-name": {"execution":{"mode":"proposal","proposal":{
             "review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}},
             "inputs":[{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"},
@@ -73,7 +73,7 @@ fn registry_with_current_date_offset(
                 {"input":"target","revision":"unchanged"},
                 {"input":"target","field":"status","equals":"open","reason":"target-not-open"},
                 {"input":"target","field":"capacity","atLeastFromInput":"minimum","reason":"below-minimum"}]},
-            "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
+            "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}},
         "accessProfiles":{"clerk": {"default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
             "requiredPurposes":["registry-administration"],"permissions":{
                 "records":[{"recordType":"target","operations":["create","get","list"],"readableFields":readable,
@@ -92,7 +92,7 @@ fn registry_with_current_date_offset(
             .push(json!({
                 "id":"eligible-on", "type":"date", "classification":"internal"
             }));
-        source["actions"][0]["commitGuards"]["targets"]
+        source["actions"]["correct-name"]["commitGuards"]["targets"]
             .as_array_mut()
             .unwrap()
             .push(json!({

@@ -14,8 +14,8 @@ fn project() -> Value {
      "recordTypes":{"entry": {"route":"entries","primaryDataset":"records","mutationMode":"mutable","fields":[
      {"id":"name","type":"string","maximumLength":32,"required":true,"classification":"internal"},
      {"id":"parent","type":"reference","target":"entry","classification":"internal"}]}},
-     "actions":[{"id":"create-pair","execution":{"mode":"immediate"},"inputs":[{"id":"name","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
-     "plan":{"type":"fixed","effects":[{"id":"z-result","target":{"recordType":"entry"},"operation":"create","set":{"name":{"fromInput":"name"}}},{"id":"a-result","target":{"recordType":"entry"},"operation":"create","set":{"name":{"fromInput":"name"}}}]}}],
+     "actions":{"create-pair": {"execution":{"mode":"immediate"},"inputs":[{"id":"name","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
+     "plan":{"type":"fixed","effects":[{"id":"z-result","target":{"recordType":"entry"},"operation":"create","set":{"name":{"fromInput":"name"}}},{"id":"a-result","target":{"recordType":"entry"},"operation":"create","set":{"name":{"fromInput":"name"}}}]}}},
      "accessProfiles":{"creator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"create-pair","operations":["invoke"],"targets":[{"recordType":"entry","rowBoundaries":"unrestricted"}],"results":["z-result","a-result"]}]}}}
     })
 }
@@ -50,26 +50,29 @@ fn production_compiler_preserves_independent_authored_order() {
 #[test]
 fn production_compiler_refuses_forward_and_cyclic_references_and_after() {
     let mut value = project();
-    value["actions"][0]["plan"]["effects"][1]["set"]["parent"] = json!({"fromEffect":"z-result"});
+    value["actions"]["create-pair"]["plan"]["effects"][1]["set"]["parent"] =
+        json!({"fromEffect":"z-result"});
     assert!(compile(value.clone(), "fn plan(ctx) { #{effects: []} }").is_ok());
     let mut forward = project();
-    forward["actions"][0]["plan"]["effects"][0]["set"]["parent"] = json!({"fromEffect":"a-result"});
+    forward["actions"]["create-pair"]["plan"]["effects"][0]["set"]["parent"] =
+        json!({"fromEffect":"a-result"});
     assert!(compile(forward, "fn plan(ctx) { #{effects: []} }").is_err());
     let mut self_reference = project();
-    self_reference["actions"][0]["plan"]["effects"][0]["set"]["parent"] =
+    self_reference["actions"]["create-pair"]["plan"]["effects"][0]["set"]["parent"] =
         json!({"fromEffect":"z-result"});
     assert!(compile(self_reference, "fn plan(ctx) { #{effects: []} }").is_err());
-    value["actions"][0]["plan"]["effects"][0]["set"]["parent"] = json!({"fromEffect":"a-result"});
+    value["actions"]["create-pair"]["plan"]["effects"][0]["set"]["parent"] =
+        json!({"fromEffect":"a-result"});
     assert!(compile(value, "fn plan(ctx) { #{effects: []} }").is_err());
     let mut value = project();
-    value["actions"][0]["plan"]["effects"][0]["after"] = json!(["a-result"]);
+    value["actions"]["create-pair"]["plan"]["effects"][0]["after"] = json!(["a-result"]);
     assert!(parse_project_json(&serde_json::to_vec(&value).unwrap()).is_err());
 }
 #[test]
 fn production_function_evaluator_preserves_order_and_refuses_forward_refs() {
     let mut value = project();
-    value["functions"] = json!([{"id":"pair-plan","runtime":"rhai","source":"plans/plan.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":[]}]);
-    value["actions"][0]["plan"] = json!({"type":"function","function":"pair-plan","inputs":["name"],"writes":[
+    value["functions"] = json!({"pair-plan": {"runtime":"rhai","source":"plans/plan.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":[]}});
+    value["actions"]["create-pair"]["plan"] = json!({"type":"function","function":"pair-plan","inputs":["name"],"writes":[
  {"id":"z-result","target":{"recordType":"entry"},"operation":"create","fields":["name","parent"]},
  {"id":"a-result","target":{"recordType":"entry"},"operation":"create","fields":["name","parent"]}]});
     let script = r#"fn plan(ctx) { #{effects:[#{id:"z-result",set:#{name:ctx.inputs.name}},#{id:"a-result",set:#{name:ctx.inputs.name}}]} }"#;
@@ -105,13 +108,12 @@ fn modules_share_native_record_types_value_types_and_function_asset_provenance()
     let mut value = project();
     value["recordTypes"] = json!({});
     value["modules"] = json!({"records": {"version":"1"}, "extensions": {"version":"1"}});
-    value["actions"][0]["plan"] = json!({"type":"function","function":"module-plan","inputs":["name"],"writes":[
+    value["actions"]["create-pair"]["plan"] = json!({"type":"function","function":"module-plan","inputs":["name"],"writes":[
         {"id":"z-result","target":{"recordType":"entry"},"operation":"create","fields":["name"]},
         {"id":"a-result","target":{"recordType":"entry"},"operation":"create","fields":["name"]}
     ]});
-    let mut reused = value["actions"][0].clone();
-    reused["id"] = json!("create-pair-again");
-    value["actions"].as_array_mut().unwrap().push(reused);
+    let reused = value["actions"]["create-pair"].clone();
+    value["actions"]["create-pair-again"] = reused;
     let mut permission = value["accessProfiles"]["creator"]["permissions"]["actions"][0].clone();
     permission["action"] = json!("create-pair-again");
     value["accessProfiles"]["creator"]["permissions"]["actions"]
@@ -122,7 +124,7 @@ fn modules_share_native_record_types_value_types_and_function_asset_provenance()
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"records","version":"1",
         "valueTypes":{"name":{"type":"string","maximumLength":32}},
         "recordTypes":{"entry": {"route":"entries","primaryDataset":"records","mutationMode":"mutable","fields":[{"id":"name","typeRef":"name","required":true,"classification":"internal"}]}},
-        "functions":[{"id":"module-plan","runtime":"rhai","source":"plans/plan.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":["evidence"]}]
+        "functions":{"module-plan": {"runtime":"rhai","source":"plans/plan.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":["evidence"]}}
     })).unwrap()).unwrap();
     let extensions = parse_module_json(&serde_json::to_vec(&json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"extensions","version":"1","dependencies":["records"],
@@ -174,28 +176,29 @@ fn modules_share_native_record_types_value_types_and_function_asset_provenance()
 #[test]
 fn fixed_reference_values_require_an_authorized_input_or_created_result() {
     let mut value = project();
-    value["actions"][0]["plan"]["effects"][0]["set"]["parent"] =
+    value["actions"]["create-pair"]["plan"]["effects"][0]["set"]["parent"] =
         json!({"value":"00000000-0000-4000-8000-000000000001"});
     let failure = compile(value.clone(), "fn plan(ctx) { #{effects: []} }").unwrap_err();
     assert!(failure
         .diagnostics()
         .iter()
         .any(|d| d.code == "breg.action.effect-reference-input-required"));
-    value["actions"][0]["plan"]["effects"][0]["set"]
+    value["actions"]["create-pair"]["plan"]["effects"][0]["set"]
         .as_object_mut()
         .unwrap()
         .remove("parent");
-    value["actions"][0]["inputs"].as_array_mut().unwrap().push(json!({
+    value["actions"]["create-pair"]["inputs"].as_array_mut().unwrap().push(json!({
         "id":"parent", "type":"reference", "target":"entry", "required":true, "classification":"internal"
     }));
-    value["actions"][0]["plan"]["effects"][0]["target"] = json!({"fromInput":"parent"});
-    value["actions"][0]["plan"]["effects"][0]["operation"] = json!("patch");
-    value["actions"][0]["plan"]["effects"][0]["clear"] = json!(["parent"]);
+    value["actions"]["create-pair"]["plan"]["effects"][0]["target"] = json!({"fromInput":"parent"});
+    value["actions"]["create-pair"]["plan"]["effects"][0]["operation"] = json!("patch");
+    value["actions"]["create-pair"]["plan"]["effects"][0]["clear"] = json!(["parent"]);
     compile(value.clone(), "fn plan(ctx) { #{effects: []} }").unwrap();
-    value["actions"][0]["plan"]["effects"][0]
+    value["actions"]["create-pair"]["plan"]["effects"][0]
         .as_object_mut()
         .unwrap()
         .remove("clear");
-    value["actions"][0]["plan"]["effects"][0]["set"]["parent"] = json!({"fromInput":"parent"});
+    value["actions"]["create-pair"]["plan"]["effects"][0]["set"]["parent"] =
+        json!({"fromInput":"parent"});
     assert!(compile(value, "fn plan(ctx) { #{effects: []} }").is_ok());
 }

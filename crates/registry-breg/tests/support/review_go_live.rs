@@ -27,14 +27,14 @@ async fn reviewed_fixture_with_recovery(
     recovery_contract: bool,
 ) -> (client_http::ClientFixture, Value) {
     let mut source = registry_source(json!(policy()));
-    source["actions"][0]["execution"]["proposal"]["application"] =
+    source["actions"]["correct-name"]["execution"]["proposal"]["application"] =
         json!({"mode":if automatic { "automatic" } else { "manual" }});
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"] =
         json!(["get", "list", "submit", "cancel", "rebase"]);
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
         json!(["target", "value"]);
     if recovery_contract {
-        source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({
+        source["actions"]["correct-name"]["execution"]["proposal"]["reviewContext"] = json!({
             "id":"review-name",
             "fields":{"proposedName":{"type":"input","input":"value"}}
         });
@@ -598,7 +598,7 @@ async fn rollback_does_not_revive_cancelled_review_or_application() {
     // An Action-only change makes returning to the exact frozen revision a
     // metadata migration, without destructive database-shape rollback.
     let mut successor = source.clone();
-    successor["actions"][0]["inputs"].as_array_mut().unwrap().push(
+    successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
     let (package, active) = proposal_activation::activate_with_compatibility(
@@ -700,7 +700,7 @@ async fn late_approval_after_rollback(finish_cancellation: bool, automatic: bool
     let accepted = authority.state.accepted.lock().unwrap().clone().unwrap();
     assert!(application_jobs(&fixture, id).await.is_empty());
     let mut successor = source.clone();
-    successor["actions"][0]["inputs"].as_array_mut().unwrap().push(
+    successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
     let (package, active) = proposal_activation::activate_with_compatibility(
@@ -1160,7 +1160,7 @@ async fn failed_review_stays_withdrawn_after_rollback(accepted: bool) {
         ).await.unwrap();
     }
     let mut successor = source.clone();
-    successor["actions"][0]["inputs"].as_array_mut().unwrap().push(
+    successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
     let (package, active) = proposal_activation::activate_with_compatibility(
@@ -1346,7 +1346,7 @@ async fn activated_automatic_proposal_preserves_requester_recovery(rollback: boo
     let id = submitted(&fixture, "closed-application-projection-canary").await;
     approve(&fixture, &authority).await;
     let mut successor = source.clone();
-    successor["actions"][0]["inputs"].as_array_mut().unwrap().push(
+    successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
     let (mut package, mut active) = proposal_activation::activate_with_compatibility(
@@ -1738,7 +1738,7 @@ async fn activation_statement_counts(extra_pending: usize) -> Vec<(String, i64)>
 
     let before = activation_work_snapshot(&fixture.database.admin).await;
     let mut successor = source.clone();
-    successor["actions"][0]["inputs"].as_array_mut().unwrap().push(
+    successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
     let project = parse_project_json(&serde_json::to_vec(&successor).unwrap()).unwrap();

@@ -197,7 +197,8 @@ def write_breg(root, urls, review_policy=None, *, borrower=False):
         "datasets": [{"id": "synthetic-applications"}],
         **({"reviewAuthorities": [{"id": "casework",
             "protocol": "id.registrystack.org/protocols/review/v1"}]} if review_policy is not None else {}),
-        "recordTypes": {"application": {key: value for key, value in applications.items() if key != "id"}}, "actions": actions,
+        "recordTypes": {"application": {key: value for key, value in applications.items() if key != "id"}}, "actions": {action["id"]: {key: value for key, value in action.items() if key != "id"}
+                    for action in actions},
         "accessProfiles": {profile["id"]: {key: value for key, value in profile.items() if key != "id"}
                            for profile in profiles},
     })

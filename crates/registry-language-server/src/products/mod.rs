@@ -313,10 +313,11 @@ fn ancestor_field(found: &Match<'_>, skip: usize, field: &str) -> Option<String>
 
 fn scope(found: &Match<'_>, rule: Scope, path: &Path) -> Option<Option<String>> {
     fn action<'a>(found: &Match<'a>) -> Option<&'a YamlValue> {
-        found.parents.iter().copied().find(|parent| {
-            parent.get("id").is_some()
-                && (parent.get("plan").is_some() || parent.get("execution").is_some())
-        })
+        found
+            .parents
+            .iter()
+            .copied()
+            .find(|parent| parent.get("plan").is_some() || parent.get("execution").is_some())
     }
     fn input_target(found: &Match<'_>, input: &str) -> Option<String> {
         at_path(action(found)?, "inputs/*/target")
@@ -326,7 +327,7 @@ fn scope(found: &Match<'_>, rule: Scope, path: &Path) -> Option<Option<String>> 
     }
     match rule {
         Scope::Global => Some(None),
-        Scope::BregAction => Some(Some(action(found)?.get_scalar("id")?.value.clone())),
+        Scope::BregAction => Some(Some((*found.keys.last()?).to_owned())),
         Scope::BregTarget => Some(Some(
             ancestor_field(found, 0, "target.recordType")
                 .or_else(|| input_target(found, &ancestor_field(found, 0, "target.fromInput")?))?,

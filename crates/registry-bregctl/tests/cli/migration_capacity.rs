@@ -55,17 +55,19 @@ fn capacity_project(profile_count: usize) -> Vec<u8> {
                     })
                 })
                 .collect::<Vec<_>>();
-            json!({
-                "id": format!("review-flow-{flow}"),
-                "execution": {"mode": "proposal", "proposal": {
-                    "review": {"type": "none"}, "application": {"mode": "manual"},
-                    "retention": {"mode": "retain"}
-                }},
-                "inputs": inputs,
-                "plan": {"type": "fixed", "effects": effects}
-            })
+            (
+                format!("review-flow-{flow}"),
+                json!({
+                    "execution": {"mode": "proposal", "proposal": {
+                        "review": {"type": "none"}, "application": {"mode": "manual"},
+                        "retention": {"mode": "retain"}
+                    }},
+                    "inputs": inputs,
+                    "plan": {"type": "fixed", "effects": effects}
+                }),
+            )
         })
-        .collect::<Vec<_>>();
+        .collect::<serde_json::Map<_, _>>();
     let access_profiles = (0..profile_count)
         .map(|profile| {
             let actions = (0..4)

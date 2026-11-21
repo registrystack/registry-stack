@@ -54,13 +54,13 @@ fn source(membership: bool) -> Value {
                     {"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
                     {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"},
                     {"id":"organization","type":"reference","target":"organization","required":true,"classification":"internal"}]}},
-        "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},
+        "actions":{"correct-name": {"execution":{"mode":"proposal","proposal":{"review":{"type":"none"},
             "reviewContext":{"id":"review-name","fields":{"currentName":{"type":"record","input":"target","field":"name"},"proposedName":{"type":"input","input":"value"}}},
             "application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}},
             "inputs":[{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
             "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
-            "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
+            "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}},
         "accessProfiles":{"clerk": {"default":true,"principalClaim":"registry_principal","requiredScopes":["proposal:manage"],
             "requiredPurposes":["registry-administration"],"permissions":{"records":[
                 {"recordType":"organization","operations":["create","get"],"readableFields":["name"],"writableFields":["name"],"rowBoundaries":"unrestricted"},
@@ -512,8 +512,8 @@ async fn review_context_requires_record_grant_and_current_membership() {
     });
     let checker = status.clone();
     let mut source = source(true);
-    source["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"]["changes"] =
-        json!({"type":"changes","recordType":"target","fields":["name"]});
+    source["actions"]["correct-name"]["execution"]["proposal"]["reviewContext"]["fields"]
+        ["changes"] = json!({"type":"changes","recordType":"target","fields":["name"]});
     source["accessProfiles"]["task-reviewer"]["permissions"]["proposals"][0]
         ["readableContextFields"]
         .as_array_mut()
@@ -521,15 +521,15 @@ async fn review_context_requires_record_grant_and_current_membership() {
         .push(json!("changes"));
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"] =
         json!(["get", "list", "edit", "submit", "cancel"]);
-    source["actions"][0]["execution"]["proposal"]["attachments"] = json!([
+    source["actions"]["correct-name"]["execution"]["proposal"]["attachments"] = json!([
         {"id":"support","required":false,"maximumBytes":4096,"contentTypes":["text/plain"],"classification":"restricted"},
         {"id":"absent","required":false,"maximumBytes":4096,"contentTypes":["text/plain"],"classification":"restricted"},
         {"id":"private","required":false,"maximumBytes":4096,"contentTypes":["text/plain"],"classification":"restricted"}
     ]);
-    source["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"]["document"] =
-        json!({"type":"document","slot":"support"});
-    source["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"]["optionalDocument"] =
-        json!({"type":"document","slot":"absent"});
+    source["actions"]["correct-name"]["execution"]["proposal"]["reviewContext"]["fields"]
+        ["document"] = json!({"type":"document","slot":"support"});
+    source["actions"]["correct-name"]["execution"]["proposal"]["reviewContext"]["fields"]
+        ["optionalDocument"] = json!({"type":"document","slot":"absent"});
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableAttachments"] =
         json!(["support"]);
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["writableAttachments"] =
@@ -920,7 +920,7 @@ async fn saved_review_document_requires_current_subject_consent() {
         .as_object_mut()
         .unwrap()
         .insert("consent-decision".to_owned(), decision);
-    let mut record_consent = consent["actions"][0].clone();
+    let mut record_consent = consent["actions"]["correct-name"].clone();
     record_consent["inputs"][0]["target"] = json!("target");
     project["actions"]
         .as_array_mut()
@@ -931,11 +931,11 @@ async fn saved_review_document_requires_current_subject_consent() {
         {"id":"data-use-purpose","values":["registry-administration"]},
         {"id":"consent-decision","values":["given","withdrawn","refused","invalidated"]}
     ]);
-    project["actions"][0]["execution"]["proposal"]["attachments"] = json!([
+    project["actions"]["correct-name"]["execution"]["proposal"]["attachments"] = json!([
         {"id":"support","required":true,"maximumBytes":4096,"contentTypes":["text/plain"],"classification":"restricted"}
     ]);
-    project["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"]["document"] =
-        json!({"type":"document","slot":"support"});
+    project["actions"]["correct-name"]["execution"]["proposal"]["reviewContext"]["fields"]
+        ["document"] = json!({"type":"document","slot":"support"});
     project["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableAttachments"] =
         json!(["support"]);
     project["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["writableAttachments"] =
@@ -1285,11 +1285,11 @@ async fn proposal_disclosures_refuse_a_signed_grant_expiring_during_terminal_aud
     });
     let checker = status.clone();
     let mut source = source(false);
-    source["actions"][0]["execution"]["proposal"]["attachments"] = json!([
+    source["actions"]["correct-name"]["execution"]["proposal"]["attachments"] = json!([
         {"id":"support","required":false,"maximumBytes":4096,"contentTypes":["text/plain"],"classification":"restricted"}
     ]);
-    source["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"]["document"] =
-        json!({"type":"document","slot":"support"});
+    source["actions"]["correct-name"]["execution"]["proposal"]["reviewContext"]["fields"]
+        ["document"] = json!({"type":"document","slot":"support"});
     source["accessProfiles"]["task-reviewer"]["permissions"]["proposals"][0]
         ["readableContextFields"]
         .as_array_mut()
@@ -1666,7 +1666,7 @@ async fn applicant_progress_rechecks_withdrawal_and_audit_before_release() {
     let mut project = source(false);
     project["reviewAuthorities"] =
         json!([{"id":"casework","protocol":"id.registrystack.org/protocols/review/v1"}]);
-    project["actions"][0]["execution"]["proposal"]["review"] = json!({
+    project["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({
         "type":"required","authority":"casework","source":"proposal-security",
         "policy":{"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))}
     });
@@ -1819,7 +1819,7 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
         json!(["currentName", "proposedName"]);
     source["reviewAuthorities"] =
         json!([{"id":"casework","protocol":"id.registrystack.org/protocols/review/v1"}]);
-    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"casework","source":"proposal-security",
+    source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"casework","source":"proposal-security",
         "policy":{"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))}});
     source["accessProfiles"].as_object_mut().unwrap().insert("review-status".to_owned(), json!({"principalClaim":"registry_principal",
         "actorKind":"service","requesterClients":["agent-client"],"requiredScopes":["proposal:review-status"],
@@ -2436,13 +2436,13 @@ async fn frozen_changes_inspection_covers_patch_and_create_without_applying_or_r
         "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
             {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]
     }));
-    project["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"] = json!({
+    project["actions"]["correct-name"]["execution"]["proposal"]["reviewContext"]["fields"] = json!({
         "changes":{"type":"changes","recordType":"target","fields":["name"]},
         "notices":{"type":"changes","recordType":"notice","fields":["name"]}
     });
-    project["actions"][0]["plan"]["effects"][0]["set"]["name"] =
+    project["actions"]["correct-name"]["plan"]["effects"][0]["set"]["name"] =
         json!({"value":"Computed frozen patch"});
-    project["actions"][0]["plan"]["effects"]
+    project["actions"]["correct-name"]["plan"]["effects"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -2453,7 +2453,7 @@ async fn frozen_changes_inspection_covers_patch_and_create_without_applying_or_r
     permissions["records"].as_array_mut().unwrap().push(json!({"recordType":"notice","operations":["get"],
         "readableFields":["name"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}));
     let target = json!({"recordType":"notice","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]});
-    permissions["actions"][0]["targets"]
+    permissions["actions"]["correct-name"]["targets"]
         .as_array_mut()
         .unwrap()
         .push(target.clone());

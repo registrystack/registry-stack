@@ -30,16 +30,16 @@ fn project(rows: Value, classification: &str) -> Value {
                 "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":classification},
                           {"id":"tenant","type":"string","maximumLength":32,"required":true,"classification":classification}]}
         },
-        "actions":[
-            {"id":"relabel-note","execution":{"mode":"immediate"},"inputs":[
+        "actions":{
+            "relabel-note": {"execution":{"mode":"immediate"},"inputs":[
                 {"id":"note-ref","apiName":"noteId","type":"reference","target":"note","required":true,"classification":classification},
                 {"id":"new-label","apiName":"newLabel","type":"string","maximumLength":32,"required":true,"classification":classification}],
                 "plan":{"type":"fixed","effects":[{"id":"relabelled","target":{"fromInput":"note-ref"},"operation":"patch","set":{"label":{"fromInput":"new-label"}}}]}},
-            {"id":"correct-case","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"},"reviewContext":{"id":"case-review","fields":{"currentLabel":{"type":"record","input":"case-ref","field":"label"},"proposedLabel":{"type":"input","input":"new-label"}}}}},"inputs":[
+            "correct-case": {"execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"},"reviewContext":{"id":"case-review","fields":{"currentLabel":{"type":"record","input":"case-ref","field":"label"},"proposedLabel":{"type":"input","input":"new-label"}}}}},"inputs":[
                 {"id":"case-ref","type":"reference","target":"case","required":true,"classification":classification},
                 {"id":"new-label","type":"string","maximumLength":32,"required":true,"classification":classification}],
                 "plan":{"type":"fixed","effects":[{"id":"corrected","target":{"fromInput":"case-ref"},"operation":"patch","set":{"label":{"fromInput":"new-label"}}}]}}
-        ],
+        },
         "accessProfiles":{
             "delegated": {"principalClaim":"registry_principal","requiredScopes":["registry.read"],
                 "requiredPurposes":["correction-review"],"actorKind":"agent","requesterClients":["task-agent"],
@@ -112,9 +112,9 @@ fn public_record_types_and_standing_profiles_draw_no_finding() {
         .remove("taskGrant");
     // A standing agent holds no immediate Action and only drafts Proposals.
     standing["actions"]
-        .as_array_mut()
-        .expect("actions array")
-        .remove(0);
+        .as_object_mut()
+        .expect("actions mapping")
+        .remove("relabel-note");
     let permissions = standing["accessProfiles"]["delegated"]["permissions"]
         .as_object_mut()
         .expect("permissions object");

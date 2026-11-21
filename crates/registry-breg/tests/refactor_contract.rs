@@ -73,11 +73,11 @@ fn optional_stored_fields_warn_only_when_no_supported_writer_can_fill_them() {
         ["recordTypes[id=facility-assignment].fields[id=note]"]
     );
 
-    value["actions"][0]["plan"]["effects"][1]["set"]["note"] =
+    value["actions"]["register-facility"]["plan"]["effects"][1]["set"]["note"] =
         serde_json::json!({"value": "created by action"});
     assert!(unfillable_paths(&parse_project(value.clone())).is_empty());
 
-    value["actions"][0]["plan"]["effects"][1]["set"]
+    value["actions"]["register-facility"]["plan"]["effects"][1]["set"]
         .as_object_mut()
         .unwrap()
         .remove("note");
@@ -112,7 +112,7 @@ fn optional_stored_fields_warn_only_when_no_supported_writer_can_fill_them() {
         ["recordTypes[id=facility-assignment].fields[id=note]"]
     );
 
-    value["actions"][1]["plan"]["writes"][0]["fields"] =
+    value["actions"]["correct-address"]["plan"]["writes"][0]["fields"] =
         serde_json::json!(["address-line", "city", "postal-code", "note"]);
     value["recordTypes"]["facility"]["fields"]
         .as_array_mut()
@@ -332,12 +332,7 @@ fn proposal_attachments_require_explicit_bounded_slot_grants() {
     use registry_breg::contract::parse_project_json;
     use serde_json::json;
     let mut value: serde_json::Value = project_source();
-    let action_index = value["actions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .position(|action| action["id"] == "correct-address")
-        .unwrap();
+    let action_index = "correct-address";
     value["actions"][action_index]["execution"]["proposal"]["attachments"] = json!([{"id":"supporting-file","required":false,"maximumBytes":1024,"contentTypes":["application/pdf"],"classification":"restricted"}]);
     value["actions"][action_index]["execution"]["proposal"]["reviewContext"]["fields"]
         ["supportingDocument"]["slot"] = json!("supporting-file");
@@ -499,12 +494,7 @@ fn explicit_automatic_application_has_a_bounded_revision_bound_system_grant() {
     use registry_breg::contract::parse_project_json;
     use serde_json::json;
     let mut value: serde_json::Value = project_source();
-    let index = value["actions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .position(|action| action["id"] == "deactivate-facility")
-        .unwrap();
+    let index = "deactivate-facility";
     value["actions"][index]["execution"]["proposal"]["application"] =
         json!({"mode":"automatic","maximumAttempts":3});
     let model =
@@ -549,7 +539,7 @@ fn explicit_automatic_application_has_a_bounded_revision_bound_system_grant() {
             .fields,
         std::collections::BTreeSet::from(["status".to_owned()])
     );
-    for action in value["actions"].as_array_mut().unwrap() {
+    for action in value["actions"].as_object_mut().unwrap().values_mut() {
         if action["execution"]["mode"] == "proposal" {
             action["execution"]["proposal"]["application"] = json!({"mode":"manual"});
         }
@@ -573,7 +563,7 @@ fn generated_policy_names_fit_postgres_without_truncation_or_collisions() {
     for automatic in [false, true] {
         let mut source: serde_json::Value = project_source();
         if automatic {
-            for action in source["actions"].as_array_mut().unwrap() {
+            for action in source["actions"].as_object_mut().unwrap().values_mut() {
                 if action["execution"]["mode"] == "proposal" {
                     action["execution"]["proposal"]["application"] =
                         json!({"mode":"automatic","maximumAttempts":3});
@@ -623,7 +613,7 @@ fn unused_reference_inputs_require_bounded_current_target_admission() {
     use registry_breg::contract::parse_project_json;
     use serde_json::json;
     let mut value: serde_json::Value = project_source();
-    value["actions"][0]["inputs"].as_array_mut().unwrap().push(json!({"id":"audit-entry","type":"reference","target":"directory-entry","classification":"internal"}));
+    value["actions"]["register-facility"]["inputs"].as_array_mut().unwrap().push(json!({"id":"audit-entry","type":"reference","target":"directory-entry","classification":"internal"}));
     assert!(compile(&parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap()).is_err());
     let profile = &mut value["accessProfiles"]["facility-registrar"];
     profile["permissions"]["actions"][0]["targets"].as_array_mut().unwrap().push(json!({"recordType":"directory-entry","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}));
@@ -643,7 +633,7 @@ fn guard_only_revision_reads_share_one_condition_bound_reference_scope() {
     use registry_breg::contract::parse_project_json;
     use serde_json::json;
     let mut value: serde_json::Value = project_source();
-    value["actions"][0]["commitGuards"]["targets"]
+    value["actions"]["register-facility"]["commitGuards"]["targets"]
         .as_array_mut()
         .unwrap()
         .push(json!({"input":"operator","revision":"unchanged"}));
@@ -725,12 +715,7 @@ fn review_context_schema_has_exact_bytes_and_no_policy_digest_cycle() {
         json!(120)
     );
     assert!(schema.revision.starts_with("sha256:"));
-    let action_index = value["actions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .position(|action| action["id"] == "correct-address")
-        .unwrap();
+    let action_index = "correct-address";
     value["actions"][action_index]["execution"]["proposal"]["review"]["policy"]["version"] =
         json!("1");
     value["actions"][action_index]["execution"]["proposal"]["review"]["policy"]["digest"] =
@@ -803,12 +788,7 @@ fn review_context_document_schema_binds_slot_meaning_and_closed_retained_values(
     use registry_breg::{compiler::review_context::compile_schema, contract::parse_project_json};
     use serde_json::{json, Value};
     let mut source = project_source();
-    let index = source["actions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .position(|action| action["id"] == "correct-address")
-        .unwrap();
+    let index = "correct-address";
     source["actions"][index]["execution"]["proposal"]["reviewContext"]["fields"]["document"] =
         json!({"type":"document","slot":"supporting-document"});
     let schema_for = |source: &Value| {
@@ -1263,16 +1243,17 @@ fn input_and_refusal_labels_are_presentation_not_frozen_meaning() {
     let mut value: serde_json::Value = project_source();
     // Keep the planner's returned code declared while independently changing
     // presentation and the operational identity of another declared refusal.
-    value["actions"][1]["plan"]["refusals"]
+    value["actions"]["correct-address"]["plan"]["refusals"]
         .as_array_mut()
         .unwrap()
         .push(json!({ "code":"invalid-address", "label":"Old label" }));
     let source =
         registry_breg::contract::parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap();
     let before = compile(&source).unwrap();
-    value["actions"][0]["inputs"][0]["display"] =
+    value["actions"]["register-facility"]["inputs"][0]["display"] =
         json!({"label":"A clearer label", "description":"Presentation only"});
-    value["actions"][1]["plan"]["refusals"][1]["label"] = json!("Use a distinct address");
+    value["actions"]["correct-address"]["plan"]["refusals"][1]["label"] =
+        json!("Use a distinct address");
     let project =
         registry_breg::contract::parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap();
     let after = compile(&project).unwrap();
@@ -1295,7 +1276,8 @@ fn input_and_refusal_labels_are_presentation_not_frozen_meaning() {
     );
 
     let mut changed_refusal_source = value.clone();
-    changed_refusal_source["actions"][1]["plan"]["refusals"][1]["code"] = json!("invalid-location");
+    changed_refusal_source["actions"]["correct-address"]["plan"]["refusals"][1]["code"] =
+        json!("invalid-location");
     let changed_refusal = registry_breg::contract::parse_project_json(
         &serde_json::to_vec(&changed_refusal_source).unwrap(),
     )
@@ -1316,7 +1298,7 @@ fn input_and_refusal_labels_are_presentation_not_frozen_meaning() {
         .iter_mut()
         .find(|field| field["id"] == "facility-code")
         .unwrap()["required"] = json!(false);
-    value["actions"][0]["inputs"][0]["required"] = json!(false);
+    value["actions"]["register-facility"]["inputs"][0]["required"] = json!(false);
     let changed_input =
         registry_breg::contract::parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap();
     let changed_input = compile(&changed_input).unwrap();
@@ -1467,7 +1449,8 @@ fn applicant_review_progress_is_explicit_caller_owned_status_authority() {
     }
 
     let mut no_review = source;
-    no_review["actions"][1]["execution"]["proposal"]["review"] = json!({"type":"none"});
+    no_review["actions"]["correct-address"]["execution"]["proposal"]["review"] =
+        json!({"type":"none"});
     let no_review = parse_project_json(&serde_json::to_vec(&no_review).unwrap()).unwrap();
     let failure = compile(&no_review).expect_err("progress requires external review");
     assert!(failure
@@ -1480,7 +1463,7 @@ fn applicant_review_progress_is_explicit_caller_owned_status_authority() {
 fn omitted_proposal_application_uses_the_bounded_builtin_executor() {
     use serde_json::json;
     let mut value: serde_json::Value = project_source();
-    value["actions"][2]["execution"]["proposal"]
+    value["actions"]["deactivate-facility"]["execution"]["proposal"]
         .as_object_mut()
         .unwrap()
         .remove("application");
@@ -1643,12 +1626,7 @@ fn review_policy_omits_both_pins_or_requires_one_complete_exact_binding() {
     use registry_review_protocol::{ContentDigest, PolicyBinding};
     use serde_json::json;
     let mut source = project_source();
-    let action = source["actions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .position(|action| action["id"] == "correct-address")
-        .unwrap();
+    let action = "correct-address";
     let exact = PolicyBinding {
         id: "facility-address-review".into(),
         version: "1".into(),
@@ -1775,12 +1753,7 @@ fn frozen_change_projection_requires_explicit_unique_existing_fields() {
         serde_json::json!(["city", "city"]),
     ] {
         let mut source = project_source();
-        let action = source["actions"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|action| action["id"] == "correct-address")
-            .unwrap();
+        let action = &mut source["actions"]["correct-address"];
         action["execution"]["proposal"]["reviewContext"]["fields"]["changes"]["fields"] = fields;
         let project =
             registry_breg::contract::parse_project_json(&serde_json::to_vec(&source).unwrap())
@@ -1788,12 +1761,7 @@ fn frozen_change_projection_requires_explicit_unique_existing_fields() {
         assert!(compile(&project).is_err());
     }
     let mut source = project_source();
-    let action = source["actions"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|action| action["id"] == "correct-address")
-        .unwrap();
+    let action = &mut source["actions"]["correct-address"];
     action["execution"]["proposal"]["reviewContext"]["fields"]["changes"]["input"] =
         serde_json::json!("city");
     assert!(

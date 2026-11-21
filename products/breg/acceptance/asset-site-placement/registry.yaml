@@ -57,7 +57,7 @@
     },
     "distributions": []
   },
-  "modules": {"asset-site-placement-core":{"digest":"sha256:32282bf3776a0370f1426ef9c0b0dbb64d9241ba7f81fb7b24a968f9b9bf7628","version":"0.1.0"}},
+  "modules": {"asset-site-placement-core":{"digest":"sha256:446c28877935f6d7a3d4925944df787f6177e55d09c1c623a62924cb75ae577f","version":"0.1.0"}},
   "recordTypes": {
     "asset-item": {
       "primaryDataset": "asset-site-placement",

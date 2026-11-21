@@ -294,11 +294,11 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
         explanation["actions"],
         json!([
             "give-person-consent",
-            "refuse-person-consent",
-            "withdraw-person-consent",
-            "record-person-consent-assisted",
+            "import-person-consent",
             "invalidate-person-consent",
-            "import-person-consent"
+            "record-person-consent-assisted",
+            "refuse-person-consent",
+            "withdraw-person-consent"
         ])
     );
     assert_eq!(

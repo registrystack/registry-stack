@@ -175,9 +175,8 @@
       ]
     }
   },
-  "actions": [
-    {
-      "id": "register-household-contact",
+  "actions": {
+    "register-household-contact": {
       "inputs": [
         {
           "id": "household",
@@ -279,5 +278,5 @@
         "mode": "immediate"
       }
     }
-  ]
+  }
 }

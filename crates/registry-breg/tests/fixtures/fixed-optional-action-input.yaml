@@ -10,7 +10,7 @@ recordTypes:
     fields:
       - {id: label, type: string, maximumLength: 40, required: false, classification: internal}
 actions:
-  - id: create-entry
+  create-entry:
     execution: {mode: immediate}
     inputs:
       - {id: label, apiName: displayLabel, type: string, maximumLength: 40, required: false, classification: internal}

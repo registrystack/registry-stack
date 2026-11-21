@@ -2616,9 +2616,7 @@ fn timer_migration_source_with_required_fields(
         "invoke":"activate-asset",
         "input":{"asset":{"fromRecordId":true}}
     }]);
-    module["actions"] = serde_json::json!([{
-        "id":"activate-asset",
-        "execution":{"mode":"immediate"},
+    module["actions"] = serde_json::json!({"activate-asset": {"execution":{"mode":"immediate"},
         "inputs":[{
             "id":"asset", "type":"reference", "target":"asset",
             "required":true, "classification":"internal"
@@ -2629,7 +2627,7 @@ fn timer_migration_source_with_required_fields(
             "operation":"patch",
             "set":{"processed":{"value":true}}
         }]}
-    }]);
+    }});
     let module_bytes = serde_json::to_vec(&module).expect("timer module serializes");
     let parsed_module = parse_module_yaml(&module_bytes).expect("timer module parses");
     let digest = module_digest(&parsed_module);

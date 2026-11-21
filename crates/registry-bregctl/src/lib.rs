@@ -18255,12 +18255,12 @@ extendRecordTypes:
         sql: sql/summary.sql
         key: id
 functions:
-  - id: person-plan
+  person-plan:
     runtime: rhai
     source: planners/person.rhai
     entrypoint: plan
     abi: registry.action-plan/v1
-  - id: normalize-person-plan
+  normalize-person-plan:
     runtime: rhai
     source: handlers/person.rhai
     entrypoint: plan

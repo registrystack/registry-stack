@@ -789,14 +789,13 @@ fn timer_project_source() -> Value {
             }]
         }},
         "timerGrants":[{"recordType":"service","timer":"activate"}],
-        "actions":[{
-            "id":"activate-service","execution":{"mode":"immediate"},
+        "actions":{"activate-service": {"execution":{"mode":"immediate"},
             "inputs":[{"id":"service","type":"reference","target":"service","required":true,"classification":"internal"}],
             "plan":{"type":"fixed","effects":[{
                 "id":"activated","target":{"fromInput":"service"},"operation":"patch",
                 "set":{"status":{"value":"active"}}
             }]}
-        }],
+        }},
         "accessProfiles":{"service-editor": {"default":true,"principalClaim":"registry_principal",
             "requiredScopes":"unrestricted","requiredPurposes":["service-administration"],
             "permissions":{"records":[{

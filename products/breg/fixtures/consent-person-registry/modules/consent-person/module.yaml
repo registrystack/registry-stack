@@ -83,209 +83,209 @@ recordTypes:
         until: expires-at
         maximumDurationDays: 365
 actions:
-- id: give-person-consent
-  execution: {mode: immediate}
-  consentIssuer: self
-  inputs:
-  - {id: link, type: reference, target: person-consent-link, required: true, classification: internal}
-  - {id: subject, type: reference, target: person, required: true, classification: restricted}
-  - {id: clause, type: reference, target: person-notice-clause, required: true, classification: internal}
-  - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
-  - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
-  - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
-  - {id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [given], required: true, classification: internal}
-  - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [self-service], required: true, classification: internal}
-  - {id: effective-at, type: timestamp, required: true, classification: internal}
-  - {id: expires-at, type: timestamp, classification: internal}
-  commitGuards:
-    targets:
-    - {input: link, field: subject, equalsFromInput: subject}
-    - {input: link, field: active, equals: true}
-    - {input: clause, field: recipient, equalsFromInput: recipient}
-    - {input: clause, field: purpose, equalsFromInput: purpose}
-    - {input: clause, field: scope, equalsFromInput: scope}
-  plan:
-    type: fixed
-    effects:
-    - id: decision
-      target: {recordType: person-consent-decision}
-      operation: create
-      set:
-        link: {fromInput: link}
-        subject: {fromInput: subject}
-        clause: {fromInput: clause}
-        recipient: {fromInput: recipient}
-        purpose: {fromInput: purpose}
-        scope: {fromInput: scope}
-        decision: {fromInput: decision}
-        channel: {fromInput: channel}
-        effective-at: {fromInput: effective-at}
-        expires-at: {fromInput: expires-at}
-- id: refuse-person-consent
-  execution: {mode: immediate}
-  consentIssuer: self
-  inputs:
-  - {id: link, type: reference, target: person-consent-link, required: true, classification: internal}
-  - {id: subject, type: reference, target: person, required: true, classification: restricted}
-  - {id: clause, type: reference, target: person-notice-clause, required: true, classification: internal}
-  - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
-  - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
-  - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
-  - {id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [refused], required: true, classification: internal}
-  - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [self-service], required: true, classification: internal}
-  - {id: effective-at, type: timestamp, required: true, classification: internal}
-  commitGuards:
-    targets:
-    - {input: link, field: subject, equalsFromInput: subject}
-    - {input: link, field: active, equals: true}
-    - {input: clause, field: recipient, equalsFromInput: recipient}
-    - {input: clause, field: purpose, equalsFromInput: purpose}
-    - {input: clause, field: scope, equalsFromInput: scope}
-  plan:
-    type: fixed
-    effects:
-    - id: decision
-      target: {recordType: person-consent-decision}
-      operation: create
-      set:
-        link: {fromInput: link}
-        subject: {fromInput: subject}
-        clause: {fromInput: clause}
-        recipient: {fromInput: recipient}
-        purpose: {fromInput: purpose}
-        scope: {fromInput: scope}
-        decision: {fromInput: decision}
-        channel: {fromInput: channel}
-        effective-at: {fromInput: effective-at}
-- id: withdraw-person-consent
-  execution: {mode: immediate}
-  consentIssuer: self
-  inputs:
-  - {id: link, type: reference, target: person-consent-link, required: true, classification: internal}
-  - {id: subject, type: reference, target: person, required: true, classification: restricted}
-  - {id: clause, type: reference, target: person-notice-clause, required: true, classification: internal}
-  - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
-  - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
-  - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
-  - {id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [withdrawn], required: true, classification: internal}
-  - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [self-service], required: true, classification: internal}
-  - {id: effective-at, type: timestamp, required: true, classification: internal}
-  commitGuards:
-    targets:
-    - {input: link, field: subject, equalsFromInput: subject}
-    - {input: link, field: active, equals: true}
-    - {input: clause, field: recipient, equalsFromInput: recipient}
-    - {input: clause, field: purpose, equalsFromInput: purpose}
-    - {input: clause, field: scope, equalsFromInput: scope}
-  plan:
-    type: fixed
-    effects:
-    - id: decision
-      target: {recordType: person-consent-decision}
-      operation: create
-      set:
-        link: {fromInput: link}
-        subject: {fromInput: subject}
-        clause: {fromInput: clause}
-        recipient: {fromInput: recipient}
-        purpose: {fromInput: purpose}
-        scope: {fromInput: scope}
-        decision: {fromInput: decision}
-        channel: {fromInput: channel}
-        effective-at: {fromInput: effective-at}
-- id: record-person-consent-assisted
-  execution: {mode: immediate}
-  consentIssuer: steward
-  inputs:
-  - {id: subject, type: reference, target: person, required: true, classification: restricted}
-  - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
-  - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
-  - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
-  - {id: clause, type: reference, target: person-notice-clause, required: true, classification: internal}
-  - {id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [given, refused, withdrawn], required: true, classification: internal}
-  - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [assisted], required: true, classification: internal}
-  - {id: effective-at, type: timestamp, required: true, classification: internal}
-  - {id: expires-at, type: timestamp, classification: internal}
-  - {id: evidence, type: string, maximumLength: 2048, required: true, classification: restricted}
-  - {id: witness, type: string, maximumLength: 255, classification: restricted}
-  commitGuards:
-    targets:
-    - {input: clause, field: recipient, equalsFromInput: recipient}
-    - {input: clause, field: purpose, equalsFromInput: purpose}
-    - {input: clause, field: scope, equalsFromInput: scope}
-  plan:
-    type: fixed
-    effects:
-    - id: decision
-      target: {recordType: person-consent-decision}
-      operation: create
-      set:
-        subject: {fromInput: subject}
-        clause: {fromInput: clause}
-        recipient: {fromInput: recipient}
-        purpose: {fromInput: purpose}
-        scope: {fromInput: scope}
-        decision: {fromInput: decision}
-        channel: {fromInput: channel}
-        effective-at: {fromInput: effective-at}
-        expires-at: {fromInput: expires-at}
-        evidence: {fromInput: evidence}
-        witness: {fromInput: witness}
-- id: invalidate-person-consent
-  execution: {mode: immediate}
-  consentIssuer: steward
-  inputs:
-  - {id: subject, type: reference, target: person, required: true, classification: restricted}
-  - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
-  - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
-  - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
-  - {id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [invalidated], required: true, classification: internal}
-  - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [steward-review], required: true, classification: internal}
-  - {id: effective-at, type: timestamp, required: true, classification: internal}
-  - {id: invalidation-reason, type: vocabulary-code, vocabulary: consent-invalidation-reason, required: true, classification: internal}
-  plan:
-    type: fixed
-    effects:
-    - id: decision
-      target: {recordType: person-consent-decision}
-      operation: create
-      set:
-        subject: {fromInput: subject}
-        recipient: {fromInput: recipient}
-        purpose: {fromInput: purpose}
-        scope: {fromInput: scope}
-        decision: {fromInput: decision}
-        channel: {fromInput: channel}
-        effective-at: {fromInput: effective-at}
-        invalidation-reason: {fromInput: invalidation-reason}
-- id: import-person-consent
-  execution: {mode: immediate}
-  consentIssuer: steward
-  inputs:
-  - {id: subject, type: reference, target: person, required: true, classification: restricted}
-  - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
-  - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
-  - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
-  - {id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [given, refused, withdrawn, invalidated], required: true, classification: internal}
-  - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [import], required: true, classification: internal}
-  - {id: effective-at, type: timestamp, required: true, classification: internal}
-  - {id: expires-at, type: timestamp, classification: internal}
-  - {id: source-reference, type: string, maximumLength: 255, required: true, classification: internal}
-  - {id: evidence, type: string, maximumLength: 2048, classification: restricted}
-  plan:
-    type: fixed
-    effects:
-    - id: decision
-      target: {recordType: person-consent-decision}
-      operation: create
-      set:
-        subject: {fromInput: subject}
-        recipient: {fromInput: recipient}
-        purpose: {fromInput: purpose}
-        scope: {fromInput: scope}
-        decision: {fromInput: decision}
-        channel: {fromInput: channel}
-        effective-at: {fromInput: effective-at}
-        expires-at: {fromInput: expires-at}
-        source-reference: {fromInput: source-reference}
-        evidence: {fromInput: evidence}
+  give-person-consent:
+    execution: {mode: immediate}
+    consentIssuer: self
+    inputs:
+    - {id: link, type: reference, target: person-consent-link, required: true, classification: internal}
+    - {id: subject, type: reference, target: person, required: true, classification: restricted}
+    - {id: clause, type: reference, target: person-notice-clause, required: true, classification: internal}
+    - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
+    - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
+    - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
+    - {id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [given], required: true, classification: internal}
+    - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [self-service], required: true, classification: internal}
+    - {id: effective-at, type: timestamp, required: true, classification: internal}
+    - {id: expires-at, type: timestamp, classification: internal}
+    commitGuards:
+      targets:
+      - {input: link, field: subject, equalsFromInput: subject}
+      - {input: link, field: active, equals: true}
+      - {input: clause, field: recipient, equalsFromInput: recipient}
+      - {input: clause, field: purpose, equalsFromInput: purpose}
+      - {input: clause, field: scope, equalsFromInput: scope}
+    plan:
+      type: fixed
+      effects:
+      - id: decision
+        target: {recordType: person-consent-decision}
+        operation: create
+        set:
+          link: {fromInput: link}
+          subject: {fromInput: subject}
+          clause: {fromInput: clause}
+          recipient: {fromInput: recipient}
+          purpose: {fromInput: purpose}
+          scope: {fromInput: scope}
+          decision: {fromInput: decision}
+          channel: {fromInput: channel}
+          effective-at: {fromInput: effective-at}
+          expires-at: {fromInput: expires-at}
+  refuse-person-consent:
+    execution: {mode: immediate}
+    consentIssuer: self
+    inputs:
+    - {id: link, type: reference, target: person-consent-link, required: true, classification: internal}
+    - {id: subject, type: reference, target: person, required: true, classification: restricted}
+    - {id: clause, type: reference, target: person-notice-clause, required: true, classification: internal}
+    - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
+    - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
+    - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
+    - {id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [refused], required: true, classification: internal}
+    - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [self-service], required: true, classification: internal}
+    - {id: effective-at, type: timestamp, required: true, classification: internal}
+    commitGuards:
+      targets:
+      - {input: link, field: subject, equalsFromInput: subject}
+      - {input: link, field: active, equals: true}
+      - {input: clause, field: recipient, equalsFromInput: recipient}
+      - {input: clause, field: purpose, equalsFromInput: purpose}
+      - {input: clause, field: scope, equalsFromInput: scope}
+    plan:
+      type: fixed
+      effects:
+      - id: decision
+        target: {recordType: person-consent-decision}
+        operation: create
+        set:
+          link: {fromInput: link}
+          subject: {fromInput: subject}
+          clause: {fromInput: clause}
+          recipient: {fromInput: recipient}
+          purpose: {fromInput: purpose}
+          scope: {fromInput: scope}
+          decision: {fromInput: decision}
+          channel: {fromInput: channel}
+          effective-at: {fromInput: effective-at}
+  withdraw-person-consent:
+    execution: {mode: immediate}
+    consentIssuer: self
+    inputs:
+    - {id: link, type: reference, target: person-consent-link, required: true, classification: internal}
+    - {id: subject, type: reference, target: person, required: true, classification: restricted}
+    - {id: clause, type: reference, target: person-notice-clause, required: true, classification: internal}
+    - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
+    - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
+    - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
+    - {id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [withdrawn], required: true, classification: internal}
+    - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [self-service], required: true, classification: internal}
+    - {id: effective-at, type: timestamp, required: true, classification: internal}
+    commitGuards:
+      targets:
+      - {input: link, field: subject, equalsFromInput: subject}
+      - {input: link, field: active, equals: true}
+      - {input: clause, field: recipient, equalsFromInput: recipient}
+      - {input: clause, field: purpose, equalsFromInput: purpose}
+      - {input: clause, field: scope, equalsFromInput: scope}
+    plan:
+      type: fixed
+      effects:
+      - id: decision
+        target: {recordType: person-consent-decision}
+        operation: create
+        set:
+          link: {fromInput: link}
+          subject: {fromInput: subject}
+          clause: {fromInput: clause}
+          recipient: {fromInput: recipient}
+          purpose: {fromInput: purpose}
+          scope: {fromInput: scope}
+          decision: {fromInput: decision}
+          channel: {fromInput: channel}
+          effective-at: {fromInput: effective-at}
+  record-person-consent-assisted:
+    execution: {mode: immediate}
+    consentIssuer: steward
+    inputs:
+    - {id: subject, type: reference, target: person, required: true, classification: restricted}
+    - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
+    - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
+    - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
+    - {id: clause, type: reference, target: person-notice-clause, required: true, classification: internal}
+    - {id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [given, refused, withdrawn], required: true, classification: internal}
+    - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [assisted], required: true, classification: internal}
+    - {id: effective-at, type: timestamp, required: true, classification: internal}
+    - {id: expires-at, type: timestamp, classification: internal}
+    - {id: evidence, type: string, maximumLength: 2048, required: true, classification: restricted}
+    - {id: witness, type: string, maximumLength: 255, classification: restricted}
+    commitGuards:
+      targets:
+      - {input: clause, field: recipient, equalsFromInput: recipient}
+      - {input: clause, field: purpose, equalsFromInput: purpose}
+      - {input: clause, field: scope, equalsFromInput: scope}
+    plan:
+      type: fixed
+      effects:
+      - id: decision
+        target: {recordType: person-consent-decision}
+        operation: create
+        set:
+          subject: {fromInput: subject}
+          clause: {fromInput: clause}
+          recipient: {fromInput: recipient}
+          purpose: {fromInput: purpose}
+          scope: {fromInput: scope}
+          decision: {fromInput: decision}
+          channel: {fromInput: channel}
+          effective-at: {fromInput: effective-at}
+          expires-at: {fromInput: expires-at}
+          evidence: {fromInput: evidence}
+          witness: {fromInput: witness}
+  invalidate-person-consent:
+    execution: {mode: immediate}
+    consentIssuer: steward
+    inputs:
+    - {id: subject, type: reference, target: person, required: true, classification: restricted}
+    - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
+    - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
+    - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
+    - {id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [invalidated], required: true, classification: internal}
+    - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [steward-review], required: true, classification: internal}
+    - {id: effective-at, type: timestamp, required: true, classification: internal}
+    - {id: invalidation-reason, type: vocabulary-code, vocabulary: consent-invalidation-reason, required: true, classification: internal}
+    plan:
+      type: fixed
+      effects:
+      - id: decision
+        target: {recordType: person-consent-decision}
+        operation: create
+        set:
+          subject: {fromInput: subject}
+          recipient: {fromInput: recipient}
+          purpose: {fromInput: purpose}
+          scope: {fromInput: scope}
+          decision: {fromInput: decision}
+          channel: {fromInput: channel}
+          effective-at: {fromInput: effective-at}
+          invalidation-reason: {fromInput: invalidation-reason}
+  import-person-consent:
+    execution: {mode: immediate}
+    consentIssuer: steward
+    inputs:
+    - {id: subject, type: reference, target: person, required: true, classification: restricted}
+    - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
+    - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
+    - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
+    - {id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [given, refused, withdrawn, invalidated], required: true, classification: internal}
+    - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [import], required: true, classification: internal}
+    - {id: effective-at, type: timestamp, required: true, classification: internal}
+    - {id: expires-at, type: timestamp, classification: internal}
+    - {id: source-reference, type: string, maximumLength: 255, required: true, classification: internal}
+    - {id: evidence, type: string, maximumLength: 2048, classification: restricted}
+    plan:
+      type: fixed
+      effects:
+      - id: decision
+        target: {recordType: person-consent-decision}
+        operation: create
+        set:
+          subject: {fromInput: subject}
+          recipient: {fromInput: recipient}
+          purpose: {fromInput: purpose}
+          scope: {fromInput: scope}
+          decision: {fromInput: decision}
+          channel: {fromInput: channel}
+          effective-at: {fromInput: effective-at}
+          expires-at: {fromInput: expires-at}
+          source-reference: {fromInput: source-reference}
+          evidence: {fromInput: evidence}

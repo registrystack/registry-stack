@@ -639,11 +639,11 @@ pub(crate) fn project_diagnostics(
         ),
         (
             "breg.function.id-collision",
-            indexed_ids("/functions", &project.functions, |item| &item.id),
+            keyed_ids("/functions", &project.functions, |item| &item.id),
         ),
         (
             "breg.action.id-collision",
-            indexed_ids("/actions", &project.actions, |item| &item.id),
+            keyed_ids("/actions", &project.actions, |item| &item.id),
         ),
         (
             "breg.vocabulary.id-collision",
@@ -834,8 +834,13 @@ pub(crate) fn project_diagnostics(
         })
         .collect::<Vec<_>>();
     add_collisions(document, &mut errors, "breg.hook.id-collision", &hooks);
-    for (index, action) in project.actions.iter().enumerate() {
-        action_integrity(document, &mut errors, &format!("/actions/{index}"), action);
+    for action in &project.actions {
+        action_integrity(
+            document,
+            &mut errors,
+            &keyed_pointer("/actions", &action.id),
+            action,
+        );
     }
 
     let warning_groups = [
@@ -1096,9 +1101,10 @@ fn add_nested_display_warnings(
             &values,
         );
     }
-    for (action_index, action) in actions.iter().enumerate() {
+    for action in actions {
+        let action_pointer = keyed_pointer(action_base, &action.id);
         let values = display_labels(
-            &format!("{action_base}/{action_index}/inputs"),
+            &format!("{action_pointer}/inputs"),
             &action.inputs,
             |input| &input.id,
             |input| input.display.label.as_deref(),
@@ -1112,7 +1118,7 @@ fn add_nested_display_warnings(
         );
         if let ActionExecutionSource::Proposal { proposal } = &action.execution {
             let values = display_labels(
-                &format!("{action_base}/{action_index}/execution/proposal/hooks"),
+                &format!("{action_pointer}/execution/proposal/hooks"),
                 &proposal.hooks,
                 |hook| &hook.id,
                 |hook| hook.display.label.as_deref(),
@@ -1132,7 +1138,7 @@ fn add_nested_display_warnings(
                 .map(|(refusal_index, refusal)| {
                     (
                         refusal.label.clone(),
-                        format!("{action_base}/{action_index}/plan/refusals/{refusal_index}/label"),
+                        format!("{action_pointer}/plan/refusals/{refusal_index}/label"),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -1259,11 +1265,11 @@ pub(crate) fn module_diagnostics(
         ),
         (
             "breg.function.id-collision",
-            indexed_ids("/functions", &module.functions, |item| &item.id),
+            keyed_ids("/functions", &module.functions, |item| &item.id),
         ),
         (
             "breg.action.id-collision",
-            indexed_ids("/actions", &module.actions, |item| &item.id),
+            keyed_ids("/actions", &module.actions, |item| &item.id),
         ),
     ] {
         add_collisions(document, &mut errors, code, &values);
@@ -1303,8 +1309,13 @@ pub(crate) fn module_diagnostics(
         )
     }));
     add_collisions(document, &mut errors, "breg.hook.id-collision", &hooks);
-    for (index, action) in module.actions.iter().enumerate() {
-        action_integrity(document, &mut errors, &format!("/actions/{index}"), action);
+    for action in &module.actions {
+        action_integrity(
+            document,
+            &mut errors,
+            &keyed_pointer("/actions", &action.id),
+            action,
+        );
     }
 
     for (code, kind, values) in [

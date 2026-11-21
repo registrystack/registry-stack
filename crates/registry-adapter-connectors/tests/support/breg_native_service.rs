@@ -356,25 +356,22 @@ impl Breg {
                     ]
                 }},
             "datasets": [{"id": "synthetic-items"}],
-            "functions": [
-                {
-                    "id": "update-item-plan",
+            "functions": {
+                "update-item-plan": {
                     "runtime": "rhai",
                     "source": "scripts/update-item.rhai",
                     "entrypoint": "plan",
                     "abi": "registry.action-plan/v1"
                 },
-                {
-                    "id": "register-household-plan",
+                "register-household-plan": {
                     "runtime": "rhai",
                     "source": "scripts/register-household.rhai",
                     "entrypoint": "plan",
                     "abi": "registry.action-plan/v1"
                 }
-            ],
-            "actions": [
-                {
-                    "id": "update-item",
+            },
+            "actions": {
+                "update-item": {
                     "execution": {"mode": "immediate"},
                     "inputs": [
                         {"id": "target", "apiName": "targetId", "type": "reference", "target": "item", "required": true, "classification": "internal"},
@@ -387,8 +384,7 @@ impl Breg {
                         "writes": [{"id": "item", "target": {"fromInput": "target"}, "operation": "patch", "fields": ["label"]}]
                     }
                 },
-                {
-                    "id": "propose-item",
+                "propose-item": {
                     "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"}, "retention": {"mode": "operator-erase"}}},
                     "inputs": [
                         {"id": "target", "apiName": "targetId", "type": "reference", "target": "item", "required": true, "classification": "internal"},
@@ -397,8 +393,7 @@ impl Breg {
                     "commitGuards": {"targets": [{"input": "target", "revision": "unchanged"}]},
                     "plan": {"type": "fixed", "effects": [{"id": "item", "target": {"fromInput": "target"}, "operation": "patch", "set": {"label": {"fromInput": "label"}}}]}
                 },
-                {
-                    "id": "manual-item",
+                "manual-item": {
                     "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"}, "retention": {"mode": "operator-erase"}, "application": {"mode": "manual"}}},
                     "inputs": [
                         {"id": "target", "apiName": "targetId", "type": "reference", "target": "item", "required": true, "classification": "internal"},
@@ -407,8 +402,7 @@ impl Breg {
                     "commitGuards": {"targets": [{"input": "target", "revision": "unchanged"}]},
                     "plan": {"type": "fixed", "effects": [{"id": "item", "target": {"fromInput": "target"}, "operation": "patch", "set": {"label": {"fromInput": "label"}}}]}
                 },
-                {
-                    "id": "register-household",
+                "register-household": {
                     "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"}, "retention": {"mode": "operator-erase"}}},
                     "inputs": [
                         {"id": "source-submission-id", "apiName": "sourceSubmissionId", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 128, "classification": "internal"},
@@ -422,7 +416,7 @@ impl Breg {
                         "writes": [{"id": "household", "target": {"recordType": "household"}, "operation": "create", "fields": ["owner", "source-submission-id", "respondent-name", "household-size"]}]
                     }
                 }
-            ],
+            },
             "accessProfiles": {"writer": {
                 "default": true,
                 "principalClaim": "sub",

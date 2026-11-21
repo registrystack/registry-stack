@@ -348,12 +348,12 @@ fn registry_source(selection: Value) -> Value {
         "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable","mutationPolicy":{"patch":"proposal-required"},
             "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}},
-        "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{"review":{"type":"required","authority":AUTHORITY,"source":"proposal-test","policy":selection},
+        "actions":{"correct-name": {"execution":{"mode":"proposal","proposal":{"review":{"type":"required","authority":AUTHORITY,"source":"proposal-test","policy":selection},
             "application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}},
             "inputs":[{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
             "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
-            "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
+            "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}},
         "accessProfiles":{"clerk": {"default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],"requiredPurposes":["registry-administration"],"permissions":{
             "records":[{"recordType":"target","operations":["create","get","list"],"readableFields":["name","jurisdiction"],"writableFields":["name","jurisdiction"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],
             "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}],
@@ -466,7 +466,7 @@ async fn configured_source_namespace_settles_new_and_legacy_submissions() {
     for variant in ["current", "legacy", "corrupt"] {
         let authority = Authority::start(false, true).await;
         let mut source = registry_source(json!(policy()));
-        source["actions"][0]["execution"]["proposal"]["review"]["source"] =
+        source["actions"]["correct-name"]["execution"]["proposal"]["review"]["source"] =
             json!("shared.facility.registry:v1");
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
@@ -545,7 +545,7 @@ async fn configured_source_namespace_settles_new_and_legacy_submissions() {
 async fn uncertain_legacy_digest_recovers_remote_acceptance_without_rewriting_its_closure() {
     let authority = Authority::start(false, true).await;
     let mut source = registry_source(json!(policy()));
-    source["actions"][0]["execution"]["proposal"]["review"]["source"] =
+    source["actions"]["correct-name"]["execution"]["proposal"]["review"]["source"] =
         json!("shared.facility.registry:v1");
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
@@ -665,7 +665,7 @@ async fn operator_reset_preserves_a_possibly_delivered_legacy_digest() {
 
     let authority = Authority::start(false, true).await;
     let mut source = registry_source(json!(policy()));
-    source["actions"][0]["execution"]["proposal"]["review"]["source"] =
+    source["actions"]["correct-name"]["execution"]["proposal"]["review"]["source"] =
         json!("shared.facility.registry:v1");
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
@@ -804,7 +804,7 @@ async fn operator_reset_preserves_a_possibly_delivered_legacy_digest() {
 async fn accepted_legacy_digest_recovers_then_cancels_without_rewriting_its_closure() {
     let authority = Authority::start(false, true).await;
     let mut source = registry_source(json!(policy()));
-    source["actions"][0]["execution"]["proposal"]["review"]["source"] =
+    source["actions"]["correct-name"]["execution"]["proposal"]["review"]["source"] =
         json!("shared.facility.registry:v1");
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
@@ -982,7 +982,7 @@ async fn compatible_activation_preserves_application_refused_review_delivery() {
     assert_eq!(before["withdrawn"], false);
 
     let mut successor = source;
-    successor["actions"][0]["display"] = json!({"label":"Correct the name"});
+    successor["actions"]["correct-name"]["display"] = json!({"label":"Correct the name"});
     let (compatible_registry, compatible_identity) =
         proposal_activation::activate_successor(&fixture, &successor).await;
 
@@ -1012,7 +1012,7 @@ async fn compatible_activation_preserves_application_refused_review_delivery() {
     assert_eq!(row.get::<_, Value>(1), before);
 
     let mut incompatible = successor.clone();
-    incompatible["actions"][0]["inputs"]
+    incompatible["actions"]["correct-name"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({

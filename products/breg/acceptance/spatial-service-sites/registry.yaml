@@ -102,7 +102,7 @@
     },
     "distributions": []
   },
-  "modules": {"spatial-service-sites-core":{"digest":"sha256:e594049ed979db9a82e6a5cc1a84c6f6bde6de9f27f128f1d709ff1512eba304","version":"0.1.0"}},
+  "modules": {"spatial-service-sites-core":{"digest":"sha256:2cc7df3bd22e512e21fb2b59b24156f6a0e1d322e72a9fbee3ef6931e8a111f3","version":"0.1.0"}},
   "accessProfiles": {
     "service-site-admin": {
       "default": true,

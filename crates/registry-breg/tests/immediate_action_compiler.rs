@@ -45,7 +45,8 @@ fn permission_targets_without_discriminators_are_refused() {
 fn invoke_schema_requires_fixed_patch_targets_even_when_the_input_is_optional() {
     let mut source: serde_json::Value =
         serde_json::from_str(&household_contact_project("")).unwrap();
-    source["actions"][0]["inputs"][0]["required"] = serde_json::json!(false);
+    source["actions"]["register-household-contact"]["inputs"][0]["required"] =
+        serde_json::json!(false);
     // This input also supplies a membership link. Keep that link nullable so
     // the fixture reaches patch-target admission rather than value typing.
     source["recordTypes"]["group-membership"]["fields"][1]["required"] = serde_json::json!(false);
@@ -86,7 +87,7 @@ fn handler_response_schema_accepts_omitted_slots_across_overlapping_grant_result
     use serde_json::{json, Value};
 
     let mut source: Value = serde_json::from_str(&household_contact_project("")).unwrap();
-    let effects = source["actions"][0]["plan"]["effects"].take();
+    let effects = source["actions"]["register-household-contact"]["plan"]["effects"].take();
     let writes = effects
         .as_array()
         .unwrap()
@@ -98,8 +99,8 @@ fn handler_response_schema_accepts_omitted_slots_across_overlapping_grant_result
             })
         })
         .collect::<Vec<_>>();
-    source["functions"] = json!([{"id":"contact-plan","runtime":"rhai","source":"scripts/handler.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}]);
-    source["actions"][0]["plan"] = json!({"type":"function","function":"contact-plan","inputs":["household","person-code","legal-name"],"writes":writes});
+    source["functions"] = json!({"contact-plan": {"runtime":"rhai","source":"scripts/handler.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}});
+    source["actions"]["register-household-contact"]["plan"] = json!({"type":"function","function":"contact-plan","inputs":["household","person-code","legal-name"],"writes":writes});
 
     let mut limited = source["accessProfiles"]["contact-registrar"].clone();
     limited["default"] = json!(false);
@@ -147,7 +148,7 @@ fn the_retired_v2_abi_is_refused_and_wasm_needs_a_wasm_capable_build() {
     use serde_json::{json, Value};
 
     let mut source: Value = serde_json::from_str(&household_contact_project("")).unwrap();
-    let effects = source["actions"][0]["plan"]["effects"].take();
+    let effects = source["actions"]["register-household-contact"]["plan"]["effects"].take();
     let writes = effects
         .as_array()
         .unwrap()
@@ -178,8 +179,9 @@ fn the_retired_v2_abi_is_refused_and_wasm_needs_a_wasm_capable_build() {
                 bytes: br#"fn handle(ctx) { #{effects:[]} }"#.to_vec(),
             }]
         };
-        source["functions"] = json!([{"id":"contact-plan","runtime":kind,"source":path,"entrypoint":"handle","abi":abi}]);
-        source["actions"][0]["plan"] = json!({"type":"function","function":"contact-plan","inputs":["household","person-code","legal-name"],"writes":writes});
+        source["functions"] =
+            json!({"contact-plan": {"runtime":kind,"source":path,"entrypoint":"handle","abi":abi}});
+        source["actions"]["register-household-contact"]["plan"] = json!({"type":"function","function":"contact-plan","inputs":["household","person-code","legal-name"],"writes":writes});
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring)
     };
@@ -257,8 +259,7 @@ fn household_contact_project(extra: &str) -> String {
               {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}
             ]
           }},
-          "actions":[{"execution":{"mode":"immediate"},
-            "id":"register-household-contact",
+          "actions":{"register-household-contact": {"execution":{"mode":"immediate"},
             "inputs":[
               {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
               {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
@@ -272,7 +273,7 @@ fn household_contact_project(extra: &str) -> String {
               {"id":"household","target":{"fromInput":"household"},"operation":"patch",
                 "set":{"contact-person":{"fromEffect":"person"}}}
             ]}
-          }],
+          }},
           "accessProfiles":{"contact-registrar": {
             "default":true,
             "principalClaim":"registry_principal",
@@ -482,7 +483,7 @@ fn household_contact_action_compiles_routes_effects_and_authority() {
 fn create_effects_still_require_an_explicit_identifier() {
     let mut source: serde_json::Value =
         serde_json::from_str(&household_contact_project("")).unwrap();
-    source["actions"][0]["plan"]["effects"][0]
+    source["actions"]["register-household-contact"]["plan"]["effects"][0]
         .as_object_mut()
         .unwrap()
         .remove("id");
@@ -540,8 +541,7 @@ fn create_effects_may_rely_entirely_on_server_generated_fields() {
                     "generate": {"type": "sequence", "minimumDigits": 1}
                 }]
             }},
-            "actions": [{
-                "id": "register",
+            "actions": {"register": {
                 "inputs": [{
                     "id": "confirmed",
                     "type": "boolean",
@@ -555,7 +555,7 @@ fn create_effects_may_rely_entirely_on_server_generated_fields() {
                     "operation": "create",
                     "set": {}
                 }]}
-            }],
+            }},
             "accessProfiles": {"operator": {
                 "default": true,
                 "principalClaim": "principal",
@@ -707,8 +707,7 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
           {"id":"alpha","type":"reference","target":"alpha","classification":"internal"}
         ]
       }},
-      "actions":[{"execution":{"mode":"immediate"},
-        "id":"make-cycle",
+      "actions":{"make-cycle": {"execution":{"mode":"immediate"},
         "inputs":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
         "plan":{"type":"fixed","effects":[{
           "id":"alpha",
@@ -721,7 +720,7 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
           "operation":"create",
           "set":{"label":{"fromInput":"label"},"alpha":{"fromEffect":"alpha"}}
         }]}
-      }],
+      }},
       "accessProfiles":{"operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{
         "action":"make-cycle",
         "operations":["invoke"],
@@ -746,11 +745,10 @@ fn action_inputs_resolve_project_vocabulary_values_for_type_compatibility() {
           "recordTypes":{"asset": {"primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
             "fields":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}]
           }},
-          "actions":[{"execution":{"mode":"immediate"},
-            "id":"create-asset",
+          "actions":{"create-asset": {"execution":{"mode":"immediate"},
             "inputs":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}],
             "plan":{"type":"fixed","effects":[{"id":"asset","target":{"recordType":"asset"},"operation":"create","set":{"kind":{"fromInput":"kind"}}}]}
-          }],
+          }},
           "accessProfiles":{"operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{
             "action":"create-asset",
             "operations":["invoke"],
@@ -778,11 +776,10 @@ fn action_inputs_reject_unknown_project_vocabulary_references() {
           "recordTypes":{"asset": {"primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
             "fields":[{"id":"kind","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           }},
-          "actions":[{"execution":{"mode":"immediate"},
-            "id":"create-asset",
+          "actions":{"create-asset": {"execution":{"mode":"immediate"},
             "inputs":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}],
             "plan":{"type":"fixed","effects":[{"id":"asset","target":{"recordType":"asset"},"operation":"create","set":{"kind":{"fromInput":"kind"}}}]}
-          }],
+          }},
           "accessProfiles":{"operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{
             "action":"create-asset",
             "operations":["invoke"],
@@ -823,7 +820,7 @@ fn action_bounds_apply_before_runtime_target_work() {
           "project":{{"id":"action-bounds","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "recordTypes":{{"record":{{"primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
             "fields":[{{"id":"label","type":"string","maximumLength":32,"classification":"internal"}}]}}}},
-          "actions":[{{"execution":{{"mode":"immediate"}},"id":"bulk-fix","inputs":[{}],"plan":{{"type":"fixed","effects":[{}]}}}}],
+          "actions":{{"bulk-fix":{{"execution":{{"mode":"immediate"}},"inputs":[{}],"plan":{{"type":"fixed","effects":[{}]}}}}}},
           "accessProfiles":{{"operator":{{"default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
             "permissions":{{"actions":[{{"action":"bulk-fix","operations":["invoke"],"targets":[{}]}}]}}}}}}
         }}"#,
@@ -879,13 +876,12 @@ fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
             "recordTypes": {"bounded-record": { "primaryDataset": "test-dataset", "route": "bounded-records", "mutationMode": "mutable",
                 "fields": fields
             }},
-            "actions": [{"execution":{"mode":"immediate"},
-                "id": "create-bounded-record", "inputs": [input],
+            "actions": {"create-bounded-record": {"execution":{"mode":"immediate"}, "inputs": [input],
                 "plan": {"type":"fixed","effects":[{
                     "id": "created-record", "target": {"recordType": "bounded-record"},
                     "operation": "create", "set": Value::Object(assignments)
                 }]}
-            }],
+            }},
             "accessProfiles": {"operator": { "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
                 "permissions": {"actions": [{
                     "action": "create-bounded-record", "operations": ["invoke"],
@@ -953,7 +949,7 @@ fn generated_create_fields_count_toward_the_proposal_snapshot_ceiling() {
             "mutationMode": "mutable",
             "fields": fields
         }},
-        "actions": [{
+        "actions": {"create-bounded-record": {
             "execution": {
                 "mode": "proposal",
                 "proposal": {
@@ -962,7 +958,6 @@ fn generated_create_fields_count_toward_the_proposal_snapshot_ceiling() {
                     "retention": {"mode": "retain"}
                 }
             },
-            "id": "create-bounded-record",
             "inputs": [{
                 "id": "description",
                 "type": "string",
@@ -982,7 +977,7 @@ fn generated_create_fields_count_toward_the_proposal_snapshot_ceiling() {
                     )]))
                 }]
             }
-        }],
+        }},
         "accessProfiles": {"operator": {
             "default": true,
             "principalClaim": "principal",

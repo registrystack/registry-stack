@@ -109,9 +109,8 @@ pub fn phone_project() -> Value {
               {"id":"phone","apiName":"phone","type":"string","maximumLength":32,"required":true,"classification":"restricted"}
             ]
           }],
-          "functions":[{"id":"phone-plan","runtime":"wasm","source":"wasm/handler.wasm","entrypoint":"handle","abi":"registry.action-plan/v1"}],
-          "actions":[{
-            "id":"normalize-phone","execution":{"mode":"immediate"},
+          "functions":{"phone-plan": {"runtime":"wasm","source":"wasm/handler.wasm","entrypoint":"handle","abi":"registry.action-plan/v1"}},
+          "actions":{"normalize-phone": {"execution":{"mode":"immediate"},
             "inputs":[
               {"id":"raw-phone","apiName":"rawPhone","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"default-region","apiName":"defaultRegion","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
@@ -127,7 +126,7 @@ pub fn phone_project() -> Value {
                 "fields":["phone"]
               }]
             }
-          }],
+          }},
           "accessProfiles":{"registrar": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"actions":[{
               "action":"normalize-phone","operations":["invoke"],

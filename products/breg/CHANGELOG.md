@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- BREAKING: `actions` and `functions` are mappings from each id to the rest of
+  its entry, in the project and in a module. The old list shape is refused, and
+  so is an `id` member inside an entry, with a message that names the mapping.
+  A repeated key is refused at the repeating key. Migration:
+  `actions: {correct-name: {execution: ...}}` in place of
+  `actions: [{id: correct-name, execution: ...}]`, and the same for
+  `functions`. Source pointers that `bregctl check` and `bregctl explain`
+  report name the id in place of its position. Compiled output keeps its array
+  shape. A module's actions are now held sorted by id, so a command that listed
+  them in the order the module wrote them lists them in id order. The lock
+  digest of every module that declares an action or a function changes. After
+  converting, run `bregctl project lock` for each such module.
 - BREAKING: `accessProfiles` is a mapping from each profile id to the rest of
   its entry, as a pre-1.0 cleanup so a profile has one name and a duplicate
   cannot be written. The change covers the project's `accessProfiles` and the

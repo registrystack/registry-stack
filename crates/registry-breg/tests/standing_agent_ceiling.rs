@@ -37,16 +37,16 @@ fn project() -> Value {
             "memo": {"route":"memos","primaryDataset":"test-dataset","mutationMode":"mutable","classification":"internal",
                 "batch":{"maximumItems":3,"maximumBytes":8192},"fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]}
         },
-        "actions":[
-            {"id":"relabel-note","execution":{"mode":"immediate"},"inputs":[
+        "actions":{
+            "relabel-note": {"execution":{"mode":"immediate"},"inputs":[
                 {"id":"note-ref","apiName":"noteId","type":"reference","target":"note","required":true,"classification":"internal"},
                 {"id":"new-label","apiName":"newLabel","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
                 "plan":{"type":"fixed","effects":[{"id":"relabelled","target":{"fromInput":"note-ref"},"operation":"patch","set":{"label":{"fromInput":"new-label"}}}]}},
-            {"id":"correct-case","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"},"reviewContext":{"id":"case-review","fields":{"currentLabel":{"type":"record","input":"case-ref","field":"label"},"proposedLabel":{"type":"input","input":"new-label"}}}}},"inputs":[
+            "correct-case": {"execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"},"reviewContext":{"id":"case-review","fields":{"currentLabel":{"type":"record","input":"case-ref","field":"label"},"proposedLabel":{"type":"input","input":"new-label"}}}}},"inputs":[
                 {"id":"case-ref","type":"reference","target":"case","required":true,"classification":"internal"},
                 {"id":"new-label","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
                 "plan":{"type":"fixed","effects":[{"id":"corrected","target":{"fromInput":"case-ref"},"operation":"patch","set":{"label":{"fromInput":"new-label"}}}]}}
-        ],
+        },
         "accessProfiles":{
             "clerk": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","actorKind":"human","requesterClients":["clerk-portal"],
                 "permissions":{"records":[
@@ -218,9 +218,10 @@ fn imported_proposal_action_uses_the_global_requester_client_binding() {
         .expect("standing agent profile")
         .remove("requesterClients");
     let action = value["actions"]
-        .as_array_mut()
-        .expect("actions array")
-        .remove(1);
+        .as_object_mut()
+        .expect("actions mapping")
+        .remove("correct-case")
+        .expect("action");
     value["modules"] = json!({"proposal-actions": {"version": "1"}});
     let project = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
         .expect("project parses");
@@ -230,7 +231,7 @@ fn imported_proposal_action_uses_the_global_requester_client_binding() {
             "kind":"BRegModule",
             "id":"proposal-actions",
             "version":"1",
-            "actions":[action]
+            "actions":{"correct-case": action}
         }))
         .expect("module serializes"),
     )

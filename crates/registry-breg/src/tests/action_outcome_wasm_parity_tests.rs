@@ -47,8 +47,8 @@ fn person_action(script: &str) -> CompiledAction {
             {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
         ]}},
-        "functions":[{"id":"person-plan","runtime":"rhai","source":"handlers/register.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":[]}],
-        "actions":[{"id":"register-person","execution":{"mode":"immediate"},"inputs":[
+        "functions":{"person-plan": {"runtime":"rhai","source":"handlers/register.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":[]}},
+        "actions":{"register-person": {"execution":{"mode":"immediate"},"inputs":[
             {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"family-name","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
@@ -56,7 +56,7 @@ fn person_action(script: &str) -> CompiledAction {
             {"id":"person","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"friend","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"existing","target":{"fromInput":"person"},"operation":"patch","fields":["name","friend"]}
-        ]}}],
+        ]}}},
         "accessProfiles":{"registrar": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}}
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
@@ -93,14 +93,14 @@ fn record_action(script: &str) -> CompiledAction {
             {"id":"count","type":"int64","classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"classification":"restricted"}
         ]}},
-        "functions":[{"id":"record-plan","runtime":"rhai","source":"handlers/register.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":[]}],
-        "actions":[{"id":"register-record","execution":{"mode":"immediate"},"inputs":[
+        "functions":{"record-plan": {"runtime":"rhai","source":"handlers/register.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":[]}},
+        "actions":{"register-record": {"execution":{"mode":"immediate"},"inputs":[
             {"id":"label","apiName":"displayLabel","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","required":true,"classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"required":true,"classification":"restricted"}
         ],"plan":{"type":"function","function":"record-plan","inputs":["label","count","amount"],"refusals":[{"code":"blank-label","label":"A label is required."}],
             "writes":[{"id":"record","target":{"recordType":"record"},"operation":"create","fields":["label","count","amount"]}]
-        }}],
+        }}},
         "accessProfiles":{"writer": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
             "actions":[
                 {"action":"register-record","operations":["invoke"],"targets":[{"recordType":"record","rowBoundaries":"unrestricted"}],"results":["record"]}

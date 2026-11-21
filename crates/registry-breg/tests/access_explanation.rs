@@ -30,8 +30,7 @@ fn compile(source: &Value) -> registry_breg::CompiledRegistry {
 
 fn repeated_action_target_source() -> Value {
     let mut candidate = source();
-    candidate["actions"] = json!([{"execution":{"mode":"immediate"},
-        "id":"create-paired-entries",
+    candidate["actions"] = json!({"create-paired-entries": {"execution":{"mode":"immediate"},
         "inputs":[
             {"id":"first-district", "type":"string", "maximumLength":32, "required":true, "classification":"internal"},
             {"id":"second-district", "type":"string", "maximumLength":32, "required":true, "classification":"internal"}
@@ -40,7 +39,7 @@ fn repeated_action_target_source() -> Value {
             {"id":"first", "target":{"recordType":"entry"}, "operation":"create", "set":{"district":{"fromInput":"first-district"}}},
             {"id":"second", "target":{"recordType":"entry"}, "operation":"create", "set":{"district":{"fromInput":"second-district"}}}
         ]}
-    }]);
+    }});
     candidate["accessProfiles"] = json!({"clerk": {
         "default":true, "principalClaim":"registry_principal",
         "requiredScopes":["entry:edit"],
@@ -62,8 +61,7 @@ fn mixed_action_target_source() -> Value {
             "id":"related", "type":"reference", "target":"entry",
             "classification":"internal"
         }));
-    candidate["actions"] = json!([{"execution":{"mode":"immediate"},
-        "id":"create-and-patch-entry",
+    candidate["actions"] = json!({"create-and-patch-entry": {"execution":{"mode":"immediate"},
         "inputs":[
             {"id":"existing", "type":"reference", "target":"entry", "required":true, "classification":"internal"},
             {"id":"linked", "type":"reference", "target":"entry", "required":true, "classification":"internal"},
@@ -78,7 +76,7 @@ fn mixed_action_target_source() -> Value {
                 "district":{"fromInput":"patch-district"}
             }}
         ]}
-    }]);
+    }});
     candidate["accessProfiles"] = json!({"clerk": {
         "default":true, "principalClaim":"registry_principal",
         "requiredScopes":["entry:edit"],
@@ -93,17 +91,15 @@ fn mixed_action_target_source() -> Value {
 
 fn function_action_target_source() -> Value {
     let mut candidate = source();
-    candidate["functions"] = json!([{
-        "id":"create-entry-plan", "runtime":"rhai", "source":"plans/create-entry.rhai",
+    candidate["functions"] = json!({"create-entry-plan": {"runtime":"rhai", "source":"plans/create-entry.rhai",
         "entrypoint":"plan", "abi":"registry.action-plan/v1"
-    }]);
-    candidate["actions"] = json!([{"execution":{"mode":"immediate"},
-        "id":"create-entry",
+    }});
+    candidate["actions"] = json!({"create-entry": {"execution":{"mode":"immediate"},
         "inputs":[{"id":"district", "type":"string", "maximumLength":32, "required":true, "classification":"internal"}],
         "plan":{"type":"function", "function":"create-entry-plan", "inputs":["district"], "writes":[{
             "id":"entry", "target":{"recordType":"entry"}, "operation":"create", "fields":["district"]
         }]}
-    }]);
+    }});
     candidate["accessProfiles"] = json!({"clerk": {
         "default":true, "principalClaim":"registry_principal",
         "requiredScopes":["entry:edit"],
@@ -181,33 +177,26 @@ fn timer_source() -> Value {
         }
     }]);
     candidate["timerGrants"] = json!([{"recordType":"entry", "timer":"activate"}]);
-    candidate["actions"] = json!([
-        {
-            "id":"activate-entry",
-            "execution":{"mode":"immediate"},
-            "inputs":[
-                {"id":"entry", "type":"reference", "target":"entry", "required":true, "classification":"internal"},
-                {"id":"note", "type":"string", "maximumLength":64, "required":true, "classification":"internal"}
-            ],
-            "plan":{"type":"fixed", "effects":[{
-                "id":"activated", "target":{"fromInput":"entry"}, "operation":"patch",
-                "set":{"active":{"value":true}}
-            }]}
-        },
-        {
-            "id":"schedule-entry",
-            "execution":{"mode":"immediate"},
-            "inputs":[
-                {"id":"entry", "type":"reference", "target":"entry", "required":true, "classification":"internal"},
-                {"id":"at", "type":"timestamp", "required":true, "classification":"internal"},
-                {"id":"note", "type":"string", "maximumLength":64, "required":true, "classification":"internal"}
-            ],
-            "plan":{"type":"fixed", "effects":[{
-                "id":"scheduled", "target":{"fromInput":"entry"}, "operation":"patch",
-                "set":{"activates-at":{"fromInput":"at"}, "note":{"fromInput":"note"}}
-            }]}
-        }
-    ]);
+    candidate["actions"] = json!({"activate-entry": {"execution":{"mode":"immediate"},
+        "inputs":[
+            {"id":"entry", "type":"reference", "target":"entry", "required":true, "classification":"internal"},
+            {"id":"note", "type":"string", "maximumLength":64, "required":true, "classification":"internal"}
+        ],
+        "plan":{"type":"fixed", "effects":[{
+            "id":"activated", "target":{"fromInput":"entry"}, "operation":"patch",
+            "set":{"active":{"value":true}}
+        }]}
+    }, "schedule-entry": {"execution":{"mode":"immediate"},
+        "inputs":[
+            {"id":"entry", "type":"reference", "target":"entry", "required":true, "classification":"internal"},
+            {"id":"at", "type":"timestamp", "required":true, "classification":"internal"},
+            {"id":"note", "type":"string", "maximumLength":64, "required":true, "classification":"internal"}
+        ],
+        "plan":{"type":"fixed", "effects":[{
+            "id":"scheduled", "target":{"fromInput":"entry"}, "operation":"patch",
+            "set":{"activates-at":{"fromInput":"at"}, "note":{"fromInput":"note"}}
+        }]}
+    }});
     let record_permission = &mut candidate["accessProfiles"]["clerk"]["permissions"]["records"][0];
     record_permission["writableFields"] = json!(["district", "active", "activates-at", "note"]);
     candidate["accessProfiles"]["clerk"]["permissions"]["actions"] = json!([{

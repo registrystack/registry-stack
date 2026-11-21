@@ -8,7 +8,7 @@ async fn changed_approved_result_id_has_a_specific_412_and_never_applies() {
         json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
-    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
+    source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"]
         .as_array_mut()
         .unwrap()

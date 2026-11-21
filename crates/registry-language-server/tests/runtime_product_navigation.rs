@@ -152,7 +152,7 @@ recordTypes:
   other:
     fields: [{id: secret, type: string}]
 actions:
-  - id: rename
+  rename:
     inputs: [{id: <|input-definition|>person, type: reference, target: person}]
     execution:
       mode: proposal
@@ -373,8 +373,8 @@ async fn disappearing_module_keeps_unsaved_buffer_until_file_returns() {
 fn module_assets_named_constraints_and_action_results_keep_their_own_scope() {
     let project=Project::new(&[
         file("registry.yaml","apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: example}\nmodules: {core: {}, extra: {}}\naccessProfiles: {staff: {permissions: {actions: [{action: register, results: [<|result|>created-record]}]}}}\n"),
-        file("modules/core/module.yaml","apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: core\nrecordTypes:\n  person:\n    fields: [{id: <|field|>name, type: string}]\n    constraints: [{type: unique, id: named-rule, fields: [<|constraint|>name]}]\nactions:\n  - id: register\n    inputs: []\n    execution: {mode: immediate}\n    plan: {type: fixed, effects: [{id: <|effect|>created-record}]}\nfunctions: [{id: core-plan, source: <|script|>scripts/action.rhai}]\n"),
-        file("modules/extra/module.yaml","apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: extra\nfunctions: [{id: extra-plan, source: scripts/action.rhai}]\n"),
+        file("modules/core/module.yaml","apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: core\nrecordTypes:\n  person:\n    fields: [{id: <|field|>name, type: string}]\n    constraints: [{type: unique, id: named-rule, fields: [<|constraint|>name]}]\nactions:\n  register:\n    inputs: []\n    execution: {mode: immediate}\n    plan: {type: fixed, effects: [{id: <|effect|>created-record}]}\nfunctions: {core-plan: {source: <|script|>scripts/action.rhai}}\n"),
+        file("modules/extra/module.yaml","apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: extra\nfunctions: {extra-plan: {source: scripts/action.rhai}}\n"),
         file("modules/core/scripts/action.rhai","// core\n"),
         file("modules/extra/scripts/action.rhai","// extra\n"),
     ]);

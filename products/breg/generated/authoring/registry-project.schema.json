@@ -768,56 +768,6 @@
       ],
       "type": "object"
     },
-    "ActionSource": {
-      "additionalProperties": false,
-      "properties": {
-        "apiName": {
-          "type": "string"
-        },
-        "commitGuards": {
-          "$ref": "#/$defs/CommitGuardsSource",
-          "default": {
-            "evidence": [],
-            "targets": []
-          }
-        },
-        "consentIssuer": {
-          "$ref": "#/$defs/ConsentIssuerSource"
-        },
-        "display": {
-          "$ref": "#/$defs/ModelDisplaySource",
-          "default": {}
-        },
-        "evidence": {
-          "items": {
-            "$ref": "#/$defs/ActionEvidenceSource"
-          },
-          "type": "array"
-        },
-        "execution": {
-          "$ref": "#/$defs/ActionExecutionSource"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "inputs": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ActionInputSource"
-          },
-          "type": "array"
-        },
-        "plan": {
-          "$ref": "#/$defs/ActionPlanSource"
-        }
-      },
-      "required": [
-        "id",
-        "execution",
-        "plan"
-      ],
-      "type": "object"
-    },
     "ActionTargetPermissionSource": {
       "additionalProperties": false,
       "properties": {
@@ -2981,50 +2931,6 @@
           "type": "integer"
         }
       },
-      "type": "object"
-    },
-    "FunctionSource": {
-      "additionalProperties": false,
-      "properties": {
-        "abi": {
-          "const": "registry.action-plan/v1",
-          "type": "string"
-        },
-        "capabilities": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/FunctionCapabilitySource"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "entrypoint": {
-          "type": "string"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "limits": {
-          "$ref": "#/$defs/FunctionLimitsSource",
-          "default": {
-            "maximumOperations": 10000,
-            "maximumOutputBytes": 8192
-          }
-        },
-        "runtime": {
-          "$ref": "#/$defs/ActionHandlerKindSource"
-        },
-        "source": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "runtime",
-        "source",
-        "entrypoint",
-        "abi"
-      ],
       "type": "object"
     },
     "GeoJsonSource": {
@@ -6067,10 +5973,57 @@
       "type": "object"
     },
     "actions": {
-      "items": {
-        "$ref": "#/$defs/ActionSource"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "apiName": {
+            "type": "string"
+          },
+          "commitGuards": {
+            "$ref": "#/$defs/CommitGuardsSource",
+            "default": {
+              "evidence": [],
+              "targets": []
+            }
+          },
+          "consentIssuer": {
+            "$ref": "#/$defs/ConsentIssuerSource"
+          },
+          "display": {
+            "$ref": "#/$defs/ModelDisplaySource",
+            "default": {}
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/$defs/ActionEvidenceSource"
+            },
+            "type": "array"
+          },
+          "execution": {
+            "$ref": "#/$defs/ActionExecutionSource"
+          },
+          "inputs": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ActionInputSource"
+            },
+            "type": "array"
+          },
+          "plan": {
+            "$ref": "#/$defs/ActionPlanSource"
+          }
+        },
+        "required": [
+          "execution",
+          "plan"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "description": "Written as a mapping from each Action id to the rest of the Action\n(CFG-ID-5) and held sorted by id.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "apiVersion": {
       "const": "id.registrystack.org/formats/breg/project/v1alpha1",
@@ -6108,11 +6061,52 @@
       "type": "array"
     },
     "functions": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/FunctionSource"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "abi": {
+            "const": "registry.action-plan/v1",
+            "type": "string"
+          },
+          "capabilities": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/FunctionCapabilitySource"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "entrypoint": {
+            "type": "string"
+          },
+          "limits": {
+            "$ref": "#/$defs/FunctionLimitsSource",
+            "default": {
+              "maximumOperations": 10000,
+              "maximumOutputBytes": 8192
+            }
+          },
+          "runtime": {
+            "$ref": "#/$defs/ActionHandlerKindSource"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runtime",
+          "source",
+          "entrypoint",
+          "abi"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "default": {},
+      "description": "Written as a mapping from each function id to the rest of the function\n(CFG-ID-5) and held sorted by id.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "kind": {
       "const": "BRegProject",

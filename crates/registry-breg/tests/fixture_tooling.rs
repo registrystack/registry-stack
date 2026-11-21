@@ -843,8 +843,7 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
               {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}
             ]
           }},
-          "actions":[{"execution":{"mode":"immediate"},
-            "id":"register-household-contact",
+          "actions":{"register-household-contact": {"execution":{"mode":"immediate"},
             "inputs":[
               {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"restricted"},
@@ -859,7 +858,7 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
               {"id":"household","target":{"fromInput":"household"},"operation":"patch",
                 "set":{"contact-person":{"fromEffect":"person"}}}
             ]}
-          }],
+          }},
           "accessProfiles":{"household-seed": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"household","operations":["create","get"],"readableFields":["jurisdiction","household-code","contact-person"],

@@ -12,7 +12,7 @@ recordTypes:
       - {id: label, type: string, maximumLength: 40, required: true, classification: restricted}
       - {id: region, type: string, maximumLength: 20, required: true, classification: internal}
 actions:
-  - id: rename-case
+  rename-case:
     execution: {mode: immediate}
     inputs:
       - {id: case-ref, apiName: caseId, type: reference, target: case, required: true, classification: restricted}

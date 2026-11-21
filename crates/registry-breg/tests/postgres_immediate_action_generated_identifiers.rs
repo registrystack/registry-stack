@@ -120,8 +120,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                "generate":{"type":"sequence","prefix":"APP-","minimumDigits":4,"scope":["jurisdiction"]}}
             ]
           }},
-          "actions":[{
-            "id":"register-application",
+          "actions":{"register-application": {
             "inputs":[
               {"id":"jurisdiction","type":"string","minimumLength":1,"maximumLength":40,"required":true,"classification":"internal"},
               {"id":"applicant","type":"string","minimumLength":1,"maximumLength":120,"required":true,"classification":"internal"}
@@ -131,7 +130,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "id":"application","target":{"recordType":"application"},"operation":"create",
               "set":{"jurisdiction":{"fromInput":"jurisdiction"},"applicant":{"fromInput":"applicant"}}
             }]}
-          }],
+          }},
           "accessProfiles":{"application-registrar": {"default":true,"principalClaim":"registry_principal",
             "requiredScopes":["registry:applications:write"],
             "permissions":{"actions":[{

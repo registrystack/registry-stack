@@ -57,12 +57,7 @@ fn record_mut<'a>(source: &'a mut Value, id: &str) -> &'a mut Value {
 }
 
 fn action_mut<'a>(source: &'a mut Value, id: &str) -> &'a mut Value {
-    source["actions"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|value| value["id"] == id)
-        .unwrap()
+    &mut source["actions"][id]
 }
 
 fn validates(subject: &str, mut value: Value) {
@@ -208,7 +203,8 @@ fn model_retains_authored_display_without_inventing_input_labels() {
     );
     record_mut(&mut source, "facility")["fields"][1]["display"] =
         json!({"label":"Facility name", "description":"Name recorded by the registry."});
-    source["actions"][0]["inputs"][1]["display"] = json!({"label":"Operating organisation"});
+    source["actions"]["register-facility"]["inputs"][1]["display"] =
+        json!({"label":"Operating organisation"});
     let registry = compile(&source);
     let model = inspect_registry(&registry);
     assert_eq!(model["datasets"], source["datasets"]);
@@ -228,9 +224,9 @@ fn model_retains_authored_display_without_inventing_input_labels() {
         definition(&record["fields"], field_id)["display"],
         source["recordTypes"]["facility"]["fields"][1]["display"]
     );
-    let action = &source["actions"][0];
+    let action = &source["actions"]["register-facility"];
     // Action inventory order is an implementation detail; locate the Action by id.
-    let inputs = &definition(&model["actions"], action["id"].as_str().unwrap())["inputs"];
+    let inputs = &definition(&model["actions"], "register-facility")["inputs"];
     let fallback = definition(inputs, action["inputs"][0]["id"].as_str().unwrap());
     assert_eq!(fallback["label"], fallback["apiName"]);
     assert!(fallback.get("display").is_none());
@@ -279,19 +275,20 @@ fn profile_dataset_and_hook_displays_refuse_record_title_selection() {
         "handler":{"type":"url", "destinationId":"record-events"}
     }]);
     let proposal = source["actions"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .iter_mut()
+        .values_mut()
         .find(|action| action["execution"]["mode"] == "proposal")
         .unwrap();
     proposal["execution"]["proposal"]["hooks"] = json!([{
         "id":"proposal-observer", "handler":{"type":"url", "destinationId":"proposal-events"}
     }]);
     let proposal_index = source["actions"]
-        .as_array()
+        .as_object()
         .unwrap()
         .iter()
-        .position(|action| action["execution"]["mode"] == "proposal")
+        .find(|(_, action)| action["execution"]["mode"] == "proposal")
+        .map(|(id, _)| id.clone())
         .unwrap();
     for pointer in [
         "/accessProfiles/directory-editor".to_owned(),
@@ -326,7 +323,7 @@ fn function_ceilings_fixed_clears_and_literal_null_remain_distinct() {
         .find(|value| value["id"] == "city")
         .unwrap();
     city["required"] = json!(false);
-    let effect = source["actions"][2]["plan"]["effects"][0]
+    let effect = source["actions"]["deactivate-facility"]["plan"]["effects"][0]
         .as_object_mut()
         .unwrap();
     effect.remove("set");
@@ -413,7 +410,7 @@ fn function_ceilings_fixed_clears_and_literal_null_remain_distinct() {
 fn function_capability_vocabulary_keeps_action_explanations_schema_valid() {
     let mut source = source();
     let canary = "private-capability-canary";
-    source["functions"][0]["capabilities"] = json!([canary]);
+    source["functions"]["correct-address-plan"]["capabilities"] = json!([canary]);
     action_mut(&mut source, "correct-address")["plan"]["capabilities"] = json!([canary]);
     let bytes = serde_json::to_vec(&source).unwrap();
     match read_project_yaml("registry.json", &bytes) {
@@ -421,7 +418,7 @@ fn function_capability_vocabulary_keeps_action_explanations_schema_valid() {
             let diagnostic = report
                 .diagnostics()
                 .iter()
-                .find(|diagnostic| diagnostic.path == "/actions/1/plan/capabilities")
+                .find(|diagnostic| diagnostic.path == "/actions/correct-address/plan/capabilities")
                 .unwrap_or_else(|| panic!("expected the removed plan capability: {report:?}"));
             assert_eq!(diagnostic.code, "config.removed-key");
             assert!(!report.render_human().contains(canary));
@@ -454,7 +451,7 @@ fn function_inspection_retains_relative_asset_and_module_identity() {
         .unwrap(),
     )
     .unwrap();
-    source["functions"] = json!([]);
+    source["functions"] = json!({});
     let assets = [ModuleAssetSource {
         module: Some("address-functions".into()),
         path: "plans/correct-address.rhai".into(),
@@ -562,7 +559,7 @@ fn event_inspection_uses_owner_hooks_for_phase_and_transitions() {
     record_mut(&mut source, "facility")["hooks"] = json!([{"id":"facility-patched", "display":{"label":"Facility changed"}, "phase":"after", "trigger":"patched",
         "projection":["address-line"], "when":{"type":"fields", "changed":["address-line"]},
         "handler":{"type":"url", "destinationId":"facility-observer"}}]);
-    source["actions"][1]["execution"]["proposal"]["hooks"] = json!([
+    source["actions"]["correct-address"]["execution"]["proposal"]["hooks"] = json!([
         {"id":"proposal-settled", "display":{"label":"Proposal update"}, "transitions":["applied","submitted"], "handler":{"type":"url", "destinationId":"proposal-observer"}},
         {"id":"proposal-any", "handler":{"type":"url", "destinationId":"all-transitions"}},
     ]);

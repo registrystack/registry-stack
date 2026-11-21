@@ -15,7 +15,7 @@ recordTypes:
     fields:
       - {id: name, type: string}
 actions:
-  - id: update
+  update:
     execution: {mode: immediate}
     inputs:
       - {id: subject, type: reference, target: person}

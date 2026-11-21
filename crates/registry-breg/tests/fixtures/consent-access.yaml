@@ -113,31 +113,31 @@ recordTypes:
     - {id: enrolment, type: reference, target: enrolment, required: true, classification: restricted}
     - {id: household, type: reference, target: household, required: true, classification: internal}
 actions:
-- id: record-consent
-  execution: {mode: immediate}
-  consentIssuer: steward
-  inputs:
-  - {id: subject, type: reference, target: person, required: true, classification: restricted}
-  - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
-  - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
-  - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
-  - {id: decision, type: vocabulary-code, vocabulary: consent-decision, required: true, classification: internal}
-  - {id: effective-at, type: timestamp, required: true, classification: internal}
-  - {id: expires-at, type: timestamp, classification: internal}
-  plan:
-    type: fixed
-    effects:
-    - id: decision
-      target: {recordType: consent-decision}
-      operation: create
-      set:
-        subject: {fromInput: subject}
-        recipient: {fromInput: recipient}
-        purpose: {fromInput: purpose}
-        scope: {fromInput: scope}
-        decision: {fromInput: decision}
-        effective-at: {fromInput: effective-at}
-        expires-at: {fromInput: expires-at}
+  record-consent:
+    execution: {mode: immediate}
+    consentIssuer: steward
+    inputs:
+    - {id: subject, type: reference, target: person, required: true, classification: restricted}
+    - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
+    - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
+    - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
+    - {id: decision, type: vocabulary-code, vocabulary: consent-decision, required: true, classification: internal}
+    - {id: effective-at, type: timestamp, required: true, classification: internal}
+    - {id: expires-at, type: timestamp, classification: internal}
+    plan:
+      type: fixed
+      effects:
+      - id: decision
+        target: {recordType: consent-decision}
+        operation: create
+        set:
+          subject: {fromInput: subject}
+          recipient: {fromInput: recipient}
+          purpose: {fromInput: purpose}
+          scope: {fromInput: scope}
+          decision: {fromInput: decision}
+          effective-at: {fromInput: effective-at}
+          expires-at: {fromInput: expires-at}
 accessProfiles:
   food-targeting:
     default: true

@@ -56,7 +56,7 @@
     ],
     "distributions": []
   },
-  "modules": {"facility-registry-actions-core":{"digest":"sha256:e4067711adc75e699f9c765fa8a7ed8672d9f2e2b9e6e6e4a90a4a51d1e23403","version":"0.1.0"}},
+  "modules": {"facility-registry-actions-core":{"digest":"sha256:e6d5fdbec2d2807621c59a8123b4d4f8405d5bbb3974c51b2ef2b5a331ca8b8d","version":"0.1.0"}},
   "recordTypes": {},
   "accessProfiles": {
     "facility-registrar": {

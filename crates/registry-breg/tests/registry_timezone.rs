@@ -133,7 +133,7 @@ fn a_current_date_requirement_requires_a_timezone() {
         .as_array_mut()
         .unwrap()
         .push(json!({"id": "expires-on", "type": "date", "required": true, "classification": "restricted"}));
-    source["actions"][0]["commitGuards"]["targets"]
+    source["actions"]["register-child"]["commitGuards"]["targets"]
         .as_array_mut()
         .unwrap()
         .push(json!({"input": "parent", "field": "expires-on", "currentDate": "on-or-after"}));
@@ -159,11 +159,10 @@ fn a_current_date_requirement_requires_a_timezone() {
 #[test]
 fn a_plan_that_calls_today_requires_a_timezone() {
     let mut source = action_support::project();
-    source["functions"] = json!([{
-        "id":"dated-plan", "runtime":"rhai", "source":"plans/dated.rhai",
+    source["functions"] = json!({"dated-plan": {"runtime":"rhai", "source":"plans/dated.rhai",
         "entrypoint":"plan", "abi":"registry.action-plan/v1"
-    }]);
-    source["actions"][0]["plan"] = json!({
+    }});
+    source["actions"]["register-child"]["plan"] = json!({
         "type":"function", "function":"dated-plan", "inputs":["parent"],
         "writes":[{"id":"child","target":{"recordType":"child"},"operation":"create","fields":["parent","label"]}]
     });
@@ -224,11 +223,10 @@ fn plan(ctx) {
 #[test]
 fn a_user_defined_zero_argument_today_does_not_require_a_timezone() {
     let mut source = action_support::project();
-    source["functions"] = json!([{
-        "id":"dated-plan", "runtime":"rhai", "source":"plans/dated.rhai",
+    source["functions"] = json!({"dated-plan": {"runtime":"rhai", "source":"plans/dated.rhai",
         "entrypoint":"plan", "abi":"registry.action-plan/v1"
-    }]);
-    source["actions"][0]["plan"] = json!({
+    }});
+    source["actions"]["register-child"]["plan"] = json!({
         "type":"function", "function":"dated-plan", "inputs":["parent"],
         "writes":[{"id":"child","target":{"recordType":"child"},"operation":"create","fields":["parent","label"]}]
     });

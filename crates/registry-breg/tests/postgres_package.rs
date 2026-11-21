@@ -3565,8 +3565,7 @@ fn timer_preview_project_bytes(at_field: &str) -> Vec<u8> {
             }]
         }},
         "timerGrants":[{"recordType":"contact","timer":"activate"}],
-        "actions":[{
-            "id":"activate-contact", "execution":{"mode":"immediate"},
+        "actions":{"activate-contact": { "execution":{"mode":"immediate"},
             "inputs":[{
                 "id":"contact", "type":"reference", "target":"contact",
                 "required":true, "classification":"internal"
@@ -3575,7 +3574,7 @@ fn timer_preview_project_bytes(at_field: &str) -> Vec<u8> {
                 "id":"mark-processed", "target":{"fromInput":"contact"},
                 "operation":"patch", "set":{"processed":{"value":true}}
             }]}
-        }]
+        }}
     }))
     .expect("timer preview source serializes")
 }

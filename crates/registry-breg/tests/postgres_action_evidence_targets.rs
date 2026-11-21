@@ -100,16 +100,16 @@ async fn setup_with_options(
             {"id":"checked", "type":"boolean", "required":true,"classification":"restricted"}
         ]
     }));
-    document["actions"][0]["inputs"].as_array_mut().unwrap().push(json!({
+    document["actions"]["register-landholding"]["inputs"].as_array_mut().unwrap().push(json!({
         "id":"local-register", "apiName":"localRegister", "type":"reference", "target":"local-register", "required":true,"classification":"restricted"
     }));
-    document["actions"][0]["plan"]["inputs"]
+    document["actions"]["register-landholding"]["plan"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!("local-register"));
-    document["actions"][0]["commitGuards"]["targets"] =
+    document["actions"]["register-landholding"]["commitGuards"]["targets"] =
         json!([{"input":"local-register","field":"active","equals":true}]);
-    document["actions"][0]["plan"]["writes"].as_array_mut().unwrap().push(json!({
+    document["actions"]["register-landholding"]["plan"]["writes"].as_array_mut().unwrap().push(json!({
         "id":"local-register", "target":{"fromInput":"local-register"},"operation":"patch","fields":["checked"]
     }));
     document["accessProfiles"]["landholding-registrar"]["permissions"]["actions"][0]["targets"].as_array_mut().unwrap().push(json!({

@@ -2921,7 +2921,7 @@ async fn action_and_proposal_only_clients_are_checked_at_construction() {
 
     let mut proposal_source = action_source;
     proposal_source["accessProfiles"]["registrar"]["actorKind"] = json!("agent");
-    proposal_source["actions"][0]["execution"] = json!({
+    proposal_source["actions"]["register-child"]["execution"] = json!({
         "mode": "proposal",
         "proposal": {
             "review": {"type": "none"},
@@ -2991,7 +2991,7 @@ async fn action_and_proposal_only_clients_are_checked_at_construction() {
     )
     .expect("an admitted Proposal-only standing agent needs no trusted actor mapping");
 
-    proposal_source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({
+    proposal_source["actions"]["register-child"]["execution"]["proposal"]["reviewContext"] = json!({
         "id": "casework-context",
         "fields": {
             "proposedLabel": {"type": "input", "input": "label"}

@@ -61,7 +61,7 @@ timerGrants:
   - {recordType: service, timer: activate}
 
 actions:
-  - id: activate-service
+  activate-service:
     display: {label: Activate service, description: Materialize a previously authorized future activation.}
     execution: {mode: immediate}
     inputs:

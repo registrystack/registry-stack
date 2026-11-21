@@ -4498,12 +4498,12 @@ mod input_write_tests {
             "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable",
                 "mutationPolicy":{"patch":"proposal-required"},
                 "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}},
-            "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{
+            "actions":{"correct-name": {"execution":{"mode":"proposal","proposal":{
                 "review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"}}},
                 "inputs":[{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
                     {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"},
                     {"id":"licence-number","type":"string","required":false,"maximumLength":64,"classification":"internal"}],
-                "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
+                "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}},
             "accessProfiles":{"clerk": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{
                 "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target","rowBoundaries":"unrestricted"}]}]}}}});
         let project =

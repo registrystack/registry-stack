@@ -3697,7 +3697,7 @@ fn a_comment_in_a_handler_script_is_a_change_because_the_package_ships_its_bytes
     );
     append_comment(
         &project.join("registry.yaml"),
-        "\nfunctions:\n  - id: create-record-group-plan\n    runtime: rhai\n    source: scripts/create-record-group.rhai\n    entrypoint: handle\n    abi: registry.action-plan/v1\nactions:\n  - id: create-record-group\n    inputs:\n      \
+        "\nfunctions:\n  create-record-group-plan:\n    runtime: rhai\n    source: scripts/create-record-group.rhai\n    entrypoint: handle\n    abi: registry.action-plan/v1\nactions:\n  create-record-group:\n    inputs:\n      \
          - {id: code, type: string, required: true, maximumLength: 64, classification: public}\n    \
          execution: {mode: immediate}\n    plan:\n      type: function\n      function: create-record-group-plan\n      inputs: [code]\n      writes:\n        - id: group\n          \
          target: {recordType: record-group}\n          operation: create\n          \

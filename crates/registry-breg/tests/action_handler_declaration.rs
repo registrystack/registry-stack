@@ -12,12 +12,12 @@ fn project() -> Value {
         "datasets":[{"id":"test"}],
         "recordTypes":{"person": {"primaryDataset":"test","route":"people","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maximumLength":64,"required":true,"classification":"internal"}]}},
-        "functions":[{"id":"person-plan","runtime":"rhai","source":"plans/person.rhai","entrypoint":"calculate","abi":ACTION_PLAN_ABI_V1}],
-        "actions":[{"id":"register-person","execution":{"mode":"immediate"},
+        "functions":{"person-plan": {"runtime":"rhai","source":"plans/person.rhai","entrypoint":"calculate","abi":ACTION_PLAN_ABI_V1}},
+        "actions":{"register-person": {"execution":{"mode":"immediate"},
             "inputs":[{"id":"code","type":"string","maximumLength":64,"required":true,"classification":"internal"},
                       {"id":"unbound","type":"string","maximumLength":64,"classification":"restricted"}],
             "plan":{"type":"function","function":"person-plan","inputs":["code"],
-                "writes":[{"id":"person","target":{"recordType":"person"},"operation":"create","fields":["code"]}]}}],
+                "writes":[{"id":"person","target":{"recordType":"person"},"operation":"create","fields":["code"]}]}}},
         "accessProfiles":{"registrar": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}}
     })
@@ -84,7 +84,7 @@ fn native_functions_round_trip_without_backend_aliases() {
 #[test]
 fn named_function_members_are_closed() {
     let mut value = project();
-    value["functions"][0]["script"] = json!("plans/person.rhai");
+    value["functions"]["person-plan"]["script"] = json!("plans/person.rhai");
     let failure = parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap_err();
     assert!(failure
         .diagnostics()
@@ -96,7 +96,7 @@ fn named_function_members_are_closed() {
 fn abi_and_source_are_required_on_the_named_function() {
     for member in ["abi", "source", "entrypoint"] {
         let mut value = project();
-        value["functions"][0]
+        value["functions"]["person-plan"]
             .as_object_mut()
             .unwrap()
             .remove(member);
@@ -110,31 +110,32 @@ fn abi_and_source_are_required_on_the_named_function() {
 #[test]
 fn retired_inline_handler_and_remote_runtime_are_refused() {
     let mut value = project();
-    value["actions"][0]["handler"] = json!({"type":"rhai","script":"plans/person.rhai"});
+    value["actions"]["register-person"]["handler"] =
+        json!({"type":"rhai","script":"plans/person.rhai"});
     assert!(parse_project_json(&serde_json::to_vec(&value).unwrap()).is_err());
     let mut value = project();
-    value["functions"][0]["runtime"] = json!("url");
+    value["functions"]["person-plan"]["runtime"] = json!("url");
     assert!(parse_project_json(&serde_json::to_vec(&value).unwrap()).is_err());
 }
 
 #[test]
 fn source_path_and_abi_fail_at_the_named_function() {
     let mut value = project();
-    value["functions"][0]["source"] = json!("plans/person.wasm");
+    value["functions"]["person-plan"]["source"] = json!("plans/person.wasm");
     let failure = compile(value).unwrap_err();
     assert!(failure
         .diagnostics()
         .iter()
         .any(|d| d.path == "functions[id=person-plan].source"));
     let mut value = project();
-    value["functions"][0]["abi"] = json!("registry.action-handler/v1");
+    value["functions"]["person-plan"]["abi"] = json!("registry.action-handler/v1");
     assert!(compile(value).is_err());
 }
 
 #[test]
 fn missing_named_function_is_a_compile_time_refusal() {
     let mut value = project();
-    value["actions"][0]["plan"]["function"] = json!("absent");
+    value["actions"]["register-person"]["plan"]["function"] = json!("absent");
     assert!(compile(value)
         .unwrap_err()
         .diagnostics()

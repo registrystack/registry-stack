@@ -22,13 +22,13 @@ fn action(script: &str) -> CompiledAction {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"script-baseline","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "datasets":[{"id":"baseline"}],
-        "functions":[{"id":"baseline","runtime":"rhai","source":"handlers/baseline.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}],
+        "functions":{"baseline": {"runtime":"rhai","source":"handlers/baseline.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}},
         "recordTypes":{"record": {"primaryDataset":"baseline","route":"records","mutationMode":"mutable","fields":[
             {"id":"label","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"classification":"restricted"}
         ]}},
-        "actions":[{"id":"register-record","execution":{"mode":"immediate"},"inputs":[
+        "actions":{"register-record": {"execution":{"mode":"immediate"},"inputs":[
             {"id":"label","apiName":"displayLabel","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","required":true,"classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"required":true,"classification":"restricted"},
@@ -36,7 +36,7 @@ fn action(script: &str) -> CompiledAction {
         ],"plan":{"type":"function","function":"baseline","inputs":["label","count","amount","note"],
             "refusals":[{"code":"blank-label","label":"A label is required."}],
             "writes":[{"id":"record","target":{"recordType":"record"},"operation":"create","fields":["label","count","amount"]}]
-        }}],
+        }}},
         "accessProfiles":{"writer": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
             "actions":[
                 {"action":"register-record","operations":["invoke"],"targets":[{"recordType":"record","rowBoundaries":"unrestricted"}],"results":["record"]}

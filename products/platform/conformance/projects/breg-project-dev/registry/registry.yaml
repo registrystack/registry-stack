@@ -29,7 +29,7 @@ recordTypes:
       - {id: name, type: string, required: true, minimumLength: 1, maximumLength: 100, classification: internal}
       - {id: owner, type: string, required: true, minimumLength: 1, maximumLength: 100, classification: internal}
 actions:
-  - id: review-action
+  review-action:
     display: {label: Review action, description: Create one conformance record.}
     execution: {mode: immediate}
     inputs:

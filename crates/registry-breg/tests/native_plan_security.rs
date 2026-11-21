@@ -13,12 +13,12 @@ fn source() -> Value {
         "datasets":[{"id":"test"}],
         "recordTypes":{"item": {"primaryDataset":"test","route":"items","mutationMode":"mutable",
             "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}]}},
-        "functions":[{"id":"calculate","runtime":"rhai","source":"plans/calculate.rhai","entrypoint":"calculate","abi":"registry.action-plan/v1"}],
-        "actions":[{"id":"register-item","execution":{"mode":"immediate"},
+        "functions":{"calculate": {"runtime":"rhai","source":"plans/calculate.rhai","entrypoint":"calculate","abi":"registry.action-plan/v1"}},
+        "actions":{"register-item": {"execution":{"mode":"immediate"},
             "inputs":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"unbound","type":"string","maximumLength":64,"classification":"restricted"}],
             "plan":{"type":"function","function":"calculate","inputs":["label"],
-                "writes":[{"id":"item","target":{"recordType":"item"},"operation":"create","fields":["label"]}]}}],
+                "writes":[{"id":"item","target":{"recordType":"item"},"operation":"create","fields":["label"]}]}}},
         "accessProfiles":{"registrar": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"actions":[{"action":"register-item","operations":["invoke"],"targets":[{"recordType":"item","rowBoundaries":"unrestricted"}],"results":["item"]}]}}}})
 }

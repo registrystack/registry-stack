@@ -68,8 +68,7 @@ pub(super) const PROJECT: &str = r#"{
         {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
       ]
     }},
-  "actions":[{
-    "id":"file-correction",
+  "actions":{"file-correction": {
     "execution":{"mode":"immediate"},
     "inputs":[
       {"id":"tenant","type":"string","required":true,"minimumLength":1,"maximumLength":64,"classification":"internal"},
@@ -80,7 +79,7 @@ pub(super) const PROJECT: &str = r#"{
     "plan":{"type":"fixed","effects":[{"id":"correction","target":{"recordType":"correction-request"},"operation":"create","set":{
       "tenant":{"fromInput":"tenant"},"placement":{"fromInput":"placement"},"proposed-site":{"fromInput":"proposed-site"},"reason":{"fromInput":"reason"}
     }}]}
-  }],
+  }},
   "accessProfiles":{
     "steward":{
       "default":true,

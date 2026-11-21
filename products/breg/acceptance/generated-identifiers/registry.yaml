@@ -39,7 +39,7 @@ recordTypes:
         generate: {type: random, prefix: "REF-", length: 8}
 
 actions:
-  - id: register-application
+  register-application:
     display: {label: Register application, description: Create an application through a Proposal.}
     execution:
       mode: proposal

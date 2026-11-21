@@ -28,11 +28,11 @@ fn source(effects: Value) -> Value {
             {"id":"parent","type":"reference","target":"target","classification":"internal"},
             {"id":"notes","type":"text","maximumLength":1048576,"classification":"internal"}
         ]}},
-        "actions":[{"id":"change-target","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"}}},"inputs":[
+        "actions":{"change-target": {"execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"}}},"inputs":[
             {"id":"one","type":"reference","target":"target","classification":"internal"},
             {"id":"two","type":"reference","target":"target","classification":"internal"},
             {"id":"value","type":"string","maximumLength":64,"required":true,"classification":"internal"}
-        ],"plan":{"type":"fixed","effects":effects}}],
+        ],"plan":{"type":"fixed","effects":effects}}},
         "accessProfiles":{"submitter": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{
             "actions":[{"action":"change-target","operations":["start"],"targets":[{"recordType":"target","rowBoundaries":"unrestricted"}]}],
             "proposals":[{"action":"change-target","operations":["get","submit","apply"],"ownership":"caller","targets":[{"recordType":"target","rowBoundaries":"unrestricted"}]}]
@@ -62,9 +62,9 @@ fn fixture_with(effects: Value, customize: impl FnOnce(&mut Value)) -> CompiledR
 }
 fn function_source() -> Value {
     let mut value = source(json!([patch_effect()]));
-    value["actions"][0]["inputs"][0]["required"] = json!(true);
-    value["functions"] = json!([{"id":"change-plan","runtime":"rhai","source":"plans/change.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":[]}]);
-    value["actions"][0]["plan"] = json!({"type":"function","function":"change-plan","inputs":["one","value"],"writes":[{"id":"patch-first","target":{"fromInput":"one"},"operation":"patch","fields":["first"]}]});
+    value["actions"]["change-target"]["inputs"][0]["required"] = json!(true);
+    value["functions"] = json!({"change-plan": {"runtime":"rhai","source":"plans/change.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":[]}});
+    value["actions"]["change-target"]["plan"] = json!({"type":"function","function":"change-plan","inputs":["one","value"],"writes":[{"id":"patch-first","target":{"fromInput":"one"},"operation":"patch","fields":["first"]}]});
     value
 }
 const SCRIPT: &str =
@@ -121,7 +121,7 @@ fn existing(
 #[test]
 fn neutral_inputs_preserve_omitted_and_function_null_distinction() {
     let mut value = function_source();
-    value["actions"][0]["inputs"].as_array_mut().unwrap().push(json!({"id":"optional-note","type":"string","maximumLength":32,"classification":"internal"}));
+    value["actions"]["change-target"]["inputs"].as_array_mut().unwrap().push(json!({"id":"optional-note","type":"string","maximumLength":32,"classification":"internal"}));
     let registry = compile(value, Some(SCRIPT));
     for (input, present) in [
         (map(json!({"one":TARGET,"value":"changed"})), false),
@@ -138,7 +138,7 @@ fn neutral_inputs_preserve_omitted_and_function_null_distinction() {
         }
     }
     let fixed = fixture_with(json!([patch_effect()]), |source| {
-        source["actions"][0]["inputs"].as_array_mut().unwrap().push(json!({"id":"optional-note","type":"string","maximumLength":32,"classification":"internal"}))
+        source["actions"]["change-target"]["inputs"].as_array_mut().unwrap().push(json!({"id":"optional-note","type":"string","maximumLength":32,"classification":"internal"}))
     });
     assert!(existing(
         &fixed,
@@ -201,8 +201,8 @@ fn encrypted_participation_is_refused_before_targets_resolve() {
 #[test]
 fn preparation_requires_the_exact_guard_reference_snapshot_union() {
     let registry = fixture_with(json!([patch_effect()]), |source| {
-        source["actions"][0]["inputs"].as_array_mut().unwrap().push(json!({"id":"guard-reference","type":"reference","target":"target","required":true,"classification":"internal"}));
-        source["actions"][0]["commitGuards"] =
+        source["actions"]["change-target"]["inputs"].as_array_mut().unwrap().push(json!({"id":"guard-reference","type":"reference","target":"target","required":true,"classification":"internal"}));
+        source["actions"]["change-target"]["commitGuards"] =
             json!({"targets":[{"input":"guard-reference","field":"first","equals":"changed"}]});
     });
     let input = map(json!({"one":TARGET,"value":"changed","guard-reference":OTHER_TARGET}));

@@ -45,14 +45,14 @@ fn registry_source(automatic: bool) -> Value {
             "mutationPolicy":{"patch":"proposal-required"},
             "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}},
-        "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{
+        "actions":{"correct-name": {"execution":{"mode":"proposal","proposal":{
             "review":{"type":"none"},"application":if automatic{json!({"mode":"automatic","maximumAttempts":3})}else{json!({"mode":"manual"})},
             "retention":{"mode":"operator-erase"},"attachments":[{"id":"support","required":false,"maximumBytes":4096,
                 "contentTypes":["text/plain"],"classification":"restricted"}]}},
             "inputs":[{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
             "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
-            "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
+            "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}},
         "accessProfiles":{"clerk": {"default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
             "requiredPurposes":["registry-administration"],"permissions":{
                 "records":[{"recordType":"target","operations":["create","get","list"],"readableFields":["name","jurisdiction"],
@@ -242,7 +242,7 @@ async fn shape_journey(change: Change) {
     } else {
         "proposal-test"
     };
-    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":review_source,"policy":policy});
+    source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":review_source,"policy":policy});
     let authority = shape_authority::LocalAuthority::start_for_registry(
         serde_json::from_value(policy).unwrap(),
         review_source,
@@ -314,7 +314,7 @@ async fn shape_journey(change: Change) {
     );
     assert_eq!(counts.get::<_, i64>(2), 0, "neither request applied");
     if !matches!(change, Change::DisplayOnly | Change::EventRecordOnly) {
-        source["actions"][0]["execution"]["proposal"]["review"]["policy"]["digest"] =
+        source["actions"]["correct-name"]["execution"]["proposal"]["review"]["policy"]["digest"] =
             json!(format!("sha256:{}", "c".repeat(64)));
     }
     match change {
@@ -334,7 +334,7 @@ async fn shape_journey(change: Change) {
         Change::Required => source["recordTypes"]["target"]["fields"][0]["required"] = json!(true),
         Change::PolicyOnly => {}
         Change::DisplayOnly => {
-            source["actions"][0]["display"] = json!({"label":"A display-only update"})
+            source["actions"]["correct-name"]["display"] = json!({"label":"A display-only update"})
         }
         Change::EventRecordOnly => {
             source["recordTypes"]["target"]["eventRecord"] = json!({
@@ -504,7 +504,7 @@ async fn shape_journey(change: Change) {
             assert!(row.get::<_, Option<Value>>(1).is_none());
             assert_eq!(
                 row.get::<_, Value>(2),
-                source["actions"][0]["execution"]["proposal"]["review"]["policy"]
+                source["actions"]["correct-name"]["execution"]["proposal"]["review"]["policy"]
             );
             assert_eq!(row.get::<_, i64>(3), 0, "old approval cannot follow Rebase");
         }

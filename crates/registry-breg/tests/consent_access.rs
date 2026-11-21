@@ -325,7 +325,7 @@ fn a_consent_record_no_profile_requires_names_the_require_consent_step() {
 #[test]
 fn consent_actions_declare_an_issuer() {
     let mut value = source();
-    value["actions"][0]
+    value["actions"]["record-consent"]
         .as_object_mut()
         .unwrap()
         .remove("consentIssuer");
@@ -346,28 +346,29 @@ fn self_issued_consent_binds_the_subject_through_the_principal_link() {
 
     // The subject must come from the input the link requirement checks.
     let mut value = self_issued_project();
-    value["actions"][1]["commitGuards"]["targets"] =
+    value["actions"]["withdraw-consent"]["commitGuards"]["targets"] =
         json!([{"input": "link", "field": "active", "equals": true}]);
     assert_refused(&value, "breg.consent.issuer-self-binding");
 
     // The link must be active.
     let mut value = self_issued_project();
-    value["actions"][1]["commitGuards"]["targets"] =
+    value["actions"]["withdraw-consent"]["commitGuards"]["targets"] =
         json!([{"input": "link", "field": "subject", "equalsFromInput": "subject"}]);
     assert_refused(&value, "breg.consent.issuer-self-binding");
 
     // The subject must be set from that input.
     let mut value = self_issued_project();
-    value["actions"][1]["inputs"].as_array_mut().unwrap().push(
+    value["actions"]["withdraw-consent"]["inputs"].as_array_mut().unwrap().push(
         json!({"id": "other", "type": "reference", "target": "person", "required": true, "classification": "restricted"}),
     );
-    value["actions"][1]["plan"]["effects"][0]["set"]["subject"] = json!({"fromInput": "other"});
+    value["actions"]["withdraw-consent"]["plan"]["effects"][0]["set"]["subject"] =
+        json!({"fromInput": "other"});
     assert_refused(&value, "breg.consent.issuer-self-binding");
 
     // A steward issuer on the same action is accepted without the binding.
     let mut value = self_issued_project();
-    value["actions"][1]["consentIssuer"] = json!("steward");
-    value["actions"][1]["commitGuards"]["targets"] = json!([]);
+    value["actions"]["withdraw-consent"]["consentIssuer"] = json!("steward");
+    value["actions"]["withdraw-consent"]["commitGuards"]["targets"] = json!([]);
     compile(&value).unwrap_or_else(|failure| panic!("{:?}", failure.diagnostics()));
 }
 
@@ -399,10 +400,12 @@ fn a_self_issued_actions_link_bound_targets_are_not_registry_wide_findings() {
 
     // A second reference to the subject entity is not bound by the link.
     let mut value = self_issued_project();
-    let inputs = value["actions"][1]["inputs"].as_array_mut().unwrap();
+    let inputs = value["actions"]["withdraw-consent"]["inputs"]
+        .as_array_mut()
+        .unwrap();
     inputs.push(json!({"id": "other", "type": "reference", "target": "person", "required": true, "classification": "restricted"}));
     inputs.push(json!({"id": "district", "type": "string", "maximumLength": 80, "required": true, "classification": "internal"}));
-    value["actions"][1]["plan"]["effects"]
+    value["actions"]["withdraw-consent"]["plan"]["effects"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -1002,7 +1005,7 @@ fn adding_a_recipient_requires_review_of_the_frozen_issuing_action() {
 
     // Changing the authored API name also changes the frozen Action.
     let mut renamed = added.clone();
-    renamed["actions"][0]["inputs"][6]["apiName"] = json!("expiry");
+    renamed["actions"]["record-consent"]["inputs"][6]["apiName"] = json!("expiry");
     let renamed = compile(&renamed).unwrap();
     let changes = compiled_registry_change_set(&before, &renamed, "prior-package");
     assert!(changes
@@ -1148,12 +1151,7 @@ fn switching_the_consent_issuer_changes_the_action_contract() {
     use registry_breg::package::CompiledRegistryChangeCode;
     let before = self_issued_project();
     let mut after = before.clone();
-    let withdraw = after["actions"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|action| action["id"] == "withdraw-consent")
-        .unwrap();
+    let withdraw = &mut after["actions"]["withdraw-consent"];
     withdraw["consentIssuer"] = json!("steward");
     let (_, codes) = change_codes(&before, &after);
     assert_eq!(

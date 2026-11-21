@@ -54,7 +54,7 @@ recordTypes:
     constraints:
       - {id: reservation-request-key, type: unique, fields: [issuer, request-key]}
 actions:
-  - id: submit-reservation-request
+  submit-reservation-request:
     execution: {mode: immediate}
     inputs:
       - {id: request-key, apiName: requestKey, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
@@ -90,7 +90,7 @@ actions:
             agreement-state: {value: not-started}
             capacity-state: {value: uncommitted}
             reservation-outcome: {value: pending}
-  - id: record-capacity-held
+  record-capacity-held:
     execution: {mode: immediate}
     inputs:
       - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
@@ -111,7 +111,7 @@ actions:
             capacity-state: {value: held}
             hold-id: {fromInput: hold-id}
             decision-deadline: {fromInput: decision-deadline}
-  - id: record-review-approved
+  record-review-approved:
     execution: {mode: immediate}
     inputs:
       - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
@@ -131,7 +131,7 @@ actions:
             review-state: {value: approved}
             review-result-id: {fromInput: review-result-id}
             agreement-state: {value: pending}
-  - id: record-review-rejected
+  record-review-rejected:
     execution: {mode: immediate}
     inputs:
       - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
@@ -150,7 +150,7 @@ actions:
             review-state: {value: rejected}
             review-result-id: {fromInput: review-result-id}
             reservation-outcome: {value: rejected}
-  - id: record-agreement-completed
+  record-agreement-completed:
     execution: {mode: immediate}
     inputs:
       - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
@@ -169,7 +169,7 @@ actions:
           set:
             agreement-state: {value: completed}
             agreement-callback-id: {fromInput: callback-id}
-  - id: record-agreement-failed
+  record-agreement-failed:
     execution: {mode: immediate}
     inputs:
       - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
@@ -189,7 +189,7 @@ actions:
             agreement-state: {value: failed}
             agreement-callback-id: {fromInput: callback-id}
             reservation-outcome: {value: agreement-failed}
-  - id: record-direct-confirmed
+  record-direct-confirmed:
     execution: {mode: immediate}
     inputs:
       - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
@@ -211,7 +211,7 @@ actions:
             capacity-state: {value: confirmed}
             reservation-outcome: {value: confirmed}
             appointment-id: {fromInput: appointment-id}
-  - id: record-held-confirmed
+  record-held-confirmed:
     execution: {mode: immediate}
     inputs:
       - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
@@ -233,7 +233,7 @@ actions:
             capacity-state: {value: confirmed}
             reservation-outcome: {value: confirmed}
             appointment-id: {fromInput: appointment-id}
-  - id: record-capacity-conflict
+  record-capacity-conflict:
     execution: {mode: immediate}
     inputs:
       - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
@@ -252,7 +252,7 @@ actions:
           operation: patch
           set:
             reservation-outcome: {value: capacity-conflict}
-  - id: record-hold-expired
+  record-hold-expired:
     execution: {mode: immediate}
     inputs:
       - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
@@ -270,7 +270,7 @@ actions:
           set:
             capacity-state: {value: expired}
             reservation-outcome: {value: hold-expired}
-  - id: record-capacity-released
+  record-capacity-released:
     execution: {mode: immediate}
     inputs:
       - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
@@ -287,7 +287,7 @@ actions:
           operation: patch
           set:
             capacity-state: {value: released}
-  - id: withdraw-reservation-request
+  withdraw-reservation-request:
     execution: {mode: immediate}
     inputs:
       - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}

@@ -235,7 +235,7 @@ fn removing_a_consent_vocabulary_code_asks_to_retire_it() {
 fn a_steward_issuer_creates_consent_without_the_subject() {
     let before = self_issued_project();
     let mut switched = before.clone();
-    switched["actions"][1]["consentIssuer"] = json!("steward");
+    switched["actions"]["withdraw-consent"]["consentIssuer"] = json!("steward");
     let diff = classify(&before, &switched);
     let action = change(&diff, Code::ActionChanged, Some("withdraw-consent"));
     assert_eq!(action.classification, DiffClassification::AccessChange);
@@ -256,9 +256,8 @@ fn a_steward_issuer_creates_consent_without_the_subject() {
     );
 
     let mut added = source();
-    let mut second = added["actions"][0].clone();
-    second["id"] = json!("record-referral-consent");
-    added["actions"].as_array_mut().unwrap().push(second);
+    let second = added["actions"]["record-consent"].clone();
+    added["actions"]["record-referral-consent"] = second;
     let mut permission = added["accessProfiles"][STEWARD]["permissions"]["actions"][0].clone();
     assert_eq!(permission["action"], "record-consent");
     permission["action"] = json!("record-referral-consent");

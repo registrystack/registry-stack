@@ -75,8 +75,7 @@ fn registry(automatic: bool, reviewed: bool) -> registry_breg::CompiledRegistry 
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}
             ]
         }},
-        "actions":[{
-            "id":"correct-name",
+        "actions":{"correct-name": {
             "execution":{"mode":"proposal","proposal":{
                 "review":review,
                 "application":if automatic {
@@ -97,7 +96,7 @@ fn registry(automatic: bool, reviewed: bool) -> registry_breg::CompiledRegistry 
                 "operation":"patch",
                 "set":{"name":{"fromInput":"value"}}
             }]}
-        }],
+        }},
         "accessProfiles":{
             "clerk": {
                 "default":true,

@@ -99,7 +99,7 @@ recordTypes:
         duplicates: reject
         constraint: one-per-deed
 actions:
-  - id: open-grant
+  open-grant:
     execution: {mode: immediate}
     inputs:
       - {id: grant-number, apiName: grantNumber, type: string, minimumLength: 1, maximumLength: 40, required: true, classification: restricted}
@@ -112,7 +112,7 @@ actions:
           set:
             grant-number: {fromInput: grant-number}
             status: {value: active}
-  - id: open-item
+  open-item:
     execution: {mode: immediate}
     inputs:
       - {id: item-number, apiName: itemNumber, type: string, minimumLength: 1, maximumLength: 40, required: true, classification: restricted}
@@ -124,7 +124,7 @@ actions:
           operation: create
           set:
             item-number: {fromInput: item-number}
-  - id: open-custody
+  open-custody:
     execution: {mode: immediate}
     inputs:
       - {id: holder-reference, apiName: holderReference, type: string, minimumLength: 1, maximumLength: 80, required: true, classification: restricted}
@@ -137,7 +137,7 @@ actions:
           set:
             holder-reference: {fromInput: holder-reference}
             status: {value: held}
-  - id: pause-grant
+  pause-grant:
     execution: {mode: immediate}
     inputs:
       - {id: grant, apiName: grantId, type: reference, target: grant, required: true, classification: restricted}
@@ -160,7 +160,7 @@ actions:
             grant: {fromInput: grant}
             decided-on: {fromInput: decided-on}
             effective-from: {fromInput: effective-from}
-  - id: record-grant-pause
+  record-grant-pause:
     execution: {mode: immediate}
     inputs:
       - {id: grant, apiName: grantId, type: reference, target: grant, required: true, classification: restricted}
@@ -180,7 +180,7 @@ actions:
             decided-on: {fromInput: decided-on}
             effective-from: {fromInput: effective-from}
             effective-until: {fromInput: effective-until}
-  - id: correct-grant-pause
+  correct-grant-pause:
     execution: {mode: immediate}
     inputs:
       - {id: grant, apiName: grantId, type: reference, target: grant, required: true, classification: restricted}
@@ -200,7 +200,7 @@ actions:
             decided-on: {fromInput: decided-on}
             effective-from: {fromInput: effective-from}
             corrects: {fromInput: original}
-  - id: hand-over-custody
+  hand-over-custody:
     execution: {mode: immediate}
     inputs:
       - {id: item, apiName: itemId, type: reference, target: item, required: true, classification: restricted}

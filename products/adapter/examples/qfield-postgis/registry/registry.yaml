@@ -58,7 +58,7 @@ recordTypes:
       - {id: by-source-submission, fields: [source-submission-id]}
 
 actions:
-  - id: register-site
+  register-site:
     display:
       label: Register field site
       description: Immediately create one site from a finalized field submission.
@@ -101,7 +101,7 @@ actions:
             boundary: {fromInput: boundary}
             contacts: {fromInput: contacts}
 
-  - id: propose-site
+  propose-site:
     display:
       label: Propose field site
       description: Create one site through a service-owned Proposal with no synthetic external review.

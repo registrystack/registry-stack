@@ -2938,8 +2938,7 @@ mod tests {
                   {"id":"status-note","apiName":"statusNote","type":"string","maximumLength":160,"classification":"restricted"}
                 ]
               }},
-              "actions":[{
-                "id":"rename-household-local",
+              "actions":{"rename-household-local": {
                 "execution":{"mode":"immediate"},
                 "inputs":[
                   {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
@@ -2952,7 +2951,7 @@ mod tests {
                   {"id":"household-note-update","target":{"fromInput":"household"},"operation":"patch",
                     "set":{"status-note":{"fromInput":"status-note"}}}
                 ]}
-              }],
+              }},
               "accessProfiles":{"contact-registrar": {
                 "default":true,
                 "principalClaim":"registry_principal",
@@ -2988,12 +2987,11 @@ mod tests {
                   "input":{"service":{"fromRecordId":true}}}]
               }},
               "timerGrants":[{"recordType":"service","timer":"activate"}],
-              "actions":[{
-                "id":"activate-service","execution":{"mode":"immediate"},
+              "actions":{"activate-service": {"execution":{"mode":"immediate"},
                 "inputs":[{"id":"service","type":"reference","target":"service","required":true,"classification":"internal"}],
                 "plan":{"type":"fixed","effects":[{"id":"activated","target":{"fromInput":"service"},
                   "operation":"patch","set":{"status":{"value":"active"}}}]}
-              }]
+              }}
             }"#,
         )
         .expect("timer context project parses");
@@ -3017,11 +3015,11 @@ mod tests {
                   "fields":[{"id":"operation-id","type":"uuid","required":true,"classification":"internal"}]}
               },
               "timerGrants":[{"recordType":"service","timer":"activate"}],
-              "actions":[{"id":"create-activation-log","execution":{"mode":"immediate"},
+              "actions":{"create-activation-log": {"execution":{"mode":"immediate"},
                 "inputs":[{"id":"operation-id","type":"uuid","required":true,"classification":"internal"}],
                 "plan":{"type":"fixed","effects":[{"id":"activation-log","target":{"recordType":"activation-log"},
                   "operation":"create","set":{"operation-id":{"fromInput":"operation-id"}}}]}}
-              ]
+              }
             }"#,
         )
         .expect("timer Create context project parses");

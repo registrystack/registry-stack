@@ -85,9 +85,8 @@
       ]
     }
   },
-  "actions": [
-    {
-      "id": "register-asset-with-inspection",
+  "actions": {
+    "register-asset-with-inspection": {
       "inputs": [
         {
           "id": "asset-code",
@@ -186,5 +185,5 @@
         "mode": "immediate"
       }
     }
-  ]
+  }
 }

@@ -2823,12 +2823,11 @@ fn directly_constructed_module_extension_display_text_keeps_authored_paths() {
           "extendRecordTypes":{"entry":{"fields":[{"id":"note","type":"text","maximumLength":128,"classification":"internal"},{"id":"first-note","type":"text","maximumLength":128,"classification":"internal"}],
             "derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"score","type":"int64","classification":"internal"}]}]
           }},
-          "actions":[{
-            "id":"create-module-entry",
+          "actions":{"create-module-entry": {
             "execution":{"mode":"immediate"},
             "inputs":[{"id":"module-code","type":"string","maximumLength":32,"classification":"internal"}],
             "plan":{"type":"fixed","effects":[{"id":"entry","target":{"recordType":"module-entry"},"operation":"create","set":{"module-code":{"fromInput":"module-code"}}}]}
-          }]
+          }}
         }"#,
     )
     .expect("module parses");
@@ -2899,11 +2898,10 @@ fn permission_refusals(permissions: &str) -> Vec<(String, String)> {
           "recordTypes":{{"case-file":{{"primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
             "fields":[{{"id":"case-code","type":"string","maximumLength":32,"classification":"internal"}}]
           }}}},
-          "actions":[{{"execution":{{"mode":"immediate"}},
-            "id":"create-case-file",
+          "actions":{{"create-case-file":{{"execution":{{"mode":"immediate"}},
             "inputs":[{{"id":"case-code","type":"string","maximumLength":32,"classification":"internal"}}],
             "plan":{{"type":"fixed","effects":[{{"id":"case","target":{{"recordType":"case-file"}},"operation":"create","set":{{"case-code":{{"fromInput":"case-code"}}}}}}]}}
-          }}],
+          }}}},
           "accessProfiles":{{"operator":{{
             "principalClaim":"sub",
             "requiredScopes":"unrestricted",
@@ -4126,20 +4124,20 @@ fn integer_members_are_read_within_their_stated_bounds() {
         (
             "farmer-landholding-evidence",
             Box::new(set(
-                "/actions/0/evidence/0/maximumObservationAgeSeconds",
+                "/actions/register-landholding/evidence/0/maximumObservationAgeSeconds",
                 json!(301),
             )),
             "config.out-of-range",
-            "project.actions[0].evidence[0].maximumObservationAgeSeconds",
+            "project.actions.register-landholding.evidence[0].maximumObservationAgeSeconds",
         ),
         (
             "farmer-landholding-evidence",
             Box::new(set(
-                "/actions/0/evidence/0/maximumObservationAgeSeconds",
+                "/actions/register-landholding/evidence/0/maximumObservationAgeSeconds",
                 json!(0),
             )),
             "config.out-of-range",
-            "project.actions[0].evidence[0].maximumObservationAgeSeconds",
+            "project.actions.register-landholding.evidence[0].maximumObservationAgeSeconds",
         ),
         (
             "facility",
@@ -4662,11 +4660,11 @@ fn project_field_option_diagnostics_agree_for_json_and_yaml_without_values() {
           "recordTypes":{{"reading":{{"primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
             "fields":[{{"id":"flag","type":"boolean","precision":"{FIELD_OPTION_CANARY}","classification":"internal"}}]
           }}}},
-          "actions":[{{
-            "id":"inspect","execution":{{"mode":"immediate"}},
+          "actions":{{"inspect":{{
+            "execution":{{"mode":"immediate"}},
             "inputs":[{{"id":"identifier","type":"uuid","maximumLength":"{FIELD_OPTION_CANARY}","classification":"internal"}}],
             "plan":{{"type":"fixed","effects":[]}}
-          }}],
+          }}}},
           "valueTypes":{{"bounded-text":{{"type":"text","target":"{FIELD_OPTION_CANARY}"}}}}
         }}"#
     );
@@ -4689,7 +4687,7 @@ recordTypes:
         precision: {FIELD_OPTION_CANARY}
         classification: internal
 actions:
-  - id: inspect
+  inspect:
     execution:
       mode: immediate
     inputs:
@@ -4713,7 +4711,7 @@ valueTypes:
             "boolean",
         ),
         (
-            "project.actions[0].inputs[0].maximumLength",
+            "project.actions.inspect.inputs[0].maximumLength",
             "maximumLength",
             "uuid",
         ),
@@ -5094,9 +5092,8 @@ fn action_decimal_bound_diagnostic_names_capacity_and_preserves_valid_bounds() {
                     "classification": "internal"
                 }]
             }},
-            "actions": [{
+            "actions": {"create-entry": {
                 "execution": {"mode": "immediate"},
-                "id": "create-entry",
                 "inputs": [input],
                 "plan": {"type": "fixed", "effects": [{
                     "id": "entry",
@@ -5104,7 +5101,7 @@ fn action_decimal_bound_diagnostic_names_capacity_and_preserves_valid_bounds() {
                     "operation": "create",
                     "set": {"amount": {"fromInput": "amount"}}
                 }]}
-            }],
+            }},
             "accessProfiles": {"operator": {
                 "default": true,
                 "principalClaim": "principal",
@@ -8392,11 +8389,10 @@ fn bounded_field_project(
         "recordTypes":{"case-file": {"primaryDataset":"test-dataset","route":"case-files",
             "mutationMode":"mutable","fields":fields,"derived":derived
         }},
-        "actions":[{"execution":{"mode":"immediate"},
-            "id":"create-case-file","inputs":inputs,
+        "actions":{"create-case-file": {"execution":{"mode":"immediate"},"inputs":inputs,
             "plan":{"type":"fixed","effects":[{"id":"case","target":{"recordType":"case-file"},"operation":"create",
                 "set":{"case-code":{"fromInput":"case-code"}}}]}
-        }]
+        }}
     }))
     .expect("the project serializes")
 }
@@ -8415,11 +8411,10 @@ fn bounded_field_module(
             "mutationMode":"mutable","fields":fields,"derived":derived
         }},
         "extendRecordTypes":{"ledger": {"fields":fields,"derived":derived}},
-        "actions":[{"execution":{"mode":"immediate"},
-            "id":"create-case-file","inputs":inputs,
+        "actions":{"create-case-file": {"execution":{"mode":"immediate"},"inputs":inputs,
             "plan":{"type":"fixed","effects":[{"id":"case","target":{"recordType":"case-file"},"operation":"create",
                 "set":{"case-code":{"fromInput":"case-code"}}}]}
-        }]
+        }}
     }))
     .expect("the module serializes")
 }
@@ -8538,7 +8533,7 @@ fn field_bounds_are_written_as_minimum_length_maximum_length_and_maximum_bytes()
         "a structured field's schema keeps its JSON Schema keywords"
     );
     assert_eq!(
-        written["actions"][0]["inputs"][0]["maximumLength"],
+        written["actions"]["create-case-file"]["inputs"][0]["maximumLength"],
         json!(32)
     );
 
@@ -8564,7 +8559,7 @@ fn the_short_field_bound_names_are_refused_in_a_project_with_their_replacement_n
         &[(0, "maxLength")],
     ));
     expected.extend(retired_bounds(
-        "project.actions[0].inputs",
+        "project.actions.create-case-file.inputs",
         &[(0, "minLength"), (0, "maxLength")],
     ));
     assert_retired_bounds_refused(&removed_key_refusals(&failure), expected);
@@ -8588,7 +8583,7 @@ fn the_short_field_bound_names_are_refused_in_a_module_with_their_replacement_na
         &[(0, "maxLength")],
     ));
     expected.extend(retired_bounds(
-        "module.actions[0].inputs",
+        "module.actions.create-case-file.inputs",
         &[(0, "minLength"), (0, "maxLength")],
     ));
     assert_retired_bounds_refused(&removed_key_refusals(&failure), expected);

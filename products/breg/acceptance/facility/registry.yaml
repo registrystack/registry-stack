@@ -57,7 +57,7 @@
     },
     "distributions": []
   },
-  "modules": {"facility-core":{"digest":"sha256:94d868c5cdf284b08e98610068ef6677fcdd2d55e975b483c3e969bb4db2af1c","version":"0.1.0"}},
+  "modules": {"facility-core":{"digest":"sha256:4d7f1ec9995635a394a32980828a978940636a49f77ede879a09b006b3562e6a","version":"0.1.0"}},
   "recordTypes": {
     "facility": {
       "primaryDataset": "facility",

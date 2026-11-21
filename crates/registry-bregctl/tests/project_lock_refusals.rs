@@ -87,13 +87,13 @@ recordTypes:
         maximumLength: 16
         classification: internal
 functions:
-  - id: update-record-plan
+  update-record-plan:
     runtime: rhai
     source: plans/update-record.rhai
     entrypoint: plan
     abi: registry.action-plan/v1
 actions:
-  - id: update-record
+  update-record:
     execution: {mode: immediate}
     inputs:
       - {id: record, type: reference, target: record, required: true, classification: internal}

@@ -44,10 +44,10 @@ manifestProjection:
 modules:
   "consent-person":
     version: "0.1.0"
-    digest: "sha256:42f91bad56c86195115faf11eeba46ebb460d083a2dfaca7dc51d3dc366aaf32"
+    digest: "sha256:3ece798eaae6ee97f7e2d946cbf17fb8b7c1dc23bb8382d7aecb423dce755c24"
   "consent-person-registry-core":
     version: "0.1.0"
-    digest: "sha256:4a32c2a78230d234d6a438bc6723f506c60027cf4cd7692926ae1fd9003dab44"
+    digest: "sha256:853a419af5b6fdd4e336a5f334accc754dde3a47eb81fd67c89b7fdfcfc6c7fe"
 
 recipients:
   organizations:

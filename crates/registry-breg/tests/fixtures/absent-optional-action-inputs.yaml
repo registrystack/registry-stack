@@ -14,7 +14,7 @@ recordTypes:
       - {id: status, type: string, maximumLength: 20, required: false, classification: internal}
       - {id: related-entry, apiName: relatedEntry, type: reference, target: entry, required: false, classification: internal}
 actions:
-  - id: create-entry
+  create-entry:
     execution: {mode: immediate}
     inputs:
       - {id: label, type: string, maximumLength: 40, required: true, classification: internal}
@@ -28,7 +28,7 @@ actions:
           target: {recordType: entry}
           operation: create
           set: {label: {fromInput: label}, jurisdiction: {fromInput: jurisdiction}, note: {fromInput: note}, related-entry: {fromInput: related-entry}}
-  - id: update-entry
+  update-entry:
     execution: {mode: immediate}
     inputs:
       - {id: entry, apiName: entryId, type: reference, target: entry, required: true, classification: internal}

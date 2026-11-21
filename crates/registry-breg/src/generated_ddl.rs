@@ -3679,12 +3679,11 @@ mod tests {
                 "mutationMode": "mutable",
                 "fields": record_fields
             }},
-            "actions": [{
-                "id": "patch-wide",
+            "actions": {"patch-wide": {
                 "execution": {"mode": "immediate"},
                 "inputs": inputs,
                 "plan": {"type": "fixed", "effects": effects}
-            }],
+            }},
             "accessProfiles": {"wide-runner": {
                 "default": true,
                 "principalClaim": "principal",

@@ -45,7 +45,7 @@ statisticalDatasets:
     disclosure: {type: minimum-count-and-rounding, minimumCount: 5, roundingBase: 5}
 
 actions:
-  - id: register-entry
+  register-entry:
     display: {label: Register entry}
     execution:
       mode: proposal

@@ -745,13 +745,13 @@ recordTypes:
       - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
       - {id: legal-name, apiName: legalName, type: string, required: true, maximumLength: 160, classification: restricted}
 functions:
-  - id: register-person-plan
+  register-person-plan:
     runtime: wasm
     source: wasm/handler.wasm
     entrypoint: handle
     abi: registry.action-plan/v1
 actions:
-  - id: register-person
+  register-person:
     inputs:
       - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
       - {id: legal-name, apiName: legalName, type: string, required: true, maximumLength: 160, classification: restricted}
