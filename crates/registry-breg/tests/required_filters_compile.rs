@@ -2,7 +2,7 @@
 
 //! Compile-time rules for `requiredFilters` on a record permission grant.
 
-use registry_breg::model::CompiledQueryKind;
+use registry_breg::model::{CompiledQueryFilterOperator, CompiledQueryKind};
 use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
 use serde_json::{json, Value};
 
@@ -177,6 +177,94 @@ fn an_alternative_no_filter_can_carry_is_refused() {
         found.contains(&expected),
         "expected {expected:?}, got {found:?}"
     );
+}
+
+fn with_details_and_validity(mut value: Value, temporal: bool) -> Value {
+    if temporal {
+        value["project"]["timezone"] = json!("UTC");
+    }
+    let person = &mut value["recordTypes"]["person"];
+    let fields = person["fields"].as_array_mut().unwrap();
+    fields.push(
+        json!({"id":"details","type":"structured","maximumBytes":1024,
+        "schema":{"type":"object","additionalProperties":false},"classification":"internal"}),
+    );
+    let mut readable = vec![
+        "national-id",
+        "family-name",
+        "birth-date",
+        "district",
+        "details",
+    ];
+    if temporal {
+        fields.push(
+            json!({"id":"valid-from","type":"date","required":true,"classification":"internal"}),
+        );
+        fields.push(json!({"id":"valid-to","type":"date","classification":"internal"}));
+        person["temporal"] = json!({"startField":"valid-from","endField":"valid-to"});
+        readable.extend(["valid-from", "valid-to"]);
+    }
+    value["accessProfiles"]["registrar"]["permissions"]["records"][0]["readableFields"] =
+        json!(readable);
+    value
+}
+
+#[test]
+fn a_field_no_eq_filter_can_match_is_refused() {
+    let expected = (
+        "breg.access-profile.required-filters-field-not-equality-filterable".to_owned(),
+        "recordTypes[id=person].accessProfiles[id=registrar].requiredFilters[field=details]"
+            .to_owned(),
+    );
+    for temporal in [false, true] {
+        let mut value = with_details_and_validity(
+            source(json!([{"fields":["details"]}]), json!(["list"])),
+            temporal,
+        );
+        value["accessProfiles"]["registrar"]["permissions"]["records"][0]["filterableFields"] =
+            json!(["national-id", "details"]);
+        let found = refusal(&value);
+        assert!(
+            found.contains(&expected),
+            "temporal={temporal}: expected {expected:?}, got {found:?}"
+        );
+    }
+}
+
+#[test]
+fn current_and_as_of_lists_carry_the_list_requirement_and_its_eq_fields() {
+    // The list check of each required field stands for `current` and `as-of`
+    // because they compile from the same grant with the same filterable
+    // fields, so a requirement `list` can meet, they can meet too.
+    let value = with_details_and_validity(
+        source(json!([{"fields":["national-id"]}]), json!(["list"])),
+        true,
+    );
+    let registry = compile(&value).expect("temporal grant compiles");
+    let eq_fields = |kind: CompiledQueryKind| {
+        let operation = registry
+            .queries()
+            .operations
+            .iter()
+            .find(|operation| operation.kind == kind && operation.selector_fields.is_empty())
+            .unwrap_or_else(|| panic!("{kind:?} compiles"));
+        let fields = operation
+            .filter_fields
+            .iter()
+            .filter(|field| {
+                field
+                    .operators
+                    .contains(&CompiledQueryFilterOperator::Equals)
+            })
+            .map(|field| field.field.clone())
+            .collect::<Vec<_>>();
+        (operation.required_filters.clone(), fields)
+    };
+    let list = eq_fields(CompiledQueryKind::List);
+    assert_eq!(list.0, vec![vec!["national-id".to_owned()]]);
+    for kind in [CompiledQueryKind::Current, CompiledQueryKind::AsOf] {
+        assert_eq!(eq_fields(kind), list, "{kind:?}");
+    }
 }
 
 #[test]

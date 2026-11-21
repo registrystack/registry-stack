@@ -8922,7 +8922,9 @@ fn required_filter_alternatives(
         for field in &alternative.fields {
             // A field outside filterableFields is reported by the profile
             // validation, so this reports only a filterable field that
-            // equality cannot match.
+            // equality cannot match. The `list` check stands for `current`
+            // and `as-of`, which compile from the same grant and filterable
+            // fields, and for the GIS collection, which is the `list` itself.
             if kind == CompiledQueryKind::List
                 && profile.filterable_fields.contains(field)
                 && !equality.contains(field.as_str())
