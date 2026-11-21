@@ -10957,6 +10957,59 @@ async fn a_policy_stored_by_an_earlier_release_is_refused_naming_the_removed_mem
 }
 
 #[tokio::test]
+async fn a_policy_stored_in_the_list_form_is_refused_naming_a_new_database() {
+    let fx = fixture().await;
+    let mut document = serde_json::to_value(read_policy(POLICY).expect("current policy"))
+        .expect("serialize current policy");
+    let listed: Vec<Value> = document["services"]
+        .as_object()
+        .expect("services are id-keyed")
+        .iter()
+        .map(|(id, service)| {
+            let mut service = service.clone();
+            service["id"] = json!(id);
+            service
+        })
+        .collect();
+    document["services"] = Value::Array(listed);
+    fx.admin
+        .execute(
+            "UPDATE scheduling_policy_revisions SET policy_document=$1",
+            &[&document],
+        )
+        .await
+        .expect("retain a policy in the list form an earlier release stored");
+    let mut replacement = read_policy(POLICY).expect("current policy");
+    replacement.project.version = "2".to_owned();
+    let digest = replacement.policy_digest();
+    let pool_ids: Vec<String> = replacement
+        .offerings
+        .iter()
+        .filter_map(|offering| offering.exact_time.as_ref().map(|exact| exact.pool.clone()))
+        .collect();
+    let refusal = fx
+        .store
+        .apply_policy(SCHEDULING_ID, &digest, &pool_ids, &replacement)
+        .await
+        .expect_err("a list-form policy is refused, not reported as corrupt");
+    assert!(
+        matches!(
+            refusal,
+            StoreError::StoredByEarlierRelease {
+                member: "services[*].id"
+            }
+        ),
+        "{refusal:?}"
+    );
+    assert!(refusal.is_activation_refusal(), "{refusal:?}");
+    let text = refusal.to_string();
+    assert!(
+        text.contains("services[*].id") && text.contains("start Scheduling from a new database"),
+        "{text}"
+    );
+}
+
+#[tokio::test]
 async fn reapplying_a_policy_does_not_reconstruct_a_missing_retained_document() {
     let fx = fixture().await;
     fx.admin

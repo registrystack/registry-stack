@@ -188,8 +188,9 @@ pub enum StoreError {
     SecretConfiguration(String),
     #[error("the Scheduling database is not in the state this runtime expects")]
     Corrupt,
-    /// A retained policy still holds a member this release removed.
-    #[error("a policy stored by an earlier release holds `{member}`, which this release does not read; Scheduling state stored by 0.45.0 or earlier is not readable after the upgrade, so start from a new database")]
+    /// A retained policy still holds a member this release does not read:
+    /// a member it removed, or the `id` of an entry stored in the list form.
+    #[error("a policy stored by an earlier release holds `{member}`, which this release does not read; Scheduling state stored by an earlier release is not readable after the upgrade, so start Scheduling from a new database")]
     StoredByEarlierRelease { member: &'static str },
     #[error("the bounded Scheduling capacity snapshot is too large to evaluate")]
     CapacitySnapshotTooLarge,
@@ -4150,22 +4151,48 @@ async fn publish_policy(
     Ok(revision)
 }
 
+/// The id-keyed policy collections, each with the member an earlier release
+/// stored in its place: a list whose entries carried their own `id`.
+const LISTED_COLLECTIONS: [(&str, &str); 5] = [
+    ("services", "services[*].id"),
+    ("offerings", "offerings[*].id"),
+    ("holidaySets", "holidaySets[*].id"),
+    ("openings", "openings[*].id"),
+    ("hooks", "hooks[*].id"),
+];
+
 /// Read a retained policy document without reinterpreting its stored members.
 ///
-/// A document that holds a member this release removed is reported as stored
-/// by an earlier release, not as corrupt, and stays refused.
+/// A document that holds a member this release removed, or a collection in
+/// the list form an earlier release stored, is reported as stored by an
+/// earlier release, not as corrupt, and stays refused.
 fn retained_policy(document: Value) -> Result<SchedulingPolicy, StoreError> {
+    let earlier_release_member = earlier_release_member(&document);
+    match serde_json::from_value(document) {
+        Ok(policy) => Ok(policy),
+        Err(_) => Err(
+            earlier_release_member.map_or(StoreError::Corrupt, |member| {
+                StoreError::StoredByEarlierRelease { member }
+            }),
+        ),
+    }
+}
+
+/// The first member that marks a document as stored by an earlier release.
+/// The removed holiday-set member is named first because it is the more
+/// specific of the two.
+fn earlier_release_member(document: &Value) -> Option<&'static str> {
     let holds_removed_member = document
         .get("holidaySets")
         .and_then(Value::as_array)
         .is_some_and(|sets| sets.iter().any(|set| set.get("because").is_some()));
-    match serde_json::from_value(document) {
-        Ok(policy) => Ok(policy),
-        Err(_) if holds_removed_member => Err(StoreError::StoredByEarlierRelease {
-            member: "holidaySets[*].because",
-        }),
-        Err(_) => Err(StoreError::Corrupt),
+    if holds_removed_member {
+        return Some("holidaySets[*].because");
     }
+    LISTED_COLLECTIONS
+        .iter()
+        .find(|(collection, _)| document.get(*collection).is_some_and(Value::is_array))
+        .map(|(_, member)| *member)
 }
 
 /// The combined policy-by-records contradictions a database write refuses.
@@ -5679,5 +5706,102 @@ mod query_bound_tests {
                 Err(StoreError::InvalidUndeliveredIntentsLimit)
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod retained_policy_tests {
+    use super::*;
+    use registry_scheduling_core::AUTHORED_POLICY_FILE;
+
+    const EXAMPLE: &str =
+        include_str!("../../../products/scheduling/examples/standalone-exact-time/scheduling.yaml");
+
+    fn current_document() -> Value {
+        let policy = SchedulingPolicy::read(AUTHORED_POLICY_FILE, EXAMPLE.as_bytes())
+            .expect("the example policy")
+            .value;
+        serde_json::to_value(policy).expect("serialize the example policy")
+    }
+
+    /// Rewrite one id-keyed collection the way an earlier release stored it:
+    /// a list whose entries carry their own `id`.
+    fn listed(document: &mut Value, collection: &str) {
+        let entries = match document.get(collection) {
+            Some(Value::Object(entries)) => entries
+                .iter()
+                .map(|(id, entry)| {
+                    let mut entry = entry.clone();
+                    entry
+                        .as_object_mut()
+                        .expect("an id-keyed entry is an object")
+                        .insert("id".to_owned(), json!(id));
+                    entry
+                })
+                .collect(),
+            _ => vec![json!({"id": "observer"})],
+        };
+        document
+            .as_object_mut()
+            .expect("a policy document is an object")
+            .insert(collection.to_owned(), Value::Array(entries));
+    }
+
+    #[test]
+    fn a_current_policy_document_reads_back() {
+        retained_policy(current_document()).expect("the current shape reads");
+    }
+
+    #[test]
+    fn a_policy_stored_in_the_list_form_names_the_collection_and_a_new_database() {
+        for (collection, expected) in [
+            ("services", "services[*].id"),
+            ("offerings", "offerings[*].id"),
+            ("holidaySets", "holidaySets[*].id"),
+            ("openings", "openings[*].id"),
+            ("hooks", "hooks[*].id"),
+        ] {
+            let mut document = current_document();
+            listed(&mut document, collection);
+            let refusal = retained_policy(document).expect_err(collection);
+            assert!(
+                matches!(refusal, StoreError::StoredByEarlierRelease { member } if member == expected),
+                "{collection}: {refusal:?}"
+            );
+            let text = refusal.to_string();
+            assert!(
+                text.contains("stored by an earlier release")
+                    && text.contains(&format!("`{expected}`"))
+                    && text.contains("start Scheduling from a new database"),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_list_form_holiday_set_with_the_removed_member_names_that_member() {
+        let mut document = current_document();
+        listed(&mut document, "holidaySets");
+        document["holidaySets"][0]["because"] = json!("Office closures");
+        let refusal = retained_policy(document).expect_err("an earlier-release member");
+        assert!(
+            matches!(
+                refusal,
+                StoreError::StoredByEarlierRelease {
+                    member: "holidaySets[*].because"
+                }
+            ),
+            "{refusal:?}"
+        );
+    }
+
+    #[test]
+    fn a_damaged_current_document_stays_corrupt() {
+        let mut document = current_document();
+        document["services"] = json!("not a collection");
+        assert!(matches!(
+            retained_policy(document),
+            Err(StoreError::Corrupt)
+        ));
     }
 }

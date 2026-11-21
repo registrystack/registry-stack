@@ -19,8 +19,11 @@
   states each mapping's entry count as `minProperties` and `maxProperties` in
   place of `minItems` and `maxItems`. The policy digest changes with the
   rewritten `scheduling.yaml`, so rebuild packages with
-  `schedulingctl package`. A stored project document written in the list form
-  no longer reads, so reactivate the policy from the rewritten package.
+  `schedulingctl package`. This release does not read Scheduling state stored
+  by an earlier release: a stored policy that holds one of these collections in
+  the list form is refused with a message that says it was stored by an
+  earlier release and names the member, for example `services[*].id`. Put
+  Scheduling on a new database.
 
 - Accept an optional `project.label` and `project.description` in the project
   block, as the shared project block does. They are display text for
