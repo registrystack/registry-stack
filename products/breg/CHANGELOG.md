@@ -95,23 +95,24 @@
   alternative `fields` sets that a `list` must pin with top-level `eq`
   predicates carrying a non-null value. A list or `$count` that does not is
   refused with `400 query.filter_required` before any query runs. The problem
-  carries a `requiredFilters` member and a `detail` that name the acceptable
-  sets. A continuation page cannot drop the criteria, because the signed cursor
-  binds the first page's filter. `bregctl check` refuses a `requiredFilters`
-  that is empty, repeats an alternative, has more than eight alternatives, names
-  a field outside the same grant's `filterableFields` or one that cannot take
+  carries a `requiredFilters` member that names the acceptable sets as API field
+  names, and a fixed `detail`. A continuation page cannot drop the criteria,
+  because the signed cursor binds the first page's filter. `bregctl check`
+  refuses a `requiredFilters` that is empty, repeats an alternative, has more
+  than eight alternatives or an alternative of more than 32 fields, names a
+  field outside the same grant's `filterableFields` or one that cannot take
   `eq`, or sits on a grant without `list`. A field repeated within one
   alternative is refused when the file is read, with `config.duplicate-item`,
   and each alternative compiles in field order. Runtime metadata lists the
   alternatives beside `filterableFields`, the Rust client exposes
   `BRegQueryDescriptor::required_filters` and
   `BRegProblemCode::QueryFilterRequired`, and the OpenAPI problem enum gains
-  `query.filter_required`, so a package's revision changes on rebuild. The
-  OpenAPI declares that `400` on a list operation only where an admitted profile
-  requires a filter. The ODRL export omits a list grant under `requiredFilters`,
-  with the reason `required-filters`, and still exports its get. The key governs
-  `list` only. Lookups, get, read paths, bulk export and `snapshot` are
-  unchanged.
+  `query.filter_required` and the Problem schema a bounded `requiredFilters`
+  member, so a package's revision changes on rebuild. The OpenAPI declares that
+  `400` on a list operation only where an admitted profile requires a filter.
+  The ODRL export omits a list grant under `requiredFilters`, with the reason
+  `required-filters`, and still exports its get. The key governs `list` only.
+  Lookups, get, read paths, bulk export and `snapshot` are unchanged.
 - Runtime Action metadata (`GET /v1/registry`, `metadata/registry.json` and the
   OpenAPI `x-registry-action` extension) carries `execution.review` (`none` or
   `required`) and `execution.application` (`manual` or `automatic`) for each

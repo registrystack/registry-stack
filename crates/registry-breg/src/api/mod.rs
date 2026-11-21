@@ -3230,10 +3230,9 @@ async fn read_query(
     )
     .map_err(|error| error.at("$filter"))?;
     if !required_filters_satisfied(operation, filter.as_ref()) {
-        return Err(ReadQueryError::FilterRequired(required_filter_names(
-            surface.response_entity,
-            operation,
-        )));
+        return Err(ReadQueryError::FilterRequired(
+            operation.required_filter_api_names(surface.response_entity),
+        ));
     }
     let spatial = first_page_spatial_query(surface, operation, query_options.bbox.as_ref())
         .map_err(|error| error.at("bbox"))?;
@@ -3357,31 +3356,6 @@ fn collect_pinned_fields<'a>(expr: &'a ReadFilterExpr, pinned: &mut BTreeSet<&'a
         }
         ReadFilterExpr::Binary { .. } | ReadFilterExpr::Not(_) | ReadFilterExpr::Predicate(_) => {}
     }
-}
-
-/// The required field sets under the names a caller writes in `$filter`.
-fn required_filter_names(
-    entity: &CompiledEntity,
-    operation: &CompiledQueryOperation,
-) -> Vec<Vec<String>> {
-    operation
-        .required_filters
-        .iter()
-        .map(|alternative| {
-            alternative
-                .iter()
-                .map(|field_id| {
-                    entity
-                        .stored_fields
-                        .iter()
-                        .map(|field| &field.logical)
-                        .chain(entity.derived_fields.values().map(|field| &field.logical))
-                        .find(|field| field.id == *field_id)
-                        .map_or_else(|| field_id.clone(), |field| field.api_name.clone())
-                })
-                .collect()
-        })
-        .collect()
 }
 
 fn query_operation_for_route<'a>(

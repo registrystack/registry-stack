@@ -198,7 +198,8 @@ withheld field return the same problem, and the field itself is never named.
 
 A grant that sets `requiredFilters` also refuses a list, and a `$count`, whose `$filter` does not
 pin every field of one listed set with a top-level `eq` predicate. The answer is
-`400 query.filter_required`, whose `requiredFilters` member and `detail` name the acceptable sets.
+`400 query.filter_required`, whose `requiredFilters` member names the acceptable sets as API field
+names.
 See [Require search criteria for lists](../../configure/breg-access/#require-search-criteria-for-lists).
 
 <ApiReferenceTable id="query-options" />

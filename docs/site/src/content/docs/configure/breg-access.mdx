@@ -245,7 +245,7 @@ entry is an alternative set of fields, and a list must pin every field of at lea
 With this grant, `GET /v1/records/facilities?$filter=facilityCode eq 'F-001'` runs, and so does
 a filter that pins both `city` and `status`. A list with no filter, or with only `city`, is refused
 with `400 query.filter_required` before any query runs. The response carries `requiredFilters`, the
-acceptable sets as API field names, and its `detail` names them.
+acceptable sets as API field names. Its `detail` is the fixed description of the code.
 
 An alternative counts as met only when the filter is a top-level `and` of predicates, brackets
 included, and every field of the alternative has an `eq` predicate with a non-null value. A predicate
@@ -262,7 +262,8 @@ cannot drop or change it.
   (`breg.access-profile.required-filters-field-not-equality-filterable`);
 - sits on a grant without `list`
   (`breg.access-profile.required-filters-list-required`);
-- is empty, has an empty alternative, repeats an alternative, or has more than eight alternatives
+- is empty, has an empty alternative, repeats an alternative, has more than eight alternatives, or
+  has an alternative of more than 32 fields, the most predicates one `$filter` may carry
   (`breg.access-profile.required-filters-empty`, `breg.access-profile.required-filters-duplicate`,
   `breg.access-profile.required-filters-too-many`).
 

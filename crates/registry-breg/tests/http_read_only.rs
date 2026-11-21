@@ -2325,11 +2325,44 @@ async fn a_list_that_pins_no_alternative_is_refused_before_any_query() {
         );
         assert_eq!(
             body["detail"],
-            "A list needs an eq filter on every field of at least one of these sets: (label) or (jurisdiction).",
+            "The list did not carry the search criteria its access profile requires.",
             "{query}"
         );
         assert_eq!(harness.records.calls(), 0, "{query}");
         assert_eq!(harness.records.refusal_calls(), 1, "{query}");
+    }
+}
+
+#[tokio::test]
+async fn the_refusal_and_its_example_fit_the_documented_problem_schema() {
+    let harness = required_filters_harness();
+    let openapi = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/openapi.json?accessProfile=caseworker",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    let schema = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&openapi["components"]["schemas"]["Problem"])
+        .expect("the Problem schema compiles");
+    let example = &openapi["paths"]["/v1/records/cases"]["get"]["responses"]["400"]["content"]
+        ["application/problem+json"]["examples"]["query.filter_required"]["value"];
+    assert_eq!(
+        example["requiredFilters"],
+        json!([["label"], ["jurisdiction"]]),
+        "{example}"
+    );
+    let body = body_json(required_filters_list(&harness, "").await).await;
+    for (name, problem) in [("refusal", &body), ("example", example)] {
+        if let Err(errors) = schema.validate(problem) {
+            let errors = errors.map(|error| error.to_string()).collect::<Vec<_>>();
+            panic!("the {name} breaks the Problem schema: {errors:?}\n{problem}");
+        }
     }
 }
 

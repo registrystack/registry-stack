@@ -282,8 +282,8 @@ pub(crate) fn timer_window_response(at_field: String, not_after_field: String) -
 /// Refuse a list that did not pin one of the alternative search criteria its
 /// grant requires. The alternatives are API field names the caller already
 /// reads from the surface's `filterableFields`, so naming them discloses
-/// nothing further. The detail spells them out for a person reading the
-/// response and `requiredFilters` carries them for a client.
+/// nothing further. `requiredFilters` carries them, and the detail stays the
+/// fixed description of the code, so it keeps within the documented bound.
 pub(crate) fn filter_required_response(alternatives: Vec<Vec<String>>) -> Response {
     let code = crate::problem::ProblemCode::QueryFilterRequired;
     let mut response = problem_response(
@@ -404,17 +404,6 @@ pub(crate) fn finish_response(
             }
         }
         if let Some(alternatives) = &problem.required_filters {
-            let sets = alternatives
-                .iter()
-                .map(|fields| format!("({})", fields.join(", ")))
-                .collect::<Vec<_>>()
-                .join(" or ");
-            object.insert(
-                "detail".to_owned(),
-                Value::String(format!(
-                    "A list needs an eq filter on every field of at least one of these sets: {sets}."
-                )),
-            );
             object.insert(
                 "requiredFilters".to_owned(),
                 serde_json::json!(alternatives),
