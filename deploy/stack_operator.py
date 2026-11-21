@@ -155,6 +155,35 @@ def verify_backup_receipt(receipt, namespace, release, database_id, digest, acti
         ) from error
 
 
+def verify_restored_database(status, receipt, database_id, digest):
+    """Check that a restored database is the one --database-id and its backup receipt name, on the staged package."""
+    if status.get("databaseId") != database_id:
+        raise OperationError(
+            "The restored database has another database ID than --database-id. "
+            "Restore the bundle into the intended database or correct --database-id."
+        )
+    if receipt.get("databaseId") != database_id:
+        raise OperationError(
+            "The backup receipt names another database than --database-id. "
+            "Use the receipt of the bundle you restored or correct --database-id."
+        )
+    if (
+        not isinstance(receipt.get("packageDigest"), str) or not receipt.get("activationId")
+        or status.get("activePackageDigest") != receipt["packageDigest"]
+        or status.get("activationId") != receipt["activationId"]
+    ):
+        raise OperationError(
+            "The restored database does not match the backup receipt. Its package digest or activation differs. "
+            "Restore the bundle the receipt names into an empty database."
+        )
+    if status.get("activePackageDigest") != digest:
+        raise OperationError(
+            "The restored database runs another package than the values file stages. "
+            "Stage the package the backup was taken with."
+        )
+    verify_active(status, digest, database_id)
+
+
 def operator_reference(value):
     """Accept the change reference BReg records as a keyed hash with an activation."""
     if (
@@ -469,11 +498,17 @@ class Installation:
         self.job("doctor", digest)
         return status
 
-    def verify_backup(self, digest, activation_id, check_age=True):
+    def read_receipt(self):
         try:
             receipt = decode_json(self.args.backup_receipt.read_text(), "Backup receipt")
-        except OSError as error:
+        except (OSError, UnicodeDecodeError) as error:
             raise OperationError("Cannot read the required backup receipt.") from error
+        if not isinstance(receipt, dict):
+            raise OperationError("Backup receipt is not a JSON object. Use the receipt that capture wrote.")
+        return receipt
+
+    def verify_backup(self, digest, activation_id, check_age=True):
+        receipt = self.read_receipt()
         verify_backup_receipt(
             receipt, self.args.namespace, self.args.release, self.args.database_id, digest, activation_id,
             self.args.max_backup_age_hours if check_age else None,
@@ -619,6 +654,7 @@ class Installation:
         return status
 
     def adopt(self):
+        receipt = self.read_receipt()
         self.require_no_upgrade_record()
         report, digest = self.job("claim-status")
         claim = report.get("instanceClaim")
@@ -628,6 +664,10 @@ class Installation:
             not claim["matches"] or self.values()["breg"]["package"]["expectedDigest"] != digest
         ):
             raise OperationError("Use a clean target Helm release for a logical restore.")
+        # The status report reads the activation record without the instance claim, so it answers for a copy
+        # that has not been adopted. Nothing changes until it matches the receipt.
+        restored, _ = self.job("status", digest)
+        verify_restored_database(restored, receipt, self.args.database_id, digest)
         if not claim["matches"]:
             self.job("claim-adopt", digest)
         status = self.verify_ready(digest)
@@ -662,6 +702,10 @@ def main():
         )
     restore = commands.add_parser("adopt-restored", help="Adopt a logical restore after permanently fencing the source.")
     restore.add_argument("--confirm-original-fenced", action="store_true", required=True)
+    restore.add_argument(
+        "--backup-receipt", type=Path, required=True,
+        help="Receipt of the backup bundle that was restored. The restored database must match it.",
+    )
     args = parser.parse_args()
     if not DNS_LABEL.fullmatch(args.namespace) or not DNS_LABEL.fullmatch(args.release) or len(args.release) > 53:
         parser.error("Use a Kubernetes namespace and a valid Helm release name.")
