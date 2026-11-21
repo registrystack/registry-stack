@@ -324,6 +324,11 @@ fn omission_reasons(
     if !crate::disclosure::plan(entity, profile_id).is_empty() {
         reasons.push("disclosure-condition");
     }
+    // ODRL has no term for the filter alternatives a list must pin. They bind
+    // `list` only, so a get under the same grant is unaffected.
+    if operation == Operation::List && !access.required_filters.is_empty() {
+        reasons.push("required-filters");
+    }
     // ODRL has no term for the reason header the request must carry.
     if access.require_access_reason {
         reasons.push("access-reason");
@@ -348,6 +353,7 @@ fn audit_access_profile(access: &AccessProfileSource) {
         readable_fields: _,
         writable_fields: _,
         filterable_fields: _,
+        // Read by `omission_reasons`, which omits the list grant as `required-filters`.
         required_filters: _,
         sortable_fields: _,
         spatial_queries: _,

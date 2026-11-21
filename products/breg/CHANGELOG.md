@@ -108,8 +108,10 @@
   `BRegProblemCode::QueryFilterRequired`, and the OpenAPI problem enum gains
   `query.filter_required`, so a package's revision changes on rebuild. The
   OpenAPI declares that `400` on a list operation only where an admitted profile
-  requires a filter. The key governs `list` only. Lookups, get, read paths, bulk
-  export and `snapshot` are unchanged.
+  requires a filter. The ODRL export omits a list grant under `requiredFilters`,
+  with the reason `required-filters`, and still exports its get. The key governs
+  `list` only. Lookups, get, read paths, bulk export and `snapshot` are
+  unchanged.
 - Runtime Action metadata (`GET /v1/registry`, `metadata/registry.json` and the
   OpenAPI `x-registry-action` extension) carries `execution.review` (`none` or
   `required`) and `execution.application` (`manual` or `automatic`) for each
