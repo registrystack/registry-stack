@@ -331,6 +331,20 @@ fn a_read_hook_on_a_record_type_without_an_access_log_is_refused() {
     );
 }
 
+#[test]
+fn a_uniqueness_constraint_on_a_withheld_field_is_refused() {
+    let path = format!("{FIELDS_COND}.fields[field=phone]");
+    for fields in [json!(["phone"]), json!(["district", "phone"])] {
+        let mut value = source();
+        value["recordTypes"][0]["constraints"] = json!([{"type": "unique", "fields": fields}]);
+        assert_refused(&value, "breg.disclosure.withheld-field-unique", &path);
+    }
+    let mut unrelated = source();
+    unrelated["recordTypes"][0]["constraints"] =
+        json!([{"type": "unique", "fields": ["subject-id"]}]);
+    compile(&unrelated).expect("a constraint on a field no condition withholds compiles");
+}
+
 fn statistics_source() -> Value {
     json!({"datasets":[{"id": "statistics-test"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",

@@ -788,6 +788,53 @@ fn check_refuses_a_read_hook_without_an_access_log_with_a_next_step() {
 }
 
 #[test]
+fn check_refuses_a_unique_withheld_field_with_a_next_step() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    let contact = &mut source["recordTypes"][0];
+    contact["fields"].as_array_mut().unwrap().push(json!({
+        "id": "phone", "type": "string", "maximumLength": 32, "classification": "internal"
+    }));
+    contact["constraints"] = json!([{"type": "unique", "fields": ["phone"]}]);
+    contact["disclosureConditions"] = json!([{
+        "id": "hide-phone",
+        "when": [{"type": "field-equals", "field": "jurisdiction", "value": "protected"}],
+        "withhold": "fields",
+        "fields": ["phone"],
+        "exemptProfiles": ["directory-editor"]
+    }]);
+    let project = TestProject::from_registry_source(&serde_json::to_vec_pretty(&source).unwrap());
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.disclosure.withheld-field-unique")
+        .unwrap_or_else(|| panic!("{report}"));
+    assert!(
+        diagnostic["path"]
+            .as_str()
+            .unwrap()
+            .contains("/disclosureConditions"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic["suggestedAction"]
+            .as_str()
+            .unwrap()
+            .contains("Withhold the record instead, or drop the constraint"),
+        "{diagnostic}"
+    );
+}
+
+#[test]
 fn hook_projection_errors_point_to_the_second_hook_in_each_owning_file() {
     let mut source = registry_platform_yaml::Reader::new("registry.yaml")
         .scan(include_bytes!(

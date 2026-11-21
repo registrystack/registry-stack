@@ -5,8 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::contract::{
-    DisclosureConditionSource, DisclosureWhenPredicate, DisclosureWithholdSource, EntitySource,
-    EventTrigger, FieldTypeSource, Operation, ProjectAccessProfileSource, UniqueSet,
+    ConstraintSource, DisclosureConditionSource, DisclosureWhenPredicate, DisclosureWithholdSource,
+    EntitySource, EventTrigger, FieldTypeSource, Operation, ProjectAccessProfileSource, UniqueSet,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{CompiledDisclosureCondition, CompiledEntity, DisclosureWithhold};
@@ -296,6 +296,18 @@ fn validate_fields(
                 "breg.disclosure.fields-invalid",
                 format!("{path}[field={field}]"),
                 "a withheld field is a stored field of its record type and is named once",
+            ));
+        }
+        // A create that repeats a withheld value answers a conflict and any
+        // other value succeeds, so the constraint would confirm a guess.
+        let unique = entity.constraints.iter().any(|constraint| {
+            matches!(constraint, ConstraintSource::Unique { fields, .. } if fields.contains(field))
+        });
+        if unique {
+            errors.push(Diagnostic::error(
+                "breg.disclosure.withheld-field-unique",
+                format!("{path}[field={field}]"),
+                "a uniqueness constraint on a withheld field confirms a guessed value with a conflict",
             ));
         }
     }
