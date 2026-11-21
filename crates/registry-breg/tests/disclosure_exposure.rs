@@ -243,10 +243,10 @@ fn declared_workflow_write_refusals(registry: &CompiledRegistry) -> [bool; 2] {
     ]
 }
 
-/// A plan Patch by a profile a `fields` or `history` condition binds is
-/// refused when it would lift a mark or overwrite a withheld field. A
-/// `record` condition hides the row instead, and an exempt writer meets no
-/// refusal.
+/// A plan Patch by a profile a condition binds can be refused, as a direct
+/// Patch can: under a `record` condition when the row it leaves is withheld,
+/// and under a `fields` or `history` condition when it would lift a mark or
+/// overwrite a withheld field. An exempt writer meets no refusal.
 #[test]
 fn the_openapi_declares_the_write_refusal_on_an_action_invoke_and_a_proposal_apply() {
     assert_eq!(
@@ -255,7 +255,7 @@ fn the_openapi_declares_the_write_refusal_on_an_action_invoke_and_a_proposal_app
     );
     assert_eq!(
         declared_workflow_write_refusals(&compile(&acting(Some("hide-protected")))),
-        [false, false]
+        [true, true]
     );
     assert_eq!(
         declared_workflow_write_refusals(&compile(&acting(None))),
