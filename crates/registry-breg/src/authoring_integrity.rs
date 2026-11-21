@@ -1329,7 +1329,7 @@ pub(crate) fn module_diagnostics(
         (
             "breg.action.duplicate-label",
             "actions",
-            display_labels(
+            keyed_display_labels(
                 "/actions",
                 &module.actions,
                 |item| &item.id,
