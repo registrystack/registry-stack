@@ -1052,7 +1052,7 @@ fn compiled_bound_writer_registry() -> CompiledRegistry {
          "set": {"phone": {"fromInput": "phone"}}}]});
     let targets = json!([{"recordType": "person", "rowBoundaries": "unrestricted"}]);
     let profile = |id: &str, default: bool| {
-        json!({"id": id, "default": default, "principalClaim": "registry_principal",
+        json!({"default": default, "principalClaim": "registry_principal",
             "requiredScopes": [format!("registry.{id}")],
             "permissions": {
                 "records": [{"recordType": "person", "operations": ["get", "list"],
@@ -1065,27 +1065,26 @@ fn compiled_bound_writer_registry() -> CompiledRegistry {
                     "operations": ["get", "list", "edit", "submit", "cancel", "apply"],
                     "targets": targets}]}})
     };
-    let source = json!({"datasets": [{"id": "test-dataset"}],
+    let source = json!({"datasets": {"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1", "kind": "BRegProject",
         "project": {"id": "bound-writer", "version": "1", "defaultLanguage": "en",
             "canonicalBaseIri": "https://bound-writer.example.test"},
-        "recordTypes": [{"id": "person", "primaryDataset": "test-dataset", "route": "people",
+        "recordTypes": {"person": {"primaryDataset": "test-dataset", "route": "people",
             "mutationMode": "mutable", "classification": "internal",
             "fields": [
                 {"id": "family-name", "type": "string", "maximumLength": 64, "classification": "internal"},
                 {"id": "protected", "type": "boolean", "classification": "internal"},
                 {"id": "phone", "type": "string", "maximumLength": 32, "classification": "internal"}],
-            "disclosureConditions": [{"id": "hide-phone",
-                "when": [{"type": "field-equals", "field": "protected", "value": true}],
-                "withhold": "fields", "fields": ["phone"], "exemptProfiles": ["officer"]}]}],
-        "actions": [
-            {"id": "set-person-phone", "inputs": inputs, "plan": plan,
+            "disclosureConditions": {"hide-phone": {"when": [{"type": "field-equals", "field": "protected", "value": true}],
+                "withhold": "fields", "fields": ["phone"], "exemptProfiles": ["officer"]}}}},
+        "actions": {
+            "set-person-phone": {"inputs": inputs, "plan": plan,
              "execution": {"mode": "immediate"}},
-            {"id": "propose-person-phone", "inputs": inputs, "plan": plan,
+            "propose-person-phone": {"inputs": inputs, "plan": plan,
              "commitGuards": {"targets": [{"input": "person", "revision": "unchanged"}]},
              "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"},
-                 "application": {"mode": "manual"}, "retention": {"mode": "operator-erase"}}}}],
-        "accessProfiles": [profile("registrar", true), profile("officer", false)]
+                 "application": {"mode": "manual"}, "retention": {"mode": "operator-erase"}}}}},
+        "accessProfiles": {"registrar": profile("registrar", true), "officer": profile("officer", false)}
     });
     let project =
         parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("fixture parses");
@@ -1150,20 +1149,20 @@ fn compiled_required_filter_registry(required: bool) -> CompiledRegistry {
     if required {
         registrar["requiredFilters"] = json!([{"fields": ["national-id"]}]);
     }
-    let source = json!({"datasets": [{"id": "test-dataset"}],
+    let source = json!({"datasets": {"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1", "kind": "BRegProject",
         "project": {"id": "required-filter", "version": "1", "defaultLanguage": "en",
             "canonicalBaseIri": "https://required-filter.example.test"},
-        "recordTypes": [{"id": "person", "primaryDataset": "test-dataset", "route": "people",
+        "recordTypes": {"person": {"primaryDataset": "test-dataset", "route": "people",
             "mutationMode": "mutable", "classification": "internal",
             "fields": [
                 {"id": "national-id", "type": "string", "maximumLength": 32, "classification": "internal"},
-                {"id": "family-name", "type": "string", "maximumLength": 64, "classification": "internal"}]}],
-        "accessProfiles": [
-            {"id": "registrar", "default": true, "principalClaim": "registry_principal",
+                {"id": "family-name", "type": "string", "maximumLength": 64, "classification": "internal"}]}},
+        "accessProfiles": {
+            "registrar": {"default": true, "principalClaim": "registry_principal",
              "requiredScopes": ["registry.registrar"], "permissions": {"records": [registrar]}},
-            {"id": "clerk", "principalClaim": "registry_principal",
-             "requiredScopes": ["registry.clerk"], "permissions": {"records": [grant]}}]
+            "clerk": {"principalClaim": "registry_principal",
+             "requiredScopes": ["registry.clerk"], "permissions": {"records": [grant]}}}
     });
     let project =
         parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("fixture parses");

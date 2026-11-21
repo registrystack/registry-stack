@@ -1844,6 +1844,12 @@ impl registry_platform_yaml::Identified for EntitySource {
     }
 }
 
+impl registry_platform_yaml::Identified for DisclosureConditionSource {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -1906,7 +1912,20 @@ pub struct EntitySource {
     #[serde(default)]
     pub hooks: Vec<HookSource>,
     /// Rules that withhold the record, its history or named fields from profiles they do not exempt.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Written as a mapping from each condition id to the rest of the
+    /// condition (CFG-ID-5) and held sorted by id.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            schema_with = "registry_platform_yaml::id_keyed_schema_bounded::<DisclosureConditionSource, 0, 8>"
+        )
+    )]
     pub disclosure_conditions: Vec<DisclosureConditionSource>,
     #[serde(default)]
     pub temporal: Option<TemporalSource>,
@@ -5914,6 +5933,10 @@ const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
         replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {PROFILE_ID: {principalClaim: ...}}, with no id member.",
     },
     RemovedKey {
+        pointer: "/recordTypes/*/disclosureConditions/*/id",
+        replacement: "Write disclosureConditions as a mapping from each id to the rest of its entry, disclosureConditions: {CONDITION_ID: {when: ...}}, with no id member.",
+    },
+    RemovedKey {
         pointer: "/recordTypes/*/changeControl",
         replacement: CHANGE_CONTROL_REPLACEMENT,
     },
@@ -6084,6 +6107,10 @@ const MODULE_REMOVED_KEYS: &[RemovedKey<'static>] = &[
     RemovedKey {
         pointer: "/recordTypes/*/accessProfiles/*/id",
         replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {PROFILE_ID: {principalClaim: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/recordTypes/*/disclosureConditions/*/id",
+        replacement: "Write disclosureConditions as a mapping from each id to the rest of its entry, disclosureConditions: {CONDITION_ID: {when: ...}}, with no id member.",
     },
     RemovedKey {
         pointer: "/extendRecordTypes/*/accessProfiles/*/id",

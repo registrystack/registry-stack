@@ -2574,19 +2574,19 @@ mod tests {
             "apiVersion": crate::compiler::AUTHORING_API_VERSION, "kind":"BRegProject",
             "project":{"id":"context-test","version":"0.1.0","defaultLanguage":"en",
                 "canonicalBaseIri":"https://context.example.test"},
-            "datasets":[{"id":"context-test"}],
-            "recordTypes":[{"id":"entry","primaryDataset":"context-test","route":"entries","mutationMode":"mutable",
+            "datasets":{"context-test": {}},
+            "recordTypes":{"entry": {"primaryDataset":"context-test","route":"entries","mutationMode":"mutable",
                 "fields":[
                     {"id":"level","type":"string","maximumLength":16,"classification":"internal"}],
-                "disclosureConditions":[{"id":"hide","when":[{"type":"field-equals","field":"level","value":"secret"}],
-                    "withhold":"record","exemptProfiles":["officer"]}]}],
-            "accessProfiles":[
-                {"id":"clerk","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+                "disclosureConditions":{"hide": {"when":[{"type":"field-equals","field":"level","value":"secret"}],
+                    "withhold":"record","exemptProfiles":["officer"]}}}},
+            "accessProfiles":{
+                "clerk": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "permissions":{"records":[{"recordType":"entry","operations":["get","create"],
                         "rowBoundaries":"unrestricted","readableFields":["level"],"writableFields":["level"]}]}},
-                {"id":"officer","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+                "officer": {"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "permissions":{"records":[{"recordType":"entry","operations":["get","create"],
-                        "rowBoundaries":"unrestricted","readableFields":["level"],"writableFields":["level"]}]}}]});
+                        "rowBoundaries":"unrestricted","readableFields":["level"],"writableFields":["level"]}]}}}});
         let project = crate::contract::parse_project_json(&serde_json::to_vec(&source).unwrap())
             .expect("project parses");
         let registry = crate::compiler::compile_project(

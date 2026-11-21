@@ -125,7 +125,8 @@
   both. The Node.js and Python clients expose `review`
   and `application` on each Action as the served string, or `null` (`None`) when
   the server sends none, as an older server does.
-- A Record type can declare `disclosureConditions`. Each is a conjunction of one to four literal
+- A Record type can declare `disclosureConditions`, a mapping from each condition id to the
+  condition. Each is a conjunction of one to four literal
   tests on the record's current values, and withholds the whole record (`withhold: record`), its
   revisions and snapshots (`history`) or named optional fields (`fields`) from every access profile
   that does not list it under `exemptProfiles`. A profile that writes the type only through an

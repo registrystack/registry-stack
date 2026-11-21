@@ -38,20 +38,28 @@ const PERSON_FIELDS: [&str; 5] = [
 /// one immediate and one Proposal Action that patch a person.
 fn history_source() -> Value {
     let mut source = project_source();
-    let records = source["recordTypes"].as_array_mut().unwrap();
-    for record in records.iter_mut() {
-        if record["id"] == "person" {
+    let records = source["recordTypes"].as_object_mut().unwrap();
+    for (id, record) in records.iter_mut() {
+        if id == "person" {
             record["tombstone"] = json!(true);
             record["batch"] = json!({"maximumItems": 4, "maximumBytes": 8192});
         }
-        for condition in record["disclosureConditions"].as_array_mut().unwrap() {
+        for condition in record["disclosureConditions"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+        {
             condition["exemptProfiles"]
                 .as_array_mut()
                 .unwrap()
                 .push(json!(WRITER));
         }
     }
-    for profile in source["accessProfiles"].as_array_mut().unwrap() {
+    for profile in source["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
         for grant in profile["permissions"]["records"].as_array_mut().unwrap() {
             grant["operations"] = json!(["get", "list", "snapshot", "revisions"]);
             grant["revisionAccess"] = json!(true);
@@ -70,8 +78,8 @@ fn history_source() -> Value {
             "readableFields": fields, "writableFields": fields})
     };
     let person_target = json!([{"recordType": "person", "rowBoundaries": "unrestricted"}]);
-    source["accessProfiles"].as_array_mut().unwrap().push(json!({
-        "id": WRITER, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
+    source["accessProfiles"][WRITER] = json!({
+        "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
         "permissions": {
             "records": [
                 writable("person", &PERSON_FIELDS),
@@ -85,10 +93,9 @@ fn history_source() -> Value {
             "proposals": [
                 {"action": "correct-person-name", "ownership": "caller",
                  "operations": ["get", "list", "edit", "submit", "revise", "rebase", "retry", "cancel", "apply"],
-                 "targets": person_target}]}}));
-    source["actions"] = json!([
-        {"id": "rename-person",
-         "inputs": [
+                 "targets": person_target}]}});
+    source["actions"] = json!({
+        "rename-person": {"inputs": [
             {"id": "person", "apiName": "personId", "type": "reference", "target": "person",
              "required": true, "classification": "internal"},
             {"id": "name", "apiName": "name", "type": "string", "maximumLength": 64,
@@ -97,8 +104,7 @@ fn history_source() -> Value {
          "plan": {"type": "fixed", "effects": [
             {"id": "rename", "target": {"fromInput": "person"}, "operation": "patch",
              "set": {"family-name": {"fromInput": "name"}}}]}},
-        {"id": "correct-person-name",
-         "execution": {"mode": "proposal", "proposal": {
+        "correct-person-name": {"execution": {"mode": "proposal", "proposal": {
             "review": {"type": "none"},
             "application": {"mode": "automatic", "maximumAttempts": 3},
             "retention": {"mode": "operator-erase"}}},
@@ -110,7 +116,7 @@ fn history_source() -> Value {
          "commitGuards": {"targets": [{"input": "person", "revision": "unchanged"}]},
          "plan": {"type": "fixed", "effects": [
             {"id": "correct", "target": {"fromInput": "person"}, "operation": "patch",
-             "set": {"family-name": {"fromInput": "name"}}}]}}]);
+             "set": {"family-name": {"fromInput": "name"}}}]}}});
     source
 }
 

@@ -135,7 +135,7 @@ impl DisclosurePlan<'_> {
             .collect()
     }
 
-    /// The bound conditions, in authored order.
+    /// The bound conditions, by id.
     pub fn conditions(&self) -> &[&CompiledDisclosureCondition] {
         &self.conditions
     }
@@ -443,25 +443,25 @@ mod tests {
     use serde_json::json;
 
     fn entity() -> CompiledEntity {
-        let source = json!({"datasets":[{"id":"d"}],
+        let source = json!({"datasets":{"d": {}},
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
             "project":{"id":"unit","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://unit.example.test"},
-            "recordTypes":[{"id":"person","primaryDataset":"d","route":"people","mutationMode":"mutable","classification":"internal",
+            "recordTypes":{"person": {"primaryDataset":"d","route":"people","mutationMode":"mutable","classification":"internal",
               "fields":[{"id":"level","type":"string","maximumLength":16,"classification":"internal"},
                         {"id":"age","type":"int64","classification":"internal"},
                         {"id":"phone","type":"string","maximumLength":16,"classification":"internal"}],
-              "disclosureConditions":[
-                {"id":"hide-record","when":[{"type":"field-equals","field":"level","value":"secret"}],
+              "disclosureConditions":{
+                "hide-record": {"when":[{"type":"field-equals","field":"level","value":"secret"}],
                  "withhold":"record","exemptProfiles":["officer"]},
-                {"id":"hide-history","when":[{"type":"field-is-not-null","field":"age"}],
+                "hide-history": {"when":[{"type":"field-is-not-null","field":"age"}],
                  "withhold":"history","exemptProfiles":["officer"]},
-                {"id":"hide-phone","when":[{"type":"field-in","field":"level","values":["a","b"]}],
-                 "withhold":"fields","fields":["phone"],"exemptProfiles":["officer"]}]}],
-            "accessProfiles":[
-              {"id":"registrar","default":true,"principalClaim":"p","requiredScopes":"unrestricted","permissions":{"records":[
+                "hide-phone": {"when":[{"type":"field-in","field":"level","values":["a","b"]}],
+                 "withhold":"fields","fields":["phone"],"exemptProfiles":["officer"]}}}},
+            "accessProfiles":{
+              "registrar": {"default":true,"principalClaim":"p","requiredScopes":"unrestricted","permissions":{"records":[
                 {"recordType":"person","operations":["get"],"rowBoundaries":"unrestricted","readableFields":["level","age","phone"]}]}},
-              {"id":"officer","principalClaim":"p","requiredScopes":"unrestricted","permissions":{"records":[
-                {"recordType":"person","operations":["get"],"rowBoundaries":"unrestricted","readableFields":["level","age","phone"]}]}}]});
+              "officer": {"principalClaim":"p","requiredScopes":"unrestricted","permissions":{"records":[
+                {"recordType":"person","operations":["get"],"rowBoundaries":"unrestricted","readableFields":["level","age","phone"]}]}}}});
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         compile_project(&project, &[], CompileProfile::Authoring)
             .expect("unit project compiles")
@@ -595,10 +595,10 @@ mod tests {
         }
         let grant = json!({"recordType":"person","operations":["get"],"rowBoundaries":"unrestricted",
             "readableFields":fields});
-        let source = json!({"datasets":[{"id":"d"}],
+        let source = json!({"datasets":{"d": {}},
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
             "project":{"id":"unit","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://unit.example.test"},
-            "recordTypes":[{"id":"person","primaryDataset":"d","route":"people","mutationMode":"mutable","classification":"internal",
+            "recordTypes":{"person": {"primaryDataset":"d","route":"people","mutationMode":"mutable","classification":"internal",
               "fields":[{"id":"level","type":"string","maximumLength":16,"classification":"internal"},
                         {"id":"phone","type":"string","maximumLength":16,"classification":"internal"},
                         {"id":"group","type":"string","maximumLength":16,"classification":"internal"},
@@ -611,12 +611,12 @@ mod tests {
                         {"id":"valid-to","type":"timestamp","validTimeRole":"valid-to","classification":"internal"}],
               "temporal":{"startField":"valid-from","endField":"valid-to"},
               "constraints":constraints,
-              "disclosureConditions":[
-                {"id":"hide-contact","when":[{"type":"field-equals","field":"level","value":"a"}],
-                 "withhold":"fields","fields":["phone","ceiling","valid-to"],"exemptProfiles":["officer"]}]}],
-            "accessProfiles":[
-              {"id":"registrar","default":true,"principalClaim":"p","requiredScopes":"unrestricted","permissions":{"records":[grant.clone()]}},
-              {"id":"officer","principalClaim":"p","requiredScopes":"unrestricted","permissions":{"records":[grant]}}]});
+              "disclosureConditions":{
+                "hide-contact": {"when":[{"type":"field-equals","field":"level","value":"a"}],
+                 "withhold":"fields","fields":["phone","ceiling","valid-to"],"exemptProfiles":["officer"]}}}},
+            "accessProfiles":{
+              "registrar": {"default":true,"principalClaim":"p","requiredScopes":"unrestricted","permissions":{"records":[grant.clone()]}},
+              "officer": {"principalClaim":"p","requiredScopes":"unrestricted","permissions":{"records":[grant]}}}});
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         compile_project(&project, &[], CompileProfile::Authoring)
             .expect("constrained unit project compiles")
@@ -706,7 +706,12 @@ mod tests {
     #[test]
     fn the_sql_form_is_two_valued() {
         let entity = entity();
-        let when = &entity.disclosure_conditions[0].when;
+        let when = &entity
+            .disclosure_conditions
+            .iter()
+            .find(|condition| condition.id == "hide-record")
+            .expect("the unit project declares hide-record")
+            .when;
         let sql = when_sql(&entity, when, &|field| format!("\"{field}\""));
         assert!(
             sql.starts_with("COALESCE((") && sql.ends_with("), false)"),

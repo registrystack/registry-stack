@@ -12,25 +12,25 @@ use registry_breg::{compile_project, parse_project_json, CompileProfile, Compile
 use serde_json::{json, Value};
 
 fn source() -> Value {
-    json!({"datasets":[{"id": "test-dataset"}],
+    json!({"datasets":{"test-dataset": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"exposure","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://exposure.example.test"},
-        "recordTypes":[{"id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"internal",
+        "recordTypes":{"person": {"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"internal",
           "fields":[{"id":"family-name","type":"string","maximumLength":64,"classification":"internal"},
                     {"id":"protected","type":"boolean","classification":"internal"},
                     {"id":"phone","type":"string","maximumLength":32,"classification":"internal"}],
-          "disclosureConditions":[
-            {"id":"hide-protected","when":[{"type":"field-equals","field":"protected","value":true}],
+          "disclosureConditions":{
+            "hide-protected": {"when":[{"type":"field-equals","field":"protected","value":true}],
              "withhold":"record","exemptProfiles":["officer"]},
-            {"id":"hide-phone","when":[{"type":"field-equals","field":"protected","value":true}],
-             "withhold":"fields","fields":["phone"],"exemptProfiles":["officer"]}]}],
-        "accessProfiles":[
-          {"id":"reader","default":true,"principalClaim":"registry_principal","requiredScopes":["registry.read"],
+            "hide-phone": {"when":[{"type":"field-equals","field":"protected","value":true}],
+             "withhold":"fields","fields":["phone"],"exemptProfiles":["officer"]}}}},
+        "accessProfiles":{
+          "reader": {"default":true,"principalClaim":"registry_principal","requiredScopes":["registry.read"],
            "permissions":{"records":[{"recordType":"person","operations":["get","list"],"rowBoundaries":"unrestricted",
              "readableFields":["family-name","protected"]}]}},
-          {"id":"officer","principalClaim":"registry_principal","requiredScopes":["registry.officer"],
+          "officer": {"principalClaim":"registry_principal","requiredScopes":["registry.officer"],
            "permissions":{"records":[{"recordType":"person","operations":["get","list"],"rowBoundaries":"unrestricted",
-             "readableFields":["family-name","protected","phone"]}]}}]
+             "readableFields":["family-name","protected","phone"]}]}}}
     })
 }
 
@@ -55,10 +55,10 @@ fn person(explanation: &Value) -> &Value {
 fn author_inspection_lists_the_conditions_in_full() {
     let registry = compiled();
     let expected = json!([
-        {"id":"hide-protected","when":[{"type":"field-equals","field":"protected","value":true}],
-         "withhold":"record","exemptProfiles":["officer"]},
         {"id":"hide-phone","when":[{"type":"field-equals","field":"protected","value":true}],
-         "withhold":{"fields":["phone"]},"exemptProfiles":["officer"]}]);
+         "withhold":{"fields":["phone"]},"exemptProfiles":["officer"]},
+        {"id":"hide-protected","when":[{"type":"field-equals","field":"protected","value":true}],
+         "withhold":"record","exemptProfiles":["officer"]}]);
     let access = serde_json::to_value(explain_access(&registry)).unwrap();
     assert_eq!(person(&access)["disclosureConditions"], expected);
     assert_eq!(
@@ -83,7 +83,7 @@ fn the_access_preview_names_the_conditions_that_bind_the_profile() {
         serde_json::to_value(preview_access(&registry, scenario("reader")).unwrap()).unwrap();
     assert_eq!(
         bound["disclosureConditions"],
-        json!(["hide-protected", "hide-phone"])
+        json!(["hide-phone", "hide-protected"])
     );
     let exempt =
         serde_json::to_value(preview_access(&registry, scenario("officer")).unwrap()).unwrap();
@@ -120,21 +120,21 @@ fn the_odrl_export_omits_a_grant_a_condition_binds() {
 /// under no row boundary. `bound_by` names the one condition that binds it.
 fn writable(bound_by: Option<&str>) -> Value {
     let mut value = source();
-    value["recordTypes"][0]["batch"] = json!({"maximumItems": 4, "maximumBytes": 8192});
-    for condition in value["recordTypes"][0]["disclosureConditions"]
-        .as_array_mut()
+    value["recordTypes"]["person"]["batch"] = json!({"maximumItems": 4, "maximumBytes": 8192});
+    for (id, condition) in value["recordTypes"]["person"]["disclosureConditions"]
+        .as_object_mut()
         .unwrap()
     {
-        if Some(condition["id"].as_str().unwrap()) != bound_by {
+        if Some(id.as_str()) != bound_by {
             condition["exemptProfiles"] = json!(["officer", "registrar"]);
         }
     }
-    value["accessProfiles"].as_array_mut().unwrap().push(json!(
-        {"id":"registrar","principalClaim":"registry_principal","requiredScopes":["registry.registrar"],
+    value["accessProfiles"]["registrar"] = json!(
+        {"principalClaim":"registry_principal","requiredScopes":["registry.registrar"],
          "permissions":{"records":[{"recordType":"person","operations":["create","get","list","patch","batch"],
            "rowBoundaries":"unrestricted","readableFields":["family-name","protected","phone"],
            "writableFields":["family-name","protected","phone"],"sortableFields":["family-name"]}]}}
-    ));
+    );
     value
 }
 
@@ -200,20 +200,15 @@ fn acting(bound_by: Option<&str>) -> Value {
     let plan = json!({"type": "fixed", "effects": [
         {"id": "contact", "target": {"fromInput": "person"}, "operation": "patch",
          "set": {"phone": {"fromInput": "phone"}}}]});
-    value["actions"] = json!([
-        {"id": "set-person-phone", "inputs": inputs, "plan": plan,
+    value["actions"] = json!({
+        "set-person-phone": {"inputs": inputs, "plan": plan,
          "execution": {"mode": "immediate"}},
-        {"id": "propose-person-phone", "inputs": inputs, "plan": plan,
+        "propose-person-phone": {"inputs": inputs, "plan": plan,
          "commitGuards": {"targets": [{"input": "person", "revision": "unchanged"}]},
          "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"},
-           "application": {"mode": "manual"}, "retention": {"mode": "operator-erase"}}}}]);
+           "application": {"mode": "manual"}, "retention": {"mode": "operator-erase"}}}}});
     let targets = json!([{"recordType": "person", "rowBoundaries": "unrestricted"}]);
-    let registrar = value["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == "registrar")
-        .unwrap();
+    let registrar = &mut value["accessProfiles"]["registrar"];
     registrar["permissions"]["actions"] = json!([
         {"action": "set-person-phone", "operations": ["invoke"], "targets": targets},
         {"action": "propose-person-phone", "operations": ["start"], "targets": targets}]);

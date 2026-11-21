@@ -67,7 +67,7 @@ fn compiled_with_profiles(with_reasoned: bool) -> CompiledRegistry {
 /// hook that alerts on every read under the `reasoned` profile.
 fn compiled_with_read_alert() -> CompiledRegistry {
     let mut source = access_source(true);
-    source["recordTypes"][0]["hooks"] = json!([
+    source["recordTypes"]["entry"]["hooks"] = json!([
         {"id":"reasoned-read","phase":"after","trigger":"read","profiles":["reasoned"],"projection":[]}
     ]);
     compile_access_source(source)
@@ -1734,30 +1734,30 @@ fn compiled_with_writes() -> CompiledRegistry {
             "rowBoundaries":"unrestricted"})
     };
     let entry_writes = json!(["get", "create", "patch", "batch", "tombstone"]);
-    let profile = |id: &str, reason: bool, records: Value| {
-        json!({"id":id,"principalClaim":"sub","requiredScopes":"unrestricted",
+    let profile = |reason: bool, records: Value| {
+        json!({"principalClaim":"sub","requiredScopes":"unrestricted",
             "requiredPurposes":[PURPOSE],"requireAccessReason":reason,
             "permissions":{"records":records}})
     };
-    let source = json!({"datasets":[{"id": "records"}],
+    let source = json!({"datasets":{"records": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "recordTypes":[
-            {"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable",
+        "recordTypes":{
+            "entry": {"primaryDataset":"records","route":"entries","mutationMode":"mutable",
                 "tombstone":true,"batch":{"maximumItems":10,"maximumBytes":65536},
                 "classification":"restricted","fields":fields.clone(),
                 "accessLog":{"subjectField":"subject","retentionDays":30,
                     "exemptions":{"investigator":{"reason":"investigation-policy-canary","delayDays":7}}},
                 "hooks":[{"id":"clerk-read","phase":"after","trigger":"read","profiles":["clerk"],"projection":[]}]},
-            {"id":"note","primaryDataset":"records","route":"notes","mutationMode":"mutable",
-                "classification":"restricted","fields":fields}],
-        "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],
+            "note": {"primaryDataset":"records","route":"notes","mutationMode":"mutable",
+                "classification":"restricted","fields":fields}},
+        "accessProfiles":{
+            "reader": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],
                 "permissions":{"records":[{"recordType":"entry","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}]}},
-            profile("clerk", true, json!([writer("entry", entry_writes.clone()), writer("note", json!(["create"]))])),
-            profile("investigator", true, json!([writer("entry", json!(["get", "create"]))])),
-            profile("steward", false, json!([writer("entry", entry_writes)]))
-        ]
+            "clerk": profile(true, json!([writer("entry", entry_writes.clone()), writer("note", json!(["create"]))])),
+            "investigator": profile(true, json!([writer("entry", json!(["get", "create"]))])),
+            "steward": profile(false, json!([writer("entry", entry_writes)]))
+        }
     });
     compile_access_source(source)
 }

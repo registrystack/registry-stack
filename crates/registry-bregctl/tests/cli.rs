@@ -654,7 +654,7 @@ fn check_refuses_invalid_required_filters_with_a_next_step() {
         .to_json_value();
     let with_required = |filterable: serde_json::Value, required: serde_json::Value| {
         let mut source = baseline.clone();
-        let grant = &mut source["accessProfiles"][0]["permissions"]["records"][0];
+        let grant = &mut source["accessProfiles"]["directory-editor"]["permissions"]["records"][0];
         grant["filterableFields"] = filterable;
         grant["requiredFilters"] = required;
         source
@@ -717,13 +717,12 @@ fn check_refuses_invalid_disclosure_conditions_with_a_next_step() {
         .unwrap()
         .unwrap()
         .to_json_value();
-    source["recordTypes"][0]["disclosureConditions"] = json!([{
-        "id": "hide-contact",
+    source["recordTypes"]["contact"]["disclosureConditions"] = json!({"hide-contact": {
         "when": [{"type": "field-equals", "field": "jurisdiction", "value": "protected"}],
         "withhold": "fields",
         "fields": ["email"],
         "exemptProfiles": ["no-such-profile"]
-    }]);
+    }});
     let project = TestProject::from_registry_source(&serde_json::to_vec_pretty(&source).unwrap());
     let output = bregctl(&["--format", "json", "check", path(project.path())]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
@@ -759,7 +758,7 @@ fn check_refuses_a_read_hook_without_an_access_log_with_a_next_step() {
         .unwrap()
         .unwrap()
         .to_json_value();
-    let contact = &mut source["recordTypes"][0];
+    let contact = &mut source["recordTypes"]["contact"];
     contact["hooks"] = json!([{
         "id": "contact-read", "phase": "after", "trigger": "read",
         "profiles": ["directory-editor"], "projection": []
@@ -796,19 +795,18 @@ fn check_warns_of_a_unique_withheld_field_and_accepts_it() {
         .unwrap()
         .unwrap()
         .to_json_value();
-    let contact = &mut source["recordTypes"][0];
+    let contact = &mut source["recordTypes"]["contact"];
     contact["fields"].as_array_mut().unwrap().push(json!({
         "id": "phone", "type": "string", "maximumLength": 32, "classification": "internal"
     }));
     contact["constraints"] = json!([{"type": "unique", "fields": ["phone"]}]);
-    contact["disclosureConditions"] = json!([{
-        "id": "hide-phone",
+    contact["disclosureConditions"] = json!({"hide-phone": {
         "when": [{"type": "field-equals", "field": "jurisdiction", "value": "protected"}],
         "withhold": "fields",
         "fields": ["phone"],
         "exemptProfiles": ["directory-editor"]
-    }]);
-    let grant = &mut source["accessProfiles"][0]["permissions"]["records"][0];
+    }});
+    let grant = &mut source["accessProfiles"]["directory-editor"]["permissions"]["records"][0];
     for member in ["readableFields", "writableFields"] {
         grant[member].as_array_mut().unwrap().push(json!("phone"));
     }
@@ -860,7 +858,7 @@ acceptances:
   - code: breg.disclosure.withheld-field-probe
     scope:
       file: registry.yaml
-      path: /recordTypes/@id=contact/disclosureConditions/@id=hide-phone/fields/0
+      path: /recordTypes/contact/disclosureConditions/hide-phone/fields/0
     reason: Only trusted directory staff can create contacts.
 "#,
     )

@@ -40,7 +40,7 @@
     "disclosureConditions": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "The ids of the disclosure conditions of the Record type that bind the previewed profile, in authored order. Present only when at least one does. A condition's when literals are never shown here."
+      "description": "The ids of the disclosure conditions of the Record type that bind the previewed profile, by id. Present only when at least one does. A condition's when literals are never shown here."
     },
     "recipients": {
       "type": "array",

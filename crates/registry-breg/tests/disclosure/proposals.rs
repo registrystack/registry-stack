@@ -64,15 +64,15 @@ fn action_grant(action: &str, record_type: &str, context: &[&str]) -> (Value, Va
 /// set is a create, and a residence correction.
 fn proposal_project() -> Value {
     let mut source = project_source();
-    source["recordTypes"][0]["mutationPolicy"] = json!({"patch": "proposal-required"});
-    source["recordTypes"][1]["mutationPolicy"] = json!({"patch": "proposal-required"});
+    source["recordTypes"]["person"]["mutationPolicy"] = json!({"patch": "proposal-required"});
+    source["recordTypes"]["residence"]["mutationPolicy"] = json!({"patch": "proposal-required"});
     let proposal = |review: Value, attachments: Value| {
         json!({"review": {"type": "none"}, "application": {"mode": "manual"},
             "retention": {"mode": "operator-erase"}, "attachments": attachments,
             "reviewContext": review})
     };
-    source["actions"] = json!([
-        {"id": "correct-person", "execution": {"mode": "proposal", "proposal": proposal(
+    source["actions"] = json!({
+        "correct-person": {"execution": {"mode": "proposal", "proposal": proposal(
             json!({"id": "review-person", "fields": {
                 "contact": {"type": "record", "input": "target", "field": "email-address"},
                 "changes": {"type": "changes", "recordType": "person",
@@ -83,7 +83,7 @@ fn proposal_project() -> Value {
          "commitGuards": {"targets": [{"input": "target", "revision": "unchanged"}]},
          "plan": {"type": "fixed", "effects": [{"id": "name", "target": {"fromInput": "target"},
             "operation": "patch", "set": {"family-name": {"fromInput": "value"}}}]}},
-        {"id": "register-person", "execution": {"mode": "proposal", "proposal": proposal(
+        "register-person": {"execution": {"mode": "proposal", "proposal": proposal(
             json!({"id": "review-registration", "fields": {
                 "changes": {"type": "changes", "recordType": "person",
                     "fields": ["family-name", "protection-level", "email-address"]}}}), json!([]))},
@@ -95,7 +95,7 @@ fn proposal_project() -> Value {
             "target": {"recordType": "person"}, "set": {
                 "family-name": {"fromInput": "name"}, "protection-level": {"fromInput": "level"},
                 "email-address": {"fromInput": "email"}}}]}},
-        {"id": "correct-residence", "execution": {"mode": "proposal", "proposal": proposal(
+        "correct-residence": {"execution": {"mode": "proposal", "proposal": proposal(
             json!({"id": "review-residence", "fields": {
                 "residence": {"type": "changes", "recordType": "residence", "fields": ["address"]}}}),
             json!([]))},
@@ -104,8 +104,12 @@ fn proposal_project() -> Value {
             {"id": "value", "type": "string", "required": true, "maximumLength": 128, "classification": "internal"}],
          "commitGuards": {"targets": [{"input": "target", "revision": "unchanged"}]},
          "plan": {"type": "fixed", "effects": [{"id": "address", "target": {"fromInput": "target"},
-            "operation": "patch", "set": {"address": {"fromInput": "value"}}}]}}]);
-    for profile in source["accessProfiles"].as_array_mut().unwrap() {
+            "operation": "patch", "set": {"address": {"fromInput": "value"}}}]}}});
+    for profile in source["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
         profile["principalClaim"] = json!("sub");
         let records = profile["permissions"]["records"].as_array_mut().unwrap();
         for grant in records.iter_mut() {

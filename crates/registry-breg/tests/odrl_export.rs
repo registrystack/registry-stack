@@ -381,7 +381,7 @@ fn row_membership_and_consent_restrictions_omit_the_complete_read_grant() {
 fn a_grant_with_required_filters_omits_its_list_grant_only() {
     let export = |required: bool| {
         let mut source = supported_source();
-        let grant = &mut source["accessProfiles"][0]["permissions"]["records"][0];
+        let grant = &mut source["accessProfiles"]["directory-editor"]["permissions"]["records"][0];
         grant["filterableFields"] = json!(["jurisdiction"]);
         if required {
             grant["requiredFilters"] = json!([{"fields": ["jurisdiction"]}]);
@@ -419,17 +419,16 @@ fn a_profile_that_requires_an_access_reason_omits_the_complete_read_grant() {
     // so the reader is a copy of the editor's record grant without them.
     let reader = |require_access_reason: bool| {
         let mut source = supported_source();
-        let mut reader = source["accessProfiles"][0].clone();
-        reader["id"] = json!("reason-reader");
+        let mut reader = source["accessProfiles"]["directory-editor"].clone();
         reader["default"] = json!(false);
         reader["requireAccessReason"] = json!(require_access_reason);
         let permissions = reader["permissions"].as_object_mut().unwrap();
         permissions.remove("actions");
         permissions.remove("proposals");
         source["accessProfiles"]
-            .as_array_mut()
+            .as_object_mut()
             .unwrap()
-            .push(reader);
+            .insert("reason-reader".to_owned(), reader);
         export_odrl(&compile_source(&source), Some("reason-reader")).unwrap()
     };
     let read = |export: &registry_breg::odrl_export::OdrlExport, operation: &str| {

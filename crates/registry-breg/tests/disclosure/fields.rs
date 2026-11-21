@@ -66,8 +66,12 @@ fn the_fixture_withholds_contacts_from_the_registrar_only() {
 /// The fixture project with create and patch granted on `person`.
 fn writable_project() -> registry_breg::CompiledRegistry {
     let mut source = project_source();
-    source["recordTypes"][0]["batch"] = json!({"maximumItems": 4, "maximumBytes": 8192});
-    for profile in source["accessProfiles"].as_array_mut().unwrap() {
+    source["recordTypes"]["person"]["batch"] = json!({"maximumItems": 4, "maximumBytes": 8192});
+    for profile in source["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
         let grant = &mut profile["permissions"]["records"][0];
         assert_eq!(grant["recordType"], "person");
         grant["operations"] = json!(["create", "get", "list", "patch", "batch"]);

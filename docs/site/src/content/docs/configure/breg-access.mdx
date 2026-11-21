@@ -458,18 +458,18 @@ Action issues a consent.
 Some records need more protection while a flag is set: a person under witness protection, a case
 that is sealed, a field that is hidden once a status changes. `disclosureConditions` on a Record type
 withholds a record, its history or named fields from every access profile the condition does not
-exempt, for as long as the record's current values match:
+exempt, for as long as the record's current values match. Each condition is keyed by its id:
 
 ```yaml
 recordTypes:
-  - id: case
+  case:
     disclosureConditions:
-      - id: sealed-case
+      sealed-case:
         when:
           - {type: field-equals, field: sealed, value: true}
         withhold: record
         exemptProfiles: [registrar]
-      - id: hide-notes
+      hide-notes:
         when:
           - {type: field-in, field: status, values: [closed, archived]}
         withhold: fields
@@ -575,8 +575,7 @@ refuses:
   projections or statistical dataset (`breg.disclosure.withheld-field-exposed`);
 - a `when` field of an unsupported type, or a literal that does not fit it
   (`breg.disclosure.when-field-invalid`, `breg.disclosure.when-value-invalid`);
-- a duplicate id, more than eight conditions, or an empty or unknown `exemptProfiles`
-  (`breg.disclosure.id-duplicate`, `breg.disclosure.too-many`,
+- more than eight conditions, or an empty or unknown `exemptProfiles` (`breg.disclosure.too-many`,
   `breg.disclosure.exempt-profiles-invalid`);
 - spatial queries over a withheld geometry (`breg.disclosure.spatial-query-withheld-geometry`);
 - a derived field, row boundary, membership boundary, consent requirement, read path, Evidence fact
