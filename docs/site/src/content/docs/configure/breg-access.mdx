@@ -516,10 +516,15 @@ for an absent record.
 
 Only an exempt profile lifts a `fields` or `history` condition, or writes a field a `fields`
 condition withholds. When a condition that binds the writing profile matches a record, a write to
-that record is refused with `403 write.outside-boundary` in two cases:
+that record is refused with `403 write.outside-boundary` in three cases:
 
 - The write names a field the condition lists under `fields`. Writing back the `null` a read showed
   counts, so the answer is the same whether or not the field holds a value.
+- The write changes a field that a constraint checks together with a field the condition lists
+  under `fields`. That is another field of a uniqueness constraint, a field a partial uniqueness
+  constraint's `when` reads, the other side of a comparison, a scope field of a temporal
+  non-overlap, or a valid-time field. The conflict or failed check would otherwise answer whether
+  the withheld value matches a guess. Writing back the stored value is allowed.
 - The record would no longer match the condition afterwards, which would lift the mark.
 
 A bound profile can still set a mark and write any field a condition does not name. In the example
@@ -585,10 +590,6 @@ refuses:
 
 These refusals hold whatever the profiles:
 
-- A uniqueness constraint, or an encrypted field's unique lookup, on a field a `fields` condition
-  withholds (`breg.disclosure.withheld-field-unique`). A create that repeated the withheld value
-  would answer a conflict and so confirm a guess. Withhold the record instead, or drop the
-  constraint or the unique lookup.
 - A change hook (`created`, `patched` or `tombstoned`) on a Record type with a `record` or `history`
   condition (`breg.disclosure.withheld-field-exposed`). A change hook must project at least one
   field and its destinations hold no access profile, so such a Record type declares no change hook
@@ -609,8 +610,18 @@ Design around them.
 
 - A Proposal's inputs stay visible to its reviewers. A reviewer sees what the author typed, even for
   a field the reviewer's own profile would not read on the record.
-- A uniqueness conflict on a write can reveal that a hidden record exists. A create that repeats a
-  unique value of a record a `record` condition withholds answers `409 mutation.conflict`.
+- A Create can confirm a hidden value. A Create that repeats a unique value of a record a `record`
+  condition withholds answers `409 mutation.conflict`, which shows that the hidden record exists.
+  For a field a `fields` condition withholds, a Create that repeats its value answers the same `409`
+  when the field belongs to a uniqueness constraint, has a unique encrypted lookup, or is in a
+  temporal non-overlap. That confirms the value exists on a hidden record. `bregctl check` warns
+  about the `fields` case with `breg.disclosure.withheld-field-probe`, ranked as widening access,
+  so the check fails under `--deny-warnings` until you
+  [accept the finding](../../reference/configuration-files/#accept-an-intentional-project-warning).
+  Keep the field out of the constraint, or accept the finding if the profiles that can create these
+  records are trusted.
+  A Patch cannot probe a withheld value this way, because the rule in
+  [Who can lift a mark](#who-can-lift-a-mark) refuses it.
 - A refused write can reveal that a condition matches. The `403 write.outside-boundary` a bound
   profile meets tells it that a condition holds for this record. A `null` it read is then known to
   be withheld rather than unset.

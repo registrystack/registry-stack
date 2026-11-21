@@ -15,7 +15,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
-use crate::contract::{DisclosureWhenPredicate, FieldTypeSource};
+use crate::contract::{
+    ConstraintSource, DisclosureWhenPredicate, FieldTypeSource, UniqueWhenPredicate,
+};
 use crate::generated_ddl::{quote_identifier, quote_literal, typed_literal_sql};
 use crate::model::{CompiledDisclosureCondition, CompiledEntity, DisclosureWithhold};
 
@@ -141,9 +143,13 @@ impl DisclosurePlan<'_> {
     /// Whether the profile may not write `written` over `before`. A bound
     /// `fields` or `history` condition that matches `before` refuses a write
     /// that names one of its `fields`, the `null` a read showed included, and
-    /// a write that leaves it unmatched, which lifts the mark. Setting a mark
-    /// on a record the condition does not match stays allowed. A `record`
-    /// condition is decided on the resulting state by the row boundary check.
+    /// a write that leaves it unmatched, which lifts the mark. A bound
+    /// `fields` condition also refuses a write that changes a field a
+    /// constraint ties to one of its `fields`, because the conflict or check
+    /// failure would answer whether the withheld value matches a guess.
+    /// Setting a mark on a record the condition does not match stays allowed.
+    /// A `record` condition is decided on the resulting state by the row
+    /// boundary check.
     pub fn refuses_write(
         &self,
         before: &Map<String, Value>,
@@ -155,16 +161,23 @@ impl DisclosurePlan<'_> {
                 .iter()
                 .map(|(field, value)| (field.clone(), value.clone())),
         );
+        let ties = constraint_ties(self.entity);
         for condition in &self.conditions {
-            let names_a_written_field = match &condition.withhold {
+            let reaches_a_withheld_field = match &condition.withhold {
                 DisclosureWithhold::Record => continue,
                 DisclosureWithhold::History => false,
-                DisclosureWithhold::Fields(fields) => {
-                    written.keys().any(|field| fields.contains(field))
-                }
+                DisclosureWithhold::Fields(fields) => written.iter().any(|(field, value)| {
+                    fields.contains(field)
+                        || (before.get(field).unwrap_or(&Value::Null) != value
+                            && ties.iter().any(|tie| {
+                                tie.contains(field.as_str())
+                                    && tie.iter().any(|member| fields.contains(*member))
+                            }))
+                }),
             };
             if when_matches(self.entity, &condition.when, before)?
-                && (names_a_written_field || !when_matches(self.entity, &condition.when, &after)?)
+                && (reaches_a_withheld_field
+                    || !when_matches(self.entity, &condition.when, &after)?)
             {
                 return Ok(true);
             }
@@ -191,6 +204,61 @@ impl DisclosurePlan<'_> {
         }
         Ok(false)
     }
+}
+
+/// The field sets whose values one constraint checks together, so a write to
+/// one member is answered according to the others. A uniqueness constraint
+/// ties its fields and the fields its `when` reads, a comparison its two
+/// sides, a temporal non-overlap its scope and the valid-time fields, and the
+/// temporal order check the valid-time fields. A single-field constraint, an
+/// encrypted field's unique lookup included, ties nothing to another field.
+fn constraint_ties(entity: &CompiledEntity) -> Vec<BTreeSet<&str>> {
+    let valid_time = || {
+        entity
+            .fields
+            .values()
+            .filter(|field| field.valid_time_role.is_some())
+            .map(|field| field.id.as_str())
+    };
+    let mut ties = entity
+        .constraints
+        .values()
+        .filter_map(|constraint| match constraint {
+            ConstraintSource::Unique { fields, when, .. } => Some(
+                fields
+                    .iter()
+                    .map(String::as_str)
+                    .chain(
+                        when.iter()
+                            .flatten()
+                            .filter_map(|predicate| match predicate {
+                                UniqueWhenPredicate::FieldEquals { field, .. }
+                                | UniqueWhenPredicate::FieldIsNull { field }
+                                | UniqueWhenPredicate::FieldIsNotNull { field } => {
+                                    Some(field.as_str())
+                                }
+                                UniqueWhenPredicate::ActiveLifecycle {} => None,
+                            }),
+                    )
+                    .collect(),
+            ),
+            ConstraintSource::Compare { left, right, .. } => {
+                Some(BTreeSet::from([left.as_str(), right.as_str()]))
+            }
+            ConstraintSource::TemporalNonOverlap { scope_fields, .. } => Some(
+                scope_fields
+                    .iter()
+                    .map(String::as_str)
+                    .chain(valid_time())
+                    .collect(),
+            ),
+            ConstraintSource::IntRange { .. } | ConstraintSource::Vocabulary { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    if entity.temporal.is_some() {
+        ties.push(valid_time().collect());
+    }
+    ties
 }
 
 /// Whether every predicate holds for `state`. A predicate on an absent or null
@@ -496,6 +564,107 @@ mod tests {
         assert!(registrar
             .refuses_write(&state(json!({"level": 7})), &state(json!({"phone": "555"})))
             .is_err());
+    }
+
+    /// A record type whose constraints tie unwithheld fields to the withheld
+    /// `phone` and `ceiling`, and whose temporal order check ties `valid-from`
+    /// to the withheld `valid-to`. A temporal non-overlap key on `scope` is
+    /// added when `non_overlap` is set.
+    fn constrained_entity(non_overlap: bool) -> CompiledEntity {
+        let fields = [
+            "level",
+            "phone",
+            "group",
+            "status",
+            "floor",
+            "ceiling",
+            "age",
+            "scope",
+            "valid-from",
+            "valid-to",
+        ];
+        let mut constraints = vec![
+            json!({"id":"group-phone","type":"unique","fields":["group","phone"]}),
+            json!({"id":"active-phone","type":"unique","fields":["phone"],
+                "when":[{"type":"field-equals","field":"status","value":"active"}]}),
+            json!({"id":"floor-ceiling","type":"compare","left":"floor","operator":"less-than","right":"ceiling"}),
+        ];
+        if non_overlap {
+            constraints.push(json!({"id":"scope-time","type":"temporal-non-overlap",
+                "scopeFields":["scope"],"startField":"valid-from","endField":"valid-to"}));
+        }
+        let grant = json!({"recordType":"person","operations":["get"],"rowBoundaries":"unrestricted",
+            "readableFields":fields});
+        let source = json!({"datasets":[{"id":"d"}],
+            "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+            "project":{"id":"unit","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://unit.example.test"},
+            "recordTypes":[{"id":"person","primaryDataset":"d","route":"people","mutationMode":"mutable","classification":"internal",
+              "fields":[{"id":"level","type":"string","maximumLength":16,"classification":"internal"},
+                        {"id":"phone","type":"string","maximumLength":16,"classification":"internal"},
+                        {"id":"group","type":"string","maximumLength":16,"classification":"internal"},
+                        {"id":"status","type":"string","maximumLength":16,"classification":"internal"},
+                        {"id":"floor","type":"int64","classification":"internal"},
+                        {"id":"ceiling","type":"int64","classification":"internal"},
+                        {"id":"age","type":"int64","classification":"internal"},
+                        {"id":"scope","type":"string","maximumLength":16,"required":true,"classification":"internal"},
+                        {"id":"valid-from","type":"timestamp","validTimeRole":"valid-from","required":true,"classification":"internal"},
+                        {"id":"valid-to","type":"timestamp","validTimeRole":"valid-to","classification":"internal"}],
+              "temporal":{"startField":"valid-from","endField":"valid-to"},
+              "constraints":constraints,
+              "disclosureConditions":[
+                {"id":"hide-contact","when":[{"type":"field-equals","field":"level","value":"a"}],
+                 "withhold":"fields","fields":["phone","ceiling","valid-to"],"exemptProfiles":["officer"]}]}],
+            "accessProfiles":[
+              {"id":"registrar","default":true,"principalClaim":"p","requiredScopes":"unrestricted","permissions":{"records":[grant.clone()]}},
+              {"id":"officer","principalClaim":"p","requiredScopes":"unrestricted","permissions":{"records":[grant]}}]});
+        let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("constrained unit project compiles")
+            .entities()["person"]
+            .clone()
+    }
+
+    #[test]
+    fn a_bound_write_cannot_change_a_field_a_constraint_ties_to_a_withheld_field() {
+        let marked = json!({"level": "a", "group": "g", "status": "inactive", "floor": 1,
+            "age": 4, "scope": "s", "valid-from": "2026-01-01T00:00:00Z"});
+        let mut unmarked = marked.clone();
+        unmarked["level"] = json!("c");
+        let tied = [
+            json!({"group": "h"}),
+            json!({"status": "active"}),
+            json!({"floor": 2}),
+            json!({"valid-from": "2026-02-01T00:00:00Z"}),
+        ];
+        for non_overlap in [false, true] {
+            let entity = constrained_entity(non_overlap);
+            let registrar = plan(&entity, "registrar");
+            let officer = plan(&entity, "officer");
+            let refuses = |plan: &DisclosurePlan<'_>, before: &Value, written: &Value| {
+                plan.refuses_write(&state(before.clone()), &state(written.clone()))
+                    .unwrap()
+            };
+            let mut writes = tied.to_vec();
+            if non_overlap {
+                writes.push(json!({"scope": "t"}));
+            } else {
+                // Without the non-overlap key, `scope` is tied to nothing.
+                assert!(!refuses(&registrar, &marked, &json!({"scope": "t"})));
+            }
+            for written in &writes {
+                assert!(refuses(&registrar, &marked, written), "{written}");
+                assert!(!refuses(&registrar, &unmarked, written), "{written}");
+                assert!(!refuses(&officer, &marked, written), "{written}");
+            }
+            // Writing back the stored value changes nothing a constraint answers on.
+            assert!(!refuses(
+                &registrar,
+                &marked,
+                &json!({"group": "g", "floor": 1})
+            ));
+            // A field no constraint ties to a withheld one stays writable.
+            assert!(!refuses(&registrar, &marked, &json!({"age": 5})));
+        }
     }
 
     #[test]

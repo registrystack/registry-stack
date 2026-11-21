@@ -296,22 +296,62 @@ fn validate_fields(
                 "a withheld field is a stored field of its record type",
             ));
         }
-        // A create that repeats a withheld value answers a conflict and any
-        // other value succeeds, so the constraint would confirm a guess. An
-        // encrypted field's unique blind index answers the same way.
-        let unique = entity.constraints.iter().any(|constraint| {
-            matches!(constraint, ConstraintSource::Unique { fields, .. } if fields.contains(field))
-        }) || entity.fields.iter().any(|source| {
-            source.id == *field && source.lookup.as_ref().is_some_and(|lookup| lookup.unique)
-        });
-        if unique {
-            errors.push(Diagnostic::error(
-                "breg.disclosure.withheld-field-unique",
-                format!("{path}[field={field}]"),
-                "a uniqueness constraint on a withheld field confirms a guessed value with a conflict",
-            ));
+    }
+}
+
+/// One finding for each field a `fields` condition withholds that a
+/// cross-record constraint also covers. A Create that repeats the value of a
+/// hidden record answers a conflict and any other value succeeds, so the
+/// constraint confirms a guess. A uniqueness constraint member, an encrypted
+/// field's unique blind index and a temporal non-overlap key field answer
+/// this way. The runtime write rule closes the same probe on Patch.
+pub(super) fn withheld_field_probe_findings(
+    entities: &BTreeMap<String, EntitySource>,
+) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    for entity in entities.values() {
+        for condition in entity
+            .disclosure_conditions
+            .iter()
+            .filter(|condition| condition.withhold == DisclosureWithholdSource::Fields)
+        {
+            for field in condition.fields.iter() {
+                if constrained_across_records(entity, field) {
+                    findings.push(Diagnostic::finding(
+                        "breg.disclosure.withheld-field-probe",
+                        format!(
+                            "recordTypes[id={}].disclosureConditions[id={}].fields[field={field}]",
+                            entity.id, condition.id
+                        ),
+                        "a Create that repeats this withheld value on a new record answers 409 and confirms the value exists on a hidden record",
+                    ));
+                }
+            }
         }
     }
+    findings
+}
+
+fn constrained_across_records(entity: &EntitySource, field: &str) -> bool {
+    // A temporal non-overlap compares the valid-time fields whether or not it
+    // names them.
+    let valid_time = entity
+        .fields
+        .iter()
+        .any(|source| source.id == field && source.valid_time_role.is_some());
+    entity
+        .constraints
+        .iter()
+        .any(|constraint| match constraint {
+            ConstraintSource::Unique { fields, .. } => fields.iter().any(|id| id == field),
+            ConstraintSource::TemporalNonOverlap { scope_fields, .. } => {
+                valid_time || scope_fields.iter().any(|id| id == field)
+            }
+            _ => false,
+        })
+        || entity.fields.iter().any(|source| {
+            source.id == field && source.lookup.as_ref().is_some_and(|lookup| lookup.unique)
+        })
 }
 
 fn validate_exempt_profiles(

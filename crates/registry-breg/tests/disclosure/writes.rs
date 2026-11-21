@@ -92,9 +92,59 @@ fn writes_source() -> Value {
     source
 }
 
+/// The write fixture, with person constraints that tie fields the contacts
+/// condition does not withhold to fields it does: `group-code` shares a
+/// uniqueness constraint with the phone number, `status` decides a partial
+/// uniqueness constraint on the email address, and `listed-on` is compared
+/// with the withheld `contact-since`.
+fn tied_source() -> Value {
+    let mut source = writes_source();
+    let tied = ["group-code", "status", "listed-on", "contact-since"];
+    for record in source["recordTypes"].as_array_mut().unwrap() {
+        if record["id"] != "person" {
+            continue;
+        }
+        record["fields"].as_array_mut().unwrap().extend([
+            json!({"id": "group-code", "type": "string", "maximumLength": 16, "classification": "internal"}),
+            json!({"id": "status", "type": "string", "maximumLength": 16, "classification": "internal"}),
+            json!({"id": "listed-on", "type": "date", "classification": "internal"}),
+            json!({"id": "contact-since", "type": "date", "classification": "internal"}),
+        ]);
+        let contacts = &mut record["disclosureConditions"][0];
+        assert_eq!(contacts["id"], "hide-contacts");
+        contacts["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("contact-since"));
+        record["constraints"] = json!([
+            {"id": "group-phone", "type": "unique", "fields": ["group-code", "phone-number"]},
+            {"id": "active-email", "type": "unique", "fields": ["email-address"],
+             "when": [{"type": "field-equals", "field": "status", "value": "active"}]},
+            {"id": "listed-before-contact", "type": "compare", "left": "listed-on",
+             "operator": "less-than-or-equal", "right": "contact-since"}]);
+    }
+    for profile in source["accessProfiles"].as_array_mut().unwrap() {
+        for grant in profile["permissions"]["records"].as_array_mut().unwrap() {
+            if grant["recordType"] != "person" {
+                continue;
+            }
+            for member in ["readableFields", "writableFields"] {
+                if let Some(fields) = grant[member].as_array_mut() {
+                    fields.extend(tied.map(|field| json!(field)));
+                }
+            }
+        }
+    }
+    source
+}
+
 async fn start() -> History {
-    let project = parse_project_json(&serde_json::to_vec(&writes_source()).unwrap())
-        .expect("write fixture parses");
+    start_with(writes_source()).await
+}
+
+async fn start_with(source: Value) -> History {
+    let project =
+        parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("write fixture parses");
     let registry = compile_project(&project, &[], CompileProfile::Authoring)
         .unwrap_or_else(|errors| panic!("write fixture compiles: {errors:#?}"));
     History {
@@ -689,5 +739,65 @@ async fn a_bound_tombstone_of_a_withheld_record_answers_as_an_absent_one() {
         )
         .await;
     assert_eq!(kept.status, 200, "{}", kept.text());
+    history.fixture.finish().await;
+}
+
+/// A conflict on a constraint over a withheld field answers whether the hidden
+/// value matches, so a bound Patch of a marked record may not change a field a
+/// constraint ties to one. The exempt officer may, and so may anyone on a
+/// record the condition does not match.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bound_patch_cannot_change_a_field_a_constraint_ties_to_a_withheld_field() {
+    let history = start_with(tied_source()).await;
+    let person_data = |level: &str, group: &str, email: &str, phone: &str| {
+        json!({"familyName": "Tied", "protectionLevel": level, "historyProtected": false,
+            "emailAddress": email, "phoneNumber": phone, "groupCode": group,
+            "status": "inactive", "listedOn": "2020-01-01", "contactSince": "2021-01-01"})
+    };
+    let marked = history
+        .create(
+            "people",
+            person_data("protected", "G1", SHIELDED_EMAIL, SHIELDED_PHONE),
+        )
+        .await;
+    let unmarked = history
+        .create(
+            "people",
+            person_data("none", "G2", "open@example.invalid", "555-0100"),
+        )
+        .await;
+    let probes = [
+        ("composite unique member", "groupCode", json!("G9")),
+        ("partial unique when field", "status", json!("active")),
+        ("compare side", "listedOn", json!("2020-06-01")),
+    ];
+    for (what, member, value) in &probes {
+        let reply = patch_as(&history, REGISTRAR, &marked, replace(member, value.clone())).await;
+        assert_refused(&reply, what);
+    }
+    let stored_marked = stored(&history, &marked).await;
+    assert_eq!(stored_marked["groupCode"], "G1");
+    assert_eq!(stored_marked["status"], "inactive");
+    assert_eq!(stored_marked["listedOn"], "2020-01-01");
+
+    for (what, member, value) in &probes {
+        let reply = patch_as(
+            &history,
+            REGISTRAR,
+            &unmarked,
+            replace(member, value.clone()),
+        )
+        .await;
+        assert_eq!(reply.status, 200, "unmarked {what}: {}", reply.text());
+        let reply = patch_as(
+            &history,
+            PROTECTION_OFFICER,
+            &marked,
+            replace(member, value.clone()),
+        )
+        .await;
+        assert_eq!(reply.status, 200, "officer {what}: {}", reply.text());
+        assert_eq!(stored(&history, &marked).await[*member], *value, "{what}");
+    }
     history.fixture.finish().await;
 }
