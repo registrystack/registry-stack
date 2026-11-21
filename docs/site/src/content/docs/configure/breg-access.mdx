@@ -615,10 +615,11 @@ A `record` condition also binds the profile that refreshes an external view of i
 refresh lists the view's root records under that profile, so a bound profile skips the records the
 condition matches and the sweep still succeeds: their external projections and labels are not
 fetched or kept current. That can be what you want, because it keeps protected subjects' keys away
-from the external source. `bregctl check` cannot see which profile a runtime refresh plan uses, so
-it warns about each profile that holds `refreshExternalProjections` for one of the view's
-projections, may List its root, and is bound by a `record` condition on that root
-(`breg.disclosure.external-refresh-withheld-root`). The check fails under `--deny-warnings` until
+from the external source. `bregctl check` reads the project, not the runtime refresh plans, so it
+warns about each profile that holds `refreshExternalProjections` for one of the view's projections,
+may List its root, and is bound by a `record` condition on that root
+(`breg.disclosure.external-refresh-withheld-root`). It can therefore warn about a profile that no
+plan uses as its worker. The check fails under `--deny-warnings` until
 you add the profile to `exemptProfiles`, so the refresh covers those records, or
 [accept the finding](../../reference/configuration-files/#accept-an-intentional-project-warning) to
 leave them out.
