@@ -199,6 +199,27 @@ fn an_unusable_when_value_is_refused() {
 }
 
 #[test]
+fn a_repeated_withheld_field_is_refused_by_the_reader() {
+    let mut repeated = source();
+    conditions(&mut repeated)[1]["fields"] = json!(["phone", "phone"]);
+    let failure = parse_project_json(&serde_json::to_vec(&repeated).unwrap())
+        .expect_err("a repeated withheld field is refused rather than collapsed");
+    let found = failure
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        found,
+        vec![(
+            "config.duplicate-item",
+            "project.recordTypes[0].disclosureConditions[1].fields[1]"
+        )],
+        "{failure:?}"
+    );
+}
+
+#[test]
 fn invalid_fields_are_refused() {
     let mut missing = source();
     conditions(&mut missing)[1]["fields"] = json!([]);

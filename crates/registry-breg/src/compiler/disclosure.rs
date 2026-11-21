@@ -288,14 +288,12 @@ fn validate_fields(
         ));
         return;
     }
-    let mut seen = BTreeSet::new();
-    for field in &condition.fields {
-        let stored = entity.fields.iter().any(|source| source.id == *field);
-        if !stored || !seen.insert(field.as_str()) {
+    for field in condition.fields.iter() {
+        if !entity.fields.iter().any(|source| source.id == *field) {
             errors.push(Diagnostic::error(
                 "breg.disclosure.fields-invalid",
                 format!("{path}[field={field}]"),
-                "a withheld field is a stored field of its record type and is named once",
+                "a withheld field is a stored field of its record type",
             ));
         }
         // A create that repeats a withheld value answers a conflict and any
