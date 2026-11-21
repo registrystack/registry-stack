@@ -47,7 +47,7 @@ fn prospective_row_boundary_refusal_is_documented_only_where_it_can_apply() {
     let example = super::problem_example(
         "403",
         "write.outside-boundary",
-        "The resulting record falls outside the selected access profile's row boundary.",
+        "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition.",
     );
     assert_eq!(example["title"], "Forbidden");
 }

@@ -2187,7 +2187,7 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         }
         Code::UnsupportedMediaType => "The request media type is not supported.",
         Code::WriteOutsideBoundary => {
-            "The resulting record falls outside the selected access profile's row boundary."
+            "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition."
         }
         _ => panic!("unregistered problem code"),
     }
