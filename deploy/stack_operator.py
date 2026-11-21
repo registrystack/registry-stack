@@ -23,6 +23,10 @@ from state_bundle import DNS_LABEL, BundleError, file_hashes, stderr_tail, verif
 CHART = Path(__file__).resolve().parent / "helm" / "registry-stack"
 PACKAGE_ANNOTATION = "registrystack.org/package-digest"
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+# kubectl prints these when the API server rejected a request without storing
+# anything. Any other failure, such as a server timeout or a lost connection,
+# may still have created the object.
+REFUSED_REQUEST = re.compile(r"^Error from server \((?:BadRequest|Forbidden|Invalid)\)", re.MULTILINE)
 MODULES = ("breg", "appKit", "casework", "evidence")
 # BReg records an operator reference only for package activations. The chart
 # accepts up to 256 characters; BReg accepts up to 512 bytes.
@@ -36,6 +40,14 @@ BREG_SUCCESSOR_WARNINGS = (
 
 class OperationError(Exception):
     """A failed precondition or a refused operation."""
+
+
+class CommandFailed(OperationError):
+    """A command that ran and exited non-zero, with its error output."""
+
+    def __init__(self, message, stderr):
+        super().__init__(message)
+        self.stderr = stderr or ""
 
 
 def activation_action(plan, digest, command):
@@ -178,8 +190,9 @@ def command_output(args, label, data=None, timeout=60):
             f"{label} timed out. Inspect its state before retrying.{stderr_tail(error.stderr)}"
         ) from error
     if result.returncode:
-        raise OperationError(
-            f"{label} failed with exit {result.returncode}. Inspect the selected resource.{stderr_tail(result.stderr)}"
+        raise CommandFailed(
+            f"{label} failed with exit {result.returncode}. Inspect the selected resource.{stderr_tail(result.stderr)}",
+            result.stderr,
         )
     return result.stdout
 
@@ -351,10 +364,10 @@ class Installation:
         try:
             created = decode_json(self.kubectl("create", "-f", "-", "-o", "json", data=json.dumps(job)), "Job")
         except OperationError as error:
-            # A live Job needs its policy. After a refused create, drop the
-            # policy and the lock only once Kubernetes confirms the Job is
-            # absent. A timed-out create stays uncertain, as above.
-            if not isinstance(error.__cause__, subprocess.TimeoutExpired):
+            # A live Job needs its policy. Drop the policy and the lock only
+            # when the API server refused the create and Kubernetes confirms
+            # the Job is absent. Any other failure stays uncertain, as above.
+            if isinstance(error, CommandFailed) and REFUSED_REQUEST.search(error.stderr):
                 self.abandon_job(name, policy["metadata"]["name"] if policy else None)
             raise
         if policy:
@@ -670,9 +683,10 @@ def main():
                 print(json.dumps(installation.apply(), indent=2))
     except KeyError as error:
         # Installation checks the values file on load, so a missing key comes
-        # from what Helm, Kubernetes or BReg returned.
+        # from what Helm, Kubernetes, the upgrade record or BReg returned.
         parser.exit(1, (
-            f"registry-stack: Missing key {error} in the Helm release values or a BReg report. "
+            f"registry-stack: Missing key {error} in the Helm release values, a Kubernetes object, the upgrade "
+            "record or a BReg report. "
             "Inspect them before retrying.\n"
         ))
     except (OperationError, OSError, TypeError, AttributeError) as error:
