@@ -26,7 +26,7 @@ recordTypes:
       - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
 
 accessProfiles:
-  - id: directory-editor
+  directory-editor:
     default: true
     principalClaim: registry_principal
     requiredScopes: ["registry:directory:write"]

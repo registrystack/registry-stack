@@ -12,6 +12,17 @@
   `accessProfiles: [{id: operator, principalClaim: ...}]`. `bregctl explain`
   keeps its output shape and lists profiles in id order, and the source
   pointers it reports name the profile id in place of its position.
+  Two default profiles may no longer share an operation on one Proposal
+  action (`breg.proposal.default-multiple`).
+  `bregctl test --baseline-package` and `bregctl diff --runtime-config` refuse
+  a baseline package built before this release, because its stored sources
+  write `accessProfiles` as a list. The refusal says the baseline package's
+  stored sources do not compile with this `bregctl` and carries the reader's
+  message. A database whose active package predates this release is
+  recreated.
+  The lock digest of every module that declares or extends a Record type
+  changes, even when it declares no profiles. After converting, run
+  `bregctl project lock` for each such module.
 - BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
   -> `database.caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef`
   the other TLS blocks use. The old key is refused as an unknown key. The value

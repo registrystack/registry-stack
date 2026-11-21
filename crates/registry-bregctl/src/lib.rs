@@ -3899,7 +3899,7 @@ fn external_projection_failure(
             diagnostic(
                 "external-projection.package.refused",
                 "package",
-                package_refusal_message(&error, "the active runtime package was refused"),
+                &package_refusal_message(&error, "the active runtime package was refused"),
             ),
             DiagnosticArtifact::VerifiedPackage,
             package_refusal_action(&error),
@@ -6147,7 +6147,10 @@ fn capture_rehearsal_baseline(
         )
     };
     let (predecessor, registry) =
-        inspect_baseline_rehearsal(baseline_package).map_err(|_| unavailable())?;
+        inspect_baseline_rehearsal(baseline_package).map_err(|error| match error {
+            error @ PackageError::PredecessorSources(_) => baseline_package_failure(command, error),
+            _ => unavailable(),
+        })?;
     if predecessor.package_digest() != package_digest {
         return Err(unavailable());
     }
@@ -7959,7 +7962,7 @@ fn inspection_failure(
         RuntimePackageInspectionError::RuntimeConfigPath => (
             format!("{prefix}.runtime-config.path-invalid"),
             "runtimeConfig",
-            "the runtime configuration path must be absolute",
+            "the runtime configuration path must be absolute".into(),
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
@@ -7980,7 +7983,7 @@ fn inspection_failure(
         ok: false,
         command,
         diagnostics: vec![tool_diagnostic(
-            diagnostic(&code, path, message),
+            diagnostic(&code, path, &message),
             artifact,
             action,
         )],
@@ -7991,11 +7994,18 @@ const PACKAGE_BUILD_MISMATCH: &str = "the package cannot be reproduced by this c
 
 const PACKAGE_ENGINE_UPGRADE_REQUIRED: &str = "the package predates the engine-owned Record timer store. Nothing was changed. Keep this exact package as the active baseline, build a successor with this release using `bregctl test --baseline-package <active package directory>` and `bregctl package --baseline-package <active package directory>`, then run `bregctl plan --package <successor>` and `bregctl apply --package <successor>` before restarting the runtime";
 
-fn package_refusal_message(error: &PackageError, fallback: &'static str) -> &'static str {
+fn package_refusal_message(
+    error: &PackageError,
+    fallback: &'static str,
+) -> std::borrow::Cow<'static, str> {
     match error {
-        PackageError::Derivation => PACKAGE_BUILD_MISMATCH,
-        PackageError::EngineFeatureUpgradeRequired => PACKAGE_ENGINE_UPGRADE_REQUIRED,
-        _ => fallback,
+        PackageError::Derivation => PACKAGE_BUILD_MISMATCH.into(),
+        PackageError::EngineFeatureUpgradeRequired => PACKAGE_ENGINE_UPGRADE_REQUIRED.into(),
+        PackageError::PredecessorSources(_) => format!(
+            "{error}. A package built before this release cannot be a baseline: rebuild it from sources this bregctl accepts, or recreate the database"
+        )
+        .into(),
+        _ => fallback.into(),
     }
 }
 
@@ -8026,6 +8036,10 @@ fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
             ("package-refused", SuggestedAction::VerifyPackageIntegrity)
         }
         PackageError::Derivation => ("build-mismatch", SuggestedAction::CorrectPackageBuild),
+        PackageError::PredecessorSources(_) => (
+            "predecessor-sources-refused",
+            SuggestedAction::CorrectPackageBuild,
+        ),
         PackageError::EngineFeatureUpgradeRequired => (
             "engine-upgrade-required",
             SuggestedAction::CorrectPackageBuild,
@@ -8137,7 +8151,7 @@ fn baseline_package_failure(command: &'static str, error: PackageError) -> Failu
         command,
         &format!("package.baseline.{suffix}"),
         "baselinePackage",
-        package_refusal_message(
+        &package_refusal_message(
             &error,
             "the baseline package was refused; name the chain tip package directory with --baseline-package as an absolute path",
         ),
@@ -8190,7 +8204,7 @@ fn package_diff_failure(error: PackageError) -> FailureReport {
     diff_failure_with_action(
         &format!("diff.baseline.{suffix}"),
         "baseline",
-        package_refusal_message(&error, "the baseline package was refused"),
+        &package_refusal_message(&error, "the baseline package was refused"),
         DiagnosticArtifact::BaselinePackage,
         action,
     )

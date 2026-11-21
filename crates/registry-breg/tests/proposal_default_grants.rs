@@ -56,9 +56,9 @@ fn compile(value: &Value) -> Result<registry_breg::CompiledRegistry, CompileFail
 
 #[test]
 fn overlapping_default_proposal_grants_are_refused_naming_both_profiles() {
-    let failure = compile(&project(json!(["get", "edit"]), json!(["get"])))
-        .err()
-        .expect("overlapping defaults on get are refused");
+    let Err(failure) = compile(&project(json!(["get", "edit"]), json!(["get"]))) else {
+        panic!("overlapping defaults on get compiled")
+    };
     let diagnostic = failure
         .diagnostics()
         .iter()
@@ -77,7 +77,7 @@ fn default_proposal_grants_with_disjoint_operations_compile() {
 
 /// The single default for `get` is the same profile whatever the ids sort as.
 #[test]
-fn default_grant_selection_ignores_profile_id_order() {
+fn the_one_default_grant_compiles_whichever_profile_id_sorts_first() {
     for (default_id, other_id) in [("alpha", "omega"), ("omega", "alpha")] {
         let mut value = project(json!(["get"]), json!(["get"]));
         let mut profiles = value["accessProfiles"].take();

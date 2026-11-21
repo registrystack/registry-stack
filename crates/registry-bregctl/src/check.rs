@@ -1295,6 +1295,7 @@ fn package_code(error: &PackageError) -> &'static str {
         | PackageError::Integrity
         | PackageError::CanonicalJson
         | PackageError::Derivation
+        | PackageError::PredecessorSources(_)
         | PackageError::MigrationPlan
         | PackageError::ReviewedMigration(_) => "breg.package.integrity-refused",
         PackageError::EngineFeatureUpgradeRequired => "breg.package.engine-upgrade-required",
