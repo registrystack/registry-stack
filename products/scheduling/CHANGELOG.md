@@ -4,8 +4,9 @@
 
 - Accept an optional `project.label` and `project.description` in the project
   block, as every product's project file does. They are display text for
-  people and change no compiled output.
-  The policy digest ignores both, so a relabel is not a policy change.
+  people and change no scheduling behavior. The policy digest covers the whole
+  authored document, so a relabel changes it, and activation stores the
+  relabelled policy.
 
 - BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
   -> `database.caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef`

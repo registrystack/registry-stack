@@ -1217,16 +1217,11 @@ impl SchedulingPolicy {
 
     /// The canonical digest of this policy package: `sha256:` followed by 64
     /// hex digits over the canonical JSON of the envelope and policy. The
-    /// same policy always digests identically; any authored change does not,
-    /// except to `project.label` and `project.description`, which are for
-    /// readers and leave the digest, and so the policy revision, unchanged.
+    /// same policy always digests identically; any authored change does not.
     pub fn policy_digest(&self) -> String {
-        let mut policy = self.clone();
-        policy.project.label = None;
-        policy.project.description = None;
         let envelope = serde_json::json!({
             "schema": SCHEDULING_POLICY_API_VERSION,
-            "policy": policy,
+            "policy": self,
         });
         let canonical = registry_platform_canonical_json::canonicalize_json(&envelope)
             .expect("a policy envelope always canonicalizes");
@@ -2994,12 +2989,16 @@ maximumRecipients: 1
     }
 
     #[test]
-    fn the_project_label_and_description_do_not_move_the_policy_digest() {
+    fn the_project_label_and_description_move_the_policy_digest() {
         let policy = minimal_exact_time_policy();
         let mut labelled = policy.clone();
         labelled.project.label = Some("Registry updates".to_owned());
         labelled.project.description = Some("Books registry update slots.".to_owned());
-        assert_eq!(policy.policy_digest(), labelled.policy_digest());
+        assert_ne!(policy.policy_digest(), labelled.policy_digest());
+
+        let mut relabelled = labelled.clone();
+        relabelled.project.label = Some("Registry changes".to_owned());
+        assert_ne!(labelled.policy_digest(), relabelled.policy_digest());
 
         let stored = serde_json::to_value(&labelled).expect("the project serializes");
         assert_eq!(stored["project"]["label"], "Registry updates");
