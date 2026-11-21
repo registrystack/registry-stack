@@ -19,7 +19,8 @@ use crate::model::{
     CompiledActionInventory, CompiledActionPermission, CompiledActionRoute,
     CompiledActionTargetPermission, CompiledActionTargetUse, CompiledActionTargetUseSource,
     CompiledCommitGuard, CompiledEntity, CompiledPlanEffect, CompiledPlanMutation,
-    CompiledPlanTarget, CompiledPlanTargetBinding, CompiledPlanValue, HttpMethod,
+    CompiledPlanTarget, CompiledPlanTargetBinding, CompiledPlanValue, CompiledProposalPermission,
+    HttpMethod, ProposalOperation,
 };
 use crate::plan::{MAX_PLAN_FIELD_MUTATIONS, MAX_PLAN_SNAPSHOT_BYTES, MAX_PLAN_TARGETS};
 
@@ -2398,6 +2399,37 @@ fn compile_action_routes(
     routes
 }
 
+/// Proposal grant selection takes the first default grant that holds the
+/// operation, so two default profiles may not share an operation on one action.
+fn validate_single_default_proposal_grants(
+    action_id: &str,
+    permissions: &[CompiledProposalPermission],
+    errors: &mut Vec<Diagnostic>,
+) {
+    let mut claimed: BTreeMap<ProposalOperation, &str> = BTreeMap::new();
+    for grant in permissions.iter().filter(|grant| grant.default) {
+        for operation in &grant.operations {
+            match claimed.get(operation) {
+                Some(first) if *first != grant.profile_id => {
+                    errors.push(Diagnostic::error(
+                        "breg.proposal.default-multiple",
+                        format!("accessProfiles[id={}].default", grant.profile_id),
+                        &format!(
+                            "operation `{}` on proposal action `{action_id}` accepts one default profile and `{first}` already claims it; clear `default: true` on `{}` or give the profiles disjoint operations",
+                            operation.as_str(),
+                            grant.profile_id
+                        ),
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    claimed.insert(*operation, grant.profile_id.as_str());
+                }
+            }
+        }
+    }
+}
+
 fn route_default_profile<'a>(
     profiles: &[&'a ProjectAccessProfileSource],
     errors: &mut Vec<Diagnostic>,
@@ -2980,6 +3012,7 @@ fn compile_execution(
             });
         }
     }
+    validate_single_default_proposal_grants(&action.id, &permissions, errors);
     if let Some(context) = &proposal.review_context {
         validate_id(
             &context.id,
