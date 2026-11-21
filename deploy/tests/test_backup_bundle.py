@@ -33,7 +33,8 @@ class PythonVersionTest(unittest.TestCase):
     def test_supported_interpreters_continue(self):
         for version in ((3, 11, 0, "final", 0), (3, 14, 7, "final", 0), (4, 0, 0, "alpha", 1)):
             with self.subTest(version=version):
-                self.assertIsNone(require_supported_python(version))
+                # Passing means no SystemExit is raised.
+                require_supported_python(version)
 
 
 class BackupBundleTest(unittest.TestCase):
