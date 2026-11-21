@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
   -> `database.caBundleRef` and, for an `smtp` provider,
   `providers.*.trustedRootCertificateRef` -> `providers.*.caBundleRef`, as a
@@ -19,8 +21,6 @@
   cancels a slow read. Failed reads are logged by error class. A failed read
   is counted in `messaging_metrics_sample_failures_total`, and its gauge is
   left out.
-
-## 0.47.0 - 2026-11-20
 
 - `rstack dev` runs Messaging projects. An `smtp` provider sends to a Mailpit
   container and an `http` SMS provider to a mock gateway; the run report names

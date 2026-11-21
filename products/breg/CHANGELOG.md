@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
   -> `database.caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef`
   the other TLS blocks use. The old key is refused as an unknown key. The value
@@ -37,8 +39,6 @@
 - Every database-sampled gauge is read under one 5 second scrape deadline,
   with a server-side statement timeout set to the time left, so the server
   cancels a slow read. Failed reads are logged by error class.
-
-## 0.47.0 - 2026-11-20
 
 - BREAKING: A bearer token that carries a Casework task grant
   (`registry_grant_*` claims) must carry `iat` and `exp`, and `exp - iat` must be

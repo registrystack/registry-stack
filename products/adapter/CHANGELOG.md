@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - BREAKING: `database.trustedRootCertificateRef` -> `database.caBundleRef` in
   the runtime configuration, and `store.trustedRootCertificateRef` ->
   `store.caBundleRef` in the job runtime configuration, as a pre-1.0 cleanup,
@@ -28,8 +30,6 @@
   default, `private-address`, keeps the loopback-or-private rule.
 - The job's item counts take their statement timeout from one 5 second scrape
   deadline. Failed reads are logged by error class.
-
-## 0.47.0 - 2026-11-20
 
 - PostgreSQL jobs can project bounded JSONB values, including the geometry
   and related rows in the [QField PostGIS example](examples/qfield-postgis/README.md).

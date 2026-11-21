@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - BREAKING: in `origins.yaml` (`DiscoveryOrigins`), `origins[].originId` ->
   `origins[].id`, as a pre-1.0 cleanup. The old key is refused as an unknown
   key. The id is now a local identifier: a lowercase letter, then up to 63
@@ -16,8 +18,6 @@
   hashes the same inputs as before. An origin renamed to fit publishes its new
   id as `originId`, so its record ids change too. Tell consumers that pin that
   `originId` to re-pin it.
-
-## 0.47.0 - 2026-11-20
 
 - BREAKING: `discoveryctl api --client` is removed. Pass `--url URL --header @FILE`
   with a bearer header file, or use a saved `--connection`.
