@@ -10,8 +10,9 @@ data:
   #
   # No role opens a network session on the maintenance or template databases.
   # Product databases are separated by the CONNECT privilege, not by these
-  # rules: each product's provisioning revokes it from PUBLIC and grants it to
-  # that product's roles only, so adding a product needs no change here.
+  # rules. BReg's provisioning revokes it from PUBLIC and grants it to the BReg
+  # roles only. Other products follow deploy/README.md, so adding a product
+  # needs no change here.
   pg_hba.conf: |
     local   all                           postgres                 peer
     local   all                           all                      reject
