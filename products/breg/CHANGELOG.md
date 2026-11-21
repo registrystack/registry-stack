@@ -98,9 +98,11 @@
   carries a `requiredFilters` member and a `detail` that name the acceptable
   sets. A continuation page cannot drop the criteria, because the signed cursor
   binds the first page's filter. `bregctl check` refuses a `requiredFilters`
-  that is empty, repeats a field or an alternative, has more than eight
-  alternatives, names a field outside the same grant's `filterableFields` or one
-  that cannot take `eq`, or sits on a grant without `list`. Runtime metadata
+  that is empty, repeats an alternative, has more than eight alternatives,
+  names a field outside the same grant's `filterableFields` or one that cannot
+  take `eq`, or sits on a grant without `list`. A field repeated within one
+  alternative is refused when the file is read, with `config.duplicate-item`,
+  and each alternative compiles in field order. Runtime metadata
   lists the alternatives beside `filterableFields`, the Rust client exposes
   `BRegQueryDescriptor::required_filters` and
   `BRegProblemCode::QueryFilterRequired`, and the OpenAPI problem enum gains
@@ -129,7 +131,11 @@
   a `record` condition would hide from the writer is refused with `write.outside-boundary`. So is a
   Patch, Batch item, immediate Action or Proposal applied by hand, when a condition that binds the
   applying profile matches the record and the write names a field it withholds or would lift the
-  mark. An import item it refuses answers the generic `412 precondition.failed`. The OpenAPI of
+  mark. A bound profile cannot tombstone a record that a `fields` or `history` condition binding it
+  matches. A Proposal applied automatically is checked against the profile that submitted the
+  version being applied, so an exempt submitter's Proposal applies, and one whose submitting profile
+  was removed or lost its exemption is refused. An import item the write rule refuses answers the
+  generic `412 precondition.failed`. The OpenAPI of
   Create, Patch and Batch declares that 403 wherever a binding condition can refuse the write, and
   its `detail` names disclosure conditions beside row boundaries. PostgreSQL enforces a `record`
   condition as a restrictive row policy. `bregctl check` refuses a bound profile whose filters,
@@ -146,7 +152,10 @@
 - An access profile can set `requireAccessReason: true`. A request under it without a valid
   `Registry-Access-Reason` header (unpadded base64url UTF-8, at most 512 bytes) is refused with
   `400 request.access_reason_required`. The reason is stored on the subject access log entry and
-  returned as `accessReason`. A write checks the reason but does not keep it. A hook with
+  returned as `accessReason`. On a Record type with `accessLog`, each record a direct Create,
+  Patch, Batch item or Tombstone changes gets an entry with the reason and `accessKind: write`,
+  written in the same transaction and raising no read alert. Action and Proposal writes record
+  none. A read entry carries `accessKind: read`. A hook with
   `trigger: read` and `profiles` raises a value-free event for each logged read by those profiles,
   carrying an `access` object. The event is written with the access log entry, so `bregctl check`
   refuses a read hook on a Record type without `accessLog`
@@ -154,8 +163,9 @@
   that grants import, invoke, start, `allowDataExport`, or an action, proposal, dataset, external
   view or projection-refresh permission, which do not check the reason
   (`breg.access-profile.access-reason-operation-unsupported`).
-- BREAKING: the subject access log keeps the access reason in its own column, and the managed
-  schema fingerprint changes with it. Migration: install the release on a fresh database.
+- BREAKING: the subject access log keeps the access reason and the access kind in their own
+  columns, and the managed schema fingerprint changes with them. Migration: install the release on
+  a fresh database.
 
 - Report hook deliveries and ingestion runs as metrics:
   `breg_hook_deliveries` by state, including `dead-lettered`, and
