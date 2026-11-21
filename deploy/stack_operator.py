@@ -24,9 +24,13 @@ CHART = Path(__file__).resolve().parent / "helm" / "registry-stack"
 PACKAGE_ANNOTATION = "registrystack.org/package-digest"
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 # kubectl prints these when the API server rejected a request without storing
-# anything. Any other failure, such as a server timeout or a lost connection,
-# may still have created the object.
-REFUSED_REQUEST = re.compile(r"^Error from server \((?:BadRequest|Forbidden|Invalid)\)", re.MULTILINE)
+# anything. It reports a failed validation (422) as "The <Kind> "<name>" is
+# invalid" or "The request is invalid". Any other failure, such as a server
+# timeout or a lost connection, may still have created the object.
+REFUSED_REQUEST = re.compile(
+    r'^(?:Error from server \((?:BadRequest|Forbidden|Invalid)\)|The \S+ "[^"]*" is invalid|The request is invalid)',
+    re.MULTILINE,
+)
 MODULES = ("breg", "appKit", "casework", "evidence")
 # BReg records an operator reference only for package activations. The chart
 # accepts up to 256 characters; BReg accepts up to 512 bytes.
@@ -267,6 +271,9 @@ class Installation:
         self.upgrade_record_name = f"{args.release}-operator-upgrade"
         self.active_job = None
         self.target = decode_json(args.values.read_text(), "Operator values")
+
+    def require_staged_package(self):
+        """Refuse a values file without the BReg package that every BReg operation stages."""
         for path in ("breg.package.expectedDigest", "breg.package.existingClaim"):
             value = self.target
             for key in path.split("."):
@@ -666,6 +673,9 @@ def main():
 
     try:
         installation = Installation(args)
+        # stop reads the release's recorded values, so it also serves a release without BReg.
+        if args.action != "stop":
+            installation.require_staged_package()
         with installation.lock():
             if args.action == "status":
                 status, digest = installation.job("status")

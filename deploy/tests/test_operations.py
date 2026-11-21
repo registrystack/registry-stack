@@ -432,18 +432,41 @@ class JobLifecycleTest(unittest.TestCase):
         self.assertFalse([entry for entry in self.calls if entry[0] == "delete"])
 
     def test_refused_job_creation_removes_its_network_policy_and_releases_the_lease(self):
-        self.job_failure = subprocess.CompletedProcess(["kubectl"], 1, "", "Error from server (Forbidden): exceeded quota")
-        installation = self.installation()
-        stderr = io.StringIO()
-        with redirect_stderr(stderr), self.assertRaisesRegex(OperationError, "(?s)^kubectl create failed with exit 1.*exceeded quota$"):
-            with installation.lock():
-                installation.job("status", DIGEST)
-        self.assertEqual(stderr.getvalue(), "")
-        removal = ("delete", "networkpolicy", "status-test", "--ignore-not-found")
-        lookup = ("get", "job", "status-test", "--ignore-not-found", "-o", "name")
-        self.assertLess(self.calls.index(lookup), self.calls.index(removal))
-        self.assertEqual(self.calls[-1][:2], ("delete", "--raw"))
-        self.assertFalse([entry for entry in self.calls if entry[0] == "patch"])
+        # kubectl's own wording for each refusal. It prints a 422 without the
+        # "Error from server" prefix.
+        refusals = {
+            "forbidden": 'Error from server (Forbidden): error when creating "STDIN": jobs.batch "status-test" is '
+            "forbidden: exceeded quota: registry, requested: limits.memory=2Gi, used: limits.memory=7Gi, "
+            "limited: limits.memory=8Gi",
+            "bad request": 'Error from server (BadRequest): error when creating "STDIN": Job in version "v1" cannot be '
+            'handled as a Job: strict decoding error: unknown field "spec.template.spec.affinityy"',
+            "invalid": 'The Job "status-test" is invalid: spec.template.spec.containers[0].resources.requests: '
+            'Invalid value: "2": must be less than or equal to cpu limit of 1',
+            "invalid with several causes": 'The Job "status-test" is invalid: \n* spec.template.spec.tolerations[0].'
+            'operator: Invalid value: "Equals": a valid toleration operator is required\n'
+            '* spec.template.spec.tolerations[0].effect: Unsupported value: "NoRun"',
+            "invalid without details": "The request is invalid: the server rejected our request due to an error in our request",
+            "after a warning": "Warning: spec.template.spec.nodeSelector: deprecated label\n"
+            'The Job "status-test" is invalid: spec.template.spec.affinity: Required value',
+        }
+        for description, message in refusals.items():
+            with self.subTest(description=description):
+                self.calls.clear()
+                self.job_failure = subprocess.CompletedProcess(["kubectl"], 1, "", message)
+                installation = self.installation()
+                stderr = io.StringIO()
+                with (
+                    redirect_stderr(stderr),
+                    self.assertRaisesRegex(OperationError, f"(?s)^kubectl create failed with exit 1.*{re.escape(message[-20:])}$"),
+                ):
+                    with installation.lock():
+                        installation.job("status", DIGEST)
+                self.assertEqual(stderr.getvalue(), "")
+                removal = ("delete", "networkpolicy", "status-test", "--ignore-not-found")
+                lookup = ("get", "job", "status-test", "--ignore-not-found", "-o", "name")
+                self.assertLess(self.calls.index(lookup), self.calls.index(removal))
+                self.assertEqual(self.calls[-1][:2], ("delete", "--raw"))
+                self.assertFalse([entry for entry in self.calls if entry[0] == "patch"])
 
     def test_uncertain_job_creation_keeps_its_network_policy_and_lease(self):
         lost = subprocess.CompletedProcess(["kubectl"], 1, "", "unexpected EOF")
@@ -1177,6 +1200,13 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("job claim-adopt", self.events)
         self.assertNotIn("helm upgrade", self.events)
         self.assertEqual(self.events[-1], "lease release")
+
+    def test_stop_needs_no_staged_package(self):
+        # stop reads the release's recorded values, so a release without BReg
+        # can stop with a values file that stages no package.
+        code, stdout, stderr = self.run_operator("stop", values={"casework": {"enabled": True, "serve": True}})
+        self.assertEqual((code, stdout, stderr), (1, "", "registry-stack: Helm has no release to stop.\n"))
+        self.assertEqual(self.events, ["lease acquire", "helm list", "lease release"])
 
     def test_values_file_without_the_package_is_refused_before_any_command(self):
         for values, path in (
