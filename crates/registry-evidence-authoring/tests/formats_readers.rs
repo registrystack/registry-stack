@@ -251,17 +251,17 @@ fn a_normalized_project_without_an_envelope_is_refused() {
 
 #[test]
 fn an_environment_expression_is_refused_in_an_authored_value_and_key() {
-    let line = PROJECT_TEXT.lines().count() + 1;
-    let text = format!("{PROJECT_TEXT}label: ${{HOME}}\n");
+    let line = 4;
+    let text = PROJECT_TEXT.replacen("project:\n", "project:\n  label: ${HOME}\n", 1);
     let report = project::read_project("evidence.yaml", text.as_bytes())
         .expect_err("authored files are not expanded");
     let diagnostic = &report.diagnostics()[0];
     assert_eq!(diagnostic.code, SUBSTITUTION_NOT_ALLOWED);
-    assert_eq!(diagnostic.path, "/label");
+    assert_eq!(diagnostic.path, "/project/label");
     assert!(!diagnostic.message.contains("HOME"));
     assert!(diagnostic.suggested_action.contains("not expanded"));
     let source = diagnostic.source.as_ref().expect("placed");
-    assert_eq!((source.line, source.column), (Some(line), Some(8)));
+    assert_eq!((source.line, source.column), (Some(line), Some(10)));
 }
 
 #[test]

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- BREAKING: an `EvidenceProject`'s human `label` and `description` move from
+  the top level into the shared `project` block, as `project.label` and
+  `project.description` (pre-1.0 cleanup, so every product accepts them in the
+  same place). A top-level `label` or `description` is refused with
+  `config.removed-key` and the fix "Move label to project.label." Neither
+  enters a behavior revision. `project.version` stays a human release label
+  outside the compiled bundle. Validation findings on them now point at
+  `/project/label` and `/project/description`.
+
 - BREAKING: `EvidenceProject` names the project in a `project` block, as the
   other products' project files do (pre-1.0 cleanup). Top-level `id` ->
   `project.id`, and `project.version`, a human release label, is a new

@@ -5,7 +5,7 @@ use registry_platform_yaml::{
     duplicate_display_text_diagnostics, local_id_collision_diagnostics, lookalike_local_id_pairs,
     ApiVersion, AuthoredDisplayText, AuthoredId, BoundedU64, Decoded, Diagnostic, DisplayText,
     EnvelopeRule, Expect, ExternalId, FormatSpec, LocalId, ProjectIdentity, Reader, Refusal,
-    Report, ScalarHook, ScalarSite, UniqueList,
+    RemovedKey, Report, ScalarHook, ScalarSite, UniqueList,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -29,7 +29,16 @@ pub const PROJECT: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(PROJECT_API_VERSION)],
         retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/label",
+            replacement: "Move label to project.label.",
+        },
+        RemovedKey {
+            pointer: "/description",
+            replacement: "Move description to project.description.",
+        },
+    ],
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -38,30 +47,10 @@ pub const PROJECT: FormatSpec<'static> = FormatSpec {
 pub struct EvidenceProject {
     /// The shared identity: `project.id` names this project and
     /// `project.version` is a human release label. The compiled bundle carries
-    /// only the id.
+    /// only the id. The optional `project.label` and `project.description` are
+    /// presentation for authors and reviewers: stable references use the
+    /// identifier, and neither enters a behavior revision.
     pub project: ProjectIdentity,
-    /// Optional presentation label. Stable references use the identifier.
-    #[serde(
-        default,
-        deserialize_with = "registry_platform_yaml::optional_display_text",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::DisplayText>")
-    )]
-    pub label: Option<String>,
-    /// Human explanation for authors and reviewers; excluded from behavior revisions.
-    #[serde(
-        default,
-        deserialize_with = "registry_platform_yaml::optional_display_text",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::DisplayText>")
-    )]
-    pub description: Option<String>,
     pub selector_profiles: BTreeMap<LocalId, SelectorProfile>,
     pub functions: BTreeMap<LocalId, Function>,
     pub sources: BTreeMap<LocalId, Source>,
@@ -1597,9 +1586,9 @@ fn validate_public_check(
 fn validate_project_display_text(project: &EvidenceProject) -> Vec<Finding> {
     let mut findings = Vec::new();
     validate_presentation(
-        project.label.as_deref(),
-        project.description.as_deref(),
-        &FieldPath::root(),
+        project.project.label.as_deref(),
+        project.project.description.as_deref(),
+        &FieldPath::root().key("project"),
         &mut findings,
     );
     for (id, function) in &project.functions {
