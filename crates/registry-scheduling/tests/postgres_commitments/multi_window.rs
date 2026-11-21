@@ -26,7 +26,7 @@ fn sessions_policy() -> String {
         .replace(
             "holdPolicy:",
             &format!(
-                "  - id: {SESSIONS}\n\
+                "  {SESSIONS}:\n\
                  \x20   service: registry-update\n\
                  \x20   label: Registry sessions\n\
                  \x20   mode: arrival-window\n\
