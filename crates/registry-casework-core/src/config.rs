@@ -77,95 +77,95 @@ pub struct CaseworkProject {
     pub kind: String,
     pub project: ProjectIdentity,
     #[serde(
-        deserialize_with = "crate::typed::id_keyed",
-        serialize_with = "crate::typed::serialize_id_keyed"
+        deserialize_with = "registry_platform_yaml::id_keyed",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "crate::typed::id_keyed_schema::<AccessProfile>")
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<AccessProfile>")
     )]
     pub access_profiles: Vec<AccessProfile>,
     #[serde(
-        deserialize_with = "crate::typed::id_keyed",
-        serialize_with = "crate::typed::serialize_id_keyed"
+        deserialize_with = "registry_platform_yaml::id_keyed",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "crate::typed::id_keyed_schema::<QueuePolicy>")
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<QueuePolicy>")
     )]
     pub queues: Vec<QueuePolicy>,
     #[serde(
         default,
-        deserialize_with = "crate::typed::id_keyed",
-        serialize_with = "crate::typed::serialize_id_keyed"
+        deserialize_with = "registry_platform_yaml::id_keyed",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
     )]
     #[cfg_attr(
         feature = "schema",
         schemars(
-            schema_with = "crate::typed::id_keyed_schema::<crate::ReviewContextProviderPolicy>"
+            schema_with = "registry_platform_yaml::id_keyed_schema::<crate::ReviewContextProviderPolicy>"
         )
     )]
     pub context_providers: Vec<crate::ReviewContextProviderPolicy>,
     #[serde(
         default,
-        deserialize_with = "crate::typed::id_keyed",
-        serialize_with = "crate::typed::serialize_id_keyed"
+        deserialize_with = "registry_platform_yaml::id_keyed",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "crate::typed::id_keyed_schema::<TeamPolicy>")
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<TeamPolicy>")
     )]
     pub teams: Vec<TeamPolicy>,
     #[serde(
         default,
-        deserialize_with = "crate::typed::id_keyed",
+        deserialize_with = "registry_platform_yaml::id_keyed",
         serialize_with = "serialize_project_review_policies"
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "crate::typed::id_keyed_schema::<ReviewPolicy>")
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<ReviewPolicy>")
     )]
     pub review_policies: Vec<ReviewPolicy>,
     #[serde(
         default,
-        deserialize_with = "crate::typed::id_keyed",
-        serialize_with = "crate::typed::serialize_id_keyed"
+        deserialize_with = "registry_platform_yaml::id_keyed",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "crate::typed::id_keyed_schema::<ReviewProducerPolicy>")
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<ReviewProducerPolicy>")
     )]
     pub trusted_producers: Vec<ReviewProducerPolicy>,
     #[serde(
         default,
-        deserialize_with = "crate::typed::id_keyed",
-        serialize_with = "crate::typed::serialize_id_keyed"
+        deserialize_with = "registry_platform_yaml::id_keyed",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "crate::typed::id_keyed_schema::<CalendarPolicy>")
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<CalendarPolicy>")
     )]
     pub calendars: Vec<CalendarPolicy>,
     #[serde(
         default,
-        deserialize_with = "crate::typed::id_keyed",
+        deserialize_with = "registry_platform_yaml::id_keyed",
         serialize_with = "serialize_project_clocks"
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "crate::typed::id_keyed_schema::<ClockPolicy>")
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<ClockPolicy>")
     )]
     pub clocks: Vec<ClockPolicy>,
     #[serde(default)]
     pub inbox: InboxPolicy,
     #[serde(
         default,
-        deserialize_with = "crate::typed::id_keyed",
-        serialize_with = "crate::typed::serialize_id_keyed"
+        deserialize_with = "registry_platform_yaml::id_keyed",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "crate::typed::id_keyed_schema::<crate::TaskTemplate>")
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<crate::TaskTemplate>")
     )]
     pub task_templates: Vec<crate::TaskTemplate>,
 }

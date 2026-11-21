@@ -489,11 +489,13 @@ pub struct ReviewPolicy {
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",
-        deserialize_with = "crate::typed::id_keyed_or_list"
+        deserialize_with = "registry_platform_yaml::id_keyed_or_list"
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "crate::typed::id_keyed_or_list_schema::<ReviewOutcomePolicy>")
+        schemars(
+            schema_with = "registry_platform_yaml::id_keyed_or_list_schema::<ReviewOutcomePolicy>"
+        )
     )]
     pub outcomes: Vec<ReviewOutcomePolicy>,
 }
