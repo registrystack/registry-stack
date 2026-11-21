@@ -40,7 +40,9 @@ A project contains no deployment credential values.
 
 The `project` block names the project: `project.id` is the stable local
 project identifier and `project.version` is a required human release label
-that check and inspect reports show. The compiled bundle carries only the id.
+that check and inspect reports show. The optional `project.label` and
+`project.description` name and explain the project for readers; a top-level
+`label` or `description` is refused. The compiled bundle carries only the id.
 Stable identifiers connect `assertionDefinitions`, `sources`,
 `selectorProfiles` and `functions`, each a map keyed by its identifier.
 Optional `label` and `description` fields are presentation metadata. They do
@@ -665,7 +667,6 @@ assertionDefinitions.*.subjects[].role
 assertionDefinitions.*.subjects[].selectors
 assertionDefinitions.*.subjects[].selectors[]
 assertionDefinitions.*.validitySeconds
-description
 functions
 functions.*
 functions.*.description
@@ -673,10 +674,11 @@ functions.*.interface
 functions.*.label
 functions.*.source
 kind
-label
 maximumHolderBoundBatchSize
 project
+project.description
 project.id
+project.label
 project.version
 selectorProfiles
 selectorProfiles.*

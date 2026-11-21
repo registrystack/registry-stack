@@ -199,14 +199,37 @@ fn definition_keys_keep_the_complete_local_id_bound() {
 }
 
 #[test]
+fn a_top_level_label_or_description_is_refused_with_project_as_its_home() {
+    for member in ["label", "description"] {
+        let mut document = normalized_document();
+        document[member] = json!("Standalone Evidence project");
+        let diagnostic = normalized_refusal(&document);
+        assert_eq!(diagnostic.code, "config.removed-key");
+        assert_eq!(diagnostic.path, format!("/{member}"));
+        assert!(
+            diagnostic
+                .suggested_action
+                .contains(&format!("project.{member}")),
+            "{}",
+            diagnostic.suggested_action
+        );
+    }
+}
+
+#[test]
 fn presentation_labels_do_not_rename_stable_ids_or_references() {
     let mut document = normalized_document();
-    document["label"] = json!("Standalone Evidence project");
+    document["project"]["label"] = json!("Standalone Evidence project");
+    document["project"]["description"] = json!("Explains the project.");
     document["selectorProfiles"]["record-by-id"]["label"] = json!("Record identifier");
     document["sources"]["person-record"]["label"] = json!("Person source");
     document["assertionDefinitions"]["adult-status"]["label"] = json!("Adult status");
     let project = read_normalized(&document).unwrap();
     assert_eq!(project.project.id.as_str(), "standalone-evidence");
+    assert_eq!(
+        project.project.label.as_deref(),
+        Some("Standalone Evidence project")
+    );
     assert!(project
         .selector_profiles
         .keys()

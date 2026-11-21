@@ -153,8 +153,11 @@ fn constructed_project_id_collisions_are_checked_before_compilation() {
 fn constructed_presentation_fields_share_display_text_validation() {
     type Mutate = fn(&mut project::EvidenceProject, &str);
     let cases: &[(&str, Mutate)] = &[
-        ("/label", |project, value| {
-            project.label = Some(value.to_owned())
+        ("/project/label", |project, value| {
+            project.project.label = Some(value.to_owned())
+        }),
+        ("/project/description", |project, value| {
+            project.project.description = Some(value.to_owned())
         }),
         (
             "/selectorProfiles/person-by-id/description",
@@ -242,7 +245,7 @@ fn constructed_presentation_fields_share_display_text_validation() {
 #[test]
 fn constructed_multilingual_display_text_remains_valid() {
     let mut project = project();
-    project.label = Some("می\u{200c}خواهم\u{00ad}".to_owned());
+    project.project.label = Some("می\u{200c}خواهم\u{00ad}".to_owned());
     project
         .assertion_definitions
         .values_mut()
@@ -566,7 +569,9 @@ fn private_dates_keep_canonical_format_validation() {
 fn presentation_metadata_does_not_change_compiled_semantics_or_behavior_dependencies() {
     let original = project();
     let mut edited = serde_json::to_value(&original).unwrap();
-    edited["label"] = json!("Friendly project name");
+    edited["project"]["label"] = json!("Friendly project name");
+    edited["project"]["description"] = json!("Explains the project");
+    edited["project"]["version"] = json!("2");
     edited["sources"]["person"]["description"] = json!("Reviewed source explanation");
     edited["functions"]["derive-status"]["label"] = json!("Extract a person");
     edited["selectorProfiles"]["person-by-id"]["label"] = json!("Person identifier");
