@@ -11,6 +11,9 @@ use registry_breg::{
 };
 use serde_json::{json, Value};
 
+#[path = "support/consent_fixture.rs"]
+mod consent_fixture;
+
 fn source() -> Value {
     json!({"datasets":{"test-dataset": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
@@ -984,8 +987,6 @@ fn a_membership_boundary_cannot_read_a_withheld_field() {
 
 #[test]
 fn a_consent_boundary_cannot_read_a_withheld_field() {
-    #[path = "support/consent_fixture.rs"]
-    mod consent_fixture;
     let mut value = consent_fixture::source();
     let consenting: Vec<String> = value["accessProfiles"]
         .as_object()
@@ -1022,6 +1023,41 @@ fn a_consent_boundary_cannot_read_a_withheld_field() {
         found.contains(&"breg.disclosure.consent-boundary-withheld-field".to_owned()),
         "{found:?}"
     );
+}
+
+/// The consent check of `requireConsent` reads the consent record type under
+/// the gated profile, so a `record` condition there could hide a revocation
+/// and let an earlier consent stand. Field and history conditions leave that
+/// read whole.
+#[test]
+fn a_consent_record_cannot_carry_a_record_condition() {
+    let with_condition = |withhold: Value| {
+        let mut value = consent_fixture::source();
+        let mut condition = json!({"when":[{"type":"field-equals","field":"decision","value":"withdrawn"}],
+            "withhold": withhold, "exemptProfiles":["steward"]});
+        if withhold == "fields" {
+            condition["fields"] = json!(["expires-at"]);
+        }
+        value["recordTypes"][consent_fixture::CONSENT_RECORD]["disclosureConditions"] =
+            json!({"hide-withdrawn": condition});
+        value
+    };
+    let found = refusal(&with_condition(json!("record")));
+    assert!(
+        found.contains(&(
+            "breg.disclosure.consent-record-condition".to_owned(),
+            "recordTypes[id=consent-decision].disclosureConditions[id=hide-withdrawn]".to_owned()
+        )),
+        "{found:?}"
+    );
+    for withhold in ["fields", "history"] {
+        let value = with_condition(json!(withhold));
+        assert!(
+            consent_fixture::compile(&value).is_ok(),
+            "{withhold}: {:?}",
+            refusal_or_empty(&value)
+        );
+    }
 }
 
 #[test]
