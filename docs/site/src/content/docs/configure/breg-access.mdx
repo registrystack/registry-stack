@@ -492,11 +492,13 @@ record's state. A JSON Patch `test` on such a field is refused like a test on a 
 exist, so it cannot be used to guess the value.
 
 `exemptProfiles` names the profiles the condition never applies to. List at least one, and only
-profiles the project declares. The record timer, which runs under the reserved `system-record-timer`
-profile, is never withheld from, so a timer keeps firing on a record that is hidden from people. A
-timer may not read a field that a `fields` condition withholds from some profile, because what the
-timer writes would reveal it. For the same reason, a timer on a Record type with a `record`
-condition may not create a record that a profile the condition binds can read.
+profiles the project declares. A profile with no record grant on the Record type can be listed when
+an Action or Proposal permission of that profile targets the type, so it can write a marked record
+through the Action or the Proposal apply. The record timer, which runs under the reserved
+`system-record-timer` profile, is never withheld from, so a timer keeps firing on a record that is
+hidden from people. A timer may not read a field that a `fields` condition withholds from some
+profile, because what the timer writes would reveal it. For the same reason, a timer on a Record
+type with a `record` condition may not create a record that a profile the condition binds can read.
 
 ### How a condition is evaluated
 

@@ -125,7 +125,8 @@
 - A Record type can declare `disclosureConditions`. Each is a conjunction of one to four literal
   tests on the record's current values, and withholds the whole record (`withhold: record`), its
   revisions and snapshots (`history`) or named optional fields (`fields`) from every access profile
-  that does not list it under `exemptProfiles`. The record timer is never withheld from. A withheld
+  that does not list it under `exemptProfiles`. A profile that writes the type only through an
+  Action or Proposal permission can be listed. The record timer is never withheld from. A withheld
   record answers as an absent one, and a withheld member is `null` on reads and revisions and absent
   from write responses. A JSON Patch `test` on a withheld field is refused, and a direct write that
   a `record` condition would hide from the writer is refused with `write.outside-boundary`. So is a
