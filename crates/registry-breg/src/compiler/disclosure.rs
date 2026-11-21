@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::contract::{
     ConstraintSource, DisclosureConditionSource, DisclosureWhenPredicate, DisclosureWithholdSource,
     EntitySource, EventTrigger, FieldTypeSource, Operation, ProjectAccessProfileSource, UniqueSet,
+    UniqueWhenPredicate,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{CompiledDisclosureCondition, CompiledEntity, DisclosureWithhold};
@@ -306,9 +307,10 @@ fn validate_fields(
 /// One finding for each field a `fields` condition withholds that a
 /// cross-record constraint also covers. A Create that repeats the value of a
 /// hidden record answers a conflict and any other value succeeds, so the
-/// constraint confirms a guess. A uniqueness constraint member, an encrypted
-/// field's unique blind index and a temporal non-overlap key field answer
-/// this way. The runtime write rule closes the same probe on Patch.
+/// constraint confirms a guess. A uniqueness constraint member, a field a
+/// partial uniqueness constraint's `when` reads, an encrypted field's unique
+/// blind index and a temporal non-overlap key field answer this way. The
+/// runtime write rule closes the same probe on a Patch of the marked record.
 pub(super) fn withheld_field_probe_findings(
     entities: &BTreeMap<String, EntitySource>,
 ) -> Vec<Diagnostic> {
@@ -327,7 +329,7 @@ pub(super) fn withheld_field_probe_findings(
                             "recordTypes[id={}].disclosureConditions[id={}].fields[field={field}]",
                             entity.id, condition.id
                         ),
-                        "a Create that repeats this withheld value on a new record answers 409 and confirms the value exists on a hidden record",
+                        "a Create, or a Patch of another record, that a constraint over this withheld field refuses with 409 confirms its value on a hidden record",
                     ));
                 }
             }
@@ -347,11 +349,26 @@ fn constrained_across_records(entity: &EntitySource, field: &str) -> bool {
         .constraints
         .iter()
         .any(|constraint| match constraint {
-            ConstraintSource::Unique { fields, .. } => fields.iter().any(|id| id == field),
+            // A partial constraint holds only for the records its `when`
+            // matches, so a repeated value conflicts exactly when the hidden
+            // record's `when` field meets the predicate.
+            ConstraintSource::Unique { fields, when, .. } => {
+                fields.iter().any(|id| id == field)
+                    || when.iter().flatten().any(|predicate| match predicate {
+                        UniqueWhenPredicate::FieldEquals { field: id, .. }
+                        | UniqueWhenPredicate::FieldIsNull { field: id }
+                        | UniqueWhenPredicate::FieldIsNotNull { field: id } => id == field,
+                        UniqueWhenPredicate::ActiveLifecycle {} => false,
+                    })
+            }
             ConstraintSource::TemporalNonOverlap { scope_fields, .. } => {
                 valid_time || scope_fields.iter().any(|id| id == field)
             }
-            _ => false,
+            // These check one record's own values against each other or a
+            // literal, so another record's value never decides them.
+            ConstraintSource::Compare { .. }
+            | ConstraintSource::IntRange { .. }
+            | ConstraintSource::Vocabulary { .. } => false,
         })
         || entity.fields.iter().any(|source| {
             source.id == field && source.lookup.as_ref().is_some_and(|lookup| lookup.unique)

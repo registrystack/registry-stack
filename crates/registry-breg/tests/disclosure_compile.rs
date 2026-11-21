@@ -476,6 +476,28 @@ fn a_uniqueness_constraint_on_a_withheld_field_is_a_finding() {
     assert!(probe_findings(&unrelated).is_empty());
 }
 
+/// A partial uniqueness constraint holds only for records its `when` matches,
+/// so a Create that repeats the unique value answers a conflict exactly when a
+/// hidden record's withheld field meets the predicate.
+#[test]
+fn a_withheld_field_in_a_partial_uniqueness_when_is_a_finding() {
+    let path = format!("{FIELDS_COND}.fields[field=phone]");
+    for predicate in [
+        json!({"type":"field-is-not-null","field":"phone"}),
+        json!({"type":"field-is-null","field":"phone"}),
+        json!({"type":"field-equals","field":"phone","value":"0000"}),
+    ] {
+        let mut value = source();
+        value["recordTypes"][0]["constraints"] =
+            json!([{"type": "unique", "fields": ["subject-id"], "when": [predicate]}]);
+        assert_eq!(probe_findings(&value), [path.as_str()]);
+    }
+    let mut unrelated = source();
+    unrelated["recordTypes"][0]["constraints"] = json!([{"type": "unique", "fields": ["subject-id"],
+        "when": [{"type":"field-is-not-null","field":"district"}]}]);
+    assert!(probe_findings(&unrelated).is_empty());
+}
+
 /// An encrypted field's unique blind index answers a repeated value with a
 /// conflict in the same way as a uniqueness constraint.
 #[test]
