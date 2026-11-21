@@ -73,7 +73,7 @@ fn typescript_and_python_outputs_navigate_to_the_same_normalized_model() {
         );
         for (id, expected) in [
             ("person", "person:"),
-            ("derive-status", "derive-status, interface:"),
+            ("derive-status", "derive-status: {interface:"),
         ] {
             let key = format!("\"{id}\":");
             let offset = if id == "person" {
