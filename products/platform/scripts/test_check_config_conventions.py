@@ -656,6 +656,32 @@ class RegistryAccuracyTests(ConventionsTestCase):
         self.repo.fmt()["conformance"]["requiredText"] = "/description"
         self.assertError(self.repo.run(), "requiredText /description is not required by the schema")
 
+    def test_cfg_check_3_accepts_required_text_inside_an_id_keyed_entry(self) -> None:
+        # A map key names an entry, as a list index does, so it is not a
+        # member the schema could require.
+        self.repo.project["required"].append("accessProfiles")
+        profile = self.repo.project["$defs"]["AccessProfile"]
+        profile["required"] = ["label"]
+        profile["properties"]["label"] = {"type": "string", "minLength": 1}
+        self.repo.example["accessProfiles"]["reviewer"]["label"] = "Reviewer"
+        self.repo.fmt()["conformance"]["requiredText"] = "/accessProfiles/reviewer/label"
+        self.assertEqual(self.repo.run().errors, [])
+
+    def test_cfg_check_3_refuses_required_text_an_id_keyed_entry_does_not_require(self) -> None:
+        self.repo.project["required"].append("accessProfiles")
+        self.repo.project["$defs"]["AccessProfile"]["properties"]["label"] = {"type": "string", "minLength": 1}
+        self.repo.example["accessProfiles"]["reviewer"]["label"] = "Reviewer"
+        self.repo.fmt()["conformance"]["requiredText"] = "/accessProfiles/reviewer/label"
+        self.assertError(self.repo.run(), "requiredText /accessProfiles/reviewer/label is not required by the schema")
+
+    def test_cfg_check_3_refuses_required_text_an_id_keyed_entry_does_not_declare(self) -> None:
+        # The entry schema closes its members, so a member it does not declare
+        # resolves to nothing even though the map key before it does.
+        self.repo.project["required"].append("accessProfiles")
+        self.repo.example["accessProfiles"]["reviewer"]["label"] = "Reviewer"
+        self.repo.fmt()["conformance"]["requiredText"] = "/accessProfiles/reviewer/label"
+        self.assertError(self.repo.run(), "requiredText /accessProfiles/reviewer/label does not resolve in the schema")
+
     def test_cfg_check_3_accepts_the_optional_shape_roles(self) -> None:
         self.repo.example["description"] = "notes.md"
         self.repo.write("products/casework/examples/demo/notes.md", "Notes.\n")
