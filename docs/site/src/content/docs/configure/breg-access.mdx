@@ -522,7 +522,9 @@ that record is refused with `403 write.outside-boundary` in two cases:
 A bound profile can still set a mark and write any field a condition does not name. In the example
 above, a caseworker bound by `hide-notes` can close a case but cannot reopen it. The rule covers a
 Patch, each batch or import item, an immediate Action and a Proposal. It checks the profile that
-applies the change. A Create has no earlier state, so this rule never refuses it.
+applies the change. An import item it refuses answers the generic `412 precondition.failed` instead
+of the 403, as import does for a row boundary. A Create has no earlier state, so this rule never
+refuses it.
 
 A Proposal review shows a withheld field as `null`, and applying a change set to a record that
 became withheld after submission is refused. A Proposal applied by hand is checked as a write by the
