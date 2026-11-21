@@ -299,9 +299,12 @@ fn validate_fields(
             ));
         }
         // A create that repeats a withheld value answers a conflict and any
-        // other value succeeds, so the constraint would confirm a guess.
+        // other value succeeds, so the constraint would confirm a guess. An
+        // encrypted field's unique blind index answers the same way.
         let unique = entity.constraints.iter().any(|constraint| {
             matches!(constraint, ConstraintSource::Unique { fields, .. } if fields.contains(field))
+        }) || entity.fields.iter().any(|source| {
+            source.id == *field && source.lookup.as_ref().is_some_and(|lookup| lookup.unique)
         });
         if unique {
             errors.push(Diagnostic::error(

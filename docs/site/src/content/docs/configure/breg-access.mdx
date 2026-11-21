@@ -569,9 +569,10 @@ refuses:
 
 These refusals hold whatever the profiles:
 
-- A uniqueness constraint on a field a `fields` condition withholds
-  (`breg.disclosure.withheld-field-unique`). A create that repeated the withheld value would answer
-  a conflict and so confirm a guess. Withhold the record instead, or drop the constraint.
+- A uniqueness constraint, or an encrypted field's unique lookup, on a field a `fields` condition
+  withholds (`breg.disclosure.withheld-field-unique`). A create that repeated the withheld value
+  would answer a conflict and so confirm a guess. Withhold the record instead, or drop the
+  constraint or the unique lookup.
 - A change hook (`created`, `patched` or `tombstoned`) on a Record type with a `record` or `history`
   condition (`breg.disclosure.withheld-field-exposed`). A change hook must project at least one
   field and its destinations hold no access profile, so such a Record type declares no change hook
