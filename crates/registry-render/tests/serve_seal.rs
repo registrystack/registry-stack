@@ -1245,8 +1245,8 @@ fn the_signing_member_reaches_the_template_only_on_the_seal_route() {
         String::from_utf8_lossy(&plain.body)
     );
     assert_eq!(
-        plain.json()["dataSha256"],
-        sha256_hex(PLAIN_ENVELOPE.as_bytes()),
+        plain.json()["dataDigest"],
+        sha256_digest(PLAIN_ENVELOPE.as_bytes()),
         "the plain route's envelope has no signing member"
     );
 }
@@ -2633,11 +2633,7 @@ fn a_seal_writes_a_paired_value_free_audit() {
         record["certificateDigest"],
         body["seal"]["certificateDigest"]
     );
-    // The audit keeps its released bare hex `dataSha256`.
-    assert_eq!(
-        format!("sha256:{}", record["dataSha256"].as_str().unwrap()),
-        body["dataDigest"].as_str().unwrap()
-    );
+    assert_eq!(record["dataDigest"], body["dataDigest"]);
     let token_digest = record["timestampTokenDigest"].as_str().unwrap();
     assert!(
         token_digest
@@ -2646,7 +2642,9 @@ fn a_seal_writes_a_paired_value_free_audit() {
         "{record}"
     );
     for absent in [
+        "pdfDigest",
         "pdfSha256",
+        "dataSha256",
         "documentSha256",
         "signedFileSha256",
         "certificateSha256",

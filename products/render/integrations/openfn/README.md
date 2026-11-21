@@ -27,7 +27,6 @@ Deployment shape:
 Why the JSON variant exists: OpenFn's `util.request` parses bodies as text,
 so raw PDF bytes would be corrupted in transport; `Accept:
 application/json` returns `{pdfBase64, pdfDigest, dataDigest,
-documentVersion, warnings}` plus the deprecated bare hex `pdfSha256` and
-`dataSha256`, which `receipt-job.js` still reads. `Idempotency-Key` is correlation-only — deterministic
+documentVersion, warnings}`. `Idempotency-Key` is correlation-only: deterministic
 rendering is the real idempotency, so the event bridge's at-least-once
 redelivery and dead-letter replays can never issue conflicting documents.

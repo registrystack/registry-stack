@@ -531,7 +531,7 @@ async fn fixture() -> Fixture {
     let database_config = DatabaseConfig {
         runtime_url_ref: format!("secret:env/{secret_name}"),
         migration_url_ref: format!("secret:env/{secret_name}"),
-        trusted_root_certificate_ref: None,
+        ca_bundle_ref: None,
         test_only_plaintext: true,
     };
     let migration = PostgresStore::connect_migration(&database_config, &secrets)

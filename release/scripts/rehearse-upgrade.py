@@ -716,12 +716,16 @@ class Keys:
 
 
 class Side:
-    """One side of the upgrade: the previous release or this source."""
+    """One side of the upgrade: the previous release or this source.
+    `release` is the published release the binaries come from, or None for a
+    build of this source."""
 
-    def __init__(self, label: str, bin_dir: Path, ca_file: Path) -> None:
+    def __init__(self, label: str, bin_dir: Path, ca_file: Path,
+                 release: tuple[int, int, int] | None = None) -> None:
         self.label = label
         self.bin_dir = bin_dir
         self.ca_file = ca_file
+        self.release = release
 
     def path(self, binary: str) -> str:
         return str(self.bin_dir / binary)
@@ -1047,6 +1051,20 @@ def dump_yaml(path: Path, document: Any) -> None:
 # compare.
 
 
+# The first release whose Messaging runtime names the database CA bundle
+# `caBundleRef`. Earlier releases name it `trustedRootCertificateRef`, and an
+# operator renames the key before upgrading, as the Messaging CHANGELOG says.
+DATABASE_CA_BUNDLE_RENAMED = (0, 48, 0)
+
+
+def database_ca_bundle_key(release: tuple[int, int, int] | None) -> str:
+    """The database CA bundle key the binaries of `release` read; None is a
+    build of this source."""
+    if release is not None and release < DATABASE_CA_BUNDLE_RENAMED:
+        return "trustedRootCertificateRef"
+    return "caBundleRef"
+
+
 MESSAGING_ISSUER = "https://issuer.upgrade-rehearsal.invalid"
 MESSAGING_AUDIENCE = "urn:upgrade-rehearsal:messaging"
 MESSAGING_KID = "upgrade-rehearsal-messaging-rsa"
@@ -1130,7 +1148,7 @@ class Messaging:
             "secretProviders": {"file": {"root": str(self.secrets)}},
             "database": {"runtimeUrlRef": "secret:file/runtime-database-url",
                          "migrationUrlRef": "secret:file/migration-database-url",
-                         "trustedRootCertificateRef": "secret:file/postgres-ca.pem"},
+                         database_ca_bundle_key(side.release): "secret:file/postgres-ca.pem"},
             "authentication": {"oidc": {
                 "issuer": MESSAGING_ISSUER, "audience": MESSAGING_AUDIENCE,
                 "allowedClients": ["case-system", "operations-console"],
@@ -1141,6 +1159,17 @@ class Messaging:
             "audit": {"path": str(self.audit / MESSAGING_AUDIT),
                       "hashKeyRef": "secret:file/messaging-audit-key"},
         })
+
+    def rename_database_ca_bundle(self, side: Side) -> None:
+        """Rename the runtime file's database CA bundle key to the one `side`
+        reads, the edit an operator makes before upgrading."""
+        runtime = load_yaml(self.runtime)
+        database = runtime["database"]
+        wanted = database_ca_bundle_key(side.release)
+        for key in ("trustedRootCertificateRef", "caBundleRef"):
+            if key != wanted and key in database:
+                database[wanted] = database.pop(key)
+        dump_yaml(self.runtime, runtime)
 
     def call(self, method: str, path: str, body: Any = None,
              headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], Any]:
@@ -1243,6 +1272,7 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     # release wrote. The ledger must still name that package as active: a plan
     # that reports a change once any pending schema versions are applied means
     # the upgrade lost the activation.
+    messaging.rename_database_ca_bundle(new)
     differences = messaging.upgrade(new, activated)
     differences += dispatch_shape_differences(postgres.sql("messaging", """
         SELECT pg_get_constraintdef(oid) FROM pg_constraint
@@ -1680,7 +1710,8 @@ def main(argv: list[str]) -> int:
             from_bin = args.from_bin_dir.resolve()
             report["fromProvenance"] = "UNVERIFIED local override"
             print(f"warning: {from_bin} is not authenticated as {from_tag}", file=sys.stderr)
-        old = Side("from", from_bin, tls / "ca.pem")
+        old = Side("from", from_bin, tls / "ca.pem",
+                   None if unpublished else parse_tag(from_tag))
         # A build of this source reports a development version, not the tag.
         report["fromVersions"] = check_binaries(
             old, None if unpublished else from_tag[1:], binaries)

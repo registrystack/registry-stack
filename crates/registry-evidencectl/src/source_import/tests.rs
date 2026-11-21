@@ -17,15 +17,17 @@ impl Fixture {
             "evidence.yaml",
             r#"apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
 kind: EvidenceProject
-id: import-test
+project:
+  id: import-test
+  version: "1"
 selectorProfiles:
   other-reference:
     maximumAggregateBytes: 64
     fields: {value: {type: string, minimumBytes: 1, maximumBytes: 64}}
 functions:
-- id: other-derive
-  interface: assertion-derive/v1
-  source: functions/other-derive.rhai
+  other-derive:
+    interface: assertion-derive/v1
+    source: functions/other-derive.rhai
 sources:
   other:
     pack: {id: other-pack, version: "1"}
@@ -306,8 +308,8 @@ fn canonical_block_project_imports_and_preserves_unowned_authored_text() {
     assert!(!decoded
         .value
         .functions
-        .iter()
-        .any(|function| function.id.as_str().starts_with("lookup-")));
+        .keys()
+        .any(|id| id.as_str().starts_with("lookup-")));
     let (project, scripts) = crate::normalized::read(candidate.project()).unwrap();
     let pack_routes = crate::normalized::read_pack_routes(candidate.project(), &project).unwrap();
     registry_evidence_authoring::compile::compile_with_pack_routes(
@@ -475,8 +477,8 @@ fn import_refuses_invalid_source_and_selector_headers_without_leaking_values() {
 #[test]
 fn flow_and_empty_project_collections_import_without_partial_entries() {
     for functions in [
-        "[{id: existing, interface: assertion-derive/v1, source: functions/existing.rhai}]",
-        "\n  []",
+        "{existing: {interface: assertion-derive/v1, source: functions/existing.rhai}}",
+        "\n  {}",
     ] {
         let project = format!(
             "apiVersion: {}\nkind: {}\nfunctions: {functions}\n# Preserve this comment and the unowned member.\nuntouched: true\n",
@@ -491,11 +493,10 @@ fn flow_and_empty_project_collections_import_without_partial_entries() {
                 ),
             )
             .unwrap();
-        let replacement = json!([{
-            "id": "imported-derive",
+        let replacement = json!({"imported-derive": {
             "interface": "assertion-derive/v1",
             "source": "functions/imported-derive.rhai"
-        }]);
+        }});
         let replaced =
             replace_project_sections(&project, &document, [("/functions", &replacement)]).unwrap();
         registry_platform_yaml::Reader::new("evidence.yaml")
@@ -509,8 +510,99 @@ fn flow_and_empty_project_collections_import_without_partial_entries() {
         assert!(
             replaced.contains("# Preserve this comment and the unowned member.\nuntouched: true")
         );
-        assert!(!replaced.contains("- ["));
+        assert!(!replaced.contains("- {"));
+        assert!(!replaced.contains("existing"));
     }
+}
+
+/// The next import state holding one Source fragment per `(sourceId, Function
+/// ids)` pair, each fragment shaped as export normalization writes it.
+fn fragment_state(fragments: &[(&str, &[&str])]) -> State {
+    let mut state = State::default();
+    for (source_id, function_ids) in fragments {
+        let path = format!("source-fragments/{source_id}.json");
+        let text = serde_json::to_string_pretty(&json!({
+            "functions": function_ids
+                .iter()
+                .map(|id| json!({
+                    "id": id,
+                    "interface": "assertion-derive/v1",
+                    "source": format!("functions/{id}.rhai")
+                }))
+                .collect::<Vec<_>>(),
+            "sourceId": source_id,
+            "source": {
+                "pack": {"id": "other-pack", "version": "1"},
+                "route": "lookup",
+                "connection": source_id,
+                "acquisitionPosture": "record-transformed",
+                "inputs": {"value": {"selector": {
+                    "role": "subject", "profile": "other-reference", "field": "value"
+                }}}
+            }
+        }))
+        .unwrap();
+        state.imports.insert(
+            (*source_id).to_owned(),
+            InstalledExport {
+                manifest: ExportManifest {
+                    source_id: (*source_id).to_owned(),
+                    provenance: BTreeMap::new(),
+                    artifacts: Vec::new(),
+                },
+                upstream: BTreeMap::from([(path.clone(), text.clone())]),
+                retained: BTreeMap::new(),
+                detached: false,
+            },
+        );
+        state.accepted.insert(path, Some(text));
+    }
+    state
+}
+
+#[test]
+fn merged_fragment_functions_refuse_an_id_the_project_or_another_fragment_declares() {
+    let fixture = Fixture::new();
+    let before = BTreeMap::from([(
+        "evidence.yaml".to_owned(),
+        Contents {
+            text: fs::read_to_string(fixture.project.join("evidence.yaml")).unwrap(),
+            mode: 0o600,
+        },
+    )]);
+    let merge = |next: &State| {
+        let mut after = BTreeMap::new();
+        merge_normalized_fragments(&before, &mut after, &State::default(), next).map(|()| after)
+    };
+
+    let after = merge(&fragment_state(&[("lookup", &["imported-derive"])]))
+        .expect("a Function id no one else declares merges");
+    let merged = registry_evidence_authoring::project::read_project(
+        "evidence.yaml",
+        after["evidence.yaml"].text.as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        merged
+            .value
+            .functions
+            .keys()
+            .map(|id| id.as_str())
+            .collect::<Vec<_>>(),
+        ["imported-derive", "other-derive"]
+    );
+
+    // `other-derive` is the Function the project authors itself.
+    let error = merge(&fragment_state(&[("lookup", &["other-derive"])]))
+        .expect_err("a fragment may not replace an authored Function");
+    assert!(error.to_string().contains("`other-derive`"), "{error:#}");
+
+    let error = merge(&fragment_state(&[
+        ("lookup", &["shared-derive"]),
+        ("second", &["shared-derive"]),
+    ]))
+    .expect_err("two fragments may not declare one Function id");
+    assert!(error.to_string().contains("`shared-derive`"), "{error:#}");
 }
 
 #[test]
@@ -1328,7 +1420,7 @@ fn structural_impact_follows_source_dependencies_without_inventing_revisions() {
 }
 
 #[test]
-fn provenance_only_unconsumed_update_ignores_consumed_function_declaration_order() {
+fn provenance_only_unconsumed_update_of_a_json_project_affects_no_definition() {
     let fixture = Fixture::new();
     let lookup = fixture.export("lookup", "lookup", "v1", &[]);
     let unrelated = fixture.export("unrelated", "unrelated", "v1", &[]);
@@ -1348,14 +1440,6 @@ fn provenance_only_unconsumed_update_ignores_consumed_function_declaration_order
     project["assertionDefinitions"]["other"]["acquisition"] = json!({"source":"lookup"});
     project["assertionDefinitions"]["other"]["subjects"][0]["selectors"] =
         json!(["imported-reference"]);
-    project["functions"]
-        .as_array_mut()
-        .unwrap()
-        .sort_by_key(|function| {
-            !function["id"]
-                .as_str()
-                .is_some_and(|id| id.starts_with("lookup-"))
-        });
     fs::write(&project_path, serde_json::to_vec_pretty(&project).unwrap()).unwrap();
 
     let provenance_only = fixture.export("unrelated-next", "unrelated", "v2", &[]);

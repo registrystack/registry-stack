@@ -14,7 +14,7 @@ test('provider authenticates one document; invalid input precedes acquisition', 
     request.resume();request.on('end',()=> {
       response.writeHead(200,{'content-type':'application/json','traceparent':'00-1234567890abcdef1234567890abcdef-1234567890abcdef-01'});
       const pdfHex=createHash('sha256').update(pdf).digest('hex');
-      response.end(JSON.stringify({pdfBase64:pdf.toString('base64'),pdfDigest:`sha256:${pdfHex}`,dataDigest:`sha256:${'0'.repeat(64)}`,pdfSha256:pdfHex,dataSha256:'0'.repeat(64),documentVersion:'receipt v1',warnings:[]}));
+      response.end(JSON.stringify({pdfBase64:pdf.toString('base64'),pdfDigest:`sha256:${pdfHex}`,dataDigest:`sha256:${'0'.repeat(64)}`,documentVersion:'receipt v1',warnings:[]}));
     });
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -110,7 +110,7 @@ test('seal returns the checked sealed document and sends the correlation key', a
       if (request.headers['idempotency-key']) headers['idempotency-key']=request.headers['idempotency-key'];
       response.writeHead(200,headers);
       if (request.url==='/v1/render/receipt') {
-        response.end(JSON.stringify({pdfBase64:first.toString('base64'),pdfDigest:sha(first),dataDigest:digestOf('0'),pdfSha256:hex(first),dataSha256:'0'.repeat(64),documentVersion:'receipt v1',warnings:[]}));
+        response.end(JSON.stringify({pdfBase64:first.toString('base64'),pdfDigest:sha(first),dataDigest:digestOf('0'),documentVersion:'receipt v1',warnings:[]}));
         return;
       }
       response.end(JSON.stringify({pdfBase64:pdf.toString('base64'),documentDigest:sha(first),signedFileDigest:tampered?digestOf('0'):sha(pdf),dataDigest:digestOf('0'),documentVersion:'receipt v1',packageDigest:digestOf('b'),warnings:[],seal:{id:'agency',level:'B-T',certificateDigest:digestOf('c'),timestampedAt:'2026-10-23T00:00:01Z',testOnly:true}}));

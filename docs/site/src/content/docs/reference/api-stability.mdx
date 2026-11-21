@@ -52,6 +52,15 @@ the reference wins.
 | Registry Discovery | [Origins, evidence-type mappings, and runtime file](../../configure/discovery/) | [`GET /v1/services` and `POST /v1/evidence-types/resolve`](../../tutorials/publish-and-consume-discovery-index/#resolve-a-requirement) |
 | Registry Manifest | [`registry-manifest/v1` metadata documents](../../products/registry-manifest/reference/) | None |
 
+Registry Evidence's promised configuration is the compiled bundle and its runtime file. The
+authored files `evidencectl` compiles into a bundle, `EvidenceProject`, `EvidenceTarget`, and
+`EvidenceTargetAuthority`, are tooling formats outside the promise and may change in any minor
+release. The bundle they compile to stays covered.
+
+{/* Evidence: products/platform/config-formats.yaml, the stability of evidence/project,
+    evidence/target and evidence/target-authority;
+    crates/registry-breg/src/contract.rs, evidence_providers. */}
+
 Registry Evidence's versioned routes are `POST /v1/evidence`, `POST /v1/evidence/batch`, and
 `GET /v1/evidence-definitions`. Its operational routes are `/health`, `/ready`, `/openapi.json`,
 `/catalog.jsonld`, `/.well-known/evidence/jwks.json`, `/.well-known/jwt-vc-issuer`, and
@@ -126,8 +135,9 @@ release without deprecation:
 - the Registry Evidence public certificate check: the `POST /v1/public-check` route, its
   `registry.evidence.public-check/v1alpha1` answer, and the `publicCheck` members of an Evidence
   project and of a target authority
-- calling Evidence from a Base Registry Engine governed action handler: the action's `evidence`
-  declaration, and `evidence::resolve` inside the handler
+- calling Evidence from a Base Registry Engine governed action handler: the project's
+  `evidenceProviders`, the action's `evidence` declaration, and `evidence::resolve` inside the
+  handler
 - the `scheduling` variant of a Casework task grant's bounds
 - the Registry Coordinator operations that call an experimental product:
   `messaging.submit-message/v1`, and the Scheduling operations `scheduling.read-service/v1`, `scheduling.read-availability/v1`,

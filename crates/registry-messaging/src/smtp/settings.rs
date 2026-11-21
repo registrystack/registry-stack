@@ -124,7 +124,7 @@ pub struct SmtpProviderSettings {
         feature = "schema",
         schemars(with = "Option<registry_platform_config::SecretReference>")
     )]
-    pub trusted_root_certificate_ref: Option<String>,
+    pub ca_bundle_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authentication: Option<SmtpAuthentication>,
     /// How long one attempt may take, from 1000 to 60000 milliseconds;
@@ -172,11 +172,8 @@ impl std::fmt::Debug for SmtpProviderSettings {
             .field("port", &self.port)
             .field("tls", &self.tls)
             .field(
-                "trusted_root_certificate_ref",
-                &self
-                    .trusted_root_certificate_ref
-                    .as_ref()
-                    .map(|_| "<redacted>"),
+                "ca_bundle_ref",
+                &self.ca_bundle_ref.as_ref().map(|_| "<redacted>"),
             )
             .field("authentication", &self.authentication)
             .field(
@@ -209,7 +206,7 @@ pub enum SmtpSettingsError {
     DevelopmentRequiresLoopbackHost,
     #[error("tls development-loopback requires an explicit port other than 465 and 587")]
     DevelopmentRequiresExplicitPort,
-    #[error("tls development-loopback cannot declare trustedRootCertificateRef")]
+    #[error("tls development-loopback cannot declare caBundleRef")]
     DevelopmentTrustedRootDenied,
     #[error("tls development-loopback cannot declare allowedPrivateCidrs")]
     DevelopmentPrivateCidrsDenied,
@@ -233,7 +230,7 @@ pub enum SmtpSettingsError {
     Secret(String),
     #[error("{field} must resolve to UTF-8 text")]
     SecretNotText { field: &'static str },
-    #[error("trustedRootCertificateRef must resolve to at least one PEM certificate")]
+    #[error("caBundleRef must resolve to at least one PEM certificate")]
     InvalidTrustedRootCertificate,
     #[error("the TLS client for this provider could not be built")]
     TlsClient,
@@ -252,7 +249,7 @@ impl SmtpSettingsError {
             | Self::DevelopmentRequiresExplicitPort => "port",
             Self::DevelopmentNotPermitted => "tls",
             Self::DevelopmentTrustedRootDenied | Self::InvalidTrustedRootCertificate => {
-                "trustedRootCertificateRef"
+                "caBundleRef"
             }
             Self::DevelopmentPrivateCidrsDenied
             | Self::TooManyPrivateCidrs
@@ -277,8 +274,8 @@ impl SmtpProviderSettings {
     #[must_use]
     pub fn secret_references(&self) -> Vec<(&'static str, &str)> {
         let mut references = Vec::new();
-        if let Some(reference) = &self.trusted_root_certificate_ref {
-            references.push(("trustedRootCertificateRef", reference.as_str()));
+        if let Some(reference) = &self.ca_bundle_ref {
+            references.push(("caBundleRef", reference.as_str()));
         }
         if let Some(authentication) = &self.authentication {
             references.push((
@@ -335,13 +332,9 @@ impl SmtpProviderSettings {
 
     fn tls_parameters(&self, secrets: &SecretResolver) -> Result<TlsParameters, SmtpSettingsError> {
         let mut builder = TlsParameters::builder(self.host.clone());
-        if let Some(reference) = &self.trusted_root_certificate_ref {
+        if let Some(reference) = &self.ca_bundle_ref {
             let pem = secrets.resolve(reference).map_err(|error| {
-                SmtpSettingsError::Secret(describe_secret_failure(
-                    "trustedRootCertificateRef",
-                    reference,
-                    &error,
-                ))
+                SmtpSettingsError::Secret(describe_secret_failure("caBundleRef", reference, &error))
             })?;
             let certificates = CertificateDer::pem_slice_iter(pem.expose_secret())
                 .collect::<Result<Vec<_>, _>>()
@@ -390,7 +383,7 @@ impl SmtpProviderSettings {
                 if !loopback {
                     return Err(SmtpSettingsError::DevelopmentRequiresLoopbackHost);
                 }
-                if self.trusted_root_certificate_ref.is_some() {
+                if self.ca_bundle_ref.is_some() {
                     return Err(SmtpSettingsError::DevelopmentTrustedRootDenied);
                 }
                 if !self.allowed_private_cidrs.is_empty() {
@@ -630,12 +623,30 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_relay_ca_bundle_reads_from_ca_bundle_ref() {
+        let settings: SmtpProviderSettings = serde_json::from_value(serde_json::json!({
+            "host": "smtp.example.org",
+            "tls": "starttls",
+            "caBundleRef": "secret:file/relay-root",
+        }))
+        .expect("the settings read");
+        assert_eq!(
+            settings.secret_references(),
+            vec![("caBundleRef", "secret:file/relay-root")]
+        );
+    }
+
+    #[test]
     fn plaintext_refuses_tls_material_and_private_networks() {
         let mut settings = development("127.0.0.1");
-        settings.trusted_root_certificate_ref = Some("secret:env/ROOT".to_owned());
+        settings.ca_bundle_ref = Some("secret:env/ROOT".to_owned());
         assert_eq!(
             settings.check(false),
             Err(SmtpSettingsError::DevelopmentTrustedRootDenied)
+        );
+        assert_eq!(
+            SmtpSettingsError::DevelopmentTrustedRootDenied.member(),
+            "caBundleRef"
         );
         let mut settings = development("127.0.0.1");
         settings.allowed_private_cidrs = vec!["10.0.0.0/8".to_owned()];
@@ -736,7 +747,7 @@ pub(super) mod tests {
     #[test]
     fn debug_output_names_no_secret_reference() {
         let mut settings = starttls();
-        settings.trusted_root_certificate_ref = Some("secret:file/relay-root".to_owned());
+        settings.ca_bundle_ref = Some("secret:file/relay-root".to_owned());
         settings.authentication = Some(SmtpAuthentication {
             username_ref: "secret:file/relay-user".to_owned(),
             password_ref: "secret:file/relay-password".to_owned(),
@@ -768,12 +779,12 @@ pub(super) mod tests {
             "{debug}"
         );
 
-        settings.trusted_root_certificate_ref = Some("secret:file/relay-root".to_owned());
+        settings.ca_bundle_ref = Some("secret:file/relay-root".to_owned());
         assert_eq!(
             settings.activate(&secrets, false).map(|_| ()),
             Err(SmtpSettingsError::InvalidTrustedRootCertificate)
         );
-        settings.trusted_root_certificate_ref = Some("secret:file/absent".to_owned());
+        settings.ca_bundle_ref = Some("secret:file/absent".to_owned());
         let error = settings
             .activate(&secrets, false)
             .map(|_| ())
@@ -786,7 +797,7 @@ pub(super) mod tests {
             host: host.to_owned(),
             port: Some(1025),
             tls: SmtpTlsMode::DevelopmentLoopback,
-            trusted_root_certificate_ref: None,
+            ca_bundle_ref: None,
             authentication: None,
             attempt_timeout_milliseconds: DEFAULT_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS,
             allowed_private_cidrs: Vec::new(),

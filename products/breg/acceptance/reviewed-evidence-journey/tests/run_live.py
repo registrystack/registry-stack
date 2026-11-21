@@ -280,12 +280,12 @@ def activate_evidence(h, source_project, source, origin):
     # Source and its Functions remain in this composition's final model.
     model["sources"].pop("record-status")
     model["selectorProfiles"].pop("record-by-code-v1")
-    model["functions"] = [
-        item
-        for item in model["functions"]
-        if item["id"] not in ("record-status-extract", "extract-record-active")
-    ]
-    model["functions"] += fragment["functions"][:1]
+    model["functions"] = {
+        id: function
+        for id, function in model["functions"].items()
+        if id not in ("record-status-extract", "extract-record-active")
+    }
+    model["functions"]["record-active"] = fragment["functions"]["record-active"]
     model["assertionDefinitions"] = {"record-active": fragment["assertionDefinitions"]["record-active"]}
     yaml_write(project / "evidence.yaml", model)
     for directory, name in [("functions", "record-active.rhai"), ("fixtures", "record-active.yaml")]:

@@ -668,7 +668,7 @@ pub struct JobStoreConfig {
     /// The root certificate the connection trusts beside the platform
     /// roots; absent, the platform roots alone.
     #[serde(default)]
-    pub trusted_root_certificate_ref: Option<SecretReference>,
+    pub ca_bundle_ref: Option<SecretReference>,
     /// Plaintext connections for the loopback test database only;
     /// refused by the job host in any build without its `postgres-test`
     /// feature, the way the facade database refuses it.
@@ -1911,7 +1911,25 @@ mod tests {
         assert!(read.sources.is_some(), "the sources block still reads");
         let store = read.store.expect("the store block reads typed");
         assert!(!store.test_only_plaintext);
-        assert!(store.trusted_root_certificate_ref.is_none());
+        assert!(store.ca_bundle_ref.is_none());
+        let with_ca_bundle = r#"{
+                "id": "job-deployment",
+                "endpoints": [],
+                "store": {
+                    "runtimeUrlRef": "secret:env/JOB_DB",
+                    "caBundleRef": "secret:file/job-db-ca.pem"
+                }
+            }"#;
+        let read_ca_bundle: JobRuntimeConfig =
+            serde_json::from_str(with_ca_bundle).expect("the store's CA bundle reads");
+        assert_eq!(
+            read_ca_bundle
+                .store
+                .and_then(|store| store.ca_bundle_ref)
+                .as_ref()
+                .map(SecretReference::as_str),
+            Some("secret:file/job-db-ca.pem")
+        );
         assert!(
             read.core.allowed_private_cidrs.is_empty(),
             "a listener-free job with no network endpoint keeps an empty allowlist"

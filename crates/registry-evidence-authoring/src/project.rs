@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use registry_platform_yaml::{
     duplicate_display_text_diagnostics, local_id_collision_diagnostics, lookalike_local_id_pairs,
     ApiVersion, AuthoredDisplayText, AuthoredId, BoundedU64, Decoded, Diagnostic, DisplayText,
-    EnvelopeRule, Expect, ExternalId, FormatSpec, LocalId, Reader, Refusal, Report, ScalarHook,
-    ScalarSite, UniqueList,
+    EnvelopeRule, Expect, ExternalId, FormatSpec, LocalId, ProjectIdentity, Reader, Refusal,
+    Report, ScalarHook, ScalarSite, UniqueList,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -36,6 +36,10 @@ pub const PROJECT: FormatSpec<'static> = FormatSpec {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceProject {
+    /// The shared identity: `project.id` names this project and
+    /// `project.version` is a human release label. The compiled bundle carries
+    /// only the id.
+    pub project: ProjectIdentity,
     /// Optional presentation label. Stable references use the identifier.
     #[serde(
         default,
@@ -58,9 +62,8 @@ pub struct EvidenceProject {
         schemars(with = "Option<registry_platform_yaml::DisplayText>")
     )]
     pub description: Option<String>,
-    pub id: LocalId,
     pub selector_profiles: BTreeMap<LocalId, SelectorProfile>,
-    pub functions: Vec<Function>,
+    pub functions: BTreeMap<LocalId, Function>,
     pub sources: BTreeMap<LocalId, Source>,
     pub assertion_definitions: BTreeMap<LocalId, AssertionDefinition>,
     /// Maximum assertions released together in one holder-bound batch; omission means one.
@@ -124,7 +127,6 @@ pub struct Function {
         schemars(with = "Option<registry_platform_yaml::DisplayText>")
     )]
     pub description: Option<String>,
-    pub id: LocalId,
     pub interface: FunctionInterface,
     pub source: String,
 }
@@ -648,7 +650,7 @@ impl ScalarHook for ProjectScalars {
 
     fn value(&mut self, site: &ScalarSite<'_>) -> Result<Option<String>, Refusal> {
         self.authored.value(site)?;
-        let message = if site.keys == ["functions", "interface"]
+        let message = if matches!(site.keys, ["functions", _, "interface"])
             && matches!(site.text, "source-prepare/v1" | "source-extract/v1")
         {
             Some("The source-prepare/v1 and source-extract/v1 interfaces are retired; reviewed Adapter pack routes own source acquisition.")
@@ -743,18 +745,8 @@ fn project_id_namespaces(project: &EvidenceProject) -> Vec<ProjectIdNamespace<'_
         ),
         (
             "function-id-collision",
-            false,
-            project
-                .functions
-                .iter()
-                .enumerate()
-                .map(|(index, function)| {
-                    (
-                        function.id.as_str(),
-                        FieldPath::root().key("functions").index(index).key("id"),
-                    )
-                })
-                .collect(),
+            true,
+            map_ids("functions", &project.functions),
         ),
     ];
     for (profile_id, profile) in &project.selector_profiles {
@@ -918,14 +910,13 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<EvidenceProject>) -> Vec<
             project
                 .functions
                 .iter()
-                .enumerate()
-                .filter_map(|(index, item)| {
+                .filter_map(|(id, item)| {
                     item.label.as_ref().map(|label| {
-                        (
-                            item.id.as_str().to_owned(),
-                            label.clone(),
-                            format!("/functions/{index}/label"),
-                        )
+                        let pointer = format!(
+                            "/functions/{}/label",
+                            registry_platform_yaml::escape_pointer_segment(id.as_str())
+                        );
+                        (id.as_str().to_owned(), label.clone(), pointer)
                     })
                 })
                 .collect(),
@@ -1043,14 +1034,7 @@ fn validate_project_without_id_collisions(project: &EvidenceProject) -> Vec<Find
             .collect::<Vec<_>>(),
     );
     let mut push = |path, code, message| findings.push(Finding::new(path, code, message));
-    let functions: BTreeMap<_, _> = project.functions.iter().map(|f| (&f.id, f)).collect();
-    if functions.len() != project.functions.len() {
-        push(
-            FieldPath::root().key("functions"),
-            "function-unique",
-            "function IDs must be unique",
-        );
-    }
+    let functions = &project.functions;
     if project.assertion_definitions.is_empty() || project.assertion_definitions.len() > 128 {
         push(
             FieldPath::root().key("assertionDefinitions"),
@@ -1058,12 +1042,12 @@ fn validate_project_without_id_collisions(project: &EvidenceProject) -> Vec<Find
             "declare between one and 128 assertion definitions",
         );
     }
-    for (index, function) in project.functions.iter().enumerate() {
+    for (id, function) in &project.functions {
         if !valid_asset(&function.source, "rhai") {
             push(
                 FieldPath::root()
                     .key("functions")
-                    .index(index)
+                    .map_key(id.to_string())
                     .key("source"),
                 "function-source",
                 "name one project-relative .rhai function asset without traversal",
@@ -1618,11 +1602,11 @@ fn validate_project_display_text(project: &EvidenceProject) -> Vec<Finding> {
         &FieldPath::root(),
         &mut findings,
     );
-    for (index, function) in project.functions.iter().enumerate() {
+    for (id, function) in &project.functions {
         validate_presentation(
             function.label.as_deref(),
             function.description.as_deref(),
-            &FieldPath::root().key("functions").index(index),
+            &FieldPath::root().key("functions").map_key(id.to_string()),
             &mut findings,
         );
     }

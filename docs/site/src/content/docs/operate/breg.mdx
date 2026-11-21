@@ -236,7 +236,7 @@ secretProviders:
 database:
   runtimeUrlRef: secret:file/runtime-database-url
   migrationUrlRef: secret:file/migration-database-url
-  trustedRootCertificateRef: secret:file/database-ca
+  caBundleRef: secret:file/database-ca
   pool:
     maximumConnections: 4
   roles:
@@ -273,7 +273,7 @@ schema cannot tell you:
   names another. `instanceId` stamps every webhook event this runtime captures, so keep it stable
   while deliveries are pending.
 - **`database`** names the two connection URLs and the two roles. The runtime requires TLS on both
-  connections and verifies the server's certificate and host name. `trustedRootCertificateRef`
+  connections and verifies the server's certificate and host name. `caBundleRef`
   names PEM root certificates to trust in place of the platform roots, for a server whose
   certificate a private authority issued; omit it when a public authority issued it.
 - **`package.root`** is the package directory `package` published. Once you have the package,

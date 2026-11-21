@@ -209,7 +209,7 @@ The refusal names `schedulingctl apply --runtime-config FILE` to grant the read,
 
 Scheduling sets `sslmode` to `Require` on both connections and refuses a connection it cannot
 protect.
-`database.trustedRootCertificateRef` is optional and selects the PEM bundle of a private CA in
+`database.caBundleRef` is optional and selects the PEM bundle of a private CA in
 front of PostgreSQL.
 The one plaintext escape is `database.testOnlyPlaintext: true`, and only a build carrying the
 `postgres-test` feature accepts it; a production build refuses the setting at startup instead of

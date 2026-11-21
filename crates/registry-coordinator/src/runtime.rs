@@ -1397,8 +1397,8 @@ fn serialize_database<S: serde::Serializer>(
     let mut map = serializer.serialize_map(None)?;
     map.serialize_entry("runtimeUrlRef", &database.runtime_url_ref)?;
     map.serialize_entry("migrationUrlRef", &database.migration_url_ref)?;
-    if let Some(reference) = &database.trusted_root_certificate_ref {
-        map.serialize_entry("trustedRootCertificateRef", reference)?;
+    if let Some(reference) = &database.ca_bundle_ref {
+        map.serialize_entry("caBundleRef", reference)?;
     }
     if database.test_only_plaintext {
         map.serialize_entry("testOnlyPlaintext", &true)?;

@@ -38,8 +38,11 @@ A project contains no deployment credential values.
 
 ## Project and definition identity
 
-`id` is the stable local project identifier. Stable identifiers connect
-`assertionDefinitions`, `sources`, `selectorProfiles` and named `functions`.
+The `project` block names the project: `project.id` is the stable local
+project identifier and `project.version` is a required human release label
+that check and inspect reports show. The compiled bundle carries only the id.
+Stable identifiers connect `assertionDefinitions`, `sources`,
+`selectorProfiles` and `functions`, each a map keyed by its identifier.
 Optional `label` and `description` fields are presentation metadata. They do
 not change a definition's behavior revision; presentation bytes included in a
 package remain covered by its integrity digest.
@@ -140,11 +143,11 @@ finite operation budget and absolute deadline. The retired tagged acquisition
 kinds and Source `request`, `response`, `prepare`, `extract` and `batch` fields
 are refused rather than converted into packs.
 
-Each `functions` entry has a stable `id`, reviewed `source` asset and the
-`assertion-derive/v1` interface. `derive.function` selects that Function and
-`derive.parameters` carries reviewed requirement parameters. A completed
-matched lookup supplies its private facts; other lookup outcomes stop before
-derivation. Derivation receives only its separately declared authorized
+Each `functions` entry is keyed by its stable identifier and has a reviewed
+`source` asset and the `assertion-derive/v1` interface. `derive.function`
+selects that Function and `derive.parameters` carries reviewed requirement
+parameters. A completed matched lookup supplies its private facts; other
+lookup outcomes stop before derivation. Derivation receives only its separately declared authorized
 selector inputs and returns the declared Outputs. It cannot authorize, choose
 a Source, read credentials, perform I/O, sign, audit or construct an assertion.
 The `source-prepare/v1` and `source-extract/v1` Function interfaces are retired;
@@ -664,16 +667,17 @@ assertionDefinitions.*.subjects[].selectors[]
 assertionDefinitions.*.validitySeconds
 description
 functions
-functions[]
-functions[].description
-functions[].id
-functions[].interface
-functions[].label
-functions[].source
-id
+functions.*
+functions.*.description
+functions.*.interface
+functions.*.label
+functions.*.source
 kind
 label
 maximumHolderBoundBatchSize
+project
+project.id
+project.version
 selectorProfiles
 selectorProfiles.*
 selectorProfiles.*.description

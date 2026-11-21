@@ -94,7 +94,7 @@ fn(async state => {
     body: {
       recordId: data.recordId,
       pdfBase64: rendered.body.pdfBase64,
-      pdfSha256: rendered.body.pdfSha256,
+      pdfDigest: rendered.body.pdfDigest,
       idempotencyKey: state.eventEffectId,
     },
     parseAs: 'json', timeout: 10000,
@@ -105,7 +105,7 @@ fn(async state => {
 
   // Return only what the pipeline needs — hashes for the audit trail.
   return {
-    data: { receipt: { sha256: rendered.body.pdfSha256, version: rendered.body.documentVersion } },
+    data: { receipt: { pdfDigest: rendered.body.pdfDigest, version: rendered.body.documentVersion } },
     eventEffectId: state.eventEffectId,
   };
 });

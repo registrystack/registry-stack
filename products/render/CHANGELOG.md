@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- BREAKING: the render route and `compile --format json` send only the
+  labelled digests, as a pre-1.0 cleanup. The deprecated bare hex members and
+  headers are removed: `pdfSha256` -> `pdfDigest`, `dataSha256` ->
+  `dataDigest`, `X-Registry-Pdf-Sha256` -> `X-Registry-Pdf-Digest` and
+  `X-Registry-Data-Sha256` -> `X-Registry-Data-Digest`. The OpenAPI document
+  no longer declares them. Audit entries rename `pdfSha256` -> `pdfDigest` and
+  `dataSha256` -> `dataDigest`, and their values are now labelled
+  `sha256:<hex>` like the seal digests beside them. `registry-render-client`'s
+  `RenderedDocument` drops `pdf_sha256` and `data_sha256`, and the Node and
+  Python bindings drop `pdfSha256` and `dataSha256`; the client checks
+  `pdf_digest` against the bytes and that `data_digest` is labelled. Read
+  `pdfDigest` and `dataDigest`, which every server since 0.46.0 sends. The
+  OpenFn example `integrations/openfn/receipt-job.js` posts `pdfDigest`
+  (labelled `sha256:<hex>`) to the delivery endpoint in place of `pdfSha256`,
+  and returns `receipt.pdfDigest` in place of `receipt.sha256`.
+
 - Serve Prometheus metrics on an optional operator-private listener. Set
   `metricsListener.bind` to a loopback or private address, distinct from the
   serving listener. It is off by default, and a link-local address is refused.
@@ -269,4 +285,4 @@
   PDF and data hashes did not.
 
 Migration steps and the diagnostic code table:
-`release/notes/config-conventions/render.md`.
+[`release/notes/config-conventions/render.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/render.md).

@@ -75,7 +75,7 @@ fn database(reference: &str) -> DatabaseConfig {
     DatabaseConfig {
         runtime_url_ref: reference.to_owned(),
         migration_url_ref: reference.to_owned(),
-        trusted_root_certificate_ref: None,
+        ca_bundle_ref: None,
         test_only_plaintext: true,
     }
 }

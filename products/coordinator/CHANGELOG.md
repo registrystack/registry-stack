@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
+  -> `database.caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef`
+  the other TLS blocks use. The old key is refused as an unknown key. The value
+  is unchanged: a secret reference to the PEM CA bundle the connection trusts.
 - Report held and stuck work as metrics: `coordinator_runs_attention` by
   reason, `coordinator_runs_restore_review_required`, `coordinator_hold_active`
   for the restore and admissions holds, and `coordinator_oldest_due_age_seconds`

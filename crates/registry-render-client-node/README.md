@@ -4,8 +4,7 @@ Internal binding used by the unified Registry Stack client. HTTP behavior and
 validation belong to `registry-render-client`. The public facade accepts an
 explicit token or a resource-bound provider and performs one render or seal
 exchange. Every digest is labelled, `sha256:<hex>`. A render returns
-`pdfDigest` and `dataDigest` beside their deprecated bare hex `pdfSha256` and
-`dataSha256`. A seal returns the signed PDF as `pdfBase64` with the server's
+`pdfDigest` and `dataDigest`. A seal returns the signed PDF as `pdfBase64` with the server's
 digests, `packageDigest` and seal facts, once the Rust client has checked them.
 
 Request and correlation key validation run before token acquisition. The

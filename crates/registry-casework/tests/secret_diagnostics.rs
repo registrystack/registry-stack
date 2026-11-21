@@ -16,7 +16,7 @@ fn database(reference: &str) -> DatabaseConfig {
     DatabaseConfig {
         runtime_url_ref: reference.to_owned(),
         migration_url_ref: reference.to_owned(),
-        trusted_root_certificate_ref: None,
+        ca_bundle_ref: None,
         test_only_plaintext: false,
     }
 }
@@ -116,7 +116,7 @@ mod unix {
         );
         let secrets = SecretResolver::new([SecretProvider::File], root.path()).expect("resolver");
         let mut config = database("secret:file/casework-database-url");
-        config.trusted_root_certificate_ref = Some("secret:file/database-root.pem".to_owned());
+        config.ca_bundle_ref = Some("secret:file/database-root.pem".to_owned());
 
         let error = PostgresStore::connect_runtime(&config, &secrets)
             .expect_err("a group-readable certificate file is refused");

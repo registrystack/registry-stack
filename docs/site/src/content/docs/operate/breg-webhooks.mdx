@@ -461,7 +461,7 @@ is refused: wait for the lease to expire and list again.
 
 The webhook commands connect to PostgreSQL with the runtime file's database settings. If the
 database presents a certificate from a private certificate authority, name its PEM bundle with
-`database.trustedRootCertificateRef` in the runtime file.
+`database.caBundleRef` in the runtime file.
 
 {/* Evidence: crates/registry-breg/src/hooks.rs, MAX_HOOK_STATUS_RESULTS and
     HookOperatorService::from_runtime_config();

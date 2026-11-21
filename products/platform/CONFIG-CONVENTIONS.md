@@ -175,12 +175,13 @@ envelope, not the extension, identifies the format.
 
 **CFG-ENV-6 (MUST). A product's top-level authored file, the one its project
 check starts from (CFG-CHECK-2), is `<Prefix>Project`,** format `project`
-(`BRegProject`, `CaseworkProject`, `SchedulingProject`, `MessagingProject`).
+(`BRegProject`, `CaseworkProject`, `SchedulingProject`, `MessagingProject`,
+`EvidenceProject`).
 It names the project in a top-level `project` block holding the shared
 `ProjectIdentity` members, `id` (a local identifier) and `version` (text); the
 block may add project-wide members of the product's own. A product whose
-top-level authored file is a bundle of files rather than a project (Render,
-Evidence) names it `<Prefix>Bundle`, format `bundle`.
+top-level authored file is a bundle of files rather than a project (Render)
+names it `<Prefix>Bundle`, format `bundle`.
 *Why:* a person who has written one product's project file knows how the next
 one opens, and "package" stays the name of the built artifact.
 *Enforced by:* the format registry lint (a `project` format's kind ends in
@@ -462,8 +463,11 @@ Retention windows other than the audit journal's live in a top-level
 value that states what the operator accepts,** not a boolean:
 `tlsTermination: operator-controlled-upstream`, not `insecure: true`.
 *Why:* the value reads as an acknowledgement in review and greps as one.
-The booleans that predate this rule are listed under
-[recorded exceptions](#recorded-exceptions-outside-the-lint-register).
+Two shared booleans are accepted as they are, because each name already states
+what the operator accepts: `allowInsecureHttp` in the platform
+`OidcIssuerConfig`, for plain-HTTP issuer and key-set URLs, and
+`testOnlyPlaintext` in the platform `DatabaseConfig`, which only a test build
+accepts.
 
 **CFG-NAME-8 (SHOULD). A member holding a relative path ends in `File`,
 `Directory`, or `Path`** (`descriptionFile`, not `description`).
@@ -494,9 +498,9 @@ claim name, a scope, or a URN is accepted as its issuer writes it: a
 non-empty string with a stated maximum length, compared exactly.
 
 **CFG-ID-3 (MUST). A reference is the target's identifier as a plain
-string,** under a key named for the target's kind (`entity: person`,
+string,** under a key named for the target's kind (`recordType: person`,
 `template: welcome`). A reference to an item inside another item is a mapping
-of plain identifiers (`{entity: person, field: birth-date}`). References are
+of plain identifiers (`{recordType: person, field: birth-date}`). References are
 never dotted strings, never API names, and never paths into another file's
 structure.
 *Why:* one reference shape is one thing to learn, and a checker can resolve
@@ -1022,7 +1026,9 @@ accepts exactly one spelling of each key and value. There are no aliases.
 is refused with its replacement named** (`config.removed-key`: "`maxBytes` was renamed to
 `maximumBytes`"; `config.retired-api-version`, naming the current
 `apiVersion`), registered in the format's removed-key table. The refusal is
-the migration guide; it stays until the format's next stable version.
+the migration guide; it stays until the format's next stable version. A format
+with no stable version yet may drop or rename a key with only the CHANGELOG
+entry CFG-CHANGE-3 requires, and the old key is then refused as unknown.
 
 **CFG-CHANGE-3 (MUST). Before 1.0, an alpha format may change in place.**
 Each breaking change ships in one change with: a `BREAKING:` entry and exact
@@ -1073,9 +1079,6 @@ format.
 
 | Rule | Where | Reason |
 |---|---|---|
-| CFG-NAME-5 (trust anchors) | `trustedRootCertificateRef` in platform `DatabaseConfig`, Casework, Coordinator, Messaging and Adapter | Names a secret reference holding PEM roots; the shared spelling is `caBundleRef`. Renaming breaks promised runtime formats. |
-| CFG-NAME-7 | `allowInsecureHttp` in the shared platform `OidcIssuerConfig`, and every format that embeds it | A boolean for plain-HTTP issuer and key-set URLs, shared by every protected product; renaming changes all their runtime files at once. |
-| CFG-NAME-7 | the plaintext-connection boolean in platform `DatabaseConfig` | A boolean that allows a connection without TLS; same reason. |
 | CFG-DIAG-3 (`insecure-url`) | `adapter.runtime.insecure-origin`, `breg.review-runtime.plain-http-endpoint`, `authentication.insecure-http` (`bregctl`), `evidence.client.base-url-not-https` | Released codes that scripts may match; a code is never reused for a different condition, and changing one is a rename. |
 | Instant naming (hooks) | `deliveryTime` and `X-Registry-Delivery-Time` in hooks | A signed protocol field; the name is part of what the receiver verifies, so it keeps `Time` where every other instant ends in `At`. |
 | CFG-VAL-6 | BReg tooling `journeyFileSha256`, `migrationPlanSha256`, `sqlSha256`, `signingInputSha256` | Tooling reports that predate the rule and write the bare digest under a `...Sha256` name. |
@@ -1084,7 +1087,6 @@ format.
 | CFG-VAL-6 | Scheduling `admissionHash` | Released API member. |
 | CFG-VAL-6 | platform-audit `prevHash` and `recordHash` | Members of the audit record whose bytes are hashed in sequence; renaming changes the record. |
 | CFG-VAL-6 | BReg `schemaFingerprint` | A fingerprint of a schema, named for what it identifies rather than as a digest. |
-| CFG-VAL-6 | Render `pdfSha256` and `dataSha256` (and their `X-Registry-Pdf-Sha256` and `X-Registry-Data-Sha256` headers) | Released members, deprecated in favour of `pdfDigest` and `dataDigest`. |
 
 ## Enforcement summary
 

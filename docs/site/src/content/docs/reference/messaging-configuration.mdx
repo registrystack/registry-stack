@@ -152,7 +152,7 @@ At least one is required, and the runtime does not fall back from one provider t
 
 `database.runtimeUrlRef` supplies the service connection and `database.migrationUrlRef` the operator-run migration connection, each a PostgreSQL URL held in a secret.
 The runtime requires TLS on both.
-`database.trustedRootCertificateRef` optionally selects the PEM bundle of a private CA.
+`database.caBundleRef` optionally selects the PEM bundle of a private CA.
 `database.testOnlyPlaintext: true` is accepted only by a build that carries the `postgres-test` feature.
 
 `authentication.oidc` requires `issuer`, `audience`, and `allowedClients`.
@@ -238,7 +238,7 @@ An `smtp` connection takes these keys:
 | `port` | no | Defaults to 587 for `starttls` and 465 for `implicit`; required for `development-loopback` |
 | `authentication` | no | `usernameRef` and `passwordRef` |
 | `attemptTimeoutMilliseconds` | no | One attempt's whole budget, 1000 to 60000, default 30000 |
-| `trustedRootCertificateRef` | no | A PEM root trusted besides the public web roots |
+| `caBundleRef` | no | A PEM root trusted besides the public web roots |
 | `allowedPrivateCidrs` | no | Exact private networks the relay may resolve into |
 
 An `http` connection takes these keys:

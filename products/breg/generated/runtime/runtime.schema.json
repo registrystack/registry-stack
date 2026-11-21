@@ -1722,6 +1722,10 @@
       "additionalProperties": false,
       "description": "The registry's database: the shared database block and the connection\npool and SQL roles the registry adds.",
       "properties": {
+        "caBundleRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to a PEM root certificate the connection trusts.\nAbsent, the connection trusts the platform's root certificates."
+        },
         "migrationUrlRef": {
           "$ref": "#/$defs/SecretReference",
           "description": "Secret reference to the migration connection URL."
@@ -1740,10 +1744,6 @@
           "default": false,
           "description": "Allow a plaintext connection. Refused outside test builds.",
           "type": "boolean"
-        },
-        "trustedRootCertificateRef": {
-          "$ref": "#/$defs/SecretReference",
-          "description": "Secret reference to a PEM root certificate the connection trusts.\nAbsent, the connection trusts the platform's root certificates."
         }
       },
       "required": [

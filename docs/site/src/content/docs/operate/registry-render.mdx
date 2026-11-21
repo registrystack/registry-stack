@@ -239,9 +239,7 @@ curl -s -X POST http://127.0.0.1:8080/v1/render/<document-type> \
 The answer is the PDF with `x-registry-pdf-digest`, `x-registry-data-digest`,
 `x-registry-warning-count`, and `x-registry-document-version` headers; each digest is labelled
 `sha256:<hex>`. With `Accept: application/json` it is a JSON object with `pdfDigest`,
-`dataDigest`, `documentVersion`, `warnings`, and the PDF as `pdfBase64`. The bare hex
-`pdfSha256` and `dataSha256`, and their `x-registry-pdf-sha256` and `x-registry-data-sha256`
-headers, are still sent and are deprecated.
+`dataDigest`, `documentVersion`, `warnings`, and the PDF as `pdfBase64`.
 
 Requests must carry `Content-Length`; a chunked body is refused with `invalid-argument`, because
 one that passes the limit mid-stream could not be answered. `Idempotency-Key` is echoed and

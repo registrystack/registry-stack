@@ -264,11 +264,7 @@ mod tests {
             registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN,
             "the audit path must be absolute with no `..` segment"
         );
-        for property in [
-            "runtimeUrlRef",
-            "migrationUrlRef",
-            "trustedRootCertificateRef",
-        ] {
+        for property in ["runtimeUrlRef", "migrationUrlRef", "caBundleRef"] {
             assert_eq!(
                 document["$defs"]["DatabaseConfig"]["properties"][property]["$ref"],
                 "#/$defs/SecretReference",

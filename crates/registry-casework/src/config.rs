@@ -2650,7 +2650,7 @@ mod tests {
     fn serving_secret_preflight_covers_configured_optional_consumers_with_structural_paths() {
         let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let mut value = operator_value(root.path(), root.path());
-        value["database"]["trustedRootCertificateRef"] = json!("secret:file/db-ca");
+        value["database"]["caBundleRef"] = json!("secret:file/db-ca");
         value["authentication"]["oidc"]["jwksSource"] =
             json!({"type":"static", "documentRef":"secret:file/jwks"});
         value["taskAuthority"] = json!({"issuer":"https://casework.example.test","exchangeAudience":"urn:example:exchange","signingKeyRef":"secret:file/signer","statusClients":{}});
@@ -2688,7 +2688,7 @@ mod tests {
             paths,
             [
                 "/database/runtimeUrlRef",
-                "/database/trustedRootCertificateRef",
+                "/database/caBundleRef",
                 "/audit/hashKeyRef",
                 "/authentication/oidc/jwksSource/documentRef",
                 "/taskAuthority/signingKeyRef",

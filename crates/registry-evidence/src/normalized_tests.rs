@@ -1307,7 +1307,7 @@ sourceConnections:
 
 fn normalized_project() -> EvidenceProject {
     let mut document = json!({
-        "id": "normalized-retention",
+        "project": {"id": "normalized-retention", "version": "1"},
         "maximumHolderBoundBatchSize": 2,
         "selectorProfiles": {
             "record-by-id": {
@@ -1315,11 +1315,11 @@ fn normalized_project() -> EvidenceProject {
                 "fields": {"record-id": {"type": "string", "minimumBytes": 1, "maximumBytes": 64}}
             }
         },
-        "functions": [
-            {"id": "derive-active", "interface": "assertion-derive/v1", "source": "functions/derive.rhai"},
-            {"id": "derive-classic", "interface": "assertion-derive/v1", "source": "functions/derive-classic.rhai"},
-            {"id": "derive-members", "interface": "assertion-derive/v1", "source": "functions/derive-members.rhai"}
-        ],
+        "functions": {
+            "derive-active": {"interface": "assertion-derive/v1", "source": "functions/derive.rhai"},
+            "derive-classic": {"interface": "assertion-derive/v1", "source": "functions/derive-classic.rhai"},
+            "derive-members": {"interface": "assertion-derive/v1", "source": "functions/derive-members.rhai"}
+        },
         "sources": {
             "records": {
                 "pack": {"id": "normalized-retention", "version": "1"},

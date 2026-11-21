@@ -36,12 +36,12 @@ fn named_functions_and_their_assets_navigate() {
     let p = Project::new(SOURCE);
     let index = p.index();
     let function = after(SOURCE, "derive: {function: ");
-    let declaration = after(SOURCE, "- {id: derive-status");
+    let declaration = after(SOURCE, "  derive-status");
     assert_eq!(
         index.definitions_at(&p.path(PROJECT), function)[0]
             .range
             .start,
-        at(SOURCE, "derive-status, interface")
+        at(SOURCE, "derive-status: {interface")
     );
     let asset = p.at(PROJECT, DERIVE);
     assert_eq!(

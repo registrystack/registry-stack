@@ -741,7 +741,7 @@ fn tls_settings(authentication: Option<SmtpAuthentication>, trusted: bool) -> Sm
         host: TLS_HOST.to_owned(),
         port: None,
         tls: SmtpTlsMode::Starttls,
-        trusted_root_certificate_ref: trusted.then(|| "secret:file/relay-root".to_owned()),
+        ca_bundle_ref: trusted.then(|| "secret:file/relay-root".to_owned()),
         authentication,
         attempt_timeout_milliseconds: 5_000,
         allowed_private_cidrs: Vec::new(),

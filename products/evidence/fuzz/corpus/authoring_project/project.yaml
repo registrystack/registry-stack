@@ -1,6 +1,8 @@
 apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
 kind: EvidenceProject
-id: operator-evidence
+project:
+  id: operator-evidence
+  version: "1"
 selectorProfiles:
   operator-by-id:
     maximumAggregateBytes: 64
@@ -10,9 +12,9 @@ selectorProfiles:
         minimumBytes: 1
         maximumBytes: 64
 functions:
-- id: derive-operator
-  interface: assertion-derive/v1
-  source: functions/derive-operator.rhai
+  derive-operator:
+    interface: assertion-derive/v1
+    source: functions/derive-operator.rhai
 sources:
   operator-register:
     pack:

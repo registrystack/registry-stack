@@ -7,7 +7,7 @@ secretProviders:
 database:
   runtimeUrlRef: secret:env/COORDINATOR_DATABASE_URL
   migrationUrlRef: secret:env/COORDINATOR_MIGRATION_URL
-  trustedRootCertificateRef: secret:file/postgres-root.pem
+  caBundleRef: secret:file/postgres-root.pem
 namespace: coordinator_reservation_review
 connections:
   reservations:

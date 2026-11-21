@@ -1284,7 +1284,7 @@ fn project_source_binding(
         "project mock serve needs local-target.yaml with the Source's numeric-loopback connection",
     )?;
     let target = target::read_target("local-target.yaml", &target_bytes)?.value;
-    if target.project != project.id {
+    if target.project != project.project.id {
         bail!("local-target.yaml must name the EvidenceProject being served");
     }
 

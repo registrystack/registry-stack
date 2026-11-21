@@ -48,7 +48,7 @@ pub(super) fn spec(product: ProductKind) -> Option<ProductSpec> {
 const DISCOVERY: &[DocumentRules] = &[
     DocumentRules {
         pattern: "@document",
-        declarations: &[NameRule::global("origins/*/originId", "origin")],
+        declarations: &[NameRule::global("origins/*/id", "origin")],
         references: &[],
         files: &[],
     },

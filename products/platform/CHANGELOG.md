@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: in the shared `database` runtime block, `trustedRootCertificateRef`
+  -> `caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef` the other
+  TLS blocks use. The old key is refused as an unknown key. The value is
+  unchanged: a secret reference to the PEM CA bundle the connection trusts.
+  `rstack dev` writes `database.caBundleRef` in the runtime files it generates.
+
 ## 0.47.0 - 2026-11-20
 
 - Update Wasmtime LTS to 48.0.9 for RUSTSEC-2026-0566 to RUSTSEC-2026-0573.
@@ -596,7 +602,7 @@
   `config.removed-key` with its replacement; `REMOVED_OIDC_JWKS_URI` names
   `type: uri`. Migration: rename `kind` to `type` under every `jwksSource`,
   keeping the value. Details are in
-  `release/notes/config-conventions/platform.md`.
+  [`release/notes/config-conventions/platform.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/platform.md).
 - `registry-platform-yaml` is the shared configuration reader: one YAML
   subset (no anchors, aliases, merge keys, tags, or several documents), one
   scalar table, the `apiVersion` and `kind` envelope check, and a serde
@@ -697,7 +703,7 @@
   session, delete the directory that holds `session.json`, and start it
   again.
   Migration steps and the diagnostic code table for both files:
-  `release/notes/config-conventions/platform.md`.
+  [`release/notes/config-conventions/platform.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/platform.md).
 - `evidencectl dev check <file>` checks a task connection file or a session
   state file offline, without resolving a secret reference, and exits 0, 1,
   or 3 under the shared check contract; `--format json` reports the

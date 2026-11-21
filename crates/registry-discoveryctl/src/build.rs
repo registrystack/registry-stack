@@ -214,13 +214,13 @@ async fn fetch_origins(
             })?;
         let content_digest = sha256_digest(&bytes);
         origins.push(OriginSummary {
-            origin_id: approved.origin_id.clone(),
+            origin_id: approved.id.to_string(),
             catalog_url: approved.catalog_url.to_string(),
             content_digest: content_digest.clone(),
             fetched_at: fetched_at.clone(),
         });
         for advertised in description.services() {
-            let record_id = record_id(&approved.origin_id, advertised.binding_id())?;
+            let record_id = record_id(&approved.id, advertised.binding_id())?;
             if !record_ids.insert(record_id.clone()) {
                 return Err(BuildError::Compile);
             }
@@ -243,7 +243,7 @@ async fn fetch_origins(
                 evidence_type_ids: advertised.evidence_type_ids().to_vec(),
                 semantic_class_ids: advertised.semantic_class_ids().to_vec(),
                 operation_family_ids: advertised.operation_family_ids().to_vec(),
-                origin_id: approved.origin_id.clone(),
+                origin_id: approved.id.to_string(),
                 origin_url: approved.catalog_url.to_string(),
                 origin_content_digest: content_digest.clone(),
                 origin_fetched_at: fetched_at.clone(),
@@ -283,6 +283,9 @@ fn compile_mappings(mappings: Vec<AuthoredEvidenceMapping>) -> Vec<CompiledEvide
 }
 
 fn record_id(origin_id: &str, binding_id: &str) -> Result<String, BuildError> {
+    // The hash input keeps the label `originId`, the index member name, so a
+    // record id stays the same however the authored origins file spells the
+    // origin's key.
     let value = serde_json::json!({
         "originId": origin_id,
         "bindingId": binding_id,
@@ -446,7 +449,7 @@ mod tests {
         fs::write(
             project.path().join("origins.yaml"),
             format!(
-                "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - originId: evidence\n    catalogUrl: http://{address}/catalog.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: true\n"
+                "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - id: evidence\n    catalogUrl: http://{address}/catalog.jsonld\n    profile: registry-discovery-v1alpha1\n"
             ),
         )
         .expect("origins");

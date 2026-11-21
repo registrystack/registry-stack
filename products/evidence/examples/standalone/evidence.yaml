@@ -1,6 +1,8 @@
 apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
 kind: EvidenceProject
-id: standalone-evidence
+project:
+  id: standalone-evidence
+  version: "1"
 selectorProfiles:
   record-by-id:
     maximumAggregateBytes: 64
@@ -10,18 +12,18 @@ selectorProfiles:
         minimumBytes: 1
         maximumBytes: 64
 functions:
-- id: derive-adult-status
-  interface: assertion-derive/v1
-  source: functions/derive-adult-status.rhai
-- id: derive-residence-region
-  interface: assertion-derive/v1
-  source: functions/derive-residence-region.rhai
-- id: derive-licence-status
-  interface: assertion-derive/v1
-  source: functions/derive-licence-status.rhai
-- id: derive-parent-relationship
-  interface: assertion-derive/v1
-  source: functions/derive-parent-relationship.rhai
+  derive-adult-status:
+    interface: assertion-derive/v1
+    source: functions/derive-adult-status.rhai
+  derive-residence-region:
+    interface: assertion-derive/v1
+    source: functions/derive-residence-region.rhai
+  derive-licence-status:
+    interface: assertion-derive/v1
+    source: functions/derive-licence-status.rhai
+  derive-parent-relationship:
+    interface: assertion-derive/v1
+    source: functions/derive-parent-relationship.rhai
 sources:
   person-record:
     pack: {id: synthetic-register, version: '1'}

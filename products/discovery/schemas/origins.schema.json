@@ -10,27 +10,29 @@
           "pattern": "^https://[^\\s\\u0000-\\u001F\\u007F-\\u009F/?#@]+(?!.*//)(?:/[^\\s\\u0000-\\u001F\\u007F-\\u009F?#]*)?$"
         },
         "enabled": {
-          "description": "Whether `discoveryctl package` collects this origin.",
+          "default": true,
+          "description": "Whether `discoveryctl package` collects this origin. Absent, it does.",
           "type": "boolean"
         },
-        "originId": {
-          "description": "The origin's name in this project: 1 to 128 characters from `A-Z`,\n`a-z`, `0-9`, `.`, `_`, and `-`.",
-          "maxLength": 128,
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9._-]+$",
-          "type": "string"
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The origin's name in this project, unique among its origins."
         },
         "profile": {
           "$ref": "#/$defs/OriginProfile"
         }
       },
       "required": [
-        "originId",
+        "id",
         "catalogUrl",
-        "profile",
-        "enabled"
+        "profile"
       ],
       "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
     },
     "OriginProfile": {
       "description": "The publication profile an approved origin implements.",

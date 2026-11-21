@@ -304,7 +304,7 @@ fn runtime_members(
         "database": {
             "runtimeUrlRef": "secret:file/runtime-database-url",
             "migrationUrlRef": "secret:file/migration-database-url",
-            "trustedRootCertificateRef": "secret:file/postgres-ca.pem",
+            "caBundleRef": "secret:file/postgres-ca.pem",
         },
         "authentication": {"oidc": {
             "issuer": ISSUER,

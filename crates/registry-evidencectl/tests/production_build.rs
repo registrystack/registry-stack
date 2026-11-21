@@ -1206,11 +1206,9 @@ fn unsafe_function_sources_refuse_inspection_before_missing_dependencies() {
             symlink(&outside, fixture.project.join(source)).expect("linked Function asset");
         }
         edit_json(&fixture.project.join("evidence.yaml"), |project| {
-            project["functions"][0]["source"] = json!(source);
-            project["functions"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!({"id":"missing","interface":"assertion-derive/v1","source":"functions/missing.rhai"}));
+            project["functions"]["answer"]["source"] = json!(source);
+            project["functions"]["missing"] =
+                json!({"interface":"assertion-derive/v1","source":"functions/missing.rhai"});
         });
         let project_before = fs::read(fixture.project.join("evidence.yaml")).unwrap();
         for format in ["human", "json"] {
@@ -1233,7 +1231,7 @@ fn unsafe_function_sources_refuse_inspection_before_missing_dependencies() {
                             .iter()
                             .any(|diagnostic| {
                                 diagnostic["code"] == expected_code
-                                    && diagnostic["path"] == "/functions/0/source"
+                                    && diagnostic["path"] == "/functions/answer/source"
                                     && diagnostic["source"]["file"]
                                         .as_str()
                                         .is_some_and(|file| file.ends_with("evidence.yaml"))
@@ -2239,11 +2237,11 @@ fn write_sqlite_source_pack(project: &Path) {
 fn project_document() -> Value {
     json!({
         "apiVersion":"id.registrystack.org/formats/evidence/project/v1alpha1",
-        "kind":"EvidenceProject", "id":"production-fixture",
+        "kind":"EvidenceProject", "project":{"id":"production-fixture","version":"1"},
         "selectorProfiles":{"subject-reference-v1":{"maximumAggregateBytes":128,"fields":{"reference":{"type":"string","minimumBytes":1,"maximumBytes":128}}}},
-        "functions":[
-            {"id":"answer","interface":"assertion-derive/v1","source":"functions/answer.rhai"}
-        ],
+        "functions":{
+            "answer":{"interface":"assertion-derive/v1","source":"functions/answer.rhai"}
+        },
         "sources":{"registry":{
             "pack":{"id":"registry","version":"1"},
             "route":"lookup", "connection":"registry-http",

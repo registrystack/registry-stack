@@ -30,7 +30,7 @@ fn project_document() -> Value {
     json!({
         "apiVersion": project::PROJECT_API_VERSION,
         "kind": project::PROJECT_KIND,
-        "id": "all-output-forms",
+        "project": {"id": "all-output-forms", "version": "1"},
         "selectorProfiles": {
             "record-by-code": {
                 "maximumAggregateBytes": 16,
@@ -45,9 +45,9 @@ fn project_document() -> Value {
                 }
             }
         },
-        "functions": [
-            {"id": "derive-values", "interface": "assertion-derive/v1", "source": "functions/derive.rhai"}
-        ],
+        "functions": {
+            "derive-values": {"interface": "assertion-derive/v1", "source": "functions/derive.rhai"}
+        },
         "sources": {
             "records": {
                 "pack": {"id": "output-forms-source", "version": "1"},

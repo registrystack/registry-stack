@@ -458,8 +458,13 @@ fn compile_preview_seal_renders_the_sealed_variant_without_a_signature() {
     );
     assert!(out.stderr.is_empty(), "JSON mode has no stderr chatter");
     let summary: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(summary["pdfSha256"], pinned["pdfSha256"], "{summary}");
-    assert_eq!(summary["dataSha256"], pinned["dataSha256"], "{summary}");
+    for (digest, hex) in [("pdfDigest", "pdfSha256"), ("dataDigest", "dataSha256")] {
+        assert_eq!(
+            summary[digest].as_str(),
+            Some(format!("sha256:{}", pinned[hex].as_str().unwrap()).as_str()),
+            "{summary}"
+        );
+    }
     let bytes = std::fs::read(&pdf).unwrap();
     for marker in [&b"/ByteRange"[..], b"/SigFlags", b"/DocMDP"] {
         assert!(
@@ -791,20 +796,22 @@ fn compile_supports_format_json() {
     let summary: serde_json::Value =
         serde_json::from_slice(&compiled.stdout).expect("JSON summary on stdout");
     assert_eq!(summary["pdfPath"], pdf.display().to_string());
-    assert!(summary["pdfSha256"].is_string());
-    assert!(summary["dataSha256"].is_string());
-    // The labelled digests sit beside the deprecated bare hex members.
-    for (digest, hex) in [
-        ("pdfDigest", "pdfSha256"),
-        ("dataDigest", "dataSha256"),
-        ("packageDigest", "bundleHash"),
-    ] {
-        assert_eq!(
-            summary[digest].as_str(),
-            Some(format!("sha256:{}", summary[hex].as_str().unwrap()).as_str()),
-            "{digest}: {summary}"
-        );
+    // Every digest is labelled; no bare hex copy sits beside it.
+    for old in ["pdfSha256", "dataSha256"] {
+        assert!(summary.get(old).is_none(), "{old}: {summary}");
     }
+    assert!(
+        summary["dataDigest"]
+            .as_str()
+            .and_then(|digest| digest.strip_prefix("sha256:"))
+            .is_some_and(|hex| hex.len() == 64),
+        "{summary}"
+    );
+    assert_eq!(
+        summary["packageDigest"].as_str(),
+        Some(format!("sha256:{}", summary["bundleHash"].as_str().unwrap()).as_str()),
+        "{summary}"
+    );
     let bytes = std::fs::read(&pdf).unwrap();
     assert_eq!(
         summary["pdfDigest"].as_str(),

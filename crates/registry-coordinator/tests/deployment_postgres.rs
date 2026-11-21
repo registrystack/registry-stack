@@ -762,7 +762,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     doc["database"]
         .as_object_mut()
         .unwrap()
-        .remove("trustedRootCertificateRef");
+        .remove("caBundleRef");
     let d = &mut doc["deployment"];
     d["databaseId"] = json!("router-test");
     d["runtimeRole"] = json!(role);
@@ -2756,7 +2756,7 @@ impl TwoFlowFixture {
         doc["database"]
             .as_object_mut()
             .unwrap()
-            .remove("trustedRootCertificateRef");
+            .remove("caBundleRef");
         let d = &mut doc["deployment"];
         d["databaseId"] = json!("two-flow-test");
         d["runtimeRole"] = json!(role);

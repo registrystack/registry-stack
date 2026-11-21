@@ -9,7 +9,7 @@ fn normalized_document() -> Value {
     json!({
         "apiVersion": project::PROJECT_API_VERSION,
         "kind": project::PROJECT_KIND,
-        "id": "standalone-evidence",
+        "project": {"id": "standalone-evidence", "version": "1"},
         "selectorProfiles": {
             "record-by-id": {
                 "maximumAggregateBytes": 64,
@@ -18,11 +18,12 @@ fn normalized_document() -> Value {
                 }
             }
         },
-        "functions": [{
-            "id": "derive-adult-status",
-            "interface": "assertion-derive/v1",
-            "source": "functions/derive.rhai"
-        }],
+        "functions": {
+            "derive-adult-status": {
+                "interface": "assertion-derive/v1",
+                "source": "functions/derive.rhai"
+            }
+        },
         "sources": {
             "person-record": {
                 "pack": {"id": "synthetic-register", "version": "0.1.0"},
@@ -82,33 +83,32 @@ fn normalized_refusal(document: &Value) -> Diagnostic {
 #[test]
 fn project_id_uses_the_complete_local_id_bound() {
     let mut document = normalized_document();
-    document["id"] = json!("a".repeat(64));
+    document["project"]["id"] = json!("a".repeat(64));
     assert!(read_normalized(&document).is_ok());
 
-    document["id"] = json!("a".repeat(65));
+    document["project"]["id"] = json!("a".repeat(65));
     let diagnostic = normalized_refusal(&document);
-    assert_eq!(diagnostic.path, "/id");
+    assert_eq!(diagnostic.path, "/project/id");
     assert_eq!(diagnostic.code, "config.invalid-value");
 }
 
 #[test]
 fn function_id_and_presentation_label_are_separate() {
     let mut document = normalized_document();
-    document["functions"].as_array_mut().unwrap().push(json!({
-        "id": "a".repeat(64),
+    let function = json!({
         "label": "Friendly label with spaces and punctuation.",
         "interface": "assertion-derive/v1",
         "source": "functions/unused-derive.rhai"
-    }));
+    });
+    let functions = document["functions"].as_object_mut().unwrap();
+    functions.insert("a".repeat(64), function.clone());
     assert!(read_normalized(&document).is_ok());
 
-    document["functions"]
-        .as_array_mut()
-        .unwrap()
-        .last_mut()
-        .unwrap()["id"] = json!("a".repeat(65));
+    let functions = document["functions"].as_object_mut().unwrap();
+    functions.remove(&"a".repeat(64));
+    functions.insert("a".repeat(65), function);
     let diagnostic = normalized_refusal(&document);
-    assert_eq!(diagnostic.path, "/functions/1/id");
+    assert_eq!(diagnostic.path, format!("/functions/{}", "a".repeat(65)));
 }
 
 #[test]
@@ -206,7 +206,7 @@ fn presentation_labels_do_not_rename_stable_ids_or_references() {
     document["sources"]["person-record"]["label"] = json!("Person source");
     document["assertionDefinitions"]["adult-status"]["label"] = json!("Adult status");
     let project = read_normalized(&document).unwrap();
-    assert_eq!(project.id.as_str(), "standalone-evidence");
+    assert_eq!(project.project.id.as_str(), "standalone-evidence");
     assert!(project
         .selector_profiles
         .keys()

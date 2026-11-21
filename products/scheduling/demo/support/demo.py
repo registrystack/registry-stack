@@ -398,7 +398,7 @@ def runtime_config(
     trusted_root_ca: Path | None,
 ) -> str:
     trust = (
-        f"  trustedRootCertificateRef: secret:file/db-root-ca\n"
+        f"  caBundleRef: secret:file/db-root-ca\n"
         if trusted_root_ca is not None
         else ""
     )

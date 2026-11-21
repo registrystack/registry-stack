@@ -92,7 +92,7 @@ impl Fixture {
         let database = DatabaseConfig {
             runtime_url_ref: reference.clone(),
             migration_url_ref: reference,
-            trusted_root_certificate_ref: None,
+            ca_bundle_ref: None,
             test_only_plaintext: true,
         };
         Self::open(database, &url, url.clone(), schema).await
@@ -117,7 +117,7 @@ impl Fixture {
         let database = DatabaseConfig {
             runtime_url_ref: secret_ref(&runtime_url),
             migration_url_ref: secret_ref(&url),
-            trusted_root_certificate_ref: None,
+            ca_bundle_ref: None,
             test_only_plaintext: true,
         };
         Self::open(database, &url, runtime_url, schema).await

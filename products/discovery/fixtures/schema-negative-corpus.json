@@ -10,7 +10,7 @@
     {
       "name": "origins-refuses-invalid-origin-id",
       "contract": "origins",
-      "pointer": "/origins/0/originId",
+      "pointer": "/origins/0/id",
       "value": "contains spaces"
     },
     {

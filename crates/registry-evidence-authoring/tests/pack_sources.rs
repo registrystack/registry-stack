@@ -58,9 +58,9 @@ fn source_input_names_are_the_pack_routes_external_identifiers() {
 
 fn project() -> project::EvidenceProject {
     serde_json::from_value(json!({
-        "id":"family-evidence",
+        "project":{"id":"family-evidence","version":"1"},
         "selectorProfiles":{"person-by-id":{"maximumAggregateBytes":64,"fields":{"person-id":{"type":"string","minimumBytes":1,"maximumBytes":64}}}},
-        "functions":[{"id":"derive-family","interface":"assertion-derive/v1","source":"functions/derive.rhai"}],
+        "functions":{"derive-family":{"interface":"assertion-derive/v1","source":"functions/derive.rhai"}},
         "sources":{"family":{"pack":{"id":"synthetic-register","version":"0.1.0"},"route":"evidence-family","connection":"register","inputs":{"personId":{"selector":{"role":"person","profile":"person-by-id","field":"person-id"}}},"acquisitionPosture":"record-transformed"}},
         "assertionDefinitions":{"family-status":{"question":"Does the family record match?","semantics":{"requirement":"urn:example:requirement:family","kind":"criterion","evidenceType":"urn:example:evidence:family","referenceFrameworks":["urn:example:framework:family"]},"purpose":"family-check","grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":["urn:example:audience:consumer"]},"subjects":[{"role":"person","selectors":["person-by-id"]}],"acquisition":{"source":"family"},"derive":{"function":"derive-family"},"outputs":{"matched":{"concept":"urn:example:concept:matched","type":"boolean"}},"validitySeconds":300,"subjectBinding":"audience-scoped","representations":["signed-jws"]}}
     })).expect("pack-source project")

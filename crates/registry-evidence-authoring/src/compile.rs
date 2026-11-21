@@ -65,8 +65,10 @@ pub fn compile_with_pack_routes(
     }
     let mut artifacts = BTreeMap::new();
     let mut functions = Vec::new();
-    for (function_index, function) in project.functions.iter().enumerate() {
-        let at = FieldPath::root().key("functions").index(function_index);
+    for (function_id, function) in &project.functions {
+        let at = FieldPath::root()
+            .key("functions")
+            .map_key(function_id.to_string());
         let Some(script) = scripts.get(&function.source) else {
             findings.push(Finding::new(
                 at.key("source"),
@@ -85,11 +87,11 @@ pub fn compile_with_pack_routes(
         );
         let mut sites = Vec::new();
         for (id, definition) in &project.assertion_definitions {
-            if definition.derive.function == function.id {
+            if &definition.derive.function == function_id {
                 sites.push(format!("/assertionDefinitions/{id}/derive"));
             }
         }
-        functions.push(json!({"id": function.id, "interface": function.interface, "arity": crate::derivation::function_arity(script,function.interface), "source": function.source, "label":function.label, "description":function.description, "capabilities": function.interface.capabilities(), "callSites": sites}));
+        functions.push(json!({"id": function_id, "interface": function.interface, "arity": crate::derivation::function_arity(script,function.interface), "source": function.source, "label":function.label, "description":function.description, "capabilities": function.interface.capabilities(), "callSites": sites}));
     }
     if !findings.is_empty() {
         return Err(findings);
@@ -97,8 +99,7 @@ pub fn compile_with_pack_routes(
     let function = |id: &registry_platform_yaml::LocalId| {
         project
             .functions
-            .iter()
-            .find(|function| &function.id == id)
+            .get(id)
             .expect("validated Function reference")
     };
     let mut sources = Map::new();
@@ -575,7 +576,7 @@ pub fn compile_with_pack_routes(
         );
         let compiled_script = format!(
             "// Evidence Function {} interface assertion-derive/v1\n{compiled_script}",
-            derive.id
+            definition.derive.function
         );
         insert_artifact(
             &mut artifacts,
@@ -629,7 +630,7 @@ pub fn compile_with_pack_routes(
         }
         requirements.push(requirement);
     }
-    let mut model = json!({"project":project.id,"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size,"selectorProfiles":project.selector_profiles.iter().map(|(id,profile)|(id.to_string(),json!({"fields":profile.fields.iter().map(|(name,value)|(name.to_string(),crate::selector::compiled(value))).collect::<Map<_,_>>(),"maximumAggregateBytes":profile.maximum_aggregate_bytes}))).collect::<Map<_,_>>(),"sources":sources,"requirements":requirements});
+    let mut model = json!({"project":project.project.id,"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size,"selectorProfiles":project.selector_profiles.iter().map(|(id,profile)|(id.to_string(),json!({"fields":profile.fields.iter().map(|(name,value)|(name.to_string(),crate::selector::compiled(value))).collect::<Map<_,_>>(),"maximumAggregateBytes":profile.maximum_aggregate_bytes}))).collect::<Map<_,_>>(),"sources":sources,"requirements":requirements});
     if project.maximum_holder_bound_batch_size.is_none() {
         model
             .as_object_mut()
@@ -647,7 +648,9 @@ pub fn compile_with_pack_routes(
     let interfaces = project
         .functions
         .iter()
-        .map(|function| crate::types::function_shape(project, &compiled, function))
+        .map(|(function_id, function)| {
+            crate::types::function_shape(project, &compiled, function_id, function)
+        })
         .collect::<Vec<_>>();
     for (function, interface) in compiled.functions.iter_mut().zip(interfaces) {
         let calls = interface["properties"]["calls"]["anyOf"]
@@ -1232,15 +1235,18 @@ pub fn definition_dependencies(project: &EvidenceProject, id: &str) -> Option<Va
     let function_ids = BTreeSet::from([&definition.derive.function]);
     let mut behavior = serde_json::to_value(definition).ok()?;
     behavior.as_object_mut()?.remove("question");
-    let mut functions = project
+    // Each consumed Function keeps its `id` member, so a dependency revision
+    // reads the same as when Functions were a list of declarations with ids.
+    let functions = project
         .functions
         .iter()
-        .filter(|function| function_ids.contains(&function.id))
-        .collect::<Vec<_>>();
-    // Declaration order does not change a Function dependency. Source imports
-    // may recompose owned declarations around authored Functions, so compare
-    // the consumed declarations in their stable identifier order.
-    functions.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+        .filter(|(id, _)| function_ids.contains(id))
+        .map(|(id, function)| {
+            let mut value = serde_json::to_value(function).ok()?;
+            value.as_object_mut()?.insert("id".to_owned(), json!(id));
+            Some(value)
+        })
+        .collect::<Option<Vec<_>>>()?;
     Some(behavior_value(
         json!({"definition":behavior,"sources":source_ids.into_iter().map(|id| (id.as_str(), &project.sources[id])).collect::<BTreeMap<_, _>>(),"selectors":definition.subjects.iter().flat_map(|subject| subject.selectors.iter()).map(|id| (id.as_str(), &project.selector_profiles[id])).collect::<BTreeMap<_, _>>(),"functions":functions}),
     ))

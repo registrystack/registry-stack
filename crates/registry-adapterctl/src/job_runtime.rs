@@ -402,7 +402,7 @@ struct JobStore {
     /// The root certificate the connection trusts beside the platform
     /// roots; absent, the platform roots alone.
     #[serde(default)]
-    trusted_root_certificate_ref: Option<SecretReference>,
+    ca_bundle_ref: Option<SecretReference>,
     /// Plaintext connections for the loopback test database only;
     /// refused when true in any build without the job host's test
     /// feature.

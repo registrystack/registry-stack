@@ -1,6 +1,8 @@
 apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
 kind: EvidenceProject
-id: registry-evidence
+project:
+  id: registry-evidence
+  version: "1"
 selectorProfiles:
   record-by-code-v1:
     maximumAggregateBytes: 96
@@ -10,9 +12,9 @@ selectorProfiles:
         minimumBytes: 4
         maximumBytes: 64
 functions:
-- id: extract-record-active
-  interface: assertion-derive/v1
-  source: functions/extract-record-active.rhai
+  extract-record-active:
+    interface: assertion-derive/v1
+    source: functions/extract-record-active.rhai
 sources:
   record-status:
     pack: {id: record-status-extract, version: '1'}

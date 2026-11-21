@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
+  -> `database.caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef`
+  the other TLS blocks use. The old key is refused as an unknown key. The value
+  is unchanged: a secret reference to the PEM CA bundle the connection trusts.
+- The Evidence starter `evidence/starter/definitions.yaml.fragment` writes
+  `functions` as a map keyed by the Function id, the shape `EvidenceProject`
+  reads. Merge its entries into the project's `functions` map.
 - Runtime Action metadata (`GET /v1/registry`, `metadata/registry.json` and the
   OpenAPI `x-registry-action` extension) carries `execution.review` (`none` or
   `required`) and `execution.application` (`manual` or `automatic`) for each
@@ -1782,24 +1789,24 @@ or discard of earlier rows.
   `kind: BRegProject`, and names the registry in a top-level `project` block
   (was `registry.registrystack.org/v1alpha1`, `RegistryProject`, and the
   `registry` block). The earlier header and block are refused by name.
-  Migration steps are in `release/notes/config-conventions/breg.md` under
+  Migration steps are in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under
   "Stable move".
 - BREAKING: `module.yaml` opens with
   `apiVersion: id.registrystack.org/formats/breg/module/v1alpha1` and
   `kind: BRegModule` (it had no header). A module without them is refused with
   `config.missing-envelope`. Module digests are unchanged. Migration steps are
-  in `release/notes/config-conventions/breg.md` under "Stable move".
+  in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: `runtime.yaml` writes
   `apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1` (was
   `registry.registrystack.org/breg-runtime/v1alpha1`). The earlier value is
   refused with `config.retired-api-version`. Migration steps are in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: each `bregctl explain` payload carries its own `apiVersion`,
   `id.registrystack.org/formats/breg/<format>/v1alpha4`, and a kind that opens
   with `BReg`, such as `BRegAccessExplanation` (all nine shared
   `registry.registrystack.org/breg-explain/v1alpha4` and wrote kinds such as
   `AccessExplanation`). The table of values is in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - Every `bregctl --format json` report opens with
   `apiVersion: id.registrystack.org/formats/breg/ctl-report/v1alpha1` and
   `kind: BRegCtlReport`, ahead of `ok` and `command`. The change is additive:
@@ -1814,41 +1821,41 @@ or discard of earlier rows.
   project and rebuild the package after the edit. A package the previous
   release built states `maxDuration` and is refused, as a current package and
   as a predecessor. No stored row is rewritten. Migration steps are in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: a vocabulary under `manifestProjection.vocabularies` names the
   page that publishes it as `externalReference` (was `externalRef`), in
   `registry.yaml` and in the compiled package. `externalRef` is refused with
   `config.removed-key`. The rendered Registry Manifest keeps its own
   `external_ref`. Rebuild the package after the edit; no stored row changes.
-  Migration steps are in `release/notes/config-conventions/breg.md` under
+  Migration steps are in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under
   "Stable move".
 - BREAKING: a client listed under `authentication.oidc.assertionIssuers` in
   `runtime.yaml` names at least one issuer. `assertionIssuers: {kiosk: []}`
   is refused with `config.invalid-value` at
   `/authentication/oidc/assertionIssuers/kiosk`: remove the client, which
   then may exchange from no authority as before, or list its issuers.
-  Migration steps are in `release/notes/config-conventions/breg.md` under
+  Migration steps are in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under
   "Stable move".
 - BREAKING: `authentication.oidc.deniedKids` in `runtime.yaml` names at
   least one key or is left out. `deniedKids: []` is refused with
   `config.invalid-value`, and the refusal says to delete the member. A file
   with no `deniedKids` denies no key, as `[]` did. `bregctl init` and
   `bregctl dev` no longer write the empty list. Migration steps are in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: `attachmentStorage`, `attachmentVerification`, and
   `fieldEncryption.provider` in `runtime.yaml` name their variant in `type`
   (was `kind`), and the field encryption variant `localFile` is written
   `local-file`. The `kind` member is refused with `config.removed-key`, and
   `type: localFile` with `config.unknown-variant`. The other variant words
   are unchanged. Nothing stored changes.
-  Migration steps are in `release/notes/config-conventions/breg.md` under
+  Migration steps are in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under
   "Stable move".
 - BREAKING: the issuer key source names its variant in `type` (was `kind`):
   `authentication.oidc.jwksSource.type` in the engine's `runtime.yaml` and
   `resourceServer.jwksSource.type` in the `breg-mcp` runtime file. The words
   `discovery`, `uri`, and `static` are unchanged. The `kind` member is
   refused with `config.removed-key`, naming `type`. Nothing stored changes.
-  Migration steps are in `release/notes/config-conventions/breg.md` under
+  Migration steps are in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under
   "Stable move".
 - BREAKING: `runtime.yaml` reads the keys of `eventDestinations` as local
   identifiers and the client keys of `assertionIssuers` and `trustedActors`
@@ -1856,7 +1863,7 @@ or discard of earlier rows.
   `config.invalid-value` at the key. No event destination key that was read
   before is refused. A client key that carries a control character is newly
   refused; an OAuth client identifier never does. Nothing stored changes.
-  Details are in `release/notes/config-conventions/breg.md` under "Stable
+  Details are in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable
   move".
 - BREAKING: an access profile that writes no `principalClaim` is refused
   with `config.missing-key` when `registry.yaml` or `module.yaml` is read.
@@ -1865,7 +1872,7 @@ or discard of earlier rows.
   written empty and no longer reports `breg.import.principal-required` or
   `breg.access.membership-authentication`. The published project schema
   lists `principalClaim` as required. Details are in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - An `entities` list that writes one `id` twice in a `registry.yaml` or a
   `module.yaml` is refused when the file is read, with `config.duplicate-id`
   at the `id` of the second item (was `breg.entity.id-duplicate` at the list,
@@ -1900,13 +1907,13 @@ or discard of earlier rows.
   policies in the generated DDL that state it, and a consumer that pinned a
   `behaviorRevision` generates its Evidence source export again. No SQL
   migration runs. Migration steps are in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: `runtime.yaml` writes the event destination profile words in
   kebab-case: `networkProfile` is `production-https` or
   `loopback-development-http`, and `dnsFamily` is `dual-stack-strict` or
   `ipv4-only`. An earlier word is refused with `config.unknown-variant`. The
   stored binding digest of a destination is unchanged. Migration steps are in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: `runtime.yaml` renames eleven members to the shared spellings:
   `database.pool.maxSize` to `maximumConnections`,
   `authentication.oidc.maxTokenLifetimeSeconds` to
@@ -1919,11 +1926,11 @@ or discard of earlier rows.
   `attemptTimeoutMilliseconds` under `fieldEncryption.provider`,
   `attachmentStorage`, and `attachmentVerification`. Values are unchanged. An
   earlier key is refused with `config.removed-key`. Migration steps are in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: `bregctl --format json explain lifecycle` spells the `id` of each
   of its twenty-one enforcement layers in lowercase kebab-case, such as
   `caller-authentication` (was `caller_authentication`). The table of values
-  is in `release/notes/config-conventions/breg.md` under "Stable move".
+  is in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - The `bregctl explain` contract schemas type the module, action, effect,
   consent organization, consent group, and lifecycle `id` members as
   `$defs/LocalId`. The registry project already holds these identifiers to that
@@ -1933,16 +1940,16 @@ or discard of earlier rows.
   `binding`, an effect field mutation and its `value`, and each entry of
   `routes[]`. An effect field value reads `from-input` or `from-effect` (was
   `from_input`, `from_effect`). The table is in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: `bregctl --format json explain actions` spells what it states
   about a handler, its evidence, and a requirement in lowercase kebab-case,
   such as `reads: supplied-inputs-only` (was `supplied_inputs_only`). The
-  eleven values are in `release/notes/config-conventions/breg.md` under
+  eleven values are in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under
   "Stable move".
 - BREAKING: `bregctl --format json explain queries` names each of the eight
   members of `operations[].bounds` `maximum<Thing>`, such as `maximumPageSize`
   (was `maxPageSize`). The table is in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: `bregctl --format json explain actions` reports how long an
   accepted Evidence assertion is retained as `evidence.retentionDays: 1` (was
   `retentionSeconds: 86400`). The retention itself is unchanged.
@@ -1951,7 +1958,7 @@ or discard of earlier rows.
   as `principal-claim-missing` (was `principal_claim_missing`), and, with
   `--scenario`, `mode: offline-synthetic` and `recordAccess: not-evaluated`
   (were `offline_synthetic`, `not_evaluated`). The table is in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: `bregctl --format json explain change-requests` tags six unions
   with `type` (was `kind`): a `planner`, its `declaringOrigin`, the `target`
   of each of its `possibleWrites`, an effect target `binding`, an effect field
@@ -1959,7 +1966,7 @@ or discard of earlier rows.
   `from-effect` (were `reserved_create`, `from_field`, `from_effect`).
   `requests[].review` is unchanged. A Casework source imported from this
   output is imported again with the same release's `caseworkctl source add`.
-  The table is in `release/notes/config-conventions/breg.md` under "Stable
+  The table is in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable
   move".
 - BREAKING: the access profiles a module writes on an entity
   (`module.yaml` `/entities/*/accessProfiles` and
@@ -1970,12 +1977,12 @@ or discard of earlier rows.
   module schema states the member, and the project access findings
   `breg.access.profile-subsumes-narrower` and
   `breg.access.wildcard-spelled-item` also report a module profile. Migration
-  steps are in `release/notes/config-conventions/breg.md`.
+  steps are in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - BREAKING: an action permission in an access profile no longer accepts
   `rowBoundaries` (an action has no rows; the row reach of its targets is
   written on each target), and a statistical dataset permission must name its
   `dataset` as an identifier. Migration steps are in
-  `release/notes/config-conventions/breg.md`.
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - `bregctl check --format json` reports `status` (`complete`, `domain-refusal`,
   or `operational-failure`) beside `ok` and `command`, and `bregctl dev grant`
   JSON carries an empty `diagnostics` list. Both are additive.
@@ -1992,7 +1999,7 @@ or discard of earlier rows.
   `institutional-grant` or `first-party` (was `institutional_grant` and
   `first_party`), an identifier that starts with a digit is refused, and an
   issuer or `baseUrl` must be an absolute `http` or `https` URL. Migration
-  steps are in `release/notes/config-conventions/breg.md`.
+  steps are in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - `editors/configure.py` maps the JSON formats `*-binding.json` and
   `examples/scenarios.json` beside the YAML formats for VS Code and Zed.
 - A reviewed migration descriptor has a published JSON Schema generated from
@@ -2010,7 +2017,7 @@ or discard of earlier rows.
   `beforeEquals`) still accepts `null` as a record value; a list or a mapping
   there is refused by the reader as `config.invalid-type` rather than at
   compile time. Migration steps and the code table are in
-  `release/notes/config-conventions/breg.md`.
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - BREAKING: `runtime.yaml` is decoded by the shared reader. `breg` and every
   `bregctl` command that reads it report every problem in the file with the
   reader's code, path, line, column, and fix, and `breg` prints those
@@ -2020,7 +2027,7 @@ or discard of earlier rows.
   file, envelope, and substitution codes) become reader codes, and
   `database.url`, `database.password`, and `database.plaintext` are refused as
   `config.removed-key`. The runtime file may be up to 1 MiB. The code table
-  and migration steps are in `release/notes/config-conventions/breg.md`.
+  and migration steps are in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - BREAKING: `runtime.yaml` secret references and URLs are typed by the shared
   reader. A `*Ref` member that is not `secret:file/NAME` or `secret:env/NAME`,
   and a `publicOrigin`, Evidence provider `baseUrl`, or task-grant status
@@ -2029,7 +2036,7 @@ or discard of earlier rows.
   `sourceIssuer` written as a `urn:` was accepted and is refused, and
   `authentication.oidc.assertionIssuers: {}` is refused: delete the member to
   apply no assertion-issuer rule. Migration steps are in
-  `release/notes/config-conventions/breg.md`.
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - BREAKING: every integer member of `runtime.yaml` is refused outside the
   minimum and maximum the runtime schema states when the file is read, as
   `config.out-of-range` at the member, rather than after decoding as
@@ -2040,7 +2047,7 @@ or discard of earlier rows.
   enclosing block. No value that was accepted is refused. A problem inside an
   `attachmentStorage`, `attachmentVerification`, or `fieldEncryption.provider`
   form is reported at its own member. The code table is in
-  `release/notes/config-conventions/breg.md`.
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - BREAKING: `registry.yaml` URLs and module digests are typed by the shared
   reader. A module lock `digest` that is not `sha256:` and 64 lowercase hex
   digits, and a `taskGrant.sourceIssuer` that is not an absolute URL, are
@@ -2049,7 +2056,7 @@ or discard of earlier rows.
   Manifest projection `baseUrl`, `endpointUrl`, `accessUrl`, or `downloadUrl`
   that is not an absolute `http` or `https` URL without user information, or
   that is empty, is refused as `config.invalid-value`. The code table is in
-  `release/notes/config-conventions/breg.md`.
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - BREAKING: every integer member of `registry.yaml` and `module.yaml` states
   its minimum and maximum in the published schemas, and a value outside them
   is refused at read as `config.out-of-range` (or `config.invalid-value` at
@@ -2057,14 +2064,14 @@ or discard of earlier rows.
   0, and a CRS84 `precision` above 9) rather than at compile under a field,
   batch, attachment, statistical disclosure, or action evidence code. No
   value that compiled before is refused. The code table is in
-  `release/notes/config-conventions/breg.md`.
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - BREAKING: a list member of `registry.yaml` and `module.yaml` that is a set
   (access profile scopes, purposes, clients, operations, and field lists,
   read paths, access requirements, trusted intermediaries, change-control
   operations, effect `clear` lists, and hook projections and conditions)
   refuses a repeated item as `config.duplicate-item` instead of collapsing
   it. Delete the repeat to migrate. The member list is in
-  `release/notes/config-conventions/breg.md`.
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - BREAKING: `provenanceFields` on a permission or an entity access profile is
   read as a set: a repeated item is refused with `config.duplicate-item`
   where the file is read (was `breg.access-profile.provenance-fields-invalid`
@@ -2082,7 +2089,7 @@ or discard of earlier rows.
   than `check.package.<cause>`. Codes that name a `bregctl` operation, HTTP
   problem codes, and the reader's `config.*` and `yaml.*` codes are
   unchanged. Replace each code a script or alert matches; the old-to-new
-  table is in `release/notes/config-conventions/breg.md`.
+  table is in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - BREAKING: `bregctl check` reports in the diagnostic shape every Registry
   Stack check command shares. Its JSON report lists every error and warning
   under `diagnostics[]`, each with `severity`, a JSON Pointer `path`, a
@@ -2092,7 +2099,7 @@ or discard of earlier rows.
   is a `warning`, `--deny-findings` is `--deny-warnings`, and a project,
   package, or runtime file the command cannot read exits 3 instead of 1.
   `bregctl check --runtime-config FILE` also checks a `runtime.yaml` offline.
-  Migration steps are in `release/notes/config-conventions/breg.md`.
+  Migration steps are in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - BREAKING: a package's `package.json` declares `apiVersion:
   id.registrystack.org/formats/breg/package/v2` and `kind: BRegPackage`.
   `breg` and every `bregctl` command refuse a package with the retired
@@ -2101,13 +2108,13 @@ or discard of earlier rows.
   refusal names the current apiVersion. Rebuild the package from the migrated
   project with this release and apply it to a new database with `bregctl
   apply --initial`. Migration steps are in
-  `release/notes/config-conventions/breg.md`.
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - BREAKING: experimental statistical datasets in `registry.yaml` tag their
   period with `type: flow` or `type: stock` in place of `kind`, and a
   dataset `id` outside the local identifier grammar is refused when the
   project is read, as `config.invalid-value`, rather than by the compiler.
   Rename `period.kind` to `period.type`. Migration steps are in
-  `release/notes/config-conventions/breg.md`.
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - The project, module, and runtime JSON Schemas admit `null` only in a
   comparison literal, as the reader does, and declare no `default: null`. The
   project schema states its `apiVersion` and `kind` as constants, an embedded
@@ -2124,7 +2131,7 @@ or discard of earlier rows.
   export an earlier release generated is refused by `evidencectl source`;
   generate it again. Every change and its migration step is in the "BReg
   tool and output formats" section of
-  `release/notes/config-conventions/breg.md`.
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - BREAKING: the words that name a change between two compiled registries are
   written in kebab-case (CFG-NAME-2) in a reviewed migration `descriptor.json`
   (`changeClass`, `covers[].code`, `covers[].target.kind`, `recovery`), in a
@@ -2140,7 +2147,7 @@ or discard of earlier rows.
   `planDigest` of its `rehearsal.json`, build the package again, and update
   what reads the commands' output. No stored word changes. The tables of
   every word are in the "BReg tool and output formats" section of
-  `release/notes/config-conventions/breg.md`.
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md).
 - BREAKING: a `${...}` substitution expression in a file `bregctl` reads as
   written (fixture journeys, schema-test credentials, model selection,
   development clients, example scenarios, migration descriptors, backup
@@ -2215,7 +2222,7 @@ or discard of earlier rows.
   `retentionDays`. Each old key is refused naming its replacement. `check`
   reads no secret, takes `--format json` and `--deny-warnings`, and exits 0,
   1, 2, or 3. Migration steps and the code table are in
-  `release/notes/config-conventions/breg.md`, section "BReg citizen services".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md), section "BReg citizen services".
 - BREAKING: a registry serves authenticated callers only. `anonymous` on an
   access profile in `registry.yaml` or `module.yaml` is refused when the file
   is read as `config.removed-key`, naming the fix, and every route except the
@@ -2228,7 +2235,7 @@ or discard of earlier rows.
   `bregctl explain` reports `breg-explain/v1alpha4` without the anonymous
   members, fifteen anonymous-only diagnostic codes are no longer reported,
   and a baseline package that granted unauthenticated access is refused.
-  Migration steps are in `release/notes/config-conventions/breg.md`, section
+  Migration steps are in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md), section
   "BReg access".
 - BREAKING: an access profile in `registry.yaml` says `unrestricted` or names
   what it restricts, and an empty list is refused when the file is read.
@@ -2245,7 +2252,7 @@ or discard of earlier rows.
   `breg.access.profile-subsumes-narrower` and
   `breg.access.wildcard-spelled-item` are added. A module that declares
   `accessRequirements` without all three members gets a new digest. Migration
-  steps are in `release/notes/config-conventions/breg.md`, section "BReg
+  steps are in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md), section "BReg
   access".
 - BREAKING: `authentication.oidc.allowedClients` in `runtime.yaml` is
   required and takes `unrestricted` or a list of at least one OAuth client.
@@ -2254,7 +2261,7 @@ or discard of earlier rows.
   `config.invalid-value`; both used to accept a token from every client of
   the issuer, which is now written `allowedClients: unrestricted`. Token
   verification does not change. Migration steps are in
-  `release/notes/config-conventions/breg.md`, section "BReg access".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md), section "BReg access".
 - BREAKING: access to a statistical dataset is granted in each access
   profile's `permissions`, as `{dataset, operations}` with the operations
   `read-live`, `publish`, and `read-releases`. `live` and `releases` on a
@@ -2271,7 +2278,7 @@ or discard of earlier rows.
   does not change and a rewritten project keeps its compiled revision.
   `bregctl explain access` gains `statisticalDatasets`, the profiles holding
   each operation per dataset, in `breg-explain/v1alpha4`. Migration steps are
-  in `release/notes/config-conventions/breg.md`, section "BReg access".
+  in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md), section "BReg access".
 
 - `registry-breg-client` resends an idempotency-keyed mutation whose outcome
   is unknown, a timeout or broken exchange after sending or a 5xx answer, up
@@ -2292,7 +2299,7 @@ or discard of earlier rows.
   `dead-lettered`, and `replay-pending`, and stored rows hold
   `hmac-sha256-v1`, `after-commit`, `dead-lettered`, and `changes-requested`.
   A database written by an earlier release is not migrated in place; start on
-  a new database. The table is in `release/notes/config-conventions/breg.md`
+  a new database. The table is in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md)
   under "Stable move".
 - BREAKING: every enumerated word is written in kebab-case, in `registry.yaml`
   and module files and in everything the engine writes: `submit-request`,
@@ -2307,7 +2314,7 @@ or discard of earlier rows.
   reasons in kebab-case. Rewrite the words, run `bregctl project lock`, build
   the package again, and apply it to a new database: a package or a database
   written by an earlier release is refused. Both tables of words are in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: an `id` outside `^[a-z][a-z0-9_-]{0,63}$`, and a mapping key
   outside the grammar of its position, is refused when `registry.yaml`, a
   module file, or `runtime.yaml` is read, as `config.invalid-value` at the
@@ -2315,7 +2322,7 @@ or discard of earlier rows.
   The grammar is unchanged, so a project that passed `bregctl check` still
   passes. The published schemas type each `id` as `LocalId` and name the keys
   of each mapping. The table is in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: a union of `registry.yaml` and of a module file is tagged by
   `type`: a constraint, a predicate of a unique constraint, and an event
   condition (were tagged by `kind`), a selector of a change request Evidence
@@ -2327,7 +2334,7 @@ or discard of earlier rows.
   document, a change request record, `bregctl explain change-requests`, and
   the Node.js and Python clients. Module digests and proposal digests change:
   run `bregctl project lock`, build the package again, and apply it to a new
-  database. The table is in `release/notes/config-conventions/breg.md` under
+  database. The table is in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under
   "Stable move".
 - BREAKING: an access profile in `registry.yaml` groups its `permissions` by
   what each names (CFG-ID-7, CFG-SCHEMA-8): `permissions` is a mapping of
@@ -2343,7 +2350,7 @@ or discard of earlier rows.
   generated output are the ones the list compiled to. A module file is not
   affected. Move each permission under its group, and build the package
   again: its digest changes. The tables are in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: the handler of an entity hook and of a governed action is tagged
   by `type` (CFG-ID-7), where it was tagged by `kind`:
   `handler: {type: url, destinationId: <id>}`, `type: rhai`, `type: wasm`, in
@@ -2355,7 +2362,7 @@ or discard of earlier rows.
   actions`, and the stored `handler_kind` of a hook delivery keep `kind`.
   Rename the member, run `bregctl project lock` for a module you changed, and
   build the package again: its digest changes. The table is in
-  `release/notes/config-conventions/breg.md` under "Stable move".
+  [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: `null` is no longer a comparison value in `registry.yaml` or a
   module file. A change request precondition predicate and an action
   requirement state an unset value with `isNull: true` (was `equals: null`),
@@ -2379,7 +2386,7 @@ or discard of earlier rows.
   `webhook-delivery`, `review-submission`, and `review-application`. Metric
   names and label names are unchanged. Migration: respell the label values
   in every dashboard query, recording rule, alert rule, and log filter. The
-  table is in `release/notes/config-conventions/breg.md` under "Stable move".
+  table is in [`release/notes/config-conventions/breg.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/breg.md) under "Stable move".
 - BREAKING: the thirteen webhook audit words that still carried an
   underscore are written in kebab-case. In a webhook delivery record of the
   audit journal, the `outcome` words `attempt_started`,

@@ -1,6 +1,6 @@
 //! The template payload contract. The renderer builds one envelope value,
 //! canonicalizes it with RFC 8785 (JCS), injects those exact bytes as
-//! `sys.inputs.data`, and hashes the same bytes as `dataSha256`. The
+//! `sys.inputs.data`, and hashes the same bytes as `dataDigest`. The
 //! injected bytes and the hashed bytes can never diverge.
 
 use std::collections::BTreeMap;

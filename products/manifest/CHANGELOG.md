@@ -65,7 +65,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   kebab-case (CFG-NAME-2): the ten multi-word `required_gates` words, the
   `allowed_outputs` word, `access_rights`, `update_frequency`, `status`, and
   the fulfillment modes. The old spelling is refused and the refusal names the
-  new word. Migration: see `release/notes/config-conventions/manifest.md`.
+  new word. Migration: see [`release/notes/config-conventions/manifest.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/manifest.md).
 - BREAKING: an entity that repeats a relationship `name`, or lists the same
   `identifiers` item twice, is refused with `config.duplicate-id` at the
   repetition. Both were accepted before: the later relationship shadowed the

@@ -27,8 +27,6 @@ class RenderJourney(unittest.TestCase):
                         "pdfBase64": base64.b64encode(pdf).decode(),
                         "pdfDigest": "sha256:" + pdf_hex,
                         "dataDigest": "sha256:" + "0" * 64,
-                        "pdfSha256": pdf_hex,
-                        "dataSha256": "0" * 64,
                         "documentVersion": "receipt v1",
                         "warnings": [],
                     }
@@ -127,8 +125,6 @@ class SealJourney(unittest.TestCase):
                         "pdfBase64": base64.b64encode(FIRST_REVISION).decode(),
                         "pdfDigest": _sha(FIRST_REVISION),
                         "dataDigest": _digest_of("0"),
-                        "pdfSha256": hashlib.sha256(FIRST_REVISION).hexdigest(),
-                        "dataSha256": "0" * 64,
                         "documentVersion": "receipt v1",
                         "warnings": [],
                     }

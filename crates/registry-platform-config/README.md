@@ -99,7 +99,7 @@ accepted reference through the explicitly enabled environment or file provider.
   `environment: {}` enables `secret:env/NAME`. At least one must be declared,
   and a reference to an undeclared provider is refused.
 - `DatabaseConfig`: `runtimeUrlRef`, `migrationUrlRef`, and an optional
-  `trustedRootCertificateRef`.
+  `caBundleRef`.
 - `JwksSource`: `type: discovery` (the default) with no other member,
   `type: uri` with checked `Url` member `uri`, or `type: static` with `documentRef`.
 - `OidcIssuerConfig`: a checked `Url` issuer, audience, and `JwksSource`.

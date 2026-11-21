@@ -809,17 +809,13 @@ fn render_returns_pdf_with_hash_headers_matching_golden() {
             .unwrap_or_default()
     };
     assert!(header("content-type").starts_with("application/pdf"));
-    assert_eq!(header("x-registry-pdf-sha256"), golden_receipt_sha());
-    assert!(!header("x-registry-data-sha256").is_empty());
-    // The labelled digests sit beside the deprecated bare hex headers.
     assert_eq!(
         header("x-registry-pdf-digest"),
         format!("sha256:{}", golden_receipt_sha())
     );
-    assert_eq!(
-        header("x-registry-data-digest"),
-        format!("sha256:{}", header("x-registry-data-sha256"))
-    );
+    assert!(header("x-registry-data-digest")
+        .strip_prefix("sha256:")
+        .is_some_and(|hex| hex.len() == 64));
     assert_eq!(header("x-registry-document-version"), "receipt v3");
     assert_eq!(header("x-registry-warning-count"), "0");
     assert_eq!(header("idempotency-key"), "effect-1234");
@@ -862,15 +858,15 @@ fn json_variant_serves_openfn_clients() {
     let bytes = base64_decode(b64);
     assert_eq!(sha256_hex(&bytes), golden_receipt_sha());
     assert_eq!(json["documentVersion"].as_str().unwrap(), "receipt v3");
-    assert_eq!(json["pdfSha256"].as_str().unwrap(), golden_receipt_sha());
     assert_eq!(
         json["pdfDigest"].as_str().unwrap(),
         format!("sha256:{}", golden_receipt_sha())
     );
-    assert_eq!(
-        json["dataDigest"].as_str().unwrap(),
-        format!("sha256:{}", json["dataSha256"].as_str().unwrap())
-    );
+    assert!(json["dataDigest"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("sha256:")
+        .is_some_and(|hex| hex.len() == 64));
 }
 
 /// The OpenAPI document declares exactly the headers and JSON members the
@@ -926,10 +922,7 @@ fn the_openapi_document_declares_what_the_render_route_answers() {
         .filter(|(_, deprecated)| **deprecated)
         .map(|(name, _)| name.as_str())
         .collect();
-    assert_eq!(
-        deprecated,
-        BTreeSet::from(["x-registry-data-sha256", "x-registry-pdf-sha256"])
-    );
+    assert!(deprecated.is_empty(), "{deprecated:?}");
 
     let schema = &answer["content"]["application/json"]["schema"];
     let properties = schema["properties"].as_object().expect("declared members");
@@ -950,7 +943,7 @@ fn the_openapi_document_declares_what_the_render_route_answers() {
         .filter(|(_, property)| property["deprecated"] == true)
         .map(|(name, _)| name.as_str())
         .collect();
-    assert_eq!(deprecated, BTreeSet::from(["dataSha256", "pdfSha256"]));
+    assert!(deprecated.is_empty(), "{deprecated:?}");
 }
 
 #[test]
@@ -1124,7 +1117,10 @@ fn a_render_writes_a_request_entry_then_a_response_entry_sharing_correlation() {
         );
         assert_eq!(response["phase"], "response");
         assert_eq!(response["record"]["outcome"], "rendered");
-        assert_eq!(response["record"]["pdfSha256"], golden_receipt_sha());
+        assert_eq!(
+            response["record"]["pdfDigest"],
+            format!("sha256:{}", golden_receipt_sha())
+        );
         assert_eq!(
             request["correlation"], response["correlation"],
             "the response carries its request's correlation"
@@ -1202,7 +1198,7 @@ fn a_refused_response_entry_withholds_the_pdf() {
         !reply
             .headers
             .iter()
-            .any(|(name, _)| name == "x-registry-pdf-sha256" || name == "x-registry-pdf-digest"),
+            .any(|(name, _)| name == "x-registry-pdf-digest"),
         "no document metadata leaves either"
     );
     let ready = request(port, "GET", "/ready", &[], None);
@@ -1814,7 +1810,6 @@ fn maintained_sdk_uses_the_real_oidc_adapter_for_render_and_typed_refusals() {
             Some("render-correlation-1"),
         ))
         .unwrap();
-    assert_eq!(rendered.pdf_sha256, golden_receipt_sha());
     assert_eq!(
         rendered.pdf_digest,
         format!("sha256:{}", golden_receipt_sha())

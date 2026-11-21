@@ -1,6 +1,8 @@
 apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
 kind: EvidenceProject
-id: farmer-provider
+project:
+  id: farmer-provider
+  version: "1"
 selectorProfiles:
   farmer-number-v1:
     maximumAggregateBytes: 128
@@ -10,12 +12,12 @@ selectorProfiles:
         minimumBytes: 3
         maximumBytes: 77
 functions:
-- id: derive-status
-  interface: assertion-derive/v1
-  source: functions/status.rhai
-- id: derive-category
-  interface: assertion-derive/v1
-  source: functions/category.rhai
+  derive-status:
+    interface: assertion-derive/v1
+    source: functions/status.rhai
+  derive-category:
+    interface: assertion-derive/v1
+    source: functions/category.rhai
 sources:
   source-status:
     pack: {id: farmer-facts, version: '1'}

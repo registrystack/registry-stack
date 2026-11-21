@@ -47,7 +47,7 @@ async fn store_for_schema(schema: &str, application_name: &str) -> PostgresStore
     let config = crate::DatabaseConfig {
         runtime_url_ref: format!("secret:env/{secret_name}"),
         migration_url_ref: format!("secret:env/{secret_name}"),
-        trusted_root_certificate_ref: None,
+        ca_bundle_ref: None,
         test_only_plaintext: true,
     };
     let store = PostgresStore::connect_runtime(&config, &secrets)

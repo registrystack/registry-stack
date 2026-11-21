@@ -451,7 +451,7 @@ fn tls_connector(
     resolver: &SecretResolver,
 ) -> Result<tokio_postgres_rustls::MakeRustlsConnect, StoreError> {
     let invalid = |what: &str| StoreError::Pool(format!("store: {what}"));
-    let Some(reference) = &config.trusted_root_certificate_ref else {
+    let Some(reference) = &config.ca_bundle_ref else {
         return native_postgres_tls()
             .map_err(|_| invalid("no platform root certificate could be loaded"));
     };

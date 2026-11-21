@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- BREAKING: `EvidenceProject` names the project in a `project` block, as the
+  other products' project files do (pre-1.0 cleanup). Top-level `id` ->
+  `project.id`, and `project.version`, a human release label, is a new
+  required member. A file that still carries the top-level `id` is refused
+  with `config.unknown-key`. The check, explain and inspect reports show the
+  version under `projectPresentation`; the compiled `EvidenceBundle` still
+  carries only the project id, so bundle bytes and definition revisions do not
+  change.
+- BREAKING: `EvidenceProject` `functions` is a map keyed by the Function id
+  instead of a list of entries that each carry an `id`, like `sources`,
+  `selectorProfiles` and `assertionDefinitions` (pre-1.0 cleanup).
+  `functions: [{id: X, ...}]` -> `functions: {X: {...}}`. A duplicate
+  Function id is now refused by the reader as a duplicate key, so the
+  `evidence.project.function-unique` finding is gone. Diagnostic paths name
+  the Function by id, for example `/functions/derive-status/source` instead of
+  `/functions/0/source`.
 - A `requestNonce` that is not 32 random bytes in unpadded base64url (43
   characters), or that repeats within a batch, is now refused as
   `request.nonce-invalid` (400) instead of `evidence.invalid-request`. The
@@ -775,7 +791,7 @@
   only and report a body in the old spelling as a protocol failure.
   Migration: upgrade the gateway and every client in one step, and respell
   any match on `code`, `type`, or the `error` label. See "Protocol words" in
-  `release/notes/config-conventions/evidence.md`.
+  [`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md).
 - BREAKING: an unavailable item of the request-batch response states
   `result: evidence-not-available` in place of `evidence_not_available`. The
   Version 1 request-batch response contract and the generated schema and
@@ -818,7 +834,7 @@
   delivery front end passes through its `error` label are unchanged.
   Migration: respell the label values in every dashboard query, recording
   rule, alert rule, and log filter. See "Protocol words" in
-  `release/notes/config-conventions/evidence.md`.
+  [`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md).
 - BREAKING: `evidencectl dev` reads the `mapping` of an exchange issuer in
   the borrowed Base Registry Engine owner's `.breg/dev/clients.json` in the
   spelling the owner writes: `institutional-grant` and `first-party`. It
@@ -836,7 +852,7 @@
   two lines named. Migration: replace the first line of a hand-written bundle
   with the two members, regenerate `SHA256SUMS`, and re-pin
   `configurationRevision`; rebuild a compiled bundle with `evidencectl build`.
-  See "Stable move" in `release/notes/config-conventions/evidence.md`.
+  See "Stable move" in [`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md).
 - BREAKING: the runtime file declares `apiVersion:
   id.registrystack.org/formats/evidence/runtime/v1alpha1`. The earlier
   `registry.registrystack.org/evidence-runtime/v1alpha1` is refused as
@@ -926,7 +942,7 @@
   `authentication.oidc` with `unrestricted` to keep today's behavior, or list
   the admitted values, then regenerate `SHA256SUMS` and re-pin
   `package.expectedDigest` and `configurationRevision`. See "Stable move" in
-  `release/notes/config-conventions/evidence.md`.
+  [`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md).
 - BREAKING: the runtime file tags its signer with `signer.type`; `signer.kind`
   is refused as `config.removed-key` with the replacement named. Migration:
   rename the key in `runtime.yaml` and under the `runtime` member of every
@@ -943,7 +959,7 @@
   members and rename `privateKey.source` to `privateKey.type`, keeping the
   value; a Base Registry Engine project does the same in
   `evidence/contracts.json` and rebuilds its package. See "Stable move" in
-  `release/notes/config-conventions/evidence.md`.
+  [`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md).
 - BREAKING: the key of every id-keyed map in `evidence.yaml` and
   `runtime.yaml` is a local identifier as every Registry Stack format writes
   one: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or
@@ -1022,7 +1038,7 @@
   in one step; rewrite the `form` of each `expectedOutputs` entry in every
   retained policy file and in code that builds the policy object; and fetch
   each reviewed contracts file again. See "Stable move" in
-  `release/notes/config-conventions/evidence.md`.
+  [`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md).
 - BREAKING: a source that authenticates to its token endpoint with a signed
   client assertion declares `authentication.type: oauth2-private-key-jwt`.
   `oauth2-client-credentials` is the shared-secret form alone and requires
@@ -1071,7 +1087,7 @@
   check` reports positioned, coded diagnostics, supports `--format json` and
   `--deny-warnings`, and exits 0, 1, 2, or 3. Every change, its migration
   step, and the old-message-to-code table are in
-  `release/notes/config-conventions/evidence.md`, section "Evidence clients
+  [`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md), section "Evidence clients
   and OID4VCI".
 - BREAKING: `evidencectl check --file <path> --deny-warnings` is refused as
   a usage error (exit 2). A single-file check reports no warnings, so the
@@ -1091,7 +1107,7 @@
   accept the retired `--project` flag (use the positional project directory),
   and `evidencectl client profile create` and `client contracts fetch` no
   longer accept `--out` (use `--output`). See "Evidence tooling files" in
-  `release/notes/config-conventions/evidence.md`.
+  [`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md).
 - BREAKING: `evidencectl` no longer accepts the second spellings of arguments
   that have a current one. `--project` is refused on `target explain`,
   `dev stop`, `dev clean`, `source add`, `source suggest`, `source detach`,
@@ -1100,7 +1116,7 @@
   `--output-dir`, `--public-output`, and `--output`); `jwks` refuses `--out`
   (use `--output`). The seed of a mock plan is bounded by the shared reader
   and refused as `config.out-of-range`. See "Evidence tooling files" in
-  `release/notes/config-conventions/evidence.md`.
+  [`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md).
 - BREAKING: a file under `sources/` opens with `apiVersion`
   (`id.registrystack.org/formats/evidence/source/v1alpha1`) and `kind`
   (`EvidenceSource`), and a file under `selectors/` with
@@ -1109,7 +1125,7 @@
   generated schema mapped for editors, and lose the two lines before the
   compile. A BReg export writes them. Migration: add the two lines at the top
   of every such file; see "Evidence tooling files" in
-  `release/notes/config-conventions/evidence.md`.
+  [`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md).
 - `evidencectl` writes the mock plan and the access policy and client
   documents with sequences indented beneath their keys, and reports a refused
   `source mock` argument combination (`--http-addr`, `--path-parameter`) as a
@@ -1125,14 +1141,14 @@
   resolution with `type` in place of `choice`, and is read by the shared
   configuration reader. A resolution of `keep` or `adopt` takes no other
   member. A generated JSON Schema ships with it. See "Evidence
-  tooling files" in `release/notes/config-conventions/evidence.md`.
+  tooling files" in [`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md).
 
 - BREAKING: the source-import baseline (`.evidence/source-imports/state.json`)
   and transaction journal (`.evidence/source-imports/transaction.json`) open
   with `apiVersion` and `kind` in place of `formatVersion`. `evidencectl source
   import` refuses a file in the earlier shape with a message that names the
   fix. See "Evidence tooling files" in
-  `release/notes/config-conventions/evidence.md`.
+  [`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md).
 
 - BREAKING: the session state `evidencectl dev` retains in
   `.evidence/dev/state.json` opens with `apiVersion`
@@ -1141,7 +1157,7 @@
   `issuerProject`, `issuerOwner`, and `failure` when unset where it wrote
   `null`. `evidencectl` refuses state in the earlier shape with a message that
   names the fix. Migration: see "Evidence tooling files" in
-  `release/notes/config-conventions/evidence.md`.
+  [`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md).
 
 - BREAKING: every `evidencectl --format json` report carries `apiVersion`
   (`id.registrystack.org/formats/evidence/ctl-report/v1alpha1`) and `kind`
@@ -1156,7 +1172,7 @@
   are refused at their line and column. `evidencectl check --deny-findings`
   is now `--deny-warnings`, its report lists `diagnostics` with
   `severity: warning`, its codes follow `evidence.<area>.<condition>`, and
-  `--production` requires `--target`. `release/notes/config-conventions/evidence.md`
+  `--production` requires `--target`. [`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md)
   ("Evidence authoring tools") gives each migration and the full code table.
 - BREAKING: a question answer's concept URI is written `answers[].uri`, no
   longer `answers[].id`; a file that keeps `id` under an answer is refused as
@@ -1224,7 +1240,7 @@
   `editors/configure.py` maps deployment-project files to their schemas.
 
 Migration steps and the diagnostic code table:
-`release/notes/config-conventions/evidence.md`, section "Evidence runtime".
+[`release/notes/config-conventions/evidence.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/evidence.md), section "Evidence runtime".
 
 ## v0.39.0 - 2026-10-06
 

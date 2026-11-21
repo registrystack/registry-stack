@@ -3,17 +3,17 @@ use serde_json::{json, Value};
 
 fn project_value() -> Value {
     json!({
-        "id": "acquisition-validation",
+        "project": {"id": "acquisition-validation", "version": "1"},
         "selectorProfiles": {
             "person-by-id": {
                 "maximumAggregateBytes": 64,
                 "fields": {"person-id": {"type": "string", "minimumBytes": 1, "maximumBytes": 64}}
             }
         },
-        "functions": [
-            {"id": "extract", "interface": "source-extract/v1", "source": "functions/extract.rhai"},
-            {"id": "derive", "interface": "assertion-derive/v1", "source": "functions/derive.rhai"}
-        ],
+        "functions": {
+            "extract": {"interface": "source-extract/v1", "source": "functions/extract.rhai"},
+            "derive": {"interface": "assertion-derive/v1", "source": "functions/derive.rhai"}
+        },
         "sources": {
             "search": source(
                 json!([{"role": "person", "profiles": ["person-by-id"]}]),

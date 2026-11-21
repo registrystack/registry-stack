@@ -1,6 +1,8 @@
 apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
 kind: EvidenceProject
-id: wallet-presentation-evidence
+project:
+  id: wallet-presentation-evidence
+  version: "1"
 selectorProfiles:
   wallet-session:
     maximumAggregateBytes: 1152
@@ -37,12 +39,12 @@ selectorProfiles:
         minimumBytes: 1
         maximumBytes: 256
 functions:
-- id: derive-credential-possession
-  interface: assertion-derive/v1
-  source: functions/derive-credential-possession.rhai
-- id: derive-name-match
-  interface: assertion-derive/v1
-  source: functions/derive-name-match.rhai
+  derive-credential-possession:
+    interface: assertion-derive/v1
+    source: functions/derive-credential-possession.rhai
+  derive-name-match:
+    interface: assertion-derive/v1
+    source: functions/derive-name-match.rhai
 sources:
   presented-possession:
     pack: {id: wallet-session, version: '1'}

@@ -68,7 +68,7 @@ database:
   migrationUrlRef: secret:file/migration-database-url
   # The PEM bundle of the private CA in front of PostgreSQL, when the
   # deployment terminates database TLS with one.
-  # trustedRootCertificateRef: secret:file/postgres-ca.pem
+  # caBundleRef: secret:file/postgres-ca.pem
   # `testOnlyPlaintext: true` is the one plaintext escape, and only a build
   # carrying the `postgres-test` feature accepts it: a production build
   # refuses the setting at startup instead of opening an unencrypted

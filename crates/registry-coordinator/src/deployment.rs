@@ -530,7 +530,7 @@ async fn open_named(
     };
     let url = std::str::from_utf8(raw.expose_secret())
         .map_err(|_| fail("database reference must resolve to UTF-8"))?;
-    let tls = if d.local() && runtime.database.trusted_root_certificate_ref.is_none() {
+    let tls = if d.local() && runtime.database.ca_bundle_ref.is_none() {
         None
     } else {
         Some(tls(&runtime.database, &secrets)?)
@@ -548,7 +548,7 @@ fn tls(
     secrets: &registry_platform_config::SecretResolver,
 ) -> Result<tokio_postgres_rustls::MakeRustlsConnect> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    if let Some(r) = &database.trusted_root_certificate_ref {
+    if let Some(r) = &database.ca_bundle_ref {
         let value = secrets
             .resolve(r)
             .map_err(|_| fail("make the database TLS root available"))?;

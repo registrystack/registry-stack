@@ -93,7 +93,7 @@ matter most:
 | --- | ------ |
 | `identity.databaseId` | A name for the one database this deployment owns. The service refuses a database recorded for another. |
 | `package.root` and `package.expectedDigest` | The package directory, and the digest `documentsctl package` printed. |
-| `database.trustedRootCertificateRef` | The PEM bundle of the CA that signs the database certificate, when a private CA does. It replaces the system roots. |
+| `database.caBundleRef` | The PEM bundle of the CA that signs the database certificate, when a private CA does. It replaces the system roots. |
 | `authentication.oidc` | The `issuer`, the `audience` your tokens carry, every client in `allowedClients`, and `jwksSource` when the runtime should not fetch the issuer's keys itself. See [Access tokens](#access-tokens). |
 | `storage.type` | `database` or `s3`. The first upload pins the choice: a later start under another backend or bucket is refused. |
 | `storage.maximumDocumentBytes` | The largest version the deployment takes: 16 MiB by default on both backends. On `s3` you may raise it up to 64 MiB. |

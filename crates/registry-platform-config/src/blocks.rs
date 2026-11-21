@@ -257,7 +257,7 @@ pub struct DatabaseConfig {
     /// Absent, the connection trusts the platform's root certificates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
-    pub trusted_root_certificate_ref: Option<String>,
+    pub ca_bundle_ref: Option<String>,
     /// Allow a plaintext connection. Refused outside test builds.
     #[serde(default)]
     pub test_only_plaintext: bool,
@@ -270,11 +270,8 @@ impl fmt::Debug for DatabaseConfig {
             .field("runtime_url_ref", &"<redacted>")
             .field("migration_url_ref", &"<redacted>")
             .field(
-                "trusted_root_certificate_ref",
-                &self
-                    .trusted_root_certificate_ref
-                    .as_ref()
-                    .map(|_| "<redacted>"),
+                "ca_bundle_ref",
+                &self.ca_bundle_ref.as_ref().map(|_| "<redacted>"),
             )
             .field("test_only_plaintext", &self.test_only_plaintext)
             .finish()
@@ -289,8 +286,8 @@ impl DatabaseConfig {
             ("database.runtimeUrlRef", self.runtime_url_ref.as_str()),
             ("database.migrationUrlRef", self.migration_url_ref.as_str()),
         ];
-        if let Some(reference) = &self.trusted_root_certificate_ref {
-            references.push(("database.trustedRootCertificateRef", reference.as_str()));
+        if let Some(reference) = &self.ca_bundle_ref {
+            references.push(("database.caBundleRef", reference.as_str()));
         }
         references
     }

@@ -490,7 +490,7 @@ exceptions:
   format: "casework/report"
   location: "products/casework/contracts/cli/report.schema.json#"
   class: "exchange-model"
-  reason: "The promised Casework v1alpha1 command-report exchange model is discriminated by the invoked command. Every typed command payload retains that exact CLI spelling; replacing it with type would change the public report contract without adding validation."
+  reason: "The Casework v1alpha1 command-report exchange model is discriminated by the invoked command. Every typed command payload retains that exact CLI spelling; replacing it with type would change the public report contract without adding validation."
   resolution: "Permanent for the Casework v1alpha1 command-report model. Real CLI parity tests validate successful, domain-refusal and usage reports against the generated closed schema."
 - rule: CFG-NAME-2
   format: evidence/target

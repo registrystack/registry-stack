@@ -124,7 +124,7 @@ private authority, put the PEM roots in the runtime Secret and set
 `breg.caBundleKey` to that key. Serving and operation containers then receive
 only `SSL_CERT_FILE=/etc/breg-secrets/<key>`. The value is empty by default, so
 public Web PKI remains the native client's default. Keep the database-specific
-`trustedRootCertificateRef` in `runtime.yaml` for the BReg database TLS binding.
+`database.caBundleRef` in `runtime.yaml` for the BReg database TLS binding.
 
 Use BReg's production split-role mode. `database.roles.runtime` names the role
 in the runtime URL, and `database.roles.migration` names the different role in

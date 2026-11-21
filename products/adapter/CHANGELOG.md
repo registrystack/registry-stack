@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BREAKING: `database.trustedRootCertificateRef` -> `database.caBundleRef` in
+  the runtime configuration, and `store.trustedRootCertificateRef` ->
+  `store.caBundleRef` in the job runtime configuration, as a pre-1.0 cleanup,
+  to match the `caBundleRef` the other TLS blocks use. The old key is refused
+  as an unknown key. The value is unchanged: a secret reference to the PEM CA
+  bundle the connection trusts.
+
 - Serve Prometheus metrics from the facade and from `adapter-job pass --loop`
   on an optional `metricsListener.bind` in the runtime document, off by default
   and loopback or private only. An address equal to the serving or hook

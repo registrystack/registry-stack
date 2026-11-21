@@ -1370,7 +1370,7 @@ fn shared_config(
         "migrationUrlRef": secret_ref(&format!("{name}-migration-url"))
     });
     if root.join("postgres-ca").is_file() {
-        database["trustedRootCertificateRef"] = json!(secret_ref("postgres-ca"));
+        database["caBundleRef"] = json!(secret_ref("postgres-ca"));
     }
     let audit = json!({
         "hashKeyRef": secret_ref(&format!("{name}-audit-key")),

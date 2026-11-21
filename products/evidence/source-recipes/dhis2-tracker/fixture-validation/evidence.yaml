@@ -1,18 +1,20 @@
 apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
 kind: EvidenceProject
-id: dhis2-tracker-recipe-validation
+project:
+  id: dhis2-tracker-recipe-validation
+  version: "1"
 selectorProfiles:
   validation-seed:
     maximumAggregateBytes: 8
     fields:
       id: {type: string, minimumBytes: 1, maximumBytes: 8}
 functions:
-- id: derive-active-status
-  interface: assertion-derive/v1
-  source: functions/derive-active-status.rhai
-- id: validation-seed-derive
-  interface: assertion-derive/v1
-  source: functions/validation-seed-derive.rhai
+  derive-active-status:
+    interface: assertion-derive/v1
+    source: functions/derive-active-status.rhai
+  validation-seed-derive:
+    interface: assertion-derive/v1
+    source: functions/validation-seed-derive.rhai
 sources:
   validation-seed:
     pack: {id: validation-seed, version: '1'}

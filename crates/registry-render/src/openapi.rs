@@ -92,7 +92,7 @@ pub const OPENAPI_JSON: &str = r##"{
         },
         "responses": {
           "200": {
-            "description": "Rendered PDF. The default representation is application/pdf with the headers below. A nonzero warning count means the host should inspect the JSON warnings before releasing the document. With Accept: application/json, the body carries the same values and the warning text, and the headers are not sent. pdfSha256 and dataSha256, and their headers, are deprecated: they are pdfDigest and dataDigest without the sha256: label.",
+            "description": "Rendered PDF. The default representation is application/pdf with the headers below. A nonzero warning count means the host should inspect the JSON warnings before releasing the document. With Accept: application/json, the body carries the same values and the warning text, and the headers are not sent.",
             "headers": {
               "X-Registry-Pdf-Digest": {
                 "description": "SHA-256 over the PDF.",
@@ -101,16 +101,6 @@ pub const OPENAPI_JSON: &str = r##"{
               "X-Registry-Data-Digest": {
                 "description": "SHA-256 over the canonical request envelope the template read.",
                 "schema": { "$ref": "#/components/schemas/Digest" }
-              },
-              "X-Registry-Pdf-Sha256": {
-                "description": "Deprecated: X-Registry-Pdf-Digest without its sha256: label.",
-                "deprecated": true,
-                "schema": { "$ref": "#/components/schemas/Sha256Hex" }
-              },
-              "X-Registry-Data-Sha256": {
-                "description": "Deprecated: X-Registry-Data-Digest without its sha256: label.",
-                "deprecated": true,
-                "schema": { "$ref": "#/components/schemas/Sha256Hex" }
               },
               "X-Registry-Document-Version": {
                 "description": "The document type and its version, as <id> v<version>.",
@@ -126,21 +116,11 @@ pub const OPENAPI_JSON: &str = r##"{
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["pdfBase64", "pdfDigest", "dataDigest", "pdfSha256", "dataSha256", "documentVersion", "warnings"],
+                  "required": ["pdfBase64", "pdfDigest", "dataDigest", "documentVersion", "warnings"],
                   "properties": {
                     "pdfBase64": { "type": "string", "contentEncoding": "base64" },
                     "pdfDigest": { "$ref": "#/components/schemas/Digest" },
                     "dataDigest": { "$ref": "#/components/schemas/Digest" },
-                    "pdfSha256": {
-                      "description": "Deprecated: pdfDigest without its sha256: label.",
-                      "deprecated": true,
-                      "$ref": "#/components/schemas/Sha256Hex"
-                    },
-                    "dataSha256": {
-                      "description": "Deprecated: dataDigest without its sha256: label.",
-                      "deprecated": true,
-                      "$ref": "#/components/schemas/Sha256Hex"
-                    },
                     "documentVersion": { "type": "string" },
                     "warnings": { "type": "array", "items": { "type": "string" } }
                   }
@@ -299,11 +279,6 @@ pub const OPENAPI_JSON: &str = r##"{
         "description": "A labelled SHA-256 digest: sha256: and 64 lowercase hex digits.",
         "type": "string",
         "pattern": "^sha256:[0-9a-f]{64}$"
-      },
-      "Sha256Hex": {
-        "description": "A bare SHA-256: 64 lowercase hex digits.",
-        "type": "string",
-        "pattern": "^[0-9a-f]{64}$"
       }
     },
     "securitySchemes": {

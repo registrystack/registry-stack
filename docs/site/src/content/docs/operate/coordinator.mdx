@@ -215,7 +215,7 @@ Back up each key file under custody separate from the database.
 The database URLs are secrets too.
 `database.runtimeUrlRef` names the runtime role's URL and `database.migrationUrlRef` the migration role's URL; only `apply` resolves the migration URL.
 Institutional connections use `sslmode=require`.
-Coordinator verifies the database certificate against the system roots, or against `database.trustedRootCertificateRef` for a private root.
+Coordinator verifies the database certificate against the system roots, or against `database.caBundleRef` for a private root.
 
 Enter each URL at a hidden prompt, so its password stays out of shell history.
 Use a URL such as `postgresql://coordinator_runtime:...@db.example.org:5432/coordinator?sslmode=require`.
@@ -252,7 +252,7 @@ The connection's required `clientAssertionAudience` is the issuer identifier, ex
 Secret values never appear in a diagnostic or a log.
 
 {/* Evidence: crates/registry-coordinator/src/runtime.rs secret_providers, state_keys, active_state_key;
-    crates/registry-coordinator/src/deployment.rs trusted_root_certificate_ref;
+    crates/registry-coordinator/src/deployment.rs ca_bundle_ref;
     crates/registry-coordinator/tests/deployment_postgres.rs state-key-custody;
     products/coordinator/examples/single-flow-runtime.yaml runtimeUrlRef. */}
 

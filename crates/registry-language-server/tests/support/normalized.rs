@@ -9,11 +9,13 @@ pub const PROJECT: &str = "evidence.yaml";
 pub const DERIVE: &str = "functions/derive.rhai";
 pub const SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
 kind: EvidenceProject
-id: synthetic
+project:
+  id: synthetic
+  version: "1"
 selectorProfiles:
   person-by-id: {maximumAggregateBytes: 64, fields: {person-id: {type: string, minimumBytes: 1, maximumBytes: 64}}}
 functions:
-  - {id: derive-status, interface: assertion-derive/v1, source: functions/derive.rhai}
+  derive-status: {interface: assertion-derive/v1, source: functions/derive.rhai}
 sources:
   person:
     pack: {id: population, version: '1'}

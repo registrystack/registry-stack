@@ -593,7 +593,7 @@ class Journey:
                          "networkExposure": "private-address"},
             "secretProviders": {"file": {"root": str(keys)}},
             "database": {"runtimeUrlRef": "secret:file/database", "migrationUrlRef": "secret:file/database",
-                         "trustedRootCertificateRef": "secret:file/database-root.pem"},
+                         "caBundleRef": "secret:file/database-root.pem"},
             "authentication": {"oidc": {"issuer": self.urls["issuer"], "audience": resource,
                 "allowedClients": ["staff", "supervisor", "administrator", "producer", "task-agent",
                                    "status-client", "scheduling-status"],
@@ -1307,7 +1307,7 @@ class Journey:
                          "networkExposure": "private-address"},
             "secretProviders": {"file": {"root": str(keys)}},
             "database": {"runtimeUrlRef": "secret:file/database", "migrationUrlRef": "secret:file/database",
-                         "trustedRootCertificateRef": "secret:file/database-root.pem"},
+                         "caBundleRef": "secret:file/database-root.pem"},
             "authentication": {"oidc": {"issuer": self.urls["issuer"], "audience": resource,
                 "allowedClients": ["review-producer", "staff", "administrator"], "scopeClaim": "scope",
                 "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
@@ -1569,7 +1569,7 @@ class Journey:
         if test_only_plaintext:
             database_config["testOnlyPlaintext"] = True
         if trusted_root_certificate is not None:
-            database_config["trustedRootCertificateRef"] = "secret:file/database-root.pem"
+            database_config["caBundleRef"] = "secret:file/database-root.pem"
         private(runtime, {"apiVersion":"id.registrystack.org/formats/messaging/runtime/v1alpha1","kind":"MessagingRuntimeConfig",
             "identity":{"databaseId":"coordinator-messaging"},"package":{"root":str(package)},
             "listener":{"bind":f"127.0.0.1:{port}","tlsTermination":"development-loopback"},

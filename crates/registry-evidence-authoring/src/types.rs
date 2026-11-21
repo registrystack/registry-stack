@@ -3,6 +3,7 @@ use crate::{
     compile::CompiledProject,
     project::{self, EvidenceProject, Output},
 };
+use registry_platform_yaml::LocalId;
 use serde_json::{json, Map, Value};
 
 fn object(properties: Map<String, Value>) -> Value {
@@ -158,11 +159,12 @@ fn selector_inputs(
 pub(crate) fn function_shape(
     project: &EvidenceProject,
     compiled: &CompiledProject,
+    function_id: &LocalId,
     function: &project::Function,
 ) -> Value {
     let mut calls = Vec::new();
     for (id, definition) in &project.assertion_definitions {
-        if definition.derive.function != function.id {
+        if &definition.derive.function != function_id {
             continue;
         }
         // Type contexts follow the first Source a validated definition names.
@@ -472,12 +474,12 @@ pub fn typescript(project: &EvidenceProject, compiled: &CompiledProject) -> Stri
         result.push_str("}\n");
     }
     result.push_str("export interface FunctionBindings {\n");
-    for function in &project.functions {
-        let shape = function_shape(project, compiled, function);
+    for (function_id, function) in &project.functions {
+        let shape = function_shape(project, compiled, function_id, function);
         result.push_str(&format!(
             "  // evidence-function: {}\n  {}: {};\n",
-            function.id,
-            json!(function.id),
+            function_id,
+            json!(function_id),
             ts(&shape, &shape, 0)
         ));
     }
@@ -551,13 +553,13 @@ pub fn python(project: &EvidenceProject, compiled: &CompiledProject) -> String {
         ));
     }
     let mut entries = Vec::new();
-    for function in &project.functions {
-        let shape = function_shape(project, compiled, function);
+    for (function_id, function) in &project.functions {
+        let shape = function_shape(project, compiled, function_id, function);
         let name = renderer.shape(&shape, &shape, 0);
-        result.push_str(&format!("# evidence-function: {}\n", function.id));
+        result.push_str(&format!("# evidence-function: {}\n", function_id));
         result.push_str(&renderer.definitions);
         renderer.definitions.clear();
-        entries.push(format!("    {}: {name},\n", json!(function.id)));
+        entries.push(format!("    {}: {name},\n", json!(function_id)));
     }
     result.push_str(&format!(
         "FunctionBindings = TypedDict(\"FunctionBindings\", {{\n{}}})\n",

@@ -22,7 +22,7 @@ fn retired_acquisition_functions_name_the_pack_migration_instead_of_a_derivation
         let diagnostic = report
             .diagnostics()
             .iter()
-            .find(|diagnostic| diagnostic.path == "/functions/0/interface")
+            .find(|diagnostic| diagnostic.path == "/functions/derive-adult-status/interface")
             .expect("the exact retired function interface is addressed");
         assert_eq!(diagnostic.code, RETIRED_CODE);
         assert!(diagnostic.message.contains("retired"));
