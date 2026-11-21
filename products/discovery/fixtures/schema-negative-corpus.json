@@ -8,33 +8,33 @@
       "value": true
     },
     {
-      "name": "origins-refuses-invalid-origin-id",
+      "name": "origins-refuses-an-id-member-inside-an-origin",
       "contract": "origins",
-      "pointer": "/origins/0/id",
-      "value": "contains spaces"
+      "pointer": "/origins/example-evidence/id",
+      "value": "example-evidence"
     },
     {
       "name": "origins-refuses-non-https-production-url",
       "contract": "origins",
-      "pointer": "/origins/0/catalogUrl",
+      "pointer": "/origins/example-evidence/catalogUrl",
       "value": "ftp://provider.example/catalog.jsonld"
     },
     {
       "name": "origins-refuses-query-bearing-url",
       "contract": "origins",
-      "pointer": "/origins/0/catalogUrl",
+      "pointer": "/origins/example-evidence/catalogUrl",
       "value": "https://provider.example/catalog.jsonld?private=true"
     },
     {
       "name": "origins-refuses-whitespace-before-url-parsing",
       "contract": "origins",
-      "pointer": "/origins/0/catalogUrl",
+      "pointer": "/origins/example-evidence/catalogUrl",
       "value": " https://provider.example/catalog.jsonld"
     },
     {
       "name": "origins-refuses-empty-catalog-path-segments",
       "contract": "origins",
-      "pointer": "/origins/0/catalogUrl",
+      "pointer": "/origins/example-evidence/catalogUrl",
       "value": "https://provider.example/a//catalog.jsonld"
     },
     {

@@ -113,7 +113,7 @@ def check_product_schemas_and_fixture() -> None:
         if schema.get("type") != "object" or schema.get("additionalProperties") is not False:
             fail(f"{name} schema must close its root object")
     origins = PRODUCT_SCHEMAS["origins"]
-    if load(origins)["properties"]["origins"].get("maxItems") != 128:
+    if load(origins)["properties"]["origins"].get("maxProperties") != 128:
         fail("origins schema must carry the authored-origin hard bound")
     mapping = load(PRODUCT_SCHEMAS["evidence-mapping"])
     if mapping["properties"]["alternatives"].get("maxItems") != 32:

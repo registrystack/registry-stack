@@ -65,14 +65,14 @@ discoveryctl check --project discovery-project
 
 ```text test-expect
 discoveryctl check refused the input.
-error[discovery.origins.catalog-url-not-allowed] discovery-project/origins.yaml:5:17 /origins/0/catalogUrl
+error[discovery.origins.catalog-url-not-allowed] discovery-project/origins.yaml:5:17 /origins/tutorial-evidence/catalogUrl
   a catalogUrl is an https URL with no query, fragment, empty path segment, whitespace, or control character
   next: Write an https catalog URL with no query or fragment, or pass --allow-loopback for an http loopback origin during development.
 1 error, 0 warnings in 3 files
 ```
 
-In production, write the provider's URL as `catalogUrl`, one entry per provider with its own
-`id`. The steps below keep the local origin so that you can package again on your
+In production, write the provider's URL as `catalogUrl`, one entry per provider, keyed by its own
+id. The steps below keep the local origin so that you can package again on your
 machine.
 
 Add a file under `discovery-project/mappings/` for each requirement applications resolve. A mapping

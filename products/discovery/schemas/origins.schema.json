@@ -1,34 +1,5 @@
 {
   "$defs": {
-    "ApprovedOrigin": {
-      "additionalProperties": false,
-      "description": "One approved origin: a provider whose public description the index\ncollects.",
-      "properties": {
-        "catalogUrl": {
-          "$ref": "#/$defs/Url",
-          "description": "Exact production HTTPS URL without credentials, query, or fragment.\nLoopback HTTP is a development exception `discoveryctl` accepts only\nwith `--allow-loopback`, not part of this production authoring schema.",
-          "pattern": "^https://[^\\s\\u0000-\\u001F\\u007F-\\u009F/?#@]+(?!.*//)(?:/[^\\s\\u0000-\\u001F\\u007F-\\u009F?#]*)?$"
-        },
-        "enabled": {
-          "default": true,
-          "description": "Whether `discoveryctl package` collects this origin. Absent, it does.",
-          "type": "boolean"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId",
-          "description": "The origin's name in this project, unique among its origins."
-        },
-        "profile": {
-          "$ref": "#/$defs/OriginProfile"
-        }
-      },
-      "required": [
-        "id",
-        "catalogUrl",
-        "profile"
-      ],
-      "type": "object"
-    },
     "LocalId": {
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -65,13 +36,38 @@
       "type": "string"
     },
     "origins": {
-      "description": "One to 128 approved origins.",
-      "items": {
-        "$ref": "#/$defs/ApprovedOrigin"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "description": "One approved origin: a provider whose public description the index\ncollects.",
+        "properties": {
+          "catalogUrl": {
+            "$ref": "#/$defs/Url",
+            "description": "Exact production HTTPS URL without credentials, query, or fragment.\nLoopback HTTP is a development exception `discoveryctl` accepts only\nwith `--allow-loopback`, not part of this production authoring schema.",
+            "pattern": "^https://[^\\s\\u0000-\\u001F\\u007F-\\u009F/?#@]+(?!.*//)(?:/[^\\s\\u0000-\\u001F\\u007F-\\u009F?#]*)?$"
+          },
+          "enabled": {
+            "default": true,
+            "description": "Whether `discoveryctl package` collects this origin. Absent, it does.",
+            "type": "boolean"
+          },
+          "profile": {
+            "$ref": "#/$defs/OriginProfile"
+          }
+        },
+        "required": [
+          "catalogUrl",
+          "profile"
+        ],
+        "type": "object"
       },
-      "maxItems": 128,
-      "minItems": 1,
-      "type": "array"
+      "description": "One to 128 approved origins, keyed by origin id and held in id order.",
+      "maxProperties": 128,
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId",
+        "description": "The origin's name in this project, unique among its origins."
+      },
+      "type": "object"
     }
   },
   "required": [

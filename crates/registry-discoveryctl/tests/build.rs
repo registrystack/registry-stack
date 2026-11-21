@@ -220,7 +220,7 @@ fn authoring_project(catalog_url: &str) -> TempDir {
     fs::write(
         project.path().join("origins.yaml"),
         format!(
-            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - id: evidence-one\n    catalogUrl: {catalog_url}\n    profile: registry-discovery-v1alpha1\n"
+            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  evidence-one:\n    catalogUrl: {catalog_url}\n    profile: registry-discovery-v1alpha1\n"
         ),
     )
     .expect("origins");
@@ -420,7 +420,7 @@ async fn identical_claimed_service_ids_from_distinct_origins_remain_separate() {
     fs::write(
         project.path().join("origins.yaml"),
         format!(
-            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - id: evidence-one\n    catalogUrl: {first_url}\n    profile: registry-discovery-v1alpha1\n  - id: evidence-two\n    catalogUrl: {second_url}\n    profile: registry-discovery-v1alpha1\n"
+            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  evidence-one:\n    catalogUrl: {first_url}\n    profile: registry-discovery-v1alpha1\n  evidence-two:\n    catalogUrl: {second_url}\n    profile: registry-discovery-v1alpha1\n"
         ),
     )
     .expect("origins");
@@ -666,7 +666,7 @@ async fn compiled_service_bound_leaves_the_previous_output_untouched() {
         String::from("apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n");
     for index in 0..origins_needed {
         origins.push_str(&format!(
-            "  - id: evidence-{index:03}\n    catalogUrl: {base_url}/catalog-{index:03}.jsonld\n    profile: registry-discovery-v1alpha1\n"
+            "  evidence-{index:03}:\n    catalogUrl: {base_url}/catalog-{index:03}.jsonld\n    profile: registry-discovery-v1alpha1\n"
         ));
     }
     fs::write(project.path().join("origins.yaml"), origins).expect("origins");
