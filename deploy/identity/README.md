@@ -1,10 +1,10 @@
 # Reference ThunderID identity prerequisite
 
 This reference pins the upstream ThunderID 1.0.1 OCI chart and image and
-prepares them for Restricted admission and recovery. It qualifies one synthetic
+prepares them for Restricted admission and recovery. It tests one synthetic
 App Kit human sign-in and one machine token against the same-release BReg.
 
-## Fixed qualification identity
+## Fixed test identity
 
 | Input | Value |
 | --- | --- |
@@ -26,7 +26,7 @@ migration.
 
 ## Environment prerequisites
 
-These objects must already exist in the qualification namespace. The chart
+These objects must already exist in the test namespace. The chart
 references them and never creates their values.
 
 - `registry-identity-postgres`, key `password`, for the dedicated
@@ -40,11 +40,11 @@ references them and never creates their values.
   byte digests before creating both the identity and App Kit Secrets.
 - `registry-identity-tls`, keys `tls.crt` and `tls.key`. The leaf must have the
   issuer DNS SAN, critical `CA:FALSE`, and `serverAuth`, and must be signed by
-  a private qualification CA. Do not use a self-signed leaf as its own trust
+  a private test CA. Do not use a self-signed leaf as its own trust
   anchor.
 - The corresponding pure CA certificate, without the leaf or private key,
   available as `qualification-root-ca.pem` to Registry Stack workloads and
-  local qualification clients.
+  local test clients.
 - PostgreSQL serving a certificate for
   `registry-postgres.directory.svc.cluster.local`, the service in the
   `directory` namespace used by the [main guide](../README.md). If your
@@ -58,8 +58,17 @@ references them and never creates their values.
   `thunderid_entity`, and `backend/dbscripts/runtime_persistent/postgres.sql`
   to `thunderid_runtime_persistent`. The ThunderID 1.0.1 chart's database
   init container covers SQLite. Apply the PostgreSQL schemas separately.
-- DNS, or qualification-only hosts entries, mapping both stable hostnames to
+- DNS, or hosts entries for the test only, mapping both stable hostnames to
   the K3s Traefik endpoint.
+
+Only `registry_identity` may connect to the four databases. PostgreSQL lets
+every role connect to a new database until that is revoked. After creating
+them, run this as the PostgreSQL superuser:
+
+```sql
+REVOKE ALL ON DATABASE thunderid_config, thunderid_runtime_transient, thunderid_entity, thunderid_runtime_persistent FROM PUBLIC;
+GRANT CONNECT ON DATABASE thunderid_config, thunderid_runtime_transient, thunderid_entity, thunderid_runtime_persistent TO registry_identity;
+```
 
 `values.reference.yaml` uses `sslmode=verify-full` for every database. lib/pq
 reads `PGSSLROOTCERT`, and the upstream chart's declarative-resource ConfigMap
@@ -112,9 +121,9 @@ row claims.
 database, TLS and key custody remain environment-owned.
 
 Prepare Kubernetes material from the generated public resources and PostgreSQL
-CA. This command prints no value. It writes the two ConfigMaps (the resources
-with the CA, and the CA alone for the first install) and the two Secrets for
-the registry schema. It needs `kubectl` or `k3s`. Treat its output as private
+CA. This command prints no value. It writes two ConfigMaps. One holds the
+resources with the CA, and the other holds the CA alone for the first install.
+It also writes the two Secrets for the registry schema. It needs `kubectl` or `k3s`. Treat its output as private
 deployment material even though the generated identities contain only public
 keys and secret placeholders. The output folder must not exist. The command
 writes into a temporary folder beside it and moves it into place only on
@@ -190,7 +199,7 @@ sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \
 ```
 
 The first install deliberately requests zero serving replicas, disables
-declarative resources, makes the explicit stores mutable, and mounts only the
+declarative resources and makes the explicit stores mutable. It mounts only the
 PostgreSQL CA into the setup Job from the `registry-identity-postgres-ca`
 ConfigMap that `prepare-material.sh` created. This creates ThunderID's built-in password
 flow before the upgrade starts the declarative App Kit application. Combining
@@ -202,7 +211,7 @@ that the 1.0.1 chart does not run. Stop serving, mount the generated agent
 documents alongside ThunderID's shipped bootstrap bundle, run the pinned
 upstream `setup.sh` Job once, then resume one replica. The prepare script
 stores the single generated agent document under the key `agent.yaml` in the
-`registry-identity-agents` Secret, so the Job needs no edit when the issuer or
+`registry-identity-agents` Secret. The Job then needs no edit when the issuer or
 client changes. The script stops if the generator produced more than one agent
 document. Do not rerun the Job against retained state without reviewing
 upstream bootstrap semantics.
@@ -218,7 +227,7 @@ sudo k3s kubectl apply -f deploy/identity/edge.yaml
 sudo k3s kubectl -n registry-identity-qualification rollout status deployment/thunderid-deployment --timeout=5m
 ```
 
-## Qualify a real token and browser session
+## Test a real token and browser session
 
 The token driver signs a one-minute client assertion, requests a resource-bound
 token, verifies its JWT signature, issuer, audience and expiry, then discards
@@ -234,14 +243,14 @@ IDENTITY_SCOPES='registry:directory:write' \
 deploy/identity/qualify-oidc.sh
 ```
 
-When qualification DNS must remain unchanged, set
+When the test DNS must remain unchanged, set
 `IDENTITY_CONNECT_ADDRESS` and optionally `IDENTITY_CONNECT_PORT`. The driver
 still sends and verifies TLS for the stable issuer hostname. The override
 selects the test socket. Port 80 must not serve issuer discovery.
 
-The browser driver uses App Kit's installed Playwright. It opens App Kit,
-follows its real Authorization Code with PKCE redirect, signs in the synthetic
-officer, waits for the callback, and confirms App Kit created a server session.
+The browser driver uses App Kit's installed Playwright. It opens App Kit and
+follows its real Authorization Code with PKCE redirect. It signs in the synthetic
+officer, waits for the callback and confirms App Kit created a server session.
 The password stays in an owner-only file.
 
 ```bash
@@ -269,12 +278,12 @@ same browser session reads every retained record, creates and reads one new
 `zone-a` contact, and requires a `403` for an otherwise identical `zone-b`
 create. This mode intentionally writes one synthetic permitted record. Its
 diagnostics contain only the retained and created record IDs and fixed phase
-results, never URLs, cookies, authorization codes, state, tokens, response
-bodies or raw Playwright errors.
+results. They never contain URLs, cookies, authorization codes, state, tokens,
+response bodies or raw Playwright errors.
 
 ## Before a pilot
 
-This profile is a qualification fixture. It keeps a synthetic password login
+This profile is a test fixture. It keeps a synthetic password login
 for `qualification-officer` with directory write access, and injects its
 password into the serving Deployment. Before a pilot, change the following.
 
@@ -283,7 +292,7 @@ password into the serving Deployment. Before a pilot, change the following.
 - Remove the `QUALIFICATION_OFFICER_PASSWORD` entry from both `secretEnv`
   blocks in `values.reference.yaml` and from `schema-bootstrap-job.yaml`.
 - Delete the `qualification-officer-password` key from the fixture Secret.
-- Replace the qualification hostnames, CA and App Kit client secret with your
+- Replace the test hostnames, CA and App Kit client secret with your
   own. Connect staff sign-in to your institutional identity provider.
 
 ## Backup and restore inputs
@@ -294,21 +303,22 @@ ThunderID encryption and signing keys. The secrets PVC owns the direct-auth
 secret. The certs archive contains `crypto.key`, `ecdsa-signing.cert`,
 `ecdsa-signing.key`, `server.cert`, `server.key`, `signing.cert` and
 `signing.key`. The secrets archive contains `direct_auth_secret`. Also retain
-the ingress TLS leaf, key and pure CA, the generated
-declarative bundle and receipt, the registry schema, the public client JWK,
-and the external admin, App Kit, synthetic user, PostgreSQL and CA inputs. The
+the ingress TLS leaf, key and pure CA. Retain the generated declarative bundle
+and receipt, the registry schema and the public client JWK. Retain the
+external admin, App Kit, synthetic user, PostgreSQL and CA inputs. The
 machine client's private JWK is needed only when that synthetic client must
 retain its identity.
 
 A matching signing-key JWK thumbprint plus a fresh login proves signing-key
 continuity and new authentication. When session retention is required, verify
 that a pre-backup browser cookie resolves against the restored ThunderID and
-App Kit state before performing the fresh login.
+App Kit state. Do this before the fresh login.
 
 ### Clean-target restored-state sequence
 
 Wait until the PostgreSQL owner confirms all four identity databases are
-restored and reachable with `sslmode=verify-full`. Recreate the referenced
+restored and reachable with `sslmode=verify-full`. Repeat the `REVOKE` and
+`GRANT` from the prerequisites on the restored databases. Recreate the referenced
 Secrets and ConfigMaps from normalised fixture inputs, the PostgreSQL CA, the
 augmented declarative bundle and the CA-signed issuer leaf. Preserve the
 issuer hostname and callback exactly.

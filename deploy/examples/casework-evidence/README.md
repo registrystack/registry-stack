@@ -1,6 +1,6 @@
-# Casework and Evidence qualification fixtures
+# Casework and Evidence test fixtures
 
-These fixtures support an isolated, private qualification of the Registry Stack
+These fixtures support an isolated, private test of the Registry Stack
 Casework and Evidence Helm modules. They are not a deployment stack and are not
 production identity, source, or signing services.
 
@@ -15,7 +15,7 @@ production identity, source, or signing services.
 
 The server requires TLS and a static source token. It disables access logging
 because source paths can contain selectors. Keep the issuer private key outside
-Kubernetes and issue only short-lived synthetic tokens for qualification.
+Kubernetes and issue only short-lived synthetic tokens for the test.
 
 Casework has two independently governed issuer bindings. The runtime OIDC issuer
 authenticates access tokens. Each `trustedProducers` entry in the immutable
@@ -51,7 +51,7 @@ path "transit/sign/evidence-signing/sha2-256" {
 
 The proxy token belongs only in the proxy container. Evidence receives the
 Unix socket. This fixture proves the v0.46 Transit protocol and sign-and-verify
-startup check with a disposable synthetic key. Qualify key custody, unseal,
+startup check with a disposable synthetic key. Test key custody, unseal,
 backup, rotation, and recovery with the institution's signer.
 
 The proxy reaches Vault over plain HTTP and sends the synthetic token with every

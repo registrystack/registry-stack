@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -49,6 +50,23 @@ class ReferenceIdentityContract(unittest.TestCase):
         self.assertIn("name: registry-identity-material", values)
         self.assertNotIn("sslmode: require", values)
         self.assertNotIn("sslmode: disable", values)
+
+    def test_runbook_limits_database_connections_to_the_identity_role(self) -> None:
+        values = (ROOT / "values.reference.yaml").read_text()
+        databases = set(re.findall(r"^\s+name: (thunderid_\w+)$", values, re.MULTILINE))
+        roles = set(re.findall(r"^\s+username: (\w+)$", values, re.MULTILINE))
+        self.assertEqual(len(databases), 4)
+        self.assertEqual(roles, {"registry_identity"})
+        runbook = (ROOT / "README.md").read_text()
+
+        def named(statement: str) -> set[str]:
+            match = re.search(rf"^{statement} (.+?) (?:FROM PUBLIC|TO registry_identity);$", runbook, re.MULTILINE)
+            self.assertIsNotNone(match, statement)
+            return {name.strip() for name in match.group(1).split(",")}
+
+        self.assertEqual(named("REVOKE ALL ON DATABASE"), databases)
+        self.assertEqual(named("GRANT CONNECT ON DATABASE"), databases)
+        self.assertIn("Repeat the `REVOKE` and\n`GRANT` from the prerequisites on the restored databases.", runbook)
 
     def test_runbook_requires_a_ca_signed_end_entity_issuer_certificate(self) -> None:
         runbook = (ROOT / "README.md").read_text()

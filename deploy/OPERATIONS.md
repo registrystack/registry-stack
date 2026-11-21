@@ -16,18 +16,25 @@ Choose a recovery point and backup cadence with the service owner. The reference
 
    `stop` applies the Helm release with serving turned off. The chart then renders no serving workloads, and Helm records the release as stopped, so a retried command leaves it stopped. `capture` refuses while any Pod of the release is still running, and again if one starts during the capture.
 
+   The subshell stops at the first failure. If `status` fails, `stop` does not run, and only the `.tmp` file is left, which the later steps do not read. The status file appears under its final name only after `status` succeeds.
+
    ```bash
-   sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 deploy/stack_operator.py \
-     --helm-bin /usr/local/lib/registry-stack/helm --kube-context default --namespace directory \
-     --release directory --database-id directory-db \
-     --values /srv/registry-directory/inputs/values.json status \
-     | sudo tee /srv/registry-directory/backup-status.json >/dev/null
-   sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 deploy/stack_operator.py \
-     --helm-bin /usr/local/lib/registry-stack/helm --kube-context default --namespace directory \
-     --release directory --database-id directory-db \
-     --values /srv/registry-directory/inputs/values.json stop
+   (
+     set -euo pipefail
+     sudo rm -f /srv/registry-directory/backup-status.json /srv/registry-directory/backup-status.json.tmp
+     sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 deploy/stack_operator.py \
+       --helm-bin /usr/local/lib/registry-stack/helm --kube-context default --namespace directory \
+       --release directory --database-id directory-db \
+       --values /srv/registry-directory/inputs/values.json status \
+       | sudo tee /srv/registry-directory/backup-status.json.tmp >/dev/null
+     sudo mv /srv/registry-directory/backup-status.json.tmp /srv/registry-directory/backup-status.json
+     sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml python3 deploy/stack_operator.py \
+       --helm-bin /usr/local/lib/registry-stack/helm --kube-context default --namespace directory \
+       --release directory --database-id directory-db \
+       --values /srv/registry-directory/inputs/values.json stop
+   )
    ```
-2. Assemble a private directory with the exact chart bindings, packaged code, runtime files, credential recovery material, and audit and authority stores. Copy the files from their owning storage, using its consistent snapshot or copy procedure. When you operate them, keep TLS material, the App Kit PostgreSQL state and encryption key, and the issuer's signing keys and database in the recovery set. For an external issuer, record who owns its recovery and verify it will preserve the issuer URL and subject mapping. Preserve the signer key versions through the signer's backup procedure. Back up the attachment bucket if used. BReg refuses a versioned bucket.
+2. Assemble a private directory. It holds the exact chart bindings, packaged code, runtime files, credential recovery material, and audit and authority stores. Copy the files from their owning storage, using its consistent snapshot or copy procedure. Keep TLS material, the App Kit PostgreSQL state and encryption key, and the issuer's signing keys and database in the recovery set. This applies to each one you operate. For an external issuer, record who owns its recovery. Verify that it preserves the issuer URL and subject mapping. Preserve the signer key versions through the signer's backup procedure. Back up the attachment bucket if used. BReg refuses a versioned bucket.
 3. Dump each application database into the bundle. Include one `--database` per database. Record the role names and permissions to recreate before restore. The bundle manifest states what it leaves out: the persistent volumes behind the BReg audit and package claims, and any attachment or object storage. Copy their files into the `--files` directory to keep them with the bundle. In this example, run with a Kubeconfig that can administer the reference PostgreSQL Pod. The bundle is readable only by root, so run `snapshot` with the same privilege.
 
    ```bash
@@ -39,7 +46,9 @@ Choose a recovery point and backup cadence with the service owner. The reference
      --output /srv/registry-directory/backup-01
    ```
 
-4. Archive the verified bundle to the Restic repository you initialised. Supply its credentials through protected files or the institution's secret manager. Keep the receipt off-host with the installation record.
+   `capture` checks the status file against the BReg state in the database it dumps. It refuses a report from another activation or installation. If the BReg database is not `registry_breg`, name it with `--breg-database`. `capture` reads each dump back in full and refuses one it cannot read.
+
+4. Archive the verified bundle to the Restic repository you initialised. Supply its credentials through protected files or the institution's secret manager. Keep the receipt off-host with the installation record. `snapshot` refuses an existing receipt path before it writes to the repository.
 
    ```bash
    sudo env RESTIC_REPOSITORY=sftp:backup@backup.example.org:/srv/restic \
@@ -69,7 +78,7 @@ For K3s control-plane recovery, take and export an embedded-etcd snapshot and pr
 
 Read the target [Registry Stack release notes](https://github.com/registrystack/registry-stack/releases) and rehearse on an isolated restored copy before the maintenance window. Rebuild product packages against the exact active baseline and rebuild App Kit with the matching client. For Casework or Scheduling versions that require a fresh database, follow the product's cutover procedure and preserve the source database for reconciliation.
 
-1. Retain the previous chart, exact image digests, package claim, config and Secrets. Stage the successor package in a new read-only claim, with versioned runtime inputs that name the successor digest. On the reference single server, copy the private input directory, replace its package, set the successor digest in `runtime.yaml` and `values.json`, give the runtime ConfigMap and package claim new versioned names, and run `prepare_local.py` with the copy. It leaves existing objects whose inputs are unchanged and refuses a changed object under an existing name.
+1. Retain the previous chart, exact image digests, package claim, config and Secrets. Stage the successor package in a new read-only claim, with versioned runtime inputs that name the successor digest. On the reference single server, copy the private input directory and replace its package. Set the successor digest in `runtime.yaml` and `values.json`. Give the runtime ConfigMap and package claim new versioned names. Then run `prepare_local.py` with the copy. It leaves existing objects whose inputs are unchanged and refuses a changed object under an existing name.
 2. Pause callers and take a new backup. Check its receipt against the encrypted repository. The operator checks that it identifies the active installation and activation and that its capture is inside the backup window. If the operator refuses with a backup-age message, take a newer backup. If your recovery policy allows an older one, pass `--max-backup-age-hours` with that limit to `upgrade`. The default is 26 hours. Pass `--operator-reference` with the change or ticket reference for the upgrade. BReg records a keyed hash of it with the activation, so its runtime audit profile must be keyed. BReg refuses the activation otherwise, after the operator has stopped serving, so check the profile before the window. The reference also appears in the operation Job's arguments until the Job expires, so use a ticket ID, not personal data. An upgrade that keeps the active package, such as a configuration or image change, activates nothing and needs no reference. Supply the target chart values to the operator.
 
    ```bash
@@ -136,4 +145,4 @@ Use a new versioned application TLS Secret and update the Helm values through th
 
 ## Isolate customers
 
-Use a separate namespace and Helm release per deployment, with separate PostgreSQL roles and databases, audit claims, identity clients, signing keys, bucket credentials and backup permissions. Give operators access only to their scope. Besides the permissions Helm needs to apply the chart, the operator reads Pods, creates and reads Jobs and their logs, creates and deletes Leases, and creates, patches and deletes NetworkPolicies in the release namespace. Apply Restricted Pod Security and verify enforced NetworkPolicies. Use separate clusters for customers who need independent administration or stronger workload isolation.
+Use a separate namespace and Helm release per deployment. Give each one its own PostgreSQL roles and databases, audit claims, identity clients, signing keys, bucket credentials and backup permissions. Give operators access only to their scope. In the release namespace, the operator needs these permissions as well as those Helm needs to apply the chart. It reads Pods, creates and reads Jobs and their logs, creates and deletes Leases, and creates, patches and deletes NetworkPolicies. Apply Restricted Pod Security and verify enforced NetworkPolicies. Use separate clusters for customers who need independent administration or stronger workload isolation.

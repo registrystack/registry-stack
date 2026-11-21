@@ -153,7 +153,7 @@ sudo k3s kubectl -n registry-storage delete secret registry-seaweedfs-bootstrap
 Retest the old bootstrap credential through the loopback port-forward. It must
 now receive `AccessDenied`. Treat an accepted request as a failed rotation.
 
-SeaweedFS 4.53 protects the IAM gRPC handlers even without mTLS, and this
+SeaweedFS 4.53 protects the IAM gRPC handlers even without mTLS. This
 profile also sets `jwt.filer_signing.key` through the chart's
 `filerWrite: true` switch for authenticated cross-pod IAM propagation. This is
 important because older default S3 gRPC deployments were exposed to the
@@ -233,12 +233,12 @@ openssl verify -CAfile /absolute/private/s3-ca.pem \
   /absolute/private/registry-seaweedfs-s3-tls.crt
 ```
 
-## Qualification
+## Local S3 check
 
 The fast local check runs the exact pinned image in a local Docker container.
-It needs `docker`, `curl` and `grep`. It creates the dedicated bucket through the bootstrap identity, proves the app
-identity can probe versioning and put, read, and delete one object, then proves
-it cannot create another bucket. It exits with an error when any check cannot
+It needs `docker`, `curl` and `grep`. It creates the dedicated bucket through the bootstrap identity.
+It proves the app identity can probe versioning and put, read, and delete one
+object. It then proves the app identity cannot create another bucket. It exits with an error when any check cannot
 run:
 
 ```bash
@@ -262,7 +262,7 @@ products/breg/scripts/test-attachment-s3.sh
 
 That script owns a disposable loopback SeaweedFS container and synthetic
 credentials. It proves BReg storage semantics, not this Kubernetes chart.
-Keep the chart render, local S3 qualification, and BReg proof as distinct
+Keep the chart render, local S3 check, and BReg proof as distinct
 evidence.
 
 ## Backup
@@ -332,8 +332,8 @@ Exercise restore in a clean namespace, never over the only retained copy:
 4. Wait for master, volume, filer, and S3 readiness in that order, then route
    the unchanged stable hostname to the recovered TLS endpoint. Require the
    leaf SAN and issuing CA bundle to verify that same hostname.
-5. Through a loopback port-forward, authenticate as the application identity,
-   confirm `GET ?versioning` reports neither `Enabled` nor `Suspended`, and read
+5. Through a loopback port-forward, authenticate as the application identity.
+   Confirm `GET ?versioning` reports neither `Enabled` nor `Suspended`. Read
    a pre-backup canary object by its exact key and checksum.
 6. Restore BReg from its matching backup with the original `databaseId`,
    activate the original `registryId`, and keep the recorded URL, bucket, and

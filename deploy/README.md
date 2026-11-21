@@ -4,7 +4,7 @@ This folder is a public reference. It is not a supported product, is not publish
 
 Use the Registry Stack chart on Ubuntu 24.04 or 26.04 amd64 with K3s. On an existing Kubernetes cluster, give it the same inputs. The chart runs Base Registry Engine (BReg), Casework, Evidence and a prebuilt App Kit host. Each component is opt-in. Use the same Stack release for the products, tools and clients in one installation.
 
-This guide targets Registry Stack v0.46.0. The example values pin every image by digest from that release manifest. The `deploy/` folder is not part of any release tag, so use it from the commit that carries this guide and record that commit with the installation. Install `bregctl` v0.46.0 to match the images.
+This guide targets Registry Stack v0.46.0. The example values pin every image by digest from that release manifest. The `deploy/` folder is not part of any release tag. Use it from the commit that carries this guide, and record that commit with the installation. Install `bregctl` v0.46.0 to match the images.
 
 The deployment commands use Python 3.11 or newer. Both supported Ubuntu releases provide a suitable Python version. Helm 4 is the only supported Helm version. The install section installs it.
 
@@ -12,7 +12,7 @@ The deployment commands use Python 3.11 or newer. Both supported Ubuntu releases
 
 Choose a namespace and release name, an HTTPS hostname for each public component, an institutional OIDC issuer, and an encrypted backup destination on another system. Start with one BReg registry per release. A partner can deploy additional registries as separate releases with their own names, credentials and storage.
 
-Use PostgreSQL 17 with one database and distinct runtime and migration roles per product. The single-server example runs PostgreSQL on the same server with a retained local volume. Reserve space for database, packages, audits and backup staging. Four cores, 8 GiB RAM and SSD storage are a starting point for a small registry. Size from the expected records, writes and enabled components before accepting traffic.
+Use PostgreSQL 17 with one database and distinct runtime and migration roles per product. On the shared reference PostgreSQL, revoke CONNECT on each product database from PUBLIC and grant it only to that product's roles. `prepare_local.py` does this for BReg. The single-server example runs PostgreSQL on the same server with a retained local volume. Reserve space for database, packages, audits and backup staging. Four cores, 8 GiB RAM and SSD storage are a starting point for a small registry. Size from the expected records, writes and enabled components before accepting traffic.
 
 The single-server preparation stores retained application volumes below `/var/lib/registry-stack/storage`. When the server has a dedicated data filesystem, mount it there persistently before running `prepare_local.py`. Otherwise those volumes use the operating-system filesystem.
 
@@ -152,5 +152,7 @@ sudo k3s kubectl get nodes
 Size for quorum and storage separately. The application chart still has a single serving BReg replica per registry. A retained local PostgreSQL or audit volume stays on its node. For service continuity through a node outage, supply an existing highly available PostgreSQL service. Also supply a storage class that can reattach the required volumes on another node. Test the ingress and each storage dependency under a real node outage before you commit to a recovery time.
 
 On a standard Kubernetes cluster, use its existing ingress, storage and encryption controls. Create a Restricted namespace as shown above, provision the same named inputs, and use the same chart and operator. Ensure the CNI enforces NetworkPolicy. An empty ingress list admits no other Pod. On K3s, the node itself and `hostNetwork` Pods on that node still reach the Pod. Treat access to the node as access to its service ports. Place current Linux amd64-only product artifacts on eligible nodes. Standard Kubernetes deployment does not require K3s-specific CRDs.
+
+The status and doctor Jobs mount the BReg audit claim while BReg is serving. That claim is ReadWriteOnce. On a multi-node cluster, a Job Pod scheduled on a different node cannot attach the volume and waits. This is expected behaviour of the reference. The chart sets no affinity by default and applies `breg.nodeSelector` and `breg.affinity` to the Jobs as well as to serving. Set one of them to keep both on one node, or use storage that allows Pods on different nodes to share the volume.
 
 See [Operate the installation](OPERATIONS.md) for upgrades, recovery and monitoring.
