@@ -4,5 +4,6 @@
 
 export const ARCHIVED_EVIDENCE_PATHS = [
   '/reference/contracts/',
+  '/spec/rs-dm-manifest/',
   '/spec/rs-pr-relayctl/',
 ];
