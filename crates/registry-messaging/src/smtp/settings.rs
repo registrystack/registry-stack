@@ -522,6 +522,7 @@ pub(super) mod tests {
             "host: smtp.example.org\ntls: starttls\nverifyCertificates: false\n",
             "host: smtp.example.org\ntls: starttls\nauthentication:\n  usernameRef: secret:env/U\n  passwordRef: secret:env/P\n  mechanism: plain\n",
             "host: smtp.example.org\ntls: none\n",
+            "host: smtp.example.org\ntls: starttls\ntrustedRootCertificateRef: secret:file/relay-root\n",
         ] {
             assert!(settings(yaml).is_err(), "accepted: {yaml}");
         }

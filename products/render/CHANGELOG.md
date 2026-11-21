@@ -13,7 +13,10 @@
   `RenderedDocument` drops `pdf_sha256` and `data_sha256`, and the Node and
   Python bindings drop `pdfSha256` and `dataSha256`; the client checks
   `pdf_digest` against the bytes and that `data_digest` is labelled. Read
-  `pdfDigest` and `dataDigest`, which every server since 0.46.0 sends. The
+  `pdfDigest` and `dataDigest`, which every server since 0.46.0 sends. A
+  0.46 client still requires `pdfSha256` and `dataSha256` and fails every
+  render with a `protocol` error when they are missing, so upgrade the
+  products and bindings that call Render with or before the Render server. The
   OpenFn example `integrations/openfn/receipt-job.js` posts `pdfDigest`
   (labelled `sha256:<hex>`) to the delivery endpoint in place of `pdfSha256`,
   and returns `receipt.pdfDigest` in place of `receipt.sha256`.

@@ -11,8 +11,11 @@
   is gone; the shared local identifier check reports instead.
 - `origins[].enabled` is optional and defaults to `true`. `enabled: false`
   still leaves an origin out of `discoveryctl package`.
-- The index, the resolve API and record ids are unchanged: the published
-  member stays `originId`, and a record id hashes the same inputs as before.
+- For an origin whose id already fits, the index, the resolve API and record
+  ids are unchanged: the published member stays `originId`, and a record id
+  hashes the same inputs as before. An origin renamed to fit publishes its new
+  id as `originId`, so its record ids change too. Tell consumers that pin that
+  `originId` to re-pin it.
 
 ## 0.47.0 - 2026-11-20
 
