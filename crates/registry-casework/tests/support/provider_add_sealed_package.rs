@@ -92,10 +92,7 @@ fn sealed_authority_and_runtime_bindings_agree_with_the_inspected_project() {
     let registry_path = source.join("registry.yaml");
     let mut registry = read_yaml(&registry_path);
     let reviewer = registry["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == "proposal-reviewer")
+        .get_mut("proposal-reviewer")
         .unwrap();
     reviewer["actorKind"] = json!("human");
     reviewer["requesterClients"] = json!(["review-ui"]);
@@ -164,10 +161,7 @@ fn sealed_authority_and_runtime_bindings_agree_with_the_inspected_project() {
     let registry_path = source.join("registry.yaml");
     let mut registry = read_yaml(&registry_path);
     let status = registry["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == "casework-review-status")
+        .get_mut("casework-review-status")
         .unwrap();
     status["requiredScopes"] = json!("unrestricted");
     fs::write(&registry_path, serde_norway::to_string(&registry).unwrap()).unwrap();

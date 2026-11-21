@@ -1116,19 +1116,10 @@ async fn native_proposal_journey(producer_id: &'static str) {
         .unwrap()
         .binding();
     let mut source = canonical_source();
-    let actions = source["actions"].as_array_mut().unwrap();
-    let correction = actions
-        .iter_mut()
-        .find(|action| action["id"] == "correct-address")
-        .unwrap();
+    let correction = &mut source["actions"]["correct-address"];
     correction["execution"]["proposal"]["review"]["policy"] =
         serde_json::to_value(&binding).unwrap();
-    let author_profile = source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == "facility-correction-author")
-        .unwrap();
+    let author_profile = &mut source["accessProfiles"]["facility-correction-author"];
     let status_grant = author_profile["permissions"]["proposals"]
         .as_array_mut()
         .unwrap()

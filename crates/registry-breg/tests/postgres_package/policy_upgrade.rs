@@ -19,7 +19,7 @@ async fn ordinary_profile_removal_applies_and_matches_fresh_catalog() {
 async fn ordinary_profile_operation_narrowing_applies_and_matches_fresh_catalog() {
     assert_profile_successor(
         Some(json!({
-            "id": "auditor", "principalClaim": "principal", "requiredScopes":"unrestricted","rowBoundaries":"unrestricted",
+            "principalClaim": "principal", "requiredScopes":"unrestricted","rowBoundaries":"unrestricted",
             "operations": ["create"], "writableFields": ["code", "note"]
         })),
         ProfileSuccessor::Compiler,
@@ -31,7 +31,7 @@ async fn ordinary_profile_operation_narrowing_applies_and_matches_fresh_catalog(
 async fn ordinary_profile_create_revocation_applies_and_matches_fresh_catalog() {
     assert_profile_successor(
         Some(json!({
-            "id": "auditor", "principalClaim": "principal", "requiredScopes":"unrestricted","rowBoundaries":"unrestricted",
+            "principalClaim": "principal", "requiredScopes":"unrestricted","rowBoundaries":"unrestricted",
             "operations": ["get", "list"], "readableFields": ["code", "note"]
         })),
         ProfileSuccessor::Compiler,
@@ -43,7 +43,7 @@ async fn ordinary_profile_create_revocation_applies_and_matches_fresh_catalog() 
 async fn ordinary_profile_field_narrowing_applies_and_matches_fresh_catalog() {
     assert_profile_successor(
         Some(json!({
-            "id": "auditor", "principalClaim": "principal", "requiredScopes":"unrestricted","rowBoundaries":"unrestricted",
+            "principalClaim": "principal", "requiredScopes":"unrestricted","rowBoundaries":"unrestricted",
             "operations": ["create", "get", "list"],
             "writableFields": ["code", "note"], "readableFields": ["code"]
         })),
@@ -348,15 +348,15 @@ fn publish_proposal_policy_package(
 
 fn profile_module(auditor: Option<Value>) -> Vec<u8> {
     let mut module: Value = serde_json::from_slice(&module_bytes(PlanChoice::Schema)).unwrap();
-    let entity = &mut module["recordTypes"]["asset"];
+    let entity = &mut module["recordTypes"]["neutral-record"];
     entity["fields"].as_array_mut().unwrap().push(json!({
         "id": "note", "type": "string", "maximumLength": 80, "classification": "internal"
     }));
     if let Some(auditor) = auditor {
         entity["accessProfiles"]
-            .as_array_mut()
+            .as_object_mut()
             .unwrap()
-            .push(auditor);
+            .insert("auditor".to_owned(), auditor);
     }
     serde_json::to_vec(&module).unwrap()
 }
@@ -391,7 +391,7 @@ pub(super) async fn fresh_fingerprint(registry: &registry_breg::model::CompiledR
 
 async fn assert_profile_successor(auditor: Option<Value>, kind: ProfileSuccessor) {
     let baseline_bytes = profile_module(Some(json!({
-        "id": "auditor", "principalClaim": "principal", "requiredScopes":"unrestricted","rowBoundaries":"unrestricted",
+        "principalClaim": "principal", "requiredScopes":"unrestricted","rowBoundaries":"unrestricted",
         "operations": ["create", "get", "list"],
         "writableFields": ["code", "note"], "readableFields": ["code", "note"]
     })));

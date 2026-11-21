@@ -1780,10 +1780,10 @@ fn retired_authoring_keys_point_to_governed_replacements() {
         "changeRequest": {},
         "accessProfiles": {"reader": {"requestVisibility": "owner", "readableRequestFields": ["reason"]}}
     });
-    let actions = json!([{
+    let actions = json!({"update-reason": {
         "commitGuards": {"targets": [{"equalsInput": "reason"}]},
         "plan": {"type": "fixed", "effects": [{"set": {"reason": {"fromField": "reason"}}}]}
-    }]);
+    }});
     let mut project = project_source();
     project["recordTypes"]["directory-entry"] = retired.clone();
     project["actions"] = actions.clone();
@@ -1807,11 +1807,11 @@ fn retired_authoring_keys_point_to_governed_replacements() {
             "readableInputs",
         ),
         (
-            "/actions/0/commitGuards/targets/0/equalsInput",
+            "/actions/update-reason/commitGuards/targets/0/equalsInput",
             "equalsFromInput",
         ),
         (
-            "/actions/0/plan/effects/0/set/reason/fromField",
+            "/actions/update-reason/plan/effects/0/set/reason/fromField",
             "fromInput",
         ),
     ] {

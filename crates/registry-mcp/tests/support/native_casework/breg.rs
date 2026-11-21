@@ -339,18 +339,15 @@ fn install_delegated_profile(project: &Path) {
         .expect("copied facility Registry is not empty")
         .to_json_value();
     let profiles = source["accessProfiles"]
-        .as_array_mut()
+        .as_object_mut()
         .expect("facility Registry access profiles");
     let mut delegated = profiles
-        .iter()
-        .find(|profile| profile["id"] == "proposal-reviewer")
+        .get("proposal-reviewer")
         .expect("facility Registry proposal reviewer")
         .clone();
-    delegated["id"] = json!(SOURCE_PROFILE);
     delegated["actorKind"] = json!("agent");
     delegated["requesterClients"] = json!([SOURCE_CLIENT]);
-    profiles.retain(|profile| profile["id"] != SOURCE_PROFILE);
-    profiles.push(delegated);
+    profiles.insert(SOURCE_PROFILE.to_owned(), delegated);
     json_document(&path, &source);
 }
 
