@@ -6,10 +6,11 @@ import io
 import itertools
 import json
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,7 +18,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from stack_operator import (
-    BREG_SUCCESSOR_WARNINGS, Installation, OperationError, activation_action, command_output, operator_reference,
+    BREG_SUCCESSOR_WARNINGS, Installation, OperationError, activation_action, command_output, main, operator_reference,
     rendered_operation, require_install_retry, release_values, successor_job_values, verify_active,
     verify_backup_receipt,
 )
@@ -26,6 +27,8 @@ from stack_operator import (
 DIGEST = "sha256:" + "a" * 64
 OTHER_DIGEST = "sha256:" + "b" * 64
 REPOSITORY = Path(__file__).resolve().parents[2]
+PACKAGE_VALUES = {"breg": {"package": {"existingClaim": "package", "expectedDigest": DIGEST}}}
+ADOPT_RESTORED = ("adopt-restored", "--confirm-original-fenced")
 
 
 def fake_clock():
@@ -175,7 +178,7 @@ class InstallReferenceTest(unittest.TestCase):
     """Install asks for a change reference only when it activates a package."""
 
     def setUp(self):
-        self.target = {"breg": {"enabled": True, "serve": True, "package": {"expectedDigest": DIGEST}}}
+        self.target = {"breg": {"enabled": True, "serve": True, "package": {"existingClaim": "package", "expectedDigest": DIGEST}}}
         self.status = {
             "ok": True, "command": "status", "databaseId": "registry-test-db",
             "activePackageDigest": DIGEST, "activationId": "applied-activation",
@@ -249,7 +252,7 @@ class JobReportTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         values = root / "values.json"
-        values.write_text("{}")
+        values.write_text(json.dumps(PACKAGE_VALUES))
         self.args = SimpleNamespace(
             namespace="pilot", release="directory", kube_context="test-only",
             kubectl_bin="kubectl", helm_bin="helm", chart=root / "chart", values=values, timeout=2,
@@ -341,7 +344,7 @@ class JobLifecycleTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         values = root / "values.json"
-        values.write_text("{}")
+        values.write_text(json.dumps(PACKAGE_VALUES))
         self.args = SimpleNamespace(
             namespace="pilot", release="directory", kube_context="test-only",
             kubectl_bin="kubectl", helm_bin="helm", chart=root / "chart", values=values, timeout=2,
@@ -349,6 +352,9 @@ class JobLifecycleTest(unittest.TestCase):
         self.report = {"ok": True, "command": "status"}
         self.conditions = [{"type": "Complete", "status": "True"}]
         self.delete_error = None
+        self.job_failure = None
+        self.existing_job = ""
+        self.lookup_error = None
         self.calls = []
 
     def kubectl(self, command, *args, data=None, **kwargs):
@@ -359,9 +365,18 @@ class JobLifecycleTest(unittest.TestCase):
         if command == "create" and body.get("kind") == "NetworkPolicy":
             return "networkpolicy.networking.k8s.io/status-test"
         if command == "create" and body.get("kind") == "Job":
+            if self.job_failure:
+                # Raise the error command_output gives for this kubectl outcome.
+                outcome = {"side_effect": self.job_failure} if isinstance(self.job_failure, Exception) else {"return_value": self.job_failure}
+                with patch("stack_operator.subprocess.run", **outcome):
+                    command_output(["kubectl", "create"], "kubectl create")
             return json.dumps({"metadata": {"uid": "job-uid"}})
         if command == "patch":
             return ""
+        if command == "get" and "--ignore-not-found" in args:
+            if self.lookup_error:
+                raise OperationError(self.lookup_error)
+            return self.existing_job
         if command == "get":
             return json.dumps({"status": {"conditions": self.conditions}})
         if command == "logs":
@@ -415,6 +430,42 @@ class JobLifecycleTest(unittest.TestCase):
                 installation.job("status", DIGEST)
         self.assertIn("Lease directory-operator-lock retained while Job status-test", stderr.getvalue())
         self.assertFalse([entry for entry in self.calls if entry[0] == "delete"])
+
+    def test_refused_job_creation_removes_its_network_policy_and_releases_the_lease(self):
+        self.job_failure = subprocess.CompletedProcess(["kubectl"], 1, "", "Error from server (Forbidden): exceeded quota")
+        installation = self.installation()
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaisesRegex(OperationError, "(?s)^kubectl create failed with exit 1.*exceeded quota$"):
+            with installation.lock():
+                installation.job("status", DIGEST)
+        self.assertEqual(stderr.getvalue(), "")
+        removal = ("delete", "networkpolicy", "status-test", "--ignore-not-found")
+        lookup = ("get", "job", "status-test", "--ignore-not-found", "-o", "name")
+        self.assertLess(self.calls.index(lookup), self.calls.index(removal))
+        self.assertEqual(self.calls[-1][:2], ("delete", "--raw"))
+        self.assertFalse([entry for entry in self.calls if entry[0] == "patch"])
+
+    def test_uncertain_job_creation_keeps_its_network_policy_and_lease(self):
+        refused = subprocess.CompletedProcess(["kubectl"], 1, "", "unexpected EOF")
+        cases = {
+            "timed out": (subprocess.TimeoutExpired(["kubectl"], 60), "", None),
+            "created without a response": (refused, "job.batch/status-test", None),
+            "existence unknown": (refused, "", "synthetic lookup failure"),
+        }
+        for description, case in cases.items():
+            with self.subTest(description=description):
+                self.calls.clear()
+                self.job_failure, self.existing_job, self.lookup_error = case
+                installation = self.installation()
+                stderr = io.StringIO()
+                with redirect_stderr(stderr), self.assertRaisesRegex(OperationError, "^kubectl create (failed|timed out)"):
+                    with installation.lock():
+                        installation.job("status", DIGEST)
+                self.assertFalse([entry for entry in self.calls if entry[0] == "delete"])
+                self.assertIn("Lease directory-operator-lock retained while Job status-test", stderr.getvalue())
+                if self.lookup_error:
+                    self.assertIn("Check it before deleting NetworkPolicy status-test", stderr.getvalue())
+                    self.assertIn("synthetic lookup failure", stderr.getvalue())
 
     def test_lease_release_failure_keeps_the_original_error(self):
         self.delete_error = ("--raw", "synthetic Lease failure")
@@ -925,6 +976,219 @@ class UpgradeRetryTest(unittest.TestCase):
             upgrade.apply()
         self.assertEqual(self.helm_inputs[0][0], b"reviewed chart")
         self.assert_changed_retry_refused()
+
+
+class CommandLineTest(unittest.TestCase):
+    """Run the operator command line against kubectl and Helm doubles of a restore target."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        (self.root / "chart").mkdir()
+        self.target = {
+            "breg": {"enabled": True, "serve": True, "package": {"existingClaim": "restored-package", "expectedDigest": DIGEST}},
+            "appKit": {"enabled": True, "serve": True},
+        }
+        self.restore_target()
+        commands = patch("stack_operator.command_output", side_effect=self.command)
+        commands.start()
+        self.addCleanup(commands.stop)
+
+    def restore_target(self):
+        """A logical restore whose instance claim still names the source database."""
+        self.releases = []
+        self.deployed = None
+        self.upgrade_record = None
+        self.claim = {
+            "live": {"systemIdentifier": "7300000000000000001", "databaseOid": 16401},
+            "claim": {"systemIdentifier": "7300000000000000000", "databaseOid": 16400, "epoch": 7, "claimedAt": "2026-11-20T10:00:00Z"},
+            "matches": False,
+        }
+        self.reported_database_id = "registry-test-db"
+        self.events = []
+        self.operations = {}
+        self.policies = {}
+
+    def run_operator(self, *action, values=None):
+        path = self.root / "values.json"
+        path.write_text(json.dumps(self.target if values is None else values))
+        argv = [
+            "stack_operator.py", "--kube-context", "restore-target", "--namespace", "directory",
+            "--release", "directory", "--database-id", "registry-test-db", "--values", str(path),
+            "--chart", str(self.root / "chart"), "--helm-bin", "helm", "--kubectl-bin", "kubectl", "--timeout", "5",
+            *action,
+        ]
+        stdout, stderr, code = io.StringIO(), io.StringIO(), 0
+        with patch.object(sys, "argv", argv), redirect_stdout(stdout), redirect_stderr(stderr):
+            try:
+                main()
+            except SystemExit as error:
+                code = error.code
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def command(self, args, label, data=None, timeout=60):
+        tool, (verb, *rest) = args[0], args[5:]
+        context = {"helm": "--kube-context", "kubectl": "--context"}[tool]
+        self.assertEqual(args[1:5], [context, "restore-target", "--namespace", "directory"])
+        return (self.helm if tool == "helm" else self.kubectl)(verb, rest, data)
+
+    def helm(self, verb, args, data):
+        if verb == "list":
+            self.events.append("helm list")
+            return json.dumps(self.releases)
+        if verb == "get":
+            self.events.append("helm get values")
+            return json.dumps(self.deployed)
+        if verb == "template":
+            values = json.loads(data)
+            operation = values["breg"]["operation"]
+            self.assertIs(values["breg"]["serve"], False)
+            self.assertNotIn("operatorReference", operation)
+            self.operations[operation["name"]] = operation["kind"]
+            metadata = {"name": operation["name"]}
+            annotations = {"registrystack.org/package-digest": values["breg"]["package"]["expectedDigest"]}
+            job = {"apiVersion": "batch/v1", "kind": "Job", "metadata": {**metadata, "annotations": annotations}}
+            policy = {"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": metadata}
+            return f"{json.dumps(job)}\n{json.dumps(policy)}"
+        self.assertEqual((verb, args[0]), ("upgrade", "--install"))
+        self.events.append("helm upgrade")
+        self.deployed = json.loads(data)
+        self.releases = [{"name": "directory"}]
+        return ""
+
+    def kubectl(self, verb, args, data):
+        if verb == "create" and args[0] == "--dry-run=client":
+            return data
+        body = json.loads(data) if data else {}
+        if verb == "create" and body["kind"] == "Lease":
+            self.events.append("lease acquire")
+            return json.dumps({"metadata": {"uid": "lease-uid"}})
+        if verb == "create" and body["kind"] == "NetworkPolicy":
+            self.policies[body["metadata"]["name"]] = None
+            return f"networkpolicy.networking.k8s.io/{body['metadata']['name']}"
+        if verb == "create":
+            name = body["metadata"]["name"]
+            self.assertIn(name, self.policies)
+            self.events.append(f"job {self.operations[name]}")
+            if self.operations[name] == "claim-adopt":
+                self.claim.update(claim={**self.claim["live"], "epoch": 8, "claimedAt": "2026-11-21T10:00:00Z"}, matches=True)
+            return json.dumps({"metadata": {"uid": f"{name}-uid"}})
+        if verb == "patch":
+            self.policies[args[1]] = json.loads(args[-1])["metadata"]["ownerReferences"][0]["uid"]
+            return ""
+        if verb == "get" and args[0] == "configmap":
+            return json.dumps(self.upgrade_record) if self.upgrade_record else ""
+        if verb == "get":
+            return json.dumps({"status": {"conditions": [{"type": "Complete", "status": "True"}]}})
+        if verb == "logs":
+            return json.dumps(self.report(self.operations[args[0].removeprefix("job/")]))
+        if verb == "delete" and args[0] == "networkpolicy":
+            self.assertEqual(self.policies.pop(args[1]), f"{args[1]}-uid")
+            return ""
+        self.assertEqual((verb, args[0]), ("delete", "--raw"))
+        self.assertEqual(body["preconditions"], {"uid": "lease-uid"})
+        self.events.append("lease release")
+        return ""
+
+    def report(self, kind):
+        envelope = {"ok": True, "status": "complete", "diagnostics": []}
+        if kind == "claim-status":
+            claim = {} if self.claim is None else {"instanceClaim": copy.deepcopy(self.claim)}
+            return {**envelope, "command": "instance-claim status", **claim}
+        if kind == "claim-adopt":
+            return {**envelope, "command": "instance-claim adopt"}
+        if kind == "status":
+            return {
+                **envelope, "command": "status", "databaseId": self.reported_database_id,
+                "activePackageDigest": DIGEST, "activationId": "restored-activation", "roleMode": "split",
+                "maintenanceStatus": "ready", "maintenanceTargetPackageDigest": None,
+            }
+        self.assertEqual(kind, "doctor")
+        # BReg does not start a copy whose instance claim names another database.
+        matches = self.claim["matches"]
+        return {**envelope, "ok": matches, "command": "doctor", "diagnostics": [] if matches else [{"code": "startup.instance-claim"}]}
+
+    def test_adopt_restored_claims_verifies_and_serves_the_restored_copy(self):
+        code, stdout, stderr = self.run_operator(*ADOPT_RESTORED)
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(self.events, [
+            "lease acquire", "job claim-status", "helm list", "job claim-adopt", "job status", "job doctor",
+            "helm upgrade", "lease release",
+        ])
+        self.assertEqual(json.loads(stdout), self.report("status"))
+        self.assertEqual(self.deployed, release_values(self.target, serve=True))
+        self.assertEqual(self.policies, {})
+
+    def test_adopt_restored_resumes_an_adopted_copy_without_adopting_again(self):
+        self.claim["matches"] = True
+        self.releases = [{"name": "directory"}]
+        self.deployed = release_values(self.target, serve=True)
+        code, stdout, stderr = self.run_operator(*ADOPT_RESTORED)
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(self.events, [
+            "lease acquire", "job claim-status", "helm list", "helm get values", "job status", "job doctor",
+            "helm upgrade", "lease release",
+        ])
+        self.assertEqual(json.loads(stdout)["activationId"], "restored-activation")
+
+    def test_adopt_restored_refuses_a_target_that_is_not_a_clean_restore(self):
+        other_package = copy.deepcopy(self.target)
+        other_package["breg"]["package"]["expectedDigest"] = OTHER_DIGEST
+        existing = {"releases": [{"name": "directory"}], "deployed": release_values(self.target, serve=True)}
+        cases = (
+            ("pending upgrade", {"upgrade_record": {"data": {}}}, "An upgrade is pending"),
+            ("fresh database", {"claim": {**self.claim, "claim": None}}, "The target did not show a restored logical copy"),
+            ("report without an instance claim", {"claim": None}, "The target did not show a restored logical copy"),
+            ("existing release", existing, "Use a clean target Helm release"),
+            (
+                "release of another package",
+                {**existing, "claim": {**self.claim, "matches": True}, "deployed": release_values(other_package, serve=True)},
+                "Use a clean target Helm release",
+            ),
+        )
+        for description, state, message in cases:
+            with self.subTest(description=description):
+                self.restore_target()
+                vars(self).update(copy.deepcopy(state))
+                code, stdout, stderr = self.run_operator(*ADOPT_RESTORED)
+                self.assertEqual((code, stdout), (1, ""))
+                self.assertRegex(stderr, f"^registry-stack: {message}")
+                self.assertNotIn("job claim-adopt", self.events)
+                self.assertNotIn("helm upgrade", self.events)
+                self.assertEqual(self.events[-1], "lease release")
+
+    def test_adopt_restored_does_not_serve_a_copy_of_another_database(self):
+        self.reported_database_id = "other-registry-db"
+        code, stdout, stderr = self.run_operator(*ADOPT_RESTORED)
+        self.assertEqual((code, stdout), (1, ""))
+        self.assertRegex(stderr, "^registry-stack: BReg status did not verify the expected ready database")
+        self.assertIn("job claim-adopt", self.events)
+        self.assertNotIn("helm upgrade", self.events)
+        self.assertEqual(self.events[-1], "lease release")
+
+    def test_values_file_without_the_package_is_refused_before_any_command(self):
+        for values, path in (
+            ({}, "breg.package.expectedDigest"),
+            ([], "breg.package.expectedDigest"),
+            ({"breg": {"package": "restored-package"}}, "breg.package.expectedDigest"),
+            ({"breg": {"package": {"expectedDigest": DIGEST}}}, "breg.package.existingClaim"),
+        ):
+            with self.subTest(values=values):
+                code, _, stderr = self.run_operator("status", values=values)
+                self.assertEqual(code, 1)
+                self.assertEqual(stderr, f"registry-stack: The values file has no {path}. Add it for the staged BReg package.\n")
+        self.assertEqual(self.events, [])
+
+    def test_missing_release_or_report_key_is_named(self):
+        self.claim["matches"] = True
+        self.releases = [{"name": "directory"}]
+        self.deployed = {"appKit": {"enabled": True}}
+        code, _, stderr = self.run_operator(*ADOPT_RESTORED)
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            stderr, "registry-stack: Missing key 'breg' in the Helm release values or a BReg report. Inspect them before retrying.\n"
+        )
 
 
 if __name__ == "__main__":
