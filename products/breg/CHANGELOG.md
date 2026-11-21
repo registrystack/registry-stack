@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - BREAKING: the project's `datasets`, `vocabularies`, `statisticalDatasets`,
   `reviewAuthorities`, `evidenceProviders`, `externalRecordTypes`,
   `externalProjections` and `externalViews` are mappings from each id to the
@@ -206,8 +208,6 @@
 - Every database-sampled gauge is read under one 5 second scrape deadline,
   with a server-side statement timeout set to the time left, so the server
   cancels a slow read. Failed reads are logged by error class.
-
-## 0.47.0 - 2026-11-20
 
 - BREAKING: A bearer token that carries a Casework task grant
   (`registry_grant_*` claims) must carry `iat` and `exp`, and `exp - iat` must be

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - Accept an optional `project.label` and `project.description` beside
   `project.id` and `project.version`, in the shared `ProjectIdentity` block. They are display text for people. A project that sets neither
   compiles to the same bytes as before. BReg keeps its own `project.display`.
@@ -12,8 +14,6 @@
   TLS blocks use. The old key is refused as an unknown key. The value is
   unchanged: a secret reference to the PEM CA bundle the connection trusts.
   `rstack dev` writes `database.caBundleRef` in the runtime files it generates.
-
-## 0.47.0 - 2026-11-20
 
 - Update Wasmtime LTS to 48.0.9 for RUSTSEC-2026-0566 to RUSTSEC-2026-0573.
 - `rstack dev check|start|status|token|stop` runs a checkout's BReg, Casework,
