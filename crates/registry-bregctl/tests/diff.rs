@@ -432,6 +432,53 @@ fn a_runtime_bound_baseline_is_verified_without_opening_runtime_dependencies() {
     );
 }
 
+/// A package built before access profiles were keyed by id stores them as a
+/// list. This bregctl does not read that form, so the package is refused as a
+/// baseline with the reader's diagnostic.
+#[test]
+fn a_runtime_bound_baseline_stored_with_list_form_access_profiles_is_refused() {
+    let directory = TestDirectory::create();
+    let legacy = PublishedPackage {
+        package: Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../registry-breg/tests/fixtures/pre-record-timer-store-package/package")
+            .canonicalize()
+            .expect("the legacy package fixture exists"),
+        digest: String::new(),
+    };
+    let stored = fs::read_to_string(legacy.package.join("source/registry.yaml"))
+        .expect("the legacy source reads");
+    assert!(
+        stored.contains("  - id: directory-editor\n"),
+        "the fixture stores its access profiles as a list"
+    );
+    let candidate = write_project(&directory.path, "candidate", "internal");
+    let runtime = write_runtime_config(&directory.path, &legacy);
+
+    let diffed = run(&[
+        "--format",
+        "json",
+        "diff",
+        path(&candidate),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(diffed.status.code(), Some(1), "{diffed:?}");
+    let diagnostic = &json_stdout(&diffed)["diagnostics"][0];
+    assert_eq!(
+        diagnostic["code"],
+        "diff.baseline.predecessor-sources-refused"
+    );
+    let message = diagnostic["message"].as_str().expect("message is text");
+    assert!(
+        message.contains("stored sources do not compile with this bregctl"),
+        "{message}"
+    );
+    assert!(
+        message.contains("Write accessProfiles as a mapping"),
+        "{message}"
+    );
+}
+
 #[test]
 fn diff_help_and_selector_usage_preserve_the_closed_command_inventory_and_exit_codes() {
     let directory = TestDirectory::create();

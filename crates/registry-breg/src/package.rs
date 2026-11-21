@@ -8,6 +8,9 @@ mod change_target_tests;
 #[path = "package/tests/immediate_actions.rs"]
 mod immediate_action_tests;
 #[cfg(test)]
+#[path = "package/tests/predecessor_sources.rs"]
+mod predecessor_source_tests;
+#[cfg(test)]
 #[path = "package/tests/record_timers.rs"]
 mod record_timer_tests;
 use std::collections::{BTreeMap, BTreeSet};
@@ -61,6 +64,7 @@ use crate::model::{
     CompiledRecipients, CompiledRouteInventory, REFERENCE_INDEX_PREFIX,
 };
 use crate::physical_names::PhysicalNameInventory;
+use crate::CompileFailure;
 use crate::CompiledRegistry;
 
 pub const PACKAGE_API_VERSION: &str = "id.registrystack.org/formats/breg/package/v2";
@@ -779,6 +783,10 @@ pub enum PackageError {
     Binding,
     #[error("the package compiler derivation failed")]
     Derivation,
+    /// A predecessor package whose stored sources this release's reader
+    /// refuses. The diagnostics are the reader's own value-free messages.
+    #[error("the baseline package's stored sources do not compile with this bregctl: {0}")]
+    PredecessorSources(String),
     #[error(
         "the package predates the required Record timer store; build and apply a successor with this release"
     )]
@@ -4270,7 +4278,8 @@ pub fn load_predecessor_rehearsal_baseline_with_verified_envelope(
     shared: &SharedVerifiedPackage,
 ) -> Result<(VerifiedPredecessorPackage, CompiledRegistry)> {
     let (package, loaded) = load_predecessor_closure(root, context, shared)?;
-    let registry = compile_package_sources(&package.manifest, &loaded)?;
+    let registry =
+        compile_package_sources(&package.manifest, &loaded, PackageSourceOrigin::Predecessor)?;
     Ok((package, registry))
 }
 
@@ -4772,11 +4781,53 @@ fn load_closure(
     Ok(loaded)
 }
 
+/// Whose stored sources a package closure holds.
+#[derive(Clone, Copy)]
+enum PackageSourceOrigin {
+    /// A package built by this release, so its sources are read as authored.
+    Current,
+    /// A predecessor package, whose sources an earlier release stored.
+    #[cfg_attr(
+        not(feature = "tooling"),
+        allow(
+            dead_code,
+            reason = "only the tooling rehearsal loader reads predecessor sources"
+        )
+    )]
+    Predecessor,
+}
+
+impl PackageSourceOrigin {
+    /// The refusal for stored sources that do not parse. A predecessor's
+    /// sources were written by an earlier release, so the refusal carries the
+    /// reader's diagnostics for the operator to act on.
+    fn source_refusal(self, failure: &CompileFailure) -> PackageError {
+        match self {
+            Self::Current => PackageError::Derivation,
+            Self::Predecessor => {
+                const SHOWN: usize = 3;
+                let diagnostics = failure.diagnostics();
+                let mut detail = diagnostics
+                    .iter()
+                    .take(SHOWN)
+                    .map(|diagnostic| format!("{}: {}", diagnostic.path, diagnostic.message))
+                    .collect::<Vec<_>>()
+                    .join(". ");
+                if diagnostics.len() > SHOWN {
+                    detail.push_str(&format!(" ({} more)", diagnostics.len() - SHOWN));
+                }
+                PackageError::PredecessorSources(detail)
+            }
+        }
+    }
+}
+
 /// Compile the sources of one verified package closure. The caller
 /// decides whether generated artifacts must also match byte for byte.
 fn compile_package_sources(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
+    origin: PackageSourceOrigin,
 ) -> Result<CompiledRegistry> {
     validate_source_inventory(manifest)?;
     let fixture_journeys = loaded
@@ -4789,7 +4840,8 @@ fn compile_package_sources(
     let project_bytes = loaded
         .get(&manifest.sources.project)
         .ok_or(PackageError::Derivation)?;
-    let project = parse_project_yaml(project_bytes).map_err(|_| PackageError::Derivation)?;
+    let project =
+        parse_project_yaml(project_bytes).map_err(|failure| origin.source_refusal(&failure))?;
     let modules = manifest
         .sources
         .modules
@@ -4798,7 +4850,9 @@ fn compile_package_sources(
             loaded
                 .get(&source.path)
                 .ok_or(PackageError::Derivation)
-                .and_then(|bytes| parse_module_yaml(bytes).map_err(|_| PackageError::Derivation))
+                .and_then(|bytes| {
+                    parse_module_yaml(bytes).map_err(|failure| origin.source_refusal(&failure))
+                })
         })
         .collect::<Result<Vec<RegistryModule>>>()?;
     let module_assets = captured_compiler_assets(manifest, loaded)?;
@@ -4848,7 +4902,7 @@ fn rederive(
     loaded: &BTreeMap<String, Vec<u8>>,
 ) -> Result<(CompiledRegistry, Option<ValidatedReviewedMigrationPlan>)> {
     validate_engine_features(manifest)?;
-    let compiled = compile_package_sources(manifest, loaded)?;
+    let compiled = compile_package_sources(manifest, loaded, PackageSourceOrigin::Current)?;
     let expected_artifacts = expected_artifact_bytes(manifest, &compiled)?;
     let packaged_artifacts = manifest
         .files

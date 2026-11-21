@@ -4,7 +4,7 @@ use super::*;
 use crate::model::{CompiledAccessEntry, CompiledRoute, CompiledSourceRelation};
 #[cfg(feature = "tooling")]
 use crate::tooling::{classify_registry_diff, DiffClassification};
-use crate::{compile_project, parse_project_json, parse_project_yaml, CompileProfile};
+use crate::{compile_project, parse_project_json, CompileProfile};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -138,20 +138,13 @@ fn historical_entity_id_aliases_are_deserialize_only_and_duplicate_members_refus
 }
 
 #[test]
+#[cfg(feature = "tooling")]
 fn unchanged_pre_timer_store_registry_plans_one_engine_transition_without_authored_ddl() {
     let root = native_minimal_package();
     let predecessor = load_predecessor_package(&root, &local_package_context())
         .expect("the exact supported legacy package remains a planning baseline");
-    // The legacy package records its source in the list shape that predates
-    // id-keyed access profiles, and its digests forbid editing it, so the
-    // current compiler reads the same source with that one entry re-keyed.
-    let source =
-        fs::read_to_string(root.join("source/registry.yaml")).expect("fixture source reads");
-    let rekeyed = source.replace("  - id: directory-editor\n", "  directory-editor:\n");
-    assert_ne!(source, rekeyed, "the legacy access profile is re-keyed");
-    let project = parse_project_yaml(rekeyed.as_bytes()).expect("fixture source parses");
-    let candidate = compile_project(&project, &[], CompileProfile::Production)
-        .expect("the current compiler accepts the timer-free project");
+    let (_, candidate) = load_predecessor_rehearsal_baseline(&root, &local_package_context())
+        .expect("the legacy package's stored sources compile as a rehearsal baseline");
     let mut baseline = predecessor.migration_baseline().clone();
     baseline.generated_ddl_sha256 = Some(digest(candidate.ddl().script().as_bytes()));
 
