@@ -4,7 +4,7 @@
 //! profile (CFG-ID-5). The key is the id, and profiles are held and written
 //! in id order, whatever order the file writes them in.
 
-use registry_breg::contract::{parse_project_yaml, read_project_yaml};
+use registry_breg::contract::{parse_project_yaml, read_module_yaml, read_project_yaml};
 
 const HEAD: &str = "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
@@ -273,4 +273,61 @@ fn a_project_writes_its_profiles_as_a_mapping_in_id_order() {
         value["accessProfiles"]["alpha"]["principalClaim"],
         "registry_principal"
     );
+}
+
+#[test]
+fn an_id_member_inside_a_module_profile_is_refused_like_the_project_level() {
+    let project_failure = parse_project_yaml(
+        project(
+            "accessProfiles:
+  reader:
+    id: reader
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
+",
+        )
+        .as_bytes(),
+    )
+    .expect_err("an inner id is refused");
+    let expected = project_failure.diagnostics()[0]
+        .message
+        .split(" (line")
+        .next()
+        .unwrap();
+    for (list, member) in [
+        ("recordTypes", "id: entry"),
+        ("extendRecordTypes", "recordType: entry"),
+    ] {
+        let module = format!(
+            "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: extension
+version: 0.1.0
+{list}:
+  - {member}
+    accessProfiles:
+      reader:
+        id: reader
+        principalClaim: registry_principal
+        requiredScopes: unrestricted
+"
+        );
+        let failure =
+            read_module_yaml("module.yaml", module.as_bytes()).expect_err("an inner id is refused");
+        let [diagnostic] = failure.diagnostics() else {
+            panic!("{list}: one refusal: {failure:?}");
+        };
+        assert_eq!(
+            diagnostic.code, "config.removed-key",
+            "{list}: {diagnostic:?}"
+        );
+        assert_eq!(diagnostic.message, expected, "{list}");
+        assert!(
+            diagnostic
+                .suggested_action
+                .contains("accessProfiles: {PROFILE_ID: {"),
+            "{list}: the refusal names the mapping shape: {}",
+            diagnostic.suggested_action
+        );
+    }
 }

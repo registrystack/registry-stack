@@ -1328,3 +1328,84 @@ fn module_schema_includes_the_readers_named_type_alternative() {
         .unwrap();
     assert!(schema.is_valid(&source));
 }
+
+fn module_with_profiles(owner: &str, second_id: &str) -> String {
+    let (list, member) = if owner == "extend" {
+        ("extendRecordTypes", "recordType: entry")
+    } else {
+        (
+            "recordTypes",
+            "id: entry
+    primaryDataset: test-dataset
+    route: entries
+    mutationMode: mutable
+    classification: internal
+    fields:
+      - {id: code, type: string, maximumLength: 32, classification: internal}",
+        )
+    };
+    format!(
+        "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: extension
+version: 0.1.0
+{list}:
+  - {member}
+    accessProfiles:
+      case-reader:
+        display: {{label: Case reader}}
+        principalClaim: registry_principal
+        requiredScopes: unrestricted
+        operations: [get]
+        readableFields: [code]
+        rowBoundaries: unrestricted
+      {second_id}:
+        display: {{label: Case reader}}
+        principalClaim: registry_principal
+        requiredScopes: unrestricted
+        operations: [get]
+        readableFields: [code]
+        rowBoundaries: unrestricted
+"
+    )
+}
+
+fn assert_at_line(item: &registry_platform_yaml::Diagnostic, text: &str, needle: &str) {
+    let expected = text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.trim_start().starts_with(needle))
+        .map(|(index, _)| index + 1)
+        .last()
+        .unwrap();
+    let source = item
+        .source
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} has no source location", item.code));
+    assert_eq!(source.line, Some(expected), "{}", item.code);
+    assert!(source.column.is_some_and(|column| column > 1), "{item:?}");
+}
+
+#[test]
+fn module_access_profile_findings_are_located_at_the_profile_key() {
+    for owner in ["extend", "record"] {
+        let text = module_with_profiles(owner, "case_reader");
+        let report = read_module_yaml("module.yaml", text.as_bytes()).expect_err("id collision");
+        let collision = report
+            .diagnostics()
+            .iter()
+            .find(|item| item.code == "breg.access-profile.id-collision")
+            .unwrap_or_else(|| panic!("{owner}: no collision in {report:?}"));
+        assert_at_line(collision, &text, "case_reader:");
+
+        let text = module_with_profiles(owner, "other-reader");
+        let decoded = read_module_yaml("module.yaml", text.as_bytes()).expect("reads");
+        let warnings = decoded.document.warnings();
+        let label = warnings
+            .diagnostics()
+            .iter()
+            .find(|item| item.code == "breg.access-profile.duplicate-label")
+            .unwrap_or_else(|| panic!("{owner}: no duplicate label"));
+        assert_at_line(label, &text, "display:");
+    }
+}
