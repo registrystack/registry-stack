@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -12,11 +13,27 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from state_bundle import (
-    BundleError, capture, checked_run, file_hashes, restore_database, verify_archived_manifest, verify_bundle,
-    verify_snapshot_age,
+    BundleError, capture, checked_run, file_hashes, require_supported_python, restore_database, snapshot,
+    verify_archived_manifest, verify_bundle, verify_snapshot_age,
 )
 
 DIGEST = "sha256:" + "a" * 64
+
+
+class PythonVersionTest(unittest.TestCase):
+    def test_older_interpreter_stops_with_a_clear_message(self):
+        for version in ((3, 10, 14, "final", 0), (3, 9, 6, "final", 0)):
+            with self.subTest(version=version), self.assertRaises(SystemExit) as raised:
+                require_supported_python(version)
+            self.assertEqual(
+                raised.exception.code,
+                f"These tools need Python 3.11 or later. This is Python 3.{version[1]}. Run them with a newer python3.",
+            )
+
+    def test_supported_interpreters_continue(self):
+        for version in ((3, 11, 0, "final", 0), (3, 14, 7, "final", 0), (4, 0, 0, "alpha", 1)):
+            with self.subTest(version=version):
+                self.assertIsNone(require_supported_python(version))
 
 
 class BackupBundleTest(unittest.TestCase):
@@ -147,6 +164,14 @@ class ReceiptBindingTest(unittest.TestCase):
             restore_database(self.restore_args())
         self.assertIn("pg_restore", run.call_args_list[1].args[0])
 
+    def test_clean_target_check_ignores_temporary_schemas(self):
+        run = Mock(side_effect=[b"0\n", b""])
+        with patch("state_bundle.checked_run", run), redirect_stdout(io.StringIO()):
+            restore_database(self.restore_args())
+        query = run.call_args_list[0].args[0][-1]
+        self.assertIn("nspname NOT LIKE 'pg_temp_%'", query)
+        self.assertIn("nspname NOT LIKE 'pg_toast_temp_%'", query)
+
 
 class CaptureTest(unittest.TestCase):
     def setUp(self):
@@ -154,27 +179,40 @@ class CaptureTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         status = root / "status.json"
-        status.write_text(json.dumps({
-            "ok": True, "command": "status", "roleMode": "split", "maintenanceStatus": "ready",
-            "activePackageDigest": DIGEST, "databaseId": "registry-test-db", "activationId": "synthetic-activation",
-        }))
+        recorded = {
+            "maintenanceStatus": "ready", "activePackageDigest": DIGEST, "databaseId": "registry-test-db",
+            "activationId": "synthetic-activation",
+        }
+        status.write_text(json.dumps({"ok": True, "command": "status", "roleMode": "split", **recorded}))
         files = root / "files"
         files.mkdir()
         (files / "values.json").write_text("{}")
         self.args = SimpleNamespace(
             kube_context="test-only", namespace="pilot", pod="registry-postgres-0", container="postgres",
-            kubectl_bin="kubectl", release="directory", database=["registry_breg"], status_file=status,
-            files=files, output=root / "backup-01",
+            kubectl_bin="kubectl", release="directory", database=["registry_breg"], breg_database="registry_breg",
+            status_file=status, files=files, output=root / "backup-01",
         )
         self.pod_listings = []
         self.commands = []
+        self.breg_state = json.dumps(recorded).encode() + b"\n"
+        self.read_back = {}
+        self.unreadable = set()
 
     def run_command(self, argv, label, *, stdin=None, stdout=None):
         self.commands.append(argv)
         if "pods" in argv:
             return json.dumps({"items": self.pod_listings.pop(0)}).encode()
+        if "psql" in argv:
+            return self.breg_state
+        if "pg_restore" in argv:
+            database = Path(stdin.name).stem
+            self.read_back[database] = stdin.read()
+            if database in self.unreadable:
+                raise BundleError(f"{label} failed with exit 1.")
+            return b""
         self.assertIn("pg_dump", argv)
-        stdout.write(b"synthetic dump")
+        database = argv[-1].removeprefix("--dbname=")
+        stdout.write(f"synthetic {database} dump".encode())
         return None
 
     def capture(self):
@@ -213,6 +251,141 @@ class CaptureTest(unittest.TestCase):
         with self.assertRaisesRegex(BundleError, "release name"):
             self.capture()
         self.assertFalse(self.commands)
+
+    def test_capture_checks_the_status_file_against_the_breg_database(self):
+        self.pod_listings = [[], []]
+        self.capture()
+        query = next(argv for argv in self.commands if "psql" in argv)
+        self.assertEqual(
+            query[:-1],
+            ["kubectl", "--context", "test-only", "--namespace", "pilot", "exec", "-i", "registry-postgres-0",
+             "-c", "postgres", "--", "psql", "-XAt", "--no-password", "--username=postgres",
+             "--dbname=registry_breg", "-v", "ON_ERROR_STOP=1", "-c"],
+        )
+        self.assertTrue(query[-1].startswith("SELECT "))
+        self.assertIn("FROM registry_internal.registry_state WHERE singleton", query[-1])
+        self.assertLess(self.commands.index(query), next(i for i, argv in enumerate(self.commands) if "pg_dump" in argv))
+        self.assertEqual(verify_bundle(self.args.output)["activationId"], "synthetic-activation")
+
+    def test_capture_refuses_a_status_file_for_another_activation_or_database(self):
+        recorded = json.loads(self.breg_state)
+        for field, value in (
+            ("activationId", "later-activation"), ("databaseId", "another-installation-db"),
+            ("activePackageDigest", "sha256:" + "b" * 64), ("maintenanceStatus", "failed"),
+        ):
+            with self.subTest(field=field):
+                self.pod_listings, self.commands = [[]], []
+                self.breg_state = json.dumps({**recorded, field: value}).encode()
+                with self.assertRaisesRegex(BundleError, f"does not describe database registry_breg.*{field}.*status"):
+                    self.capture()
+                self.assertFalse(self.args.output.exists())
+                self.assertFalse([argv for argv in self.commands if "pg_dump" in argv])
+
+    def test_capture_refuses_a_database_without_breg_state(self):
+        self.pod_listings, self.breg_state = [[]], b""
+        with self.assertRaisesRegex(BundleError, "registry_breg has no BReg state.*--breg-database"):
+            self.capture()
+        self.assertFalse(self.args.output.exists())
+
+    def test_capture_requires_the_breg_database_among_the_dumps(self):
+        self.args.database = ["registry_casework"]
+        with self.assertRaisesRegex(BundleError, "--database registry_breg.*--breg-database"):
+            self.capture()
+        self.assertFalse(self.commands)
+
+    def test_capture_reads_back_each_dump(self):
+        self.args.database = ["registry_breg", "registry_casework"]
+        self.pod_listings = [[], []]
+        self.capture()
+        self.assertEqual(self.read_back, {
+            "registry_breg": b"synthetic registry_breg dump", "registry_casework": b"synthetic registry_casework dump",
+        })
+        read_back = [argv for argv in self.commands if "pg_restore" in argv]
+        self.assertEqual(read_back[0][-2:], ["pg_restore", "--file=/dev/null"])
+        self.assertEqual(len(read_back), 2)
+
+    def test_capture_refuses_an_unreadable_dump(self):
+        self.args.database = ["registry_breg", "registry_casework"]
+        self.pod_listings, self.unreadable = [[], []], {"registry_breg"}
+        with self.assertRaisesRegex(BundleError, "registry_breg dump"):
+            self.capture()
+        self.assertFalse((self.args.output / "manifest.json").exists())
+        self.assertNotIn("--dbname=registry_casework", [arg for argv in self.commands for arg in argv])
+
+
+class SnapshotTest(unittest.TestCase):
+    SNAPSHOT = "d" * 64
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.bundle = self.root / "backup-01"
+        self.bundle.mkdir()
+        write_bundle(self.bundle)
+        self.args = SimpleNamespace(bundle=self.bundle, receipt=self.root / "receipt.json", restic_bin="restic")
+        self.backup = subprocess.CompletedProcess([], 0, json.dumps({
+            "message_type": "summary", "snapshot_id": self.SNAPSHOT,
+        }).encode() + b"\n", b"")
+        self.calls = []
+
+    def restic(self, argv, **_):
+        self.calls.append(argv[1])
+        if argv[1] == "backup":
+            return self.backup
+        if argv[1] == "cat":
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"paths": [str(self.bundle.resolve())]}).encode(), b"")
+        return subprocess.CompletedProcess(argv, 0, (self.bundle / "manifest.json").read_bytes(), b"")
+
+    def snapshot(self):
+        self.printed = io.StringIO()
+        with patch("state_bundle.subprocess.run", side_effect=self.restic), redirect_stdout(self.printed):
+            snapshot(self.args)
+        return self.printed.getvalue()
+
+    def test_snapshot_writes_a_receipt_for_the_verified_archive(self):
+        printed = self.snapshot()
+        receipt = json.loads(self.args.receipt.read_text())
+        self.assertEqual(receipt["snapshotId"], self.SNAPSHOT)
+        self.assertEqual(verify_bundle(self.bundle, receipt)["release"], "directory")
+        self.assertEqual(self.calls, ["backup", "cat", "dump"])
+        self.assertIn(f"Verified encrypted snapshot {self.SNAPSHOT}", printed)
+
+    def test_snapshot_refuses_an_existing_receipt_before_archiving(self):
+        self.args.receipt.write_text("earlier receipt")
+        with self.assertRaisesRegex(BundleError, "already exists"):
+            self.snapshot()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.args.receipt.read_text(), "earlier receipt")
+
+    def test_snapshot_refuses_a_receipt_outside_a_directory_before_archiving(self):
+        self.args.receipt = self.root / "missing" / "receipt.json"
+        with self.assertRaisesRegex(BundleError, "directory"):
+            self.snapshot()
+        self.assertEqual(self.calls, [])
+
+    def test_failed_restic_backup_writes_no_receipt(self):
+        self.backup = subprocess.CompletedProcess([], 1, b"", b"Fatal: unable to open config file\n")
+        with self.assertRaises(BundleError) as raised:
+            self.snapshot()
+        self.assertIn("Write the encrypted snapshot failed with exit 1", str(raised.exception))
+        self.assertIn("Fatal: unable to open config file", str(raised.exception))
+        self.assertEqual(self.calls, ["backup"])
+        self.assertFalse(self.args.receipt.exists())
+        self.assertEqual(self.printed.getvalue(), "")
+
+    def test_restic_output_without_one_snapshot_identifier_writes_no_receipt(self):
+        summary = {"message_type": "summary", "snapshot_id": self.SNAPSHOT}
+        for rows in ([{"message_type": "status"}], [summary, summary], [{**summary, "snapshot_id": "NOT-HEX"}]):
+            with self.subTest(rows=rows):
+                self.calls = []
+                output = b"".join(json.dumps(row).encode() + b"\n" for row in rows)
+                self.backup = subprocess.CompletedProcess([], 0, output, b"")
+                with self.assertRaisesRegex(BundleError, "one snapshot identifier"):
+                    self.snapshot()
+                self.assertEqual(self.calls, ["backup"])
+                self.assertFalse(self.args.receipt.exists())
+                self.assertEqual(self.printed.getvalue(), "")
 
 
 if __name__ == "__main__":

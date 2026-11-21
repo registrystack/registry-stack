@@ -8,8 +8,26 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+
+def require_supported_python(version):
+    """Stop before work starts on an interpreter older than these tools use.
+
+    stack_operator.py and prepare_local.py import this module, so the check
+    covers all three tools. They use hashlib.file_digest and the ISO 8601
+    forms that datetime.fromisoformat reads from Python 3.11.
+    """
+    if tuple(version[:2]) < (3, 11):
+        raise SystemExit(
+            f"These tools need Python 3.11 or later. This is Python {version[0]}.{version[1]}. "
+            "Run them with a newer python3."
+        )
+
+
+require_supported_python(sys.version_info)
 
 DATABASE_NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
 SNAPSHOT_ID = re.compile(r"[0-9a-f]{8,64}")
@@ -24,6 +42,15 @@ NOT_INCLUDED = (
     "Copy their files into the --files directory to keep them with this bundle."
 )
 STOPPED_PHASES = {"Succeeded", "Failed"}
+# Status report fields that come from the BReg state row. The query reads that
+# row as bregctl status does. BReg does not document this table, so a change to
+# it makes psql fail and capture refuse rather than label a bundle wrongly.
+BREG_STATE_FIELDS = ("databaseId", "activationId", "activePackageDigest", "maintenanceStatus")
+BREG_STATE = (
+    "SELECT json_build_object('databaseId', database_id, 'activationId', active_activation_id::text, "
+    "'activePackageDigest', active_package_digest, 'maintenanceStatus', maintenance_status) "
+    "FROM registry_internal.registry_state WHERE singleton;"
+)
 
 
 class BundleError(Exception):
@@ -126,6 +153,25 @@ def running_release_pods(args):
     ]
 
 
+def check_status_describes_database(args, status):
+    """Refuse a saved status report that another activation or installation wrote."""
+    database = args.breg_database
+    recorded = checked_run([
+        *pg_command(args), "psql", "-XAt", "--no-password", "--username=postgres", f"--dbname={database}",
+        "-v", "ON_ERROR_STOP=1", "-c", BREG_STATE,
+    ], f"Read the BReg state in {database}")
+    if not recorded.strip():
+        raise BundleError(f"Database {database} has no BReg state. Name the BReg database with --breg-database.")
+    recorded = json.loads(recorded)
+    differing = [field for field in BREG_STATE_FIELDS if recorded.get(field) != status.get(field)]
+    if differing:
+        raise BundleError(
+            f"The status file does not describe database {database} (different {', '.join(differing)}). "
+            "Run the operator's status command for this release again, save its output as the status file, "
+            "then capture again."
+        )
+
+
 def capture(args):
     if not DNS_LABEL.fullmatch(args.release) or len(args.release) > 53:
         raise BundleError("Supply a valid Helm release name.")
@@ -133,6 +179,10 @@ def capture(args):
     if len(set(args.database)) != len(args.database):
         raise BundleError("Name each database once.")
     databases = [valid_database(name) for name in args.database]
+    if valid_database(args.breg_database) not in databases:
+        raise BundleError(
+            f"Include the BReg database with --database {args.breg_database}, or name it with --breg-database."
+        )
     status = json.loads(args.status_file.read_text())
     status = status.get("database", status)
     digest = status.get("activePackageDigest", "")
@@ -155,6 +205,7 @@ def capture(args):
             f"Release {args.release} has {len(running)} Pods that have not finished. "
             "Stop it with stack_operator.py stop, then capture again."
         )
+    check_status_describes_database(args, status)
     args.output.mkdir(mode=0o700)
     payload = args.output / "payload"
     dumps = payload / "databases"
@@ -162,11 +213,16 @@ def capture(args):
     shutil.copytree(args.files, payload / "installation", symlinks=True)
     file_hashes(payload / "installation")
     for database in databases:
-        with (dumps / f"{database}.dump").open("xb") as output:
+        path = dumps / f"{database}.dump"
+        with path.open("xb") as output:
             checked_run([
                 *pg_command(args), "pg_dump", "--format=custom", "--no-password",
                 "--username=postgres", f"--dbname={database}",
             ], f"Dump {database}", stdout=output)
+        # Read every block of the archive through the path restore-database
+        # uses, writing nothing, so an unreadable dump never gets a manifest.
+        with path.open("rb") as dump:
+            checked_run([*pg_command(args), "pg_restore", "--file=/dev/null"], f"Read back the {database} dump", stdin=dump)
     if running_release_pods(args):
         raise BundleError(
             f"Release {args.release} started Pods during the capture. {args.output} has no manifest and is not a "
@@ -185,6 +241,11 @@ def capture(args):
 
 
 def snapshot(args):
+    # Check the receipt path before Restic writes a snapshot that no receipt would name.
+    if os.path.lexists(args.receipt):
+        raise BundleError(f"The receipt {args.receipt} already exists. Keep it, and choose a new receipt path.")
+    if not args.receipt.parent.is_dir():
+        raise BundleError(f"Create the receipt directory {args.receipt.parent}, or choose a receipt path in an existing one.")
     manifest = verify_bundle(args.bundle)
     capture_timestamp(manifest)
     manifest_hash = hashlib.sha256((args.bundle / "manifest.json").read_bytes()).hexdigest()
@@ -271,7 +332,8 @@ def restore_database(args):
         raise BundleError("The snapshot has no dump for the requested database.")
     user_object_count = (
         "SELECT (SELECT count(*) FROM pg_namespace WHERE nspname NOT IN "
-        "('pg_catalog','pg_toast','public','information_schema') AND nspname NOT LIKE 'pg_temp_%') "
+        "('pg_catalog','pg_toast','public','information_schema') AND nspname NOT LIKE 'pg_temp_%' "
+        "AND nspname NOT LIKE 'pg_toast_temp_%') "
         "+ (SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace) "
         "+ (SELECT count(*) FROM pg_extension WHERE extname <> 'plpgsql');"
     )
@@ -302,6 +364,9 @@ def main():
         command.add_argument("--kubectl-bin", default="kubectl")
     capture_command.add_argument("--release", required=True)
     capture_command.add_argument("--database", action="append", required=True)
+    capture_command.add_argument(
+        "--breg-database", default="registry_breg", help="The dumped database whose BReg state the status file describes.",
+    )
     capture_command.add_argument("--status-file", type=Path, required=True)
     capture_command.add_argument("--files", type=Path, required=True)
     capture_command.add_argument("--output", type=Path, required=True)
