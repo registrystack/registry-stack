@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- BREAKING: `caseworkctl provider add` prints the BReg project fragments it
+  proposes in the id-keyed form the BReg project now reads: `accessProfiles`,
+  `reviewAuthorities` and `actions` entries are keyed by id, with no inner
+  `id`. Change paths and failure locations in the BReg project name the id as
+  a path segment, for example
+  `actions/correct-address/execution/proposal/reviewContext` in place of
+  `actions[id=correct-address].execution.proposal.reviewContext`. A location
+  in `bregctl explain` output, which keeps its list shape, keeps the selector
+  form.
+
 - Accept an optional `project.label` and `project.description` in the project
   block, as the shared project block does. They are display text for
   people and change no compiled output.

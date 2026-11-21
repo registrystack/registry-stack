@@ -216,7 +216,7 @@ impl ProviderAddFailure {
             } => (
                 "casework.provider-add.ambiguous-reviewer-boundaries",
                 format!(
-                    "actions/{action_id}/permissions/targets/{record_type}/rowBoundaries"
+                    "actions[id={action_id}].permissions.targets[recordType={record_type}].rowBoundaries"
                 ),
                 "the Action's alternative profiles have different row boundary sets, so an explicit reviewer grant is required",
                 "Author the reviewer's Proposal context and records.get permissions with the intended row boundaries, then run provider add again.",
@@ -4325,5 +4325,19 @@ exit 1
         );
         assert!(!refused_project.exists());
         assert!(!refused_output.exists());
+    }
+
+    #[test]
+    fn ambiguous_reviewer_boundaries_name_the_explained_action_target() {
+        // The alternatives come from `bregctl explain actions`, which keeps
+        // its list shape, so the location selects within that output.
+        let failure = ProviderAddFailure::AmbiguousReviewerBoundaries {
+            action_id: "correct-address".into(),
+            record_type: "facility".into(),
+        };
+        assert_eq!(
+            failure.diagnostic().1,
+            "actions[id=correct-address].permissions.targets[recordType=facility].rowBoundaries"
+        );
     }
 }
