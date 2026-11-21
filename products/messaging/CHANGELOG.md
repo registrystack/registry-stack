@@ -20,7 +20,8 @@
 
 - Accept an optional `project.label` and `project.description` in the project
   block, as the shared project block does. They are display text for
-  people and change no behaviour.
+  people and change no behaviour. The package digest covers the authored
+  files, so a relabel changes it.
 
 - BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
   -> `database.caBundleRef` and, for an `smtp` provider,
