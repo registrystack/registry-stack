@@ -4691,7 +4691,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/project.v1alpha1.schema.json",
-        "sha256": "3b76b8e958caee5a18e846556097e31f96756dce65b0be90097ebf234f75b711",
+        "sha256": "fbe1dc24cff779884ca86d6530bbdb83dddeec0ba2789bb7b2d116ca2ca2f2a0",
         "mediaType": "application/schema+json"
       }
     },
@@ -4759,7 +4759,7 @@
       "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
       "source": {
         "path": "crates/registry-breg/src/artifacts.rs",
-        "sha256": "1da14d31838a6b9530bdf350416fd1e6946a86108ae4e6c9582cad60248cca0e"
+        "sha256": "fd743f2e3dd367367ca6382a870b68f8ba97224692d3294050b4e1a9f7b828f3"
       },
       "artifact": {
         "path": "products/breg/generated/facility/generated/action-contracts.schema.json",
@@ -4993,11 +4993,11 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "6d3e3877db3c44d50d7e434bd50a49ec37b61daa8b048389438e03ede19c4e03"
+        "sha256": "9613b60594f36416613ce3f1d551eea7953360ff09f64aa36a1e273efa7047d3"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "5c1cb555b749e4b6309d2788f145a83c24332e37d01eb3c6fd6a3ce586f83cfb",
+        "sha256": "a3bdbfe9faf08dd698190590558b5f48f0de83bd946ddfd6d5ad4f0dff5dcc28",
         "mediaType": "application/schema+json"
       }
     },
@@ -5011,11 +5011,11 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "6d3e3877db3c44d50d7e434bd50a49ec37b61daa8b048389438e03ede19c4e03"
+        "sha256": "9613b60594f36416613ce3f1d551eea7953360ff09f64aa36a1e273efa7047d3"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "9a253495ef3dfaf214f3e000c32dc4db3423b7d576d26b6d0ea5de5a7426661c",
+        "sha256": "ebab74efc9dd976fdf561b6c7cba9aa6095fe077394d3ae22e4b672f24a45cc2",
         "mediaType": "application/schema+json"
       }
     },
@@ -5101,7 +5101,7 @@
       "description": "Base Registry Engine runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "6d3e3877db3c44d50d7e434bd50a49ec37b61daa8b048389438e03ede19c4e03"
+        "sha256": "9613b60594f36416613ce3f1d551eea7953360ff09f64aa36a1e273efa7047d3"
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
@@ -5177,7 +5177,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
-        "sha256": "e193ad8a4eff9e33e6db0e268e981f7f188a7c6d380abf2671c1ef8cb8705e85",
+        "sha256": "81ecfa33b288cab822fa9286b908e54fb641a297ee09a78e14bf3790c0b64b75",
         "mediaType": "application/schema+json"
       }
     },
@@ -5195,7 +5195,7 @@
       },
       "artifact": {
         "path": "products/casework/contracts/cli/report.schema.json",
-        "sha256": "24077d593743db4a10297e59a5186d8fd5739759c645ca55a8f48185fa9d803e",
+        "sha256": "b80fb562dbef1c9bdee11eb9466f5408ab7ba53ff925344e8ace47edd0ce537e",
         "mediaType": "application/schema+json"
       }
     },
@@ -5227,11 +5227,11 @@
       "description": "Registry Coordinator portable project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/authoring.rs",
-        "sha256": "8aff778324c1f05ca2615121980be6e3212d3e80f1bc99104b7256dfe18445a5"
+        "sha256": "d9bc331b223ade980f9b54ff2b29eecd285108d468ab86f23d73ff47d443aa20"
       },
       "artifact": {
         "path": "products/coordinator/generated/project/project.schema.json",
-        "sha256": "c4bc1e7a160804ec03dc958eed753e6cc59fb3132b702bf6bd43638f0c6829a1",
+        "sha256": "be3682d24686b500e6421946dc2de94dd5aea293f1dd42fa447098ac71740204",
         "mediaType": "application/schema+json"
       }
     },
@@ -5317,11 +5317,11 @@
       "description": "Registry Discovery authoring, runtime configuration, and index JSON Schema.",
       "source": {
         "path": "products/discovery/schemas/origins.schema.json",
-        "sha256": "c46a82a755524da6e3c8ab61a88b37b828b5d7cc95c09c98ca1ce0fa72aa6e83"
+        "sha256": "ead04bda4fa2561a2c6be0e56e259a68c1e09adc1745ae1a0e8dfe5c97058bd6"
       },
       "artifact": {
         "path": "products/discovery/schemas/origins.schema.json",
-        "sha256": "c46a82a755524da6e3c8ab61a88b37b828b5d7cc95c09c98ca1ce0fa72aa6e83",
+        "sha256": "ead04bda4fa2561a2c6be0e56e259a68c1e09adc1745ae1a0e8dfe5c97058bd6",
         "mediaType": "application/schema+json"
       }
     },
@@ -5411,7 +5411,7 @@
       },
       "artifact": {
         "path": "products/documents/generated/project/project.schema.json",
-        "sha256": "26884cc061cde1b1e5f6eb60d59b738c4522d9451c3ebef0f0e0ac007f17a7e9",
+        "sha256": "2e63a41bad5eeaba48694f601aaa40378fde6e25d8c181f7690227c5d7ad7d93",
         "mediaType": "application/schema+json"
       }
     },
@@ -5627,7 +5627,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/project.schema.json",
-        "sha256": "ab0849717b630aeedff77ca4f55418964e32102ae6d49bc789d7a81c9ced2f50",
+        "sha256": "370766110be921eea02fe1e17aa195e1f63352bf8b5c93aa5b078de3a4b214c8",
         "mediaType": "application/schema+json"
       }
     },
@@ -5789,7 +5789,7 @@
       },
       "artifact": {
         "path": "products/messaging/generated/authoring/project.schema.json",
-        "sha256": "2a6983bc79d8bf3bae405d3428189c364e643460bcce5930f60e21fde9c31865",
+        "sha256": "b60536fb11b4167cffabbe49770dce00321b9b5d4a9f9461ff5a2bd1926adf35",
         "mediaType": "application/schema+json"
       }
     },
@@ -6131,7 +6131,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/project/project.schema.json",
-        "sha256": "ff888718d437664e4ca5095c5e58016539c58e535f512ea873a210929fd5df80",
+        "sha256": "5d8042c2ca29ac275c541248e4c34246c9add5a457af726db560ce232da7b69b",
         "mediaType": "application/schema+json"
       }
     },
