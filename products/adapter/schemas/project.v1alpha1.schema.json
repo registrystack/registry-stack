@@ -265,6 +265,13 @@
       "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
     },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "not": {
+        "pattern": "[  ‪-‮⁦-⁩﻿﷐-﷯￾￿]|🿾|🿿|𯿾|𯿿|𿿾|𿿿|񏿾|񏿿|񟿾|񟿿|񯿾|񯿿|񿿾|񿿿|򏿾|򏿿|򟿾|򟿿|򯿾|򯿿|򿿾|򿿿|󏿾|󏿿|󟿾|󟿿|󯿾|󯿿|󿿾|󿿿|􏿾|􏿿"
+      },
+      "type": "string"
+    },
     "ExternalId": {
       "description": "An identifier another system issues, written exactly as its issuer gives it.",
       "maxLength": 512,
@@ -326,11 +333,19 @@
     },
     "ProjectIdentity": {
       "additionalProperties": false,
-      "description": "The project identity block: the deployment's own name and version. The id is a local\nidentifier (CFG-ID-1); the version is text, the same version-as-text\nrule as profiles and packs.",
+      "description": "The project identity block: the deployment's own name and version. The id is a local\nidentifier (CFG-ID-1); the version is text, the same version-as-text\nrule as profiles and packs. The optional label and description are display\ntext for people (CFG-ENV-6) and are omitted from the serialized block when\nabsent.",
       "properties": {
+        "description": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional explanation of the project for readers."
+        },
         "id": {
           "$ref": "#/$defs/LocalId",
           "description": "The project identifier."
+        },
+        "label": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional human label for the project."
         },
         "version": {
           "description": "The project version.",

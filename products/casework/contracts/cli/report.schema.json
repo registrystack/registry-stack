@@ -1220,12 +1220,36 @@
     },
     "ProjectIdentity": {
       "additionalProperties": false,
-      "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\nSchema name `ProjectIdentity`.",
+      "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\n`id` and `version` are required. `label` and `description` are optional\ndisplay text for people. Neither changes a product's behavior or stable\nidentity. A product whose digest covers the whole authored document, such\nas Scheduling, still sees them, so a relabel changes that digest. An absent\nmember is omitted when the block is serialized, so a project that sets\nneither compiles to the same bytes.\nSchema name `ProjectIdentity`.",
       "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "An optional explanation of the project for readers."
+        },
         "id": {
-          "$ref": "#/$defs/LocalId"
+          "$ref": "#/$defs/LocalId",
+          "description": "The project identifier."
+        },
+        "label": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "An optional human label for the project."
         },
         "version": {
+          "description": "The project version.",
           "type": "string"
         }
       },
