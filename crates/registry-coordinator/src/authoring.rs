@@ -42,7 +42,9 @@ const FORMAT: FormatSpec<'static> = FormatSpec {
     },
     removed_keys: &[
         RemovedKey { pointer: "/input", replacement: "Move input to workflow.input." },
-        RemovedKey { pointer: "/title", replacement: "Write label." },
+        RemovedKey { pointer: "/title", replacement: "Write project.label." },
+        RemovedKey { pointer: "/label", replacement: "Move label to project.label." },
+        RemovedKey { pointer: "/description", replacement: "Move description to project.description." },
         RemovedKey { pointer: "/functions/*/title", replacement: "Write label." },
         RemovedKey { pointer: "/operations/*/title", replacement: "Write label." },
         RemovedKey { pointer: "/workflow/steps/*/title", replacement: "Write label." },
@@ -62,15 +64,8 @@ const FORMAT: FormatSpec<'static> = FormatSpec {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CoordinatorProject {
     /// The shared identity: project.id identifies this Workflow and project.version is a human release label.
+    /// The optional project.label and project.description are for readers; they change neither stable identity nor behavior revision and have no execution or authorization effect.
     pub project: ProjectIdentity,
-    /// An optional human label; it changes neither stable identity nor behavior revision.
-    #[serde(default, deserialize_with = "optional_display_text")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
-    label: Option<String>,
-    /// An optional explanation for readers; it has no execution or authorization effect.
-    #[serde(default, deserialize_with = "optional_display_text")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
-    description: Option<String>,
     /// Generated local public product contracts imported at compile time; no runtime discovery occurs.
     #[serde(default)]
     contracts: BTreeMap<LocalId, ImportedContract>,
@@ -1569,8 +1564,8 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         .collect::<Result<_>>()?;
     let mut steps = BTreeMap::new();
     let mut presentation = Presentation {
-        label: project.label,
-        description: project.description,
+        label: project.project.label.clone(),
+        description: project.project.description.clone(),
         steps: BTreeMap::new(),
         calendar_triggers: calendar_trigger_presentation,
         event_triggers: trigger_presentation,
@@ -2447,6 +2442,10 @@ pub fn project_schema() -> std::result::Result<String, serde_json::Error> {
         json!("The stable Workflow API name, also the enclosing Project ID.");
     schema["$defs"]["ProjectIdentity"]["properties"]["version"]["description"] =
         json!("The human release label; it is distinct from the computed Workflow revision.");
+    schema["$defs"]["ProjectIdentity"]["properties"]["label"]["description"] =
+        json!("An optional human label; it changes neither stable identity nor behavior revision.");
+    schema["$defs"]["ProjectIdentity"]["properties"]["description"]["description"] =
+        json!("An optional explanation for readers; it has no execution or authorization effect.");
     fn maps(value: &mut Value) {
         match value {
             Value::Object(object) => {

@@ -967,11 +967,19 @@
     },
     "ProjectIdentity": {
       "additionalProperties": false,
-      "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\nSchema name `ProjectIdentity`.",
+      "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\n`id` and `version` are required. `label` and `description` are optional\ndisplay text for people. Neither changes a product's stable identity or\nbehavior revision, and an absent member is omitted when the block is\nserialized, so a project that sets neither compiles to the same bytes.\nSchema name `ProjectIdentity`.",
       "properties": {
+        "description": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional explanation for readers; it has no execution or authorization effect."
+        },
         "id": {
           "$ref": "#/$defs/LocalId",
           "description": "The stable Workflow API name, also the enclosing Project ID."
+        },
+        "label": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional human label; it changes neither stable identity nor behavior revision."
         },
         "version": {
           "description": "The human release label; it is distinct from the computed Workflow revision.",
@@ -1109,10 +1117,6 @@
       },
       "type": "object"
     },
-    "description": {
-      "$ref": "#/$defs/DisplayText",
-      "description": "An optional explanation for readers; it has no execution or authorization effect."
-    },
     "functions": {
       "additionalProperties": {
         "$ref": "#/$defs/AuthoredFunction"
@@ -1130,10 +1134,6 @@
       "description": "The kind of document this is.",
       "type": "string"
     },
-    "label": {
-      "$ref": "#/$defs/DisplayText",
-      "description": "An optional human label; it changes neither stable identity nor behavior revision."
-    },
     "operations": {
       "additionalProperties": {
         "$ref": "#/$defs/AuthoredOperation"
@@ -1150,7 +1150,7 @@
       "allOf": [
         {
           "$ref": "#/$defs/ProjectIdentity",
-          "description": "The shared identity: project.id identifies this Workflow and project.version is a human release label."
+          "description": "The shared identity: project.id identifies this Workflow and project.version is a human release label.\nThe optional project.label and project.description are for readers; they change neither stable identity nor behavior revision and have no execution or authorization effect."
         },
         {
           "properties": {

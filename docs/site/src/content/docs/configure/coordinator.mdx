@@ -209,7 +209,7 @@ Valid runtime configuration
 ```
 
 The `Definition:` digest is the workflow revision. It hashes what execution depends on: input,
-steps, outcomes, and the operation and Function revisions used. Titles, descriptions, and
+steps, outcomes, and the operation and Function revisions used. Labels, descriptions (including `project.label` and `project.description`), and
 `project.version` do not change it. Every run records the revision it was admitted under.
 
 {/* Evidence: crates/registry-coordinator/src/mapping_check.rs;
@@ -220,7 +220,7 @@ steps, outcomes, and the operation and Function revisions used. Titles, descript
 
 A project separates reusable assets from the one workflow that uses them:
 
-- `project` supplies an ID and a human version label.
+- `project` supplies an ID, a human version label, and an optional `label` and `description`.
 - `contracts` optionally imports generated local product contracts.
 - `types` optionally names reusable JSON Schemas.
 - `functions` optionally names typed pure computations, their source assets, and entrypoints.

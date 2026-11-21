@@ -65,7 +65,8 @@ fn named_function_inputs_are_typed_and_the_snapshot_restores_without_sources() {
 fn presentation_version_and_unreferenced_definitions_do_not_change_workflow_revision() {
     let initial = load(&project(), SOURCE).unwrap();
     let mut edited = project();
-    edited["label"] = json!("Readable workflow");
+    edited["project"]["label"] = json!("Readable workflow");
+    edited["project"]["description"] = json!("Shows a text.");
     edited["project"]["version"] = json!("next");
     edited["workflow"]["steps"]["done"]["label"] = json!("Show the text");
     edited["functions"]["render"]["label"] = json!("Render a notice");
@@ -80,6 +81,25 @@ fn presentation_version_and_unreferenced_definitions_do_not_change_workflow_revi
         edited.explain().unwrap()["steps"][0]["presentation"]["label"],
         json!("Show the text")
     );
+    let presentation = &edited.explain().unwrap()["presentation"];
+    assert_eq!(presentation["label"], json!("Readable workflow"));
+    assert_eq!(presentation["description"], json!("Shows a text."));
+}
+
+#[test]
+fn a_top_level_label_or_description_is_refused_with_project_as_its_home() {
+    for member in ["label", "description"] {
+        let mut edited = project();
+        edited[member] = json!("Readable workflow");
+        let error = refused(&edited, SOURCE);
+        let text = format!("{error:?}");
+        assert!(
+            text.contains("config.removed-key")
+                && text.contains(&format!("/{member}"))
+                && text.contains(&format!("Move {member} to project.{member}.")),
+            "{member}: {text}"
+        );
+    }
 }
 
 #[test]
