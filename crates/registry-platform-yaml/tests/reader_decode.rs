@@ -2206,6 +2206,35 @@ struct Package {
 }
 
 #[test]
+fn cfg_env_6_the_project_identity_reads_an_optional_label_and_description() {
+    let read = decode::<Package>(
+        "id: core\nversion: \"1.2\"\nlabel: Core registry\ndescription: The core registry.\ntitle: Core\n",
+    )
+    .unwrap_or_else(|report| panic!("{report}"));
+    assert_eq!(read.project.label.as_deref(), Some("Core registry"));
+    assert_eq!(
+        read.project.description.as_deref(),
+        Some("The core registry.")
+    );
+}
+
+#[test]
+fn cfg_env_6_an_unset_label_and_description_stay_out_of_the_serialized_identity() {
+    let identity = ProjectIdentity::new(LocalId::new("core").unwrap(), "1.2");
+    assert_eq!(
+        serde_json::to_value(&identity).unwrap(),
+        serde_json::json!({"id": "core", "version": "1.2"})
+    );
+}
+
+#[test]
+fn cfg_val_11_the_project_label_is_display_text() {
+    let report =
+        refusal::<Package>("id: core\nversion: \"1\"\nlabel: \"a\\u2028b\"\ntitle: Core\n");
+    assert!(report.to_string().contains("label"), "{report}");
+}
+
+#[test]
 fn cfg_schema_8_a_shared_block_places_its_members_beside_the_host() {
     let read = decode::<Package>("id: core\nversion: \"1.2\"\ntitle: Core\n")
         .unwrap_or_else(|report| panic!("{report}"));
@@ -2227,7 +2256,7 @@ fn cfg_schema_8_an_unknown_key_beside_a_shared_block_names_every_accepted_key() 
         [
             (
                 "/zzz",
-                "Remove `zzz`; the accepted keys are `id`, `version`, `title`."
+                "Remove `zzz`; the accepted keys are `id`, `version`, `label`, `description`, `title`."
             ),
             // A mapping lists its accepted keys once.
             (

@@ -1020,6 +1020,23 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_project_block_reads_an_optional_label_and_description() {
+        let plain = project(valid());
+        assert_eq!(plain.project.label, None);
+        let mut value = valid();
+        value["project"]["label"] = json!("Notices");
+        value["project"]["description"] = json!("Reminders sent to the public.");
+        let labelled = project(value);
+        assert_eq!(labelled.project.label.as_deref(), Some("Notices"));
+        assert_eq!(
+            labelled.project.description.as_deref(),
+            Some("Reminders sent to the public.")
+        );
+        assert_eq!(labelled.providers, plain.providers);
+        assert_eq!(labelled.templates, plain.templates);
+    }
+
+    #[test]
     fn the_envelope_the_project_block_and_the_profile_list_are_checked() {
         let mut value = valid();
         value["apiVersion"] = json!(RETIRED_MESSAGING_PROJECT_API_VERSION);

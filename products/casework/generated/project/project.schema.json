@@ -222,12 +222,22 @@
     },
     "ProjectIdentity": {
       "additionalProperties": false,
-      "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\nSchema name `ProjectIdentity`.",
+      "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\n`id` and `version` are required. `label` and `description` are optional\ndisplay text for people. Neither changes a product's stable identity or\nbehavior revision, and an absent member is omitted when the block is\nserialized, so a project that sets neither compiles to the same bytes.\nSchema name `ProjectIdentity`.",
       "properties": {
+        "description": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional explanation of the project for readers."
+        },
         "id": {
-          "$ref": "#/$defs/LocalId"
+          "$ref": "#/$defs/LocalId",
+          "description": "The project identifier."
+        },
+        "label": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional human label for the project."
         },
         "version": {
+          "description": "The project version.",
           "type": "string"
         }
       },

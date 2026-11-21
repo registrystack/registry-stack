@@ -379,13 +379,47 @@ text_newtype!(Url);
 
 /// The members that name a project (CFG-ENV-6): a project's `project` block
 /// holds these, and may add project-wide members of the product's own.
+/// `id` and `version` are required. `label` and `description` are optional
+/// display text for people. Neither changes a product's stable identity or
+/// behavior revision, and an absent member is omitted when the block is
+/// serialized, so a project that sets neither compiles to the same bytes.
 /// Schema name `ProjectIdentity`.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ProjectIdentity {
+    /// The project identifier.
     pub id: LocalId,
+    /// The project version.
     pub version: String,
+    /// An optional human label for the project.
+    #[serde(
+        default,
+        deserialize_with = "optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
+    pub label: Option<String>,
+    /// An optional explanation of the project for readers.
+    #[serde(
+        default,
+        deserialize_with = "optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
+    pub description: Option<String>,
+}
+
+impl ProjectIdentity {
+    /// An identity with no label or description.
+    pub fn new(id: LocalId, version: impl Into<String>) -> ProjectIdentity {
+        ProjectIdentity {
+            id,
+            version: version.into(),
+            label: None,
+            description: None,
+        }
+    }
 }
 
 /// A complete foreign JSON tree, decoded under its own value rules (CFG-EMBED-2).

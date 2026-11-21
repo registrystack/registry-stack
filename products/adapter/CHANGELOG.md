@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Accept an optional `project.label` and `project.description` in the project
+  block, as every product's project file does. They are display text for
+  people and change no compiled output.
+
 - BREAKING: `database.trustedRootCertificateRef` -> `database.caBundleRef` in
   the runtime configuration, and `store.trustedRootCertificateRef` ->
   `store.caBundleRef` in the job runtime configuration, as a pre-1.0 cleanup,

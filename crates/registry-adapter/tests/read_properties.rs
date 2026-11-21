@@ -256,10 +256,7 @@ fn profile() -> AdapterProfile {
 
 fn project(budget: u64) -> AdapterProject {
     AdapterProject {
-        project: ProjectIdentity {
-            id: local("soundness-project"),
-            version: "1".to_owned(),
-        },
+        project: ProjectIdentity::new(local("soundness-project"), "1".to_owned()),
         profile: Some(PinnedRef {
             id: local("soundness-profile"),
             version: "1".to_owned(),

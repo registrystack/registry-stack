@@ -18,6 +18,10 @@
   package's digest changes with the rewritten `messaging.yaml`, so rebuild
   packages with `messagingctl package`.
 
+- Accept an optional `project.label` and `project.description` in the project
+  block, as every product's project file does. They are display text for
+  people and change no behaviour.
+
 - BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
   -> `database.caBundleRef` and, for an `smtp` provider,
   `providers.*.trustedRootCertificateRef` -> `providers.*.caBundleRef`, as a

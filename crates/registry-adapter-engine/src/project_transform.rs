@@ -337,10 +337,7 @@ mod tests {
                 ),
         );
         let project = AdapterProject {
-            project: ProjectIdentity {
-                id: LocalId::new("two-views").unwrap(),
-                version: "1".to_owned(),
-            },
+            project: ProjectIdentity::new(LocalId::new("two-views").unwrap(), "1".to_owned()),
             profile: None,
             consultation: None,
             write: None,
