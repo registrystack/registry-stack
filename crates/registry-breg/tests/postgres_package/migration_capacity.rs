@@ -14,19 +14,21 @@ const PROPOSAL_OPERATIONS: &[&str] = &["get", "list", "edit", "submit", "cancel"
 fn reviewed_flow_project(profile_count: usize, proposal_operations: &[&str]) -> Value {
     let record_types = (0..3)
         .map(|ordinal| {
-            json!({
-                "id": format!("case-{ordinal}"),
-                "primaryDataset": "cases",
-                "route": format!("cases-{ordinal}"),
-                "mutationMode": "mutable",
-                "mutationPolicy": {"patch": "proposal-required"},
-                "fields": [{
-                    "id": "label", "type": "string", "required": true,
-                    "maximumLength": 80, "classification": "internal"
-                }]
-            })
+            (
+                format!("case-{ordinal}"),
+                json!({
+                    "primaryDataset": "cases",
+                    "route": format!("cases-{ordinal}"),
+                    "mutationMode": "mutable",
+                    "mutationPolicy": {"patch": "proposal-required"},
+                    "fields": [{
+                        "id": "label", "type": "string", "required": true,
+                        "maximumLength": 80, "classification": "internal"
+                    }]
+                }),
+            )
         })
-        .collect::<Vec<_>>();
+        .collect::<serde_json::Map<_, _>>();
     let actions = (0..4)
         .map(|flow| {
             let inputs = (0..3)
@@ -55,18 +57,20 @@ fn reviewed_flow_project(profile_count: usize, proposal_operations: &[&str]) -> 
                     })
                 })
                 .collect::<Vec<_>>();
-            json!({
-                "id": format!("review-flow-{flow}"),
-                "execution": {"mode": "proposal", "proposal": {
-                    "review": {"type": "none"},
-                    "application": {"mode": "manual"},
-                    "retention": {"mode": "retain"}
-                }},
-                "inputs": inputs,
-                "plan": {"type": "fixed", "effects": effects}
-            })
+            (
+                format!("review-flow-{flow}"),
+                json!({
+                    "execution": {"mode": "proposal", "proposal": {
+                        "review": {"type": "none"},
+                        "application": {"mode": "manual"},
+                        "retention": {"mode": "retain"}
+                    }},
+                    "inputs": inputs,
+                    "plan": {"type": "fixed", "effects": effects}
+                }),
+            )
         })
-        .collect::<Vec<_>>();
+        .collect::<serde_json::Map<_, _>>();
     let targets = (0..3)
         .map(|target| {
             json!({"recordType": format!("case-{target}"), "rowBoundaries": "unrestricted"})
@@ -111,15 +115,17 @@ fn reviewed_flow_project(profile_count: usize, proposal_operations: &[&str]) -> 
                     "readableFields": ["label"], "rowBoundaries": "unrestricted"
                 }]);
             }
-            json!({
-                "id": format!("reviewer-{profile}"),
-                "default": profile == 0,
-                "principalClaim": "principal",
-                "requiredScopes": [format!("review:{profile}")],
-                "permissions": permissions
-            })
+            (
+                format!("reviewer-{profile}"),
+                json!({
+                    "default": profile == 0,
+                    "principalClaim": "principal",
+                    "requiredScopes": [format!("review:{profile}")],
+                    "permissions": permissions
+                }),
+            )
         })
-        .collect::<Vec<_>>();
+        .collect::<serde_json::Map<_, _>>();
 
     json!({
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
@@ -147,7 +153,7 @@ fn reviewed_flow_project(profile_count: usize, proposal_operations: &[&str]) -> 
             }],
             "distributions": []
         },
-        "datasets": [{"id": "cases"}],
+        "datasets": {"cases": {}},
         "recordTypes": record_types,
         "actions": actions,
         "accessProfiles": access_profiles

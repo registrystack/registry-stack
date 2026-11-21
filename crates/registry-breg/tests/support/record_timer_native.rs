@@ -4601,19 +4601,19 @@ fn fairness_project_bytes(project_bytes: &[u8]) -> Vec<u8> {
     timer_grants.push(case_grant);
 
     let actions = project["actions"]
-        .as_array_mut()
-        .expect("public future-activation Actions are an array");
+        .as_object_mut()
+        .expect("public future-activation Actions are a mapping");
     let mut case_action = actions
-        .first()
+        .values()
+        .next()
         .expect("public future-activation has one Action")
         .clone();
-    case_action["id"] = json!("activate-case");
     case_action["display"]["label"] = json!("Activate case");
     case_action["display"]["description"] =
         json!("Materialize a previously authorized future case activation.");
     case_action["inputs"][0]["target"] = json!("case");
     case_action["plan"]["effects"][0]["id"] = json!("activated-case");
-    actions.push(case_action);
+    actions.insert("activate-case".to_owned(), case_action);
 
     let permissions = project["accessProfiles"]["service-editor"]["permissions"]["records"]
         .as_array_mut()

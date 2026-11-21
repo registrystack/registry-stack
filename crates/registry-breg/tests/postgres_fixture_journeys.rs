@@ -1684,7 +1684,7 @@ fn compiled_compare_constraint_fixture() -> (registry_breg::CompiledRegistry, Ve
             1,
         );
     let write_only_end = format!(
-        "  - id: write-only-end\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes: [case-management]\n    permissions:\n      records:\n        - recordType: widget\n          operations: [create]\n          readableFields: [{fields}, valid-from]\n          writableFields: [{fields}, valid-from, valid-to]\n          rowBoundaries:\n            - {{field: jurisdiction, claim: jurisdiction, operator: equals}}\n"
+        "  write-only-end:\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes: [case-management]\n    permissions:\n      records:\n        - recordType: widget\n          operations: [create]\n          readableFields: [{fields}, valid-from]\n          writableFields: [{fields}, valid-from, valid-to]\n          rowBoundaries:\n            - {{field: jurisdiction, claim: jurisdiction, operator: equals}}\n"
     );
     assert!(
         project_source.contains("right: valid-to}")

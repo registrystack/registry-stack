@@ -694,15 +694,14 @@ fn write_runtime(
             "apiVersion": registry_messaging_core::MESSAGING_PROJECT_API_VERSION,
             "kind": registry_messaging_core::MESSAGING_PROJECT_KIND,
             "project": {"id": "operations", "version": "1"},
-            "accessProfiles": [{
-                "id": "operations",
+            "accessProfiles": {"operations": {
                 "principalClaim": "sub",
                 "requiredScopes": ["messaging:operate"],
                 "requesterClients": ["operations-console"],
                 "actsAs": "operator",
                 "requestsPerMinute": 60,
                 "burst": 10
-            }]
+            }}
         }))
         .unwrap(),
     )

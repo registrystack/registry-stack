@@ -132,15 +132,11 @@ fn set_operations(profile: &mut Value, operations: Value) {
 
 fn add_profile(source: &mut Value, id: &str, operations: Value) {
     let mut profile = source["accessProfiles"]["clerk"].clone();
-    profile["id"] = json!(id);
     profile["default"] = json!(false);
     profile["permissions"]["records"] = json!([]);
     profile["permissions"]["actions"] = json!([]);
     set_operations(&mut profile, operations);
-    source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(profile);
+    source["accessProfiles"][id] = profile;
 }
 
 fn split_recovery_source(source: &Value) -> Value {

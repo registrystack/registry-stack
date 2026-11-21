@@ -2920,8 +2920,8 @@ fn timer_ingestion_registry_with_operations(
         .expect("public timer example is valid YAML")
         .expect("public timer example is nonempty")
         .to_json_value();
-    source["recordTypes"]["widget"]["batch"] = json!({"maximumItems":3,"maximumBytes":8192});
-    source["recordTypes"]["widget"]["hooks"]
+    source["recordTypes"]["service"]["batch"] = json!({"maximumItems":3,"maximumBytes":8192});
+    source["recordTypes"]["service"]["hooks"]
         .as_array_mut()
         .expect("timer fixture hooks are an array")
         .push(json!({

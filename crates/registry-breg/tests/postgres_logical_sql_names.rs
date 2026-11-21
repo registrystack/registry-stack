@@ -40,8 +40,7 @@ fn project_with_entities(entities: Value) -> Value {
 #[test]
 fn fields_that_only_differ_after_postgres_identifier_limit_are_refused() {
     let prefix = format!("f{}", "x".repeat(62));
-    let failure = compile(project_with_entities(json!([{
-        "id": "record",
+    let failure = compile(project_with_entities(json!({"record": {
         "route": "records",
         "primaryDataset": "records",
         "mutationMode": "mutable",
@@ -49,7 +48,7 @@ fn fields_that_only_differ_after_postgres_identifier_limit_are_refused() {
             {"id": format!("{prefix}a"), "type": "boolean", "classification": "internal"},
             {"id": format!("{prefix}b"), "type": "boolean", "classification": "internal"}
         ]
-    }])))
+    }})))
     .expect_err("PostgreSQL would collapse the two source-view columns");
 
     assert!(failure
@@ -61,22 +60,20 @@ fn fields_that_only_differ_after_postgres_identifier_limit_are_refused() {
 #[test]
 fn entities_that_only_differ_after_postgres_identifier_limit_are_refused() {
     let prefix = format!("e{}", "x".repeat(62));
-    let failure = compile(project_with_entities(json!([
-        {
-            "id": format!("{prefix}a"),
+    let failure = compile(project_with_entities(json!({
+        format!("{prefix}a"): {
             "route": "records-a",
             "primaryDataset": "records-a",
             "mutationMode": "mutable",
             "fields": [{"id": "flag", "type": "boolean", "classification": "internal"}]
         },
-        {
-            "id": format!("{prefix}b"),
+        format!("{prefix}b"): {
             "route": "records-b",
             "primaryDataset": "records-b",
             "mutationMode": "mutable",
             "fields": [{"id": "flag", "type": "boolean", "classification": "internal"}]
         }
-    ])))
+    })))
     .expect_err("PostgreSQL would collapse the two source-view names");
 
     assert!(failure
@@ -89,8 +86,7 @@ fn entities_that_only_differ_after_postgres_identifier_limit_are_refused() {
 async fn one_64_byte_entity_and_field_install_with_exact_canonical_catalog_names() {
     let entity_id = format!("e{}", "x".repeat(63));
     let field_id = format!("f{}", "x".repeat(63));
-    let source = project_with_entities(json!([{
-        "id": entity_id,
+    let source = project_with_entities(json!({entity_id.clone(): {
         "route": "records",
         "primaryDataset": "records",
         "mutationMode": "mutable",
@@ -102,7 +98,7 @@ async fn one_64_byte_entity_and_field_install_with_exact_canonical_catalog_names
             "execution": "live",
             "fields": [{"id": "copied", "type": "boolean", "classification": "internal"}]
         }]
-    }]));
+    }}));
     let project = parse_project_json(&serde_json::to_vec(&source).expect("source serializes"))
         .expect("source parses");
     let sql = format!(

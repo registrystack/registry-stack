@@ -1170,7 +1170,6 @@ async fn known_proposal_http_authorization_refusals_are_value_free_and_audit_gat
         "no-lifecycle",
     ] {
         let mut profile = source["accessProfiles"]["clerk"].clone();
-        profile["id"] = json!(id);
         profile["default"] = json!(false);
         match id {
             "reviewer" | "missing-record-claim" => {
@@ -1196,10 +1195,7 @@ async fn known_proposal_http_authorization_refusals_are_value_free_and_audit_gat
             }
             _ => unreachable!(),
         }
-        source["accessProfiles"]
-            .as_array_mut()
-            .unwrap()
-            .push(profile);
+        source["accessProfiles"][id] = profile;
     }
     let fixture = client_http::ClientFixture::start(
         compile(source),

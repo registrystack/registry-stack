@@ -414,7 +414,7 @@ fn public_register_source(measures: Value) -> Value {
         field["classification"] = json!("public");
     }
     let publisher = json!({
-        "id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+        "principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
             "recordType":"record","operations":["list"],
             "readableFields":["subject","active","category","event-date","amount","quantity"],
             "filterableFields":["subject","active","category","event-date"],"allowCount":true,
@@ -422,16 +422,14 @@ fn public_register_source(measures: Value) -> Value {
         }],"datasets":[{"dataset":"records-by-category","operations":["publish","read-releases"]}]}
     });
     let reader = json!({
-        "id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+        "principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
             "datasets":[{"dataset":"records-by-category","operations":["read-releases"]}]
         }
     });
     source["accessProfiles"]["analyst"]["permissions"]["datasets"][0]["operations"] =
         json!(["read-live", "read-releases"]);
-    source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .extend([publisher, reader]);
+    source["accessProfiles"]["publisher"] = publisher;
+    source["accessProfiles"]["reader"] = reader;
     source["statisticalDatasets"]["records-by-category"]["disclosure"] =
         json!({"type":"exact-public-values"});
     source
@@ -906,15 +904,13 @@ fn released_parcel_source(dimensions: &[&str], measures: Value) -> Value {
         source["accessProfiles"]["analyst"]["permissions"]["records"][0]["readableFields"].clone();
     source["accessProfiles"]["analyst"]["permissions"]["datasets"][0]["operations"] =
         json!(["read-live", "read-releases"]);
-    source["accessProfiles"].as_array_mut().unwrap().extend([
-        json!({"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+    source["accessProfiles"]["publisher"] = json!({"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
             "recordType":"record","operations":["list"],"readableFields":readable,
             "filterableFields":["subject","active","category","event-date"],"allowCount":true,
             "rowBoundaries":"unrestricted"
-        }],"datasets":[{"dataset":"records-by-category","operations":["publish","read-releases"]}]}}),
-        json!({"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
-            "datasets":[{"dataset":"records-by-category","operations":["read-releases"]}]}}),
-    ]);
+        }],"datasets":[{"dataset":"records-by-category","operations":["publish","read-releases"]}]}});
+    source["accessProfiles"]["reader"] = json!({"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "datasets":[{"dataset":"records-by-category","operations":["read-releases"]}]}});
     source
 }
 

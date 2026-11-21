@@ -920,12 +920,9 @@ async fn saved_review_document_requires_current_subject_consent() {
         .as_object_mut()
         .unwrap()
         .insert("consent-decision".to_owned(), decision);
-    let mut record_consent = consent["actions"]["correct-name"].clone();
+    let mut record_consent = consent["actions"]["record-consent"].clone();
     record_consent["inputs"][0]["target"] = json!("target");
-    project["actions"]
-        .as_array_mut()
-        .unwrap()
-        .push(record_consent);
+    project["actions"]["record-consent"] = record_consent;
     project["recipients"] = json!({"organizations":[{"id":"review-org","name":"Review organization","contact":"privacy@example.test","clients":["agent-client"]}]});
     project["vocabularies"] = json!({"data-use-purpose": {"values":["registry-administration"]}, "consent-decision": {"values":["given","withdrawn","refused","invalidated"]}});
     project["actions"]["correct-name"]["execution"]["proposal"]["attachments"] = json!([
@@ -1086,7 +1083,6 @@ async fn saved_review_document_requires_current_subject_consent() {
 async fn explicit_service_assessment_preserves_scope_actor_target_and_record_disclosure() {
     let mut project = source(false);
     let mut service = project["accessProfiles"]["task-reviewer"].clone();
-    service["id"] = json!("assessment");
     service["actorKind"] = json!("service");
     service["requiredScopes"] = json!(["proposal:assess"]);
     service["requiredPurposes"] = json!(["automatic-assessment"]);
@@ -1101,15 +1097,12 @@ async fn explicit_service_assessment_preserves_scope_actor_target_and_record_dis
         .unwrap()
         .remove("ownership");
     let mut human = service.clone();
-    human["id"] = json!("human-review");
     human["actorKind"] = json!("human");
     let mut narrow = service.clone();
-    narrow["id"] = json!("narrow-assessment");
     narrow["permissions"]["proposals"][0]["readableContextFields"] = json!(["proposedName"]);
-    project["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .extend([service, human, narrow]);
+    project["accessProfiles"]["assessment"] = service;
+    project["accessProfiles"]["human-review"] = human;
+    project["accessProfiles"]["narrow-assessment"] = narrow;
     let fixture = client_http::ClientFixture::start(compile(project), clerk()).await;
     let (_, target) = seed(&fixture).await;
     let (code, draft, etag) = send(
@@ -1292,7 +1285,7 @@ async fn proposal_disclosures_refuse_a_signed_grant_expiring_during_terminal_aud
         .as_array_mut()
         .unwrap()
         .push(json!("document"));
-    for profile in [0, 1] {
+    for profile in ["clerk", "task-reviewer"] {
         source["accessProfiles"][profile]["permissions"]["proposals"][0]["readableAttachments"] =
             json!(["support"]);
     }
@@ -2426,9 +2419,9 @@ fn assert_review_contract(registry: &registry_breg::CompiledRegistry, value: &Va
 async fn frozen_changes_inspection_covers_patch_and_create_without_applying_or_rerunning_plan() {
     let mut project = source(false);
     project["accessProfiles"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .truncate(1);
+        .retain(|id, _| id == "clerk");
     project["recordTypes"].as_object_mut().unwrap().insert("notice".to_owned(), json!({"primaryDataset":"directory","route":"notices","mutationMode":"mutable",
         "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
             {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]
@@ -2450,7 +2443,7 @@ async fn frozen_changes_inspection_covers_patch_and_create_without_applying_or_r
     permissions["records"].as_array_mut().unwrap().push(json!({"recordType":"notice","operations":["get"],
         "readableFields":["name"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}));
     let target = json!({"recordType":"notice","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]});
-    permissions["actions"]["correct-name"]["targets"]
+    permissions["actions"][0]["targets"]
         .as_array_mut()
         .unwrap()
         .push(target.clone());

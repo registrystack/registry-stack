@@ -61,9 +61,9 @@ fn registry(automatic: bool, reviewed: bool) -> registry_breg::CompiledRegistry 
         },
         "datasets":{"directory": {}},
         "reviewAuthorities":if reviewed {
-            json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}])
+            json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}})
         } else {
-            json!([])
+            json!({})
         },
         "recordTypes":{"target": {
             "primaryDataset":"directory",

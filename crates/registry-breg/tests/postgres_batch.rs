@@ -950,7 +950,13 @@ fn compiled_timer_batch_registry() -> registry_breg::CompiledRegistry {
         .expect("public timer example is valid YAML")
         .expect("public timer example is nonempty")
         .to_json_value();
-    source["recordTypes"]["widget"]["batch"] = json!({"maximumItems":3,"maximumBytes":8192});
+    source["recordTypes"]["service"]["batch"] = json!({"maximumItems":3,"maximumBytes":8192});
+    let renamed = source["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .remove("service-editor")
+        .expect("the future-activation example has a service-editor profile");
+    source["accessProfiles"]["operator"] = renamed;
     source["accessProfiles"]["operator"]["requiredScopes"] = json!("unrestricted");
     source["accessProfiles"]["operator"]["permissions"]["records"][0]["operations"] =
         json!(["create", "get", "list", "patch", "tombstone", "batch"]);
