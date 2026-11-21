@@ -340,9 +340,10 @@ changed by a direct write under a profile that requires an access reason, to
 `registry_internal.registry_subject_access_log`. Each row takes its expiry from the record type's
 `retentionDays` (default 90) when the read or write happens, and the subject's access-log route
 hides it once that expiry passes. A background job erases expired rows every minute in batches of
-1000 until none remain, up to 100,000 rows a minute; a run that stops at that bound logs a warning
-with the remaining backlog. The job keeps running after a later package turns `accessLog` off, and a package
-change never extends an existing row's expiry. Database backups keep their own copies of these rows.
+1000 until none remain, up to 100,000 rows a minute. A run that stops at that bound logs a warning
+with the remaining backlog. The job keeps running after a later package turns `accessLog` off, and a
+package change never extends an existing row's expiry. Database backups keep their own copies of
+these rows.
 
 Ingestion runs live in `registry_internal.registry_ingestion_runs`, with their chunks and chunk
 receipts beside them. A run row holds the verified issuer and principal value of the caller that

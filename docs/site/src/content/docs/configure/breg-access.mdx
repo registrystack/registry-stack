@@ -509,10 +509,10 @@ writer. A snapshot reference taken before a record was marked does not read it. 
 `record` condition as a restrictive row policy, so a query that forgets to apply it cannot read the
 row.
 
-A direct Create or Patch whose resulting record a `record` condition would hide from the writing
-profile is refused with `403 write.outside-boundary`. Give the profile that sets the mark an
-exemption. A Patch of a record the profile can no longer see answers `412 precondition.failed`, as
-for an absent record.
+A Create, Patch, immediate Action or Proposal applied by hand whose resulting record a `record`
+condition would hide from the writing profile is refused with `403 write.outside-boundary`. Give the
+profile that sets the mark an exemption. A Patch of a record the profile can no longer see answers
+`412 precondition.failed`, as for an absent record.
 
 ### Who can lift a mark
 
@@ -544,15 +544,20 @@ A Proposal review shows a withheld field as `null`, and applying a change set to
 became withheld after submission is refused. A Proposal applied by hand is checked as a write by the
 profile that applies it. A Proposal applied automatically is checked against the profile that
 submitted the version being applied, which each submit records. An exempt submitter's automatic
-Proposal applies. A bound submitter's is refused wherever a write by that profile would be, and so is
-one whose submitting profile was removed or lost its exemption after submission. A version that
-records no submitting profile is checked against the reserved `system-proposal-apply` profile, which
-no condition exempts. A refused automatic Proposal leaves the record unchanged, and once its attempts
-are used it ends `blocked`, with the reason `attempts-exhausted` and the recovery `correct-input`.
+Proposal can make a change this rule refuses to a bound profile. A bound submitter's is refused
+wherever a write by that profile would be, and so is one whose submitting profile was removed or lost
+its exemption after submission. A version that records no submitting profile is checked against the
+reserved `system-proposal-apply` profile, which no condition exempts. A refused automatic Proposal
+leaves the record unchanged and ends `blocked` at that attempt, with the recovery `correct-input`.
+The reason is `attempts-exhausted` when that was its last attempt, and `application-refused`
+otherwise.
 
-An automatic application still reads its targets under `system-proposal-apply`. A target that a
-`record` condition hides from that profile is absent to it, so an automatic Proposal cannot apply
-to such a record, whoever submitted it. Apply that Proposal by hand under an exempt profile.
+An automatic application still reads and writes its targets under `system-proposal-apply`. A target
+that a `record` condition hides from that profile is absent to it, so an automatic Proposal cannot
+apply to such a record, whoever submitted it. Nor can an automatic Proposal set a `record` mark,
+even when its submitter is exempt: the condition's row policy refuses the marked record under
+`system-proposal-apply`, so the Proposal ends `blocked` and the record is unchanged. For either
+case, use an immediate Action or apply the Proposal by hand, under an exempt profile.
 
 ### What `bregctl check` refuses
 
@@ -561,8 +566,8 @@ guarantee does not rest on remembering every route. For a profile a condition bi
 refuses:
 
 - a `fields` condition that names a required field or `id`, or a condition with `fields` and a mode
-  other than `fields` (`breg.disclosure.fields-invalid`). A field named twice is refused when the
-  file is read, with `config.duplicate-item`;
+  other than `fields` (`breg.disclosure.fields-invalid`). A field named twice is refused with
+  `config.duplicate-item` when the file is read.
 - a withheld field in the profile's `filterableFields`, `sortableFields`, lookups, data export, hook
   projections or statistical dataset (`breg.disclosure.withheld-field-exposed`);
 - a `when` field of an unsupported type, or a literal that does not fit it
@@ -612,17 +617,18 @@ Design around them.
 
 - A Proposal's inputs stay visible to its reviewers. A reviewer sees what the author typed, even for
   a field the reviewer's own profile would not read on the record.
-- A Create can confirm a hidden value. A Create that repeats a unique value of a record a `record`
-  condition withholds answers `409 mutation.conflict`, which shows that the hidden record exists.
-  For a field a `fields` condition withholds, a Create that repeats its value answers the same `409`
-  when the field belongs to a uniqueness constraint, has a unique encrypted lookup, or is in a
-  temporal non-overlap. That confirms the value exists on a hidden record. `bregctl check` warns
-  about the `fields` case with `breg.disclosure.withheld-field-probe`, ranked as widening access,
+- A Create or Patch can confirm a hidden value. A Create, or a Patch of another record, that repeats
+  a unique value of a record a `record` condition withholds answers `409 mutation.conflict`, which
+  shows that the hidden record exists. For a field a `fields` condition withholds, a Create or a
+  Patch of another record that repeats its value answers the same `409` when the field belongs to a
+  uniqueness constraint, has a unique encrypted lookup, or is in a temporal non-overlap. That
+  confirms the value exists on a hidden record. `bregctl check` warns about the `fields` case with
+  `breg.disclosure.withheld-field-probe`, ranked as widening access,
   so the check fails under `--deny-warnings` until you
   [accept the finding](../../reference/configuration-files/#accept-an-intentional-project-warning).
-  Keep the field out of the constraint, or accept the finding if the profiles that can create these
-  records are trusted.
-  A Patch cannot probe a withheld value this way, because the rule in
+  Keep the field out of the constraint, or accept the finding if the profiles that can create or
+  patch these records are trusted.
+  A Patch of the marked record itself cannot probe its withheld value this way, because the rule in
   [Who can lift a mark](#who-can-lift-a-mark) refuses it.
 - A refused write can reveal that a condition matches. The `403 write.outside-boundary` a bound
   profile meets tells it that a condition holds for this record. A `null` it read is then known to
