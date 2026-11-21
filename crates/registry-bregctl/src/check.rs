@@ -1718,6 +1718,7 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
         "breg.disclosure.read-path-withheld-field" => "Remove the read path from the profile's permission, or add the profile to exemptProfiles of the condition that withholds the path's reference field.",
         "breg.disclosure.evidence-fact-withheld-field" => "Export a fact field the condition does not withhold from the Evidence access profile, or add the profile to exemptProfiles.",
         "breg.disclosure.external-view-withheld-field" => "Remove the link from the profile's external view grant, or add the profile to exemptProfiles of the condition that withholds the link's fromField.",
+        "breg.disclosure.external-refresh-withheld-root" => "Add the refresh profile to exemptProfiles of the record condition if the refresh should keep the records it matches current, or accept this finding to leave them out of the external source.",
         "breg.disclosure.statistics-withheld-field" => "Stop the derived relation reading the withheld field of the dependency record type, or add every profile that reaches the dataset to exemptProfiles.",
         "breg.disclosure.statistics-live-bound" => "Grant read-releases instead of read-live or read-exact, or add the profile to exemptProfiles of the record condition.",
         "breg.disclosure.statistics-publisher-bound" => "Add the publishing profile to exemptProfiles of the record condition, so releases include every record.",

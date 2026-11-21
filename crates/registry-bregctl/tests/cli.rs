@@ -889,6 +889,63 @@ acceptances:
     );
 }
 
+/// A `record` condition on a view's root that binds a refresh profile leaves the
+/// records it matches out of the refresh, which may be intended, so the check
+/// passes with a hygiene finding whose next step names both choices.
+#[test]
+fn check_warns_when_a_record_condition_binds_a_refresh_profile() {
+    let example = fs::read_to_string(external_views_example().join("registry.yaml")).unwrap();
+    let jurisdiction = "      - {id: jurisdiction, type: string, required: true, maximumLength: 40, classification: internal}\n  licensed-business:";
+    assert_eq!(example.matches(jurisdiction).count(), 1);
+    let source = example.replace(
+        jurisdiction,
+        "      - {id: jurisdiction, type: string, required: true, maximumLength: 40, classification: internal}
+    disclosureConditions:
+      hide-protected:
+        when: [{type: field-equals, field: jurisdiction, value: protected}]
+        withhold: record
+        exemptProfiles: [fixture-editor, staff-refresh]
+  licensed-business:",
+    );
+    let project = TestProject::from_registry_source(source.as_bytes());
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let warnings: Vec<_> = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|diagnostic| diagnostic["code"] == "breg.disclosure.external-refresh-withheld-root")
+        .collect();
+    assert_eq!(warnings.len(), 1, "{report}");
+    let warning = warnings[0];
+    assert_eq!(warning["severity"], "warning", "{warning}");
+    assert_eq!(warning["rank"], "hygiene", "{warning}");
+    assert!(
+        warning["path"]
+            .as_str()
+            .unwrap()
+            .contains("/recordTypes/licence/disclosureConditions/hide-protected"),
+        "{warning}"
+    );
+    let message = warning["message"].as_str().unwrap();
+    for named in ["`projection-refresh`", "`licence-holder-indexed`"] {
+        assert!(message.contains(named), "{named}: {warning}");
+    }
+    let next = warning["suggestedAction"].as_str().unwrap();
+    for choice in ["exemptProfiles", "accept this finding"] {
+        assert!(next.contains(choice), "{choice}: {warning}");
+    }
+    let denied = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(project.path()),
+        "--deny-warnings",
+    ]);
+    assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+}
+
 #[test]
 fn hook_projection_errors_point_to_the_second_hook_in_each_owning_file() {
     let mut source = registry_platform_yaml::Reader::new("registry.yaml")

@@ -159,7 +159,10 @@
   widening access, when a field a `fields` condition withholds is in a uniqueness constraint or a
   partial one's `when`, a unique encrypted lookup or a temporal non-overlap, because a Create, or a
   Patch of another record, that repeats the value answers `409` and confirms it exists on a hidden
-  record (`breg.disclosure.withheld-field-probe`). Runtime metadata flags `mayBeWithheld` and lists
+  record (`breg.disclosure.withheld-field-probe`). It also warns when a `record` condition on a
+  view's root binds a profile that may refresh the view, because the refresh then skips the
+  records the condition matches and still succeeds
+  (`breg.disclosure.external-refresh-withheld-root`). Runtime metadata flags `mayBeWithheld` and lists
   the bound conditions without their literals, `bregctl explain access` lists them in full, the
   access preview names the ids that bind a profile, and the ODRL export omits a grant a condition
   binds (`disclosure-condition`). Proposal inputs stay visible to reviewers, and a uniqueness or

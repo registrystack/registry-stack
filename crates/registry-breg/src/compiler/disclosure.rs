@@ -16,7 +16,10 @@ use super::canonical_field_literal;
 
 mod reach;
 
-pub(super) use reach::{validate_derived_reads, validate_external_views, validate_timer_creates};
+pub(super) use reach::{
+    refresh_withheld_root_findings, validate_derived_reads, validate_external_views,
+    validate_timer_creates,
+};
 
 /// The most conditions one record type declares.
 const MAX_CONDITIONS: usize = 8;

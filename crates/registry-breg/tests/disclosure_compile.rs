@@ -1210,6 +1210,84 @@ fn an_external_view_cannot_link_from_a_withheld_field_for_a_bound_profile() {
     );
 }
 
+const REFRESH_SKIPS: &str = "breg.disclosure.external-refresh-withheld-root";
+
+/// The linked example with `withhold` and `exemptProfiles` of its root
+/// condition replaced by `condition`, and a refresh service profile.
+fn refreshed(condition: &str) -> String {
+    LINKED
+        .replace(
+            "        withhold: fields\n        fields: [subject-key]\n        exemptProfiles: [officer]",
+            condition,
+        )
+        .replace(
+            "accessProfiles:\n",
+            "accessProfiles:
+  refresher:
+    actorKind: service
+    requesterClients: [refresh-worker]
+    principalClaim: registry_principal
+    requiredScopes: [registry.refresh]
+    requiredPurposes: [local-consultation]
+    permissions:
+      records:
+        - {recordType: local-record, operations: [get, list], readableFields: [local-title], rowBoundaries: unrestricted}
+      refreshExternalProjections: [approved-subjects]
+",
+        )
+}
+
+/// The paths and messages of the refresh finding `source` compiles with.
+fn refresh_findings(source: &str) -> Vec<(String, String)> {
+    let project = registry_breg::contract::parse_project_yaml(source.as_bytes()).unwrap();
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .unwrap_or_else(|failure| panic!("{:?}", failure.diagnostics()))
+        .findings()
+        .iter()
+        .filter(|finding| finding.code == REFRESH_SKIPS)
+        .map(|finding| {
+            assert_eq!(
+                finding.severity,
+                registry_breg::DiagnosticSeverity::Finding,
+                "{finding:?}"
+            );
+            (finding.path.clone(), finding.message.clone())
+        })
+        .collect()
+}
+
+/// A refresh lists the view's roots under the refreshing profile, so a
+/// `record` condition that binds it leaves the records it matches out of the
+/// refresh. Leaving protected subjects out may be intended, so the project
+/// compiles with a finding. An exempt profile, and a `fields` or `history`
+/// condition, which hide no row, raise none.
+#[test]
+fn a_record_condition_that_binds_a_refresh_profile_is_a_finding() {
+    let bound = refreshed("        withhold: record\n        exemptProfiles: [officer]");
+    let findings = refresh_findings(&bound);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    let (path, message) = &findings[0];
+    assert_eq!(
+        path,
+        "recordTypes[id=local-record].disclosureConditions[id=hide-key]"
+    );
+    for named in ["`refresher`", "`local-with-subject`"] {
+        assert!(message.contains(named), "{named}: {message}");
+    }
+
+    for condition in [
+        "        withhold: record\n        exemptProfiles: [officer, refresher]",
+        "        withhold: fields\n        fields: [local-title]\n        exemptProfiles: [officer]",
+        "        withhold: history\n        exemptProfiles: [officer]",
+    ] {
+        assert_eq!(
+            refresh_findings(&refreshed(condition)),
+            Vec::<(String, String)>::new(),
+            "{condition}"
+        );
+    }
+}
+
 fn live_statistics_source() -> Value {
     let mut value = statistics_source();
     value["recordTypes"]["record"]["disclosureConditions"]["hide-inactive"]["exemptProfiles"] =
