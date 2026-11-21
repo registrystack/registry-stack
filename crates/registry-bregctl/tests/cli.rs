@@ -679,6 +679,11 @@ fn check_refuses_invalid_required_filters_with_a_next_step() {
             "breg.access-profile.required-filters-empty",
             "at least one",
         ),
+        (
+            with_required(json!(["jurisdiction"]), json!([])),
+            "config.invalid-value",
+            "Omit requiredFilters",
+        ),
     ] {
         let project =
             TestProject::from_registry_source(&serde_json::to_vec_pretty(&source).unwrap());

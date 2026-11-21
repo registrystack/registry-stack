@@ -55,6 +55,12 @@ impl Items for Vec<RowBoundarySource> {
     }
 }
 
+impl Items for Vec<RequiredFilterSource> {
+    fn holds_nothing(&self) -> bool {
+        self.is_empty()
+    }
+}
+
 #[cfg(feature = "runtime")]
 impl Items for Vec<String> {
     fn holds_nothing(&self) -> bool {
@@ -315,6 +321,15 @@ narrowing_member!(
 );
 
 narrowing_member!(
+    RequiredFilters,
+    RequiredFiltersShapes,
+    required_filters,
+    Vec<RequiredFilterSource>,
+    "a list of at least one alternative set of fields",
+    "Omit requiredFilters to let a list run without search criteria, or list the alternative sets of fields a list must pin."
+);
+
+narrowing_member!(
     RequirementPurposes,
     RequirementPurposesShapes,
     requirement_purposes,
@@ -461,8 +476,19 @@ pub(super) struct AuthoredModuleProfile {
     writable_fields: UniqueSet<String>,
     #[serde(default)]
     filterable_fields: UniqueSet<String>,
-    /// Alternative search criteria; a `list` must satisfy at least one.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Alternative search criteria; a `list` must satisfy at least one. Omit to put no criteria on lists.
+    #[serde(
+        default,
+        deserialize_with = "required_filters",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "Listed<Vec<RequiredFilterSource>, RequiredFilters>",
+            length(max = crate::compiler::MAXIMUM_REQUIRED_FILTER_ALTERNATIVES)
+        )
+    )]
     required_filters: Vec<RequiredFilterSource>,
     #[serde(default)]
     sortable_fields: UniqueSet<String>,
@@ -649,8 +675,21 @@ pub(super) struct AuthoredEntityPermission {
     writable_fields: UniqueSet<String>,
     #[serde(default)]
     filterable_fields: UniqueSet<String>,
-    /// Alternative search criteria; a `list` must satisfy at least one.
-    #[serde(default)]
+    /// Alternative search criteria; a `list` must satisfy at least one. Omit to put no criteria on lists.
+    // `skip_serializing_if` keeps the schema from offering `[]`, a value the
+    // member refuses, as its default.
+    #[serde(
+        default,
+        deserialize_with = "required_filters",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "Listed<Vec<RequiredFilterSource>, RequiredFilters>",
+            length(max = crate::compiler::MAXIMUM_REQUIRED_FILTER_ALTERNATIVES)
+        )
+    )]
     required_filters: Vec<RequiredFilterSource>,
     #[serde(default)]
     sortable_fields: UniqueSet<String>,

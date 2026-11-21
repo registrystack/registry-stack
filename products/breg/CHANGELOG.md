@@ -98,12 +98,14 @@
   carries a `requiredFilters` member that names the acceptable sets as API field
   names, and a fixed `detail`. A continuation page cannot drop the criteria,
   because the signed cursor binds the first page's filter. `bregctl check`
-  refuses a `requiredFilters` that is empty, repeats an alternative, has more
-  than eight alternatives or an alternative of more than 32 fields, names a
-  field outside the same grant's `filterableFields` or one that cannot take
-  `eq`, or sits on a grant without `list`. A field repeated within one
-  alternative is refused when the file is read, with `config.duplicate-item`,
-  and each alternative compiles in field order. Runtime metadata lists the
+  refuses a `requiredFilters` that has an empty alternative, repeats an
+  alternative, has more than eight alternatives or an alternative of more than
+  32 fields, names a field outside the same grant's `filterableFields` or one
+  that cannot take `eq`, or sits on a grant without `list`. An empty
+  `requiredFilters` is refused when the file is read, with
+  `config.invalid-value`, so an author omits the key to put no criteria on
+  lists. A field repeated within one alternative is refused the same way, with
+  `config.duplicate-item`, and each alternative compiles in field order. Runtime metadata lists the
   alternatives beside `filterableFields`, the Rust client exposes
   `BRegQueryDescriptor::required_filters` and
   `BRegProblemCode::QueryFilterRequired`, and the OpenAPI problem enum gains

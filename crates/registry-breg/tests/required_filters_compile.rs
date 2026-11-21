@@ -180,6 +180,34 @@ fn an_alternative_no_filter_can_carry_is_refused() {
 }
 
 #[test]
+fn an_empty_list_of_alternatives_is_refused_by_the_reader() {
+    // An empty list reads as both "no criteria" and "no list passes", so an
+    // author omits the member to put no criteria on lists.
+    let value = source(json!([]), json!(["list"]));
+    let failure = parse_project_json(&serde_json::to_vec(&value).unwrap())
+        .expect_err("an empty requiredFilters is refused rather than read as absent");
+    let found = failure
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        found,
+        vec![(
+            "config.invalid-value",
+            "project.accessProfiles.registrar.permissions.records[0].requiredFilters"
+        )],
+        "{failure:?}"
+    );
+    assert!(
+        failure.diagnostics()[0]
+            .message
+            .contains("Omit requiredFilters"),
+        "{failure:?}"
+    );
+}
+
+#[test]
 fn a_repeated_field_inside_an_alternative_is_refused_by_the_reader() {
     let value = source(
         json!([{"fields":["national-id","national-id"]}]),
