@@ -40,12 +40,12 @@ fn registry() -> registry_breg::CompiledRegistry {
         .expect("canonical fixture uses the supported YAML subset")
         .expect("canonical fixture is nonempty")
         .to_json_value();
-    source["actions"] = json!([{"id":"create-contact","execution":{"mode":"immediate"},"inputs":[
+    source["actions"] = json!({"create-contact": {"execution":{"mode":"immediate"},"inputs":[
         {"id":"name","type":"string","required":true,"minimumLength":1,"maximumLength":160,"classification":"internal"},
         {"id":"email","type":"string","required":true,"minimumLength":1,"maximumLength":254,"classification":"internal"},
         {"id":"jurisdiction","type":"string","required":true,"minimumLength":1,"maximumLength":40,"classification":"internal"}],
         "plan":{"type":"fixed","effects":[{"id":"contact","target":{"recordType":"contact"},"operation":"create",
-            "set":{"name":{"fromInput":"name"},"email":{"fromInput":"email"},"jurisdiction":{"fromInput":"jurisdiction"}}}]}}]);
+            "set":{"name":{"fromInput":"name"},"email":{"fromInput":"email"},"jurisdiction":{"fromInput":"jurisdiction"}}}]}}});
     // The replaced Actions take the canonical profile's Action grants with them.
     let editor = source["accessProfiles"]["directory-editor"]["permissions"]
         .as_object_mut()

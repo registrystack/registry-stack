@@ -291,7 +291,7 @@ fn proposal_policy_sources(add_submitter: bool, add_optional_field: bool) -> (Ve
         serde_json::from_slice(&project_bytes(&module_digest(&module))).unwrap();
     project["actions"] = actions;
     project["reviewAuthorities"] =
-        json!([{"id": "casework-main", "protocol": "id.registrystack.org/protocols/review/v1"}]);
+        json!({"casework-main": {"protocol": "id.registrystack.org/protocols/review/v1"}});
     let profile = |id: &str, default: bool| {
         json!({
             id: {"default": default, "principalClaim": "principal", "requiredScopes": "unrestricted",

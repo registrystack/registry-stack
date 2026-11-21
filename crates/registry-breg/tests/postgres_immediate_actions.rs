@@ -3802,25 +3802,27 @@ fn history_registry() -> registry_breg::CompiledRegistry {
     let mut source: Value = serde_json::from_slice(ACTION_PROJECT).expect("action project is JSON");
     let boundary = json!([{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]);
     source["accessProfiles"]
-        .as_array_mut()
+        .as_object_mut()
         .expect("action project declares access profiles")
-        .push(json!({
-            "id":"record-history",
-            "principalClaim":"registry_principal",
-            "requiredScopes":["registry:history:read"],
-            "requiredPurposes":["contact-registration"],
-            "permissions":{"records":[{
-                "recordType":"person",
-                "operations":["revisions","snapshot"],"revisionAccess":true,
-                "readableFields":["person-code"],
-                "rowBoundaries":boundary.clone()
-            },{
-                "recordType":"household",
-                "operations":["revisions","snapshot"],"revisionAccess":true,
-                "readableFields":["household-code","status-note"],
-                "rowBoundaries":boundary
-            }]}
-        }));
+        .insert(
+            "record-history".to_owned(),
+            json!({
+                "principalClaim":"registry_principal",
+                "requiredScopes":["registry:history:read"],
+                "requiredPurposes":["contact-registration"],
+                "permissions":{"records":[{
+                    "recordType":"person",
+                    "operations":["revisions","snapshot"],"revisionAccess":true,
+                    "readableFields":["person-code"],
+                    "rowBoundaries":boundary.clone()
+                },{
+                    "recordType":"household",
+                    "operations":["revisions","snapshot"],"revisionAccess":true,
+                    "readableFields":["household-code","status-note"],
+                    "rowBoundaries":boundary
+                }]}
+            }),
+        );
     let project =
         parse_project_json(&serde_json::to_vec(&source).expect("history project serializes"))
             .expect("history project parses");

@@ -641,13 +641,13 @@ fn twelve_dimension_registry() -> registry_breg::CompiledRegistry {
         .collect::<Vec<_>>();
     let mut fields =
         vec![json!({"id":"valid-from","type":"date","required":true,"classification":"internal"})];
-    let mut vocabularies = Vec::new();
+    let mut vocabularies = serde_json::Map::new();
     for id in &dimension_ids {
         fields.push(json!({
             "id":id,"type":"vocabulary-code","vocabulary":id,
             "required":true,"classification":"internal"
         }));
-        vocabularies.push(json!({"id":id,"values":["only"]}));
+        vocabularies.insert(id.clone(), json!({"values":["only"]}));
     }
     let mut readable = vec!["valid-from".to_owned()];
     readable.extend(dimension_ids.iter().cloned());

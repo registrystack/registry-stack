@@ -83,10 +83,10 @@ fn registry_from_with_correction(
     correction_plan: &[u8],
 ) -> registry_breg::CompiledRegistry {
     let correction = yaml
-        .split("  - id: correct-address\n")
+        .split("\n  correct-address:\n")
         .nth(1)
         .unwrap()
-        .split("  - id: deactivate-facility\n")
+        .split("\n  deactivate-facility:\n")
         .next()
         .unwrap();
     assert!(

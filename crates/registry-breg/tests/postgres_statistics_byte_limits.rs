@@ -39,9 +39,14 @@ async fn authored_multi_period_response_obeys_the_shared_document_byte_limit() {
     let mut fields: Vec<_> = dimension_ids.iter().map(|id| json!({"id":id,"type":"vocabulary-code","vocabulary":id,"required":true,"classification":"internal"})).collect();
     fields
         .push(json!({"id":"event-date","type":"date","required":true,"classification":"internal"}));
-    let vocabularies: Vec<_> = dimension_ids
+    let vocabularies: serde_json::Map<String, serde_json::Value> = dimension_ids
         .iter()
-        .map(|id| json!({"id":id,"values":["a".repeat(122),"b".repeat(122)]}))
+        .map(|id| {
+            (
+                id.clone(),
+                json!({"values":["a".repeat(122),"b".repeat(122)]}),
+            )
+        })
         .collect();
     let mut accessible = dimension_ids.clone();
     accessible.push("event-date".to_owned());

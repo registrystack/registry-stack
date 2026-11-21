@@ -13,10 +13,11 @@ pub fn project() -> Value {
     ];
     let boundary = json!([{"field":"owner","claim":"sub","operator":"equals"}]);
     let targets = json!([{"recordType":"person-address","rowBoundaries":boundary}]);
-    let mut profiles = vec![json!({"id":"writer","default":true,"principalClaim":"sub",
+    let mut profiles = serde_json::Map::new();
+    profiles.insert("writer".to_owned(), json!({"default":true,"principalClaim":"sub",
         "actorKind":"service","requesterClients":["application-reader"],"requiredScopes":["applications:read"],
         "permissions":{"records":[{"recordType":"person-address","operations":["create","get","list","patch"],
-            "readableFields":fields,"writableFields":fields,"rowBoundaries":"unrestricted"}]}})];
+            "readableFields":fields,"writableFields":fields,"rowBoundaries":"unrestricted"}]}}));
     for (id, actor, client, operations) in [
         (
             "citizen-agent",
@@ -31,7 +32,7 @@ pub fn project() -> Value {
             vec!["get", "list", "submit", "cancel"],
         ),
     ] {
-        let mut profile = json!({"id":id,"principalClaim":"sub","actorKind":actor,
+        let mut profile = json!({"principalClaim":"sub","actorKind":actor,
             "requesterClients":[client],"requiredScopes":["address-correction:self"],
             "permissions":{"records":[{"recordType":"person-address","operations":["get","list"],
                 "readableFields":["address-line","locality","postal-code"],"rowBoundaries":boundary}],
@@ -42,7 +43,7 @@ pub fn project() -> Value {
             profile["requiredPurposes"] = json!(["address-correction"]);
             profile["taskGrant"] = json!({"sourceIssuer":"https://tasks.example.test"});
         }
-        profiles.push(profile);
+        profiles.insert(id.to_owned(), profile);
     }
     json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"native-citizen-proof","canonicalBaseIri":"https://synthetic.example.test/citizen","version":"1","defaultLanguage":"en"},

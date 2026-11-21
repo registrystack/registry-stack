@@ -598,7 +598,7 @@ fn source() -> Value {
                 "datasets":[{"dataset":DATASET,"operations":["read-releases"]}]}}
         },
         "vocabularies":{"district": {"values":["d1","d2"]}, "category": {"values":["a","b","c"]}},
-        "statisticalDatasets":{"DATASET": {"unit":"record","population":"active eq true",
+        "statisticalDatasets":{(DATASET): {"unit":"record","population":"active eq true",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["district","category"],
             "measures":[

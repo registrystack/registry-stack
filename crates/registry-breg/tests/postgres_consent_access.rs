@@ -1439,7 +1439,11 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
     // Isolate the read-policy and consent-helper DDL from Action contract
     // revisions, whose native migration policy requires separate review.
     gated.as_object_mut().unwrap().remove("actions");
-    for profile in gated["accessProfiles"].as_array_mut().unwrap() {
+    for profile in gated["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
         profile["permissions"]
             .as_object_mut()
             .unwrap()
@@ -1630,11 +1634,7 @@ async fn frozen_review_changes_require_current_consent_for_each_snapshot_subject
             "set":{"person":{"fromInput":"person"},"programme":{"value":"proposed-programme-canary"}}
         }]}
     });
-    let profiles = source["accessProfiles"].as_array_mut().unwrap();
-    let steward = profiles
-        .iter_mut()
-        .find(|profile| profile["id"] == "steward")
-        .unwrap();
+    let steward = &mut source["accessProfiles"]["steward"];
     steward["permissions"]["actions"]
         .as_array_mut()
         .unwrap()
@@ -1644,22 +1644,14 @@ async fn frozen_review_changes_require_current_consent_for_each_snapshot_subject
     steward["permissions"]["proposals"] = json!([{
         "action":"reassign-enrolment","operations":["get","submit"],"ownership":"caller","targets":targets
     }]);
-    let reviewer = profiles
-        .iter_mut()
-        .find(|profile| profile["id"] == SCOPE)
-        .unwrap();
+    let reviewer = &mut source["accessProfiles"][SCOPE];
     reviewer["permissions"]["proposals"] = json!([{
         "action":"reassign-enrolment","operations":["get-review-context"],
         "readableContextFields":["changes"],"targets":targets
     }]);
     for operation in ["get", "edit", "submit", "apply"] {
         let mut invalid = source.clone();
-        let reviewer = invalid["accessProfiles"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|profile| profile["id"] == SCOPE)
-            .unwrap();
+        let reviewer = &mut invalid["accessProfiles"][SCOPE];
         reviewer["permissions"]["proposals"][0]["operations"] =
             json!(["get-review-context", operation]);
         assert!(
