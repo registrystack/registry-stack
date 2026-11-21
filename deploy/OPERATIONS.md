@@ -134,8 +134,11 @@ To abandon an upgrade before any database change, match the ready ledger activat
      --helm-bin /usr/local/lib/registry-stack/helm --kube-context default --namespace directory \
      --release directory --database-id directory-db \
      --values /srv/registry-directory/restored/values.json \
-     adopt-restored --confirm-original-fenced
+     adopt-restored --confirm-original-fenced \
+     --backup-receipt /srv/registry-directory/backup-01-receipt.json
    ```
+
+   Before it adopts anything, the operator reads the restored database's status. It refuses unless the status is ready and the database ID matches `--database-id` and the receipt. The activation must match the receipt. The package must match the receipt and the package in `values.json`. Two backups of the same activation look the same to this check, so pass the receipt you used in step 3.
 
 6. Verify HTTPS, sign-in, an authorised record and a denied request, previous audit entries, and one post-restore write and readback. Open ingress and callers after acceptance. Record measured recovery time and the recovered point in time.
 

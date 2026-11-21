@@ -29,6 +29,7 @@ OTHER_DIGEST = "sha256:" + "b" * 64
 REPOSITORY = Path(__file__).resolve().parents[2]
 PACKAGE_VALUES = {"breg": {"package": {"existingClaim": "package", "expectedDigest": DIGEST}}}
 ADOPT_RESTORED = ("adopt-restored", "--confirm-original-fenced")
+RESTORED_ACTIVATION = "restored-activation"
 
 
 def fake_clock():
@@ -1043,6 +1044,19 @@ class CommandLineTest(unittest.TestCase):
         self.events = []
         self.operations = {}
         self.policies = {}
+        self.write_receipt()
+
+    def write_receipt(self, **overrides):
+        """The receipt of the bundle the restored database came from."""
+        self.receipt = self.root / "backup-receipt.json"
+        self.receipt.write_text(json.dumps({
+            "namespace": "source-namespace", "release": "source-release", "databaseId": "registry-test-db",
+            "packageDigest": DIGEST, "activationId": RESTORED_ACTIVATION,
+            "capturedAt": "2026-01-01T00:00:00+00:00", **overrides,
+        }))
+
+    def adopt_restored(self):
+        return self.run_operator(*ADOPT_RESTORED, "--backup-receipt", str(self.receipt))
 
     def run_operator(self, *action, values=None):
         path = self.root / "values.json"
@@ -1135,7 +1149,7 @@ class CommandLineTest(unittest.TestCase):
         if kind == "status":
             return {
                 **envelope, "command": "status", "databaseId": self.reported_database_id,
-                "activePackageDigest": DIGEST, "activationId": "restored-activation", "roleMode": "split",
+                "activePackageDigest": DIGEST, "activationId": RESTORED_ACTIVATION, "roleMode": "split",
                 "maintenanceStatus": "ready", "maintenanceTargetPackageDigest": None,
             }
         self.assertEqual(kind, "doctor")
@@ -1144,10 +1158,10 @@ class CommandLineTest(unittest.TestCase):
         return {**envelope, "ok": matches, "command": "doctor", "diagnostics": [] if matches else [{"code": "startup.instance-claim"}]}
 
     def test_adopt_restored_claims_verifies_and_serves_the_restored_copy(self):
-        code, stdout, stderr = self.run_operator(*ADOPT_RESTORED)
+        code, stdout, stderr = self.adopt_restored()
         self.assertEqual((code, stderr), (0, ""))
         self.assertEqual(self.events, [
-            "lease acquire", "job claim-status", "helm list", "job claim-adopt", "job status", "job doctor",
+            "lease acquire", "job claim-status", "helm list", "job status", "job claim-adopt", "job status", "job doctor",
             "helm upgrade", "lease release",
         ])
         self.assertEqual(json.loads(stdout), self.report("status"))
@@ -1158,10 +1172,10 @@ class CommandLineTest(unittest.TestCase):
         self.claim["matches"] = True
         self.releases = [{"name": "directory"}]
         self.deployed = release_values(self.target, serve=True)
-        code, stdout, stderr = self.run_operator(*ADOPT_RESTORED)
+        code, stdout, stderr = self.adopt_restored()
         self.assertEqual((code, stderr), (0, ""))
         self.assertEqual(self.events, [
-            "lease acquire", "job claim-status", "helm list", "helm get values", "job status", "job doctor",
+            "lease acquire", "job claim-status", "helm list", "helm get values", "job status", "job status", "job doctor",
             "helm upgrade", "lease release",
         ])
         self.assertEqual(json.loads(stdout)["activationId"], "restored-activation")
@@ -1185,19 +1199,40 @@ class CommandLineTest(unittest.TestCase):
             with self.subTest(description=description):
                 self.restore_target()
                 vars(self).update(copy.deepcopy(state))
-                code, stdout, stderr = self.run_operator(*ADOPT_RESTORED)
+                code, stdout, stderr = self.adopt_restored()
                 self.assertEqual((code, stdout), (1, ""))
                 self.assertRegex(stderr, f"^registry-stack: {message}")
                 self.assertNotIn("job claim-adopt", self.events)
                 self.assertNotIn("helm upgrade", self.events)
                 self.assertEqual(self.events[-1], "lease release")
 
-    def test_adopt_restored_does_not_serve_a_copy_of_another_database(self):
-        self.reported_database_id = "other-registry-db"
-        code, stdout, stderr = self.run_operator(*ADOPT_RESTORED)
+    def test_adopt_restored_refuses_a_database_that_differs_from_the_receipt(self):
+        cases = (
+            ("restored database ID", {"reported_database_id": "other-registry-db"}, {}, "The restored database has another database ID than --database-id"),
+            ("receipt database ID", {}, {"databaseId": "other-registry-db"}, "The backup receipt names another database than --database-id"),
+            ("--database-id", {"reported_database_id": "other-registry-db"}, {"databaseId": "other-registry-db"}, "The restored database has another database ID than --database-id"),
+            ("package digest", {}, {"packageDigest": OTHER_DIGEST}, "The restored database does not match the backup receipt"),
+            ("activation", {}, {"activationId": "other-activation"}, "The restored database does not match the backup receipt"),
+            ("receipt without an activation", {}, {"activationId": None}, "The restored database does not match the backup receipt"),
+        )
+        for description, state, receipt, message in cases:
+            with self.subTest(description=description):
+                self.restore_target()
+                vars(self).update(state)
+                self.write_receipt(**receipt)
+                code, stdout, stderr = self.adopt_restored()
+                self.assertEqual((code, stdout), (1, ""))
+                self.assertRegex(stderr, f"^registry-stack: {message}")
+                self.assertNotIn("job claim-adopt", self.events)
+                self.assertNotIn("helm upgrade", self.events)
+                self.assertEqual(self.events[-1], "lease release")
+
+    def test_adopt_restored_refuses_a_staged_package_other_than_the_restored_one(self):
+        self.target["breg"]["package"]["expectedDigest"] = OTHER_DIGEST
+        code, stdout, stderr = self.adopt_restored()
         self.assertEqual((code, stdout), (1, ""))
-        self.assertRegex(stderr, "^registry-stack: BReg status did not verify the expected ready database")
-        self.assertIn("job claim-adopt", self.events)
+        self.assertRegex(stderr, "^registry-stack: The restored database runs another package than the values file stages")
+        self.assertNotIn("job claim-adopt", self.events)
         self.assertNotIn("helm upgrade", self.events)
         self.assertEqual(self.events[-1], "lease release")
 
@@ -1207,6 +1242,43 @@ class CommandLineTest(unittest.TestCase):
         code, stdout, stderr = self.run_operator("stop", values={"casework": {"enabled": True, "serve": True}})
         self.assertEqual((code, stdout, stderr), (1, "", "registry-stack: Helm has no release to stop.\n"))
         self.assertEqual(self.events, ["lease acquire", "helm list", "lease release"])
+
+    def test_adopt_restored_refuses_a_missing_or_unreadable_receipt(self):
+        cases = (
+            ("missing", None, "Cannot read the required backup receipt"),
+            ("not UTF-8", b"\x1f\x8b\x08\x00\xff", "Cannot read the required backup receipt"),
+            ("not JSON", b"{", "Backup receipt "),
+            ("not an object", b"[]", "Backup receipt "),
+        )
+        for description, content, message in cases:
+            with self.subTest(description=description):
+                self.restore_target()
+                if content is None:
+                    self.receipt = self.root / "missing.json"
+                else:
+                    self.receipt.write_bytes(content)
+                code, stdout, stderr = self.adopt_restored()
+                self.assertEqual((code, stdout), (1, ""))
+                self.assertRegex(stderr, f"^registry-stack: {message}")
+                self.assertEqual(self.events, ["lease acquire", "lease release"])
+
+    def test_adopt_restored_resume_refuses_a_receipt_of_another_activation(self):
+        self.claim["matches"] = True
+        self.releases = [{"name": "directory"}]
+        self.deployed = release_values(self.target, serve=True)
+        self.write_receipt(activationId="other-activation")
+        code, stdout, stderr = self.adopt_restored()
+        self.assertEqual((code, stdout), (1, ""))
+        self.assertRegex(stderr, "^registry-stack: The restored database does not match the backup receipt")
+        self.assertNotIn("job claim-adopt", self.events)
+        self.assertNotIn("helm upgrade", self.events)
+        self.assertEqual(self.events[-1], "lease release")
+
+    def test_adopt_restored_requires_a_backup_receipt_argument(self):
+        code, stdout, stderr = self.run_operator(*ADOPT_RESTORED)
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("--backup-receipt", stderr)
+        self.assertEqual(self.events, [])
 
     def test_values_file_without_the_package_is_refused_before_any_command(self):
         for values, path in (
@@ -1225,7 +1297,7 @@ class CommandLineTest(unittest.TestCase):
         self.claim["matches"] = True
         self.releases = [{"name": "directory"}]
         self.deployed = {"appKit": {"enabled": True}}
-        code, _, stderr = self.run_operator(*ADOPT_RESTORED)
+        code, _, stderr = self.adopt_restored()
         self.assertEqual(code, 1)
         self.assertEqual(
             stderr, "registry-stack: Missing key 'breg' in the Helm release values, a Kubernetes object, the upgrade record "

@@ -3133,7 +3133,7 @@ async fn real_postgres_an_activation_keeps_a_claim_that_names_another_database()
         )
         .await
         .expect("the administrator points the claim at another database");
-    apply(
+    let successor = apply(
         &database,
         &package,
         ApplyPrecondition::Successor { current: &active },
@@ -3145,6 +3145,18 @@ async fn real_postgres_an_activation_keeps_a_claim_that_names_another_database()
         (Some(1), 3),
         "the activation leaves the recorded claim in place"
     );
+    // The deployment operator reads this status from a restored copy before
+    // it adopts the copy, so the report must not depend on the claim.
+    let status = read_activation_status(
+        &database.migration_config,
+        &database.migration_role,
+        timeouts(),
+    )
+    .await
+    .expect("status answers while the claim names another database")
+    .expect("the database records an activation");
+    assert_eq!(status.identity, successor);
+    assert_eq!(status.maintenance_status, "ready");
 }
 
 /// Threat: a database whose registry state this release does not recognise,
