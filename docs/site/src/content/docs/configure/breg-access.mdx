@@ -526,6 +526,10 @@ applies the change. An import item it refuses answers the generic `412 precondit
 of the 403, as import does for a row boundary. A Create has no earlier state, so this rule never
 refuses it.
 
+A bound profile also cannot tombstone a record that a condition binding it matches. A `fields` or
+`history` condition refuses the tombstone with `403 write.outside-boundary`. A `record` condition
+already hides the row, so the tombstone answers `412 precondition.failed`, as for an absent record.
+
 A Proposal review shows a withheld field as `null`, and applying a change set to a record that
 became withheld after submission is refused. A Proposal applied by hand is checked as a write by the
 profile that applies it. A Proposal applied automatically runs under the reserved

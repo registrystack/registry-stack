@@ -172,6 +172,13 @@ impl DisclosurePlan<'_> {
         Ok(false)
     }
 
+    /// Whether the profile may not tombstone a record in `before`: any bound
+    /// condition that matches it refuses. A `record` condition also hides the
+    /// row from the tombstone, which then answers as for an absent record.
+    pub fn refuses_tombstone(&self, before: &Map<String, Value>) -> Result<bool, DisclosureError> {
+        self.any_matching(before, |_| true)
+    }
+
     fn any_matching(
         &self,
         state: &Map<String, Value>,
@@ -488,6 +495,27 @@ mod tests {
         // A state that cannot be evaluated is an error.
         assert!(registrar
             .refuses_write(&state(json!({"level": 7})), &state(json!({"phone": "555"})))
+            .is_err());
+    }
+
+    #[test]
+    fn a_bound_profile_cannot_tombstone_a_marked_record() {
+        let entity = entity();
+        let registrar = plan(&entity, "registrar");
+        let refuses = |before: Value| registrar.refuses_tombstone(&state(before)).unwrap();
+        // Each kind of matching condition refuses: fields, history, record.
+        assert!(refuses(json!({"level": "a"})));
+        assert!(refuses(json!({"age": 4})));
+        assert!(refuses(json!({"level": "secret"})));
+        // A record no condition matches tombstones.
+        assert!(!refuses(json!({"level": "c"})));
+        // An exempt profile tombstones a marked record.
+        assert!(!plan(&entity, "officer")
+            .refuses_tombstone(&state(json!({"level": "a", "age": 4})))
+            .unwrap());
+        // A state that cannot be evaluated is an error.
+        assert!(registrar
+            .refuses_tombstone(&state(json!({"level": 7})))
             .is_err());
     }
 
