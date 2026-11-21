@@ -149,16 +149,16 @@
   derived fields, spatial queries, Evidence facts, external view links or statistical datasets reach
   a withheld value, a Record timer that reads a withheld field, and a Record timer on a hidden
   record that creates a record a bound profile reads (`breg.disclosure.*`). It warns, ranked as
-  widening access, when a field a `fields` condition withholds is in a uniqueness constraint, a
-  unique encrypted lookup or a temporal non-overlap, because a Create, or a Patch of another record,
-  that repeats the value answers `409` and confirms it exists on a hidden record
-  (`breg.disclosure.withheld-field-probe`). Runtime metadata flags `mayBeWithheld` and lists the
-  bound conditions without their literals, `bregctl explain access` lists them in full, the access
-  preview names the ids that bind a profile, and the ODRL export omits a grant a condition binds
-  (`disclosure-condition`). Proposal inputs stay visible to reviewers, and a uniqueness or reference
-  conflict on a Create or Patch can reveal that a withheld record exists. Packages that use the new
-  key change revision, and the metadata, OpenAPI and Explain documents gain members that earlier
-  clients ignore.
+  widening access, when a field a `fields` condition withholds is in a uniqueness constraint or a
+  partial one's `when`, a unique encrypted lookup or a temporal non-overlap, because a Create, or a
+  Patch of another record, that repeats the value answers `409` and confirms it exists on a hidden
+  record (`breg.disclosure.withheld-field-probe`). Runtime metadata flags `mayBeWithheld` and lists
+  the bound conditions without their literals, `bregctl explain access` lists them in full, the
+  access preview names the ids that bind a profile, and the ODRL export omits a grant a condition
+  binds (`disclosure-condition`). Proposal inputs stay visible to reviewers, and a uniqueness or
+  reference conflict on a Create or Patch can reveal that a withheld record exists. Packages that
+  use the new key change revision, and the metadata, OpenAPI and Explain documents gain members that
+  earlier clients ignore.
 - An access profile can set `requireAccessReason: true`. A request under it without a valid
   `Registry-Access-Reason` header (unpadded base64url UTF-8, at most 512 bytes) is refused with
   `400 request.access_reason_required`. The reason is stored on the subject access log entry and

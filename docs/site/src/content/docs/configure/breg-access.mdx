@@ -622,7 +622,9 @@ Design around them.
   shows that the hidden record exists. For a field a `fields` condition withholds, a Create or a
   Patch of another record that repeats its value answers the same `409` when the field belongs to a
   uniqueness constraint, has a unique encrypted lookup, or is in a temporal non-overlap. That
-  confirms the value exists on a hidden record. `bregctl check` warns about the `fields` case with
+  confirms the value exists on a hidden record. A field a partial uniqueness constraint's `when`
+  reads answers in the same way: a repeated unique value conflicts only when the hidden record's
+  field meets the predicate. `bregctl check` warns about the `fields` case with
   `breg.disclosure.withheld-field-probe`, ranked as widening access,
   so the check fails under `--deny-warnings` until you
   [accept the finding](../../reference/configuration-files/#accept-an-intentional-project-warning).
