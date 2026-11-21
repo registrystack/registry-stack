@@ -85,6 +85,21 @@ pub fn id_keyed_schema<T: schemars::JsonSchema + crate::Identified>(
     })
 }
 
+/// The schema of an [`id_keyed`] member that holds from `MIN` to `MAX`
+/// entries: [`id_keyed_schema`] with `minProperties` (omitted when `MIN` is
+/// zero) and `maxProperties`.
+#[cfg(feature = "schema")]
+pub fn id_keyed_schema_bounded<T: schemars::JsonSchema, const MIN: u64, const MAX: u64>(
+    generator: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
+    let mut schema = id_keyed_schema::<T>(generator);
+    if MIN > 0 {
+        schema.insert("minProperties".to_owned(), MIN.into());
+    }
+    schema.insert("maxProperties".to_owned(), MAX.into());
+    schema
+}
+
 /// The schema of an [`id_keyed_or_list`] member: the mapping configuration
 /// writes, or, for the served form, the list of items by id.
 #[cfg(feature = "schema")]

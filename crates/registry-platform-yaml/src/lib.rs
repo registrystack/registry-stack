@@ -139,7 +139,7 @@ pub use envelope::{
 };
 pub use id_keyed::{id_keyed, id_keyed_by_local_id, id_keyed_or_list, serialize_id_keyed};
 #[cfg(feature = "schema")]
-pub use id_keyed::{id_keyed_or_list_schema, id_keyed_schema};
+pub use id_keyed::{id_keyed_or_list_schema, id_keyed_schema, id_keyed_schema_bounded};
 pub use integrity::{
     duplicate_display_text_diagnostics, duplicate_display_text_location_diagnostics,
     local_id_collision_diagnostics, AuthoredDisplayText, AuthoredDisplayTextLocation, AuthoredId,

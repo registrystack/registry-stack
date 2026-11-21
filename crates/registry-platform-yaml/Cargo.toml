@@ -17,6 +17,10 @@ schema = ["dep:schemars"]
 name = "reader_schema"
 required-features = ["schema"]
 
+[[test]]
+name = "id_keyed_schema"
+required-features = ["schema"]
+
 [dependencies]
 registry-platform-text.workspace = true
 saphyr-parser.workspace = true
