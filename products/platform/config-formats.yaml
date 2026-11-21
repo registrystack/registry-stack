@@ -1946,7 +1946,7 @@ formats:
       optionalText: /accessProfiles/case-notices/actorKind
       integer: /senderProfiles/reminders-sms/maximumSegments
       boolean: /providers/sms-gateway/idempotentSubmit
-      idList: /templates
+      idList: none
       set: /accessProfiles/case-notices/requiredScopes
       reference: /senderProfiles/transactional/provider
     securityMembers:
