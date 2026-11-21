@@ -266,6 +266,9 @@ pub(in crate::compiler) fn validate_timer_creates(
 
 /// A read path walks the reference fields of its `through` entity, so a
 /// profile that reads the path learns which rows the withheld reference joins.
+/// The path's grant also filters and sorts its `to` entity before the reader
+/// withholds a field, so a bound profile may not filter or sort a field
+/// withheld there either.
 pub(super) fn validate_read_paths(
     entity: &EntitySource,
     condition: &DisclosureConditionSource,
@@ -304,6 +307,36 @@ pub(super) fn validate_read_paths(
                         &profile.id,
                         &format!("reads path `{}` through", path.id),
                     );
+                }
+            }
+        }
+        for path in owner.read_paths.iter().filter(|path| path.to == entity.id) {
+            for (profile, grant) in owner
+                .access_profiles
+                .iter()
+                .filter(|profile| !condition.exempt_profiles.contains(&profile.id))
+                .flat_map(|profile| {
+                    profile
+                        .read_paths
+                        .iter()
+                        .filter(|grant| grant.path == path.id)
+                        .map(move |grant| (profile, grant))
+                })
+            {
+                for (surface, granted) in [
+                    ("filters", &grant.filterable_fields),
+                    ("sorts", &grant.sortable_fields),
+                ] {
+                    for field in granted.iter().filter(|field| withheld.contains(field)) {
+                        refuse(
+                            errors,
+                            "breg.disclosure.read-path-withheld-field",
+                            root,
+                            field,
+                            &profile.id,
+                            &format!("{surface} path `{}` by", path.id),
+                        );
+                    }
                 }
             }
         }

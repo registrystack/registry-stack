@@ -1056,6 +1056,49 @@ fn a_read_path_cannot_run_through_a_withheld_reference() {
     ));
 }
 
+/// A read path compiles the grant's filter and sort over the `to` record
+/// type, and the filter runs before the reader withholds the field, so
+/// `$filter=code eq 'guess'` would say whether a withheld value matches.
+#[test]
+fn a_read_path_cannot_filter_or_sort_a_withheld_target_field() {
+    let mut value = source();
+    value["recordTypes"]["child"] = json!({"primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","classification":"internal",
+            "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"},
+                      {"id":"sealed","type":"boolean","classification":"internal"}],
+            "disclosureConditions":{"hide-code": {"when":[{"type":"field-equals","field":"sealed","value":true}],
+              "withhold":"fields","fields":["code"],"exemptProfiles":["protection-officer"]}}});
+    value["recordTypes"]["link"] = json!({"primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","classification":"internal",
+            "fields":[{"id":"person","type":"reference","target":"person","classification":"internal"},
+                      {"id":"child","type":"reference","target":"child","classification":"internal"}]});
+    value["recordTypes"]["person"]["readPaths"] =
+        json!([{"id":"children","through":"link","to":"child","route":"children"}]);
+    let path = "recordTypes[id=child].disclosureConditions[id=hide-code].fields[field=code]";
+    for surface in ["filterableFields", "sortableFields"] {
+        let mut granted = value.clone();
+        person_permission(&mut granted, REGISTRAR)["readPaths"] =
+            json!([{"path":"children","readableFields":["code"], surface: ["code"]}]);
+        let found = refusal_or_empty(&granted);
+        assert!(
+            found.contains(&(
+                "breg.disclosure.read-path-withheld-field".to_owned(),
+                path.to_owned()
+            )),
+            "{surface}: {found:?}"
+        );
+        granted["recordTypes"]["child"]["disclosureConditions"]["hide-code"]["exemptProfiles"] =
+            json!(["protection-officer", "registrar"]);
+        assert!(
+            compile(&granted).is_ok(),
+            "{surface}: {:?}",
+            refusal_or_empty(&granted)
+        );
+    }
+    // Reading the field through the path stays allowed: the reader withholds
+    // it from the response.
+    person_permission(&mut value, REGISTRAR)["readPaths"] = json!([{"path":"children","readableFields":["code","sealed"],"filterableFields":["sealed"]}]);
+    assert!(compile(&value).is_ok(), "{:?}", refusal_or_empty(&value));
+}
+
 fn compile_with_sql(
     value: &Value,
     sql: &str,
