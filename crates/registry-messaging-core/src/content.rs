@@ -493,19 +493,19 @@ pub(crate) mod tests {
             {"id": "appointment-reminder", "version": "2"},
             {"id": "appointment-sms", "version": "1"}
         ]);
-        value["accessProfiles"][0]["senderProfiles"] = json!(["transactional", "notices-sms"]);
-        value["accessProfiles"][0]["templates"] =
+        value["accessProfiles"]["case-notices"]["senderProfiles"] =
+            json!(["transactional", "notices-sms"]);
+        value["accessProfiles"]["case-notices"]["templates"] =
             json!(["appointment-reminder", "appointment-sms"]);
-        value["accessProfiles"][0]["allowDirectContent"] = json!(true);
-        value["accessProfiles"].as_array_mut().unwrap().push(json!({
-            "id": "operators",
+        value["accessProfiles"]["case-notices"]["allowDirectContent"] = json!(true);
+        value["accessProfiles"]["operators"] = json!({
             "principalClaim": "sub",
             "requiredScopes": "unrestricted",
             "requesterClients": ["operator-console"],
             "actsAs": "operator",
             "requestsPerMinute": 60,
             "burst": 10
-        }));
+        });
         project(value)
     }
 

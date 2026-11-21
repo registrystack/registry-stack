@@ -5,10 +5,10 @@ project:
   id: earlier-appointment-notices
   version: '1'
 providers:
-  - id: mail-relay
+  mail-relay:
     type: smtp
 senderProfiles:
-  - id: transactional
+  transactional:
     channel: email
     provider: mail-relay
     sender: notices@example.invalid
@@ -16,7 +16,7 @@ templates:
   - id: earlier-appointment
     version: '1'
 accessProfiles:
-  - id: alert-sender
+  alert-sender:
     principalClaim: sub
     requiredScopes: [messaging:send]
     requesterClients: [coordinator-alerts]

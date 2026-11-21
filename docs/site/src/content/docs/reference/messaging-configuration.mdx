@@ -349,7 +349,7 @@ kind: MessagingProject
 project:
   id: starter
   version: "1"
-accessProfiles: []
+accessProfiles: {}
 ```
 
 The former kind `MessagingPackage` is refused as `config.wrong-kind`, naming `MessagingProject`, and the former `registry.registrystack.org/messaging-package/v1alpha1` as `config.retired-api-version`, naming the runtime envelope.
@@ -360,9 +360,12 @@ The former kind `MessagingPackage` is refused as `config.wrong-kind`, naming `Me
 
 ### Access profiles
 
-Each access profile has the members `id`, `principalClaim`, `requiredScopes`, `requesterClients`, `actorKind`, `actsAs`, `senderProfiles`, `templates`, `allowDirectContent`, `requestsPerMinute`, `burst`, and `maximumMessagesPerDay`.
+`accessProfiles`, `providers`, and `senderProfiles` are mappings from each item's id to the rest of its entry, written with no `id` member.
+The list form and an `id` member inside an entry are refused as `config.removed-key`, and a repeated key is refused as `yaml.duplicate-key`.
+`templates` stays a list, because a template is named by its id and version.
+Each access profile has the members `principalClaim`, `requiredScopes`, `requesterClients`, `actorKind`, `actsAs`, `senderProfiles`, `templates`, `allowDirectContent`, `requestsPerMinute`, `burst`, and `maximumMessagesPerDay`.
 
-- `id` is a local identifier: a lowercase letter, then at most 63 lowercase letters, digits, underscores, or hyphens.
+- The key is the profile id, a local identifier: a lowercase letter, then at most 63 lowercase letters, digits, underscores, or hyphens.
 - `requiredScopes` is required: a list of at least one scope a token must carry, or `unrestricted` to require none.
 - `requesterClients` lists at least one client.
   A requester client belongs to exactly one profile.
@@ -386,17 +389,17 @@ The rest of the manifest declares what callers send through:
 
 ```yaml
 providers:
-  - id: mail-relay
+  mail-relay:
     type: smtp
-  - id: sms-gateway
+  sms-gateway:
     type: http
     idempotentSubmit: true
 senderProfiles:
-  - id: transactional
+  transactional:
     channel: email
     provider: mail-relay
     sender: notices@example.org
-  - id: reminders-sms
+  reminders-sms:
     channel: sms
     provider: sms-gateway
     sender: Registry

@@ -22,8 +22,8 @@ test('Messaging reference carries the keys the author and operator pages name', 
   const paths = (id) => new Set(document.contracts.find((contract) => contract.id === id)
     .fields.map((field) => field.key_path));
   const expected = {
-    project: ['senderProfiles[].maximumSegments', 'senderProfiles[].retry.maximumAttempts',
-      'senderProfiles[].onUncertain', 'accessProfiles[].requesterClients', 'accessProfiles[].burst'],
+    project: ['senderProfiles.*.maximumSegments', 'senderProfiles.*.retry.maximumAttempts',
+      'senderProfiles.*.onUncertain', 'accessProfiles.*.requesterClients', 'accessProfiles.*.burst'],
     template: ['channel', 'locales', 'parts'],
     provider: ['prepareScript', 'capabilities.receipts', 'capabilities.ratePerSecond'],
     runtime: ['identity.databaseId', 'listener.bind', 'package.root', 'package.expectedDigest',

@@ -1943,12 +1943,12 @@ formats:
     example: products/messaging/examples/starter/messaging.yaml
     conformance:
       requiredText: /project/id
-      optionalText: /accessProfiles/0/actorKind
-      integer: /senderProfiles/1/maximumSegments
-      boolean: /providers/1/idempotentSubmit
-      idList: /providers
-      set: /accessProfiles/0/requiredScopes
-      reference: /senderProfiles/0/provider
+      optionalText: /accessProfiles/case-notices/actorKind
+      integer: /senderProfiles/reminders-sms/maximumSegments
+      boolean: /providers/sms-gateway/idempotentSubmit
+      idList: /templates
+      set: /accessProfiles/case-notices/requiredScopes
+      reference: /senderProfiles/transactional/provider
     securityMembers:
       - pointer: /accessProfiles/*/requiredScopes
         whenOmitted: refused

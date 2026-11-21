@@ -208,7 +208,7 @@ fn the_aws_example_builds_and_checks_as_an_installed_package() {
     let manifest = project.path().join("messaging.yaml");
     let manifest_text = std::fs::read_to_string(&manifest)
         .expect("read starter manifest")
-        .replace("  - id: sms-gateway\n", "  - id: aws-sms\n")
+        .replace("  sms-gateway:\n", "  aws-sms:\n")
         .replace("    idempotentSubmit: true\n", "")
         .replace("    provider: sms-gateway\n", "    provider: aws-sms\n")
         .replace(

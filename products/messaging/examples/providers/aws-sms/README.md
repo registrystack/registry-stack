@@ -20,10 +20,10 @@ above from this example, and change the package manifest to:
 
 ```yaml
 providers:
-  - id: aws-sms
+  aws-sms:
     type: http
 senderProfiles:
-  - id: reminders-sms
+  reminders-sms:
     channel: sms
     provider: aws-sms
     # Use the AWS E.164 origination number or sender ID for this deployment.

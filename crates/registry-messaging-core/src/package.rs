@@ -8,8 +8,11 @@
 //! `project` block, declares the providers a deployment routes through (by
 //! type, never by endpoint or credential, which are runtime configuration),
 //! the sender profiles callers select, the template versions the project
-//! ships, and who may call the runtime, as `accessProfiles[]`, so a reviewer
-//! reads the callers next to what they may send. Every member is closed, so an
+//! ships, and who may call the runtime, as `accessProfiles`, so a reviewer
+//! reads the callers next to what they may send. Providers, sender profiles,
+//! and access profiles are mappings from each id to the rest of the entry
+//! (CFG-ID-5). Templates stay a list because a template is named by id and
+//! version. Every member is closed, so an
 //! unknown key is refused rather than ignored.
 //!
 //! The shared reader refuses what one member decides by itself: its type,
@@ -86,6 +89,18 @@ pub const MESSAGING_PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
         }],
     },
     removed_keys: &[
+        RemovedKey {
+            pointer: "/providers/*/id",
+            replacement: "Write providers as a mapping from each id to the rest of its entry, providers: {PROVIDER_ID: {type: smtp}}, with no id member.",
+        },
+        RemovedKey {
+            pointer: "/senderProfiles/*/id",
+            replacement: "Write senderProfiles as a mapping from each id to the rest of its entry, senderProfiles: {SENDER_PROFILE_ID: {channel: email, ...}}, with no id member.",
+        },
+        RemovedKey {
+            pointer: "/accessProfiles/*/id",
+            replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {ACCESS_PROFILE_ID: {principalClaim: ...}}, with no id member.",
+        },
         RemovedKey {
             pointer: "/providers/*/kind",
             replacement: "Write type.",
@@ -355,21 +370,29 @@ pub struct MessagingProject {
     pub api_version: String,
     pub kind: String,
     pub project: ProjectIdentity,
-    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
+    /// Written as a mapping from each provider id to the rest of the
+    /// provider (CFG-ID-5) and held sorted by id.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id"
+    )]
     #[cfg_attr(
         feature = "schema",
         schemars(
-            with = "registry_platform_yaml::UniqueIdList<ProviderDeclaration>",
-            length(max = 256)
+            schema_with = "registry_platform_yaml::id_keyed_schema_bounded::<ProviderDeclaration, 0, 256>"
         )
     )]
     pub providers: Vec<ProviderDeclaration>,
-    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
+    /// Written as a mapping from each sender profile id to the rest of the
+    /// profile (CFG-ID-5) and held sorted by id.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id"
+    )]
     #[cfg_attr(
         feature = "schema",
         schemars(
-            with = "registry_platform_yaml::UniqueIdList<SenderProfile>",
-            length(max = 256)
+            schema_with = "registry_platform_yaml::id_keyed_schema_bounded::<SenderProfile, 0, 256>"
         )
     )]
     pub sender_profiles: Vec<SenderProfile>,
@@ -383,13 +406,13 @@ pub struct MessagingProject {
     )]
     pub templates: Vec<TemplateDeclaration>,
     /// Who may call the deployment, at least one profile: a project that
-    /// names no caller serves none.
+    /// names no caller serves none. Written as a mapping from each profile id
+    /// to the rest of the profile (CFG-ID-5) and held sorted by id.
     #[serde(deserialize_with = "access_profiles")]
     #[cfg_attr(
         feature = "schema",
         schemars(
-            with = "registry_platform_yaml::UniqueIdList<AccessProfile>",
-            length(min = 1, max = 256)
+            schema_with = "registry_platform_yaml::id_keyed_schema_bounded::<AccessProfile, 1, 256>"
         )
     )]
     pub access_profiles: Vec<AccessProfile>,
@@ -399,10 +422,10 @@ fn access_profiles<'de, D>(deserializer: D) -> Result<Vec<AccessProfile>, D::Err
 where
     D: Deserializer<'de>,
 {
-    let profiles = crate::typed::unique_id_list::<D, AccessProfile>(deserializer)?;
+    let profiles = registry_platform_yaml::id_keyed_by_local_id::<D, AccessProfile>(deserializer)?;
     if profiles.is_empty() {
         return Err(Invalid::expected(
-            "a list of at least one access profile",
+            "a mapping of at least one access profile, keyed by each profile's id",
             "Declare the access profile each calling client resolves to.",
         )
         .into_error());
@@ -457,18 +480,17 @@ impl MessagingProject {
             FindingReason::ProviderIdCollision,
             self.providers
                 .iter()
-                .enumerate()
-                .map(|(index, provider)| (provider.id.as_str(), format!("/providers/{index}/id"))),
+                .map(|provider| (provider.id.as_str(), format!("/providers/{}", provider.id))),
         );
         add_identifier_collision_findings(
             &mut findings,
             FindingReason::SenderProfileIdCollision,
-            self.sender_profiles
-                .iter()
-                .enumerate()
-                .map(|(index, profile)| {
-                    (profile.id.as_str(), format!("/senderProfiles/{index}/id"))
-                }),
+            self.sender_profiles.iter().map(|profile| {
+                (
+                    profile.id.as_str(),
+                    format!("/senderProfiles/{}", profile.id),
+                )
+            }),
         );
         add_identifier_collision_findings(
             &mut findings,
@@ -481,12 +503,12 @@ impl MessagingProject {
         add_identifier_collision_findings(
             &mut findings,
             FindingReason::AccessProfileIdCollision,
-            self.access_profiles
-                .iter()
-                .enumerate()
-                .map(|(index, profile)| {
-                    (profile.id.as_str(), format!("/accessProfiles/{index}/id"))
-                }),
+            self.access_profiles.iter().map(|profile| {
+                (
+                    profile.id.as_str(),
+                    format!("/accessProfiles/{}", profile.id),
+                )
+            }),
         );
         for (member, count) in [
             ("/providers", self.providers.len()),
@@ -498,16 +520,16 @@ impl MessagingProject {
                 findings.push(MessagingFinding::new(FindingReason::TooManyEntries, member));
             }
         }
-        for (index, provider) in self.providers.iter().enumerate() {
+        for provider in &self.providers {
             if provider.kind == ProviderKind::Smtp && provider.idempotent_submit {
                 findings.push(MessagingFinding::new(
                     FindingReason::IdempotentSmtp,
-                    format!("/providers/{index}/idempotentSubmit"),
+                    format!("/providers/{}/idempotentSubmit", provider.id),
                 ));
             }
         }
-        for (index, profile) in self.sender_profiles.iter().enumerate() {
-            self.sender_profile_findings(index, profile, &mut findings);
+        for profile in &self.sender_profiles {
+            self.sender_profile_findings(profile, &mut findings);
         }
         self.access_profile_findings(&mut findings);
         findings
@@ -515,11 +537,10 @@ impl MessagingProject {
 
     fn sender_profile_findings(
         &self,
-        index: usize,
         profile: &SenderProfile,
         findings: &mut Vec<MessagingFinding>,
     ) {
-        let at = |member: &str| format!("/senderProfiles/{index}/{member}");
+        let at = |member: &str| format!("/senderProfiles/{}/{member}", profile.id);
         let provider = self
             .providers
             .iter()
@@ -585,8 +606,8 @@ impl MessagingProject {
             .map(|template| template.id.as_str())
             .collect();
         let mut clients = BTreeSet::new();
-        for (index, profile) in self.access_profiles.iter().enumerate() {
-            let at = |member: &str| format!("/accessProfiles/{index}/{member}");
+        for profile in &self.access_profiles {
+            let at = |member: &str| format!("/accessProfiles/{}/{member}", profile.id);
             for (item, scope) in profile.required_scopes.iter().enumerate() {
                 if wildcard_spelled(scope) {
                     findings.push(MessagingFinding::new(
@@ -829,32 +850,40 @@ pub(crate) mod tests {
             "apiVersion": MESSAGING_PROJECT_API_VERSION,
             "kind": MESSAGING_PROJECT_KIND,
             "project": {"id": "notices", "version": "2026.1"},
-            "providers": [
-                {"id": "relay", "type": "smtp"},
-                {"id": "sms-gateway", "type": "http"}
-            ],
-            "senderProfiles": [
-                {"id": "transactional", "channel": "email", "provider": "relay",
+            "providers": {
+                "relay": {"type": "smtp"},
+                "sms-gateway": {"type": "http"}
+            },
+            "senderProfiles": {
+                "transactional": {"channel": "email", "provider": "relay",
                  "sender": "notices@example.org"},
-                {"id": "notices-sms", "channel": "sms", "provider": "sms-gateway",
+                "notices-sms": {"channel": "sms", "provider": "sms-gateway",
                  "sender": "Registry", "maximumSegments": 2}
-            ],
+            },
             "templates": [
                 {"id": "appointment-reminder", "version": "1"},
                 {"id": "appointment-reminder", "version": "2"}
             ],
-            "accessProfiles": [{
-                "id": "case-notices",
-                "principalClaim": "sub",
-                "requiredScopes": ["messaging:send"],
-                "requesterClients": ["case-system"],
-                "actsAs": "sender",
-                "senderProfiles": ["transactional"],
-                "templates": ["appointment-reminder"],
-                "requestsPerMinute": 60,
-                "burst": 10
-            }]
+            "accessProfiles": {
+                "case-notices": {
+                    "principalClaim": "sub",
+                    "requiredScopes": ["messaging:send"],
+                    "requesterClients": ["case-system"],
+                    "actsAs": "sender",
+                    "senderProfiles": ["transactional"],
+                    "templates": ["appointment-reminder"],
+                    "requestsPerMinute": 60,
+                    "burst": 10
+                }
+            }
         })
+    }
+
+    /// Move the entry `from` to the key `to` in a mapping of entries.
+    fn rename(entries: &mut serde_json::Value, from: &str, to: &str) {
+        let entries = entries.as_object_mut().unwrap();
+        let entry = entries.remove(from).unwrap();
+        entries.insert(to.to_owned(), entry);
     }
 
     /// The codes and paths a refused read reports.
@@ -896,20 +925,17 @@ pub(crate) mod tests {
     #[test]
     fn every_project_definition_namespace_refuses_separator_lookalikes() {
         let mut value = valid();
-        let mut provider = value["providers"][1].clone();
-        provider["id"] = json!("sms_gateway");
-        value["providers"].as_array_mut().unwrap().push(provider);
-        let mut sender = value["senderProfiles"][1].clone();
-        sender["id"] = json!("notices_sms");
-        value["senderProfiles"].as_array_mut().unwrap().push(sender);
+        let provider = value["providers"]["sms-gateway"].clone();
+        value["providers"]["sms_gateway"] = provider;
+        let sender = value["senderProfiles"]["notices-sms"].clone();
+        value["senderProfiles"]["notices_sms"] = sender;
         let mut template = value["templates"][0].clone();
         template["id"] = json!("appointment_reminder");
         template["version"] = json!("2");
         value["templates"].as_array_mut().unwrap().push(template);
-        let mut access = value["accessProfiles"][0].clone();
-        access["id"] = json!("case_notices");
+        let mut access = value["accessProfiles"]["case-notices"].clone();
         access["requesterClients"] = json!(["second-case-system"]);
-        value["accessProfiles"].as_array_mut().unwrap().push(access);
+        value["accessProfiles"]["case_notices"] = access;
 
         let project = project(value);
         assert!(project.check().is_err());
@@ -923,12 +949,12 @@ pub(crate) mod tests {
             (
                 collisions[0],
                 "messaging.project.provider-id-collision",
-                "/providers/2/id",
+                "/providers/sms_gateway",
             ),
             (
                 collisions[1],
                 "messaging.project.sender-profile-id-collision",
-                "/senderProfiles/2/id",
+                "/senderProfiles/notices_sms",
             ),
             (
                 collisions[2],
@@ -938,7 +964,7 @@ pub(crate) mod tests {
             (
                 collisions[3],
                 "messaging.project.access-profile-id-collision",
-                "/accessProfiles/1/id",
+                "/accessProfiles/case_notices",
             ),
         ] {
             assert_eq!(finding.code(), code);
@@ -949,14 +975,14 @@ pub(crate) mod tests {
     #[test]
     fn exact_template_versions_and_ids_in_distinct_namespaces_remain_permitted() {
         let mut value = valid();
-        value["providers"][0]["id"] = json!("shared-id");
-        value["senderProfiles"][0]["id"] = json!("shared-id");
-        value["senderProfiles"][0]["provider"] = json!("shared-id");
+        rename(&mut value["providers"], "relay", "shared-id");
+        rename(&mut value["senderProfiles"], "transactional", "shared-id");
+        value["senderProfiles"]["shared-id"]["provider"] = json!("shared-id");
         value["templates"][0]["id"] = json!("shared-id");
         value["templates"][1]["id"] = json!("shared-id");
-        value["accessProfiles"][0]["id"] = json!("shared-id");
-        value["accessProfiles"][0]["senderProfiles"] = json!(["shared-id"]);
-        value["accessProfiles"][0]["templates"] = json!(["shared-id"]);
+        rename(&mut value["accessProfiles"], "case-notices", "shared-id");
+        value["accessProfiles"]["shared-id"]["senderProfiles"] = json!(["shared-id"]);
+        value["accessProfiles"]["shared-id"]["templates"] = json!(["shared-id"]);
         let project = project(value);
         assert!(project
             .findings()
@@ -971,16 +997,16 @@ pub(crate) mod tests {
     fn every_unknown_member_is_refused_at_its_key() {
         let mut value = valid();
         value["templatez"] = json!([]);
-        value["accessProfiles"][0]["allowEverything"] = json!(true);
-        value["senderProfiles"][0]["endpoint"] = json!("https://relay.example.org");
-        value["providers"][0]["credentialRef"] = json!("secret:env/RELAY");
+        value["accessProfiles"]["case-notices"]["allowEverything"] = json!(true);
+        value["senderProfiles"]["transactional"]["endpoint"] = json!("https://relay.example.org");
+        value["providers"]["relay"]["credentialRef"] = json!("secret:env/RELAY");
         value["templates"][0]["latest"] = json!(true);
         let reported = refused(&value);
         for path in [
             "/templatez",
-            "/accessProfiles/0/allowEverything",
-            "/senderProfiles/0/endpoint",
-            "/providers/0/credentialRef",
+            "/accessProfiles/case-notices/allowEverything",
+            "/senderProfiles/transactional/endpoint",
+            "/providers/relay/credentialRef",
             "/templates/0/latest",
         ] {
             assert!(
@@ -989,8 +1015,8 @@ pub(crate) mod tests {
             );
         }
         let mut value = valid();
-        value["providers"][0]["type"] = json!("sendmail");
-        assert_eq!(refused(&value)[0].1, "/providers/0/type");
+        value["providers"]["relay"]["type"] = json!("sendmail");
+        assert_eq!(refused(&value)[0].1, "/providers/relay/type");
     }
 
     #[test]
@@ -1015,44 +1041,44 @@ pub(crate) mod tests {
     #[test]
     fn the_former_spellings_name_their_replacements() {
         let mut value = valid();
-        value["providers"][0] = json!({"id": "relay", "kind": "smtp"});
-        value["accessProfiles"][0]["dailyLimit"] = json!(100);
-        value["accessProfiles"][0]["role"] = json!("sender");
+        value["providers"]["relay"] = json!({"kind": "smtp"});
+        value["accessProfiles"]["case-notices"]["dailyLimit"] = json!(100);
+        value["accessProfiles"]["case-notices"]["role"] = json!("sender");
         let reported = refused(&value);
         assert!(reported.contains(&(
             "config.removed-key".to_owned(),
-            "/accessProfiles/0/role".to_owned()
+            "/accessProfiles/case-notices/role".to_owned()
         )));
         assert!(reported.contains(&(
             "config.removed-key".to_owned(),
-            "/providers/0/kind".to_owned()
+            "/providers/relay/kind".to_owned()
         )));
         assert!(reported.contains(&(
             "config.removed-key".to_owned(),
-            "/accessProfiles/0/dailyLimit".to_owned()
+            "/accessProfiles/case-notices/dailyLimit".to_owned()
         )));
     }
 
     #[test]
     fn every_reference_must_name_a_declaration() {
         let mut value = valid();
-        value["accessProfiles"][0]["templates"] = json!(["unknown-template"]);
-        value["accessProfiles"][0]["senderProfiles"] = json!(["unknown-profile"]);
-        value["senderProfiles"][0]["provider"] = json!("elsewhere");
+        value["accessProfiles"]["case-notices"]["templates"] = json!(["unknown-template"]);
+        value["accessProfiles"]["case-notices"]["senderProfiles"] = json!(["unknown-profile"]);
+        value["senderProfiles"]["transactional"]["provider"] = json!("elsewhere");
         assert_eq!(
             findings(value),
             vec![
                 (
                     "messaging.project.unknown-provider".to_owned(),
-                    "/senderProfiles/0/provider".to_owned()
+                    "/senderProfiles/transactional/provider".to_owned()
                 ),
                 (
                     "messaging.project.unknown-sender-profile".to_owned(),
-                    "/accessProfiles/0/senderProfiles/0".to_owned()
+                    "/accessProfiles/case-notices/senderProfiles/0".to_owned()
                 ),
                 (
                     "messaging.project.unknown-template".to_owned(),
-                    "/accessProfiles/0/templates/0".to_owned()
+                    "/accessProfiles/case-notices/templates/0".to_owned()
                 ),
             ]
         );
@@ -1061,12 +1087,12 @@ pub(crate) mod tests {
     #[test]
     fn a_provider_type_carries_only_its_channels() {
         let mut value = valid();
-        value["senderProfiles"][1]["provider"] = json!("relay");
+        value["senderProfiles"]["notices-sms"]["provider"] = json!("relay");
         assert_eq!(
             findings(value),
             one(
                 "messaging.project.provider-cannot-carry-channel",
-                "/senderProfiles/1/provider"
+                "/senderProfiles/notices-sms/provider"
             )
         );
     }
@@ -1082,9 +1108,6 @@ pub(crate) mod tests {
                 "/templates/1".to_owned()
             )
         );
-        let mut value = valid();
-        value["providers"][1]["id"] = json!("relay");
-        assert_eq!(refused(&value)[0].1, "/providers/1/id");
         for version in ["", "latest/1", "1..2", ".1", "V1", "-1", &"1".repeat(33)] {
             let mut value = valid();
             value["templates"][1]["version"] = json!(version);
@@ -1107,33 +1130,33 @@ pub(crate) mod tests {
             "no-at-sign",
         ] {
             let mut value = valid();
-            value["senderProfiles"][0]["sender"] = json!(sender);
+            value["senderProfiles"]["transactional"]["sender"] = json!(sender);
             assert_eq!(
                 findings(value),
                 one(
                     "messaging.project.invalid-email-sender",
-                    "/senderProfiles/0/sender"
+                    "/senderProfiles/transactional/sender"
                 ),
                 "{sender}"
             );
         }
         for sender in ["+0123", "+1", "TwelveChars1", " Lead", "Reg!stry"] {
             let mut value = valid();
-            value["senderProfiles"][1]["sender"] = json!(sender);
+            value["senderProfiles"]["notices-sms"]["sender"] = json!(sender);
             assert_eq!(
                 findings(value),
                 one(
                     "messaging.project.invalid-sms-sender",
-                    "/senderProfiles/1/sender"
+                    "/senderProfiles/notices-sms/sender"
                 ),
                 "{sender}"
             );
         }
         let mut value = valid();
-        value["senderProfiles"][1]["sender"] = json!("+15551234567");
+        value["senderProfiles"]["notices-sms"]["sender"] = json!("+15551234567");
         assert!(project(value).check().is_ok());
         let mut value = valid();
-        value["senderProfiles"][1]
+        value["senderProfiles"]["notices-sms"]
             .as_object_mut()
             .unwrap()
             .remove("maximumSegments");
@@ -1141,27 +1164,27 @@ pub(crate) mod tests {
             findings(value),
             one(
                 "messaging.project.missing-maximum-segments",
-                "/senderProfiles/1/maximumSegments"
+                "/senderProfiles/notices-sms/maximumSegments"
             )
         );
         for segments in [0, 11] {
             let mut value = valid();
-            value["senderProfiles"][1]["maximumSegments"] = json!(segments);
+            value["senderProfiles"]["notices-sms"]["maximumSegments"] = json!(segments);
             assert_eq!(
                 refused(&value)[0],
                 (
                     "config.out-of-range".to_owned(),
-                    "/senderProfiles/1/maximumSegments".to_owned()
+                    "/senderProfiles/notices-sms/maximumSegments".to_owned()
                 )
             );
         }
         let mut value = valid();
-        value["senderProfiles"][0]["maximumSegments"] = json!(1);
+        value["senderProfiles"]["transactional"]["maximumSegments"] = json!(1);
         assert_eq!(
             findings(value),
             one(
                 "messaging.project.email-maximum-segments",
-                "/senderProfiles/0/maximumSegments"
+                "/senderProfiles/transactional/maximumSegments"
             )
         );
     }
@@ -1183,10 +1206,10 @@ pub(crate) mod tests {
         assert_eq!(profile.expiry_seconds(), DEFAULT_EXPIRY_SECONDS);
 
         let mut value = valid();
-        value["senderProfiles"][0]["retry"] = json!({
+        value["senderProfiles"]["transactional"]["retry"] = json!({
             "maximumAttempts": 3, "initialDelaySeconds": 10, "maximumDelaySeconds": 60
         });
-        value["senderProfiles"][0]["defaultExpirySeconds"] = json!(3600);
+        value["senderProfiles"]["transactional"]["defaultExpirySeconds"] = json!(3600);
         let checked = project(value).check().unwrap();
         let profile = &checked.sender_profiles["transactional"];
         assert_eq!(profile.retry_policy().maximum_attempts, 3);
@@ -1211,56 +1234,62 @@ pub(crate) mod tests {
             ),
         ] {
             let mut value = valid();
-            value["senderProfiles"][0]["retry"] = retry.clone();
+            value["senderProfiles"]["transactional"]["retry"] = retry.clone();
             assert_eq!(
                 refused(&value)[0],
                 (
                     "config.out-of-range".to_owned(),
-                    format!("/senderProfiles/0/retry/{member}")
+                    format!("/senderProfiles/transactional/retry/{member}")
                 ),
                 "{retry}"
             );
         }
         let mut value = valid();
-        value["senderProfiles"][0]["retry"] = json!({
+        value["senderProfiles"]["transactional"]["retry"] = json!({
             "maximumAttempts": 3, "initialDelaySeconds": 60, "maximumDelaySeconds": 10
         });
         assert_eq!(
             findings(value),
             one(
                 "messaging.project.retry-delay-order",
-                "/senderProfiles/0/retry/maximumDelaySeconds"
+                "/senderProfiles/transactional/retry/maximumDelaySeconds"
             )
         );
         for expiry in [0, 59, MAXIMUM_EXPIRY_SECONDS + 1] {
             let mut value = valid();
-            value["senderProfiles"][0]["defaultExpirySeconds"] = json!(expiry);
+            value["senderProfiles"]["transactional"]["defaultExpirySeconds"] = json!(expiry);
             assert_eq!(
                 refused(&value)[0].1,
-                "/senderProfiles/0/defaultExpirySeconds",
+                "/senderProfiles/transactional/defaultExpirySeconds",
                 "{expiry}"
             );
         }
         let mut value = valid();
-        value["senderProfiles"][0]["retry"] = json!({
+        value["senderProfiles"]["transactional"]["retry"] = json!({
             "maximumAttempts": 3, "initialDelaySeconds": 10, "maximumDelaySeconds": 60,
             "jitter": false
         });
-        assert_eq!(refused(&value)[0].1, "/senderProfiles/0/retry/jitter");
+        assert_eq!(
+            refused(&value)[0].1,
+            "/senderProfiles/transactional/retry/jitter"
+        );
         let mut value = valid();
-        value["senderProfiles"][0]["onUncertain"] = json!("resend");
-        assert_eq!(refused(&value)[0].1, "/senderProfiles/0/onUncertain");
+        value["senderProfiles"]["transactional"]["onUncertain"] = json!("resend");
+        assert_eq!(
+            refused(&value)[0].1,
+            "/senderProfiles/transactional/onUncertain"
+        );
     }
 
     #[test]
     fn retrying_an_uncertain_send_needs_provider_deduplication_or_an_explicit_choice() {
         let mut value = valid();
-        value["senderProfiles"][1]["onUncertain"] = json!("retry");
+        value["senderProfiles"]["notices-sms"]["onUncertain"] = json!("retry");
         assert_eq!(
             findings(value.clone()),
             one(
                 "messaging.project.uncertain-retry-duplicates",
-                "/senderProfiles/1/onUncertain"
+                "/senderProfiles/notices-sms/onUncertain"
             )
         );
         assert!(matches!(
@@ -1268,26 +1297,26 @@ pub(crate) mod tests {
             Err(PackageError::Findings(_))
         ));
         let mut deduplicating = value.clone();
-        deduplicating["providers"][1]["idempotentSubmit"] = json!(true);
+        deduplicating["providers"]["sms-gateway"]["idempotentSubmit"] = json!(true);
         let checked = project(deduplicating).check().unwrap();
         assert_eq!(
             checked.sender_profiles["notices-sms"].on_uncertain,
             UncertainPolicy::Retry
         );
         let mut accepting = value;
-        accepting["senderProfiles"][1]["acceptDuplicates"] = json!(true);
+        accepting["senderProfiles"]["notices-sms"]["acceptDuplicates"] = json!(true);
         assert!(project(accepting).check().is_ok());
     }
 
     #[test]
     fn an_smtp_provider_cannot_declare_idempotent_submission() {
         let mut value = valid();
-        value["providers"][0]["idempotentSubmit"] = json!(true);
+        value["providers"]["relay"]["idempotentSubmit"] = json!(true);
         assert_eq!(
             findings(value),
             one(
                 "messaging.project.idempotent-smtp",
-                "/providers/0/idempotentSubmit"
+                "/providers/relay/idempotentSubmit"
             )
         );
     }
@@ -1295,9 +1324,9 @@ pub(crate) mod tests {
     #[test]
     fn every_finding_is_reported_together() {
         let mut value = valid();
-        value["providers"][0]["idempotentSubmit"] = json!(true);
-        value["senderProfiles"][0]["sender"] = json!("no-at-sign");
-        value["accessProfiles"][0]["templates"] = json!(["unknown-template"]);
+        value["providers"]["relay"]["idempotentSubmit"] = json!(true);
+        value["senderProfiles"]["transactional"]["sender"] = json!("no-at-sign");
+        value["accessProfiles"]["case-notices"]["templates"] = json!(["unknown-template"]);
         let Err(PackageError::Findings(findings)) = project(value).check() else {
             panic!("the project passed its checks");
         };
@@ -1307,7 +1336,7 @@ pub(crate) mod tests {
     #[test]
     fn an_allow_list_item_spelled_as_a_wildcard_is_a_warning() {
         let mut value = valid();
-        value["accessProfiles"][0]["requesterClients"] = json!(["case-system", "*"]);
+        value["accessProfiles"]["case-notices"]["requesterClients"] = json!(["case-system", "*"]);
         let project = project(value);
         assert_eq!(
             project
@@ -1317,7 +1346,7 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             vec![(
                 "messaging.project.wildcard-spelled-item".to_owned(),
-                "/accessProfiles/0/requesterClients/1".to_owned(),
+                "/accessProfiles/case-notices/requesterClients/1".to_owned(),
                 false
             )]
         );
@@ -1339,6 +1368,248 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             one("messaging.project.missing-template", "/templates/1")
         );
+    }
+
+    const MAP_HEAD: &str = "apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1
+kind: MessagingProject
+project:
+  id: notices
+  version: '1'
+";
+
+    const MAP_BODY: &str = "providers:
+  zeta-gateway:
+    type: http
+  relay:
+    type: smtp
+senderProfiles:
+  zeta-sms:
+    channel: sms
+    provider: zeta-gateway
+    sender: Registry
+    maximumSegments: 2
+  alpha-mail:
+    channel: email
+    provider: relay
+    sender: notices@example.org
+templates:
+  - id: reminder
+    version: '1'
+accessProfiles:
+  zeta-caller:
+    principalClaim: sub
+    requiredScopes: [messaging:send]
+    requesterClients: [zeta-system]
+    actsAs: sender
+    senderProfiles: [alpha-mail]
+    templates: [reminder]
+    requestsPerMinute: 60
+    burst: 10
+  alpha-caller:
+    principalClaim: sub
+    requiredScopes: [messaging:send]
+    requesterClients: [alpha-system]
+    actsAs: sender
+    senderProfiles: [alpha-mail]
+    templates: [reminder]
+    requestsPerMinute: 60
+    burst: 10
+";
+
+    fn decode_text(text: &str) -> Result<MessagingProject, Report> {
+        MessagingProject::decode(Reader::new("messaging.yaml"), text.as_bytes())
+            .map(|decoded| decoded.value)
+    }
+
+    fn refused_text(text: &str) -> Vec<(String, String)> {
+        decode_text(text)
+            .unwrap_err()
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn named_collections_are_mappings_read_in_id_order() {
+        let project = decode_text(&format!("{MAP_HEAD}{MAP_BODY}")).expect("the mappings read");
+        let ids = |ids: Vec<&str>| ids.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(
+            ids(project.providers.iter().map(|p| p.id.as_str()).collect()),
+            ["relay", "zeta-gateway"]
+        );
+        assert_eq!(
+            ids(project
+                .sender_profiles
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect()),
+            ["alpha-mail", "zeta-sms"]
+        );
+        assert_eq!(
+            ids(project
+                .access_profiles
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect()),
+            ["alpha-caller", "zeta-caller"]
+        );
+    }
+
+    #[test]
+    fn the_list_form_of_each_named_collection_is_refused_naming_the_mapping() {
+        for (member, entry, shape) in [
+            (
+                "providers",
+                "- id: relay\n    type: smtp",
+                "providers: {PROVIDER_ID: {",
+            ),
+            (
+                "senderProfiles",
+                "- id: mail\n    channel: email\n    provider: relay\n    sender: a@b.org",
+                "senderProfiles: {SENDER_PROFILE_ID: {",
+            ),
+            (
+                "accessProfiles",
+                "- id: caller\n    principalClaim: sub",
+                "accessProfiles: {ACCESS_PROFILE_ID: {",
+            ),
+        ] {
+            let text = format!("{MAP_HEAD}{member}:\n  {entry}\n");
+            let report = decode_text(&text).unwrap_err();
+            let path = format!("/{member}/0/id");
+            let found = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.path == path)
+                .unwrap_or_else(|| panic!("{member}: no refusal at {path}: {report:?}"));
+            assert_eq!(found.code, "config.removed-key", "{member}: {report:?}");
+            assert!(
+                found.suggested_action.contains(shape),
+                "{member}: {}",
+                found.suggested_action
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_list_of_a_named_collection_is_refused_naming_the_mapping() {
+        for member in ["providers", "senderProfiles", "accessProfiles"] {
+            let report = decode_text(&format!("{MAP_HEAD}{member}: []\n")).unwrap_err();
+            let path = format!("/{member}");
+            let found = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.path == path)
+                .unwrap_or_else(|| panic!("{member}: no refusal at {path}: {report:?}"));
+            assert!(
+                found.message.contains("a mapping keyed by each item's id"),
+                "{member}: {}",
+                found.message
+            );
+        }
+    }
+
+    #[test]
+    fn an_id_member_inside_a_mapped_entry_is_refused() {
+        let text = format!("{MAP_HEAD}providers:\n  relay:\n    id: relay\n    type: smtp\n");
+        assert!(
+            refused_text(&text).contains(&(
+                "config.removed-key".to_owned(),
+                "/providers/relay/id".to_owned()
+            )),
+            "{:?}",
+            refused_text(&text)
+        );
+    }
+
+    #[test]
+    fn a_repeated_key_is_refused_at_the_repeating_key_line() {
+        let text =
+            format!("{MAP_HEAD}providers:\n  relay:\n    type: smtp\n  relay:\n    type: http\n");
+        let report = decode_text(&text).unwrap_err();
+        let first = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "yaml.duplicate-key")
+            .expect("the repeated key is refused");
+        assert_eq!(first.path, "/providers/relay");
+        let line = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.starts_with("  relay:"))
+            .last()
+            .unwrap()
+            .0
+            + 1;
+        assert_eq!(
+            first.source.as_ref().and_then(|source| source.line),
+            Some(line)
+        );
+    }
+
+    #[test]
+    fn a_key_that_is_not_a_local_id_is_refused_at_its_line() {
+        let text = format!("{MAP_HEAD}providers:\n  Relay_One:\n    type: smtp\n");
+        let report = decode_text(&text).unwrap_err();
+        let line = text
+            .lines()
+            .position(|l| l.starts_with("  Relay_One:"))
+            .unwrap()
+            + 1;
+        let refusal = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.path.starts_with("/providers/Relay_One"))
+            .unwrap_or_else(|| panic!("the key is refused: {report:?}"));
+        let source = refusal.source.as_ref().expect("a source");
+        assert_eq!(source.line, Some(line), "{report:?}");
+    }
+
+    #[test]
+    fn findings_and_refusals_name_the_id_not_the_index() {
+        let project = decode_text(&format!("{MAP_HEAD}{MAP_BODY}")).unwrap();
+        assert!(project.findings().is_empty());
+        let text =
+            format!("{MAP_HEAD}{MAP_BODY}").replace("provider: relay", "provider: elsewhere");
+        let project = decode_text(&text).unwrap();
+        assert_eq!(
+            project
+                .findings()
+                .iter()
+                .map(|finding| (finding.code(), finding.path.clone()))
+                .collect::<Vec<_>>(),
+            one(
+                "messaging.project.unknown-provider",
+                "/senderProfiles/alpha-mail/provider"
+            )
+        );
+        let text =
+            format!("{MAP_HEAD}{MAP_BODY}").replace("provider: zeta-gateway", "provider: relay");
+        let project = decode_text(&text).unwrap();
+        assert!(project
+            .findings()
+            .iter()
+            .any(|finding| finding.path == "/senderProfiles/zeta-sms/provider"));
+    }
+
+    #[test]
+    fn a_lookalike_id_is_reported_at_its_key() {
+        let text = format!("{MAP_HEAD}{MAP_BODY}")
+            .replace("  relay:\n", "  relay_x:\n    type: smtp\n  relay:\n")
+            .replace("  relay_x:", "  relay-x:")
+            .replace(
+                "  zeta-gateway:\n",
+                "  zeta_gateway:\n    type: http\n  zeta-gateway:\n",
+            );
+        let project = decode_text(&text).unwrap();
+        let collisions = project
+            .findings()
+            .iter()
+            .filter(|finding| finding.code() == "messaging.project.provider-id-collision")
+            .map(|finding| finding.path.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(collisions, ["/providers/zeta_gateway"]);
     }
 
     #[test]

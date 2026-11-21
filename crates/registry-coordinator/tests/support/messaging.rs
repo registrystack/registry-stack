@@ -77,12 +77,12 @@ impl Messaging {
         std::fs::write(project.join("messaging.yaml"), serde_norway::to_string(&json!({
             "apiVersion":"id.registrystack.org/formats/messaging/project/v1alpha1", "kind":"MessagingProject",
             "project":{"id":"coordinator-messaging", "version":"1"},
-            "providers":[{"id":"mail-relay", "type":"smtp"}],
-            "senderProfiles":[{"id":"transactional", "channel":"email", "provider":"mail-relay", "sender":"notices@example.invalid"}],
+            "providers":{"mail-relay":{"type":"smtp"}},
+            "senderProfiles":{"transactional":{"channel":"email", "provider":"mail-relay", "sender":"notices@example.invalid"}},
             "templates":[{"id":"application-follow-up", "version":"1"}],
-            "accessProfiles":[{"id":"case-notices", "principalClaim":"sub", "requiredScopes":["messaging:send"],
+            "accessProfiles":{"case-notices":{"principalClaim":"sub", "requiredScopes":["messaging:send"],
                 "requesterClients":["case-system"], "actorKind":"service", "actsAs":"sender", "senderProfiles":["transactional"],
-                "templates":["application-follow-up"], "requestsPerMinute":600, "burst":100}]
+                "templates":["application-follow-up"], "requestsPerMinute":600, "burst":100}}
         })).unwrap()).unwrap();
         std::fs::write(
             template.join("template.yaml"),
