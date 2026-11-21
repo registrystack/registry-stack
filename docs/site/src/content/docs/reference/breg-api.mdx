@@ -233,8 +233,9 @@ A profile that sets `requireAccessReason` refuses a request without a `Registry-
 with `400 request.access_reason_required`. The value is the reason as UTF-8 text, base64url-encoded
 without padding. It must be one header, at most 684 characters encoded, decode to at most 512 bytes,
 and be neither blank nor contain a control character. The reason is checked on Record reads and
-direct writes, stored with each subject access log entry, and carried by a `read` event. Only a read
-writes an entry, so the reason a write carries is not kept.
+direct writes, stored with each subject access log entry, and carried by a `read` event. On a Record
+type with `accessLog`, a direct Create, Patch, Batch item or Tombstone stores one entry with
+`accessKind: write` and the reason. A Record type without `accessLog` stores neither.
 
 ### Withheld records and fields
 

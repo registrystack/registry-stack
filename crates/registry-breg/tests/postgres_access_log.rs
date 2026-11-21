@@ -17,6 +17,7 @@ use registry_breg::api::{
 };
 use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
+use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
@@ -991,8 +992,17 @@ fn compiled_with_history() -> CompiledRegistry {
 /// Serves record, snapshot, revision, and mutation routes, so a record gets
 /// its revision history through the ordinary create path.
 async fn setup_with_history() -> (TestDatabase, Router, MockIdp, Arc<CompiledRegistry>) {
+    setup_with_mutations(compiled_with_history(), None).await
+}
+
+/// The same routes over `registry`, with the mutation service failing at
+/// `fault` when one is given.
+async fn setup_with_mutations(
+    registry: CompiledRegistry,
+    fault: Option<MutationFaultPoint>,
+) -> (TestDatabase, Router, MockIdp, Arc<CompiledRegistry>) {
     let database = TestDatabase::create(4).await;
-    let registry = Arc::new(compiled_with_history());
+    let registry = Arc::new(registry);
     let (migration, task) = database.connect_migration().await;
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
@@ -1062,7 +1072,7 @@ async fn setup_with_history() -> (TestDatabase, Router, MockIdp, Arc<CompiledReg
         audit.clone(),
         cursors.clone(),
     );
-    let mutations = PostgresRecordMutationService::new(
+    let mut mutations = PostgresRecordMutationService::new(
         pool,
         registry.clone(),
         identity.clone(),
@@ -1071,6 +1081,9 @@ async fn setup_with_history() -> (TestDatabase, Router, MockIdp, Arc<CompiledReg
         Duration::from_secs(2),
         audit,
     );
+    if let Some(fault) = fault {
+        mutations = mutations.with_fault_for_test(fault);
+    }
     let service = HttpService::new(
         registry.clone(),
         ReadRuntimeIdentity {
@@ -1469,6 +1482,7 @@ async fn a_valid_access_reason_is_stored_and_returned_by_the_access_log_route() 
     let events = page["events"].as_array().unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0]["accessReason"], reason);
+    assert_eq!(events[0]["accessKind"], "read");
     let stored: Option<String> = db
         .admin
         .query_one(
@@ -1700,6 +1714,434 @@ async fn a_failed_read_emits_no_alert() {
     assert_eq!(status, StatusCode::NOT_FOUND, "no such record");
     assert!(read_alerts(&db).await.is_empty());
     assert_eq!(access_log_rows(&db).await, 0);
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+/// An `entry` type with `accessLog` and a `note` type without one. The `clerk`
+/// and `investigator` profiles require an access reason; the `steward` does
+/// not. Entries by the `investigator` are delayed seven days, and a read hook
+/// alerts on every `clerk` read of an entry.
+fn compiled_with_writes() -> CompiledRegistry {
+    let fields = json!([
+        {"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
+        {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}
+    ]);
+    let writer = |record_type: &str, operations: Value| {
+        json!({"recordType":record_type,"operations":operations,
+            "readableFields":["subject","label"],"writableFields":["subject","label"],
+            "rowBoundaries":"unrestricted"})
+    };
+    let entry_writes = json!(["get", "create", "patch", "batch", "tombstone"]);
+    let profile = |id: &str, reason: bool, records: Value| {
+        json!({"id":id,"principalClaim":"sub","requiredScopes":"unrestricted",
+            "requiredPurposes":[PURPOSE],"requireAccessReason":reason,
+            "permissions":{"records":records}})
+    };
+    let source = json!({"datasets":[{"id": "records"}],
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
+        "recordTypes":[
+            {"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable",
+                "tombstone":true,"batch":{"maximumItems":10,"maximumBytes":65536},
+                "classification":"restricted","fields":fields.clone(),
+                "accessLog":{"subjectField":"subject","retentionDays":30,
+                    "exemptions":{"investigator":{"reason":"investigation-policy-canary","delayDays":7}}},
+                "hooks":[{"id":"clerk-read","phase":"after","trigger":"read","profiles":["clerk"],"projection":[]}]},
+            {"id":"note","primaryDataset":"records","route":"notes","mutationMode":"mutable",
+                "classification":"restricted","fields":fields}],
+        "accessProfiles":[
+            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],
+                "permissions":{"records":[{"recordType":"entry","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}]}},
+            profile("clerk", true, json!([writer("entry", entry_writes.clone()), writer("note", json!(["create"]))])),
+            profile("investigator", true, json!([writer("entry", json!(["get", "create"]))])),
+            profile("steward", false, json!([writer("entry", entry_writes)]))
+        ]
+    });
+    compile_access_source(source)
+}
+
+/// One write under `profile`. `reason` is sent as the access reason header
+/// when given. Answers the status, the body, and the response ETag.
+#[allow(clippy::too_many_arguments)]
+async fn write_as(
+    app: &Router,
+    token: &str,
+    profile: &str,
+    method: Method,
+    path: &str,
+    body: Option<(&str, Value)>,
+    if_match: Option<&str>,
+    reason: Option<&str>,
+) -> (StatusCode, Value, Option<String>) {
+    let separator = if path.contains('?') { '&' } else { '?' };
+    let mut request = Request::builder()
+        .method(method)
+        .uri(format!("{path}{separator}accessProfile={profile}"))
+        .header("authorization", format!("Bearer {token}"))
+        .header("idempotency-key", uuid::Uuid::new_v4().to_string());
+    if let Some(etag) = if_match {
+        request = request.header("if-match", etag);
+    }
+    if let Some(reason) = reason {
+        request = request.header("Registry-Access-Reason", reason_header(reason));
+    }
+    let body = match body {
+        Some((content_type, value)) => {
+            request = request.header("content-type", content_type);
+            Body::from(serde_json::to_vec(&value).unwrap())
+        }
+        None => Body::empty(),
+    };
+    let response = app
+        .clone()
+        .oneshot(request.body(body).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let etag = response
+        .headers()
+        .get("etag")
+        .map(|value| value.to_str().unwrap().to_owned());
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    (status, body, etag)
+}
+
+/// Create one `entry` for `SUBJECT` as `profile`, and answer its id and ETag.
+async fn create_entry(
+    app: &Router,
+    token: &str,
+    profile: &str,
+    reason: Option<&str>,
+) -> (String, String) {
+    let (status, body, etag) = write_as(
+        app,
+        token,
+        profile,
+        Method::POST,
+        "/v1/records/entries",
+        Some((
+            "application/json",
+            json!({"data":{"subject":SUBJECT,"label":"first-label"}}),
+        )),
+        None,
+        reason,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    (
+        body["data"]["recordIdentifier"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        etag.expect("a created record carries an ETag"),
+    )
+}
+
+/// Every stored entry as `(record, kind, operation, reason)`, in write order.
+async fn logged_entries(db: &TestDatabase) -> Vec<(String, String, String, Option<String>)> {
+    db.admin
+        .query(
+            "SELECT record_id::text, access_kind, operation_id, access_reason
+               FROM registry_internal.registry_subject_access_log
+              ORDER BY accessed_at, event_id",
+            &[],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3)))
+        .collect()
+}
+
+#[tokio::test]
+async fn each_direct_write_under_a_reasoned_profile_logs_one_write_entry_with_its_reason() {
+    let (db, app, idp, registry) = setup_with_mutations(compiled_with_writes(), None).await;
+    let clerk = token(&idp, "agency", "clerk");
+    let (first, etag) = create_entry(&app, &clerk, "clerk", Some("create reason")).await;
+
+    let (status, body, etag) = write_as(
+        &app,
+        &clerk,
+        "clerk",
+        Method::PATCH,
+        &format!("/v1/records/entries/{first}"),
+        Some((
+            "application/json-patch+json",
+            json!([{"op":"replace","path":"/data/label","value":"second-label"}]),
+        )),
+        Some(&etag),
+        Some("patch reason"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let etag = etag.expect("a patched record carries an ETag");
+
+    let (status, body, _) = write_as(
+        &app,
+        &clerk,
+        "clerk",
+        Method::POST,
+        "/v1/records/entries:batch",
+        Some((
+            "application/json",
+            json!({"items":[
+                {"operation":"create","data":{"subject":SUBJECT,"label":"batch-label"}},
+                {"operation":"patch","recordIdentifier":first,"ifMatch":etag,
+                    "patch":[{"op":"replace","path":"/data/label","value":"third-label"}]}
+            ]}),
+        )),
+        None,
+        Some("batch reason"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let second = body["results"][0]["recordIdentifier"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{body}"))
+        .to_owned();
+    let second_etag = body["results"][0]["etag"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{body}"))
+        .to_owned();
+
+    let (status, body, _) = write_as(
+        &app,
+        &clerk,
+        "clerk",
+        Method::DELETE,
+        &format!("/v1/records/entries/{second}"),
+        None,
+        Some(&second_etag),
+        Some("tombstone reason"),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {body}");
+
+    let operation = |operation| route_operation(&registry, operation);
+    use registry_breg::contract::Operation;
+    let write = |record: &str, operation: String, reason: &str| {
+        (
+            record.to_owned(),
+            "write".to_owned(),
+            operation,
+            Some(reason.to_owned()),
+        )
+    };
+    let mut logged = logged_entries(&db).await;
+    let mut expected = vec![
+        write(&first, operation(Operation::Create), "create reason"),
+        write(&first, operation(Operation::Patch), "patch reason"),
+        write(&second, operation(Operation::Batch), "batch reason"),
+        write(&first, operation(Operation::Batch), "batch reason"),
+        write(&second, operation(Operation::Tombstone), "tombstone reason"),
+    ];
+    logged.sort();
+    expected.sort();
+    assert_eq!(logged, expected);
+
+    let (status, page) = history(&app, &token(&idp, "portal", SUBJECT), &first, "").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let events = page["events"].as_array().unwrap();
+    assert_eq!(events.len(), 3, "{page}");
+    assert!(events.iter().all(|event| event["accessKind"] == "write"
+        && event["requester"] == "agency"
+        && event["serviceClient"].is_null()));
+    let mut reasons = events
+        .iter()
+        .map(|event| event["accessReason"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    reasons.sort_unstable();
+    assert_eq!(reasons, ["batch reason", "create reason", "patch reason"]);
+    db.assert_every_audit_request_answered_once();
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_write_under_a_profile_without_the_flag_logs_no_write_entry() {
+    let (db, app, idp, _) = setup_with_mutations(compiled_with_writes(), None).await;
+    let steward = token(&idp, "agency", "steward");
+    let (record, etag) = create_entry(&app, &steward, "steward", None).await;
+    let (status, body, _) = write_as(
+        &app,
+        &steward,
+        "steward",
+        Method::PATCH,
+        &format!("/v1/records/entries/{record}"),
+        Some((
+            "application/json-patch+json",
+            json!([{"op":"replace","path":"/data/label","value":"second-label"}]),
+        )),
+        Some(&etag),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(logged_entries(&db).await, []);
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_type_without_an_access_log_requires_the_reason_and_stores_nothing() {
+    let (db, app, idp, _) = setup_with_mutations(compiled_with_writes(), None).await;
+    let clerk = token(&idp, "agency", "clerk");
+    let note = || {
+        Some((
+            "application/json",
+            json!({"data":{"subject":SUBJECT,"label":"note-label"}}),
+        ))
+    };
+    let (status, problem, _) = write_as(
+        &app,
+        &clerk,
+        "clerk",
+        Method::POST,
+        "/v1/records/notes",
+        note(),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+    assert_eq!(problem["code"], "request.access_reason_required");
+    let (status, body, _) = write_as(
+        &app,
+        &clerk,
+        "clerk",
+        Method::POST,
+        "/v1/records/notes",
+        note(),
+        None,
+        Some("note reason"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(logged_entries(&db).await, []);
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_rolled_back_write_leaves_no_write_entry() {
+    let (db, app, idp, _) = setup_with_mutations(
+        compiled_with_writes(),
+        Some(MutationFaultPoint::BeforeCommit),
+    )
+    .await;
+    let clerk = token(&idp, "agency", "clerk");
+    let (status, body, _) = write_as(
+        &app,
+        &clerk,
+        "clerk",
+        Method::POST,
+        "/v1/records/entries",
+        Some((
+            "application/json",
+            json!({"data":{"subject":SUBJECT,"label":"first-label"}}),
+        )),
+        None,
+        Some("create reason"),
+    )
+    .await;
+    assert!(!status.is_success(), "{status}: {body}");
+    assert_eq!(logged_entries(&db).await, []);
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_write_entry_raises_no_read_alert() {
+    let (db, app, idp, _) = setup_with_mutations(compiled_with_writes(), None).await;
+    let clerk = token(&idp, "agency", "clerk");
+    let (record, _) = create_entry(&app, &clerk, "clerk", Some("create reason")).await;
+    assert_eq!(logged_entries(&db).await.len(), 1);
+    assert_eq!(read_alerts(&db).await, []);
+    // The hook is live: a read under the same profile alerts.
+    let (status, body) = send_reasoned(
+        &app,
+        &clerk,
+        Method::GET,
+        &format!("/v1/records/entries/{record}?accessProfile=clerk"),
+        None,
+        Some(&reason_header("read reason")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(read_alerts(&db).await.len(), 1);
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn write_entries_keep_the_retention_and_exemption_delay_of_read_entries() {
+    let (db, app, idp, _) = setup_with_mutations(compiled_with_writes(), None).await;
+    let clerk = token(&idp, "agency", "clerk");
+    let investigator = token(&idp, "agency", "investigator");
+    let (prompt, _) = create_entry(&app, &clerk, "clerk", Some("create reason")).await;
+    let (delayed, _) =
+        create_entry(&app, &investigator, "investigator", Some("investigation")).await;
+    let timing = |record: String| {
+        let db = &db;
+        async move {
+            let row = db
+                .admin
+                .query_one(
+                    "SELECT extract(day FROM visible_after - accessed_at)::int,
+                            extract(day FROM expires_at - accessed_at)::int, exemption_reason
+                       FROM registry_internal.registry_subject_access_log
+                      WHERE record_id = $1::text::uuid",
+                    &[&record],
+                )
+                .await
+                .unwrap();
+            (
+                row.get::<_, i32>(0),
+                row.get::<_, i32>(1),
+                row.get::<_, Option<String>>(2),
+            )
+        }
+    };
+    assert_eq!(timing(prompt.clone()).await, (0, 30, None));
+    assert_eq!(
+        timing(delayed.clone()).await,
+        (7, 30, Some("investigation-policy-canary".to_owned()))
+    );
+    let owner = token(&idp, "portal", SUBJECT);
+    let (_, page) = history(&app, &owner, &delayed, "").await;
+    assert_eq!(page["events"].as_array().unwrap().len(), 0, "{page}");
+
+    db.admin
+        .execute(
+            "UPDATE registry_internal.registry_subject_access_log
+                SET accessed_at = accessed_at - interval '31 days',
+                    visible_after = visible_after - interval '31 days',
+                    expires_at = expires_at - interval '31 days'",
+            &[],
+        )
+        .await
+        .unwrap();
+    let (_, page) = history(&app, &owner, &prompt, "").await;
+    assert_eq!(page["events"].as_array().unwrap().len(), 0, "{page}");
+    let pool = db.runtime_config.build_pool().unwrap();
+    let (erased, _) = registry_breg::expire_subject_access_log_for_test(&pool, None)
+        .await
+        .unwrap();
+    assert_eq!(erased, 2);
+    assert_eq!(logged_entries(&db).await, []);
+    drop(pool);
     drop(app);
     drop(idp);
     db.cleanup().await;

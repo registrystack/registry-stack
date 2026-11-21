@@ -10,9 +10,12 @@ use tokio_postgres::{types::Type, GenericClient};
 
 use crate::api::{AuthorizedRequestContext, ReadServiceError};
 use crate::audit::RegistryAudit;
+use crate::contract::AccessLogSource;
 use crate::correlation::RequestCorrelation;
 use crate::model::CompiledEntity;
-use crate::postgres::{ExpectedRegistryIdentity, RuntimePool, RuntimeRevoke, SqlIdentifier};
+use crate::postgres::{
+    ClaimContext, ExpectedRegistryIdentity, RuntimePool, RuntimeRevoke, SqlIdentifier,
+};
 
 pub(crate) const REQUESTER_HEADER: &str = "registry-access-requester";
 pub(crate) const PURPOSE_HEADER: &str = "registry-access-purpose";
@@ -35,6 +38,69 @@ impl std::fmt::Debug for ForwardedAccessAttribution {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("<access attribution redacted>")
     }
+}
+
+/// Whether an entry records a read of its Record or a direct write to it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AccessKind {
+    Read,
+    Write,
+}
+
+impl AccessKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+        }
+    }
+}
+
+/// What a direct write under a profile that requires an access reason
+/// records in the subject access log. Provenance only, like the forwarded
+/// attribution: it never enters a row policy, setting, or idempotency binding.
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct WriteAttribution {
+    requester: String,
+    purpose: Option<String>,
+    access_reason: String,
+}
+
+impl std::fmt::Debug for WriteAttribution {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("<write attribution redacted>")
+    }
+}
+
+impl WriteAttribution {
+    /// `None` under a profile that does not require a reason, whose writes
+    /// the log does not keep. A direct write names the verified client, or
+    /// else the verified principal, as a direct read does.
+    pub(crate) fn of(context: &AuthorizedRequestContext) -> Result<Option<Self>, ()> {
+        let Some(access_reason) = context.access_reason() else {
+            return Ok(None);
+        };
+        let requester = context
+            .requester_client()
+            .or(context.principal())
+            .filter(|value| valid_value(value))
+            .ok_or(())?;
+        Ok(Some(Self {
+            requester: requester.to_owned(),
+            purpose: context.purpose().map(str::to_owned),
+            access_reason: access_reason.to_owned(),
+        }))
+    }
+}
+
+/// The attribution every entry of one request shares.
+struct EntryAttribution<'a> {
+    kind: AccessKind,
+    profile: &'a str,
+    requester: &'a str,
+    service_client: Option<&'a str>,
+    purpose: Option<&'a str>,
+    access_reason: Option<&'a str>,
 }
 
 /// Both headers are host-authored, canonical base64url UTF-8. Only an explicitly
@@ -117,6 +183,9 @@ pub(crate) async fn install(
              ALTER TABLE registry_internal.registry_subject_access_log
                 ADD COLUMN IF NOT EXISTS access_reason text
                 CHECK (octet_length(access_reason) BETWEEN 1 AND 512);
+             ALTER TABLE registry_internal.registry_subject_access_log
+                ADD COLUMN IF NOT EXISTS access_kind text NOT NULL DEFAULT 'read'
+                CHECK (access_kind IN ('read', 'write'));
              CREATE INDEX IF NOT EXISTS registry_subject_access_log_record
                 ON registry_internal.registry_subject_access_log (entity_id, record_id, accessed_at DESC, event_id DESC);
              CREATE INDEX IF NOT EXISTS registry_subject_access_log_expiry
@@ -175,90 +244,27 @@ pub(crate) async fn record_reads(
         .or(context.purpose());
     let service_client = forwarded.and(context.requester_client());
     let access_reason = context.access_reason();
-    let exemption = policy
-        .exemptions
-        .get(context.selected_profile())
-        .filter(|exemption| {
-            exemption.source_entity.as_deref().unwrap_or(&entity.id) == authority_entity
-        });
-    let delay = i32::from(exemption.map_or(0, |value| value.delay_days));
-    let retention = i32::from(policy.retention_days);
-    let reason = exemption.map(|value| value.reason.as_str());
-    // The separate exemption audit identifies the governed policy by a keyed
-    // reference. Neither its text, the subject, nor the purpose enters audit.
-    if let Some(reason) = reason {
-        let reference = audit
-            .profile()
-            .key_hasher()
-            .audit_reference_hash(
-                "breg-access-log-exemption-v1",
-                &identity.activation_id,
-                reason,
-            )
-            .map_err(|_| ReadServiceError::Unavailable)?;
-        let correlation_id = format!("{}:access-log", correlation.request_id());
-        let _attempt = audit
-            .begin(
-                AuditEntry::request(
-                    "breg-access-log/v2",
-                    &correlation_id,
-                    json!({"operation":"visibility-delay", "entityId":entity.id,
-                        "authorityEntity":authority_entity,
-                        "activationId":identity.activation_id,
-                        "selectedAccessProfile":context.selected_profile(),
-                        "exemptionReference":reference,"delayDays":delay}),
-                ),
-                json!({"outcome":"unfinished"}),
-            )
-            .await
-            .map_err(|_| ReadServiceError::Unavailable)?;
-        audit
-            .append(AuditEntry::response(
-                "breg-access-log/v2",
-                correlation_id,
-                json!({"outcome":"authorized"}),
-            ))
-            .await
-            .map_err(|_| ReadServiceError::Unavailable)?;
-    }
-    let event_ids = record_ids
-        .iter()
-        .map(|_| uuid::Uuid::new_v4().to_string())
-        .collect::<Vec<_>>();
-    let request_id = correlation.request_id().to_string();
-    // A page has one bounded insert, rather than one database round trip per
-    // subject. The parallel arrays retain a distinct event for every read hit.
-    transaction
-        .execute_typed(
-            "INSERT INTO registry_internal.registry_subject_access_log
-                    (event_id, entity_id, record_id, requester, service_client, purpose,
-                     operation_id, access_profile, package_revision, request_id,
-                     authority_entity,
-                     visible_after, expires_at, exemption_reason, access_reason)
-                 SELECT hit.event_id::uuid, $2, hit.record_id::uuid, $4, $5, $6, $7, $8, $9,
-                         $10::text::uuid, $14, transaction_timestamp() + make_interval(days => $11),
-                         transaction_timestamp() + make_interval(days => $12), $13, $15
-                 FROM unnest($1::text[], $3::text[]) AS hit(event_id, record_id)",
-            &[
-                (&event_ids, Type::TEXT_ARRAY),
-                (&entity.id, Type::TEXT),
-                (&record_ids, Type::TEXT_ARRAY),
-                (&requester, Type::TEXT),
-                (&service_client, Type::TEXT),
-                (&purpose, Type::TEXT),
-                (&operation_id, Type::TEXT),
-                (&context.selected_profile(), Type::TEXT),
-                (&identity.activation_id, Type::TEXT),
-                (&request_id, Type::TEXT),
-                (&delay, Type::INT4),
-                (&retention, Type::INT4),
-                (&reason, Type::TEXT),
-                (&authority_entity, Type::TEXT),
-                (&access_reason, Type::TEXT),
-            ],
-        )
-        .await
-        .map_err(|_| ReadServiceError::Unavailable)?;
+    let event_ids = insert_entries(
+        transaction,
+        policy,
+        entity,
+        authority_entity,
+        &EntryAttribution {
+            kind: AccessKind::Read,
+            profile: context.selected_profile(),
+            requester,
+            service_client,
+            purpose,
+            access_reason,
+        },
+        record_ids,
+        operation_id,
+        identity,
+        correlation,
+        audit,
+    )
+    .await
+    .map_err(|()| ReadServiceError::Unavailable)?;
     let reads = record_ids
         .iter()
         .zip(&event_ids)
@@ -286,6 +292,155 @@ pub(crate) async fn record_reads(
     .await
     .map_err(|_| ReadServiceError::Unavailable)?;
     Ok(())
+}
+
+/// Called inside the mutation transaction after the write has changed
+/// `record_ids`, so a write that rolls back leaves no entry. Writes nothing for
+/// a Record type without `accessLog` or a write without a [`WriteAttribution`],
+/// and never raises a read alert. Failure refuses the write.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn record_writes(
+    transaction: &tokio_postgres::Transaction<'_>,
+    entity: &CompiledEntity,
+    claims: &ClaimContext,
+    record_ids: &[String],
+    operation_id: &str,
+    identity: &ExpectedRegistryIdentity,
+    correlation: &RequestCorrelation,
+    audit: &RegistryAudit,
+) -> Result<(), ()> {
+    let (Some(policy), Some(attribution)) = (&entity.access_log, claims.write_attribution()) else {
+        return Ok(());
+    };
+    if record_ids.is_empty() {
+        return Ok(());
+    }
+    insert_entries(
+        transaction,
+        policy,
+        entity,
+        &entity.id,
+        &EntryAttribution {
+            kind: AccessKind::Write,
+            profile: claims.access_profile(),
+            requester: &attribution.requester,
+            service_client: None,
+            purpose: attribution.purpose.as_deref(),
+            access_reason: Some(&attribution.access_reason),
+        },
+        record_ids,
+        operation_id,
+        identity,
+        correlation,
+        audit,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Inserts one entry for each of `record_ids` and answers their event ids in
+/// the same order. An exemption of the profile delays the entries and writes
+/// its own operational audit entry first.
+#[allow(clippy::too_many_arguments)]
+async fn insert_entries(
+    transaction: &tokio_postgres::Transaction<'_>,
+    policy: &AccessLogSource,
+    entity: &CompiledEntity,
+    authority_entity: &str,
+    attribution: &EntryAttribution<'_>,
+    record_ids: &[String],
+    operation_id: &str,
+    identity: &ExpectedRegistryIdentity,
+    correlation: &RequestCorrelation,
+    audit: &RegistryAudit,
+) -> Result<Vec<String>, ()> {
+    let exemption = policy
+        .exemptions
+        .get(attribution.profile)
+        .filter(|exemption| {
+            exemption.source_entity.as_deref().unwrap_or(&entity.id) == authority_entity
+        });
+    let delay = i32::from(exemption.map_or(0, |value| value.delay_days));
+    let retention = i32::from(policy.retention_days);
+    let reason = exemption.map(|value| value.reason.as_str());
+    // The separate exemption audit identifies the governed policy by a keyed
+    // reference. Neither its text, the subject, nor the purpose enters audit.
+    if let Some(reason) = reason {
+        let reference = audit
+            .profile()
+            .key_hasher()
+            .audit_reference_hash(
+                "breg-access-log-exemption-v1",
+                &identity.activation_id,
+                reason,
+            )
+            .map_err(|_| ())?;
+        let correlation_id = format!("{}:access-log", correlation.request_id());
+        let _attempt = audit
+            .begin(
+                AuditEntry::request(
+                    "breg-access-log/v2",
+                    &correlation_id,
+                    json!({"operation":"visibility-delay", "entityId":entity.id,
+                        "authorityEntity":authority_entity,
+                        "activationId":identity.activation_id,
+                        "selectedAccessProfile":attribution.profile,
+                        "exemptionReference":reference,"delayDays":delay}),
+                ),
+                json!({"outcome":"unfinished"}),
+            )
+            .await
+            .map_err(|_| ())?;
+        audit
+            .append(AuditEntry::response(
+                "breg-access-log/v2",
+                correlation_id,
+                json!({"outcome":"authorized"}),
+            ))
+            .await
+            .map_err(|_| ())?;
+    }
+    let event_ids = record_ids
+        .iter()
+        .map(|_| uuid::Uuid::new_v4().to_string())
+        .collect::<Vec<_>>();
+    let request_id = correlation.request_id().to_string();
+    let kind = attribution.kind.as_str();
+    // A request has one bounded insert, rather than one database round trip
+    // per subject. The parallel arrays retain a distinct event for every Record.
+    transaction
+        .execute_typed(
+            "INSERT INTO registry_internal.registry_subject_access_log
+                    (event_id, entity_id, record_id, requester, service_client, purpose,
+                     operation_id, access_profile, package_revision, request_id,
+                     authority_entity,
+                     visible_after, expires_at, exemption_reason, access_reason, access_kind)
+                 SELECT hit.event_id::uuid, $2, hit.record_id::uuid, $4, $5, $6, $7, $8, $9,
+                         $10::text::uuid, $14, transaction_timestamp() + make_interval(days => $11),
+                         transaction_timestamp() + make_interval(days => $12), $13, $15, $16
+                 FROM unnest($1::text[], $3::text[]) AS hit(event_id, record_id)",
+            &[
+                (&event_ids, Type::TEXT_ARRAY),
+                (&entity.id, Type::TEXT),
+                (&record_ids, Type::TEXT_ARRAY),
+                (&attribution.requester, Type::TEXT),
+                (&attribution.service_client, Type::TEXT),
+                (&attribution.purpose, Type::TEXT),
+                (&operation_id, Type::TEXT),
+                (&attribution.profile, Type::TEXT),
+                (&identity.activation_id, Type::TEXT),
+                (&request_id, Type::TEXT),
+                (&delay, Type::INT4),
+                (&retention, Type::INT4),
+                (&reason, Type::TEXT),
+                (&authority_entity, Type::TEXT),
+                (&attribution.access_reason, Type::TEXT),
+                (&kind, Type::TEXT),
+            ],
+        )
+        .await
+        .map_err(|_| ())?;
+    Ok(event_ids)
 }
 
 /// Runs even when the active package stops collecting entries. Expired entries

@@ -230,12 +230,20 @@ fn generated_openapi_publishes_the_subject_owned_bounded_route() {
             "purpose",
             "operationId",
             "visibleAfter",
-            "exemptionReason"
+            "exemptionReason",
+            "accessReason",
+            "accessKind"
         ])
     );
+    let properties = &schema["properties"]["events"]["items"]["properties"];
+    assert_eq!(properties["purpose"]["type"], json!(["string", "null"]));
     assert_eq!(
-        schema["properties"]["events"]["items"]["properties"]["purpose"]["type"],
-        json!(["string", "null"])
+        properties["accessReason"],
+        json!({"type": ["string", "null"], "minLength": 1, "maxLength": 512})
+    );
+    assert_eq!(
+        properties["accessKind"],
+        json!({"type": "string", "enum": ["read", "write"]})
     );
 }
 

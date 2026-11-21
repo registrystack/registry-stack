@@ -636,11 +636,13 @@ encoded as unpadded base64url. The text is at most 512 bytes, not blank, and has
 character. A request without a valid header is refused with `400 request.access_reason_required`
 before any record is read. The reason is stored on the subject access log entry and carried by a
 read alert, so a reviewer can ask why. See
-[Record why a record was read](../../operate/breg-access-log/#record-why-a-record-was-read).
+[Record why a record was read or written](../../operate/breg-access-log/#record-why-a-record-was-read-or-written).
 
-The reason is checked on record reads and direct writes only, and only a read records it. A direct
-Create, Patch, batch or Tombstone under the profile must carry the header, but nothing stores the
-reason. `bregctl check` refuses the key on a
+The reason is checked on record reads and direct writes only. A direct Create, Patch, Batch or
+Tombstone under the profile must carry the header. On a Record type with `accessLog`, each record it
+changes gets a subject access log entry with `accessKind: write` and the reason, written in the same
+transaction. On a Record type without `accessLog` the header is still required, but nothing stores
+the reason. `bregctl check` refuses the key on a
 profile that grants import, invoke or start operations, bulk data export, or an action, proposal,
 dataset, external view or projection-refresh permission, because those paths do not check it
 (`breg.access-profile.access-reason-operation-unsupported`). Bulk export is refused even though it
