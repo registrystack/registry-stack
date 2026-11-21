@@ -37,12 +37,12 @@ Choose a recovery point and backup cadence with the service owner. The reference
    ```
 2. Assemble a private directory. It holds the exact chart bindings, packaged code, runtime files, credential recovery material, and audit and authority stores. Copy the files from their owning storage, using its consistent snapshot or copy procedure. Keep TLS material, the App Kit PostgreSQL state and encryption key, and the issuer's signing keys and database in the recovery set. This applies to each one you operate. For an external issuer, record who owns its recovery. Verify that it preserves the issuer URL and subject mapping. Preserve the signer key versions through the signer's backup procedure. Back up the attachment bucket if used. BReg refuses a versioned bucket.
 
-   On the reference single server, make a new root-only directory with the input directory and the BReg audit claim. Copy the audit claim while serving is stopped.
+   On the reference single server, make a root-only directory for this backup, named like its bundle, and copy in the input directory and the BReg audit claim. `mkdir` refuses a name that already exists, so each backup starts from an empty directory. Copy the audit claim while serving is stopped.
 
    ```bash
-   sudo install -d -m 0700 /srv/registry-directory/recovery-inputs
-   sudo cp -a /srv/registry-directory/inputs /srv/registry-directory/recovery-inputs/inputs
-   sudo cp -a /var/lib/registry-stack/storage/directory/directory-audit /srv/registry-directory/recovery-inputs/audit
+   sudo mkdir -m 0700 /srv/registry-directory/backup-01-files
+   sudo cp -a /srv/registry-directory/inputs /srv/registry-directory/backup-01-files/inputs
+   sudo cp -a /var/lib/registry-stack/storage/directory/directory-audit /srv/registry-directory/backup-01-files/audit
    ```
 
    This copies the BReg inputs, including their TLS material, and the audit store. Add the other items above that you operate. The PostgreSQL CA key stays off the server with your other CA keys, and step 4 keeps the receipt off-host.
@@ -53,7 +53,7 @@ Choose a recovery point and backup cadence with the service owner. The reference
      capture --kube-context default --namespace directory \
      --release directory --database registry_breg \
      --status-file /srv/registry-directory/backup-status.json \
-     --files /srv/registry-directory/recovery-inputs \
+     --files /srv/registry-directory/backup-01-files \
      --output /srv/registry-directory/backup-01
    ```
 
@@ -128,6 +128,12 @@ Read the target [Registry Stack release notes](https://github.com/registrystack/
    ```
 
 3. Verify the intended ledger transition, HTTPS readiness, and a previously known authorised record or transaction. Exercise an allowed and a denied request. Resume callers when each participating component is ready.
+4. Once you accept the upgrade, make the successor the input directory, so later backup, stop, install and upgrade commands read the active package and values. Keep the previous inputs under a versioned name with the other items step 1 retains. `mv -T` refuses to move a directory into an existing one.
+
+   ```bash
+   sudo mv -T /srv/registry-directory/inputs /srv/registry-directory/inputs-v1
+   sudo mv -T /srv/registry-directory/successor /srv/registry-directory/inputs
+   ```
 
 The operator supplies the active runtime config and package to BReg, mounts the candidate separately, and checks the exact successor plan before stopping old Pods. It runs apply with the candidate digest, then starts the target workloads after the ledger and doctor checks pass. It refuses migrations that require product-specific backup bindings. Use the [BReg reviewed migration procedure](https://docs.registrystack.org/operate/breg-changes/) for those changes.
 
