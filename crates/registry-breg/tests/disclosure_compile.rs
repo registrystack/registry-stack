@@ -1075,3 +1075,96 @@ fn the_record_timer_profile_id_is_reserved() {
     conditions(&mut value)[1]["exemptProfiles"] = json!(["registrar"]);
     assert_refused_code(&value, "breg.access-profile.system-id-reserved");
 }
+
+/// A person with a callback Record timer and a condition that withholds the
+/// callback time and phone number from the registrar.
+fn timer_source() -> Value {
+    let mut value = source();
+    let person = &mut value["recordTypes"][0];
+    person["fields"].as_array_mut().unwrap().extend([
+        json!({"id":"call-at","type":"timestamp","classification":"internal"}),
+        json!({"id":"called","type":"boolean","classification":"internal"}),
+        json!({"id":"call-note","type":"string","maximumLength":64,"classification":"internal"}),
+        json!({"id":"call-revision","type":"int64","classification":"internal"}),
+    ]);
+    person["disclosureConditions"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"hide-callback","when":[{"type":"field-equals","field":"protected","value":true}],
+            "withhold":"fields","fields":["call-at","called","call-revision"],"exemptProfiles":["protection-officer"]}));
+    person["timers"] = json!([{
+        "id":"call-back","at":"district-call-at","invoke":"note-call",
+        "input":{"person":{"fromRecordId":true},"note":{"fromField":"family-name"}}}]);
+    person["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"district-call-at","type":"timestamp","classification":"internal"}));
+    value["timerGrants"] = json!([{"recordType":"person","timer":"call-back"}]);
+    value["actions"] = json!([{
+        "id":"note-call","execution":{"mode":"immediate"},
+        "inputs":[
+            {"id":"person","type":"reference","target":"person","required":true,"classification":"internal"},
+            {"id":"note","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
+        "plan":{"type":"fixed","effects":[{"id":"noted","target":{"fromInput":"person"},
+            "operation":"patch","set":{"call-note":{"fromInput":"note"}}}]}}]);
+    value
+}
+
+const CALLBACK_COND: &str = "recordTypes[id=person].disclosureConditions[id=hide-callback]";
+
+fn timer(value: &mut Value) -> &mut Value {
+    &mut value["recordTypes"][0]["timers"][0]
+}
+
+#[test]
+fn a_record_timer_over_fields_no_condition_withholds_compiles() {
+    compile(&timer_source()).expect("the timer reads no withheld field");
+}
+
+#[test]
+fn a_record_timer_cannot_read_a_withheld_field_for_a_bound_profile() {
+    let code = "breg.disclosure.timer-reads-withheld-field";
+
+    let mut copied = timer_source();
+    copied["recordTypes"][0]["fields"][4]["maximumLength"] = json!(64);
+    timer(&mut copied)["input"]["note"] = json!({"fromField":"phone"});
+    assert_refused(&copied, code, &format!("{FIELDS_COND}.fields[field=phone]"));
+
+    let mut timed = timer_source();
+    timer(&mut timed)["at"] = json!("call-at");
+    assert_refused(
+        &timed,
+        code,
+        &format!("{CALLBACK_COND}.fields[field=call-at]"),
+    );
+
+    let mut closed = timer_source();
+    timer(&mut closed)["notAfter"] = json!("call-at");
+    assert_refused(
+        &closed,
+        code,
+        &format!("{CALLBACK_COND}.fields[field=call-at]"),
+    );
+
+    let mut rearmed = timer_source();
+    timer(&mut rearmed)["rearmOn"] = json!("call-revision");
+    assert_refused(
+        &rearmed,
+        code,
+        &format!("{CALLBACK_COND}.fields[field=call-revision]"),
+    );
+
+    let mut predicated = timer_source();
+    timer(&mut predicated)["when"] = json!({"type":"fields","equals":{"called":false}});
+    assert_refused(
+        &predicated,
+        code,
+        &format!("{CALLBACK_COND}.fields[field=called]"),
+    );
+
+    // A timer runs without any condition, so only exempting every profile the
+    // condition would bind leaves the withheld value unreachable.
+    let mut exempt = timed.clone();
+    conditions(&mut exempt)[2]["exemptProfiles"] = json!(["protection-officer", "registrar"]);
+    assert!(!has_code(&exempt, code), "{:?}", refusal_or_empty(&exempt));
+}

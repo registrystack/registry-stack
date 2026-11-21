@@ -3,13 +3,13 @@
 //! Surfaces that read a field a `fields` condition withholds. Each function
 //! refuses one surface for the profiles the condition does not exempt, so a
 //! withheld field cannot be recovered through geometry queries, boundaries,
-//! read paths, derived fields, external views or statistics.
+//! read paths, Record timers, derived fields, external views or statistics.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::contract::{
     AccessProfileSource, DerivedSource, DisclosureConditionSource, DisclosureWithholdSource,
-    EntitySource,
+    EntitySource, TimerPredicateSource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::external_views::CompiledExternalViews;
@@ -159,6 +159,52 @@ pub(super) fn validate_boundaries(
                     "scopes rows by a consent requirement on",
                 );
             }
+        }
+    }
+}
+
+/// A Record timer runs under the reserved timer profile, which no condition
+/// binds. A timer that fires on a withheld time, holds on a withheld value or
+/// maps a withheld value into its Action would carry the value, or the moment
+/// it fires, into writes a profile the condition binds can read.
+pub(super) fn validate_timers(
+    entity: &EntitySource,
+    condition: &DisclosureConditionSource,
+    root: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let withheld: BTreeSet<&String> = withheld(condition).iter().collect();
+    if withheld.is_empty() || bound(entity, condition).next().is_none() {
+        return;
+    }
+    for timer in &entity.timers {
+        let predicate = timer.when.iter().flat_map(|when| match when {
+            TimerPredicateSource::Fields { equals } => equals.keys(),
+        });
+        let inputs = timer
+            .input
+            .values()
+            .filter_map(|input| input.from_field.as_ref());
+        let read = [
+            Some(&timer.at),
+            timer.not_after.as_ref(),
+            timer.rearm_on.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .chain(predicate)
+        .chain(inputs)
+        .filter(|field| withheld.contains(field))
+        .collect::<BTreeSet<_>>();
+        for field in read {
+            errors.push(Diagnostic::error(
+                "breg.disclosure.timer-reads-withheld-field",
+                format!("{root}.fields[field={field}]"),
+                &format!(
+                    "Record timer `{}` reads withheld field `{field}`, and it runs without the condition, so its Action can reveal the value to profiles the condition binds: time and map the timer from fields the condition does not withhold, or exempt every profile",
+                    timer.id
+                ),
+            ));
         }
     }
 }
