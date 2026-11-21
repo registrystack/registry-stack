@@ -99,7 +99,7 @@ const FIXTURES: &[Fixture] = &[
         ),
         module: None,
         ddl_sha256: "6d6431e3e4fb3eb254ef8f3b2e895aed2c09ed4ee7ca506627e1d063359f4578",
-        revision: "sha256:d5ac1bfd15ef4e38a4f83660600bb15c99e8cc057aa40f3d49a631b1a7d1e2b3",
+        revision: "sha256:123afd2f14dc039b5c8407e1afcb9888a20908c4d6923edc0e2e23178f8eda3a",
     },
     Fixture {
         name: "asset-registration-actions",
