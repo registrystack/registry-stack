@@ -146,6 +146,8 @@
   key on a profile that grants import, invoke, start, `allowDataExport`, or an action, proposal,
   dataset, external view or projection-refresh permission, which do not check the reason
   (`breg.access-profile.access-reason-operation-unsupported`).
+- BREAKING: the subject access log keeps the access reason in its own column, and the managed
+  schema fingerprint changes with it. Migration: install the release on a fresh database.
 
 - Report hook deliveries and ingestion runs as metrics:
   `breg_hook_deliveries` by state, including `dead-lettered`, and
