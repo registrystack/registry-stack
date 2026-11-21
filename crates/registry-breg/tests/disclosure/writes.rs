@@ -546,6 +546,55 @@ async fn an_immediate_action_refuses_what_a_patch_refuses() {
     history.fixture.finish().await;
 }
 
+const ACTION_CLERK: &str = "action-clerk";
+
+/// The write fixture with an `action-clerk` profile that holds no record grant,
+/// only the immediate email Action on `person`. The contacts condition exempts
+/// it when `exempt` holds.
+fn action_clerk_source(exempt: bool) -> Value {
+    let mut source = writes_source();
+    source["accessProfiles"].as_array_mut().unwrap().push(json!({
+        "id": ACTION_CLERK, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
+        "permissions": {"actions": [
+            {"action": "set-person-email", "operations": ["invoke"],
+             "targets": [{"recordType": "person", "rowBoundaries": "unrestricted"}]}]}}));
+    if exempt {
+        let person = source["recordTypes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|record| record["id"] == "person")
+            .unwrap();
+        let contacts = &mut person["disclosureConditions"][0];
+        assert_eq!(contacts["id"], "hide-contacts");
+        contacts["exemptProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(ACTION_CLERK));
+    }
+    source
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_condition_exempts_a_profile_that_writes_only_through_an_action() {
+    let history = start_with(action_clerk_source(false)).await;
+    let seeded = seed(&history).await;
+    let reply = set_email_as(&history, ACTION_CLERK, &seeded.f, REDIRECTED_EMAIL).await;
+    assert_refused(&reply, "Action-only profile the condition binds");
+    assert_unchanged(&history, &seeded).await;
+    history.fixture.finish().await;
+
+    let history = start_with(action_clerk_source(true)).await;
+    let seeded = seed(&history).await;
+    let reply = set_email_as(&history, ACTION_CLERK, &seeded.f, REDIRECTED_EMAIL).await;
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert_eq!(
+        stored(&history, &seeded.f).await["emailAddress"],
+        REDIRECTED_EMAIL
+    );
+    history.fixture.finish().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_proposal_applied_by_a_bound_profile_is_refused() {
     let history = start().await;

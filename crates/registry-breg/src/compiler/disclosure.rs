@@ -147,10 +147,12 @@ pub(super) fn validate_access_reason_operations(
 }
 
 /// Validate one entity's disclosure conditions and read hooks against the
-/// access profiles every entity declares.
+/// access profiles every entity declares. A condition may also exempt a
+/// profile that writes this entity only through an Action or a Proposal.
 pub(super) fn validate(
     entity: &EntitySource,
     entities: &BTreeMap<String, EntitySource>,
+    project_profiles: &[ProjectAccessProfileSource],
     errors: &mut Vec<Diagnostic>,
 ) {
     let known_profiles: BTreeSet<&str> = entities
@@ -159,6 +161,8 @@ pub(super) fn validate(
         .map(|profile| profile.id.as_str())
         .collect();
     validate_read_hooks(entity, &known_profiles, errors);
+    let mut exemptable = known_profiles;
+    exemptable.extend(workflow_writers(entity, project_profiles));
     if entity.disclosure_conditions.len() > MAX_CONDITIONS {
         errors.push(Diagnostic::error(
             "breg.disclosure.too-many",
@@ -178,7 +182,7 @@ pub(super) fn validate(
         }
         validate_when(entity, condition, &root, errors);
         validate_fields(entity, condition, &root, errors);
-        validate_exempt_profiles(condition, &known_profiles, &root, errors);
+        validate_exempt_profiles(condition, &exemptable, &root, errors);
         validate_exposure(entity, condition, &root, errors);
         reach::validate_withholdable(entity, condition, &root, errors);
         reach::validate_spatial_queries(entity, condition, &root, errors);
@@ -354,6 +358,32 @@ fn constrained_across_records(entity: &EntitySource, field: &str) -> bool {
         })
 }
 
+/// The profiles whose Action or Proposal permission targets `entity`. They
+/// write it through the Action or the Proposal apply, where the condition binds
+/// them unless it exempts them, though they may hold no record grant on it.
+fn workflow_writers<'a>(
+    entity: &'a EntitySource,
+    project_profiles: &'a [ProjectAccessProfileSource],
+) -> impl Iterator<Item = &'a str> {
+    project_profiles
+        .iter()
+        .filter(|profile| {
+            let permissions = &profile.permissions;
+            permissions.actions.iter().any(|permission| {
+                permission
+                    .targets
+                    .iter()
+                    .any(|target| target.entity == entity.id)
+            }) || permissions.proposals.iter().any(|permission| {
+                permission
+                    .targets
+                    .iter()
+                    .any(|target| target.record_type == entity.id)
+            })
+        })
+        .map(|profile| profile.id.as_str())
+}
+
 fn validate_exempt_profiles(
     condition: &DisclosureConditionSource,
     known_profiles: &BTreeSet<&str>,
@@ -374,7 +404,7 @@ fn validate_exempt_profiles(
             errors.push(Diagnostic::error(
                 "breg.disclosure.exempt-profiles-invalid",
                 format!("{path}[profile={profile}]"),
-                "an exempt profile is an access profile some record type declares",
+                "an exempt profile is an access profile some record type declares, or one whose Action or Proposal permission targets this record type",
             ));
         }
     }

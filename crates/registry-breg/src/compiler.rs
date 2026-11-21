@@ -19,10 +19,11 @@ use crate::contract::{
     EventConditionSource, EventTrigger, FieldGenerationSource, FieldSource, FieldTypeSource,
     GeoJsonSource, HookAuthenticationProfile, HookDeadLetterMode, HookHandlerSource, HookPhase,
     LookupValueOrigin, ManifestProjectionTextSource, ModelDisplaySource, ModuleAssetSource,
-    MutationMode, Operation, PresentationSource, ReadPathPermissionSource, RegistryModule,
-    RegistryProject, SpatialBboxPermissionSource, SpatialQueryPermissionSource, TimerInputSource,
-    TimerPredicateSource, TimerSource, TimerValueSource, UniqueWhenPredicate, ValidTimeRole,
-    DECIMAL_BOUNDS_REQUIREMENTS, MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
+    MutationMode, Operation, PresentationSource, ProjectAccessProfileSource,
+    ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
+    SpatialQueryPermissionSource, TimerInputSource, TimerPredicateSource, TimerSource,
+    TimerValueSource, UniqueWhenPredicate, ValidTimeRole, DECIMAL_BOUNDS_REQUIREMENTS,
+    MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
     MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
     MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
     MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
@@ -332,6 +333,7 @@ pub fn compile_project_with_assets(
     validate_entities(
         &project.project.id,
         &sources,
+        &project.access_profiles,
         &origins.hook_paths,
         profile,
         &mut diagnostics,
@@ -4261,6 +4263,7 @@ fn resolve_vocabularies(
 fn validate_entities(
     registry_id: &str,
     entities: &BTreeMap<String, EntitySource>,
+    project_profiles: &[ProjectAccessProfileSource],
     hook_paths: &HookPathMap,
     profile: CompileProfile,
     errors: &mut Vec<Diagnostic>,
@@ -4333,7 +4336,7 @@ fn validate_entities(
         validate_selector_profiles(entity, errors);
         validate_read_paths(entity, entities, errors);
         validate_profiles(entity, entities, errors);
-        disclosure::validate(entity, entities, errors);
+        disclosure::validate(entity, entities, project_profiles, errors);
         validate_hooks(
             registry_id,
             entity,

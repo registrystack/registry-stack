@@ -262,6 +262,93 @@ fn invalid_exempt_profiles_are_refused() {
     );
 }
 
+/// The source with a `household` record type and three profiles that hold no
+/// record grant: `action-clerk` invokes an immediate Action on `person`,
+/// `proposal-clerk` applies a Proposal on `person` that the protection officer
+/// starts, and `household-clerk` invokes an immediate Action on `household`
+/// only.
+fn workflow_source() -> Value {
+    let mut value = source();
+    value["recordTypes"].as_array_mut().unwrap().push(json!(
+        {"id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
+         "classification":"internal",
+         "fields":[{"id":"label","type":"string","maximumLength":64,"classification":"internal"}]}));
+    let action = |id: &str, record_type: &str, field: &str, execution: Value| {
+        json!({"id": id, "execution": execution,
+            "inputs":[{"id":"target","type":"reference","target":record_type,"required":true,"classification":"internal"},
+                      {"id":"name","type":"string","maximumLength":64,"required":true,"classification":"internal"}],
+            "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
+            "plan":{"type":"fixed","effects":[{"id":"rename","target":{"fromInput":"target"},"operation":"patch",
+                "set":{field:{"fromInput":"name"}}}]}})
+    };
+    let proposal = json!({"mode":"proposal","proposal":{"review":{"type":"none"},
+        "application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}});
+    value["actions"] = json!([
+        action(
+            "rename-person",
+            "person",
+            "family-name",
+            json!({"mode":"immediate"})
+        ),
+        action("propose-person-name", "person", "family-name", proposal),
+        action(
+            "rename-household",
+            "household",
+            "label",
+            json!({"mode":"immediate"})
+        )
+    ]);
+    let targets =
+        |record_type: &str| json!([{"recordType":record_type,"rowBoundaries":"unrestricted"}]);
+    let clerk = |id: &str, permissions: Value| {
+        json!({"id":id,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+            "permissions":permissions})
+    };
+    value["accessProfiles"][1]["permissions"]["actions"] = json!([
+        {"action":"propose-person-name","operations":["start"],"targets":targets("person")}]);
+    value["accessProfiles"].as_array_mut().unwrap().extend([
+        clerk("action-clerk", json!({"actions":[
+            {"action":"rename-person","operations":["invoke"],"targets":targets("person")}]})),
+        clerk("proposal-clerk", json!({"proposals":[
+            {"action":"propose-person-name","ownership":"caller","operations":["get","list","apply"],
+             "targets":targets("person")}]})),
+        clerk("household-clerk", json!({"actions":[
+            {"action":"rename-household","operations":["invoke"],"targets":targets("household")}]}))]);
+    value
+}
+
+#[test]
+fn a_condition_exempts_a_profile_that_writes_the_record_type_through_an_action_or_proposal() {
+    let base = workflow_source();
+    compile(&base).unwrap_or_else(|failure| panic!("{:#?}", failure.diagnostics()));
+    let mut exempt = base.clone();
+    for condition in conditions(&mut exempt) {
+        condition["exemptProfiles"] =
+            json!(["protection-officer", "action-clerk", "proposal-clerk"]);
+    }
+    let registry =
+        compile(&exempt).unwrap_or_else(|failure| panic!("{:#?}", failure.diagnostics()));
+    for condition in &registry.entities()["person"].disclosure_conditions {
+        for profile in ["action-clerk", "proposal-clerk"] {
+            assert!(
+                condition.exempt_profiles.contains(profile),
+                "{} exempts {profile}",
+                condition.id
+            );
+        }
+    }
+    // A profile whose Action writes another record type only is not one this
+    // record type's condition can exempt.
+    let mut elsewhere = base;
+    conditions(&mut elsewhere)[0]["exemptProfiles"] =
+        json!(["protection-officer", "household-clerk"]);
+    assert_refused(
+        &elsewhere,
+        "breg.disclosure.exempt-profiles-invalid",
+        &format!("{COND}.exemptProfiles[profile=household-clerk]"),
+    );
+}
+
 #[test]
 fn a_withheld_field_a_bound_profile_can_reach_is_refused() {
     let path = format!("{FIELDS_COND}.fields[field=phone]");
