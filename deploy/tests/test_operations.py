@@ -446,10 +446,21 @@ class JobLifecycleTest(unittest.TestCase):
         self.assertFalse([entry for entry in self.calls if entry[0] == "patch"])
 
     def test_uncertain_job_creation_keeps_its_network_policy_and_lease(self):
-        refused = subprocess.CompletedProcess(["kubectl"], 1, "", "unexpected EOF")
+        lost = subprocess.CompletedProcess(["kubectl"], 1, "", "unexpected EOF")
+        server_timeout = subprocess.CompletedProcess(
+            ["kubectl"], 1, "",
+            "Error from server (Timeout): the server was unable to return a response in the time allotted, "
+            "but may still be processing the request",
+        )
+        refused = subprocess.CompletedProcess(["kubectl"], 1, "", "Error from server (Forbidden): exceeded quota")
+        # The Job can appear after the lookup, so an absent Job proves nothing
+        # unless the API server refused the request.
         cases = {
             "timed out": (subprocess.TimeoutExpired(["kubectl"], 60), "", None),
-            "created without a response": (refused, "job.batch/status-test", None),
+            "connection lost": (lost, "", None),
+            "server timed out": (server_timeout, "", None),
+            "created without a response": (lost, "job.batch/status-test", None),
+            "refused but present": (refused, "job.batch/status-test", None),
             "existence unknown": (refused, "", "synthetic lookup failure"),
         }
         for description, case in cases.items():
@@ -1187,7 +1198,8 @@ class CommandLineTest(unittest.TestCase):
         code, _, stderr = self.run_operator(*ADOPT_RESTORED)
         self.assertEqual(code, 1)
         self.assertEqual(
-            stderr, "registry-stack: Missing key 'breg' in the Helm release values or a BReg report. Inspect them before retrying.\n"
+            stderr, "registry-stack: Missing key 'breg' in the Helm release values, a Kubernetes object, the upgrade record "
+            "or a BReg report. Inspect them before retrying.\n"
         )
 
 
