@@ -1402,6 +1402,11 @@ impl MutationTransaction {
                                 }
                             }
                         }
+                        // The submitting profile is frozen with the version, so
+                        // an automatic application is checked against it.
+                        let context = context
+                            .with_access_profile(input.authority.common.access_profile())
+                            .map_err(workflow_error)?;
                         let workflow = workflow
                             .submit(context, prepared.proposal)
                             .map_err(workflow_error)?
@@ -2632,7 +2637,7 @@ impl MutationTransaction {
             let current = write_plan_row(
                 tx,
                 entity,
-                authority.common.access_profile(),
+                disclosure_writer(authority, frozen),
                 target.record_id,
                 target.expected_revision,
                 write_fields,
@@ -4172,6 +4177,24 @@ fn input_targets(
         })
         .collect()
 }
+/// The profile disclosure conditions bind on a Proposal write. An automatic
+/// application writes as the profile that submitted the version, or as the
+/// system apply profile when the version names none. A profile removed or no
+/// longer exempt since submit is bound, so the write is refused. A manual
+/// application writes as the applier.
+fn disclosure_writer<'a>(
+    authority: &'a ProposalAuthority,
+    frozen: &'a crate::proposal_workflow::ProposalSnapshot,
+) -> &'a str {
+    if !authority.is_system() {
+        return authority.common.access_profile();
+    }
+    match frozen.submitted_profile() {
+        Some(profile) if profile != crate::disclosure::TIMER_ACCESS_PROFILE => profile,
+        _ => authority.common.access_profile(),
+    }
+}
+
 fn transition_context(actor: &str) -> Result<TrustedTransitionContext, MutationError> {
     Ok(TrustedTransitionContext::from_verified_context(
         TrustedActorRef::from_verified_context(actor).map_err(workflow_error)?,
