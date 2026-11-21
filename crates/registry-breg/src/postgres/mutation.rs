@@ -765,7 +765,7 @@ impl PostgresRecordMutationService {
             .get()
             .await
             .map_err(|_| MutationError::Unavailable)?;
-        let claims = strict_claim_context(&self.registry, input.context, input.entity_id)?;
+        let claims = direct_write_claim_context(&self.registry, input.context, input.entity_id)?;
         let plan = MutationPlan::from_compiled(&self.registry, input.route_id)?;
         self.execute_request(
             &mut client,
@@ -802,7 +802,7 @@ impl PostgresRecordMutationService {
             .get()
             .await
             .map_err(|_| MutationError::Unavailable)?;
-        let claims = strict_claim_context(&self.registry, input.context, input.entity_id)?;
+        let claims = direct_write_claim_context(&self.registry, input.context, input.entity_id)?;
         let plan = MutationPlan::from_compiled(&self.registry, input.route_id)?;
         let request = BatchMutationRequest {
             plan: &plan,
@@ -2297,7 +2297,7 @@ impl PostgresRecordMutationService {
             .get()
             .await
             .map_err(|_| MutationError::Unavailable)?;
-        let claims = strict_claim_context(&self.registry, input.context, input.entity_id)?;
+        let claims = direct_write_claim_context(&self.registry, input.context, input.entity_id)?;
         let plan = MutationPlan::from_compiled(&self.registry, input.route_id)?;
         self.execute_request(
             &mut client,
@@ -2392,6 +2392,19 @@ fn strict_claim_context(
         None => Ok(claims),
     })
     .map_err(|_| MutationError::InvalidRequest)
+}
+
+/// The claim context of a direct Create, Patch, Batch or Tombstone, which
+/// carries what the subject access log records for a profile that requires an
+/// access reason.
+fn direct_write_claim_context(
+    registry: &CompiledRegistry,
+    context: &AuthorizedRequestContext,
+    entity_id: &str,
+) -> Result<ClaimContext, MutationError> {
+    let attribution = crate::subject_access_log::WriteAttribution::of(context)
+        .map_err(|()| MutationError::Unavailable)?;
+    Ok(strict_claim_context(registry, context, entity_id)?.with_write_attribution(attribution))
 }
 
 fn strict_action_context(

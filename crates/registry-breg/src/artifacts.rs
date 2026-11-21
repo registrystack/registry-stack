@@ -2427,7 +2427,8 @@ pub(crate) fn openapi_access_log_response_schema() -> Value {
                     "additionalProperties": false,
                     "required": [
                         "id", "accessedAt", "requester", "serviceClient", "purpose",
-                        "operationId", "visibleAfter", "exemptionReason"
+                        "operationId", "visibleAfter", "exemptionReason", "accessReason",
+                        "accessKind"
                     ],
                     "properties": {
                         "id": {"type": "string", "format": "uuid"},
@@ -2437,7 +2438,9 @@ pub(crate) fn openapi_access_log_response_schema() -> Value {
                         "purpose": {"type": ["string", "null"], "minLength": 1, "maxLength": 512},
                         "operationId": {"type": "string", "minLength": 1, "maxLength": 256},
                         "visibleAfter": {"type": "string", "format": "date-time"},
-                        "exemptionReason": {"type": ["string", "null"], "minLength": 1, "maxLength": 256}
+                        "exemptionReason": {"type": ["string", "null"], "minLength": 1, "maxLength": 256},
+                        "accessReason": {"type": ["string", "null"], "minLength": 1, "maxLength": 512},
+                        "accessKind": {"type": "string", "enum": ["read", "write"]}
                     }
                 }
             },

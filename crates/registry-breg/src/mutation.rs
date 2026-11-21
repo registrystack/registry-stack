@@ -1328,6 +1328,18 @@ impl MutationTransaction {
             },
         )
         .await?;
+        crate::subject_access_log::record_writes(
+            transaction.transaction(),
+            &request.plan.entity,
+            request.claims,
+            std::slice::from_ref(&current.record_id),
+            &request.plan.route.id,
+            &self.expected,
+            &request.correlation,
+            &self.audit,
+        )
+        .await
+        .map_err(|()| MutationError::Unavailable)?;
         fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
         let trigger = mutation_trigger(request.plan.route.operation);
         let data_schemas = event_data_schemas(
@@ -1983,6 +1995,23 @@ impl MutationTransaction {
             #[cfg(not(feature = "postgres-test"))]
             let _ = item_index;
         }
+        // Each item is its own entry, under the Batch operation the caller sent.
+        let written = timer_rows
+            .iter()
+            .map(|current| current.record_id.clone())
+            .collect::<Vec<_>>();
+        crate::subject_access_log::record_writes(
+            transaction.transaction(),
+            &request.plan.entity,
+            request.claims,
+            &written,
+            &request.plan.route.id,
+            &self.expected,
+            &request.correlation,
+            &self.audit,
+        )
+        .await
+        .map_err(|()| MutationError::Unavailable)?;
         set_temporal_exclusion_constraints(
             transaction.transaction(),
             &request.plan.entity,

@@ -13,6 +13,7 @@ standards_referenced: []
 
 A Record type can opt in to a subject-facing log of reads of its Records.
 The log answers who accessed one subject's Record, when, and for which declared purpose.
+It also keeps each direct write made under a profile that must state its reason, with that reason.
 Base Registry Engine (BReg) stores it apart from its operational audit, which keeps its existing
 redaction and retention rules.
 Exemptions add the bounded policy events described later on this page.
@@ -105,7 +106,9 @@ The response is a bounded page:
       "purpose": "eligibility-check",
       "operationId": "lookup",
       "visibleAfter": "2026-09-29T10:00:00Z",
-      "exemptionReason": null
+      "exemptionReason": null,
+      "accessReason": null,
+      "accessKind": "read"
     }
   ],
   "nextCursor": null
@@ -129,6 +132,7 @@ Every access profile names a verified caller, so every log entry has one.
 
 An entry holds the accessing client attribution, access time, operation, and verified purpose,
 plus delayed-disclosure metadata when an exemption applies.
+`accessKind` is `read` for a read and `write` for a direct write.
 `purpose` is null when the verified token carries no purpose; BReg does not invent one.
 On a direct read, `requester` identifies the verified OAuth client when one is available and
 otherwise the verified principal, and `serviceClient` is null.
@@ -143,7 +147,7 @@ from the operational audit.
     direct_client_is_distinguished_in_allowed_and_refused_request_audit,
     forwarded_access_attribution_requires_a_verified_trusted_client_and_never_grants_subject_access. */}
 
-### Record why a record was read
+### Record why a record was read or written
 
 An access profile with `requireAccessReason: true` refuses every request that does not carry a
 `Registry-Access-Reason` header, with `400 request.access_reason_required`.
@@ -152,9 +156,17 @@ It must be sent once, decode to at most 512 bytes, and be neither blank nor cont
 character.
 BReg stores the decoded text as `accessReason` on each subject access log entry the request
 writes, and returns it with the entry.
-Only a read writes an entry, so a write under the profile must carry the reason but nothing keeps it.
 It is null when the profile does not require a reason.
 The text is caller-asserted, so treat it as a claim and not as verified authority.
+
+A direct write under the profile writes one entry with `accessKind: write` for each record it
+changes: a create, a Patch, a tombstone, and each item of a Batch.
+The entry is written in the write's transaction, so a write that rolls back leaves none.
+It names the requester and purpose as a direct read does, has a null `serviceClient`, and takes the
+retention and any exemption delay of the profile.
+A write entry raises no read alert.
+A write under a profile that does not require a reason writes no entry, and neither does an Action
+or a Proposal.
 
 A Record type with `accessLog` gives each reason a durable home.
 A Record type without `accessLog` still refuses a request that omits the reason, but keeps no entry
@@ -192,7 +204,7 @@ It names the record's latest retained revision.
 See [Webhooks](../breg-webhooks/#alert-on-reads).
 
 {/* Evidence: crates/registry-breg/src/outbox.rs insert_read_events;
-    crates/registry-breg/src/subject_access_log.rs access_reason;
+    crates/registry-breg/src/subject_access_log.rs access_reason, record_writes;
     crates/registry-breg/src/compiler/disclosure.rs validate_module_access_reason_operations;
     crates/registry-breg/tests/postgres_access_log.rs. */}
 

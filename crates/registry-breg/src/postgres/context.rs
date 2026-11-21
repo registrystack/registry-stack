@@ -292,6 +292,7 @@ pub struct ClaimContext {
     audit_context: Option<crate::audit::RequestAuditContext>,
     human_identity: Option<registry_review_client::HumanIdentity>,
     recipients: BTreeSet<String>,
+    write_attribution: Option<crate::subject_access_log::WriteAttribution>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -326,6 +327,20 @@ impl ClaimContext {
     }
     pub(crate) fn audit_context(&self) -> Option<&crate::audit::RequestAuditContext> {
         self.audit_context.as_ref()
+    }
+
+    /// Attach what a direct write records in the subject access log. It is
+    /// never installed into the transaction or bound into idempotency.
+    pub(crate) fn with_write_attribution(
+        mut self,
+        attribution: Option<crate::subject_access_log::WriteAttribution>,
+    ) -> Self {
+        self.write_attribution = attribution;
+        self
+    }
+
+    pub(crate) fn write_attribution(&self) -> Option<&crate::subject_access_log::WriteAttribution> {
+        self.write_attribution.as_ref()
     }
 
     pub(crate) fn with_human_identity(
@@ -441,6 +456,7 @@ impl ClaimContext {
             audit_context: None,
             human_identity: None,
             recipients: BTreeSet::new(),
+            write_attribution: None,
         })
     }
 
@@ -475,6 +491,7 @@ impl ClaimContext {
             audit_context: None,
             human_identity: None,
             recipients: BTreeSet::new(),
+            write_attribution: None,
         })
     }
 
@@ -589,6 +606,7 @@ impl fmt::Debug for ClaimContext {
             .field("purpose", &self.purpose.as_ref().map(|_| "<redacted>"))
             .field("row_boundaries", &self.row_boundaries)
             .field("recipient_count", &self.recipients.len())
+            .field("write_attribution", &self.write_attribution)
             .finish()
     }
 }
