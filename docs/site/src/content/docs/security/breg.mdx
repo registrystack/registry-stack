@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-20"
+last_reviewed: "2026-11-21"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -13,8 +13,8 @@ standards_referenced: []
 
 This page states what the Base Registry Engine (BReg) security invariants assume, what you must do
 for them to hold, and which limits a deployment accepts.
-The operator obligations are numbered 1 to 21, and each accepted residual risk carries a stable
-identifier from `BREG-RES-01` to `BREG-RES-26`.
+The operator obligations are numbered 1 to 22, and each accepted residual risk carries a stable
+identifier from `BREG-RES-01` to `BREG-RES-27`.
 The invariants themselves, each with its threat, enforcement point, refusal, and negative test, are
 the rows of the machine-checked BReg security invariant matrix in the registry-stack repository.
 This page does not repeat those rows; it names them by identifier (`BREG-SEC-NN`).
@@ -139,6 +139,62 @@ See `BREG-RES-16` for what remains.
     crates/registry-breg/src/derived_sql.rs,
     raw_node_allowlist_refuses_unreviewed_sql_json_xml_and_hidden_descendants;
     crates/registry-breg/tests/postgres_package/fingerprint.rs. */}
+
+### Disclosure conditions
+
+A disclosure condition withholds a Record, its history, or named fields from every access profile it
+does not exempt, while the Record's current values match the condition.
+A `record` condition is a restrictive row-level security policy on the Record table.
+It binds every query under a bound profile, read paths, lookups and counts included, so a hidden row
+never reaches a filter, a sort, or a count.
+A `history` condition is applied in Rust to revisions and snapshots, which answer as not found.
+A `fields` condition is applied in Rust after the SQL query.
+Reads, revisions, and Proposal review show each named member as `null`, and a write response never
+carries it.
+Filtering and sorting run in SQL before that step.
+`bregctl check` therefore refuses each surface that would let a bound profile filter, sort, look up,
+export, count, project, or derive from a withheld field (`breg.disclosure.*`), read path grants
+included.
+Writes are checked in Rust against the writing profile.
+A bound profile cannot lift a mark, write a withheld field, or tombstone a marked Record, and a write
+whose result a `record` condition would hide from the writer is refused.
+
+`exemptProfiles` is the only authority over a condition.
+An exempt profile reads and writes as if the condition did not exist, and only an exempt profile can
+lift it.
+The record timer runs under the reserved `system-record-timer` profile, which every condition
+exempts.
+The compiler therefore refuses a timer that reads a withheld field.
+On a Record type with a `record` condition, it also refuses a timer that creates a Record a bound
+profile can read.
+An automatic Proposal is checked against the profile that submitted its version, but it reads and
+writes under `system-proposal-apply`, which no condition can exempt.
+
+A profile with `requireAccessReason` must send a `Registry-Access-Reason` header on each Record read
+and direct write.
+BReg refuses a missing or invalid header with `400 request.access_reason_required` before any Record
+is read, and stores the reason on the subject access log entry of a Record type with `accessLog`.
+The compiler refuses the key on a profile that grants an operation that does not check the header.
+BReg writes no subject-log entry for a Proposal attachment download or a Proposal review read, even
+when the review shows fields of a Record type with `accessLog`.
+Those reads are recorded only in BReg's [audit records](../../operate/breg-monitor/#read-audit-records).
+See obligation 22 and `BREG-RES-27` for what remains.
+
+{/* Evidence: crates/registry-breg/src/disclosure.rs, plan, record_guard_sql, refuses_write;
+    crates/registry-breg/src/generated_ddl.rs, disclosure_record_policies;
+    crates/registry-breg/src/postgres/read.rs, withhold_disclosed_fields;
+    crates/registry-breg/src/postgres/revision_read.rs, withholds_history;
+    crates/registry-breg/src/compiler/disclosure/reach.rs, validate_read_paths;
+    crates/registry-breg/src/api/context.rs, bind_access_reason;
+    crates/registry-breg/tests/disclosure/records.rs,
+    the_record_guard_hides_a_protected_row_from_every_profile_but_the_exempt_and_the_timer;
+    crates/registry-breg/tests/disclosure/fields.rs, a_list_nulls_withheld_members_row_by_row;
+    crates/registry-breg/tests/disclosure/history.rs,
+    revisions_of_withheld_records_answer_like_a_random_identifier;
+    crates/registry-breg/tests/disclosure/writes.rs,
+    a_bound_patch_cannot_lift_a_mark_or_overwrite_a_withheld_field;
+    crates/registry-breg/tests/disclosure_compile.rs,
+    a_read_path_cannot_filter_or_sort_a_withheld_target_field. */}
 
 ## Operator obligations
 
@@ -392,6 +448,16 @@ The residuals refer to these obligations by number.
     Keep the exchange issuer's task-token lifetime at or under that bound and its clock within the
     leeway; Casework's exchange step documents 300 seconds
     ([Casework task grants](../../reference/casework-task-grants/#preview-and-approve)).
+
+22. Treat each disclosure condition's `exemptProfiles` as a disclosure decision.
+    Exempt only the profiles that may see the protected subjects.
+    Exempt the profile that sets a `record` mark too, or BReg refuses its write.
+    When a Proposal must change a Record that a `record` condition matches, apply it by hand under
+    an exempt profile or use an immediate Action, because an automatic application cannot.
+    Set `accessLog` and `requireAccessReason` where reads of protected subjects must be explained,
+    and review each accepted `breg.disclosure.*` finding as a disclosure decision.
+    If data subjects must see Proposal review reads and attachment downloads, cover them in your own
+    audit, because they write no subject-log entry.
 
 ## Accepted residuals
 
@@ -880,6 +946,39 @@ Each lists the condition, the consequence, the mitigation, and the related matri
     a_summed_field_released_by_two_datasets_over_one_unit_is_refused_at_the_second;
     crates/registry-breg/tests/statistics.rs,
     a_small_cell_whose_records_leave_the_summed_field_unset_is_suppressed_with_its_totals. */}
+
+### `BREG-RES-27`: a disclosure condition does not hide every trace
+
+- Condition: a disclosure condition binds a profile that reviews, writes, or references the Records
+  it withholds.
+- Consequence: the condition hides values, not every effect of their existence.
+  A Proposal's reviewers see its inputs, even for a field their own profile would not read.
+  Their review reads and attachment downloads write no subject-log entry.
+  A `409 mutation.conflict` on a unique value confirms that a hidden Record or a withheld value
+  exists, and a reference write confirms that its target exists.
+  A `403 write.outside-boundary` tells a bound writer that a condition matches the Record.
+  A `history` condition answers the revisions of a readable Record as not found.
+  An automatic Proposal cannot change a Record a `record` condition matches, or set a `record` mark,
+  even for an exempt submitter.
+  It ends `blocked` with no retry, and the Record is unchanged.
+  A refresh profile a `record` condition binds skips the marked roots, so their external projections
+  are not kept current.
+  Every route that would read a withheld value directly is refused at compile time instead (see
+  [Disclosure conditions](#disclosure-conditions)).
+- Mitigation: keep withheld fields out of uniqueness constraints, or accept the
+  `breg.disclosure.withheld-field-probe` finding only when the profiles that create or patch these
+  Records are trusted.
+  Grant review of protected Record types narrowly.
+  Apply such Proposals by hand under an exempt profile, or use an immediate Action.
+  Exempt the refresh profile, or accept `breg.disclosure.external-refresh-withheld-root` to leave the
+  marked roots out.
+- Related: `BREG-RES-12`, `BREG-RES-14`.
+
+{/* Evidence: crates/registry-breg/tests/disclosure/writes.rs,
+    known_limit_an_automatic_proposal_cannot_set_a_record_mark_even_for_an_exempt_submitter,
+    known_limit_an_automatic_proposal_cannot_patch_a_record_a_record_condition_hides;
+    crates/registry-breg/tests/disclosure_compile.rs,
+    a_record_condition_that_binds_a_refresh_profile_is_a_finding. */}
 
 ## Report a vulnerability
 
