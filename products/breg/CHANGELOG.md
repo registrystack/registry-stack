@@ -91,6 +91,30 @@
 - The Evidence starter `evidence/starter/definitions.yaml.fragment` writes
   `functions` as a map keyed by the Function id, the shape `EvidenceProject`
   reads. Merge its entries into the project's `functions` map.
+- An access profile record permission can set `requiredFilters`, a list of
+  alternative `fields` sets that a `list` must pin with top-level `eq`
+  predicates carrying a non-null value. A list or `$count` that does not is
+  refused with `400 query.filter_required` before any query runs. The problem
+  carries a `requiredFilters` member that names the acceptable sets as API field
+  names, and a fixed `detail`. A continuation page cannot drop the criteria,
+  because the signed cursor binds the first page's filter. `bregctl check`
+  refuses a `requiredFilters` that has an empty alternative, repeats an
+  alternative, has more than eight alternatives or an alternative of more than
+  32 fields, names a field outside the same grant's `filterableFields` or one
+  that cannot take `eq`, or sits on a grant without `list`. An empty
+  `requiredFilters` is refused when the file is read, with
+  `config.invalid-value`, so an author omits the key to put no criteria on
+  lists. A field repeated within one alternative is refused the same way, with
+  `config.duplicate-item`, and each alternative compiles in field order. Runtime metadata lists the
+  alternatives beside `filterableFields`, the Rust client exposes
+  `BRegQueryDescriptor::required_filters` and
+  `BRegProblemCode::QueryFilterRequired`, and the OpenAPI problem enum gains
+  `query.filter_required` and the Problem schema a bounded `requiredFilters`
+  member, so a package's revision changes on rebuild. The OpenAPI declares that
+  `400` on a list operation only where an admitted profile requires a filter.
+  The ODRL export omits a list grant under `requiredFilters`, with the reason
+  `required-filters`, and still exports its get. The key governs `list` only.
+  Lookups, get, read paths, bulk export and `snapshot` are unchanged.
 - Runtime Action metadata (`GET /v1/registry`, `metadata/registry.json` and the
   OpenAPI `x-registry-action` extension) carries `execution.review` (`none` or
   `required`) and `execution.application` (`manual` or `automatic`) for each
@@ -104,6 +128,64 @@
   both. The Node.js and Python clients expose `review`
   and `application` on each Action as the served string, or `null` (`None`) when
   the server sends none, as an older server does.
+- A Record type can declare `disclosureConditions`, a mapping from each condition id to the
+  condition. Each is a conjunction of one to four literal
+  tests on the record's current values, and withholds the whole record (`withhold: record`), its
+  revisions and snapshots (`history`) or named optional fields (`fields`) from every access profile
+  that does not list it under `exemptProfiles`. A profile that writes the type only through an
+  Action or Proposal permission can be listed. The record timer is never withheld from. A withheld
+  record answers as an absent one, and a withheld member is `null` on reads and revisions and absent
+  from write responses. A JSON Patch `test` on a withheld field is refused, and a direct write,
+  immediate Action or Proposal applied by hand whose result a `record` condition would hide from the
+  writer is refused with `write.outside-boundary`. So is a Patch, Batch item, immediate Action or
+  Proposal applied by hand, when a condition that binds the applying profile matches the record and
+  the write names a field it withholds, changes a field a constraint checks together with one, or
+  would lift the mark. A bound profile cannot tombstone a record that a `fields` or `history`
+  condition binding it matches. A Proposal applied automatically is checked against the profile that
+  submitted the version being applied, so an exempt submitter's Proposal can make that change, and
+  one whose submitting profile was removed or lost its exemption is refused. An automatic Proposal
+  still reads and writes under `system-proposal-apply`, which no condition can exempt, so even for an
+  exempt submitter it cannot change a record a `record` condition matches or set a `record` mark. It
+  ends `blocked` with no retry scheduled and the record unchanged. Use an immediate Action, or apply
+  the Proposal by hand under an exempt profile. An import item the write rule refuses answers the
+  generic `412 precondition.failed`. The OpenAPI of Create, Patch, Batch, immediate Action invoke
+  and Proposal apply declares that 403 wherever a binding condition can refuse the write, and its
+  `detail` names disclosure conditions beside row boundaries. PostgreSQL enforces a `record`
+  condition as a restrictive row policy. `bregctl check` refuses a bound profile whose filters,
+  sorts, lookups, export, hook projections, read paths, row, membership or consent boundaries,
+  derived fields, spatial queries, Evidence facts, external view links or statistical datasets reach
+  a withheld value, a Record timer that reads a withheld field, and a Record timer on a hidden
+  record that creates a record a bound profile reads (`breg.disclosure.*`). It warns, ranked as
+  widening access, when a field a `fields` condition withholds is in a uniqueness constraint or a
+  partial one's `when`, a unique encrypted lookup or a temporal non-overlap, because a Create, or a
+  Patch of another record, that repeats the value answers `409` and confirms it exists on a hidden
+  record (`breg.disclosure.withheld-field-probe`). It also warns when a `record` condition on a
+  view's root binds a profile that may refresh the view, because the refresh then skips the
+  records the condition matches and still succeeds
+  (`breg.disclosure.external-refresh-withheld-root`). Runtime metadata flags `mayBeWithheld` and lists
+  the bound conditions without their literals, `bregctl explain access` lists them in full, the
+  access preview names the ids that bind a profile, and the ODRL export omits a grant a condition
+  binds (`disclosure-condition`). Proposal inputs stay visible to reviewers, and a uniqueness or
+  reference conflict on a Create or Patch can reveal that a withheld record exists. Packages that
+  use the new key change revision, and the metadata, OpenAPI and Explain documents gain members that
+  earlier clients ignore.
+- An access profile can set `requireAccessReason: true`. A request under it without a valid
+  `Registry-Access-Reason` header (unpadded base64url UTF-8, at most 512 bytes) is refused with
+  `400 request.access_reason_required`. The reason is stored on the subject access log entry and
+  returned as `accessReason`. On a Record type with `accessLog`, each record a direct Create, Patch,
+  Batch item or Tombstone changes gets an entry with the reason and `accessKind: write`, written in
+  the same transaction and raising no read alert. Action and Proposal writes record none. A read
+  entry carries `accessKind: read`. A hook with `trigger: read` and `profiles` raises a value-free
+  event for each logged read by those profiles, carrying an `access` object. The event is written
+  with the access log entry, so `bregctl check` refuses a read hook on a Record type without
+  `accessLog` (`breg.disclosure.read-hook-access-log-required`). `bregctl check` refuses the key on
+  a profile that grants import, invoke, start, `allowDataExport`, or an action, proposal, dataset,
+  external view or projection-refresh permission, which do not check the reason
+  (`breg.access-profile.access-reason-operation-unsupported`). The ODRL export omits each grant of
+  such a profile (`access-reason`).
+- BREAKING: the subject access log keeps the access reason and the access kind in their own
+  columns, and the managed schema fingerprint changes with them. Migration: install the release on
+  a fresh database.
 
 - Report hook deliveries and ingestion runs as metrics:
   `breg_hook_deliveries` by state, including `dead-lettered`, and

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-11-21"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -46,6 +46,12 @@ runtime also check cross-field rules and references that no table can show.
     products/platform/scripts/check-dev-schemas.sh hold them to the Rust types. */}
 
 <ConfigurationReference contracts={reference.contracts} prefix="server" />
+
+Three keys carry authority that cuts across a Record type's grants. `requiredFilters` on a record
+permission makes a list pin search criteria. `disclosureConditions` on a Record type withholds a
+record, its history or named fields while its values match. `requireAccessReason` on an access
+profile demands a `Registry-Access-Reason` header. [Control access](../../configure/breg-access/)
+explains each, and the tables above give their bounds.
 
 ## Authored values and display
 

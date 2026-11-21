@@ -2036,6 +2036,107 @@
       "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
     },
+    "DisclosureWhenPredicate": {
+      "description": "One literal test of a record's current values. Predicates in a condition\nare ANDed, and an absent member counts as null.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "type": {
+              "const": "field-equals",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "type",
+            "field",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The field equals one of 1 to 32 literals.",
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "type": {
+              "const": "field-in",
+              "type": "string"
+            },
+            "values": {
+              "items": true,
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "field",
+            "values"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "type": {
+              "const": "field-is-null",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "field"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "type": {
+              "const": "field-is-not-null",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "field"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DisclosureWithholdSource": {
+      "description": "What a matching disclosure condition withholds from a profile it does not\nexempt.",
+      "oneOf": [
+        {
+          "const": "record",
+          "description": "The whole record behaves as absent.",
+          "type": "string"
+        },
+        {
+          "const": "history",
+          "description": "Every revision and snapshot of the record behaves as absent. The\ncurrent record stays readable.",
+          "type": "string"
+        },
+        {
+          "const": "fields",
+          "description": "The named `fields` are omitted from reads and history.",
+          "type": "string"
+        }
+      ]
+    },
     "DisplayPurpose": {
       "description": "The purpose a Record or Action declares for itself.",
       "enum": [
@@ -2166,6 +2267,15 @@
           "items": {
             "$ref": "#/$defs/ConsentRequirementSource"
           },
+          "type": "array"
+        },
+        "requiredFilters": {
+          "description": "Alternative search criteria; a `list` must satisfy at least one. Omit to put no criteria on lists.",
+          "items": {
+            "$ref": "#/$defs/RequiredFilterSource"
+          },
+          "maxItems": 8,
+          "minItems": 1,
           "type": "array"
         },
         "revisionAccess": {
@@ -2374,12 +2484,21 @@
       "type": "object"
     },
     "EventTrigger": {
-      "enum": [
-        "created",
-        "patched",
-        "tombstoned"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "created",
+            "patched",
+            "tombstoned"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "read",
+          "description": "A read by one of the hook's `profiles`, recorded in the subject access log.",
+          "type": "string"
+        }
+      ]
     },
     "EvidenceSubjectResolution": {
       "enum": [
@@ -2909,6 +3028,14 @@
           "description": "The access profile a proposal from this hook is applied under.\nOptional: a hook that declares none is a non-proposing hook, and a\nproposal from one is refused and dead-lettered at delivery time.\nDeclaring none is not an authoring error.",
           "type": "string"
         },
+        "profiles": {
+          "description": "The access profiles whose reads produce the event. Required for the read trigger and refused otherwise.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
         "projection": {
           "description": "Declared field identifiers to include in `values`. System event metadata is included separately.",
           "items": {
@@ -2919,7 +3046,7 @@
         },
         "trigger": {
           "$ref": "#/$defs/EventTrigger",
-          "description": "Committed record change that can produce this hook."
+          "description": "The committed record change, or the logged read, that can produce this hook."
         },
         "when": {
           "$ref": "#/$defs/EventConditionSource",
@@ -4440,6 +4567,23 @@
       ],
       "type": "object"
     },
+    "RequiredFilterSource": {
+      "additionalProperties": false,
+      "description": "One alternative set of search criteria a caller must supply to `list`.\nThe `$filter` must carry a top-level `eq` predicate with a non-null\nliteral for every named field.",
+      "properties": {
+        "fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "fields"
+      ],
+      "type": "object"
+    },
     "RequiredScopes": {
       "anyOf": [
         {
@@ -5695,6 +5839,10 @@
             "type": "array",
             "uniqueItems": true
           },
+          "requireAccessReason": {
+            "description": "Every request under the profile must carry a `Registry-Access-Reason` header, which the subject access log records.",
+            "type": "boolean"
+          },
           "requiredPurposes": {
             "description": "The verified token's purpose must match one listed value. Omit to accept every purpose.",
             "items": {
@@ -6121,10 +6269,23 @@
                   "type": "array",
                   "uniqueItems": true
                 },
+                "requireAccessReason": {
+                  "description": "Every request under the profile must carry a `Registry-Access-Reason` header.",
+                  "type": "boolean"
+                },
                 "requireConsent": {
                   "items": {
                     "$ref": "#/$defs/ConsentRequirementSource"
                   },
+                  "type": "array"
+                },
+                "requiredFilters": {
+                  "description": "Alternative search criteria; a `list` must satisfy at least one. Omit to put no criteria on lists.",
+                  "items": {
+                    "$ref": "#/$defs/RequiredFilterSource"
+                  },
+                  "maxItems": 8,
+                  "minItems": 1,
                   "type": "array"
                 },
                 "requiredPurposes": {
@@ -6216,6 +6377,52 @@
               "$ref": "#/$defs/DerivedSource"
             },
             "type": "array"
+          },
+          "disclosureConditions": {
+            "additionalProperties": {
+              "additionalProperties": false,
+              "description": "A rule that withholds a record, its history or named fields from every\naccess profile it does not exempt, while the record's current values match\n`when`.",
+              "properties": {
+                "exemptProfiles": {
+                  "default": [],
+                  "description": "The access profiles that see the record whatever `when` says. At least one.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "fields": {
+                  "description": "The optional stored fields to omit. Required for `withhold: fields` and refused otherwise.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "when": {
+                  "description": "One to four literal tests of the record's current values, ANDed.",
+                  "items": {
+                    "$ref": "#/$defs/DisclosureWhenPredicate"
+                  },
+                  "type": "array"
+                },
+                "withhold": {
+                  "$ref": "#/$defs/DisclosureWithholdSource"
+                }
+              },
+              "required": [
+                "when",
+                "withhold"
+              ],
+              "type": "object"
+            },
+            "description": "Rules that withhold the record, its history or named fields from profiles they do not exempt.\nWritten as a mapping from each condition id to the rest of the\ncondition (CFG-ID-5) and held sorted by id.",
+            "maxProperties": 8,
+            "propertyNames": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": "object"
           },
           "display": {
             "$ref": "#/$defs/ModelDisplaySource",

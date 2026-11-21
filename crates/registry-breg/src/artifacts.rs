@@ -21,7 +21,7 @@ use crate::model::{
     CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
     CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics, CompiledQueryTemporalValueKind,
     CompiledRecipients, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
-    CompiledStatisticalDataset, HttpMethod,
+    CompiledStatisticalDataset, DisclosureWithhold, HttpMethod,
 };
 use crate::physical_names::{hex_prefix, PhysicalNameInventory};
 use crate::record_profile::{link_header_value, CONTEXT_IDENTIFIER, PROFILE_IDENTIFIER};
@@ -384,6 +384,7 @@ pub(crate) fn event_data_schema_binding(
         EventTrigger::Created => "created",
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
+        EventTrigger::Read => "read",
     };
     let mut properties = Map::new();
     properties.insert("recordType".to_owned(), json!({"const": entity.id}));
@@ -406,12 +407,43 @@ pub(crate) fn event_data_schema_binding(
             "required": event.projection,
         }),
     );
+    let mut required = vec![
+        "recordType",
+        "recordId",
+        "revision",
+        "trigger",
+        "packageRevision",
+        "values",
+    ];
+    if event.trigger == EventTrigger::Read {
+        // A read alert names who read and why, and carries no record values.
+        properties.insert(
+            "access".to_owned(),
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "accessProfile": {"type": "string"},
+                    "operationId": {"type": "string"},
+                    "requester": {"type": "string"},
+                    "purpose": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "accessReason": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "accessLogEventId": {"type": "string", "format": "uuid"},
+                },
+                "required": [
+                    "accessProfile", "operationId", "requester", "purpose",
+                    "accessReason", "accessLogEventId"
+                ],
+            }),
+        );
+        required.push("access");
+    }
     let schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "additionalProperties": false,
         "properties": properties,
-        "required": ["recordType", "recordId", "revision", "trigger", "packageRevision", "values"]
+        "required": required,
     });
     let bytes = canonicalize_json(&schema).map_err(|_| canonicalization_error())?;
     let digest = Sha256::digest(&bytes);
@@ -719,7 +751,7 @@ pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
                     (id, value)
                 })
                 .collect::<BTreeMap<_, _>>();
-            json!({
+            let mut inspection = json!({
                 "id": record_type.id, "apiName": record_type.api_name,
                 "revision": record_type.definition_revision, "display": record_type.display,
                 "grouping": record_type.grouping, "eventRecord": record_type.event_record,
@@ -765,7 +797,11 @@ pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
                     "encrypted": false,
                     "required": false, "derivation": field.derivation_id,
                 }))).collect::<Vec<_>>()
-            })
+            });
+            if !record_type.disclosure_conditions.is_empty() {
+                inspection["disclosureConditions"] = json!(record_type.disclosure_conditions);
+            }
+            inspection
         })
         .collect::<Vec<_>>();
     json!({"registryId": registry.registry_id(), "revision": registry.revision(),
@@ -1107,6 +1143,7 @@ fn action_results_schema(action: &CompiledAction, effect_ids: &BTreeSet<String>)
 pub(crate) fn openapi_action_operation(
     route: &CompiledActionRoute,
     action: &CompiledAction,
+    entities: &BTreeMap<String, CompiledEntity>,
     access_profiles: OpenApiAccessProfiles<'_>,
 ) -> Value {
     let mut operation = Map::from_iter([
@@ -1178,7 +1215,11 @@ pub(crate) fn openapi_action_operation(
     );
     operation.insert(
         "responses".to_owned(),
-        action_operation_responses(route, action),
+        action_operation_responses(
+            route,
+            action,
+            invoke_may_refuse_write(route, action, entities, access_profiles),
+        ),
     );
     Value::Object(operation)
 }
@@ -1707,7 +1748,61 @@ fn bearer_security() -> Value {
     json!([{"bearerAuth": []}])
 }
 
-fn action_operation_responses(route: &CompiledActionRoute, action: &CompiledAction) -> Value {
+/// Whether an immediate Action invoke by a profile the document describes may
+/// be refused as outside what the profile may write.
+fn invoke_may_refuse_write(
+    route: &CompiledActionRoute,
+    action: &CompiledAction,
+    entities: &BTreeMap<String, CompiledEntity>,
+    access_profiles: OpenApiAccessProfiles<'_>,
+) -> bool {
+    if route.kind != ActionRouteKind::Invoke || action.execution.is_proposal() {
+        return false;
+    }
+    match access_profiles {
+        OpenApiAccessProfiles::All => route
+            .access_profiles
+            .iter()
+            .any(|profile_id| action_may_refuse_write(action, entities, profile_id)),
+        OpenApiAccessProfiles::Selected(profile_id) => {
+            action_may_refuse_write(action, entities, profile_id)
+        }
+    }
+}
+
+/// Whether the plan of `action`, written as `profile_id`, may be refused as
+/// outside what the profile may write, as `operation_may_refuse_write`
+/// decides for a record route. A plan Create is refused when a bound
+/// `record` condition withholds the state it writes. A plan Patch is refused
+/// when any bound condition applies: a `record` condition that withholds the
+/// resulting state, or a `fields` or `history` condition whose mark the
+/// Patch would lift or whose withheld field it would overwrite.
+pub(crate) fn action_may_refuse_write(
+    action: &CompiledAction,
+    entities: &BTreeMap<String, CompiledEntity>,
+    profile_id: &str,
+) -> bool {
+    action.effects.iter().any(|effect| {
+        let Some(entity) = entities.get(&effect.target.entity_id) else {
+            return false;
+        };
+        let disclosure = crate::disclosure::plan(entity, profile_id);
+        match effect.operation {
+            Operation::Create => disclosure
+                .conditions()
+                .iter()
+                .any(|condition| matches!(condition.withhold, DisclosureWithhold::Record)),
+            Operation::Patch => !disclosure.is_empty(),
+            _ => false,
+        }
+    })
+}
+
+fn action_operation_responses(
+    route: &CompiledActionRoute,
+    action: &CompiledAction,
+    may_refuse_write: bool,
+) -> Value {
     let (success_status, success) = if route.operation == Operation::Start {
         (
             "201",
@@ -1744,7 +1839,7 @@ fn action_operation_responses(route: &CompiledActionRoute, action: &CompiledActi
         ("200", success)
     };
     let mut responses = Map::from_iter([(success_status.to_owned(), success)]);
-    for (status, problems) in action_problem_responses(route.kind, action) {
+    for (status, problems) in action_problem_responses(route.kind, action, may_refuse_write) {
         let mut examples = problems
             .iter()
             .map(|problem| {
@@ -1790,6 +1885,7 @@ fn action_operation_responses(route: &CompiledActionRoute, action: &CompiledActi
 fn action_problem_responses(
     kind: ActionRouteKind,
     action: &CompiledAction,
+    may_refuse_write: bool,
 ) -> BTreeMap<&'static str, Vec<ProblemExample>> {
     let mut responses = BTreeMap::from([
         (
@@ -1898,6 +1994,9 @@ fn action_problem_responses(
             );
         }
         responses.insert("412", precondition_problems);
+    }
+    if may_refuse_write {
+        responses.insert("403", vec![WRITE_OUTSIDE_BOUNDARY]);
     }
     responses
 }
@@ -2224,10 +2323,10 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
         };
         operations.insert(
             method_name(route.method).to_owned(),
-            openapi_action_operation(route, action, OpenApiAccessProfiles::All),
+            openapi_action_operation(route, action, entities, OpenApiAccessProfiles::All),
         );
     }
-    append_proposal_openapi(&mut paths, actions, None);
+    append_proposal_openapi(&mut paths, actions, entities, None);
     crate::external_view_artifacts::append(
         &mut paths,
         external_views,
@@ -2391,7 +2490,8 @@ pub(crate) fn openapi_access_log_response_schema() -> Value {
                     "additionalProperties": false,
                     "required": [
                         "id", "accessedAt", "requester", "serviceClient", "purpose",
-                        "operationId", "visibleAfter", "exemptionReason"
+                        "operationId", "visibleAfter", "exemptionReason", "accessReason",
+                        "accessKind"
                     ],
                     "properties": {
                         "id": {"type": "string", "format": "uuid"},
@@ -2401,7 +2501,9 @@ pub(crate) fn openapi_access_log_response_schema() -> Value {
                         "purpose": {"type": ["string", "null"], "minLength": 1, "maxLength": 512},
                         "operationId": {"type": "string", "minLength": 1, "maxLength": 256},
                         "visibleAfter": {"type": "string", "format": "date-time"},
-                        "exemptionReason": {"type": ["string", "null"], "minLength": 1, "maxLength": 256}
+                        "exemptionReason": {"type": ["string", "null"], "minLength": 1, "maxLength": 256},
+                        "accessReason": {"type": ["string", "null"], "minLength": 1, "maxLength": 512},
+                        "accessKind": {"type": "string", "enum": ["read", "write"]}
                     }
                 }
             },
@@ -3266,16 +3368,22 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
         "200"
     };
     let mut responses = Map::from_iter([(success_status.to_owned(), success)]);
-    for (status, problems) in
-        problem_responses(spec.route.operation, operation_has_row_boundaries(spec))
-    {
+    let required_filters = example_required_filters(spec);
+    for (status, problems) in problem_responses(
+        spec.route.operation,
+        operation_may_refuse_write(spec),
+        required_filters.is_some(),
+    ) {
         let examples = problems
             .iter()
             .map(|problem| {
-                (
-                    problem.code.to_owned(),
-                    json!({"value": problem_example(status, problem.code, problem.detail)}),
-                )
+                let mut value = problem_example(status, problem.code, problem.detail);
+                if problem.code == FILTER_REQUIRED.code {
+                    if let Some(required_filters) = &required_filters {
+                        value["requiredFilters"] = json!(required_filters);
+                    }
+                }
+                (problem.code.to_owned(), json!({"value": value}))
             })
             .collect::<Map<_, _>>();
         responses.insert(
@@ -3923,26 +4031,64 @@ struct ProblemExample {
     detail: &'static str,
 }
 
-fn operation_has_row_boundaries(spec: OpenApiOperationSpec<'_>) -> bool {
-    let profile_has_boundaries = |profile_id: &str| {
-        spec.entity
+const FILTER_REQUIRED: ProblemExample = ProblemExample {
+    code: crate::problem::ProblemCode::QueryFilterRequired.code(),
+    detail: crate::problem::ProblemCode::QueryFilterRequired.description(),
+};
+
+const WRITE_OUTSIDE_BOUNDARY: ProblemExample = ProblemExample {
+    code: "write.outside-boundary",
+    detail: "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition.",
+};
+
+/// Whether a write by a profile the document describes may be refused as
+/// outside what the profile may write: the profile has a row boundary, or a
+/// disclosure condition binds it. A bound Patch or Batch item is refused when
+/// it would lift a mark or overwrite a withheld field, and a bound Create only
+/// when a `record` condition would withhold the resulting record.
+fn operation_may_refuse_write(spec: OpenApiOperationSpec<'_>) -> bool {
+    let profile_may_be_refused = |profile_id: &str| {
+        let has_boundaries = spec
+            .entity
             .access_profiles
             .get(profile_id)
-            .is_some_and(|profile| !profile.row_boundaries.is_empty())
+            .is_some_and(|profile| !profile.row_boundaries.is_empty());
+        let disclosure = crate::disclosure::plan(spec.entity, profile_id);
+        let disclosure_refuses = if spec.route.operation == Operation::Create {
+            disclosure
+                .conditions()
+                .iter()
+                .any(|condition| matches!(condition.withhold, DisclosureWithhold::Record))
+        } else {
+            !disclosure.is_empty()
+        };
+        has_boundaries || disclosure_refuses
     };
     match spec.access_profiles {
         OpenApiAccessProfiles::All => spec
             .route
             .access_profiles
             .iter()
-            .any(|profile_id| profile_has_boundaries(profile_id)),
-        OpenApiAccessProfiles::Selected(profile_id) => profile_has_boundaries(profile_id),
+            .any(|profile_id| profile_may_be_refused(profile_id)),
+        OpenApiAccessProfiles::Selected(profile_id) => profile_may_be_refused(profile_id),
     }
+}
+
+/// The search criteria a list by a profile the document describes must carry,
+/// as the API field names the refusal names: those of the first such profile
+/// whose grant requires any. `None` when no described profile's grant does,
+/// so the list is never refused for want of search criteria.
+fn example_required_filters(spec: OpenApiOperationSpec<'_>) -> Option<Vec<Vec<String>>> {
+    query_profiles_for_route(spec.route, spec.query, spec.access_profiles)
+        .iter()
+        .find(|operation| !operation.required_filters.is_empty())
+        .map(|operation| operation.required_filter_api_names(spec.response_entity))
 }
 
 fn problem_responses(
     operation: Operation,
-    has_row_boundaries: bool,
+    may_refuse_write: bool,
+    may_require_filter: bool,
 ) -> BTreeMap<&'static str, Vec<ProblemExample>> {
     let mut responses = BTreeMap::from([
         (
@@ -3995,6 +4141,9 @@ fn problem_responses(
                 detail: "The query cursor is invalid.",
             },
         ]);
+    }
+    if operation == Operation::List && may_require_filter {
+        responses.entry("400").or_default().push(FILTER_REQUIRED);
     }
     if operation == Operation::Lookup {
         responses.entry("404").or_default().push(ProblemExample {
@@ -4051,17 +4200,11 @@ fn problem_responses(
     if matches!(
         operation,
         Operation::Create | Operation::Patch | Operation::Batch
-    ) && has_row_boundaries
+    ) && may_refuse_write
     {
-        responses.insert(
-            "403",
-            vec![ProblemExample {
-                code: "write.outside-boundary",
-                detail: "The resulting record falls outside the selected access profile's row boundary.",
-            }],
-        );
+        responses.insert("403", vec![WRITE_OUTSIDE_BOUNDARY]);
     }
-    if operation == Operation::Batch && has_row_boundaries {
+    if operation == Operation::Batch && may_refuse_write {
         responses.insert(
             "412",
             vec![ProblemExample {
@@ -4117,6 +4260,18 @@ fn problem_schema() -> Value {
             "field": {"type": "string", "minLength": 1, "maxLength": 128},
             "atField": {"type": "string", "minLength": 1, "maxLength": 128},
             "notAfterField": {"type": "string", "minLength": 1, "maxLength": 128},
+            "requiredFilters": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": crate::compiler::MAXIMUM_REQUIRED_FILTER_ALTERNATIVES,
+                "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": crate::query::MAX_FILTER_PREDICATES,
+                    "uniqueItems": true,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 64}
+                }
+            },
             "code": {
                 "type": "string",
                 "enum": crate::problem::ProblemCode::DOCUMENTED

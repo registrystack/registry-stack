@@ -292,6 +292,7 @@ pub struct ClaimContext {
     audit_context: Option<crate::audit::RequestAuditContext>,
     human_identity: Option<registry_review_client::HumanIdentity>,
     recipients: BTreeSet<String>,
+    write_attribution: Option<crate::subject_access_log::WriteAttribution>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -326,6 +327,20 @@ impl ClaimContext {
     }
     pub(crate) fn audit_context(&self) -> Option<&crate::audit::RequestAuditContext> {
         self.audit_context.as_ref()
+    }
+
+    /// Attach what a direct write records in the subject access log. It is
+    /// never installed into the transaction or bound into idempotency.
+    pub(crate) fn with_write_attribution(
+        mut self,
+        attribution: Option<crate::subject_access_log::WriteAttribution>,
+    ) -> Self {
+        self.write_attribution = attribution;
+        self
+    }
+
+    pub(crate) fn write_attribution(&self) -> Option<&crate::subject_access_log::WriteAttribution> {
+        self.write_attribution.as_ref()
     }
 
     pub(crate) fn with_human_identity(
@@ -441,6 +456,7 @@ impl ClaimContext {
             audit_context: None,
             human_identity: None,
             recipients: BTreeSet::new(),
+            write_attribution: None,
         })
     }
 
@@ -475,6 +491,7 @@ impl ClaimContext {
             audit_context: None,
             human_identity: None,
             recipients: BTreeSet::new(),
+            write_attribution: None,
         })
     }
 
@@ -553,6 +570,15 @@ impl ClaimContext {
         if entity.id != self.entity_id {
             return Err(invalid_context());
         }
+        // A state the profile may not see is outside its boundary, as the
+        // restrictive disclosure policies would refuse it. A state that
+        // cannot be evaluated counts as withheld.
+        if crate::disclosure::plan(entity, &self.access_profile)
+            .withholds_record(row)
+            .unwrap_or(true)
+        {
+            return Ok(false);
+        }
         snapshot_matches_boundaries(entity, row, record_id, &self.row_boundaries)
     }
 }
@@ -580,6 +606,7 @@ impl fmt::Debug for ClaimContext {
             .field("purpose", &self.purpose.as_ref().map(|_| "<redacted>"))
             .field("row_boundaries", &self.row_boundaries)
             .field("recipient_count", &self.recipients.len())
+            .field("write_attribution", &self.write_attribution)
             .finish()
     }
 }
@@ -2538,6 +2565,67 @@ mod tests {
                 "a row spelling {spelling} is refused before any comparison"
             );
         }
+    }
+
+    #[test]
+    fn a_record_condition_puts_a_withheld_state_outside_the_boundary_of_a_profile_it_does_not_exempt(
+    ) {
+        let source = json!({
+            "apiVersion": crate::compiler::AUTHORING_API_VERSION, "kind":"BRegProject",
+            "project":{"id":"context-test","version":"0.1.0","defaultLanguage":"en",
+                "canonicalBaseIri":"https://context.example.test"},
+            "datasets":{"context-test": {}},
+            "recordTypes":{"entry": {"primaryDataset":"context-test","route":"entries","mutationMode":"mutable",
+                "fields":[
+                    {"id":"level","type":"string","maximumLength":16,"classification":"internal"}],
+                "disclosureConditions":{"hide": {"when":[{"type":"field-equals","field":"level","value":"secret"}],
+                    "withhold":"record","exemptProfiles":["officer"]}}}},
+            "accessProfiles":{
+                "clerk": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+                    "permissions":{"records":[{"recordType":"entry","operations":["get","create"],
+                        "rowBoundaries":"unrestricted","readableFields":["level"],"writableFields":["level"]}]}},
+                "officer": {"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+                    "permissions":{"records":[{"recordType":"entry","operations":["get","create"],
+                        "rowBoundaries":"unrestricted","readableFields":["level"],"writableFields":["level"]}]}}}});
+        let project = crate::contract::parse_project_json(&serde_json::to_vec(&source).unwrap())
+            .expect("project parses");
+        let registry = crate::compiler::compile_project(
+            &project,
+            &[],
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .expect("project compiles");
+        let entity = &registry.entities()["entry"];
+        let claims = |profile: &str| {
+            ClaimContext::for_compiled(
+                &registry,
+                "entry",
+                Some("principal".to_owned()),
+                profile,
+                None,
+                Vec::new(),
+            )
+            .expect("context matches the compiled profile")
+        };
+        let secret = serde_json::Map::from_iter([("level".to_owned(), json!("secret"))]);
+        let open = serde_json::Map::from_iter([("level".to_owned(), json!("open"))]);
+        let malformed = serde_json::Map::from_iter([("level".to_owned(), json!(7))]);
+        let id = Uuid::nil();
+        assert!(!claims("clerk")
+            .authorizes_record_snapshot(entity, &secret, id)
+            .unwrap());
+        assert!(claims("clerk")
+            .authorizes_record_snapshot(entity, &open, id)
+            .unwrap());
+        assert!(claims("officer")
+            .authorizes_record_snapshot(entity, &secret, id)
+            .unwrap());
+        assert!(
+            !claims("clerk")
+                .authorizes_record_snapshot(entity, &malformed, id)
+                .unwrap(),
+            "a state that cannot be evaluated counts as withheld"
+        );
     }
 
     #[test]

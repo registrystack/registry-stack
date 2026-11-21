@@ -375,6 +375,89 @@ fn row_membership_and_consent_restrictions_omit_the_complete_read_grant() {
         }));
 }
 
+/// A list under `requiredFilters` must pin one alternative, which ODRL cannot
+/// express, so the list grant is omitted. A get is not filtered and stays.
+#[test]
+fn a_grant_with_required_filters_omits_its_list_grant_only() {
+    let export = |required: bool| {
+        let mut source = supported_source();
+        let grant = &mut source["accessProfiles"]["directory-editor"]["permissions"]["records"][0];
+        grant["filterableFields"] = json!(["jurisdiction"]);
+        if required {
+            grant["requiredFilters"] = json!([{"fields": ["jurisdiction"]}]);
+        }
+        export_odrl(&compile_source(&source), Some("directory-editor"))
+            .unwrap()
+            .coverage
+    };
+
+    let open = export(false);
+    for operation in ["get", "list"] {
+        assert_eq!(grant(&open, operation)["status"], "exported", "{operation}");
+    }
+
+    let filtered = export(true);
+    assert_eq!(grant(&filtered, "get")["status"], "exported");
+    assert_eq!(grant(&filtered, "get")["reasons"], json!([]));
+    assert_eq!(grant(&filtered, "list")["status"], "omitted");
+    assert_eq!(
+        grant(&filtered, "list")["reasons"],
+        json!(["required-filters"])
+    );
+    for operation in ["create", "patch"] {
+        assert_eq!(
+            grant(&filtered, operation)["reasons"],
+            json!(["unsupported-operation"]),
+            "{operation}"
+        );
+    }
+}
+
+#[test]
+fn a_profile_that_requires_an_access_reason_omits_the_complete_read_grant() {
+    // A profile that requires a reason holds no Action or Proposal permission,
+    // so the reader is a copy of the editor's record grant without them.
+    let reader = |require_access_reason: bool| {
+        let mut source = supported_source();
+        let mut reader = source["accessProfiles"]["directory-editor"].clone();
+        reader["default"] = json!(false);
+        reader["requireAccessReason"] = json!(require_access_reason);
+        let permissions = reader["permissions"].as_object_mut().unwrap();
+        permissions.remove("actions");
+        permissions.remove("proposals");
+        source["accessProfiles"]
+            .as_object_mut()
+            .unwrap()
+            .insert("reason-reader".to_owned(), reader);
+        export_odrl(&compile_source(&source), Some("reason-reader")).unwrap()
+    };
+    let read = |export: &registry_breg::odrl_export::OdrlExport, operation: &str| {
+        export.coverage["grants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|grant| grant["recordType"] == "contact" && grant["operation"] == operation)
+            .unwrap_or_else(|| panic!("missing contact/reason-reader/{operation}"))
+            .clone()
+    };
+
+    let open = reader(false);
+    for operation in ["get", "list"] {
+        assert_eq!(read(&open, operation)["status"], "exported");
+    }
+
+    let export = reader(true);
+    for operation in ["get", "list"] {
+        let grant = read(&export, operation);
+        assert_eq!(grant["status"], "omitted");
+        assert_eq!(grant["reasons"], json!(["access-reason"]));
+    }
+    assert_eq!(
+        document(&export, "generated/odrl/policies.jsonld")["@graph"],
+        json!([])
+    );
+}
+
 #[test]
 fn task_grant_mutant_is_not_broadened_and_profile_selection_is_exact() {
     let mut source = supported_source();

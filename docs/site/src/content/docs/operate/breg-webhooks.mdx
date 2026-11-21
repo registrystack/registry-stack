@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-21"
 doc_type: how-to
 persona:
   - operator
@@ -62,7 +62,7 @@ hooks:
 - `id` is the stable external event contract. A breaking payload change uses a new versioned id.
 - `phase` is `after`: the event runs after the triggering transaction commits. The compiler refuses
   `before`.
-- `trigger` is one of `created`, `patched`, or `tombstoned`.
+- `trigger` is one of `created`, `patched`, `tombstoned`, or `read`. A `read` event alerts on a logged read and is described under [Alert on reads](#alert-on-reads).
 - `projection` is the complete set of Record values that may leave the registry. System event
   metadata does not need to be listed.
 - `when` is optional and narrows which changes fire the event.
@@ -123,6 +123,29 @@ combination fails compilation.
     field_conditions_are_typed_nonempty_and_trigger_compatible;
     crates/registry-breg/tests/field_encryption_contract.rs breg.event.when-encrypted;
     crates/registry-breg/src/compiler.rs validate_event_condition. */}
+
+### Alert on reads
+
+`trigger: read` raises an event for a read, not a change.
+It needs `profiles`, the access profiles whose reads produce the event, each declared in the
+project, and it takes `projection: []` and no `when`.
+`profiles` is refused on any other trigger, and the compiler refuses a read trigger that breaks
+these rules (`breg.hook.read-trigger-invalid`).
+The event is written with the subject access log entry, so declare it on a Record type with
+[`accessLog`](../breg-access-log/). A read hook on a Record type without `accessLog` is refused
+(`breg.disclosure.read-hook-access-log-required`), because it would never fire.
+
+The event data carries `recordType`, `recordId`, `revision`, `trigger: read`, an empty `values`, and an
+`access` object with `accessProfile`, `operationId`, `requester`, `purpose`, `accessReason` and
+`accessLogEventId`.
+It carries no record value, so the alert says who read and why without disclosing what.
+`accessLogEventId` links the alert to the subject access log entry of the same read.
+BReg stores one event per record read per hook in the transaction that writes the access log, so a read it
+logs is a read it alerts on.
+
+{/* Evidence: crates/registry-breg/src/outbox.rs insert_read_events;
+    crates/registry-breg/src/artifacts.rs;
+    crates/registry-breg/src/contract.rs HookSource. */}
 
 ### Classification and destinations
 

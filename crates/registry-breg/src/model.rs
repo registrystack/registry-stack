@@ -1050,6 +1050,10 @@ pub struct CompiledEntity {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub consent_requirements: BTreeMap<String, Vec<CompiledConsentRequirement>>,
     pub hooks: BTreeMap<String, HookSource>,
+    /// Rules that withhold the record, its history or named fields from the
+    /// profiles they do not exempt, in authored order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disclosure_conditions: Vec<CompiledDisclosureCondition>,
     /// Which module contributed each id in this entity's id-keyed
     /// collections. An id absent from a map was contributed by the project
     /// root. Two modules can never declare the same id (every level is a
@@ -1073,6 +1077,31 @@ pub struct CompiledEntity {
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub external_link_fields: BTreeSet<String>,
     pub definition_revision: String,
+}
+
+/// One compiled disclosure condition. Its literals are type-checked against
+/// the record type's fields.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledDisclosureCondition {
+    pub id: String,
+    /// ANDed tests of the record's current values.
+    pub when: Vec<crate::contract::DisclosureWhenPredicate>,
+    pub withhold: DisclosureWithhold,
+    /// The access profiles the condition never applies to.
+    pub exempt_profiles: BTreeSet<String>,
+}
+
+/// What a matching condition withholds.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DisclosureWithhold {
+    /// The whole record behaves as absent.
+    Record,
+    /// Every revision and snapshot of the record behaves as absent.
+    History,
+    /// The named field identifiers are omitted from reads and history.
+    Fields(BTreeSet<String>),
 }
 
 /// The authored purpose and group of a Record or Action.
@@ -1822,6 +1851,10 @@ pub struct CompiledQueryOperation {
     pub projection_fields: Vec<String>,
     pub filter_fields: Vec<CompiledQueryFilterField>,
     pub sort_fields: Vec<CompiledQuerySortField>,
+    /// Alternative field sets a list must pin with top-level equality
+    /// filters. Empty when the grant requires no search criteria.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_filters: Vec<Vec<String>>,
     #[serde(default)]
     pub allow_count: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1856,6 +1889,29 @@ impl CompiledQueryOperation {
                 .and_then(|spatial| spatial.bbox.as_ref())
                 .is_some())
         .then(|| format!("{}.{}", self.entity_id, self.profile_id))
+    }
+
+    /// The required field sets under the names a caller writes in `$filter`:
+    /// the API field names of `entity`, the record type the operation answers
+    /// with.
+    pub(crate) fn required_filter_api_names(&self, entity: &CompiledEntity) -> Vec<Vec<String>> {
+        self.required_filters
+            .iter()
+            .map(|alternative| {
+                alternative
+                    .iter()
+                    .map(|field_id| {
+                        entity
+                            .stored_fields
+                            .iter()
+                            .map(|field| &field.logical)
+                            .chain(entity.derived_fields.values().map(|field| &field.logical))
+                            .find(|field| field.id == *field_id)
+                            .map_or_else(|| field_id.clone(), |field| field.api_name.clone())
+                    })
+                    .collect()
+            })
+            .collect()
     }
 }
 

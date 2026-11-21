@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-21"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -82,7 +82,9 @@ These limits were checked against EDC's [policy-definition schema](https://githu
 
 ## What is omitted
 
-A permission with row boundaries, current-membership requirements, subject consent requirements, or a task grant is omitted in full.
+A permission with row boundaries, current-membership requirements, subject consent requirements, a task grant, a disclosure condition that binds the profile, or a profile that sets `requireAccessReason` is omitted in full. The reasons for the last two are `disclosure-condition` and `access-reason`.
+A `list` permission whose grant sets `requiredFilters` is omitted with the reason `required-filters`, because ODRL has no term for the filter a list must pin.
+The `get` permission of the same grant is still exported.
 The exporter never removes an unsupported restriction to produce a broader permission.
 Operations other than `get` and `list` are omitted as unsupported.
 

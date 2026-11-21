@@ -87,7 +87,7 @@ pub fn export_odrl(
             }
             for operation in &access.operations {
                 let operation_name = operation_name(*operation);
-                let reasons = omission_reasons(access, *operation);
+                let reasons = omission_reasons(entity, profile_id, access, *operation);
                 let status = if reasons.is_empty() {
                     let policy = policies
                         .entry(profile_id.clone())
@@ -299,7 +299,12 @@ fn set_constraint<'a>(
     }
 }
 
-fn omission_reasons(access: &AccessProfileSource, operation: Operation) -> Vec<&'static str> {
+fn omission_reasons(
+    entity: &CompiledEntity,
+    profile_id: &str,
+    access: &AccessProfileSource,
+    operation: Operation,
+) -> Vec<&'static str> {
     let mut reasons = Vec::new();
     if !matches!(operation, Operation::Get | Operation::List) {
         reasons.push("unsupported-operation");
@@ -315,6 +320,18 @@ fn omission_reasons(access: &AccessProfileSource, operation: Operation) -> Vec<&
     }
     if access.task_grant.is_some() {
         reasons.push("task-grant");
+    }
+    if !crate::disclosure::plan(entity, profile_id).is_empty() {
+        reasons.push("disclosure-condition");
+    }
+    // ODRL has no term for the filter alternatives a list must pin. They bind
+    // `list` only, so a get under the same grant is unaffected.
+    if operation == Operation::List && !access.required_filters.is_empty() {
+        reasons.push("required-filters");
+    }
+    // ODRL has no term for the reason header the request must carry.
+    if access.require_access_reason {
+        reasons.push("access-reason");
     }
     reasons
 }
@@ -336,6 +353,8 @@ fn audit_access_profile(access: &AccessProfileSource) {
         readable_fields: _,
         writable_fields: _,
         filterable_fields: _,
+        // Read by `omission_reasons`, which omits the list grant as `required-filters`.
+        required_filters: _,
         sortable_fields: _,
         spatial_queries: _,
         row_boundaries: _,
@@ -347,6 +366,8 @@ fn audit_access_profile(access: &AccessProfileSource) {
         revision_access: _,
         provenance_fields: _,
         allow_data_export: _,
+        // Read by `omission_reasons`, which omits the grant as `access-reason`.
+        require_access_reason: _,
     } = access;
 }
 

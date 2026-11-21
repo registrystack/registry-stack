@@ -75,6 +75,7 @@ pub(crate) struct PostgresExternalViewService {
     cursors: Arc<CursorCodec>,
     sources: ExternalSourceService,
     managed_refresh: BTreeMap<String, ResolvedExternalRefreshPlan>,
+    read_alerts: Option<crate::outbox::ReadAlerts>,
 }
 
 struct Plan<'a> {
@@ -185,7 +186,25 @@ impl PostgresExternalViewService {
             cursors,
             sources,
             managed_refresh: BTreeMap::new(),
+            read_alerts: None,
         }
+    }
+
+    /// Bind the destinations read alerts are captured under, and the runtime
+    /// instance they name as their source. A read by a profile a `read` hook
+    /// names is refused when this is not bound.
+    pub(crate) fn with_event_destinations(
+        mut self,
+        destinations: Option<Arc<crate::event_destination::ActivatedEventDestinationRegistry>>,
+        instance_id: &str,
+    ) -> Self {
+        self.read_alerts = Some(crate::outbox::ReadAlerts::new(
+            Arc::clone(&self.registry),
+            destinations,
+            &self.expected.package_id,
+            instance_id,
+        ));
+        self
     }
 
     /// Bind each configured indexed projection in its own transaction. A
@@ -964,6 +983,7 @@ impl PostgresExternalViewService {
     ) -> Result<()> {
         crate::subject_access_log::record_reads(
             transaction.transaction(),
+            self.read_alerts.as_ref(),
             plan.root,
             &plan.root.id,
             &request.context,

@@ -644,6 +644,309 @@ fn check_places_temporal_and_duplicate_api_name_errors_at_the_owning_record_and_
 }
 
 #[test]
+fn check_refuses_invalid_required_filters_with_a_next_step() {
+    let baseline = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    let with_required = |filterable: serde_json::Value, required: serde_json::Value| {
+        let mut source = baseline.clone();
+        let grant = &mut source["accessProfiles"]["directory-editor"]["permissions"]["records"][0];
+        grant["filterableFields"] = filterable;
+        grant["requiredFilters"] = required;
+        source
+    };
+
+    for (source, code, setting) in [
+        (
+            with_required(json!(["jurisdiction"]), json!([{"fields": ["name"]}])),
+            "breg.access-profile.required-filters-field-not-filterable",
+            "filterableFields",
+        ),
+        (
+            with_required(
+                json!(["jurisdiction"]),
+                json!([{"fields": ["jurisdiction"]}, {"fields": ["jurisdiction"]}]),
+            ),
+            "breg.access-profile.required-filters-duplicate",
+            "once",
+        ),
+        (
+            with_required(json!(["jurisdiction"]), json!([{"fields": []}])),
+            "breg.access-profile.required-filters-empty",
+            "remove the empty alternative",
+        ),
+        (
+            with_required(json!(["jurisdiction"]), json!([])),
+            "config.invalid-value",
+            "Omit requiredFilters",
+        ),
+    ] {
+        let project =
+            TestProject::from_registry_source(&serde_json::to_vec_pretty(&source).unwrap());
+        let output = bregctl(&["--format", "json", "check", path(project.path())]);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let report = json_stdout(&output);
+        let diagnostic = report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == code)
+            .unwrap_or_else(|| panic!("{code}: {report}"));
+        assert!(
+            diagnostic["path"]
+                .as_str()
+                .unwrap()
+                .contains("/requiredFilters"),
+            "{diagnostic}"
+        );
+        assert!(
+            diagnostic["suggestedAction"]
+                .as_str()
+                .unwrap()
+                .contains(setting),
+            "{diagnostic}"
+        );
+    }
+}
+
+#[test]
+fn check_refuses_invalid_disclosure_conditions_with_a_next_step() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    source["recordTypes"]["contact"]["disclosureConditions"] = json!({"hide-contact": {
+        "when": [{"type": "field-equals", "field": "jurisdiction", "value": "protected"}],
+        "withhold": "fields",
+        "fields": ["email"],
+        "exemptProfiles": ["no-such-profile"]
+    }});
+    let project = TestProject::from_registry_source(&serde_json::to_vec_pretty(&source).unwrap());
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.disclosure.exempt-profiles-invalid")
+        .unwrap_or_else(|| panic!("{report}"));
+    assert!(
+        diagnostic["path"]
+            .as_str()
+            .unwrap()
+            .contains("/exemptProfiles"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic["suggestedAction"]
+            .as_str()
+            .unwrap()
+            .contains("exemptProfiles"),
+        "{diagnostic}"
+    );
+}
+
+#[test]
+fn check_refuses_a_read_hook_without_an_access_log_with_a_next_step() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    let contact = &mut source["recordTypes"]["contact"];
+    contact["hooks"] = json!([{
+        "id": "contact-read", "phase": "after", "trigger": "read",
+        "profiles": ["directory-editor"], "projection": []
+    }]);
+    let project = TestProject::from_registry_source(&serde_json::to_vec_pretty(&source).unwrap());
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.disclosure.read-hook-access-log-required")
+        .unwrap_or_else(|| panic!("{report}"));
+    assert!(
+        diagnostic["path"].as_str().unwrap().contains("/hooks"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic["suggestedAction"]
+            .as_str()
+            .unwrap()
+            .contains("accessLog"),
+        "{diagnostic}"
+    );
+}
+
+#[test]
+fn check_warns_of_a_unique_withheld_field_and_accepts_it() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    let contact = &mut source["recordTypes"]["contact"];
+    contact["fields"].as_array_mut().unwrap().push(json!({
+        "id": "phone", "type": "string", "maximumLength": 32, "classification": "internal"
+    }));
+    contact["constraints"] = json!([{"type": "unique", "fields": ["phone"]}]);
+    contact["disclosureConditions"] = json!({"hide-phone": {
+        "when": [{"type": "field-equals", "field": "jurisdiction", "value": "protected"}],
+        "withhold": "fields",
+        "fields": ["phone"],
+        "exemptProfiles": ["directory-editor"]
+    }});
+    let grant = &mut source["accessProfiles"]["directory-editor"]["permissions"]["records"][0];
+    for member in ["readableFields", "writableFields"] {
+        grant[member].as_array_mut().unwrap().push(json!("phone"));
+    }
+    let project = TestProject::from_registry_source(&serde_json::to_vec_pretty(&source).unwrap());
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let warning = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.disclosure.withheld-field-probe")
+        .unwrap_or_else(|| panic!("{report}"))
+        .clone();
+    assert_eq!(warning["severity"], "warning", "{warning}");
+    assert_eq!(warning["rank"], "widens-access", "{warning}");
+    assert!(
+        warning["path"]
+            .as_str()
+            .unwrap()
+            .contains("/disclosureConditions"),
+        "{warning}"
+    );
+    assert!(
+        warning["message"].as_str().unwrap().contains("409"),
+        "{warning}"
+    );
+    assert!(
+        warning["suggestedAction"]
+            .as_str()
+            .unwrap()
+            .contains("accept this finding"),
+        "{warning}"
+    );
+    let denied = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(project.path()),
+        "--deny-warnings",
+    ]);
+    assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+
+    fs::write(
+        project.path().join("check-acceptances.yaml"),
+        r#"apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+kind: PlatformCheckAcceptances
+acceptances:
+  - code: breg.disclosure.withheld-field-probe
+    scope:
+      file: registry.yaml
+      path: /recordTypes/contact/disclosureConditions/hide-phone/fields/0
+    reason: Only trusted directory staff can create contacts.
+"#,
+    )
+    .unwrap();
+    let accepted = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(project.path()),
+        "--deny-warnings",
+    ]);
+    assert!(accepted.status.success(), "{accepted:?}");
+    let accepted_report = json_stdout(&accepted);
+    let accepted_warning = accepted_report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.disclosure.withheld-field-probe")
+        .unwrap_or_else(|| panic!("{accepted_report}"));
+    assert_eq!(
+        accepted_warning["acceptedReason"],
+        "Only trusted directory staff can create contacts."
+    );
+}
+
+/// A `record` condition on a view's root that binds a refresh profile leaves the
+/// records it matches out of the refresh, which may be intended, so the check
+/// passes with a hygiene finding whose next step names both choices.
+#[test]
+fn check_warns_when_a_record_condition_binds_a_refresh_profile() {
+    let example = fs::read_to_string(external_views_example().join("registry.yaml")).unwrap();
+    let jurisdiction = "      - {id: jurisdiction, type: string, required: true, maximumLength: 40, classification: internal}\n  licensed-business:";
+    assert_eq!(example.matches(jurisdiction).count(), 1);
+    let source = example.replace(
+        jurisdiction,
+        "      - {id: jurisdiction, type: string, required: true, maximumLength: 40, classification: internal}
+    disclosureConditions:
+      hide-protected:
+        when: [{type: field-equals, field: jurisdiction, value: protected}]
+        withhold: record
+        exemptProfiles: [fixture-editor, staff-refresh]
+  licensed-business:",
+    );
+    let project = TestProject::from_registry_source(source.as_bytes());
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let warnings: Vec<_> = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|diagnostic| diagnostic["code"] == "breg.disclosure.external-refresh-withheld-root")
+        .collect();
+    assert_eq!(warnings.len(), 1, "{report}");
+    let warning = warnings[0];
+    assert_eq!(warning["severity"], "warning", "{warning}");
+    assert_eq!(warning["rank"], "hygiene", "{warning}");
+    assert!(
+        warning["path"]
+            .as_str()
+            .unwrap()
+            .contains("/recordTypes/licence/disclosureConditions/hide-protected"),
+        "{warning}"
+    );
+    let message = warning["message"].as_str().unwrap();
+    for named in ["`projection-refresh`", "`licence-holder-indexed`"] {
+        assert!(message.contains(named), "{named}: {warning}");
+    }
+    let next = warning["suggestedAction"].as_str().unwrap();
+    for choice in ["exemptProfiles", "accept this finding"] {
+        assert!(next.contains(choice), "{choice}: {warning}");
+    }
+    let denied = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(project.path()),
+        "--deny-warnings",
+    ]);
+    assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+}
+
+#[test]
 fn hook_projection_errors_point_to_the_second_hook_in_each_owning_file() {
     let mut source = registry_platform_yaml::Reader::new("registry.yaml")
         .scan(include_bytes!(

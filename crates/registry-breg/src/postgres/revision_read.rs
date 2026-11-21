@@ -24,6 +24,7 @@ use crate::audit::{
 };
 use crate::contract::{FieldTypeSource, Operation, ProvenanceFieldSource};
 use crate::cursor::CursorRepresentation;
+use crate::disclosure::{plan as disclosure_plan, DisclosurePlan};
 use crate::field_encryption::{FieldEncryptionService, SharedFieldEncryptionService};
 use crate::history_context::ChangeContext;
 use crate::history_migration::HISTORY_MIGRATION_SYSTEM_ORIGIN;
@@ -39,7 +40,9 @@ use crate::record_profile::{self, RecordRepresentation};
 use crate::stored_bytes;
 
 use super::cancellation::QueryCancellationGuard;
-use super::history_read::HISTORY_STATEMENT_TIMEOUT;
+use super::history_read::{
+    disclosure_when_fields, withheld_fields as state_withheld_fields, HISTORY_STATEMENT_TIMEOUT,
+};
 use super::read::{load_retained_plaintext_fields, open_history_row_members, strict_claim_context};
 use super::{
     begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
@@ -59,6 +62,7 @@ pub struct PostgresRevisionReadService {
     lock_timeout: Duration,
     audit: RegistryAudit,
     field_encryption: Option<SharedFieldEncryptionService>,
+    read_alerts: Option<crate::outbox::ReadAlerts>,
     fault: RevisionReadFaultControl,
 }
 
@@ -80,6 +84,7 @@ impl PostgresRevisionReadService {
             lock_timeout,
             audit,
             field_encryption: None,
+            read_alerts: None,
             fault: RevisionReadFaultControl::Disabled,
         }
     }
@@ -90,6 +95,24 @@ impl PostgresRevisionReadService {
     #[must_use]
     pub fn with_field_encryption(mut self, service: Arc<FieldEncryptionService>) -> Self {
         self.field_encryption = Some(service);
+        self
+    }
+
+    /// Bind the destinations read alerts are captured under, and the runtime
+    /// instance they name as their source. A read by a profile a `read` hook
+    /// names is refused when this is not bound.
+    #[must_use]
+    pub fn with_event_destinations(
+        mut self,
+        destinations: Option<Arc<crate::event_destination::ActivatedEventDestinationRegistry>>,
+        instance_id: &str,
+    ) -> Self {
+        self.read_alerts = Some(crate::outbox::ReadAlerts::new(
+            Arc::clone(&self.registry),
+            destinations,
+            &self.expected.package_id,
+            instance_id,
+        ));
         self
     }
 
@@ -258,39 +281,76 @@ impl PostgresRevisionReadService {
         }
         let retained_plaintext_fields =
             load_retained_plaintext_fields(transaction.transaction(), &plan.entity.id).await?;
-        let (sql, parameters) = revision_sql(
-            request,
-            &plan.entity,
-            record_id,
-            !plan.provenance_fields.is_empty(),
-        )?;
-        let parameter_refs = parameters
-            .iter()
-            .map(|value| &**value as &(dyn ToSql + Sync))
-            .collect::<Vec<_>>();
-        let rows = transaction
-            .transaction()
-            .query(&sql, &parameter_refs)
-            .await
-            .map_err(|error| snapshot_read_error(&error, stored_bytes::Reader::RevisionRead))?;
         let mut descriptors = BTreeMap::new();
-        let mut context_visibility = BTreeMap::new();
-        let rows = revision_rows_from_rows(
-            transaction.transaction(),
-            &rows,
-            &plan.entity,
-            &request.context,
-            &request.selected_fields,
-            plan.provenance_fields.as_slice(),
-            self.field_encryption.as_deref(),
-            &retained_plaintext_fields,
-            &mut descriptors,
-            &mut context_visibility,
-        )
-        .await?;
+        let disclosure_plan = disclosure_plan(&plan.entity, request.context.selected_profile());
+        // Disclosure conditions read the latest retained revision, which holds
+        // what the current row holds. A record whose latest revision is
+        // missing, erased or matches a `record` or `history` condition answers
+        // like a record that does not exist.
+        let withheld_fields = if disclosure_plan.is_empty() {
+            Some(BTreeSet::new())
+        } else {
+            match latest_disclosure_state(
+                transaction.transaction(),
+                &plan.entity,
+                &disclosure_plan,
+                record_id,
+                &retained_plaintext_fields,
+                &mut descriptors,
+            )
+            .await?
+            {
+                Some(state) if !disclosure_plan.withholds_history(&state).unwrap_or(true) => {
+                    Some(state_withheld_fields(&disclosure_plan, &state))
+                }
+                _ => None,
+            }
+        };
+        let rows = match withheld_fields {
+            None => Vec::new(),
+            Some(withheld_fields) => {
+                let disclosure = RevisionDisclosure {
+                    plan: disclosure_plan,
+                    withheld_fields,
+                };
+                let (sql, parameters) = revision_sql(
+                    request,
+                    &plan.entity,
+                    record_id,
+                    !plan.provenance_fields.is_empty(),
+                )?;
+                let parameter_refs = parameters
+                    .iter()
+                    .map(|value| &**value as &(dyn ToSql + Sync))
+                    .collect::<Vec<_>>();
+                let rows = transaction
+                    .transaction()
+                    .query(&sql, &parameter_refs)
+                    .await
+                    .map_err(|error| {
+                        snapshot_read_error(&error, stored_bytes::Reader::RevisionRead)
+                    })?;
+                let mut context_visibility = BTreeMap::new();
+                revision_rows_from_rows(
+                    transaction.transaction(),
+                    &rows,
+                    &plan.entity,
+                    &request.context,
+                    &request.selected_fields,
+                    plan.provenance_fields.as_slice(),
+                    &disclosure,
+                    self.field_encryption.as_deref(),
+                    &retained_plaintext_fields,
+                    &mut descriptors,
+                    &mut context_visibility,
+                )
+                .await?
+            }
+        };
         if !rows.is_empty() {
             crate::subject_access_log::record_reads(
                 transaction.transaction(),
+                self.read_alerts.as_ref(),
                 &plan.entity,
                 &request.entity_id,
                 &request.context,
@@ -707,6 +767,7 @@ async fn revision_rows_from_rows(
     context: &AuthorizedRequestContext,
     selected_fields: &BTreeSet<String>,
     provenance_fields: &[ProvenanceFieldSource],
+    disclosure: &RevisionDisclosure<'_>,
     field_encryption: Option<&FieldEncryptionService>,
     retained_plaintext_fields: &BTreeSet<String>,
     descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
@@ -721,6 +782,7 @@ async fn revision_rows_from_rows(
             context,
             selected_fields,
             provenance_fields,
+            disclosure,
             field_encryption,
             retained_plaintext_fields,
             descriptors,
@@ -742,6 +804,7 @@ async fn revision_from_row(
     context: &AuthorizedRequestContext,
     selected_fields: &BTreeSet<String>,
     provenance_fields: &[ProvenanceFieldSource],
+    disclosure: &RevisionDisclosure<'_>,
     field_encryption: Option<&FieldEncryptionService>,
     retained_plaintext_fields: &BTreeSet<String>,
     descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
@@ -818,7 +881,10 @@ async fn revision_from_row(
         return Ok(None);
     }
     let mut data = Map::new();
-    for field_id in selected_fields {
+    for field_id in selected_fields
+        .iter()
+        .filter(|field| !disclosure.withheld_fields.contains(*field))
+    {
         let field = compatibility
             .fields
             .get(field_id)
@@ -839,12 +905,24 @@ async fn revision_from_row(
         field_encryption,
         &compatibility,
     )?;
+    // A withheld member reads as null, like a member the record never set.
+    for field_id in selected_fields
+        .iter()
+        .filter(|field| disclosure.withheld_fields.contains(*field))
+    {
+        let field = compatibility
+            .fields
+            .get(field_id)
+            .ok_or(ReadServiceError::Unavailable)?;
+        data.insert(field.active_api_name.clone(), Value::Null);
+    }
     let change_context = revision_change_context(
         transaction,
         row,
         entity,
         context,
         provenance_fields,
+        disclosure,
         retained_plaintext_fields,
         descriptors,
         context_visibility,
@@ -948,6 +1026,7 @@ async fn revision_change_context(
     entity: &CompiledEntity,
     context: &AuthorizedRequestContext,
     provenance_fields: &[ProvenanceFieldSource],
+    disclosure: &RevisionDisclosure<'_>,
     retained_plaintext_fields: &BTreeSet<String>,
     descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
     context_visibility: &mut BTreeMap<i64, bool>,
@@ -977,6 +1056,7 @@ async fn revision_change_context(
             transaction,
             entity,
             context,
+            &disclosure.plan,
             commit_position,
             retained_plaintext_fields,
             descriptors,
@@ -995,6 +1075,7 @@ async fn commit_context_visible(
     transaction: &tokio_postgres::Transaction<'_>,
     entity: &CompiledEntity,
     context: &AuthorizedRequestContext,
+    disclosure: &DisclosurePlan<'_>,
     commit_position: i64,
     retained_plaintext_fields: &BTreeSet<String>,
     descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
@@ -1025,6 +1106,27 @@ async fn commit_context_visible(
         let member_record_id = row
             .try_get::<_, Uuid>(1)
             .map_err(|_| ReadServiceError::Unavailable)?;
+        // A commit shares one change context across its records. A record the
+        // profile cannot see the history of must not lend its context to a
+        // record it can.
+        if !disclosure.is_empty() {
+            let withheld = match latest_disclosure_state(
+                transaction,
+                entity,
+                disclosure,
+                member_record_id,
+                retained_plaintext_fields,
+                descriptors,
+            )
+            .await
+            {
+                Ok(Some(state)) => disclosure.withholds_history(&state).unwrap_or(true),
+                Ok(None) | Err(_) => true,
+            };
+            if withheld {
+                return Ok(false);
+            }
+        }
         let package_revision = row
             .try_get::<_, String>(2)
             .map_err(|_| ReadServiceError::Unavailable)?;
@@ -1075,6 +1177,68 @@ async fn commit_context_visible(
         }
     }
     Ok(true)
+}
+
+/// The disclosure plan of a revision read and the fields it omits from every
+/// revision, both decided from the latest state of the record.
+struct RevisionDisclosure<'a> {
+    plan: DisclosurePlan<'a>,
+    withheld_fields: BTreeSet<String>,
+}
+
+/// The fields a disclosure condition of `plan` tests, as the latest retained
+/// revision of `record_id` holds them. `None` when the record has no revision
+/// or its latest snapshot was erased, which callers treat as withheld.
+async fn latest_disclosure_state(
+    transaction: &tokio_postgres::Transaction<'_>,
+    entity: &CompiledEntity,
+    plan: &DisclosurePlan<'_>,
+    record_id: Uuid,
+    retained_plaintext_fields: &BTreeSet<String>,
+    descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
+) -> Result<Option<Map<String, Value>>, ReadServiceError> {
+    let Some(row) = transaction
+        .query_opt(
+            "SELECT package_revision, snapshot
+               FROM registry_internal.registry_revisions
+              WHERE entity_id = $1::text AND record_id = $2::uuid
+              ORDER BY record_revision DESC
+              LIMIT 1",
+            &[&entity.id, &record_id],
+        )
+        .await
+        .map_err(|error| snapshot_read_error(&error, stored_bytes::Reader::RevisionRead))?
+    else {
+        return Ok(None);
+    };
+    let package_revision = bounded_text(&row, 0)?;
+    let Some(snapshot) = row
+        .try_get::<_, Option<Vec<u8>>>(1)
+        .map_err(|_| ReadServiceError::Unavailable)?
+    else {
+        return Ok(None);
+    };
+    let descriptor = descriptor_for_package(transaction, descriptors, &package_revision)
+        .await?
+        .clone();
+    let when_fields = disclosure_when_fields(plan);
+    let required_fields = HistorySchemaDescriptor::required_history_fields(
+        std::iter::empty::<&String>(),
+        when_fields.iter(),
+        std::iter::empty::<&String>(),
+    );
+    let compatibility = descriptor
+        .compatibility_for_fields_allowing_retained_plaintext(
+            entity,
+            &required_fields,
+            &when_fields,
+            retained_plaintext_fields,
+        )
+        .map_err(history_schema_error)?;
+    let decoded = descriptor
+        .decode_snapshot_for_fields(&compatibility, &snapshot, Some(&record_id.to_string()))
+        .map_err(history_schema_error)?;
+    Ok(Some(decoded.by_field_id))
 }
 
 fn project_change_context(

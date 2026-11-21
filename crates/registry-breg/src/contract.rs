@@ -1844,6 +1844,12 @@ impl registry_platform_yaml::Identified for EntitySource {
     }
 }
 
+impl registry_platform_yaml::Identified for DisclosureConditionSource {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -1905,6 +1911,22 @@ pub struct EntitySource {
     pub access_profiles: Vec<AccessProfileSource>,
     #[serde(default)]
     pub hooks: Vec<HookSource>,
+    /// Rules that withhold the record, its history or named fields from profiles they do not exempt.
+    /// Written as a mapping from each condition id to the rest of the
+    /// condition (CFG-ID-5) and held sorted by id.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            schema_with = "registry_platform_yaml::id_keyed_schema_bounded::<DisclosureConditionSource, 0, 8>"
+        )
+    )]
+    pub disclosure_conditions: Vec<DisclosureConditionSource>,
     #[serde(default)]
     pub temporal: Option<TemporalSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -3913,6 +3935,16 @@ pub struct SelectorProfileSource {
     pub fields: Vec<String>,
 }
 
+/// One alternative set of search criteria a caller must supply to `list`.
+/// The `$filter` must carry a top-level `eq` predicate with a non-null
+/// literal for every named field.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RequiredFilterSource {
+    pub fields: UniqueSet<String>,
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -4924,6 +4956,73 @@ pub enum UniqueWhenPredicate {
 registry_platform_yaml::tagged_union!(UniqueWhenPredicate);
 serialize_tagged_union!(UniqueWhenPredicate, tag = "type");
 
+/// One literal test of a record's current values. Predicates in a condition
+/// are ANDed, and an absent member counts as null.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    remote = "Self",
+    deny_unknown_fields,
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+pub enum DisclosureWhenPredicate {
+    FieldEquals {
+        field: String,
+        value: Value,
+    },
+    /// The field equals one of 1 to 32 literals.
+    FieldIn {
+        field: String,
+        values: Vec<Value>,
+    },
+    FieldIsNull {
+        field: String,
+    },
+    FieldIsNotNull {
+        field: String,
+    },
+}
+registry_platform_yaml::tagged_union!(DisclosureWhenPredicate);
+serialize_tagged_union!(DisclosureWhenPredicate, tag = "type");
+
+/// What a matching disclosure condition withholds from a profile it does not
+/// exempt.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DisclosureWithholdSource {
+    /// The whole record behaves as absent.
+    Record,
+    /// Every revision and snapshot of the record behaves as absent. The
+    /// current record stays readable.
+    History,
+    /// The named `fields` are omitted from reads and history.
+    Fields,
+}
+
+/// A rule that withholds a record, its history or named fields from every
+/// access profile it does not exempt, while the record's current values match
+/// `when`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DisclosureConditionSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub id: String,
+    /// One to four literal tests of the record's current values, ANDed.
+    pub when: Vec<DisclosureWhenPredicate>,
+    pub withhold: DisclosureWithholdSource,
+    /// The optional stored fields to omit. Required for `withhold: fields` and refused otherwise.
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    pub fields: UniqueSet<String>,
+    /// The access profiles that see the record whatever `when` says. At least one.
+    #[serde(default)]
+    pub exempt_profiles: UniqueSet<String>,
+}
+
 impl ConstraintSource {
     pub fn explicit_id(&self) -> Option<&str> {
         match self {
@@ -5016,6 +5115,9 @@ pub struct AccessProfileSource {
     pub writable_fields: UniqueSet<String>,
     #[serde(default)]
     pub filterable_fields: UniqueSet<String>,
+    /// Alternative search criteria; a `list` must satisfy at least one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_filters: Vec<RequiredFilterSource>,
     #[serde(default)]
     pub sortable_fields: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5048,6 +5150,9 @@ pub struct AccessProfileSource {
     pub provenance_fields: Vec<ProvenanceFieldSource>,
     #[serde(default)]
     pub allow_data_export: bool,
+    /// Every request under the profile must carry a `Registry-Access-Reason` header.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub require_access_reason: bool,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -5171,7 +5276,7 @@ pub struct HookSource {
     pub display: PresentationSource,
     /// When the hook runs relative to the triggering transaction.
     pub phase: HookPhase,
-    /// Committed record change that can produce this hook.
+    /// The committed record change, or the logged read, that can produce this hook.
     #[serde(deserialize_with = "record_event_trigger")]
     pub trigger: EventTrigger,
     /// Optional field tests, combined with AND. Omit to run on every matching trigger.
@@ -5183,6 +5288,9 @@ pub struct HookSource {
     /// Declaring none is not an authoring error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal: Option<String>,
+    /// The access profiles whose reads produce the event. Required for the read trigger and refused otherwise.
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    pub profiles: UniqueSet<String>,
     /// Declared field identifiers to include in `values`. System event metadata is included separately.
     pub projection: UniqueSet<String>,
     /// Governed, destination-neutral delivery. `destinationId` is a key in
@@ -5433,6 +5541,9 @@ pub struct ProjectAccessProfileSource {
         schemars(with = "sentinel::Listed<UniqueSet<String>, sentinel::ProfilePurposes>")
     )]
     pub required_purposes: UniqueSet<String>,
+    /// Every request under the profile must carry a `Registry-Access-Reason` header, which the subject access log records.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub require_access_reason: bool,
     /// What the profile may do, grouped by what each permission names. Omit when the profile grants nothing.
     #[serde(default, deserialize_with = "sentinel::permissions")]
     #[cfg_attr(feature = "schema", schemars(with = "PermissionsSource"))]
@@ -5555,6 +5666,9 @@ pub struct EntityPermissionSource {
     pub readable_fields: UniqueSet<String>,
     pub writable_fields: UniqueSet<String>,
     pub filterable_fields: UniqueSet<String>,
+    /// Alternative search criteria; a `list` must satisfy at least one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub required_filters: Vec<RequiredFilterSource>,
     pub sortable_fields: UniqueSet<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spatial_queries: Option<SpatialQueryPermissionSource>,
@@ -5681,6 +5795,8 @@ pub enum EventTrigger {
     Created,
     Patched,
     Tombstoned,
+    /// A read by one of the hook's `profiles`, recorded in the subject access log.
+    Read,
 }
 
 fn record_event_trigger<'de, D: Deserializer<'de>>(
@@ -5815,6 +5931,10 @@ const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
     RemovedKey {
         pointer: "/recordTypes/*/accessProfiles/*/id",
         replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {PROFILE_ID: {principalClaim: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/recordTypes/*/disclosureConditions/*/id",
+        replacement: "Write disclosureConditions as a mapping from each id to the rest of its entry, disclosureConditions: {CONDITION_ID: {when: ...}}, with no id member.",
     },
     RemovedKey {
         pointer: "/recordTypes/*/changeControl",
@@ -5987,6 +6107,10 @@ const MODULE_REMOVED_KEYS: &[RemovedKey<'static>] = &[
     RemovedKey {
         pointer: "/recordTypes/*/accessProfiles/*/id",
         replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {PROFILE_ID: {principalClaim: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/recordTypes/*/disclosureConditions/*/id",
+        replacement: "Write disclosureConditions as a mapping from each id to the rest of its entry, disclosureConditions: {CONDITION_ID: {when: ...}}, with no id member.",
     },
     RemovedKey {
         pointer: "/extendRecordTypes/*/accessProfiles/*/id",

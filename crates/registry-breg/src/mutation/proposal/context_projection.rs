@@ -170,7 +170,10 @@ pub(super) async fn fields(
                             .get(field)
                             .ok_or(MutationError::PreconditionFailed)?
                             .required;
+                        let withheld = withheld_members(entity, record, &row.data)?;
                         match row.data.get(field) {
+                            // A withheld member reads as an unset optional one.
+                            Some(_) if withheld.contains(field) => Value::Null,
                             Some(value) => value.clone(),
                             None if optional => Value::Null,
                             None => return Err(MutationError::PreconditionFailed),
@@ -196,11 +199,16 @@ pub(super) async fn fields(
                     .iter()
                     .filter(|target| target.entity_id == *record_type)
                 {
+                    // The current state decides what the reviewer may see. A
+                    // create that is not applied yet has no row, so its
+                    // prospective state decides.
+                    let mut current = &target.after;
+                    let row;
                     // Existing targets also require current ordinary Record
                     // visibility. A moved or erased row cannot disclose its
                     // formerly visible values through a retained Proposal.
                     if target.operation == Operation::Patch || document.header.state == "applied" {
-                        let row = load_proposal_row(tx, entity, target.record_id, false).await?;
+                        row = load_proposal_row(tx, entity, target.record_id, false).await?;
                         require_snapshot(
                             tx,
                             entity,
@@ -210,7 +218,24 @@ pub(super) async fn fields(
                             &row.data,
                         )
                         .await?;
+                        current = &row.data;
                     }
+                    let withheld = withheld_members(entity, record, current)?;
+                    // A change set is history: `before` and `after` are past
+                    // states, which a history condition on the current state
+                    // withholds like any other history surface.
+                    if crate::disclosure::plan(entity, record.context.access_profile())
+                        .withholds_history(current)
+                        .map_err(|_| MutationError::PreconditionFailed)?
+                    {
+                        return Err(MutationError::PreconditionFailed);
+                    }
+                    let visible = |snapshot: &Map<String, Value>| {
+                        select(
+                            snapshot,
+                            fields.iter().filter(|field| !withheld.contains(*field)),
+                        )
+                    };
                     if let Some(before) = &target.before {
                         require_snapshot(tx, entity, record, authority, target.record_id, before)
                             .await?;
@@ -226,8 +251,8 @@ pub(super) async fn fields(
                     .await?;
                     changes.push(json!({
                         "recordId":target.record_id,"operation":target.operation,
-                        "before":target.before.as_ref().map(|before| select(before, fields)),
-                        "after":select(&target.after, fields),
+                        "before":target.before.as_ref().map(&visible),
+                        "after":visible(&target.after),
                     }));
                 }
                 Value::Array(changes)
@@ -324,9 +349,31 @@ async fn require_snapshot(
     Ok(())
 }
 
-fn select(snapshot: &Map<String, Value>, fields: &[String]) -> Map<String, Value> {
+/// The members the profile may not see on `state`. A record the profile
+/// cannot see at all is refused, as an unauthorized row is.
+fn withheld_members(
+    entity: &CompiledEntity,
+    record: &ProposalRecordReadAuthority,
+    state: &Map<String, Value>,
+) -> Result<BTreeSet<String>, MutationError> {
+    let plan = crate::disclosure::plan(entity, record.context.access_profile());
+    // A state that cannot be evaluated fails closed.
+    if plan
+        .withholds_record(state)
+        .map_err(|_| MutationError::PreconditionFailed)?
+    {
+        return Err(MutationError::PreconditionFailed);
+    }
+    plan.withheld_fields(state)
+        .map(|fields| fields.into_iter().map(str::to_owned).collect())
+        .map_err(|_| MutationError::PreconditionFailed)
+}
+
+fn select<'a>(
+    snapshot: &Map<String, Value>,
+    fields: impl Iterator<Item = &'a String>,
+) -> Map<String, Value> {
     fields
-        .iter()
         .map(|field| {
             (
                 field.clone(),

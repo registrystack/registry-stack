@@ -22,12 +22,13 @@ use crate::audit::{
     begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
     PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
 };
-use crate::contract::{FieldTypeSource, Operation};
+use crate::contract::{DisclosureWhenPredicate, FieldTypeSource, Operation};
 use crate::cursor::{
     now_unix_seconds, CursorAdapter, CursorBinding, CursorCodec, CursorContinuation,
     CursorFilterExpr, CursorFilterOperator, CursorLogicalOp, CursorOrderClause,
     CursorProjectionField, CursorQueryScope, CursorRepresentation,
 };
+use crate::disclosure::{plan as disclosure_plan, when_sql, DisclosurePlan};
 use crate::field_encryption::{FieldEncryptionService, SharedFieldEncryptionService};
 use crate::history_commit::{
     capture_latest_snapshot_reference, resolve_snapshot_reference, ResolvedSnapshot,
@@ -40,7 +41,7 @@ use crate::history_schema::{
 use crate::history_store::load_descriptor;
 use crate::model::{
     CompiledEntity, CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection,
-    CompiledRegistry, HttpMethod,
+    CompiledRegistry, DisclosureWithhold, HttpMethod,
 };
 use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
 use crate::record_profile::{self, RecordRepresentation};
@@ -73,6 +74,7 @@ pub struct PostgresSnapshotReadService {
     audit: RegistryAudit,
     cursors: Arc<CursorCodec>,
     field_encryption: Option<SharedFieldEncryptionService>,
+    read_alerts: Option<crate::outbox::ReadAlerts>,
     fault: SnapshotReadFaultControl,
 }
 
@@ -96,6 +98,7 @@ impl PostgresSnapshotReadService {
             audit,
             cursors,
             field_encryption: None,
+            read_alerts: None,
             fault: SnapshotReadFaultControl::Disabled,
         }
     }
@@ -106,6 +109,24 @@ impl PostgresSnapshotReadService {
     #[must_use]
     pub fn with_field_encryption(mut self, service: Arc<FieldEncryptionService>) -> Self {
         self.field_encryption = Some(service);
+        self
+    }
+
+    /// Bind the destinations read alerts are captured under, and the runtime
+    /// instance they name as their source. A read by a profile a `read` hook
+    /// names is refused when this is not bound.
+    #[must_use]
+    pub fn with_event_destinations(
+        mut self,
+        destinations: Option<Arc<crate::event_destination::ActivatedEventDestinationRegistry>>,
+        instance_id: &str,
+    ) -> Self {
+        self.read_alerts = Some(crate::outbox::ReadAlerts::new(
+            Arc::clone(&self.registry),
+            destinations,
+            &self.expected.package_id,
+            instance_id,
+        ));
         self
     }
 
@@ -296,7 +317,7 @@ impl PostgresSnapshotReadService {
             &effective_scope,
         )?;
         let effective_query = cursor_query_with_scope(&request.plan, effective_scope);
-        let package_revisions = load_latest_active_package_revisions(
+        let mut package_revisions = load_latest_active_package_revisions(
             transaction,
             &request.entity_id,
             snapshot.position,
@@ -316,6 +337,22 @@ impl PostgresSnapshotReadService {
                 effective_binding,
             });
         }
+        let disclosure_fields =
+            disclosure_when_fields(&disclosure_plan(&plan.entity, claims.access_profile()));
+        if !disclosure_fields.is_empty() {
+            // Disclosure reads the latest retained revision of each record,
+            // which can carry a package revision the snapshot position does not.
+            for package_revision in
+                load_latest_package_revisions(transaction, &request.entity_id).await?
+            {
+                if !package_revisions.contains(&package_revision) {
+                    package_revisions.push(package_revision);
+                }
+            }
+            if package_revisions.len() > MAX_HISTORY_PACKAGE_DESCRIPTORS {
+                return Err(ReadServiceError::Unavailable);
+            }
+        }
         let retained_plaintext_fields =
             load_retained_plaintext_fields(transaction, &request.entity_id).await?;
         let descriptors = load_compatible_descriptors(
@@ -327,7 +364,8 @@ impl PostgresSnapshotReadService {
             package_revisions,
         )
         .await?;
-        let fields = HistoryFieldSet::new(&plan.entity, &plan.required_fields, &descriptors)?;
+        let fields = HistoryFieldSet::new(&plan.entity, &plan.required_fields, &descriptors)?
+            .with_current_state(disclosure_fields);
         ensure_required_snapshot_keys_present(
             transaction,
             &request.entity_id,
@@ -405,12 +443,15 @@ impl PostgresSnapshotReadService {
                     &selected_fields,
                     &descriptors,
                     &plan.entity,
+                    request.context.selected_profile(),
                     self.field_encryption.as_deref(),
+                    !fields.current_state.is_empty(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
         crate::subject_access_log::record_reads(
             transaction,
+            self.read_alerts.as_ref(),
             &plan.entity,
             &request.entity_id,
             &request.context,
@@ -715,12 +756,18 @@ impl SnapshotReadPlan {
             entity,
             request.context.selected_profile(),
         ));
+        // A disclosure condition reads the record's state, so its fields are
+        // decoded and authorize the row like a row boundary does.
+        let disclosure_fields =
+            disclosure_when_fields(&disclosure_plan(entity, request.context.selected_profile()));
+        required_fields.extend(disclosure_fields.iter().cloned());
         let mut authorizing_fields: BTreeSet<String> = request
             .context
             .row_boundaries()
             .iter()
             .map(|boundary| boundary.field().to_owned())
             .collect();
+        authorizing_fields.extend(disclosure_fields);
         authorizing_fields.extend(crate::membership::fields(
             entity,
             request.context.selected_profile(),
@@ -809,6 +856,48 @@ async fn load_latest_active_package_revisions(
         .collect()
 }
 
+/// The package revisions of the unbounded latest retained revision of every
+/// record, whatever its lifecycle.
+async fn load_latest_package_revisions(
+    transaction: &tokio_postgres::Transaction<'_>,
+    entity_id: &str,
+) -> Result<Vec<String>, ReadServiceError> {
+    let rows = transaction
+        .query(
+            "WITH newest AS (
+                 SELECT DISTINCT ON (member.record_id)
+                        member.record_id, member.record_revision
+                   FROM registry_internal.registry_revision_commit_members AS member
+                  WHERE member.entity_id = $1::text
+                  ORDER BY member.record_id, member.commit_position DESC,
+                           member.record_revision DESC
+             )
+             SELECT DISTINCT revision.package_revision
+               FROM newest
+               JOIN registry_internal.registry_revisions AS revision
+                 ON revision.entity_id = $1::text
+                AND revision.record_id = newest.record_id
+                AND revision.record_revision = newest.record_revision
+              WHERE revision.snapshot IS NOT NULL
+                AND revision.erased_at IS NULL
+              ORDER BY revision.package_revision
+              LIMIT $2::bigint",
+            &[
+                &entity_id,
+                &(i64::try_from(MAX_HISTORY_PACKAGE_DESCRIPTORS + 1)
+                    .map_err(|_| ReadServiceError::Unavailable)?),
+            ],
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+    if rows.len() > MAX_HISTORY_PACKAGE_DESCRIPTORS {
+        return Err(ReadServiceError::Unavailable);
+    }
+    rows.into_iter()
+        .map(|row| bounded_package_revision(&row, 0))
+        .collect()
+}
+
 async fn load_compatible_descriptors(
     transaction: &tokio_postgres::Transaction<'_>,
     entity: &CompiledEntity,
@@ -848,6 +937,10 @@ struct CompatibleDescriptor {
 
 struct HistoryFieldSet {
     by_field: BTreeMap<String, HistorySqlField>,
+    /// The fields a disclosure condition tests. They are also read from the
+    /// unbounded latest retained revision of each record, because disclosure
+    /// follows the record's current state whatever the snapshot position.
+    current_state: BTreeSet<String>,
 }
 
 impl HistoryFieldSet {
@@ -885,7 +978,15 @@ impl HistoryFieldSet {
                 },
             );
         }
-        Ok(Self { by_field })
+        Ok(Self {
+            by_field,
+            current_state: BTreeSet::new(),
+        })
+    }
+
+    fn with_current_state(mut self, fields: BTreeSet<String>) -> Self {
+        self.current_state = fields;
+        self
     }
 
     fn field(&self, field_id: &str) -> Result<&HistorySqlField, ReadServiceError> {
@@ -904,19 +1005,30 @@ struct HistorySqlField {
 }
 
 impl HistorySqlField {
+    /// The alias of the column holding the field's value in the latest
+    /// retained revision.
+    fn current_alias(&self) -> String {
+        format!("current_{}", self.alias)
+    }
+
     fn cte_json_expression(&self) -> Result<String, ReadServiceError> {
+        self.json_expression_from("revision")
+    }
+
+    /// The field's JSON value in the revision row joined as `table`.
+    fn json_expression_from(&self, table: &str) -> Result<String, ReadServiceError> {
         if self.field_id == "id" {
-            return Ok("to_jsonb(revision.record_id::text)".to_owned());
+            return Ok(format!("to_jsonb({table}.record_id::text)"));
         }
         let mut arms = Vec::new();
         for (package_revision, field) in &self.package_sources {
             let source = match &field.source {
                 HistoryValueSource::Retained(HistoryFieldSource::SnapshotKey { key }) => format!(
-                    "(convert_from(revision.snapshot, 'UTF8')::jsonb -> {})",
+                    "(convert_from({table}.snapshot, 'UTF8')::jsonb -> {})",
                     sql_quote_literal(key)
                 ),
                 HistoryValueSource::Retained(HistoryFieldSource::JournalRecordId) => {
-                    "to_jsonb(revision.record_id::text)".to_owned()
+                    format!("to_jsonb({table}.record_id::text)")
                 }
                 // A revision recorded before the field existed carries no value
                 // for it, and reads as the null the record held.
@@ -931,7 +1043,7 @@ impl HistorySqlField {
             return Err(ReadServiceError::Unavailable);
         }
         Ok(format!(
-            "(CASE revision.package_revision {} ELSE NULL::jsonb END)",
+            "(CASE {table}.package_revision {} ELSE NULL::jsonb END)",
             arms.join(" ")
         ))
     }
@@ -1060,11 +1172,29 @@ fn snapshot_page_sql(
         })
         .transpose()?
         .unwrap_or_default();
+    let disclosure_projection = if fields.current_state.is_empty() {
+        String::new()
+    } else {
+        let members = fields
+            .current_state
+            .iter()
+            .map(|field_id| {
+                let field = fields.field(field_id)?;
+                Ok(format!(
+                    "{}, {}",
+                    sql_quote_literal(field_id),
+                    field.current_alias()
+                ))
+            })
+            .collect::<Result<Vec<_>, ReadServiceError>>()?
+            .join(", ");
+        format!(", current_present, jsonb_build_object({members})::text AS disclosure_state")
+    };
     let limit_parameter =
         builder.push_i64(i64::try_from(limit).map_err(|_| ReadServiceError::Unavailable)?);
     Ok((
         format!(
-            "{} SELECT record_id, record_revision, package_revision, snapshot{sort_projection}
+            "{} SELECT record_id, record_revision, package_revision, snapshot{sort_projection}{disclosure_projection}
                  FROM historical
                 WHERE {where_sql}
                 ORDER BY {order_sql}
@@ -1092,6 +1222,51 @@ fn historical_cte(fields: &HistoryFieldSet) -> Result<String, ReadServiceError> 
         })
         .collect::<Result<Vec<_>, ReadServiceError>>()?
         .join("");
+    if fields.current_state.is_empty() {
+        return Ok(format!(
+            "WITH latest AS (
+                 SELECT DISTINCT ON (member.record_id)
+                        member.record_id, member.record_revision, member.commit_position
+                   FROM registry_internal.registry_revision_commit_members AS member
+                  WHERE member.entity_id = $1::text
+                    AND member.commit_position <= $2::bigint
+                  ORDER BY member.record_id, member.commit_position DESC,
+                           member.record_revision DESC
+             ),
+             historical AS (
+                 SELECT revision.record_id::text AS record_id,
+                        revision.record_revision,
+                        revision.package_revision,
+                        revision.snapshot
+                        {field_projection}
+                   FROM latest
+                   JOIN registry_internal.registry_revisions AS revision
+                     ON revision.entity_id = $1::text
+                    AND revision.record_id = latest.record_id
+                    AND revision.record_revision = latest.record_revision
+                  WHERE revision.record_lifecycle = 'active'
+                    AND revision.snapshot IS NOT NULL
+                    AND revision.erased_at IS NULL
+             )"
+        ));
+    }
+    // Disclosure is decided on the latest retained revision of the record at
+    // any position. A snapshot reference taken before a record was marked
+    // therefore cannot read it. A latest revision that is missing or erased
+    // leaves `current_present` false, which callers treat as withheld.
+    let current_projection = fields
+        .current_state
+        .iter()
+        .map(|field_id| {
+            let field = fields.field(field_id)?;
+            Ok(format!(
+                ", {} AS {}",
+                field.json_expression_from("newest_revision")?,
+                field.current_alias()
+            ))
+        })
+        .collect::<Result<Vec<_>, ReadServiceError>>()?
+        .join("");
     Ok(format!(
         "WITH latest AS (
              SELECT DISTINCT ON (member.record_id)
@@ -1102,17 +1277,33 @@ fn historical_cte(fields: &HistoryFieldSet) -> Result<String, ReadServiceError> 
               ORDER BY member.record_id, member.commit_position DESC,
                        member.record_revision DESC
          ),
+         newest AS (
+             SELECT DISTINCT ON (member.record_id)
+                    member.record_id, member.record_revision
+               FROM registry_internal.registry_revision_commit_members AS member
+              WHERE member.entity_id = $1::text
+              ORDER BY member.record_id, member.commit_position DESC,
+                       member.record_revision DESC
+         ),
          historical AS (
              SELECT revision.record_id::text AS record_id,
                     revision.record_revision,
                     revision.package_revision,
-                    revision.snapshot
+                    revision.snapshot,
+                    (newest_revision.snapshot IS NOT NULL
+                     AND newest_revision.erased_at IS NULL) AS current_present
                     {field_projection}
+                    {current_projection}
                FROM latest
                JOIN registry_internal.registry_revisions AS revision
                  ON revision.entity_id = $1::text
                 AND revision.record_id = latest.record_id
                 AND revision.record_revision = latest.record_revision
+               JOIN newest ON newest.record_id = latest.record_id
+               LEFT JOIN registry_internal.registry_revisions AS newest_revision
+                 ON newest_revision.entity_id = $1::text
+                AND newest_revision.record_id = newest.record_id
+                AND newest_revision.record_revision = newest.record_revision
               WHERE revision.record_lifecycle = 'active'
                 AND revision.snapshot IS NOT NULL
                 AND revision.erased_at IS NULL
@@ -1168,6 +1359,33 @@ fn snapshot_where_sql(
     for probe in crate::membership::row_probes(entity, claims.access_profile()) {
         let field = fields.field(&probe.field)?;
         predicates.push(probe.sql(&field_typed_sql(field)?));
+    }
+    // A record whose latest revision matches a `record` or `history` condition
+    // is absent from every snapshot, and from its count.
+    let disclosure = disclosure_plan(entity, claims.access_profile());
+    let mut absent_withheld = false;
+    for condition in disclosure.conditions() {
+        if matches!(condition.withhold, DisclosureWithhold::Fields(_)) {
+            continue;
+        }
+        if !absent_withheld {
+            predicates.push("current_present".to_owned());
+            absent_withheld = true;
+        }
+        let mut typed = BTreeMap::new();
+        for field_id in condition.when.iter().map(disclosure_when_field) {
+            typed.insert(
+                field_id,
+                typed_sql_for_alias(
+                    fields.field(field_id)?,
+                    &fields.field(field_id)?.current_alias(),
+                )?,
+            );
+        }
+        predicates.push(format!(
+            "NOT {}",
+            when_sql(entity, &condition.when, &|field| typed[field].clone())
+        ));
     }
     if let Some(instant) = &query.temporal_instant {
         let temporal = entity
@@ -1344,10 +1562,13 @@ fn field_json_sql(field: &HistorySqlField) -> Result<String, ReadServiceError> {
 }
 
 fn field_typed_sql(field: &HistorySqlField) -> Result<String, ReadServiceError> {
+    typed_sql_for_alias(field, &field.alias)
+}
+
+fn typed_sql_for_alias(field: &HistorySqlField, alias: &str) -> Result<String, ReadServiceError> {
     if field.field_id == "id" {
         return Ok("record_id::uuid".to_owned());
     }
-    let alias = field.alias.clone();
     match &field.field_type {
         FieldTypeSource::String { .. }
         | FieldTypeSource::Text { .. }
@@ -1405,12 +1626,44 @@ impl RecordEnvelope {
     }
 }
 
+/// The field identifiers the bound disclosure conditions test.
+pub(super) fn disclosure_when_fields(plan: &DisclosurePlan<'_>) -> BTreeSet<String> {
+    plan.conditions()
+        .iter()
+        .flat_map(|condition| condition.when.iter().map(disclosure_when_field))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn disclosure_when_field(predicate: &DisclosureWhenPredicate) -> &str {
+    match predicate {
+        DisclosureWhenPredicate::FieldEquals { field, .. }
+        | DisclosureWhenPredicate::FieldIn { field, .. }
+        | DisclosureWhenPredicate::FieldIsNull { field }
+        | DisclosureWhenPredicate::FieldIsNotNull { field } => field,
+    }
+}
+
+/// The fields a `fields` condition omits from `state`. A state the evaluator
+/// cannot read withholds every field a condition names.
+pub(super) fn withheld_fields(
+    plan: &DisclosurePlan<'_>,
+    state: &Map<String, Value>,
+) -> BTreeSet<String> {
+    match plan.withheld_fields(state) {
+        Ok(fields) => fields.into_iter().map(str::to_owned).collect(),
+        Err(_) => plan.named_fields().into_iter().map(str::to_owned).collect(),
+    }
+}
+
 fn row_to_record(
     row: &tokio_postgres::Row,
     selected_fields: &[String],
     descriptors: &BTreeMap<String, CompatibleDescriptor>,
     entity: &CompiledEntity,
+    profile: &str,
     field_encryption: Option<&FieldEncryptionService>,
+    has_disclosure_state: bool,
 ) -> Result<RecordEnvelope, ReadServiceError> {
     let id = row
         .try_get::<_, String>(0)
@@ -1435,7 +1688,32 @@ fn row_to_record(
         .descriptor
         .decode_snapshot_for_fields(&descriptor.compatibility, &snapshot, Some(&id))
         .map_err(|_| ReadServiceError::Unavailable)?;
-    let mut data = projected_data(&decoded, &descriptor.compatibility, selected_fields)?;
+    // The conditions are evaluated on the latest retained revision, which the
+    // query carries beside the row at the snapshot position.
+    let withheld = if has_disclosure_state {
+        let plan = disclosure_plan(entity, profile);
+        let present: bool = row
+            .try_get("current_present")
+            .map_err(|_| ReadServiceError::Unavailable)?;
+        if present {
+            let text: String = row
+                .try_get("disclosure_state")
+                .map_err(|_| ReadServiceError::Unavailable)?;
+            let state: Map<String, Value> =
+                serde_json::from_str(&text).map_err(|_| ReadServiceError::Unavailable)?;
+            withheld_fields(&plan, &state)
+        } else {
+            plan.named_fields().into_iter().map(str::to_owned).collect()
+        }
+    } else {
+        BTreeSet::new()
+    };
+    let visible_fields = selected_fields
+        .iter()
+        .filter(|field| !withheld.contains(field.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut data = projected_data(&decoded, &descriptor.compatibility, &visible_fields)?;
     // Open at the response edge while this row's descriptor compatibility is
     // still available. The retained snapshot itself remains byte-identical.
     open_history_row_members(
@@ -1445,6 +1723,17 @@ fn row_to_record(
         field_encryption,
         &descriptor.compatibility,
     )?;
+    // A withheld member reads as null, like a member the record never set.
+    for field_id in selected_fields {
+        if withheld.contains(field_id.as_str()) {
+            let field = descriptor
+                .compatibility
+                .fields
+                .get(field_id)
+                .ok_or(ReadServiceError::Unavailable)?;
+            data.insert(field.active_api_name.clone(), Value::Null);
+        }
+    }
     Ok(RecordEnvelope {
         id,
         revision: u64::try_from(revision).map_err(|_| ReadServiceError::Unavailable)?,

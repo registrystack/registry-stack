@@ -1882,6 +1882,7 @@ fn action_profile_from_grant(
         readable_fields: Default::default(),
         writable_fields: Default::default(),
         filterable_fields: Default::default(),
+        required_filters: Vec::new(),
         sortable_fields: Default::default(),
         spatial_queries: None,
         row_boundaries: grant
@@ -1897,6 +1898,7 @@ fn action_profile_from_grant(
         revision_access: false,
         provenance_fields: Vec::new(),
         allow_data_export: false,
+        require_access_reason: false,
     })
 }
 
@@ -3812,23 +3814,35 @@ impl SchemaTestRuntime {
             package_revision: expected.activation_id.clone(),
             schema_fingerprint: expected.schema_fingerprint.clone(),
         };
-        let records = Arc::new(PostgresRecordReadService::new(
-            pool.clone(),
-            Arc::clone(&registry),
-            expected.clone(),
-            database.lock_key(),
-            config.operational_timeouts().record_lock,
-            audit.clone(),
-            Arc::clone(&cursor_codec),
-        ));
-        let revisions = Arc::new(PostgresRevisionReadService::new(
-            pool.clone(),
-            Arc::clone(&registry),
-            expected.clone(),
-            database.lock_key(),
-            config.operational_timeouts().record_lock,
-            audit.clone(),
-        ));
+        let records = Arc::new(
+            PostgresRecordReadService::new(
+                pool.clone(),
+                Arc::clone(&registry),
+                expected.clone(),
+                database.lock_key(),
+                config.operational_timeouts().record_lock,
+                audit.clone(),
+                Arc::clone(&cursor_codec),
+            )
+            .with_event_destinations(
+                Some(Arc::clone(&event_destinations)),
+                config.identity().instance_id(),
+            ),
+        );
+        let revisions = Arc::new(
+            PostgresRevisionReadService::new(
+                pool.clone(),
+                Arc::clone(&registry),
+                expected.clone(),
+                database.lock_key(),
+                config.operational_timeouts().record_lock,
+                audit.clone(),
+            )
+            .with_event_destinations(
+                Some(Arc::clone(&event_destinations)),
+                config.identity().instance_id(),
+            ),
+        );
         let evidence = config
             .activate_evidence(&registry)
             .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Evidence))?;

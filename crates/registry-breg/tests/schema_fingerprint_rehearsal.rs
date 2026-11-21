@@ -31,11 +31,12 @@ const SOURCE_REVISION: &str = "rehearsal-source-revision";
 // Includes the runtime Evidence expiry function, both expires_at indexes, the
 // Proposal blocked-reason constraint that admits a durable Apply refusal, and
 // the always-present Record timer ledger, retention function, bounded state/block
-// observation index, partial activation-preview index, and the hand-off
-// refusal code column.
-// The migration ledger bounds statement checksums at 4,096 entries.
+// observation index, partial activation-preview index, the hand-off
+// refusal code column, and the subject access log access-reason and
+// access-kind columns. The migration ledger bounds statement checksums at
+// 4,096 entries.
 const PORTABLE_SCHEMA_FINGERPRINT: &str =
-    "sha256:a37a8337058a0a8ad9c3892708aa9c946e16d877803e258baedd2c2b3e11c4aa";
+    "sha256:f982a1bdde2a0532f7b9c2e43f05d1ac7261cda6e6c7907cb16bb946b8ca2c79";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
 kind: BRegJourneys
 journeys: []

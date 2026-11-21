@@ -542,7 +542,7 @@ fn temporal_exclusion_constraints(
     Ok(constraints)
 }
 
-fn exact_entity_event_deliveries(
+pub(crate) fn exact_entity_event_deliveries(
     registry: &CompiledRegistry,
     entity: &CompiledEntity,
 ) -> Result<Vec<CompiledEventDelivery>, MutationError> {
@@ -1328,6 +1328,18 @@ impl MutationTransaction {
             },
         )
         .await?;
+        crate::subject_access_log::record_writes(
+            transaction.transaction(),
+            &request.plan.entity,
+            request.claims,
+            std::slice::from_ref(&current.record_id),
+            &request.plan.route.id,
+            &self.expected,
+            &request.correlation,
+            &self.audit,
+        )
+        .await
+        .map_err(|()| MutationError::Unavailable)?;
         fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
         let trigger = mutation_trigger(request.plan.route.operation);
         let data_schemas = event_data_schemas(
@@ -1983,6 +1995,23 @@ impl MutationTransaction {
             #[cfg(not(feature = "postgres-test"))]
             let _ = item_index;
         }
+        // Each item is its own entry, under the Batch operation the caller sent.
+        let written = timer_rows
+            .iter()
+            .map(|current| current.record_id.clone())
+            .collect::<Vec<_>>();
+        crate::subject_access_log::record_writes(
+            transaction.transaction(),
+            &request.plan.entity,
+            request.claims,
+            &written,
+            &request.plan.route.id,
+            &self.expected,
+            &request.correlation,
+            &self.audit,
+        )
+        .await
+        .map_err(|()| MutationError::Unavailable)?;
         set_temporal_exclusion_constraints(
             transaction.transaction(),
             &request.plan.entity,
@@ -2152,6 +2181,7 @@ impl MutationTransaction {
             &request.plan.entity,
             &current.data,
             &request.response_fields,
+            request.claims.access_profile(),
         )?;
         let etag = strong_record_etag(
             self.audit.profile(),
@@ -2182,6 +2212,7 @@ impl MutationTransaction {
             &request.plan.entity,
             &current.data,
             &request.response_fields,
+            request.claims.access_profile(),
         )?;
         let member = record_profile::record_member(
             current.record_id.clone(),
@@ -2888,6 +2919,7 @@ async fn apply_current_row(
                 transaction,
                 request,
                 current.record_revision,
+                &before_data,
                 data,
                 field_encryption,
             )
@@ -2913,6 +2945,13 @@ async fn apply_current_row(
             )?;
             if expected.ct_eq(current_etag.as_bytes()).unwrap_u8() != 1 {
                 return Err(MutationError::PreconditionFailed);
+            }
+            match crate::disclosure::plan(&request.plan.entity, request.claims.access_profile())
+                .refuses_tombstone(&current.data)
+            {
+                Ok(false) => {}
+                Ok(true) => return Err(MutationError::WriteOutsideBoundary),
+                Err(_) => return Err(MutationError::Unavailable),
             }
             apply_tombstone_row(transaction, request, current).await
         }
@@ -2970,6 +3009,7 @@ async fn apply_patch_row(
     transaction: &Transaction<'_>,
     request: &MutationRequest<'_>,
     expected_revision: i64,
+    before: &Map<String, Value>,
     data: Map<String, Value>,
     field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<CurrentRow, MutationError> {
@@ -2978,8 +3018,10 @@ async fn apply_patch_row(
     update_current_row(
         transaction,
         &request.plan.entity,
+        request.claims.access_profile(),
         record_id,
         expected_revision,
+        before,
         data,
         field_encryption,
         Some(ConstraintDisclosure::DeclaredFields {
@@ -2997,6 +3039,7 @@ async fn apply_patch_row(
 pub(super) async fn write_plan_row(
     transaction: &Transaction<'_>,
     entity: &CompiledEntity,
+    writer: &str,
     record_uuid: Uuid,
     expected_revision: Option<i64>,
     fields: Map<String, Value>,
@@ -3024,6 +3067,21 @@ pub(super) async fn write_plan_row(
         )
         .await?;
     }
+    // A state a `record` condition withholds from the writer is outside its
+    // boundary, as for a Patch or a Create, before the restrictive row policy
+    // can refuse it. A state that cannot be evaluated counts as withheld.
+    let mut after = before.cloned().unwrap_or_default();
+    after.extend(
+        fields
+            .iter()
+            .map(|(field, value)| (field.clone(), value.clone())),
+    );
+    if crate::disclosure::plan(entity, writer)
+        .withholds_record(&after)
+        .unwrap_or(true)
+    {
+        return Err(MutationError::WriteOutsideBoundary);
+    }
     let record_id = record_uuid.to_string();
     let mut current = match expected_revision {
         None => {
@@ -3046,14 +3104,19 @@ pub(super) async fn write_plan_row(
             .await?
         }
         Some(revision) => {
-            if revision < 1 || before.is_none() {
+            let Some(before) = before else {
+                return Err(MutationError::InvalidRequest);
+            };
+            if revision < 1 {
                 return Err(MutationError::InvalidRequest);
             }
             update_current_row(
                 transaction,
                 entity,
+                writer,
                 &record_id,
                 revision,
+                before,
                 fields,
                 field_encryption,
                 origin.constraint_disclosure(),
@@ -3156,15 +3219,27 @@ async fn insert_current_row(
     row_to_current(entity, &row)
 }
 
+/// Write `data` over the current row `before` as the `writer` profile. Every
+/// update of an existing record passes here, so a bound writer's attempt to
+/// lift a disclosure mark or overwrite a withheld field is refused on each
+/// path alike, before the database can answer with a constraint conflict.
+#[allow(clippy::too_many_arguments)]
 async fn update_current_row(
     transaction: &Transaction<'_>,
     entity: &CompiledEntity,
+    writer: &str,
     record_id: &str,
     expected_revision: i64,
+    before: &Map<String, Value>,
     data: Map<String, Value>,
     field_encryption: Option<&FieldEncryptionService>,
     constraint_disclosure: Option<ConstraintDisclosure<'_>>,
 ) -> Result<CurrentRow, MutationError> {
+    match crate::disclosure::plan(entity, writer).refuses_write(before, &data) {
+        Ok(false) => {}
+        Ok(true) => return Err(MutationError::WriteOutsideBoundary),
+        Err(_) => return Err(MutationError::Unavailable),
+    }
     let submitted_fields = entity
         .fields
         .values()
@@ -3530,11 +3605,20 @@ fn field_id_for_api_name<'a>(
 /// enters a held response body: the idempotency cache stores ciphertext, and
 /// the single authorized HTTP serve edge opens the members for both fresh and
 /// replayed bodies.
+///
+/// A field a bound disclosure condition names is always omitted. The answer
+/// never evaluates the record's state, so a response captured or replayed
+/// after the record is marked cannot carry a value from before. The strong
+/// entity tag still binds the profile's full readable set, so it matches the
+/// tag a read of the record returns.
 fn response_data(
     entity: &CompiledEntity,
     data: &Map<String, Value>,
     response_fields: &BTreeSet<String>,
+    access_profile: &str,
 ) -> Result<Map<String, Value>, MutationError> {
+    let response_fields =
+        &crate::disclosure::plan(entity, access_profile).response_fields(response_fields);
     let mut response = Map::new();
     for (field_id, value) in data {
         if !response_fields.contains(field_id) {
@@ -3623,7 +3707,7 @@ async fn apply_patch_document(
                     .fields
                     .get(&field_id)
                     .ok_or_else(|| at(PatchMember::Path))?;
-                if !profile.readable_fields.contains(&field_id) {
+                if !testable_fields(request, profile).contains(&field_id) {
                     return Err(at(PatchMember::Path));
                 }
                 if field.encryption.is_some() {
@@ -3924,12 +4008,14 @@ fn admit_submitted_names(
     {
         return Ok(());
     }
+    let testable = crate::disclosure::plan(&plan.entity, claims.access_profile())
+        .response_fields(&profile.readable_fields);
     let admitted = |api_name: &str, write: bool| {
         field_id_for_api_name(&plan.entity, api_name).is_ok_and(|field_id| {
             if write {
                 profile.writable_fields.contains(field_id)
             } else {
-                profile.readable_fields.contains(field_id)
+                testable.contains(field_id)
             }
         })
     };
@@ -4105,6 +4191,17 @@ fn validate_batch_request(
     Ok(())
 }
 
+/// The fields a JSON Patch `test` may compare. A field a bound disclosure
+/// condition names is never testable, whatever the record's state: a test
+/// against a withheld value would answer a guess about it.
+fn testable_fields(
+    request: &MutationRequest<'_>,
+    profile: &AccessProfileSource,
+) -> BTreeSet<String> {
+    crate::disclosure::plan(&request.plan.entity, request.claims.access_profile())
+        .response_fields(&profile.readable_fields)
+}
+
 fn validate_patch_static(
     request: &MutationRequest<'_>,
     operations: &[PatchOperation],
@@ -4148,7 +4245,7 @@ fn validate_patch_static(
                 mutated = true;
             }
             PatchOperation::Test { value, .. } => {
-                if !profile.readable_fields.contains(&field_id) {
+                if !testable_fields(request, profile).contains(&field_id) {
                     return Err(at(PatchMember::Path));
                 }
                 if !value.is_null() {
@@ -4518,6 +4615,9 @@ fn map_field_database_error(
     entity: &CompiledEntity,
     disclosure: Option<ConstraintDisclosure<'_>>,
 ) -> MutationError {
+    if violates_record_disclosure_policy(&error, entity) {
+        return MutationError::WriteOutsideBoundary;
+    }
     if error.code() == Some(&SqlState::UNIQUE_VIOLATION)
         && matches!(disclosure, Some(ConstraintDisclosure::ProposalApplication))
     {
@@ -4594,6 +4694,35 @@ fn map_field_database_error(
         }
     }
     map_database_error(error)
+}
+
+/// Whether `error` is the restrictive row policy of one of `entity`'s `record`
+/// conditions refusing a written state. Every write path checks that state
+/// against the writer first, so this answers, as the boundary refusal it is, a
+/// state that the writer's check allows but the database context's profile
+/// does not. Only that policy's violation qualifies: any other insufficient
+/// privilege stays a fault. The policy name is matched because PostgreSQL may
+/// translate the message around it but not the name.
+fn violates_record_disclosure_policy(
+    error: &tokio_postgres::Error,
+    entity: &CompiledEntity,
+) -> bool {
+    if error.code() != Some(&SqlState::INSUFFICIENT_PRIVILEGE) {
+        return false;
+    }
+    let Some(message) = error.as_db_error().map(|error| error.message()) else {
+        return false;
+    };
+    entity
+        .disclosure_conditions
+        .iter()
+        .filter(|condition| condition.withhold == crate::model::DisclosureWithhold::Record)
+        .any(|condition| {
+            message.contains(&crate::generated_ddl::disclosure_policy_name(
+                &entity.id,
+                &condition.id,
+            ))
+        })
 }
 
 /// A guarded boundary records a refusal only for a failure that proves the

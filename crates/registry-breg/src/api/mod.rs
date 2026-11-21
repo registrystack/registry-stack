@@ -511,10 +511,16 @@ async fn openapi(
             openapi_access_log_response_schema(),
         );
     }
-    actions::append_openapi(&visible_actions, &mut paths, &mut schemas);
+    actions::append_openapi(
+        &visible_actions,
+        service.registry.entities(),
+        &mut paths,
+        &mut schemas,
+    );
     crate::artifacts::append_proposal_openapi(
         &mut paths,
         service.registry.actions(),
+        service.registry.entities(),
         Some(&visible_proposals),
     );
     statistics::append_openapi(&service, &claims, &options, &mut paths, &mut schemas);
@@ -862,13 +868,19 @@ async fn read_dispatch(
             return response;
         }
     };
-    if surface
+    if let Err(binding) = surface
         .context
         .bind_access_attribution(surface.response_entity, &headers)
-        .is_err()
     {
-        return audited_read_refusal(&service, &route, &surface, None, concealed(), &correlation)
-            .await;
+        return audited_read_refusal(
+            &service,
+            &route,
+            &surface,
+            None,
+            access_binding_refusal(binding),
+            &correlation,
+        )
+        .await;
     }
     if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
         return refusal;
@@ -1002,7 +1014,11 @@ async fn read_dispatch(
             {
                 Ok(Some(query)) => query,
                 Ok(None) => return unavailable(),
-                Err(error @ (ReadQueryError::Invalid | ReadQueryError::InvalidAt(_))) => {
+                Err(
+                    error @ (ReadQueryError::Invalid
+                    | ReadQueryError::InvalidAt(_)
+                    | ReadQueryError::FilterRequired(_)),
+                ) => {
                     return audited_read_refusal_with_reason(
                         &service,
                         &route,
@@ -1137,13 +1153,19 @@ async fn lookup_dispatch(
             .await;
         }
     };
-    if surface
+    if let Err(binding) = surface
         .context
         .bind_access_attribution(surface.response_entity, &headers)
-        .is_err()
     {
-        return audited_read_refusal(&service, &route, &surface, None, concealed(), &correlation)
-            .await;
+        return audited_read_refusal(
+            &service,
+            &route,
+            &surface,
+            None,
+            access_binding_refusal(binding),
+            &correlation,
+        )
+        .await;
     }
     if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
         return refusal;
@@ -1345,17 +1367,16 @@ async fn revision_dispatch(
             .await;
         }
     };
-    if surface
+    if let Err(binding) = surface
         .context
         .bind_access_attribution(surface.response_entity, &headers)
-        .is_err()
     {
         return audited_revision_refusal(
             revisions.as_ref(),
             &route,
             &surface,
             None,
-            concealed(),
+            access_binding_refusal(binding),
             &correlation,
         )
         .await;
@@ -1503,13 +1524,19 @@ async fn snapshot_dispatch(
             .await;
         }
     };
-    if surface
+    if let Err(binding) = surface
         .context
         .bind_access_attribution(surface.response_entity, &headers)
-        .is_err()
     {
-        return audited_read_refusal(&service, &route, &surface, None, concealed(), &correlation)
-            .await;
+        return audited_read_refusal(
+            &service,
+            &route,
+            &surface,
+            None,
+            access_binding_refusal(binding),
+            &correlation,
+        )
+        .await;
     }
     if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
         return refusal;
@@ -1800,7 +1827,7 @@ async fn create_dispatch(
         )
         .await;
     };
-    let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
+    let Some(mut surface) = authorize_route(&service, &route, &claims, &options) else {
         return audited_mutation_concealment(
             mutations,
             &route,
@@ -1811,6 +1838,17 @@ async fn create_dispatch(
         )
         .await;
     };
+    if let Err(binding) = surface.context.bind_access_reason(&headers) {
+        return audited_mutation_refusal(
+            mutations,
+            &route,
+            &surface.context,
+            None,
+            access_binding_refusal(binding),
+            &correlation,
+        )
+        .await;
+    }
     if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
         return refusal;
     }
@@ -1923,7 +1961,7 @@ async fn patch_dispatch(
         )
         .await;
     };
-    let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
+    let Some(mut surface) = authorize_route(&service, &route, &claims, &options) else {
         return audited_mutation_concealment(
             mutations,
             &route,
@@ -1934,6 +1972,17 @@ async fn patch_dispatch(
         )
         .await;
     };
+    if let Err(binding) = surface.context.bind_access_reason(&headers) {
+        return audited_mutation_refusal(
+            mutations,
+            &route,
+            &surface.context,
+            None,
+            access_binding_refusal(binding),
+            &correlation,
+        )
+        .await;
+    }
     if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
         return refusal;
     }
@@ -2078,7 +2127,7 @@ async fn batch_dispatch(
         )
         .await;
     };
-    let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
+    let Some(mut surface) = authorize_route(&service, &route, &claims, &options) else {
         return audited_mutation_concealment(
             mutations,
             &route,
@@ -2089,6 +2138,17 @@ async fn batch_dispatch(
         )
         .await;
     };
+    if let Err(binding) = surface.context.bind_access_reason(&headers) {
+        return audited_mutation_refusal(
+            mutations,
+            &route,
+            &surface.context,
+            None,
+            access_binding_refusal(binding),
+            &correlation,
+        )
+        .await;
+    }
     if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
         return refusal;
     }
@@ -2217,7 +2277,7 @@ async fn tombstone_dispatch(
         )
         .await;
     };
-    let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
+    let Some(mut surface) = authorize_route(&service, &route, &claims, &options) else {
         return audited_mutation_concealment(
             mutations,
             &route,
@@ -2228,6 +2288,17 @@ async fn tombstone_dispatch(
         )
         .await;
     };
+    if let Err(binding) = surface.context.bind_access_reason(&headers) {
+        return audited_mutation_refusal(
+            mutations,
+            &route,
+            &surface.context,
+            None,
+            access_binding_refusal(binding),
+            &correlation,
+        )
+        .await;
+    }
     if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
         return refusal;
     }
@@ -2602,7 +2673,8 @@ fn authorize_direct_route<'a>(
         task_grant_binding(profile, claims).map_err(|_| ReadRefusalReason::ProfileAdmission)?,
     )
     .with_audit_context(claims)
-    .with_recipients(claims);
+    .with_recipients(claims)
+    .with_access_reason_requirement(profile.require_access_reason);
     Ok(AuthorizedSurface {
         route,
         entity,
@@ -2670,7 +2742,8 @@ fn authorize_read_path_route<'a>(
             task_grant_binding(profile, claims).map_err(|_| ReadRefusalReason::ProfileAdmission)?,
         )
         .with_audit_context(claims)
-        .with_recipients(claims),
+        .with_recipients(claims)
+        .with_access_reason_requirement(profile.require_access_reason),
         readable_fields,
         read_path: Some(read_path),
     })
@@ -3089,6 +3162,12 @@ async fn read_query(
             .as_ref()
             .map(|filter| read_filter_expr_from_cursor(surface.response_entity, operation, filter))
             .transpose()?;
+        // A cursor only ever carries the filter its first page was admitted
+        // with, so a cursor that no longer meets the grant is not one this
+        // service issued for it.
+        if !required_filters_satisfied(operation, filter.as_ref()) {
+            return Err(ReadQueryError::CursorInvalid);
+        }
         let order = payload
             .query
             .order
@@ -3150,6 +3229,11 @@ async fn read_query(
         query_options.filter.as_ref(),
     )
     .map_err(|error| error.at("$filter"))?;
+    if !required_filters_satisfied(operation, filter.as_ref()) {
+        return Err(ReadQueryError::FilterRequired(
+            operation.required_filter_api_names(surface.response_entity),
+        ));
+    }
     let spatial = first_page_spatial_query(surface, operation, query_options.bbox.as_ref())
         .map_err(|error| error.at("bbox"))?;
     let order = match &query_options.orderby {
@@ -3232,6 +3316,46 @@ async fn read_query(
         adapter_origin,
         continuation: None,
     }))
+}
+
+/// Whether the filter pins one of the operation's required field sets. A field
+/// is pinned by an `eq` predicate in the top-level conjunction, looking through
+/// groups. A predicate under `or` or `not` does not count, and neither does
+/// any other operator, since each can match many rows.
+fn required_filters_satisfied(
+    operation: &CompiledQueryOperation,
+    filter: Option<&ReadFilterExpr>,
+) -> bool {
+    if operation.required_filters.is_empty() {
+        return true;
+    }
+    let mut pinned = BTreeSet::new();
+    if let Some(filter) = filter {
+        collect_pinned_fields(filter, &mut pinned);
+    }
+    operation.required_filters.iter().any(|alternative| {
+        alternative
+            .iter()
+            .all(|field| pinned.contains(field.as_str()))
+    })
+}
+
+fn collect_pinned_fields<'a>(expr: &'a ReadFilterExpr, pinned: &mut BTreeSet<&'a str>) {
+    match expr {
+        ReadFilterExpr::Binary {
+            op: ReadLogicalOp::And,
+            left,
+            right,
+        } => {
+            collect_pinned_fields(left, pinned);
+            collect_pinned_fields(right, pinned);
+        }
+        ReadFilterExpr::Group(inner) => collect_pinned_fields(inner, pinned),
+        ReadFilterExpr::Predicate(predicate) if predicate.operator == ReadFilterOperator::Eq => {
+            pinned.insert(predicate.field_id.as_str());
+        }
+        ReadFilterExpr::Binary { .. } | ReadFilterExpr::Not(_) | ReadFilterExpr::Predicate(_) => {}
+    }
 }
 
 fn query_operation_for_route<'a>(
@@ -4665,10 +4789,13 @@ impl QueryParseError {
 }
 
 /// A refused read query. `InvalidAt` names the one fixed parameter at fault.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum ReadQueryError {
     Invalid,
     InvalidAt(&'static str),
+    /// The grant requires search criteria the list did not carry. Holds the
+    /// acceptable field sets as API names.
+    FilterRequired(Vec<Vec<String>>),
     CursorInvalid,
 }
 
@@ -4682,10 +4809,13 @@ impl ReadQueryError {
         }
     }
 
-    fn problem(self) -> Response {
+    fn problem(&self) -> Response {
         match self {
             Self::Invalid => invalid_query(),
             Self::InvalidAt(parameter) => invalid_query_at(parameter),
+            Self::FilterRequired(alternatives) => {
+                crate::correlation::filter_required_response(alternatives.clone())
+            }
             Self::CursorInvalid => cursor_invalid(),
         }
     }
@@ -4785,6 +4915,18 @@ fn unavailable() -> Response {
 
 fn field_encryption_unavailable() -> Response {
     fixed_problem(ProblemCode::RuntimeFieldEncryptionUnavailable)
+}
+
+/// The refusal of a request whose access headers were not admitted. A missing
+/// or invalid access reason is named, because the caller can repair it. A
+/// refused forwarded attribution stays concealed.
+fn access_binding_refusal(refusal: context::AccessBindingRefusal) -> Response {
+    match refusal {
+        context::AccessBindingRefusal::Attribution => concealed(),
+        context::AccessBindingRefusal::ReasonRequired => {
+            fixed_problem(ProblemCode::RequestAccessReasonRequired)
+        }
+    }
 }
 
 fn invalid_query() -> Response {

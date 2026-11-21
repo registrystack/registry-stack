@@ -2160,7 +2160,13 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
             "The review result and application receipt of the submission are no longer retained."
         }
         Code::QueryCursorInvalid => "The query cursor is invalid.",
+        Code::QueryFilterRequired => {
+            "The list did not carry the search criteria its access profile requires."
+        }
         Code::QueryInvalid => "The query request is invalid.",
+        Code::RequestAccessReasonRequired => {
+            "The access profile requires a valid Registry-Access-Reason header."
+        }
         Code::RequestInvalid => "The request is invalid.",
         Code::RequestTimeout => "The request timed out.",
         Code::ResourceNotFound => "The requested resource was not found.",
@@ -2184,7 +2190,7 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         }
         Code::UnsupportedMediaType => "The request media type is not supported.",
         Code::WriteOutsideBoundary => {
-            "The resulting record falls outside the selected access profile's row boundary."
+            "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition."
         }
         _ => panic!("unregistered problem code"),
     }

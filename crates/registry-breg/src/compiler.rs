@@ -19,10 +19,11 @@ use crate::contract::{
     EventConditionSource, EventTrigger, FieldGenerationSource, FieldSource, FieldTypeSource,
     GeoJsonSource, HookAuthenticationProfile, HookDeadLetterMode, HookHandlerSource, HookPhase,
     LookupValueOrigin, ManifestProjectionTextSource, ModelDisplaySource, ModuleAssetSource,
-    MutationMode, Operation, PresentationSource, ReadPathPermissionSource, RegistryModule,
-    RegistryProject, SpatialBboxPermissionSource, SpatialQueryPermissionSource, TimerInputSource,
-    TimerPredicateSource, TimerSource, TimerValueSource, UniqueWhenPredicate, ValidTimeRole,
-    DECIMAL_BOUNDS_REQUIREMENTS, MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
+    MutationMode, Operation, PresentationSource, ProjectAccessProfileSource,
+    ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
+    SpatialQueryPermissionSource, TimerInputSource, TimerPredicateSource, TimerSource,
+    TimerValueSource, UniqueWhenPredicate, ValidTimeRole, DECIMAL_BOUNDS_REQUIREMENTS,
+    MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
     MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
     MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
     MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
@@ -65,6 +66,7 @@ use crate::physical_names::{
 };
 
 pub(crate) mod attachments;
+mod disclosure;
 pub mod review_context;
 mod statistics;
 #[cfg(feature = "runtime")]
@@ -324,12 +326,14 @@ pub fn compile_project_with_assets(
     );
     validate_project_entity_access_profiles(project, &mut diagnostics);
     validate_module_access_profile_task_grants(&sources, &mut diagnostics);
+    disclosure::validate_module_access_reason_operations(&sources, &mut diagnostics);
     let module_profiles = crate::access::module_profile_keys(&sources);
     expand_project_access(project, &mut sources, &mut diagnostics);
     resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
     validate_entities(
         &project.project.id,
         &sources,
+        &project.access_profiles,
         &origins.hook_paths,
         profile,
         &mut diagnostics,
@@ -345,6 +349,7 @@ pub fn compile_project_with_assets(
         &module_profiles,
     ));
     findings.extend(create_required_field_findings(&sources));
+    findings.extend(disclosure::withheld_field_probe_findings(&sources));
     validate_derived_assets(&sources, &origins.derived, assets, &mut diagnostics);
     validate_hook_assets(&sources, &origins.hooks, assets, &mut diagnostics);
     if !diagnostics.is_empty() {
@@ -380,6 +385,19 @@ pub fn compile_project_with_assets(
             "external view compilation",
         )
     })?;
+    let mut view_disclosure = Vec::new();
+    disclosure::validate_external_views(&external_views, &entities, &mut view_disclosure);
+    if !view_disclosure.is_empty() {
+        return Err(stopped_compile_failure(
+            CompileFailure::from_errors(view_disclosure),
+            &findings,
+            "external view compilation",
+        ));
+    }
+    findings.extend(disclosure::refresh_withheld_root_findings(
+        &external_views,
+        &entities,
+    ));
     crate::external_views::mark_link_fields(&external_views, &mut entities, &mut physical_names);
     crate::membership::compile(&mut entities);
     let recipients = crate::consent::compile(project, &sources, &mut entities);
@@ -793,6 +811,14 @@ fn compile_timers(
                     }
                 }
             }
+
+            let created = action
+                .effects
+                .iter()
+                .filter(|effect| effect.operation == Operation::Create)
+                .map(|effect| effect.target.entity_id.as_str())
+                .collect::<BTreeSet<_>>();
+            disclosure::validate_timer_creates(source_entity, &timer.id, &created, sources, errors);
 
             let anchor_read_fields = control_fields
                 .iter()
@@ -3930,6 +3956,7 @@ pub(crate) fn expand_project_access(
                 "an access profile identifier is duplicated",
             ));
         }
+        disclosure::validate_access_reason_operations(profile, errors);
         if profile.principal_claim.is_empty() {
             errors.push(Diagnostic::error(
                 "breg.access-profile.principal-claim-required",
@@ -4097,11 +4124,13 @@ pub(crate) fn expand_project_access(
                 principal_claim: profile.principal_claim.clone(),
                 required_scopes: profile.required_scopes.clone(),
                 required_purposes: profile.required_purposes.clone(),
+                require_access_reason: profile.require_access_reason,
                 operations: grant.operations.clone(),
                 readable_fields: grant.readable_fields.clone(),
                 writable_fields: grant.writable_fields.clone(),
                 filterable_fields: grant.filterable_fields.clone(),
                 sortable_fields: grant.sortable_fields.clone(),
+                required_filters: grant.required_filters.clone(),
                 spatial_queries: grant.spatial_queries.clone(),
                 row_boundaries: grant.row_boundaries.clone(),
                 membership_boundaries: grant.membership_boundaries.clone(),
@@ -4238,6 +4267,7 @@ fn resolve_vocabularies(
 fn validate_entities(
     registry_id: &str,
     entities: &BTreeMap<String, EntitySource>,
+    project_profiles: &[ProjectAccessProfileSource],
     hook_paths: &HookPathMap,
     profile: CompileProfile,
     errors: &mut Vec<Diagnostic>,
@@ -4310,6 +4340,7 @@ fn validate_entities(
         validate_selector_profiles(entity, errors);
         validate_read_paths(entity, entities, errors);
         validate_profiles(entity, entities, errors);
+        disclosure::validate(entity, entities, project_profiles, errors);
         validate_hooks(
             registry_id,
             entity,
@@ -5921,6 +5952,7 @@ fn validate_profiles(
             ));
         }
         validate_spatial_queries(access, entity, errors);
+        validate_required_filters(access, entity, errors);
         let mut read_processed = access.readable_fields.clone();
         read_processed.extend(access.filterable_fields.iter().cloned());
         read_processed.extend(access.sortable_fields.iter().cloned());
@@ -6264,6 +6296,86 @@ fn validate_single_default(
     }
 }
 
+/// The most alternative field sets one grant may require.
+pub(crate) const MAXIMUM_REQUIRED_FILTER_ALTERNATIVES: usize = 8;
+
+fn validate_required_filters(
+    access: &AccessProfileSource,
+    entity: &EntitySource,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if access.required_filters.is_empty() {
+        return;
+    }
+    let path = format!(
+        "recordTypes[id={}].accessProfiles[id={}].requiredFilters",
+        entity.id, access.id
+    );
+    if !access.operations.contains(&Operation::List) {
+        errors.push(Diagnostic::error(
+            "breg.access-profile.required-filters-list-required",
+            path.clone(),
+            "requiredFilters governs list, so the grant must include list",
+        ));
+    }
+    if access.required_filters.len() > MAXIMUM_REQUIRED_FILTER_ALTERNATIVES {
+        errors.push(Diagnostic::error(
+            "breg.access-profile.required-filters-too-many",
+            path.clone(),
+            &format!(
+                "requiredFilters lists {} alternatives, more than the {MAXIMUM_REQUIRED_FILTER_ALTERNATIVES} allowed",
+                access.required_filters.len()
+            ),
+        ));
+    }
+    let mut seen: Vec<BTreeSet<&str>> = Vec::new();
+    for (index, alternative) in access.required_filters.iter().enumerate() {
+        let alternative_path = format!("{path}[{index}]");
+        if alternative.fields.is_empty() {
+            errors.push(Diagnostic::error(
+                "breg.access-profile.required-filters-empty",
+                format!("{alternative_path}.fields"),
+                "a required filter alternative must name at least one field",
+            ));
+            continue;
+        }
+        if alternative.fields.len() > crate::query::MAX_FILTER_PREDICATES {
+            errors.push(Diagnostic::error(
+                "breg.access-profile.required-filters-too-many",
+                format!("{alternative_path}.fields"),
+                &format!(
+                    "this alternative names {} fields, more than the {} predicates one $filter may carry",
+                    alternative.fields.len(),
+                    crate::query::MAX_FILTER_PREDICATES
+                ),
+            ));
+        }
+        let fields = alternative
+            .fields
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        for field in alternative.fields.iter() {
+            if !access.filterable_fields.contains(field) {
+                errors.push(Diagnostic::error(
+                    "breg.access-profile.required-filters-field-not-filterable",
+                    format!("{alternative_path}.fields[field={field}]"),
+                    "a required filter field must also be one of the grant's filterableFields",
+                ));
+            }
+        }
+        if seen.contains(&fields) {
+            errors.push(Diagnostic::error(
+                "breg.access-profile.required-filters-duplicate",
+                alternative_path,
+                "this required filter alternative repeats an earlier one",
+            ));
+        } else {
+            seen.push(fields);
+        }
+    }
+}
+
 fn validate_spatial_queries(
     access: &AccessProfileSource,
     entity: &EntitySource,
@@ -6567,7 +6679,7 @@ fn validate_hooks(
                 "an entity hook runs after the triggering transaction commits; declare phase: after",
             ));
         }
-        if hook.projection.is_empty() {
+        if hook.projection.is_empty() && hook.trigger != EventTrigger::Read {
             errors.push(Diagnostic::error(
                 "breg.event.projection-empty",
                 format!("{hook_path}.projection"),
@@ -6888,6 +7000,8 @@ fn validate_event_condition(
                 EventTrigger::Tombstoned => {
                     changed.is_empty() && after_equals.is_empty() && after_is_null.is_empty()
                 }
+                // A read has no before or after state to test.
+                EventTrigger::Read => false,
             };
             if !compatible {
                 errors.push(Diagnostic::error(
@@ -7018,6 +7132,28 @@ pub(crate) fn valid_logical_destination_id(value: &str) -> bool {
 /// it against the compiled bound, so the compile-time proof measures the same
 /// document: the `data` object below plus the envelope wrapper
 /// [`maximum_envelope_wrapper_bytes`] covers.
+/// The worst-case canonical bytes of a read event's `access` member, key
+/// included, with the comma that precedes it. Requester, purpose and reason are
+/// each bounded to 512 bytes, the profile and operation ids to 256, and every
+/// string takes six bytes per byte plus quotes, which covers JSON's longest
+/// escape.
+fn maximum_read_access_bytes() -> u64 {
+    let keys = [
+        "accessProfile",
+        "operationId",
+        "requester",
+        "purpose",
+        "accessReason",
+        "accessLogEventId",
+    ];
+    let key_bytes: u64 = keys.iter().map(|key| key.len() as u64 + 3).sum();
+    let string = |bytes: u64| bytes * 6 + 2;
+    // `"access":` and its leading comma, then the object braces and the commas
+    // between its six members.
+    let member = ",\"access\":".len() as u64 + 2 + (keys.len() as u64 - 1);
+    member + key_bytes + string(256) + string(256) + string(512) + string(512) + string(512) + 38
+}
+
 fn maximum_event_payload_bytes<'a>(
     registry_id: &str,
     entity_id: &str,
@@ -7056,6 +7192,9 @@ fn maximum_event_payload_bytes<'a>(
             .checked_add(2)?,
     )?;
     total = total.checked_add(values)?;
+    if event.trigger == EventTrigger::Read {
+        total = total.checked_add(maximum_read_access_bytes())?;
+    }
     total.checked_add(maximum_envelope_wrapper_bytes(
         registry_id,
         entity_id,
@@ -7442,6 +7581,7 @@ fn validate_derived_assets(
                 ));
                 continue;
             };
+            let before = errors.len();
             validate_derived_sql(
                 derived,
                 sql,
@@ -7450,6 +7590,16 @@ fn validate_derived_assets(
                 &path,
                 errors,
             );
+            if errors.len() == before {
+                disclosure::validate_derived_reads(
+                    entity,
+                    derived,
+                    sql,
+                    &source_columns,
+                    sources,
+                    errors,
+                );
+            }
         }
     }
 }
@@ -7975,6 +8125,7 @@ fn compile_entities(
                 classification: source.classification,
                 access_requirements: source.access_requirements.clone(),
                 access_log: source.access_log.clone(),
+                disclosure_conditions: disclosure::compile_conditions(source),
                 geojson: source
                     .geojson
                     .as_ref()
@@ -8586,6 +8737,7 @@ fn read_path_query_operation(
         projection_fields,
         filter_fields,
         sort_fields,
+        required_filters: Vec::new(),
         allow_count: grant.allow_count,
         selector_fields: Vec::new(),
         read_path: Some(grant.path.clone()),
@@ -8708,6 +8860,18 @@ fn query_operation(
     {
         processing_fields.insert(geometry_field);
     }
+    // Only the list family carries the requirement: lookups, read paths and
+    // snapshots are other operations with their own bounds.
+    let required_filters = if matches!(
+        kind,
+        CompiledQueryKind::List | CompiledQueryKind::Current | CompiledQueryKind::AsOf
+    ) && selector_fields.is_empty()
+        && read_path.is_none()
+    {
+        required_filter_alternatives(entity, profile, &filter_fields, kind, errors)
+    } else {
+        Vec::new()
+    };
     let id = if !selector_fields.is_empty() {
         format!("records.{}.{}.lookup", entity.id, profile.id)
     } else {
@@ -8729,6 +8893,7 @@ fn query_operation(
         projection_fields,
         filter_fields,
         sort_fields,
+        required_filters,
         allow_count,
         selector_fields,
         read_path,
@@ -8737,6 +8902,53 @@ fn query_operation(
         spatial,
         temporal,
     })
+}
+
+/// The authored alternatives as field-id lists, each field checked against
+/// the operation's equality-capable filter fields.
+fn required_filter_alternatives(
+    entity: &CompiledEntity,
+    profile: &AccessProfileSource,
+    filter_fields: &[CompiledQueryFilterField],
+    kind: CompiledQueryKind,
+    errors: &mut Vec<Diagnostic>,
+) -> Vec<Vec<String>> {
+    let equality = filter_fields
+        .iter()
+        .filter(|field| {
+            field
+                .operators
+                .contains(&CompiledQueryFilterOperator::Equals)
+        })
+        .map(|field| field.field.as_str())
+        .collect::<BTreeSet<_>>();
+    for alternative in &profile.required_filters {
+        for field in &alternative.fields {
+            // A field outside filterableFields is reported by the profile
+            // validation, so this reports only a filterable field that
+            // equality cannot match. The `list` check stands for `current`
+            // and `as-of`, which compile from the same grant and filterable
+            // fields, and for the GIS collection, which is the `list` itself.
+            if kind == CompiledQueryKind::List
+                && profile.filterable_fields.contains(field)
+                && !equality.contains(field.as_str())
+            {
+                errors.push(Diagnostic::error(
+                    "breg.access-profile.required-filters-field-not-equality-filterable",
+                    format!(
+                        "recordTypes[id={}].accessProfiles[id={}].requiredFilters[field={field}]",
+                        entity.id, profile.id
+                    ),
+                    "a required filter field must be one that an eq filter can match",
+                ));
+            }
+        }
+    }
+    profile
+        .required_filters
+        .iter()
+        .map(|alternative| alternative.fields.iter().cloned().collect())
+        .collect()
 }
 
 fn canonical_spatial_span(value: &serde_json::Number) -> serde_json::Number {
@@ -9487,6 +9699,13 @@ fn reject_system_profile_id(id: &str, path: &str, errors: &mut Vec<Diagnostic>) 
             "breg.access-profile.system-id-reserved",
             path,
             "this profile identifier is reserved for the built-in Proposal executor",
+        ));
+    }
+    if id == "system-record-timer" {
+        errors.push(Diagnostic::error(
+            "breg.access-profile.system-id-reserved",
+            path,
+            "this profile identifier is reserved for the built-in record timer executor",
         ));
     }
 }

@@ -55,7 +55,7 @@ class _ProblemHandler(BaseHTTPRequestHandler):
                 "type": "https://id.registrystack.org/problems/registry-breg/write/outside-boundary",
                 "title": "Forbidden",
                 "status": 403,
-                "detail": "The resulting record falls outside the selected access profile's row boundary.",
+                "detail": "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition.",
                 "code": "write.outside-boundary",
                 "traceId": TRACE_ID,
             }

@@ -3,6 +3,7 @@
 //! Immutable configured events created inside the owning record transaction.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use registry_platform_hooks::delivery::DeliveryCapture;
@@ -23,7 +24,9 @@ use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::hooks::DELIVERY_SCHEMA;
 use crate::model::{
     CompiledEntity, CompiledEventDelivery, CompiledField, CompiledHookDeliveryMode,
+    CompiledRegistry,
 };
+use crate::postgres::ExpectedRegistryIdentity;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum OutboxError {
@@ -222,6 +225,8 @@ pub(crate) async fn insert_configured_events(
         let snapshot = match mutation.trigger {
             EventTrigger::Created | EventTrigger::Patched => mutation.after,
             EventTrigger::Tombstoned => mutation.before,
+            // Read events carry no record state, so a mutation never selects them.
+            EventTrigger::Read => None,
         }
         .ok_or(OutboxError::InvalidProjection)?;
         let values = projected_event_values(&entity.fields, &projection_fields, snapshot)?;
@@ -259,54 +264,262 @@ pub(crate) async fn insert_configured_events(
         let activated = delivery
             .map(|delivery| activate_delivery(delivery, destinations))
             .transpose()?;
-        let retention_milliseconds = i64::try_from(mutation.payload_retention.as_millis())
-            .ok()
-            .filter(|value| (86_400_000..=2_592_000_000).contains(value))
-            .ok_or(OutboxError::Unavailable)?;
-        // Capture time is written explicitly rather than left to the column
-        // default, because the envelope spells the same instant and payload
-        // expiry is measured from it.
-        let changed = transaction
-            .execute(
-                "INSERT INTO registry_internal.registry_outbox
-                     (event_id, event_type, trigger, entity_id, record_reference,
-                      record_revision, application_reference, package_revision, schema_fingerprint,
-                      payload, created_at, payload_expires_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                         $11::timestamptz + $12::bigint * interval '1 millisecond')",
-                &[
-                    &event_id,
-                    &event.id,
-                    &trigger_name(mutation.trigger),
-                    &mutation.entity_id,
-                    &mutation.record_reference,
-                    &mutation.record_revision,
-                    &mutation.application_reference,
-                    &mutation.package_revision,
-                    &mutation.schema_fingerprint,
-                    &payload,
-                    &created_at,
-                    &retention_milliseconds,
-                ],
-            )
-            .await
-            .map_err(|_| OutboxError::Unavailable)?;
-        if changed != 1 {
-            return Err(OutboxError::Unavailable);
-        }
-        if let Some(activated) = activated {
-            insert_hook_delivery(
-                transaction,
+        store_event(
+            transaction,
+            StoredEvent {
                 event_id,
-                HookCapture {
-                    activated: &activated,
+                event_type: &event.id,
+                trigger: mutation.trigger,
+                entity_id: mutation.entity_id,
+                record_reference: mutation.record_reference,
+                record_revision: mutation.record_revision,
+                application_reference: mutation.application_reference,
+                package_revision: mutation.package_revision,
+                schema_fingerprint: mutation.schema_fingerprint,
+                payload: &payload,
+                created_at,
+                payload_retention: mutation.payload_retention,
+                activated: activated.as_ref(),
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// What a read service needs to capture read alerts in the transaction that
+/// writes the access-log entries.
+#[derive(Clone)]
+pub(crate) struct ReadAlerts {
+    registry: Arc<CompiledRegistry>,
+    destinations: Option<Arc<ActivatedEventDestinationRegistry>>,
+    source: String,
+}
+
+impl ReadAlerts {
+    pub(crate) fn new(
+        registry: Arc<CompiledRegistry>,
+        destinations: Option<Arc<ActivatedEventDestinationRegistry>>,
+        package_id: &str,
+        instance_id: &str,
+    ) -> Self {
+        Self {
+            registry,
+            destinations,
+            source: crate::hooks::delivery_source(package_id, instance_id),
+        }
+    }
+}
+
+/// Who read, how and why: the `access` member of every read event.
+pub(crate) struct ReadAccess<'a> {
+    pub profile: &'a str,
+    pub operation_id: &'a str,
+    pub requester: &'a str,
+    pub purpose: Option<&'a str>,
+    pub access_reason: Option<&'a str>,
+}
+
+/// One access-log entry a read wrote, and the record it covers.
+pub(crate) struct LoggedRead<'a> {
+    pub record_id: &'a str,
+    pub access_log_event_id: &'a str,
+}
+
+/// Capture one event for each `read` hook that names the reading profile, for
+/// each logged read, in the transaction that wrote the access-log entries. A
+/// failure refuses the read with the entry. An event carries no record values.
+pub(crate) async fn insert_read_events(
+    transaction: &Transaction<'_>,
+    alerts: Option<&ReadAlerts>,
+    entity: &CompiledEntity,
+    identity: &ExpectedRegistryIdentity,
+    access: &ReadAccess<'_>,
+    reads: &[LoggedRead<'_>],
+) -> Result<(), OutboxError> {
+    let hooks = entity
+        .hooks
+        .values()
+        .filter(|hook| hook.trigger == EventTrigger::Read && hook.profiles.contains(access.profile))
+        .collect::<Vec<_>>();
+    if hooks.is_empty() || reads.is_empty() {
+        return Ok(());
+    }
+    let alerts = alerts.ok_or(OutboxError::Unavailable)?;
+    let registry = &alerts.registry;
+    let deliveries = crate::mutation::exact_entity_event_deliveries(registry, entity)
+        .map_err(|_| OutboxError::Unavailable)?;
+    let data_schemas = event_data_schemas(
+        registry.registry_id(),
+        entity,
+        EventTrigger::Read,
+        &deliveries,
+    )?;
+    let record_ids = reads.iter().map(|read| read.record_id).collect::<Vec<_>>();
+    // The event names the record's latest retained revision.
+    let latest = transaction
+        .query(
+            "SELECT DISTINCT ON (record_id) record_id::text, record_reference, record_revision
+               FROM registry_internal.registry_revisions
+              WHERE entity_id = $1 AND record_id = ANY($2::text[]::uuid[])
+              ORDER BY record_id, record_revision DESC",
+            &[&entity.id, &record_ids],
+        )
+        .await
+        .map_err(|_| OutboxError::Unavailable)?
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<_, String>(0),
+                (row.get::<_, String>(1), row.get::<_, i64>(2)),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let created_at = capture_time(transaction).await?;
+    let payload_retention = alerts
+        .destinations
+        .as_deref()
+        .map_or(Duration::from_secs(7 * 24 * 60 * 60), |destinations| {
+            destinations.payload_retention()
+        });
+    let binding = EnvelopeBinding {
+        source: &alerts.source,
+        data_schemas: &data_schemas,
+        causation: None,
+    };
+    for read in reads {
+        let (record_reference, record_revision) =
+            latest.get(read.record_id).ok_or(OutboxError::Unavailable)?;
+        for hook in &hooks {
+            let delivery = deliveries
+                .iter()
+                .find(|delivery| delivery.event_id == hook.id);
+            let event_id = Uuid::new_v4();
+            let envelope = capture_envelope(
+                &binding,
+                CapturedEvent {
+                    event_id,
+                    event_type: &hook.id,
+                    created_at: OffsetDateTime::from(created_at),
+                    subject: EventSubject::record(record_reference, *record_revision),
+                    data: json!({
+                        "recordType": entity.id,
+                        "recordId": read.record_id,
+                        "revision": record_revision,
+                        "trigger": trigger_name(EventTrigger::Read),
+                        "packageRevision": identity.package_digest,
+                        "values": {},
+                        "access": {
+                            "accessProfile": access.profile,
+                            "operationId": access.operation_id,
+                            "requester": access.requester,
+                            "purpose": access.purpose,
+                            "accessReason": access.access_reason,
+                            "accessLogEventId": read.access_log_event_id,
+                        },
+                    }),
+                },
+            )?;
+            let payload = envelope_payload(
+                &envelope,
+                delivery.map(|delivery| delivery.maximum_payload_bytes),
+            )?;
+            let activated = delivery
+                .map(|delivery| activate_delivery(delivery, alerts.destinations.as_deref()))
+                .transpose()?;
+            store_event(
+                transaction,
+                StoredEvent {
+                    event_id,
+                    event_type: &hook.id,
+                    trigger: EventTrigger::Read,
+                    entity_id: &entity.id,
+                    record_reference,
+                    record_revision: *record_revision,
+                    application_reference: None,
+                    package_revision: &identity.activation_id,
+                    schema_fingerprint: &identity.schema_fingerprint,
                     payload: &payload,
-                    package_revision: mutation.package_revision,
-                    schema_fingerprint: mutation.schema_fingerprint,
+                    created_at,
+                    payload_retention,
+                    activated: activated.as_ref(),
                 },
             )
             .await?;
         }
+    }
+    Ok(())
+}
+
+struct StoredEvent<'a> {
+    event_id: Uuid,
+    event_type: &'a str,
+    trigger: EventTrigger,
+    entity_id: &'a str,
+    record_reference: &'a str,
+    record_revision: i64,
+    application_reference: Option<&'a str>,
+    package_revision: &'a str,
+    schema_fingerprint: &'a str,
+    payload: &'a [u8],
+    created_at: SystemTime,
+    payload_retention: Duration,
+    activated: Option<&'a ActivatedDelivery<'a>>,
+}
+
+/// Write one captured event to the outbox, and its delivery when the hook
+/// declares a handler.
+async fn store_event(
+    transaction: &Transaction<'_>,
+    event: StoredEvent<'_>,
+) -> Result<(), OutboxError> {
+    let retention_milliseconds = i64::try_from(event.payload_retention.as_millis())
+        .ok()
+        .filter(|value| (86_400_000..=2_592_000_000).contains(value))
+        .ok_or(OutboxError::Unavailable)?;
+    // Capture time is written explicitly rather than left to the column
+    // default, because the envelope spells the same instant and payload
+    // expiry is measured from it.
+    let changed = transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_outbox
+                 (event_id, event_type, trigger, entity_id, record_reference,
+                  record_revision, application_reference, package_revision, schema_fingerprint,
+                  payload, created_at, payload_expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                     $11::timestamptz + $12::bigint * interval '1 millisecond')",
+            &[
+                &event.event_id,
+                &event.event_type,
+                &trigger_name(event.trigger),
+                &event.entity_id,
+                &event.record_reference,
+                &event.record_revision,
+                &event.application_reference,
+                &event.package_revision,
+                &event.schema_fingerprint,
+                &event.payload,
+                &event.created_at,
+                &retention_milliseconds,
+            ],
+        )
+        .await
+        .map_err(|_| OutboxError::Unavailable)?;
+    if changed != 1 {
+        return Err(OutboxError::Unavailable);
+    }
+    if let Some(activated) = event.activated {
+        insert_hook_delivery(
+            transaction,
+            event.event_id,
+            HookCapture {
+                activated,
+                payload: event.payload,
+                package_revision: event.package_revision,
+                schema_fingerprint: event.schema_fingerprint,
+            },
+        )
+        .await?;
     }
     Ok(())
 }
@@ -547,6 +760,7 @@ fn trigger_name(trigger: EventTrigger) -> &'static str {
         EventTrigger::Created => "created",
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
+        EventTrigger::Read => "read",
     }
 }
 

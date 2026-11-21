@@ -135,6 +135,7 @@ pub(super) fn finding_rank_for_code(code: &str) -> FindingRank {
             | "breg.access.profile-writable-row-boundary"
             | "breg.access.target-unrestricted-rows"
             | "breg.access-profile.task-grant-rows-unbound"
+            | "breg.disclosure.withheld-field-probe"
     ) {
         FindingRank::WidensAccess
     } else if code.starts_with("breg.record-type.list-unindexed-") {
@@ -1692,6 +1693,36 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
         "breg.query.temporal-field-not-readable" => "Add the temporal boundary fields to this profile's readableFields if these callers may see them; otherwise remove list and snapshot from its operations.",
         "breg.record-type.api-name-invalid" => "Set apiName to a unique upper camel case name using only ASCII letters and digits.",
         "breg.record-type.stored-field-unfillable" => "Add the field to a grant's writableFields, a fixed Action set, a function plan write, or an import permission, or remove the field.",
+        "breg.access-profile.required-filters-list-required" => "Add list to this permission's operations, or remove requiredFilters from it.",
+        "breg.access-profile.required-filters-too-many" => "Keep at most eight alternatives under requiredFilters, each naming at most 32 fields. Remove the ones that the others make redundant.",
+        "breg.access-profile.required-filters-empty" => "Give each alternative under requiredFilters at least one field, or remove the empty alternative.",
+        "breg.access-profile.required-filters-duplicate" => "Keep each field once per alternative, and each alternative once under requiredFilters.",
+        "breg.access-profile.required-filters-field-not-filterable" => "Add the field to this permission's filterableFields, or remove it from requiredFilters.",
+        "breg.access-profile.required-filters-field-not-equality-filterable" => "Choose a field whose type supports an eq filter, or remove it from requiredFilters.",
+        "breg.disclosure.too-many" => "Keep at most eight disclosureConditions on a record type. Merge conditions that share a withhold and exemptProfiles.",
+        "breg.disclosure.when-field-invalid" => "Name a stored, unencrypted boolean, string, text, vocabulary-code, int64, date or uuid field of this record type.",
+        "breg.disclosure.when-value-invalid" => "Give one to four predicates, and a non-null literal that fits the field type. A field-in predicate lists one to 32 values.",
+        "breg.disclosure.fields-invalid" => "List each withheld stored field once under fields when withhold is fields, and omit fields for record and history. A withheld field is optional and is not id.",
+        "breg.disclosure.exempt-profiles-invalid" => "Name at least one access profile under exemptProfiles, and only profiles the project declares.",
+        "breg.disclosure.withheld-field-exposed" => "Remove the withheld field from the profile's filterableFields, sortableFields, lookups, data export, hook projections or statistical dataset, or add the profile to exemptProfiles.",
+        "breg.disclosure.withheld-field-probe" => "Keep the field out of uniqueness constraints, unique encrypted lookups and temporal non-overlap keys, or accept this finding if the profiles that can create records of this type are trusted.",
+        "breg.disclosure.read-hook-access-log-required" => "Declare accessLog on the record type, so each logged read raises its alert, or remove the read hook.",
+        "breg.access-profile.access-reason-operation-unsupported" => "Remove import, invoke and start grants, allowDataExport, and the actions, proposals, datasets, externalViews and refreshExternalProjections permissions, from this profile, or drop requireAccessReason. The reason is checked on record reads and direct writes only.",
+        "breg.disclosure.spatial-query-withheld-geometry" => "Remove spatialQueries from the profile, or add the profile to exemptProfiles of the condition that withholds the geometry field.",
+        "breg.disclosure.derived-reads-withheld-field" => "Remove the derived fields from the profile's readableFields, filterableFields and sortableFields, stop the derived SQL reading the withheld field, or add the profile to exemptProfiles.",
+        "breg.disclosure.row-boundary-withheld-field" => "Bound the profile's rows by a field no condition withholds from it, or add the profile to exemptProfiles.",
+        "breg.disclosure.membership-boundary-withheld-field" => "Bound the profile's rows by a membership on a field no condition withholds from it, or add the profile to exemptProfiles.",
+        "breg.disclosure.consent-boundary-withheld-field" => "Point requireConsent on at a field no condition withholds from the profile, or add the profile to exemptProfiles.",
+        "breg.disclosure.timer-creates-readable-record" => "Have the timer's Action change only its own record, remove every read of the created Record type from the profile, or add the profile to exemptProfiles.",
+        "breg.disclosure.timer-reads-withheld-field" => "Time the Record timer, hold it and map its inputs from fields the condition does not withhold, or add every profile that reads the record type to exemptProfiles.",
+        "breg.disclosure.read-path-withheld-field" => "Remove the read path from the profile's permission, or add the profile to exemptProfiles of the condition that withholds the path's reference field.",
+        "breg.disclosure.evidence-fact-withheld-field" => "Export a fact field the condition does not withhold from the Evidence access profile, or add the profile to exemptProfiles.",
+        "breg.disclosure.external-view-withheld-field" => "Remove the link from the profile's external view grant, or add the profile to exemptProfiles of the condition that withholds the link's fromField.",
+        "breg.disclosure.external-refresh-withheld-root" => "Add the refresh profile to exemptProfiles of the record condition if the refresh should keep the records it matches current, or accept this finding to leave them out of the external source.",
+        "breg.disclosure.statistics-withheld-field" => "Stop the derived relation reading the withheld field of the dependency record type, or add every profile that reaches the dataset to exemptProfiles.",
+        "breg.disclosure.statistics-live-bound" => "Grant read-releases instead of read-live or read-exact, or add the profile to exemptProfiles of the record condition.",
+        "breg.disclosure.statistics-publisher-bound" => "Add the publishing profile to exemptProfiles of the record condition, so releases include every record.",
+        "breg.hook.read-trigger-invalid" => "For trigger read, name at least one declared access profile under profiles and write projection: []. Use profiles with no other trigger.",
         "breg.compile.later-checks-skipped" => "Correct the reported errors, then run bregctl check again to run the skipped checks.",
         "breg.action.handler-source-missing" | "breg.hook.handler-source-missing" | "breg.source.planner-asset-missing" => "Add the referenced Rhai source file at the authored project-relative path, then check again.",
         "breg.action.handler-parse" | "breg.hook.handler-parse" => "Correct the Rhai syntax at the reported line and column, then check again.",

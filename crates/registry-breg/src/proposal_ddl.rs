@@ -194,6 +194,7 @@ fn add_read_policies(
         )
     );
     result.push(DdlPolicy {
+        permissive: true,
         name: policy_name(
             action,
             entity,
@@ -211,6 +212,7 @@ fn add_read_policies(
     // PostgreSQL requires UPDATE permission for a row lock. This policy can
     // only lock the authorized row; it can never write through the read path.
     result.push(DdlPolicy {
+        permissive: true,
         name: policy_name(
             action,
             entity,
@@ -249,6 +251,7 @@ fn add_application_policies(
         frozen_read_target_expression(false)
     );
     result.push(DdlPolicy {
+        permissive: true,
         name: policy_name(
             action,
             entity,
@@ -264,6 +267,7 @@ fn add_application_policies(
         check_expression: None,
     });
     result.push(DdlPolicy {
+        permissive: true,
         name: policy_name(
             action,
             entity,
@@ -316,6 +320,7 @@ fn add_application_policies(
         );
         let suffix = operation_name(operation);
         result.push(DdlPolicy {
+            permissive: true,
             name: policy_name(
                 action,
                 entity,
@@ -336,6 +341,7 @@ fn add_application_policies(
             PolicyCommand::Update
         };
         result.push(DdlPolicy {
+            permissive: true,
             name: policy_name(action, entity, profile, "application", suffix, command),
             command,
             access_profile: profile.to_owned(),
@@ -499,6 +505,7 @@ fn add_system_policies(
         );
         for command in [PolicyCommand::Select, PolicyCommand::Update] {
             result.push(DdlPolicy {
+                permissive: true,
                 name: policy_name(action, entity, PROFILE, phase, "get", command),
                 command,
                 access_profile: PROFILE.to_owned(),
@@ -526,6 +533,7 @@ fn add_system_policies(
             frozen_target_expression(operation)
         );
         result.push(DdlPolicy {
+            permissive: true,
             name: policy_name(
                 action,
                 entity,
@@ -546,6 +554,7 @@ fn add_system_policies(
             PolicyCommand::Update
         };
         result.push(DdlPolicy {
+            permissive: true,
             name: policy_name(
                 action,
                 entity,

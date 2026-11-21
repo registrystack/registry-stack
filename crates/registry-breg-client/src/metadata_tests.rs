@@ -1210,6 +1210,51 @@ fn complete_descriptive_metadata_is_retained_and_spatial_is_optional() {
         .is_none());
 }
 
+#[test]
+fn required_filters_are_validated_and_exposed_on_the_query() {
+    let mut value = fixture();
+    value["operations"][2]["query"] = json!({
+        "kind": "list",
+        "selectableFields": [{"id": "legal-name", "apiName": "legalName"}],
+        "filterableFields": [], "sortableFields": [], "allowCount": false,
+        "defaultPageSize": 25, "maximumPageSize": 100, "maximumFilterClauses": 8,
+        "maximumInValues": 16,
+        "pagination": {"parameter": "$skiptoken", "responsePath": "pageInfo.nextCursor", "exclusive": true},
+        "temporal": null
+    });
+    value["operations"][2]["query"]["requiredFilters"] =
+        json!([{"fields": ["legalName"]}, {"fields": ["legalName", "legalName2"]}]);
+    let metadata = parse(&value);
+    let query = metadata
+        .operation("records.company.get")
+        .unwrap()
+        .query()
+        .unwrap();
+    assert_eq!(query.required_filters.len(), 2);
+    assert_eq!(
+        query.required_filters[1].fields,
+        ["legalName", "legalName2"]
+    );
+
+    for invalid in [
+        json!([]),
+        json!([{"fields": []}]),
+        json!([{"fields": ["not an api name"]}]),
+        json!({"fields": ["legalName"]}),
+    ] {
+        value["operations"][2]["query"]["requiredFilters"] = invalid.clone();
+        let error = BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap())
+            .expect_err(&format!("{invalid} is refused"));
+        assert!(
+            matches!(
+                error.kind(),
+                BRegMetadataErrorKind::Shape | BRegMetadataErrorKind::Identifier
+            ),
+            "{invalid}"
+        );
+    }
+}
+
 fn proposal_action_metadata() -> Value {
     let mut value = fixture();
     value["proposals"] = json!({"method":"GET","path":"/v1/proposals","accessProfiles":[],

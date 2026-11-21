@@ -79,6 +79,8 @@ pub(crate) struct PublicProblem {
     declared_constraint: Option<Box<crate::mutation::RowLocalConstraintViolation>>,
     timer_window_fields: Option<(String, String)>,
     statistical_detail: Option<(&'static str, &'static str)>,
+    /// The acceptable search criteria of a refused list, as API field names.
+    required_filters: Option<Vec<Vec<String>>>,
 }
 
 /// Build one value-free public problem. The boundary replaces this provisional
@@ -106,6 +108,7 @@ pub(crate) fn problem_response(
         declared_constraint: None,
         timer_window_fields: None,
         statistical_detail: None,
+        required_filters: None,
     };
     let mut response = Problem::new(&type_uri, title, status)
         .detail(detail)
@@ -141,6 +144,7 @@ pub(crate) fn problem_response_with_field_path(
         declared_constraint: None,
         timer_window_fields: None,
         statistical_detail: None,
+        required_filters: None,
     };
     let mut response = Problem::new(&type_uri, title, status)
         .detail(detail)
@@ -275,6 +279,27 @@ pub(crate) fn timer_window_response(at_field: String, not_after_field: String) -
     response
 }
 
+/// Refuse a list that did not pin one of the alternative search criteria its
+/// grant requires. The alternatives are API field names the caller already
+/// reads from the surface's `filterableFields`, so naming them discloses
+/// nothing further. `requiredFilters` carries them, and the detail stays the
+/// fixed description of the code, so it keeps within the documented bound.
+pub(crate) fn filter_required_response(alternatives: Vec<Vec<String>>) -> Response {
+    let code = crate::problem::ProblemCode::QueryFilterRequired;
+    let mut response = problem_response(
+        StatusCode::BAD_REQUEST,
+        code.title(),
+        code.description(),
+        code.code(),
+    );
+    response
+        .extensions_mut()
+        .get_mut::<PublicProblem>()
+        .expect("problem response carries public metadata")
+        .required_filters = Some(alternatives);
+    response
+}
+
 /// Observe a router that is not already owned by an outer correlation layer.
 /// Nested use is deliberately idempotent so the production timeout wrapper
 /// and focused test routers share one request ID and emit one log record.
@@ -377,6 +402,12 @@ pub(crate) fn finish_response(
                     object.insert("field".to_owned(), Value::String(field.clone()));
                 }
             }
+        }
+        if let Some(alternatives) = &problem.required_filters {
+            object.insert(
+                "requiredFilters".to_owned(),
+                serde_json::json!(alternatives),
+            );
         }
         if let Some((at_field, not_after_field)) = &problem.timer_window_fields {
             object.insert("atField".to_owned(), Value::String(at_field.clone()));

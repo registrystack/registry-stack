@@ -159,7 +159,9 @@ pub enum BRegProblemCode {
     ProposalReviewResultMismatch,
     ProposalSubmissionExpired,
     QueryCursorInvalid,
+    QueryFilterRequired,
     QueryInvalid,
+    RequestAccessReasonRequired,
     RequestInvalid,
     RequestTimeout,
     ResourceNotFound,
@@ -176,7 +178,7 @@ pub enum BRegProblemCode {
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 37] = [
         Self::ActionEvidenceFailed,
         Self::ActionGuardFailed,
         Self::ActionHandlerFailed,
@@ -198,7 +200,9 @@ impl BRegProblemCode {
         Self::ProposalReviewResultMismatch,
         Self::ProposalSubmissionExpired,
         Self::QueryCursorInvalid,
+        Self::QueryFilterRequired,
         Self::QueryInvalid,
+        Self::RequestAccessReasonRequired,
         Self::RequestInvalid,
         Self::RequestTimeout,
         Self::ResourceNotFound,
@@ -238,7 +242,9 @@ impl BRegProblemCode {
             Self::ProposalReviewResultMismatch => "proposal.review_result_mismatch",
             Self::ProposalSubmissionExpired => "proposal.submission_expired",
             Self::QueryCursorInvalid => "query.cursor_invalid",
+            Self::QueryFilterRequired => "query.filter_required",
             Self::QueryInvalid => "query.invalid",
+            Self::RequestAccessReasonRequired => "request.access_reason_required",
             Self::RequestInvalid => "request.invalid",
             Self::RequestTimeout => "request.timeout",
             Self::ResourceNotFound => "resource.not_found",
@@ -258,7 +264,11 @@ impl BRegProblemCode {
     #[must_use]
     pub const fn status(self) -> u16 {
         match self {
-            Self::QueryCursorInvalid | Self::QueryInvalid | Self::RequestInvalid => 400,
+            Self::QueryCursorInvalid
+            | Self::QueryFilterRequired
+            | Self::QueryInvalid
+            | Self::RequestAccessReasonRequired
+            | Self::RequestInvalid => 400,
             Self::ActionEvidenceFailed => 503,
             Self::ActionHandlerFailed => 500,
             Self::AuthenticationRefused => 401,
@@ -360,7 +370,13 @@ impl BRegProblemCode {
                 "The review result and application receipt of the submission are no longer retained."
             }
             Self::QueryCursorInvalid => "The query cursor is invalid.",
+            Self::QueryFilterRequired => {
+                "The list did not carry the search criteria its access profile requires."
+            }
             Self::QueryInvalid => "The query request is invalid.",
+            Self::RequestAccessReasonRequired => {
+                "The access profile requires a valid Registry-Access-Reason header."
+            }
             Self::RequestInvalid => "The request is invalid.",
             Self::RequestTimeout => "The request timed out.",
             Self::ResourceNotFound => "The requested resource was not found.",
@@ -384,7 +400,7 @@ impl BRegProblemCode {
             }
             Self::UnsupportedMediaType => "The request media type is not supported.",
             Self::WriteOutsideBoundary => {
-                "The resulting record falls outside the selected access profile's row boundary."
+                "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition."
             }
         }
     }
@@ -726,7 +742,7 @@ mod tests {
         assert_eq!(code.title(), "Forbidden");
         assert_eq!(
             code.detail(),
-            "The resulting record falls outside the selected access profile's row boundary."
+            "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition."
         );
     }
 

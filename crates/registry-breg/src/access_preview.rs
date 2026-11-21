@@ -58,6 +58,10 @@ pub struct AccessPreview {
     pub authority_issued: bool,
     pub row_values_disclosed: bool,
     pub effective_profile: Option<AccessProfileSource>,
+    /// The identifiers of the disclosure conditions that bind the profile, by
+    /// id. A condition's `when` literals are never shown here.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub disclosure_conditions: Vec<String>,
     /// The consent recipients the requester client acts for; empty for an
     /// unmapped or absent client, which fails every consent check closed.
     pub recipients: Vec<String>,
@@ -101,6 +105,16 @@ pub fn preview_access(
         authority_issued: false,
         row_values_disclosed: false,
         effective_profile: profile.cloned(),
+        disclosure_conditions: entity
+            .zip(profile)
+            .map(|(entity, profile)| {
+                crate::disclosure::plan(entity, &profile.id)
+                    .conditions()
+                    .iter()
+                    .map(|condition| condition.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default(),
         recipients: claims.recipients().iter().cloned().collect(),
     })
 }

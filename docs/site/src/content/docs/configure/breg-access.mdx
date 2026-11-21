@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-21"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -224,6 +224,79 @@ The key gives no profile any access.
     crates/registry-bregctl/src/starters.rs, facility-registry replacements;
     products/breg/examples/facility/registry.yaml. */}
 
+## Require search criteria for lists
+
+A grant that lets a profile `list` a Record type lets it browse every row the boundaries admit.
+When the caller should find a Record, not enumerate them, add `requiredFilters` to the grant. Each
+entry is an alternative set of fields, and a list must pin every field of at least one set with an
+`eq` filter:
+
+```diff lang="yaml" title="facility/registry.yaml" test-edit
+           readPaths:
+             - {path: operators, readableFields: [operator-code, status, jurisdiction]}
++          filterableFields: [facility-code, city, status]
++          requiredFilters:
++            - fields: [facility-code]
++            - fields: [city, status]
+           rowBoundaries:
+             - {field: jurisdiction, claim: jurisdiction, operator: equals}
+```
+
+With this grant, `GET /v1/records/facilities?$filter=facilityCode eq 'F-001'` runs, and so does
+a filter that pins both `city` and `status`. A list with no filter, or with only `city`, is refused
+with `400 query.filter_required` before any query runs. The response carries `requiredFilters`, the
+acceptable sets as API field names. Its `detail` is the fixed description of the code.
+
+An alternative counts as met only when the filter is a top-level `and` of predicates, brackets
+included, and every field of the alternative has an `eq` predicate with a non-null value. A predicate
+under `or` or `not` does not count, and neither do `ne`, comparisons, `in`, `startswith`, or a test for
+null. Other predicates may sit beside the required ones. `$count` is held to the same rule. A
+`$skiptoken` cursor carries the first page's filter under its signature, so a continuation page
+cannot drop or change it.
+
+`bregctl check` refuses a `requiredFilters` that:
+
+- names a field missing from the same grant's `filterableFields`
+  (`breg.access-profile.required-filters-field-not-filterable`);
+- names a field that cannot take an `eq` filter
+  (`breg.access-profile.required-filters-field-not-equality-filterable`);
+- sits on a grant without `list`
+  (`breg.access-profile.required-filters-list-required`);
+- has an empty alternative, repeats an alternative, has more than eight alternatives, or has an
+  alternative of more than 32 fields, the most predicates one `$filter` may carry
+  (`breg.access-profile.required-filters-empty`, `breg.access-profile.required-filters-duplicate`,
+  `breg.access-profile.required-filters-too-many`).
+
+Two mistakes are refused when the file is read. An empty `requiredFilters` gets
+`config.invalid-value`: omit the key to put no criteria on lists. A field repeated within one
+alternative gets `config.duplicate-item` at the repeat.
+
+Check the edited project:
+
+```sh
+bregctl check facility
+```
+
+```text test-excerpt
+0 errors, 4 warnings in 3 files
+```
+
+`requiredFilters` governs `list` only. That includes the paged collection reads that share its
+grant, such as a temporal `current` or `as-of` list and a GIS collection with `bbox`. It does not
+change lookups, a get, a read path, a bulk export, or a `snapshot` read. A profile that holds those
+grants can still enumerate through them, so grant them only where the caller may enumerate. The same
+metadata that lists `filterableFields` for a surface also lists its `requiredFilters`, so a client
+can ask for the right criteria before it searches. The ODRL export omits the grant's `list`
+permission, with the reason `required-filters`, and still exports its `get`.
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, required_filters_satisfied() and read_query();
+    crates/registry-breg/src/compiler.rs, validate_required_filters();
+    crates/registry-breg/src/problem.rs, QueryFilterRequired;
+    crates/registry-breg/tests/http_read_only.rs, a_list_that_pins_no_alternative_is_refused_before_any_query;
+    crates/registry-breg/tests/required_filters_compile.rs;
+    crates/registry-breg/src/odrl_export.rs, omission_reasons();
+    crates/registry-breg/tests/odrl_export.rs, a_grant_with_required_filters_omits_its_list_grant_only. */}
+
 ## Require a current membership
 
 A row boundary works when the Record carries the claim value it is compared with. Sometimes the
@@ -381,6 +454,250 @@ Action issues a consent.
     retired_consent_scopes; crates/registry-breg/src/consent.rs, breg.consent.require-read-only,
     breg.consent.require-clients and is_reserved_claim(); crates/registry-breg/src/model.rs,
     recipient_set(). */}
+
+## Withhold a record while a condition holds
+
+Some records need more protection while a flag is set: a person under witness protection, a case
+that is sealed, a field that is hidden once a status changes. `disclosureConditions` on a Record type
+withholds a record, its history or named fields from every access profile the condition does not
+exempt, for as long as the record's current values match. Each condition is keyed by its id:
+
+```yaml
+recordTypes:
+  case:
+    disclosureConditions:
+      sealed-case:
+        when:
+          - {type: field-equals, field: sealed, value: true}
+        withhold: record
+        exemptProfiles: [registrar]
+      hide-notes:
+        when:
+          - {type: field-in, field: status, values: [closed, archived]}
+        withhold: fields
+        fields: [notes]
+        exemptProfiles: [registrar, auditor]
+```
+
+`when` is one to four predicates, all of which must match. A predicate is `field-equals`,
+`field-in` (one to 32 values), `field-is-null` or `field-is-not-null`, on a stored, unencrypted
+field of type boolean, string, text, vocabulary code, `int64`, date or `uuid`. A literal is never
+null. An unset member counts as null. A Record type holds at most eight conditions.
+
+`withhold` picks what is hidden:
+
+| `withhold` | A profile the condition binds sees |
+| --- | --- |
+| `record` | No record. A get answers `404 resource.not_found`, identical to an absent record. A list, a count, a snapshot and a lookup leave it out. Its revisions answer as not found. |
+| `history` | The current record, but none of its revisions or snapshots, which answer as not found. |
+| `fields` | The record, with each field named under `fields` returned as `null`, on reads and on revisions. The member is present and null whether or not it holds a value, so the response does not show whether it was set. |
+
+A write response never carries a field a `fields` condition names for the profile, whatever the
+record's state. A JSON Patch `test` on such a field is refused like a test on a field that does not
+exist, so it cannot be used to guess the value.
+
+`exemptProfiles` names the profiles the condition never applies to. List at least one, and only
+profiles the project declares. A profile with no record grant on the Record type can be listed when
+an Action or Proposal permission of that profile targets the type, so it can write a marked record
+through the Action or the Proposal apply. The record timer, which runs under the reserved
+`system-record-timer` profile, is never withheld from, so a timer keeps firing on a record that is
+hidden from people. A timer may not read a field that a `fields` condition withholds from some
+profile, because what the timer writes would reveal it. For the same reason, a timer on a Record
+type with a `record` condition may not create a record that a profile the condition binds can read.
+
+### How a condition is evaluated
+
+The condition reads the record's current state at the moment of each request. Marking a record
+withholds it from the next read, and clearing the mark discloses it again, with no migration. On
+history surfaces the state is the latest retained revision, which equals the current row after every
+writer. A snapshot reference taken before a record was marked does not read it. PostgreSQL enforces a
+`record` condition as a restrictive row policy, so a query that forgets to apply it cannot read the
+row.
+
+A Create, Patch, immediate Action or Proposal applied by hand whose resulting record a `record`
+condition would hide from the writing profile is refused with `403 write.outside-boundary`. Give the
+profile that sets the mark an exemption. A Patch of a record the profile can no longer see answers
+`412 precondition.failed`, as for an absent record.
+
+### Who can lift a mark
+
+Only an exempt profile lifts a `fields` or `history` condition, or writes a field a `fields`
+condition withholds. When a condition that binds the writing profile matches a record, a write to
+that record is refused with `403 write.outside-boundary` in three cases:
+
+- The write names a field the condition lists under `fields`. Writing back the `null` a read showed
+  counts, so the answer is the same whether or not the field holds a value.
+- The write changes a field that a constraint checks together with a field the condition lists
+  under `fields`. That is another field of a uniqueness constraint, a field a partial uniqueness
+  constraint's `when` reads, the other side of a comparison, a scope field of a temporal
+  non-overlap, or a valid-time field. The conflict or failed check would otherwise answer whether
+  the withheld value matches a guess. Writing back the stored value is allowed.
+- The record would no longer match the condition afterwards, which would lift the mark.
+
+A bound profile can still set a mark and write any field a condition does not name. In the example
+above, a caseworker bound by `hide-notes` can close a case but cannot reopen it. The rule covers a
+Patch, each batch or import item, an immediate Action and a Proposal. It checks the profile that
+applies the change. An import item it refuses answers the generic `412 precondition.failed` instead
+of the 403, as import does for a row boundary. A Create has no earlier state, so this rule never
+refuses it.
+
+A bound profile also cannot tombstone a record that a condition binding it matches. A `fields` or
+`history` condition refuses the tombstone with `403 write.outside-boundary`. A `record` condition
+already hides the row, so the tombstone answers `412 precondition.failed`, as for an absent record.
+
+A Proposal review shows a withheld field as `null`, and applying a change set to a record that
+became withheld after submission is refused. A Proposal applied by hand is checked as a write by the
+profile that applies it. A Proposal applied automatically is checked against the profile that
+submitted the version being applied, which each submit records. An exempt submitter's automatic
+Proposal can make a change this rule refuses to a bound profile. A bound submitter's is refused
+wherever a write by that profile would be, and so is one whose submitting profile was removed or lost
+its exemption after submission. A version that records no submitting profile is checked against the
+reserved `system-proposal-apply` profile, which no condition exempts. A refused automatic Proposal
+leaves the record unchanged and ends `blocked` at that attempt, with the recovery `correct-input`.
+The reason is `attempts-exhausted` when that was its last attempt, and `application-refused`
+otherwise.
+
+The check against the submitter does not change who writes. An automatic application still reads and
+writes its targets under `system-proposal-apply`, which no condition can exempt. So an automatic
+Proposal cannot change a record that a `record` condition matches, even when its submitter is exempt:
+the target is absent to `system-proposal-apply`. Nor can it set a `record` mark: the condition's row
+policy refuses the marked record under that profile. Either way the attempt is refused as above. The
+Proposal ends `blocked` at that attempt with no retry scheduled, and the record is unchanged. Use an
+immediate Action instead, or have an exempt profile that holds the Proposal's `apply` operation apply
+it by hand.
+
+### What `bregctl check` refuses
+
+A condition that leaves a withheld value reachable through another surface fails the check, so the
+guarantee does not rest on remembering every route. For a profile a condition binds, the check
+refuses:
+
+- a `fields` condition that names a required field or `id`, or a condition with `fields` and a mode
+  other than `fields` (`breg.disclosure.fields-invalid`). A field named twice is refused with
+  `config.duplicate-item` when the file is read.
+- a withheld field in the profile's `filterableFields`, `sortableFields`, lookups, data export, hook
+  projections or statistical dataset (`breg.disclosure.withheld-field-exposed`);
+- a `when` field of an unsupported type, or a literal that does not fit it
+  (`breg.disclosure.when-field-invalid`, `breg.disclosure.when-value-invalid`);
+- more than eight conditions, or an empty or unknown `exemptProfiles` (`breg.disclosure.too-many`,
+  `breg.disclosure.exempt-profiles-invalid`);
+- spatial queries over a withheld geometry (`breg.disclosure.spatial-query-withheld-geometry`);
+- a derived field, row boundary, membership boundary, consent requirement, read path, Evidence fact
+  or external view link that reads a withheld field
+  (`breg.disclosure.derived-reads-withheld-field`, `breg.disclosure.row-boundary-withheld-field`,
+  `breg.disclosure.membership-boundary-withheld-field`,
+  `breg.disclosure.consent-boundary-withheld-field`, `breg.disclosure.read-path-withheld-field`,
+  `breg.disclosure.evidence-fact-withheld-field`,
+  `breg.disclosure.external-view-withheld-field`);
+- a Record timer whose `at`, `notAfter`, `rearmOn`, `when` or `fromField` input reads a withheld
+  field (`breg.disclosure.timer-reads-withheld-field`). The timer runs without the condition, so
+  its Action, or the moment it fires, would reveal the value;
+- a Record timer on a Record type with a `record` condition whose Action creates a record the profile
+  reads (`breg.disclosure.timer-creates-readable-record`). The created record would carry the id of
+  a hidden record, and any value the timer maps from it;
+- a statistical dataset that would count or read a withheld record or field
+  (`breg.disclosure.statistics-withheld-field`, `breg.disclosure.statistics-live-bound`,
+  `breg.disclosure.statistics-publisher-bound`). See
+  [Disclosure conditions](../breg-statistics/#disclosure-conditions) for datasets;
+- the reserved profile id `system-record-timer`.
+
+These refusals hold whatever the profiles:
+
+- A change hook (`created`, `patched` or `tombstoned`) on a Record type with a `record` or `history`
+  condition (`breg.disclosure.withheld-field-exposed`). A change hook must project at least one
+  field and its destinations hold no access profile, so such a Record type declares no change hook
+  at all.
+- A `trigger: read` hook on a Record type without `accessLog`
+  (`breg.disclosure.read-hook-access-log-required`). The read alert is written with the subject
+  access log entry, so it would never fire.
+
+A `record` condition also binds the profile that refreshes an external view of its Record type. The
+refresh lists the view's root records under that profile, so a bound profile skips the records the
+condition matches and the sweep still succeeds: their external projections and labels are not
+fetched or kept current. That can be what you want, because it keeps protected subjects' keys away
+from the external source. `bregctl check` reads the project, not the runtime refresh plans, so it
+warns about each profile that holds `refreshExternalProjections` for one of the view's projections,
+may List its root, and is bound by a `record` condition on that root
+(`breg.disclosure.external-refresh-withheld-root`). It can therefore warn about a profile that no
+plan uses as its worker. The check fails under `--deny-warnings` until
+you add the profile to `exemptProfiles`, so the refresh covers those records, or
+[accept the finding](../../reference/configuration-files/#accept-an-intentional-project-warning) to
+leave them out.
+
+`bregctl explain access` lists each condition in full, `when` literals included, for the author. The
+runtime metadata a caller reads flags `mayBeWithheld` on a field and names the bound conditions by
+`id` and mode, and never carries the literals. The ODRL export omits a grant a condition binds, with
+the reason `disclosure-condition`.
+
+### What a condition does not hide
+
+Four limits are inherent to what a write has to check, and a fifth follows from how history works.
+Design around them.
+
+- A Proposal's inputs stay visible to its reviewers. A reviewer sees what the author typed, even for
+  a field the reviewer's own profile would not read on the record.
+- A Create or Patch can confirm a hidden value. A Create, or a Patch of another record, that repeats
+  a unique value of a record a `record` condition withholds answers `409 mutation.conflict`, which
+  shows that the hidden record exists. For a field a `fields` condition withholds, a Create or a
+  Patch of another record that repeats its value answers the same `409` when the field belongs to a
+  uniqueness constraint, has a unique encrypted lookup, or is in a temporal non-overlap. That
+  confirms the value exists on a hidden record. A field a partial uniqueness constraint's `when`
+  reads answers in the same way: a repeated unique value conflicts only when the hidden record's
+  field meets the predicate. `bregctl check` warns about the `fields` case with
+  `breg.disclosure.withheld-field-probe`, ranked as widening access,
+  so the check fails under `--deny-warnings` until you
+  [accept the finding](../../reference/configuration-files/#accept-an-intentional-project-warning).
+  Keep the field out of the constraint, or accept the finding if the profiles that can create or
+  patch these records are trusted.
+  A Patch of the marked record itself cannot probe its withheld value this way, because the rule in
+  [Who can lift a mark](#who-can-lift-a-mark) refuses it.
+- A refused write can reveal that a condition matches. The `403 write.outside-boundary` a bound
+  profile meets tells it that a condition holds for this record. A `null` it read is then known to
+  be withheld rather than unset.
+- A write that sets a reference can reveal that a withheld record exists, because the database
+  checks that the target is there.
+- `withhold: history` on a record the caller can read answers its revisions as not found. A client
+  that expects the current revision to appear in the history sees it missing.
+
+{/* Evidence: crates/registry-breg/src/disclosure.rs;
+    crates/registry-breg/src/compiler/disclosure.rs and compiler/disclosure/reach.rs;
+    crates/registry-breg/tests/disclosure_compile.rs;
+    crates/registry-breg/tests/disclosure/fields.rs, history.rs, proposals.rs, records.rs and
+    writes.rs;
+    crates/registry-breg/tests/disclosure_exposure.rs;
+    crates/registry-breg/tests/http_read_only.rs,
+    metadata_flags_a_field_that_may_be_withheld_without_the_condition_literals. */}
+
+## Require a reason for each read
+
+Add `requireAccessReason: true` to an access profile when each use of it must state why. Every
+request under the profile must then carry a `Registry-Access-Reason` header, the reason as UTF-8 text
+encoded as unpadded base64url. The text is at most 512 bytes, not blank, and has no control
+character. A request without a valid header is refused with `400 request.access_reason_required`
+before any record is read. The reason is stored on the subject access log entry and carried by a
+read alert, so a reviewer can ask why. See
+[Record why a record was read or written](../../operate/breg-access-log/#record-why-a-record-was-read-or-written).
+
+The reason is checked on record reads and direct writes only. A direct Create, Patch, Batch or
+Tombstone under the profile must carry the header. On a Record type with `accessLog`, each record it
+changes gets a subject access log entry with `accessKind: write` and the reason, written in the same
+transaction. On a Record type without `accessLog` the header is still required, but nothing stores
+the reason. `bregctl check` refuses the key on a profile that grants import, invoke or start
+operations, bulk data export, or an action, proposal, dataset, external view or projection-refresh
+permission, because those paths do not check it
+(`breg.access-profile.access-reason-operation-unsupported`). Bulk export is refused even though it
+would only fail at run time: its list calls send no reason, so every page would be refused. The ODRL
+export omits every grant of such a profile, with the reason `access-reason`, because ODRL has no
+term for the header.
+
+{/* Evidence: crates/registry-breg/src/api/context.rs bind_access_reason;
+    crates/registry-breg/src/subject_access_log.rs access_reason;
+    crates/registry-breg/src/compiler/disclosure.rs, validate_access_reason_operations and
+    validate_module_access_reason_operations;
+    crates/registry-breg/src/odrl_export.rs, omission_reasons;
+    crates/registry-breg/tests/disclosure_compile.rs;
+    crates/registry-breg/tests/odrl_export.rs,
+    a_profile_that_requires_an_access_reason_omits_the_complete_read_grant. */}
 
 ## What a reader meets when a check fails
 

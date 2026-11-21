@@ -62,6 +62,7 @@ pub struct PostgresRecordReadService {
     cursors: Arc<CursorCodec>,
     fault: ReadFaultControl,
     field_encryption: Option<Arc<FieldEncryptionService>>,
+    read_alerts: Option<crate::outbox::ReadAlerts>,
     #[cfg(feature = "postgres-test")]
     query_plan: Option<Arc<std::sync::Mutex<Vec<Value>>>>,
 }
@@ -87,6 +88,7 @@ impl PostgresRecordReadService {
             cursors,
             fault: ReadFaultControl::Disabled,
             field_encryption: None,
+            read_alerts: None,
             #[cfg(feature = "postgres-test")]
             query_plan: None,
         }
@@ -98,6 +100,24 @@ impl PostgresRecordReadService {
     #[must_use]
     pub fn with_field_encryption(mut self, service: Arc<FieldEncryptionService>) -> Self {
         self.field_encryption = Some(service);
+        self
+    }
+
+    /// Bind the destinations read alerts are captured under, and the runtime
+    /// instance they name as their source. A read by a profile a `read` hook
+    /// names is refused when this is not bound.
+    #[must_use]
+    pub fn with_event_destinations(
+        mut self,
+        destinations: Option<Arc<crate::event_destination::ActivatedEventDestinationRegistry>>,
+        instance_id: &str,
+    ) -> Self {
+        self.read_alerts = Some(crate::outbox::ReadAlerts::new(
+            Arc::clone(&self.registry),
+            destinations,
+            &self.expected.package_id,
+            instance_id,
+        ));
         self
     }
 
@@ -430,7 +450,14 @@ impl PostgresRecordReadService {
         } else {
             ReadRelations::collection(&plan.entity, query, &selected_fields)?
         };
-        let projection = projection(&plan.entity, &relations, &selected_fields, query)?;
+        let mut projection = projection(&plan.entity, &relations, &selected_fields, query)?;
+        let disclosure = crate::disclosure::plan(&plan.entity, claims.access_profile());
+        let field_conditions = field_withholding_conditions(&disclosure);
+        for (index, condition) in field_conditions.iter().enumerate() {
+            let when = disclosure_when_sql(&plan.entity, &relations, condition)?;
+            let column = disclosure_flag_column(index);
+            projection.push_str(&format!(", {when} AS \"{column}\""));
+        }
         let limit =
             i64::try_from(request.maximum_records).map_err(|_| ReadServiceError::Unavailable)?;
         let mut total_count = None;
@@ -547,10 +574,15 @@ impl PostgresRecordReadService {
         };
         let rows = rows
             .iter()
-            .map(|row| row_to_record(row, &plan.entity, &selected_fields))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|row| {
+                let mut record = row_to_record(row, &plan.entity, &selected_fields)?;
+                withhold_disclosed_fields(row, &plan.entity, &field_conditions, &mut record)?;
+                Ok(record)
+            })
+            .collect::<Result<Vec<_>, ReadServiceError>>()?;
         crate::subject_access_log::record_reads(
             transaction.transaction(),
+            self.read_alerts.as_ref(),
             &plan.entity,
             &request.entity_id,
             &request.context,
@@ -2952,6 +2984,80 @@ fn cursor_sort_value(value: Value) -> Option<String> {
         Value::String(value) => Some(value),
         Value::Array(_) | Value::Object(_) => None,
     }
+}
+
+/// The `fields` conditions that bind the caller's profile.
+fn field_withholding_conditions<'a>(
+    disclosure: &'a crate::disclosure::DisclosurePlan<'a>,
+) -> Vec<&'a crate::model::CompiledDisclosureCondition> {
+    disclosure
+        .conditions()
+        .iter()
+        .copied()
+        .filter(|condition| {
+            matches!(
+                condition.withhold,
+                crate::model::DisclosureWithhold::Fields(_)
+            )
+        })
+        .collect()
+}
+
+/// `when` of one condition over the row the read selects from, two-valued.
+fn disclosure_when_sql(
+    entity: &CompiledEntity,
+    relations: &ReadRelations,
+    condition: &crate::model::CompiledDisclosureCondition,
+) -> Result<String, ReadServiceError> {
+    let failed = std::cell::Cell::new(false);
+    let sql = crate::disclosure::when_sql(entity, &condition.when, &|field| match relations
+        .field_expression(entity, field)
+    {
+        Ok(expression) => expression.sql,
+        Err(_) => {
+            failed.set(true);
+            String::new()
+        }
+    });
+    if failed.get() {
+        return Err(ReadServiceError::Unavailable);
+    }
+    Ok(sql)
+}
+
+/// Null the members a matching `fields` condition withholds, so a withheld
+/// member reads like one the record never set and the response shape does not
+/// reveal the condition. A member the profile does not select stays absent.
+/// Each condition flag is read by its column name.
+fn withhold_disclosed_fields(
+    row: &tokio_postgres::Row,
+    entity: &CompiledEntity,
+    conditions: &[&crate::model::CompiledDisclosureCondition],
+    record: &mut RecordEnvelope,
+) -> Result<(), ReadServiceError> {
+    for (index, condition) in conditions.iter().enumerate() {
+        let matched = row
+            .try_get::<_, bool>(disclosure_flag_column(index).as_str())
+            .map_err(|_| ReadServiceError::Unavailable)?;
+        let crate::model::DisclosureWithhold::Fields(fields) = &condition.withhold else {
+            continue;
+        };
+        if matched {
+            for field_id in fields {
+                if let Some(member) = compiled_api_name(entity, field_id)
+                    .and_then(|api_name| record.data.get_mut(api_name))
+                {
+                    *member = Value::Null;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The column alias of the `index`th field-withholding condition flag.
+fn disclosure_flag_column(index: usize) -> String {
+    format!("__breg_disclosure_{index}")
 }
 
 fn row_to_record(

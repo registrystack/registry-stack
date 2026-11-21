@@ -43,7 +43,9 @@ pub enum ProblemCode {
     ProposalReviewResultMismatch,
     ProposalSubmissionExpired,
     QueryCursorInvalid,
+    QueryFilterRequired,
     QueryInvalid,
+    RequestAccessReasonRequired,
     RequestInvalid,
     RequestTimeout,
     ResourceNotFound,
@@ -83,7 +85,9 @@ impl ProblemCode {
         Self::ProposalReviewResultMismatch,
         Self::ProposalSubmissionExpired,
         Self::QueryCursorInvalid,
+        Self::QueryFilterRequired,
         Self::QueryInvalid,
+        Self::RequestAccessReasonRequired,
         Self::RequestInvalid,
         Self::RequestTimeout,
         Self::ResourceNotFound,
@@ -125,7 +129,9 @@ impl ProblemCode {
         Self::ProposalReviewResultMismatch,
         Self::ProposalSubmissionExpired,
         Self::QueryCursorInvalid,
+        Self::QueryFilterRequired,
         Self::QueryInvalid,
+        Self::RequestAccessReasonRequired,
         Self::RequestInvalid,
         Self::RequestTimeout,
         Self::ResourceNotFound,
@@ -164,7 +170,9 @@ impl ProblemCode {
             Self::ProposalReviewResultMismatch => "proposal.review_result_mismatch",
             Self::ProposalSubmissionExpired => "proposal.submission_expired",
             Self::QueryCursorInvalid => "query.cursor_invalid",
+            Self::QueryFilterRequired => "query.filter_required",
             Self::QueryInvalid => "query.invalid",
+            Self::RequestAccessReasonRequired => "request.access_reason_required",
             Self::RequestInvalid => "request.invalid",
             Self::RequestTimeout => "request.timeout",
             Self::ResourceNotFound => "resource.not_found",
@@ -185,7 +193,11 @@ impl ProblemCode {
     #[must_use]
     pub const fn status(self) -> u16 {
         match self {
-            Self::QueryCursorInvalid | Self::QueryInvalid | Self::RequestInvalid => 400,
+            Self::QueryCursorInvalid
+            | Self::QueryFilterRequired
+            | Self::QueryInvalid
+            | Self::RequestAccessReasonRequired
+            | Self::RequestInvalid => 400,
             Self::AuthenticationRefused => 401,
             Self::IngestionProfileMismatch | Self::WriteOutsideBoundary => 403,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
@@ -276,7 +288,13 @@ impl ProblemCode {
                 "The review result and application receipt of the submission are no longer retained."
             }
             Self::QueryCursorInvalid => "The query cursor is invalid.",
+            Self::QueryFilterRequired => {
+                "The list did not carry the search criteria its access profile requires."
+            }
             Self::QueryInvalid => "The query request is invalid.",
+            Self::RequestAccessReasonRequired => {
+                "The access profile requires a valid Registry-Access-Reason header."
+            }
             Self::RequestInvalid => "The request is invalid.",
             Self::RequestTimeout => "The request timed out.",
             Self::ResourceNotFound => "The requested resource was not found.",
@@ -300,7 +318,7 @@ impl ProblemCode {
             }
             Self::UnsupportedMediaType => "The request media type is not supported.",
             Self::WriteOutsideBoundary => {
-                "The resulting record falls outside the selected access profile's row boundary."
+                "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition."
             }
         }
     }
