@@ -1694,7 +1694,7 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
         "breg.record-type.api-name-invalid" => "Set apiName to a unique upper camel case name using only ASCII letters and digits.",
         "breg.record-type.stored-field-unfillable" => "Add the field to a grant's writableFields, a fixed Action set, a function plan write, or an import permission, or remove the field.",
         "breg.access-profile.required-filters-list-required" => "Add list to this permission's operations, or remove requiredFilters from it.",
-        "breg.access-profile.required-filters-too-many" => "Keep at most eight alternatives under requiredFilters. Remove the ones that the others make redundant.",
+        "breg.access-profile.required-filters-too-many" => "Keep at most eight alternatives under requiredFilters, each naming at most 32 fields. Remove the ones that the others make redundant.",
         "breg.access-profile.required-filters-empty" => "Give requiredFilters at least one alternative, and each alternative at least one field, or remove requiredFilters.",
         "breg.access-profile.required-filters-duplicate" => "Keep each field once per alternative, and each alternative once under requiredFilters.",
         "breg.access-profile.required-filters-field-not-filterable" => "Add the field to this permission's filterableFields, or remove it from requiredFilters.",

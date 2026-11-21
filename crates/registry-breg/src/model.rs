@@ -1890,6 +1890,29 @@ impl CompiledQueryOperation {
                 .is_some())
         .then(|| format!("{}.{}", self.entity_id, self.profile_id))
     }
+
+    /// The required field sets under the names a caller writes in `$filter`:
+    /// the API field names of `entity`, the record type the operation answers
+    /// with.
+    pub(crate) fn required_filter_api_names(&self, entity: &CompiledEntity) -> Vec<Vec<String>> {
+        self.required_filters
+            .iter()
+            .map(|alternative| {
+                alternative
+                    .iter()
+                    .map(|field_id| {
+                        entity
+                            .stored_fields
+                            .iter()
+                            .map(|field| &field.logical)
+                            .chain(entity.derived_fields.values().map(|field| &field.logical))
+                            .find(|field| field.id == *field_id)
+                            .map_or_else(|| field_id.clone(), |field| field.api_name.clone())
+                    })
+                    .collect()
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

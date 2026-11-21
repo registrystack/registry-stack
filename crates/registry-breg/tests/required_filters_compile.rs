@@ -150,6 +150,36 @@ fn invalid_required_filters_are_refused_with_a_code_and_path() {
 }
 
 #[test]
+fn an_alternative_no_filter_can_carry_is_refused() {
+    // A `$filter` holds at most 32 predicates, so an alternative of 33 fields
+    // could never be met.
+    let fields = (0..33)
+        .map(|index| format!("code-{index}"))
+        .collect::<Vec<_>>();
+    let mut value = source(json!([{"fields": fields}]), json!(["list"]));
+    let person = &mut value["recordTypes"]["person"];
+    for field in &fields {
+        person["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id": field,
+            "type": "string", "maximumLength": 32, "classification": "internal"}));
+    }
+    let grant = &mut value["accessProfiles"]["registrar"]["permissions"]["records"][0];
+    grant["readableFields"] = json!(fields);
+    grant["filterableFields"] = json!(fields);
+    let found = refusal(&value);
+    let expected = (
+        "breg.access-profile.required-filters-too-many".to_owned(),
+        "recordTypes[id=person].accessProfiles[id=registrar].requiredFilters[0].fields".to_owned(),
+    );
+    assert!(
+        found.contains(&expected),
+        "expected {expected:?}, got {found:?}"
+    );
+}
+
+#[test]
 fn a_repeated_field_inside_an_alternative_is_refused_by_the_reader() {
     let value = source(
         json!([{"fields":["national-id","national-id"]}]),

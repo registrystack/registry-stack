@@ -6293,7 +6293,7 @@ fn validate_single_default(
 }
 
 /// The most alternative field sets one grant may require.
-const MAXIMUM_REQUIRED_FILTER_ALTERNATIVES: usize = 8;
+pub(crate) const MAXIMUM_REQUIRED_FILTER_ALTERNATIVES: usize = 8;
 
 fn validate_required_filters(
     access: &AccessProfileSource,
@@ -6334,6 +6334,17 @@ fn validate_required_filters(
                 "a required filter alternative must name at least one field",
             ));
             continue;
+        }
+        if alternative.fields.len() > crate::query::MAX_FILTER_PREDICATES {
+            errors.push(Diagnostic::error(
+                "breg.access-profile.required-filters-too-many",
+                format!("{alternative_path}.fields"),
+                &format!(
+                    "this alternative names {} fields, more than the {} predicates one $filter may carry",
+                    alternative.fields.len(),
+                    crate::query::MAX_FILTER_PREDICATES
+                ),
+            ));
         }
         let fields = alternative
             .fields

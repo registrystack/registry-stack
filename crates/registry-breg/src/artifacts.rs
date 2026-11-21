@@ -3368,18 +3368,22 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
         "200"
     };
     let mut responses = Map::from_iter([(success_status.to_owned(), success)]);
+    let required_filters = example_required_filters(spec);
     for (status, problems) in problem_responses(
         spec.route.operation,
         operation_may_refuse_write(spec),
-        operation_may_require_filter(spec),
+        required_filters.is_some(),
     ) {
         let examples = problems
             .iter()
             .map(|problem| {
-                (
-                    problem.code.to_owned(),
-                    json!({"value": problem_example(status, problem.code, problem.detail)}),
-                )
+                let mut value = problem_example(status, problem.code, problem.detail);
+                if problem.code == FILTER_REQUIRED.code {
+                    if let Some(required_filters) = &required_filters {
+                        value["requiredFilters"] = json!(required_filters);
+                    }
+                }
+                (problem.code.to_owned(), json!({"value": value}))
             })
             .collect::<Map<_, _>>();
         responses.insert(
@@ -4027,6 +4031,11 @@ struct ProblemExample {
     detail: &'static str,
 }
 
+const FILTER_REQUIRED: ProblemExample = ProblemExample {
+    code: crate::problem::ProblemCode::QueryFilterRequired.code(),
+    detail: crate::problem::ProblemCode::QueryFilterRequired.description(),
+};
+
 const WRITE_OUTSIDE_BOUNDARY: ProblemExample = ProblemExample {
     code: "write.outside-boundary",
     detail: "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition.",
@@ -4065,12 +4074,15 @@ fn operation_may_refuse_write(spec: OpenApiOperationSpec<'_>) -> bool {
     }
 }
 
-/// Whether a list by a profile the document describes may be refused for want
-/// of the search criteria the profile's grant requires.
-fn operation_may_require_filter(spec: OpenApiOperationSpec<'_>) -> bool {
+/// The search criteria a list by a profile the document describes must carry,
+/// as the API field names the refusal names: those of the first such profile
+/// whose grant requires any. `None` when no described profile's grant does,
+/// so the list is never refused for want of search criteria.
+fn example_required_filters(spec: OpenApiOperationSpec<'_>) -> Option<Vec<Vec<String>>> {
     query_profiles_for_route(spec.route, spec.query, spec.access_profiles)
         .iter()
-        .any(|operation| !operation.required_filters.is_empty())
+        .find(|operation| !operation.required_filters.is_empty())
+        .map(|operation| operation.required_filter_api_names(spec.response_entity))
 }
 
 fn problem_responses(
@@ -4131,10 +4143,7 @@ fn problem_responses(
         ]);
     }
     if operation == Operation::List && may_require_filter {
-        responses.entry("400").or_default().push(ProblemExample {
-            code: "query.filter_required",
-            detail: "The list did not carry the search criteria its access profile requires.",
-        });
+        responses.entry("400").or_default().push(FILTER_REQUIRED);
     }
     if operation == Operation::Lookup {
         responses.entry("404").or_default().push(ProblemExample {
@@ -4251,6 +4260,18 @@ fn problem_schema() -> Value {
             "field": {"type": "string", "minLength": 1, "maxLength": 128},
             "atField": {"type": "string", "minLength": 1, "maxLength": 128},
             "notAfterField": {"type": "string", "minLength": 1, "maxLength": 128},
+            "requiredFilters": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": crate::compiler::MAXIMUM_REQUIRED_FILTER_ALTERNATIVES,
+                "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": crate::query::MAX_FILTER_PREDICATES,
+                    "uniqueItems": true,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 64}
+                }
+            },
             "code": {
                 "type": "string",
                 "enum": crate::problem::ProblemCode::DOCUMENTED
