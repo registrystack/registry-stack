@@ -103,12 +103,12 @@ pub fn phone_project() -> Value {
           "kind":"BRegProject",
           "project":{"id":"wasm-template-proof","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "datasets":{"proof-dataset": {}},
-          "recordTypes":[{
-            "id":"person","primaryDataset":"proof-dataset","route":"people","mutationMode":"mutable",
+          "recordTypes":{"person": {
+            "primaryDataset":"proof-dataset","route":"people","mutationMode":"mutable",
             "fields":[
               {"id":"phone","apiName":"phone","type":"string","maximumLength":32,"required":true,"classification":"restricted"}
             ]
-          }],
+          }},
           "functions":{"phone-plan": {"runtime":"wasm","source":"wasm/handler.wasm","entrypoint":"handle","abi":"registry.action-plan/v1"}},
           "actions":{"normalize-phone": {"execution":{"mode":"immediate"},
             "inputs":[
