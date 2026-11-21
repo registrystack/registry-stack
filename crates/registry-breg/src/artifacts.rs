@@ -1771,27 +1771,31 @@ fn invoke_may_refuse_write(
 }
 
 /// Whether the plan of `action`, written as `profile_id`, may be refused as
-/// outside what the profile may write: a condition that withholds fields or
-/// history binds the profile on a record type the plan patches. The plan
-/// Patch is then refused when it would lift a mark or overwrite a withheld
-/// field. The check passes over a `record` condition, and a plan Create
-/// meets no condition check.
+/// outside what the profile may write, as `operation_may_refuse_write`
+/// decides for a record route. A plan Create is refused when a bound
+/// `record` condition withholds the state it writes. A plan Patch is refused
+/// when any bound condition applies: a `record` condition that withholds the
+/// resulting state, or a `fields` or `history` condition whose mark the
+/// Patch would lift or whose withheld field it would overwrite.
 pub(crate) fn action_may_refuse_write(
     action: &CompiledAction,
     entities: &BTreeMap<String, CompiledEntity>,
     profile_id: &str,
 ) -> bool {
-    action
-        .effects
-        .iter()
-        .filter(|effect| effect.operation == Operation::Patch)
-        .filter_map(|effect| entities.get(&effect.target.entity_id))
-        .any(|entity| {
-            crate::disclosure::plan(entity, profile_id)
+    action.effects.iter().any(|effect| {
+        let Some(entity) = entities.get(&effect.target.entity_id) else {
+            return false;
+        };
+        let disclosure = crate::disclosure::plan(entity, profile_id);
+        match effect.operation {
+            Operation::Create => disclosure
                 .conditions()
                 .iter()
-                .any(|condition| !matches!(condition.withhold, DisclosureWithhold::Record))
-        })
+                .any(|condition| matches!(condition.withhold, DisclosureWithhold::Record)),
+            Operation::Patch => !disclosure.is_empty(),
+            _ => false,
+        }
+    })
 }
 
 fn action_operation_responses(

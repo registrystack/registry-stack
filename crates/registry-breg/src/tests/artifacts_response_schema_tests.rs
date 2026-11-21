@@ -1092,6 +1092,121 @@ fn compiled_bound_writer_registry() -> CompiledRegistry {
 }
 
 #[test]
+fn a_caller_document_declares_a_record_condition_write_refusal_to_a_bound_writer() {
+    for effect in ["patch", "create"] {
+        let registry = compiled_record_condition_writer_registry(effect);
+        let action = registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == "write-person")
+            .expect("compiled action exists");
+        let route = registry
+            .actions()
+            .routes
+            .iter()
+            .find(|route| route.id == "actions.write-person.invoke")
+            .expect("compiled invoke route exists");
+        for (profile, declared) in [("registrar", true), ("officer", false)] {
+            let operation = super::openapi_action_operation(
+                route,
+                action,
+                registry.entities(),
+                super::OpenApiAccessProfiles::Selected(profile),
+            );
+            assert_eq!(
+                operation["responses"]["403"].is_object(),
+                declared,
+                "{profile} invoke of a {effect}"
+            );
+            let visible = BTreeSet::from([(
+                "propose-person".to_owned(),
+                profile.to_owned(),
+                crate::model::ProposalOperation::Apply,
+            )]);
+            let mut paths = serde_json::Map::new();
+            super::append_proposal_openapi(
+                &mut paths,
+                registry.actions(),
+                registry.entities(),
+                Some(&visible),
+            );
+            assert_eq!(
+                paths["/v1/proposals/{proposal_id}/apply"]["post"]["responses"]["403"].is_object(),
+                declared,
+                "{profile} apply of a {effect}"
+            );
+        }
+    }
+}
+
+/// `registrar` and `officer` both write a person through an immediate Action
+/// and apply a manual Proposal whose plan runs one `effect`, `patch` or
+/// `create`. A `record` condition withholds a protected person from every
+/// profile but `officer`.
+fn compiled_record_condition_writer_registry(effect: &str) -> CompiledRegistry {
+    let phone = json!({"id": "phone", "apiName": "phone", "type": "string",
+        "maximumLength": 32, "required": true, "classification": "internal"});
+    let targets = json!([{"recordType": "person", "rowBoundaries": "unrestricted"}]);
+    let (inputs, plan, commit_guards) = if effect == "patch" {
+        (
+            json!([{"id": "person", "apiName": "personId", "type": "reference",
+                "target": "person", "required": true, "classification": "internal"}, phone]),
+            json!({"type": "fixed", "effects": [
+                {"id": "contact", "target": {"fromInput": "person"}, "operation": "patch",
+                 "set": {"phone": {"fromInput": "phone"}}}]}),
+            json!({"targets": [{"input": "person", "revision": "unchanged"}]}),
+        )
+    } else {
+        (
+            json!([phone]),
+            json!({"type": "fixed", "effects": [
+                {"id": "contact", "target": {"recordType": "person"}, "operation": "create",
+                 "set": {"phone": {"fromInput": "phone"}}}]}),
+            json!({}),
+        )
+    };
+    let profile = |id: &str, default: bool| {
+        json!({"default": default, "principalClaim": "registry_principal",
+            "requiredScopes": [format!("registry.{id}")],
+            "permissions": {
+                "records": [{"recordType": "person", "operations": ["get", "list"],
+                    "rowBoundaries": "unrestricted",
+                    "readableFields": ["family-name", "protected", "phone"]}],
+                "actions": [
+                    {"action": "write-person", "operations": ["invoke"], "targets": targets},
+                    {"action": "propose-person", "operations": ["start"], "targets": targets}],
+                "proposals": [{"action": "propose-person", "ownership": "caller",
+                    "operations": ["get", "list", "edit", "submit", "cancel", "apply"],
+                    "targets": targets}]}})
+    };
+    let source = json!({"datasets": {"test-dataset": {}},
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1", "kind": "BRegProject",
+        "project": {"id": "record-condition-writer", "version": "1", "defaultLanguage": "en",
+            "canonicalBaseIri": "https://record-condition-writer.example.test"},
+        "recordTypes": {"person": {"primaryDataset": "test-dataset", "route": "people",
+            "mutationMode": "mutable", "classification": "internal",
+            "fields": [
+                {"id": "family-name", "type": "string", "maximumLength": 64, "classification": "internal"},
+                {"id": "protected", "type": "boolean", "classification": "internal"},
+                {"id": "phone", "type": "string", "maximumLength": 32, "classification": "internal"}],
+            "disclosureConditions": {"hide-protected": {"when": [{"type": "field-equals", "field": "protected", "value": true}],
+                "withhold": "record", "exemptProfiles": ["officer"]}}}},
+        "actions": {
+            "write-person": {"inputs": inputs, "plan": plan,
+             "execution": {"mode": "immediate"}},
+            "propose-person": {"inputs": inputs, "plan": plan,
+             "commitGuards": commit_guards,
+             "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"},
+                 "application": {"mode": "manual"}, "retention": {"mode": "operator-erase"}}}}},
+        "accessProfiles": {"registrar": profile("registrar", true), "officer": profile("officer", false)}
+    });
+    let project =
+        parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles")
+}
+
+#[test]
 fn the_required_filter_refusal_is_documented_only_where_a_profile_requires_a_filter() {
     let declares = |responses: &Value| {
         responses["400"]["content"]["application/problem+json"]["examples"]
