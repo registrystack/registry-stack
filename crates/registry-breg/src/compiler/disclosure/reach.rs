@@ -407,6 +407,56 @@ pub(in crate::compiler) fn validate_external_views(
     }
 }
 
+/// A refresh lists a view's roots under the profile that refreshes it, so a
+/// `record` condition that binds that profile leaves the records it matches
+/// out of the refresh, and the refresh still succeeds. Keeping protected
+/// subjects away from the external source may be intended, so this is a
+/// finding, not a refusal. Every refresh worker holds the grant this reads,
+/// and a label grant is valid only beside the grant for its link's projection.
+pub(in crate::compiler) fn refresh_withheld_root_findings(
+    views: &CompiledExternalViews,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> Vec<Diagnostic> {
+    let mut bound = BTreeSet::new();
+    for (profile, projections) in &views.refresh {
+        for (view_id, view) in &views.views {
+            let Some(entity) = entities.get(view.record_type.as_str()) else {
+                continue;
+            };
+            let lists = entity
+                .access_profiles
+                .get(profile)
+                .is_some_and(|grant| grant.operations.contains(&Operation::List));
+            if !lists
+                || !view
+                    .links
+                    .iter()
+                    .any(|link| projections.contains(&link.projection))
+            {
+                continue;
+            }
+            for condition in entity.disclosure_conditions.iter().filter(|condition| {
+                condition.withhold == DisclosureWithhold::Record
+                    && !condition.exempt_profiles.contains(profile)
+            }) {
+                bound.insert((&entity.id, &condition.id, profile, view_id));
+            }
+        }
+    }
+    bound
+        .into_iter()
+        .map(|(entity, condition, profile, view)| {
+            Diagnostic::finding(
+                "breg.disclosure.external-refresh-withheld-root",
+                format!("recordTypes[id={entity}].disclosureConditions[id={condition}]"),
+                &format!(
+                    "access profile `{profile}` refreshes view `{view}` but this `record` condition binds it, so a refresh leaves out the records the condition matches and still succeeds"
+                ),
+            )
+        })
+        .collect()
+}
+
 /// A statistical dataset reads what its unit and its derived relations read.
 /// A profile that reads it live sees current records, so it is refused where a
 /// `record` condition could withhold them, and every profile that reaches the

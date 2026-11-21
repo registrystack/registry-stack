@@ -394,6 +394,10 @@ pub fn compile_project_with_assets(
             "external view compilation",
         ));
     }
+    findings.extend(disclosure::refresh_withheld_root_findings(
+        &external_views,
+        &entities,
+    ));
     crate::external_views::mark_link_fields(&external_views, &mut entities, &mut physical_names);
     crate::membership::compile(&mut entities);
     let recipients = crate::consent::compile(project, &sources, &mut entities);

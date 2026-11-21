@@ -611,6 +611,18 @@ These refusals hold whatever the profiles:
   (`breg.disclosure.read-hook-access-log-required`). The read alert is written with the subject
   access log entry, so it would never fire.
 
+A `record` condition also binds the profile that refreshes an external view of its Record type. The
+refresh lists the view's root records under that profile, so a bound profile skips the records the
+condition matches and the sweep still succeeds: their external projections and labels are not
+fetched or kept current. That can be what you want, because it keeps protected subjects' keys away
+from the external source. `bregctl check` cannot see which profile a runtime refresh plan uses, so
+it warns about each profile that holds `refreshExternalProjections` for one of the view's
+projections, may List its root, and is bound by a `record` condition on that root
+(`breg.disclosure.external-refresh-withheld-root`). The check fails under `--deny-warnings` until
+you add the profile to `exemptProfiles`, so the refresh covers those records, or
+[accept the finding](../../reference/configuration-files/#accept-an-intentional-project-warning) to
+leave them out.
+
 `bregctl explain access` lists each condition in full, `when` literals included, for the author. The
 runtime metadata a caller reads flags `mayBeWithheld` on a field and names the bound conditions by
 `id` and mode, and never carries the literals. The ODRL export omits a grant a condition binds, with
