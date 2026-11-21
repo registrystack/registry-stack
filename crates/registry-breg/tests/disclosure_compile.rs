@@ -1149,6 +1149,51 @@ fn a_derived_field_cannot_read_a_withheld_field_for_a_bound_profile() {
         .contains(&"breg.disclosure.derived-reads-withheld-field".to_owned()));
 }
 
+#[test]
+fn a_read_path_cannot_read_a_derived_field_that_reads_a_withheld_field() {
+    let mut value = source();
+    value["recordTypes"]["child"] = json!({"primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","classification":"internal",
+            "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"},
+                      {"id":"sealed","type":"boolean","classification":"internal"}],
+            "derived":[{"id":"code-state","sql":"sql/derived.sql","key":"id",
+              "fields":[{"id":"has-code","type":"boolean","classification":"internal"}]}],
+            "disclosureConditions":{"hide-code": {"when":[{"type":"field-equals","field":"sealed","value":true}],
+              "withhold":"fields","fields":["code"],"exemptProfiles":["protection-officer"]}}});
+    value["recordTypes"]["link"] = json!({"primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","classification":"internal",
+            "fields":[{"id":"person","type":"reference","target":"person","classification":"internal"},
+                      {"id":"child","type":"reference","target":"child","classification":"internal"}]});
+    value["recordTypes"]["person"]["readPaths"] =
+        json!([{"id":"children","through":"link","to":"child","route":"children"}]);
+    let sql = "SELECT c.id AS id, c.code IS NOT NULL AS has_code FROM registry_source.child c";
+    for surface in ["filterableFields", "sortableFields"] {
+        let mut granted = value.clone();
+        person_permission(&mut granted, REGISTRAR)["readPaths"] = json!([{"path":"children","readableFields":["sealed","has-code"], surface: ["has-code"]}]);
+        assert!(
+            codes(compile_with_sql(&granted, sql))
+                .contains(&"breg.disclosure.derived-reads-withheld-field".to_owned()),
+            "{surface}"
+        );
+    }
+    person_permission(&mut value, REGISTRAR)["readPaths"] =
+        json!([{"path":"children","readableFields":["sealed","has-code"]}]);
+    assert!(codes(compile_with_sql(&value, sql))
+        .contains(&"breg.disclosure.derived-reads-withheld-field".to_owned()));
+    let unrelated =
+        "SELECT c.id AS id, c.sealed IS NOT NULL AS has_code FROM registry_source.child c";
+    assert!(
+        compile_with_sql(&value, unrelated).is_ok(),
+        "{:?}",
+        codes(compile_with_sql(&value, unrelated))
+    );
+    value["recordTypes"]["child"]["disclosureConditions"]["hide-code"]["exemptProfiles"] =
+        json!(["protection-officer", "registrar"]);
+    assert!(
+        compile_with_sql(&value, sql).is_ok(),
+        "{:?}",
+        codes(compile_with_sql(&value, sql))
+    );
+}
+
 const LINKED: &str = r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject

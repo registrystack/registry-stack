@@ -595,6 +595,8 @@ refuses:
 - a read path grant whose `filterableFields` or `sortableFields` names a field withheld on the path's
   `to` Record type (`breg.disclosure.read-path-withheld-field`). The filter and sort run before the
   field is withheld, so the rows they return would reveal the value;
+- a read path grant that reads, filters or sorts a derived field of the path's `to` Record type when
+  the derived SQL reads a withheld field (`breg.disclosure.derived-reads-withheld-field`);
 - a Record timer whose `at`, `notAfter`, `rearmOn`, `when` or `fromField` input reads a withheld
   field (`breg.disclosure.timer-reads-withheld-field`). The timer runs without the condition, so
   its Action, or the moment it fires, would reveal the value;

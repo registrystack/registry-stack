@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::contract::{
     AccessProfileSource, DerivedSource, DisclosureConditionSource, DisclosureWithholdSource,
-    EntitySource, Operation, TimerPredicateSource,
+    EntitySource, Operation, TimerPredicateSource, UniqueSet,
 };
 use crate::diagnostics::Diagnostic;
 use crate::external_views::CompiledExternalViews;
@@ -344,8 +344,9 @@ pub(super) fn validate_read_paths(
 }
 
 /// A derived field is computed from source columns, so a profile that reads,
-/// filters or sorts it learns whatever a withheld source field says. The SQL
-/// must already have passed validation.
+/// filters or sorts it, directly or through a read path whose `to` is the
+/// owner, learns whatever a withheld source field says. The SQL must already
+/// have passed validation.
 pub(in crate::compiler) fn validate_derived_reads(
     owner: &EntitySource,
     derived: &DerivedSource,
@@ -356,6 +357,40 @@ pub(in crate::compiler) fn validate_derived_reads(
 ) {
     let read = crate::derived_sql::derived_sql_source_columns(sql, source_columns);
     let derived_ids: BTreeSet<&String> = derived.fields.iter().map(|field| &field.id).collect();
+    let names_derived = |granted: [&UniqueSet<String>; 3]| {
+        granted
+            .iter()
+            .any(|granted| granted.iter().any(|id| derived_ids.contains(id)))
+    };
+    // Each profile that reads the owner's derived fields: its own grant on the
+    // owner, then its grants on read paths that end at the owner.
+    let readers: BTreeSet<&str> = owner
+        .access_profiles
+        .iter()
+        .filter(|profile| {
+            names_derived([
+                &profile.readable_fields,
+                &profile.filterable_fields,
+                &profile.sortable_fields,
+            ])
+        })
+        .chain(sources.values().flat_map(|path_owner| {
+            path_owner.access_profiles.iter().filter(|profile| {
+                profile.read_paths.iter().any(|grant| {
+                    path_owner
+                        .read_paths
+                        .iter()
+                        .any(|path| path.id == grant.path && path.to == owner.id)
+                        && names_derived([
+                            &grant.readable_fields,
+                            &grant.filterable_fields,
+                            &grant.sortable_fields,
+                        ])
+                })
+            })
+        }))
+        .map(|profile| profile.id.as_str())
+        .collect();
     for source in sources.values() {
         let Some(columns) = read.get(&super::super::canonical_sql_name(&source.id)) else {
             continue;
@@ -369,21 +404,16 @@ pub(in crate::compiler) fn validate_derived_reads(
                 .iter()
                 .filter(|field| columns.contains(&super::super::canonical_sql_name(field)))
             {
-                for profile in bound(owner, condition).filter(|profile| {
-                    [
-                        &profile.readable_fields,
-                        &profile.filterable_fields,
-                        &profile.sortable_fields,
-                    ]
+                for profile in readers
                     .iter()
-                    .any(|granted| granted.iter().any(|id| derived_ids.contains(id)))
-                }) {
+                    .filter(|profile| !condition.exempt_profiles.contains(**profile))
+                {
                     refuse(
                         errors,
                         "breg.disclosure.derived-reads-withheld-field",
                         &root,
                         field,
-                        &profile.id,
+                        profile,
                         &format!(
                             "reads derived relation `{}`, which is computed from",
                             derived.id
