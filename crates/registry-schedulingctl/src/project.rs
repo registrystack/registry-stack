@@ -1425,6 +1425,14 @@ mod tests {
             .unwrap()
             .starts_with("sha256:"));
         let offerings = report["offerings"].as_array().unwrap();
+        let offering_ids: Vec<&str> = offerings
+            .iter()
+            .map(|offering| offering["id"].as_str().unwrap())
+            .collect();
+        let mut sorted_ids = offering_ids.clone();
+        sorted_ids.sort_unstable();
+        assert_eq!(offering_ids, sorted_ids, "offerings are listed in id order");
+        assert!(offering_ids.len() > 1, "the order is checked over several");
         let morning = offerings
             .iter()
             .find(|offering| offering["id"] == "household-morning")

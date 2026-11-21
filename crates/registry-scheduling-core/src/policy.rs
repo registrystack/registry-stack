@@ -2601,7 +2601,7 @@ holdPolicy:
         let with_hook_list = with_hooks(
             "  - id: appointment-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: []\n    handler:\n      type: url\n      destinationId: appointment-events\n",
         );
-        for (authored, pointer) in [
+        for (authored, pointer, wording) in [
             (
                 MINIMAL_EXACT_TIME_PROJECT.replacen(
                     "  registry-update:\n    label: Registry record update\n",
@@ -2609,6 +2609,7 @@ holdPolicy:
                     1,
                 ),
                 "/services",
+                "a mapping keyed by each item's id",
             ),
             (
                 MINIMAL_EXACT_TIME_PROJECT.replacen(
@@ -2617,6 +2618,7 @@ holdPolicy:
                     1,
                 ),
                 "/services/registry-update/id",
+                "Write services as a mapping from each id to the rest of its entry",
             ),
             (
                 MINIMAL_EXACT_TIME_PROJECT.replacen(
@@ -2625,6 +2627,7 @@ holdPolicy:
                     1,
                 ),
                 "/holidaySets/office-holidays/id",
+                "Write holidaySets as a mapping from each id to the rest of its entry",
             ),
             (
                 MINIMAL_EXACT_TIME_PROJECT.replacen(
@@ -2633,6 +2636,7 @@ holdPolicy:
                     1,
                 ),
                 "/openings/counter-hours/id",
+                "Write openings as a mapping from each id to the rest of its entry",
             ),
             (
                 MINIMAL_EXACT_TIME_PROJECT.replacen(
@@ -2641,12 +2645,28 @@ holdPolicy:
                     1,
                 ),
                 "/offerings/registry-update-30/id",
+                "Write offerings as a mapping from each id to the rest of its entry",
             ),
-            (with_hook_list, "/hooks"),
+            (
+                with_hook_list,
+                "/hooks",
+                "a mapping keyed by each item's id",
+            ),
         ] {
-            let found = refusals(&authored);
+            let report = SchedulingPolicy::read(AUTHORED_POLICY_FILE, authored.as_bytes())
+                .expect_err("the shape is refused");
+            let found = report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| format!(
+                        "{} {} {}",
+                        diagnostic.path, diagnostic.message, diagnostic.suggested_action
+                    ))
+                .collect::<Vec<_>>();
             assert!(
-                found.iter().any(|refusal| refusal.starts_with(pointer)),
+                found
+                    .iter()
+                    .any(|refusal| refusal.starts_with(pointer) && refusal.contains(wording)),
                 "{pointer}: {found:?}"
             );
         }

@@ -776,7 +776,7 @@ fn resolve_local_value_types(value: &mut Value) -> Result<(), (String, &'static 
         let items: Vec<(String, &mut Value)> = match value.get_mut(collection) {
             Some(Value::Object(items)) => items
                 .iter_mut()
-                .map(|(key, item)| (key.clone(), item))
+                .map(|(key, item)| (key.replace('~', "~0").replace('/', "~1"), item))
                 .collect(),
             Some(Value::Array(items)) => items
                 .iter_mut()

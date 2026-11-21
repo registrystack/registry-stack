@@ -14,8 +14,9 @@ pub(crate) const EXPECT_ID_KEYED_MAP: &str = "a mapping keyed by each item's id"
 
 /// Named items written as a mapping from each item's id to the rest of the
 /// item (CFG-ID-5), kept as a list sorted by id. The key is read as the
-/// item's `id` member, so it is checked as the item checks its id, and a
-/// mapping cannot repeat a key. The order the file writes them in is not
+/// item's `id` member, so it is checked as the item checks its id. The
+/// platform reader refuses a repeated key (`yaml.duplicate-key`) before the
+/// items are read, so a mapping cannot repeat one. The order the file writes them in is not
 /// kept: every later reading, and the served form, lists them by id.
 pub fn id_keyed<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
 where
