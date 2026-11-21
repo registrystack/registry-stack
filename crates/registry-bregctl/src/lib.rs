@@ -8003,7 +8003,7 @@ fn package_refusal_message(
         PackageError::EngineFeatureUpgradeRequired => PACKAGE_ENGINE_UPGRADE_REQUIRED.into(),
         PackageError::EntityIdMember => error.to_string().into(),
         PackageError::PredecessorSources(_) => format!(
-            "{error}. A package built before this release cannot be a baseline: rebuild it from sources this bregctl accepts, or recreate the database"
+            "{error}. A package built before this release cannot be a baseline for an upgrade in place: recreate the database and apply a package built by this release"
         )
         .into(),
         _ => fallback.into(),

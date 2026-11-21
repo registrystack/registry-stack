@@ -18,8 +18,9 @@
   a baseline package built before this release, because its stored sources
   write `accessProfiles` as a list. The refusal says the baseline package's
   stored sources do not compile with this `bregctl` and carries the reader's
-  message. A database whose active package predates this release is
-  recreated.
+  message, and tells the operator to recreate the database and apply a package
+  built by this release. A database whose active package predates this release
+  is recreated.
   The lock digest of every module that declares or extends a Record type
   changes, even when it declares no profiles. After converting, run
   `bregctl project lock` for each such module.

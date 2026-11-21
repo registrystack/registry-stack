@@ -477,6 +477,11 @@ fn a_runtime_bound_baseline_stored_with_list_form_access_profiles_is_refused() {
         message.contains("Write accessProfiles as a mapping"),
         "{message}"
     );
+    assert!(
+        message.contains("recreate the database and apply a package built by this release"),
+        "{message}"
+    );
+    assert!(!message.contains("rebuild"), "{message}");
 }
 
 #[test]
