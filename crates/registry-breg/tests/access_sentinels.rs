@@ -22,9 +22,9 @@ fn source() -> Value {
     json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"access-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://access-example.example.test"},
-        "recordTypes":[{"id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
+        "recordTypes":{"entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
           "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"},
-                    {"id":"district","type":"string","maximumLength":32,"classification":"internal"}]}],
+                    {"id":"district","type":"string","maximumLength":32,"classification":"internal"}]}},
         "accessProfiles":{"reader": {"principalClaim":"registry_principal","requiredScopes":["entry:read"],
           "permissions":{"records":[{"recordType":"entry","operations":["get","list"],
             "readableFields":["code","district"],"filterableFields":["district"],
@@ -248,17 +248,17 @@ fn an_access_requirement_only_narrows_so_it_takes_no_empty_list_and_no_unrestric
     for member in ["requiredScopes", "allowedPurposes", "rowBoundaries"] {
         for written in [json!([]), json!("unrestricted")] {
             let mut value = source();
-            value["recordTypes"][0]["accessRequirements"] = json!({
+            value["recordTypes"]["entry"]["accessRequirements"] = json!({
                 "requiredScopes":["entry:read"],
                 "allowedPurposes":["administration"],
                 "rowBoundaries":[boundary()],
             });
-            value["recordTypes"][0]["accessRequirements"][member] = written;
+            value["recordTypes"]["entry"]["accessRequirements"][member] = written;
             let (code, path, message) = refusal(&value);
             assert_eq!(code, "config.invalid-value", "{message}");
             assert_eq!(
                 path,
-                format!("project.recordTypes[0].accessRequirements.{member}")
+                format!("project.recordTypes.entry.accessRequirements.{member}")
             );
             assert!(
                 message.contains(&format!("Omit {member}")) && message.contains("only narrows"),
@@ -267,9 +267,8 @@ fn an_access_requirement_only_narrows_so_it_takes_no_empty_list_and_no_unrestric
         }
     }
 
-    let module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","extendRecordTypes":[{
-        "recordType":"entry","accessRequirements":{"requiredScopes":[]}
-    }]});
+    let module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","extendRecordTypes":{"entry": {"accessRequirements":{"requiredScopes":[]}
+    }}});
     let failure = parse_module_yaml(&serde_json::to_vec(&module).unwrap())
         .expect_err("a module requirement written empty is refused");
     let [diagnostic] = failure.diagnostics() else {
@@ -278,7 +277,7 @@ fn an_access_requirement_only_narrows_so_it_takes_no_empty_list_and_no_unrestric
     assert_eq!(diagnostic.code, "config.invalid-value");
     assert_eq!(
         diagnostic.path,
-        "module.extendRecordTypes[0].accessRequirements.requiredScopes"
+        "module.extendRecordTypes.entry.accessRequirements.requiredScopes"
     );
 }
 
@@ -293,7 +292,8 @@ fn an_authored_project_serializes_to_the_form_it_is_read_from() {
     for (pointer, _) in ROW_REACH_SITES {
         set(&mut value, pointer, json!("unrestricted"));
     }
-    value["recordTypes"][0]["accessRequirements"] = json!({"allowedPurposes":["administration"]});
+    value["recordTypes"]["entry"]["accessRequirements"] =
+        json!({"allowedPurposes":["administration"]});
     let project = read(&value).expect("the project is read");
 
     let written = serde_json::to_value(&project).expect("the project serializes");
@@ -305,7 +305,7 @@ fn an_authored_project_serializes_to_the_form_it_is_read_from() {
         assert_eq!(written.pointer(pointer), Some(&json!("unrestricted")));
     }
     assert_eq!(
-        written["recordTypes"][0]["accessRequirements"],
+        written["recordTypes"]["entry"]["accessRequirements"],
         json!({"allowedPurposes":["administration"]})
     );
 
@@ -468,7 +468,7 @@ fn an_item_spelled_like_a_wildcard_is_reported_as_one_name() {
     value["accessProfiles"]["reader"]["requiredPurposes"] = json!(["unrestricted"]);
     value["accessProfiles"]["reader"]["actorKind"] = json!("service");
     value["accessProfiles"]["reader"]["requesterClients"] = json!(["*", "portal"]);
-    value["recordTypes"][0]["accessRequirements"] =
+    value["recordTypes"]["entry"]["accessRequirements"] =
         json!({"requiredScopes":["*"],"allowedPurposes":["unrestricted"]});
     let compiled = compile(&value).expect("a wildcard spelling is a name, so the project compiles");
     assert_eq!(
@@ -494,17 +494,16 @@ fn module_profile() -> Value {
 /// A module that contributes `profile` to `entry` by extension.
 fn extension_module(profile: Value) -> Value {
     json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
-        "id":"extra","version":"1","extendRecordTypes":[{"recordType":"entry","accessProfiles":{"mod":profile}}]})
+        "id":"extra","version":"1","extendRecordTypes":{"entry": {"accessProfiles":{"mod":profile}}}})
 }
 
 /// A module that introduces an entity carrying `profile`.
 fn entity_module(profile: Value) -> Value {
     json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
-        "id":"extra","version":"1","recordTypes":[{
-        "id":"other","primaryDataset":"test-dataset","route":"others","mutationMode":"mutable",
+        "id":"extra","version":"1","recordTypes":{"other": {"primaryDataset":"test-dataset","route":"others","mutationMode":"mutable",
         "classification":"internal",
         "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}],
-        "accessProfiles":{"mod":profile}}]})
+        "accessProfiles":{"mod":profile}}}})
 }
 
 fn read_module(module: &Value) -> Result<registry_breg::contract::RegistryModule, CompileFailure> {
@@ -536,9 +535,9 @@ fn module_sites() -> [ModuleSite; 2] {
     [
         (
             extension_module,
-            "module.extendRecordTypes[0].accessProfiles.mod",
+            "module.extendRecordTypes.entry.accessProfiles.mod",
         ),
-        (entity_module, "module.recordTypes[0].accessProfiles.mod"),
+        (entity_module, "module.recordTypes.other.accessProfiles.mod"),
     ]
 }
 
@@ -653,8 +652,7 @@ fn a_module_profile_is_reported_by_the_project_profile_findings() {
     let mut open = module_profile();
     open["requiredScopes"] = json!("unrestricted");
     let module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
-        "id":"extra","version":"1","extendRecordTypes":[{
-        "recordType":"entry","accessProfiles":{"mod":module_profile(), "open":open}}]});
+        "id":"extra","version":"1","extendRecordTypes":{"entry": {"accessProfiles":{"mod":module_profile(), "open":open}}}});
     let compiled = compile_with_module(&module).expect("the module compiles");
     assert_eq!(
         finding_paths(&compiled, "breg.access.profile-subsumes-narrower"),
@@ -674,7 +672,7 @@ fn a_module_profile_is_reported_by_the_project_profile_findings() {
     let mut alone = module_profile();
     alone["requiredScopes"] = json!("unrestricted");
     let mut module = extension_module(json!({}));
-    module["extendRecordTypes"][0]["accessProfiles"] = json!({"open": alone});
+    module["extendRecordTypes"]["entry"]["accessProfiles"] = json!({"open": alone});
     let compiled = compile_with_module(&module).unwrap();
     assert_eq!(
         finding_paths(&compiled, "breg.access.profile-subsumes-narrower"),

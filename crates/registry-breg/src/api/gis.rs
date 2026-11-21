@@ -1489,7 +1489,7 @@ kind: BRegProject
 project: {id: gis-test, version: "1", defaultLanguage: en, canonicalBaseIri: https://gis-test.example.test}
 datasets: [{"id":"test-dataset"}]
 recordTypes:
-  - id: service-site
+  service-site:
     primaryDataset: test-dataset
     route: service-sites
     mutationMode: create-only
@@ -1498,7 +1498,7 @@ recordTypes:
       - {id: code, type: string, maximumLength: 32, classification: public, required: true}
       - {id: label, type: string, maximumLength: 80, classification: public}
       - {id: location, type: crs84-point, precision: 6, classification: public}
-  - id: service-area
+  service-area:
     primaryDataset: test-dataset
     route: service-areas
     mutationMode: create-only

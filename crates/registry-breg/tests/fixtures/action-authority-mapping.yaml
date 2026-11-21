@@ -3,7 +3,7 @@ kind: BRegProject
 project: {id: action-admission, version: "1", defaultLanguage: en, canonicalBaseIri: https://action-admission.example.test}
 datasets: [{id: test-dataset}]
 recordTypes:
-  - id: case
+  case:
     primaryDataset: test-dataset
     route: cases
     mutationMode: mutable

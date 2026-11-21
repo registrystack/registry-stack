@@ -34,7 +34,7 @@ The root project separately grants the exact `recordType` and timer pair:
 
 ```yaml
 recordTypes:
-  - id: service
+  service:
     fields:
       - id: status
         type: vocabulary-code
@@ -435,21 +435,20 @@ Re-read status and the exact occurrence, compare the control epoch, occurrence s
 
 Every package built with this release declares Record timer store support, including a project that
 defines no timers.
-A package built by an earlier release is predecessor-only for this engine feature.
-Starting the new runtime with that older package neither adds tables nor rewrites the active
-catalog.
-Keep the exact active package directory, build a governed successor from it with this release, plan
-and apply that successor, and only then restart the runtime on the successor package:
+A package built by an earlier release cannot be upgraded in place to this one. Starting the new
+runtime with that package neither adds tables nor rewrites the active catalog, and every command
+that reads it refuses it with one message.
+From this release the upgrade path restarts: create a fresh database, rebuild the package with this
+release, and activate it as the first package:
 
 ```sh
-bregctl test PROJECT --baseline-package ACTIVE_PACKAGE --runtime-config RUNTIME --credentials CREDENTIALS --output RECEIPT
-bregctl package PROJECT --baseline-package ACTIVE_PACKAGE --test-receipt RECEIPT --output BUILD
-bregctl plan --runtime-config RUNTIME --package BUILD/package
-bregctl apply --runtime-config RUNTIME --package BUILD/package
+bregctl test PROJECT --runtime-config RUNTIME --credentials CREDENTIALS --output RECEIPT
+bregctl package PROJECT --test-receipt RECEIPT --output BUILD
+bregctl apply --runtime-config RUNTIME --package BUILD/package --initial
 ```
 
-This is the ordinary successor-package workflow, not a separate timer migration command.
-The package records the engine-owned timer store transition; you do not supply timer schema SQL.
+The package records the engine-owned timer store; you do not supply timer schema SQL.
+Later releases build successor packages from the package this release activated.
 [Change an active registry](../../operate/breg-changes/) covers successor packages in general.
 
 {/* Evidence: crates/registry-breg/src/package/tests/record_timers.rs

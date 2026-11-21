@@ -376,8 +376,7 @@ fn source(timer_at: Option<&str>, effect_value: bool) -> Value {
             "canonicalBaseIri":"https://timer-package.example.test"
         },
         "datasets":[{"id":"test-dataset"}],
-        "recordTypes":[{
-            "id":"contact", "primaryDataset":"test-dataset", "route":"contacts",
+        "recordTypes":{"contact": { "primaryDataset":"test-dataset", "route":"contacts",
             "mutationMode":"mutable",
             "fields":[
                 {"id":"active","type":"boolean","classification":"internal"},
@@ -387,12 +386,12 @@ fn source(timer_at: Option<&str>, effect_value: bool) -> Value {
                 {"id":"activation-window-end","type":"timestamp","classification":"internal"},
                 {"id":"activation-revision","type":"uuid","classification":"internal"}
             ]
-        }]
+        }}
     });
     let Some(timer_at) = timer_at else {
         return source;
     };
-    source["recordTypes"][0]["timers"] = json!([{
+    source["recordTypes"]["contact"]["timers"] = json!([{
         "id":"activate", "at":timer_at,
         "notAfter":"activation-window-end", "rearmOn":"activation-revision",
         "when":{"type":"fields","equals":{"active":false}},
@@ -561,13 +560,13 @@ fn effect_input_migration_closure_is_record_type_qualified_and_get_only() {
 #[cfg(feature = "runtime")]
 fn source_with_effect_input(timer_at: &str) -> Value {
     let mut source = source(Some(timer_at), true);
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["contact"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"copied-activation-revision", "type":"uuid", "classification":"internal"
         }));
-    source["recordTypes"][0]["timers"][0]["input"]["activation-revision"] =
+    source["recordTypes"]["contact"]["timers"][0]["input"]["activation-revision"] =
         json!({"fromField":"activation-revision"});
     source["actions"][0]["inputs"]
         .as_array_mut()
@@ -584,14 +583,16 @@ fn source_with_effect_input(timer_at: &str) -> Value {
 #[cfg(feature = "runtime")]
 fn source_with_secondary_get() -> Value {
     let mut source = source(Some("activates-at"), true);
-    source["recordTypes"].as_array_mut().unwrap().push(json!({
-        "id":"approval", "primaryDataset":"test-dataset", "route":"approvals",
-        "mutationMode":"mutable", "fields":[{
-            "id":"status", "type":"string", "maximumLength":32,
-            "classification":"internal"
-        }]
-    }));
-    source["recordTypes"][0]["timers"][0]["input"]["approval"] =
+    source["recordTypes"].as_object_mut().unwrap().insert(
+        "approval".to_owned(),
+        json!({"primaryDataset":"test-dataset", "route":"approvals",
+            "mutationMode":"mutable", "fields":[{
+                "id":"status", "type":"string", "maximumLength":32,
+                "classification":"internal"
+            }]
+        }),
+    );
+    source["recordTypes"]["contact"]["timers"][0]["input"]["approval"] =
         json!({"value":"11111111-1111-4111-8111-111111111111"});
     source["actions"][0]["inputs"]
         .as_array_mut()

@@ -57,16 +57,9 @@
     },
     "distributions": []
   },
-  "modules": [
-    {
-      "id": "asset-site-placement-core",
-      "version": "0.1.0",
-      "digest": "sha256:8e796da3cf6d67ff440b2a1cdbcd4886f348cabc953df59d6861d3b05bb077a6"
-    }
-  ],
-  "recordTypes": [
-    {
-      "id": "asset-item",
+  "modules": {"asset-site-placement-core":{"digest":"sha256:32282bf3776a0370f1426ef9c0b0dbb64d9241ba7f81fb7b24a968f9b9bf7628","version":"0.1.0"}},
+  "recordTypes": {
+    "asset-item": {
       "primaryDataset": "asset-site-placement",
       "route": "assets",
       "mutationMode": "mutable",
@@ -106,8 +99,7 @@
         }
       ]
     },
-    {
-      "id": "asset-site",
+    "asset-site": {
       "primaryDataset": "asset-site-placement",
       "route": "sites",
       "mutationMode": "mutable",
@@ -136,8 +128,7 @@
         }
       ]
     },
-    {
-      "id": "asset-placement",
+    "asset-placement": {
       "primaryDataset": "asset-site-placement",
       "route": "placements",
       "mutationMode": "mutable",
@@ -192,8 +183,7 @@
         }
       ]
     },
-    {
-      "id": "inspection-event",
+    "inspection-event": {
       "primaryDataset": "asset-site-placement",
       "route": "inspections",
       "mutationMode": "create-only",
@@ -220,7 +210,7 @@
         }
       ]
     }
-  ],
+  },
   "accessProfiles": {
     "asset-operator": {
       "default": true,

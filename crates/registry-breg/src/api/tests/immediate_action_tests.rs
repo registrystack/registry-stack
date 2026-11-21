@@ -22,7 +22,7 @@ kind: BRegProject
 project: {id: action-admission, version: "1", defaultLanguage: en, canonicalBaseIri: https://action-admission.example.test}
 datasets: [{id: test-dataset}]
 recordTypes:
-  - id: case
+  case:
     primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
@@ -1986,9 +1986,9 @@ async fn task_statistics_reads_bind_the_grant_to_the_request_principal_and_purpo
         "project":{"id":"task-statistics","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://statistics.example.test","timezone":"UTC"},
         "datasets":[{"id":"records"}],
-        "recordTypes":[{"id":"record","primaryDataset":"records","route":"records","mutationMode":"mutable",
+        "recordTypes":{"record": {"primaryDataset":"records","route":"records","mutationMode":"mutable",
             "fields":[{"id":"active","type":"boolean","required":true,"classification":"internal"},
-                {"id":"occurred-on","type":"date","required":true,"classification":"internal"}]}],
+                {"id":"occurred-on","type":"date","required":true,"classification":"internal"}]}},
         "accessProfiles":{
             "publisher": {"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{
                 "records":[{"recordType":"record","operations":["list"],"rowBoundaries":"unrestricted","allowCount":true,

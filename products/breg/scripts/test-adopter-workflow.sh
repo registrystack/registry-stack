@@ -723,7 +723,7 @@ import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 source = json.loads(path.read_text(encoding="utf-8"))
-record_type = next(item for item in source["recordTypes"] if item["id"] == "asset-item")
+record_type = source["recordTypes"]["asset-item"]
 if any(field["id"] == "placement-review-note" for field in record_type["fields"]):
     raise SystemExit("restricted successor field already exists")
 record_type["fields"].append({
@@ -1000,7 +1000,7 @@ import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 source = json.loads(path.read_text(encoding="utf-8"))
-record_type = next(item for item in source["recordTypes"] if item["id"] == "asset-item")
+record_type = source["recordTypes"]["asset-item"]
 if not any(field["id"] == "placement-review-note" for field in record_type["fields"]):
     raise SystemExit("reviewed successor is missing its restricted predecessor field")
 if any(field["id"] == "maintenance-note" for field in record_type["fields"]):
@@ -1009,7 +1009,7 @@ record_type["fields"].append({
     "id": "maintenance-note", "type": "string", "required": False,
     "maximumLength": 120, "classification": "internal",
 })
-profile = next(item for item in source["accessProfiles"] if item["id"] == "asset-operator")
+profile = source["accessProfiles"]["asset-operator"]
 permission = next(item for item in profile["permissions"]["records"] if item["recordType"] == "asset-item")
 for grant in ("readableFields", "writableFields"):
     if "maintenance-note" in permission[grant]:

@@ -888,8 +888,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "canonicalBaseIri":"https://timer-clock.example.test"
         },
         "datasets":[{"id":"services"}],
-        "recordTypes":[{
-            "id":"service",
+        "recordTypes":{"service": {
             "primaryDataset":"services",
             "route":"services",
             "mutationMode":"mutable",
@@ -914,7 +913,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                     "operation-id":{"fromTimer":"occurrence-id"}
                 }
             }]
-        }],
+        }},
         "timerGrants":[{"recordType":"service","timer":"activate"}],
         "actions":[{
             "id":"activate-service",

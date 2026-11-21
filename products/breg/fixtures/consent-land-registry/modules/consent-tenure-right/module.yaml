@@ -6,9 +6,8 @@
   "dependencies": [
     "consent-land-registry-core"
   ],
-  "recordTypes": [
-    {
-      "id": "tenure-right-privacy-notice",
+  "recordTypes": {
+    "tenure-right-privacy-notice": {
       "primaryDataset": "consent",
       "route": "tenure-right-privacy-notices",
       "mutationMode": "create-only",
@@ -102,8 +101,7 @@
         }
       ]
     },
-    {
-      "id": "tenure-right-notice-clause",
+    "tenure-right-notice-clause": {
       "primaryDataset": "consent",
       "route": "tenure-right-notice-clauses",
       "mutationMode": "create-only",
@@ -152,8 +150,7 @@
         }
       ]
     },
-    {
-      "id": "tenure-right-consent-link",
+    "tenure-right-consent-link": {
       "primaryDataset": "consent",
       "route": "tenure-right-consent-links",
       "mutationMode": "mutable",
@@ -181,8 +178,7 @@
         }
       ]
     },
-    {
-      "id": "tenure-right-consent-decision",
+    "tenure-right-consent-decision": {
       "primaryDataset": "consent",
       "route": "tenure-right-consent-decisions",
       "mutationMode": "create-only",
@@ -310,7 +306,7 @@
         }
       }
     }
-  ],
+  },
   "actions": [
     {
       "id": "give-tenure-right-consent",

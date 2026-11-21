@@ -301,7 +301,7 @@ manifestProjection:
     - {id: wasm-schema-test-data, title: WASM Schema Test, endpointUrl: https://wasm-schema-test.invalid, servesDatasets: [wasm-schema-test]}
   distributions: []
 recordTypes:
-  - id: record
+  record:
     primaryDataset: wasm-schema-test
     route: records
     mutationMode: create-only

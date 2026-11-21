@@ -27,14 +27,13 @@ fn encrypted_project() -> Value {
     json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"field-encryption","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://encryption.example.test"},
-        "recordTypes":[{
-            "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable",
+        "recordTypes":{"case": {"primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable",
             "fields":[
                 {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"secret","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,
                  "lookup":{"normalization":["trim","uppercase"],"unique":true}}
             ]
-        }],
+        }},
         "accessProfiles":{"caseworker": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
             "recordType":"case","rowBoundaries":"unrestricted","operations":["get","list","create","patch"],
             "readableFields":["label","secret"],"writableFields":["label","secret"]
@@ -137,7 +136,7 @@ fn unicode_normalization_steps_are_authored_by_name_and_compile() {
     );
 
     let mut project = encrypted_project();
-    project["recordTypes"][0]["fields"][1]["lookup"] =
+    project["recordTypes"]["case"]["fields"][1]["lookup"] =
         json!({"normalization":["trim","nfc","case-fold"],"unique":true});
     let registry = compile_value(&project).expect("the Unicode steps compile");
     let blind = encrypted_field(&registry)
@@ -208,11 +207,11 @@ fn encrypted_field_shape_refuses_unsupported_declarations() {
 
     // The whole-project parse keeps the same value-free shape refusal.
     let mut source = encrypted_project();
-    source["recordTypes"][0]["fields"][1]["classification"] = json!("internal");
+    source["recordTypes"]["case"]["fields"][1]["classification"] = json!("internal");
     let failure = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap_err();
     let diagnostic = &failure.diagnostics()[0];
     assert_eq!(diagnostic.code, "config.invalid-value");
-    assert_eq!(diagnostic.path, "project.recordTypes[0].fields[1]");
+    assert_eq!(diagnostic.path, "project.recordTypes.case.fields[1]");
 }
 
 #[test]
@@ -289,7 +288,7 @@ fn quote(identifier: &str) -> String {
 #[test]
 fn non_unique_lookup_declares_no_unique_index_and_no_blind_column() {
     let mut source = encrypted_project();
-    source["recordTypes"][0]["fields"][1]["lookup"] = json!({"normalization": ["lowercase"]});
+    source["recordTypes"]["case"]["fields"][1]["lookup"] = json!({"normalization": ["lowercase"]});
     let registry = compile_value(&source).unwrap();
     let field = encrypted_field(&registry);
     let blind = field
@@ -317,7 +316,7 @@ fn non_unique_lookup_declares_no_unique_index_and_no_blind_column() {
 #[test]
 fn encrypted_field_refuses_pattern_with_a_pinned_diagnostic() {
     let mut source = encrypted_project();
-    source["recordTypes"][0]["fields"][1]["pattern"] = json!("^[0-9]{13}$");
+    source["recordTypes"]["case"]["fields"][1]["pattern"] = json!("^[0-9]{13}$");
     let failure = compile_value(&source).unwrap_err();
     assert_retained_authoring_finding(&failure);
     let diagnostics = failure
@@ -338,11 +337,11 @@ fn encrypted_field_refuses_pattern_with_a_pinned_diagnostic() {
 #[test]
 fn encrypted_field_bounds_fit_the_phase_one_seal_limit() {
     let mut string = encrypted_project();
-    string["recordTypes"][0]["fields"][1]["maximumLength"] =
+    string["recordTypes"]["case"]["fields"][1]["maximumLength"] =
         json!(MAX_ENCRYPTED_FIELD_STRING_CHARACTERS);
     compile_value(&string).expect("the worst-case UTF-8 string boundary compiles");
 
-    string["recordTypes"][0]["fields"][1]["maximumLength"] =
+    string["recordTypes"]["case"]["fields"][1]["maximumLength"] =
         json!(MAX_ENCRYPTED_FIELD_STRING_CHARACTERS + 1);
     let failure = compile_value(&string).expect_err("an oversized encrypted string is refused");
     let diagnostic = failure
@@ -360,13 +359,13 @@ fn encrypted_field_bounds_fit_the_phase_one_seal_limit() {
     );
 
     let mut text = encrypted_project();
-    text["recordTypes"][0]["fields"][1]["type"] = json!("text");
-    text["recordTypes"][0]["fields"][1]["maximumLength"] =
+    text["recordTypes"]["case"]["fields"][1]["type"] = json!("text");
+    text["recordTypes"]["case"]["fields"][1]["maximumLength"] =
         json!(MAX_ENCRYPTED_FIELD_STRING_CHARACTERS + 1);
     expect_code(&text, "breg.field.encrypted-size-bound-exceeds-seal-limit");
 
     let mut structured = encrypted_project();
-    structured["recordTypes"][0]["fields"][1] = json!({
+    structured["recordTypes"]["case"]["fields"][1] = json!({
         "id":"secret", "type":"structured",
         "maximumBytes":MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
         "schema":{"type":"object","additionalProperties":false},
@@ -374,7 +373,7 @@ fn encrypted_field_bounds_fit_the_phase_one_seal_limit() {
     });
     compile_value(&structured).expect("the canonical structured byte boundary compiles");
 
-    structured["recordTypes"][0]["fields"][1]["maximumBytes"] =
+    structured["recordTypes"]["case"]["fields"][1]["maximumBytes"] =
         json!(MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES + 1);
     let failure =
         compile_value(&structured).expect_err("an oversized encrypted structured field is refused");
@@ -396,7 +395,9 @@ fn encrypted_field_bounds_fit_the_phase_one_seal_limit() {
 #[test]
 fn encrypted_field_count_bounds_snapshot_envelope_overhead() {
     let mut source = encrypted_project();
-    let fields = source["recordTypes"][0]["fields"].as_array_mut().unwrap();
+    let fields = source["recordTypes"]["case"]["fields"]
+        .as_array_mut()
+        .unwrap();
     for index in 1..=MAX_ENCRYPTED_FIELDS_PER_ENTITY {
         fields.push(json!({
             "id":format!("secret-{index}"),
@@ -407,7 +408,7 @@ fn encrypted_field_count_bounds_snapshot_envelope_overhead() {
     }
     expect_code(&source, "breg.record-type.encrypted-fields-too-many");
 
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["case"]["fields"]
         .as_array_mut()
         .unwrap()
         .pop();
@@ -417,7 +418,7 @@ fn encrypted_field_count_bounds_snapshot_envelope_overhead() {
 #[test]
 fn encrypted_lookup_refuses_structured_values_and_unbounded_normalization() {
     let mut structured = encrypted_project();
-    structured["recordTypes"][0]["fields"][1] = json!({
+    structured["recordTypes"]["case"]["fields"][1] = json!({
         "id":"secret", "type":"structured", "maximumBytes":1024,
         "schema":{"type":"object","additionalProperties":false},
         "classification":"restricted", "encrypted":true,
@@ -436,17 +437,14 @@ fn encrypted_lookup_refuses_structured_values_and_unbounded_normalization() {
     );
 
     let mut bounded = encrypted_project();
-    bounded["recordTypes"][0]["fields"][1]["lookup"]["normalization"] =
-        json!(
-            std::iter::repeat_n("trim", MAX_FIELD_LOOKUP_NORMALIZATION_STEPS).collect::<Vec<_>>()
-        );
+    bounded["recordTypes"]["case"]["fields"][1]["lookup"]["normalization"] = json!(
+        std::iter::repeat_n("trim", MAX_FIELD_LOOKUP_NORMALIZATION_STEPS).collect::<Vec<_>>()
+    );
     compile_value(&bounded).expect("the normalization-step boundary compiles");
 
-    bounded["recordTypes"][0]["fields"][1]["lookup"]["normalization"] = json!(std::iter::repeat_n(
-        "trim",
-        MAX_FIELD_LOOKUP_NORMALIZATION_STEPS + 1
-    )
-    .collect::<Vec<_>>());
+    bounded["recordTypes"]["case"]["fields"][1]["lookup"]["normalization"] = json!(
+        std::iter::repeat_n("trim", MAX_FIELD_LOOKUP_NORMALIZATION_STEPS + 1).collect::<Vec<_>>()
+    );
     let failure =
         compile_value(&bounded).expect_err("an unbounded normalization pipeline is refused");
     assert_retained_authoring_finding(&failure);
@@ -474,7 +472,7 @@ fn encrypted_lookup_refuses_structured_values_and_unbounded_normalization() {
 #[test]
 fn encrypted_field_refuses_valid_time_role_and_inconsistent_classification() {
     let mut source = encrypted_project();
-    source["recordTypes"][0]["fields"][1]["validTimeRole"] = json!("valid-from");
+    source["recordTypes"]["case"]["fields"][1]["validTimeRole"] = json!("valid-from");
     expect_code(&source, "breg.field.encrypted-valid-time-refused");
 
     // The compiler keeps its own refusal for programmatically assembled
@@ -492,12 +490,12 @@ fn encrypted_field_refuses_valid_time_role_and_inconsistent_classification() {
 #[test]
 fn encrypted_field_refuses_storage_constraints_and_authored_indexes() {
     let mut constrained = encrypted_project();
-    constrained["recordTypes"][0]["constraints"] =
+    constrained["recordTypes"]["case"]["constraints"] =
         json!([{"id":"secret-unique","type":"unique","fields":["secret"]}]);
     expect_code(&constrained, "breg.constraint.field-encrypted");
 
     let mut indexed = encrypted_project();
-    indexed["recordTypes"][0]["indexes"] = json!([{"id":"secret-index","fields":["secret"]}]);
+    indexed["recordTypes"]["case"]["indexes"] = json!([{"id":"secret-index","fields":["secret"]}]);
     expect_code(&indexed, "breg.index.fields-encrypted");
 }
 
@@ -527,15 +525,15 @@ fn encrypted_field_refuses_processing_row_boundaries_and_lookupless_selectors() 
     // A selector profile over an encrypted field is exact-match lookup and
     // must declare the blind index that serves it.
     let mut selector = encrypted_project();
-    selector["recordTypes"][0]["selectorProfiles"] =
+    selector["recordTypes"]["case"]["selectorProfiles"] =
         json!([{"id":"by-secret","fields":["secret"]}]);
-    selector["recordTypes"][0]["fields"][1]
+    selector["recordTypes"]["case"]["fields"][1]
         .as_object_mut()
         .unwrap()
         .remove("lookup");
     expect_code(&selector, "breg.selector-profile.encrypted-lookup-required");
     // Declaring the lookup removes the refusal.
-    selector["recordTypes"][0]["fields"][1]["lookup"] =
+    selector["recordTypes"]["case"]["fields"][1]["lookup"] =
         json!({"normalization":["uppercase"],"unique":true});
     compile_value(&selector).unwrap();
 }
@@ -543,19 +541,19 @@ fn encrypted_field_refuses_processing_row_boundaries_and_lookupless_selectors() 
 #[test]
 fn encrypted_fields_refuse_event_projection_and_conditions() {
     let mut projected = encrypted_project();
-    projected["recordTypes"][0]["hooks"] =
+    projected["recordTypes"]["case"]["hooks"] =
         json!([{"id":"secret-seen","phase":"after","trigger":"created","projection":["secret"]}]);
     expect_code(&projected, "breg.event.projection-encrypted");
 
     let mut conditioned = encrypted_project();
-    conditioned["recordTypes"][0]["hooks"] = json!([{
+    conditioned["recordTypes"]["case"]["hooks"] = json!([{
         "id":"secret-seen","phase":"after","trigger":"created","projection":["label"],
         "when":{"type":"fields","afterEquals":{"secret":"canary"}}
     }]);
     expect_code(&conditioned, "breg.event.when-encrypted");
 
     let mut changed = encrypted_project();
-    changed["recordTypes"][0]["hooks"] = json!([{
+    changed["recordTypes"]["case"]["hooks"] = json!([{
         "id":"secret-seen","phase":"after","trigger":"patched","projection":["label"],
         "when":{"type":"fields","changed":["secret"]}
     }]);
@@ -565,7 +563,7 @@ fn encrypted_fields_refuse_event_projection_and_conditions() {
 #[test]
 fn derived_sql_cannot_reference_encrypted_columns() {
     let mut source = encrypted_project();
-    source["recordTypes"][0]["derived"] = json!([{
+    source["recordTypes"]["case"]["derived"] = json!([{
         "id":"case-facts","sql":"sql/case-facts.sql","key":"id",
         "fields":[{"id":"fact-count","type":"int64","classification":"internal"}]
     }]);
@@ -603,15 +601,14 @@ fn derived_sql_cannot_reference_encrypted_columns() {
 #[test]
 fn derived_sql_resolves_qualified_columns_to_their_source_relation() {
     let mut source = encrypted_project();
-    source["recordTypes"].as_array_mut().unwrap().push(json!({
-        "id":"public-case","primaryDataset":"test-dataset","route":"public-cases",
+    source["recordTypes"].as_object_mut().unwrap().insert("public-case".to_owned(), json!({"primaryDataset":"test-dataset","route":"public-cases",
         "mutationMode":"mutable",
         "fields":[
             {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"},
             {"id":"secret","type":"string","maximumLength":256,"classification":"restricted"}
         ]
     }));
-    source["recordTypes"][0]["derived"] = json!([{
+    source["recordTypes"]["case"]["derived"] = json!([{
         "id":"case-facts","sql":"sql/case-facts.sql","key":"id",
         "fields":[{"id":"fact-count","type":"int64","classification":"internal"}]
     }]);
@@ -694,7 +691,7 @@ fn derived_sql_resolves_qualified_columns_to_their_source_relation() {
 
 fn proposal_project() -> Value {
     let mut source = encrypted_project();
-    source["recordTypes"][0]["mutationPolicy"] = json!({"patch":"proposal-required"});
+    source["recordTypes"]["case"]["mutationPolicy"] = json!({"patch":"proposal-required"});
     source["actions"] = json!([{"id":"correct-case","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"},"reviewContext":{"id":"case-context","fields":{"currentLabel":{"type":"record","input":"case","field":"label"}}}}},"inputs":[{"id":"case","type":"reference","target":"case","required":true,"classification":"restricted"},{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}],"plan":{"type":"fixed","effects":[{"id":"case","target":{"fromInput":"case"},"operation":"patch","set":{"label":{"fromInput":"label"}}}]}}]);
     let permissions = &mut source["accessProfiles"]["caseworker"]["permissions"];
     permissions["records"][0]["operations"] = json!(["get", "list"]);
@@ -739,7 +736,7 @@ fn native_proposal_inputs_do_not_accept_persisted_record_encryption_members() {
 #[test]
 fn membership_principal_field_cannot_be_encrypted() {
     let mut source = membership_fixture::source("facility");
-    source["recordTypes"][1]["fields"][1]["encrypted"] = json!(true);
+    source["recordTypes"]["membership"]["fields"][1]["encrypted"] = json!(true);
     let failure = membership_fixture::compile(&source).unwrap_err();
     assert!(failure
         .diagnostics()
@@ -750,8 +747,8 @@ fn membership_principal_field_cannot_be_encrypted() {
 #[test]
 fn action_requirements_cannot_name_encrypted_fields() {
     let mut source = action_requirements::project();
-    source["recordTypes"][0]["fields"][1]["encrypted"] = json!(true);
-    source["recordTypes"][0]["fields"][1]["lookup"] = json!({"normalization":["uppercase"]});
+    source["recordTypes"]["parent"]["fields"][1]["encrypted"] = json!(true);
+    source["recordTypes"]["parent"]["fields"][1]["lookup"] = json!({"normalization":["uppercase"]});
     source["actions"][0]["commitGuards"]["targets"]
         .as_array_mut()
         .unwrap()
@@ -777,15 +774,15 @@ fn encryption_flip_change_sets_classify_without_a_physical_rename() {
         let mut source = encrypted_project();
         match lookup {
             Some(lookup) => {
-                source["recordTypes"][0]["fields"][1]["lookup"] = lookup;
-                source["recordTypes"][0]["fields"][1]["encrypted"] = json!(true);
+                source["recordTypes"]["case"]["fields"][1]["lookup"] = lookup;
+                source["recordTypes"]["case"]["fields"][1]["encrypted"] = json!(true);
             }
             None => {
-                source["recordTypes"][0]["fields"][1]
+                source["recordTypes"]["case"]["fields"][1]
                     .as_object_mut()
                     .unwrap()
                     .remove("encrypted");
-                source["recordTypes"][0]["fields"][1]
+                source["recordTypes"]["case"]["fields"][1]
                     .as_object_mut()
                     .unwrap()
                     .remove("lookup");
@@ -798,7 +795,7 @@ fn encryption_flip_change_sets_classify_without_a_physical_rename() {
     let encrypted_unique = compile(Some(json!({"normalization":["uppercase"],"unique":true})));
     let encrypted_plain_lookup = compile(Some(json!({"normalization":["uppercase"]})));
     let mut no_lookup = encrypted_project();
-    no_lookup["recordTypes"][0]["fields"][1]
+    no_lookup["recordTypes"]["case"]["fields"][1]
         .as_object_mut()
         .unwrap()
         .remove("lookup");
@@ -879,7 +876,7 @@ fn encryption_flip_change_sets_classify_without_a_physical_rename() {
     // A keyed engine conversion must exist before an encrypted field may
     // change its authored type.
     let mut structured = encrypted_project();
-    structured["recordTypes"][0]["fields"][1] = json!({
+    structured["recordTypes"]["case"]["fields"][1] = json!({
         "id":"secret", "type":"structured", "maximumBytes":1024,
         "schema":{"type":"object","additionalProperties":false},
         "classification":"restricted", "encrypted":true
@@ -893,7 +890,7 @@ fn encryption_flip_change_sets_classify_without_a_physical_rename() {
     assert!(change_set_to_applicable_migration_plan(&type_change).is_err());
 
     let mut without_secret = encrypted_project();
-    without_secret["recordTypes"][0]["fields"]
+    without_secret["recordTypes"]["case"]["fields"]
         .as_array_mut()
         .expect("fields are an array")
         .retain(|field| field["id"] != "secret");
@@ -903,7 +900,7 @@ fn encryption_flip_change_sets_classify_without_a_physical_rename() {
         json!(["label"]);
     let without_secret = compile_value(&without_secret).unwrap();
     let mut required_encrypted = encrypted_project();
-    required_encrypted["recordTypes"][0]["fields"][1]["required"] = json!(true);
+    required_encrypted["recordTypes"]["case"]["fields"][1]["required"] = json!(true);
     let required_encrypted = compile_value(&required_encrypted).unwrap();
     let added_required = compiled_registry_change_set(&without_secret, &required_encrypted, prior);
     assert!(added_required.changes.iter().any(|change| {

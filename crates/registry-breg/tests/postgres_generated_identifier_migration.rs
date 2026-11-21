@@ -193,8 +193,7 @@ fn source(generated: bool) -> Source {
         "kind": "BRegModule",
         "id": "core",
         "version": "1",
-        "recordTypes": [{
-            "id": "record",
+        "recordTypes": {"record": {
             "primaryDataset": "records",
             "route": "records",
             "mutationMode": "mutable",
@@ -216,7 +215,7 @@ fn source(generated: bool) -> Source {
                 "readableFields": ["jurisdiction", "registration-code"],
                 "rowBoundaries": "unrestricted"
             }}
-        }]
+        }}
     }))
     .expect("module serializes");
     let parsed_module = parse_module_yaml(&module).expect("module parses for its digest");
@@ -258,11 +257,10 @@ fn source(generated: bool) -> Source {
                 "servesDatasets": ["records"]
             }]
         },
-        "modules": [{
-            "id": "core",
+        "modules": {"core": {
             "version": "1",
             "digest": module_digest(&parsed_module)
-        }]
+        }}
     }))
     .expect("project serializes");
     Source { project, module }

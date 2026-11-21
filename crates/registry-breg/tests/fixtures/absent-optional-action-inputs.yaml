@@ -3,7 +3,7 @@ kind: BRegProject
 project: {id: absent-optional-action-inputs, version: "1", defaultLanguage: en, canonicalBaseIri: https://absent-optional-action-inputs.example.test}
 datasets: [{id: test-dataset}]
 recordTypes:
-  - id: entry
+  entry:
     primaryDataset: test-dataset
     route: entries
     mutationMode: mutable

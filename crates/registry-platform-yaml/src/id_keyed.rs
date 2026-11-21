@@ -62,7 +62,7 @@ where
     for item in items {
         let mut value = serde_json::to_value(item).map_err(S::Error::custom)?;
         if let serde_json::Value::Object(members) = &mut value {
-            members.remove("id");
+            members.remove(T::KEY_MEMBER);
         }
         map.serialize_entry(item.id(), &value)?;
     }
@@ -72,11 +72,11 @@ where
 /// The schema of an [`id_keyed`] member: an object whose property names are
 /// the item's id and whose values are the item without its `id`.
 #[cfg(feature = "schema")]
-pub fn id_keyed_schema<T: schemars::JsonSchema>(
+pub fn id_keyed_schema<T: schemars::JsonSchema + crate::Identified>(
     generator: &mut schemars::SchemaGenerator,
 ) -> schemars::Schema {
     let mut item = T::json_schema(generator).to_value();
-    let names = keyed::take_id(&mut item)
+    let names = keyed::take_id(&mut item, T::KEY_MEMBER)
         .unwrap_or_else(|| generator.subschema_for::<crate::LocalId>().to_value());
     schemars::json_schema!({
         "type": "object",
@@ -88,7 +88,7 @@ pub fn id_keyed_schema<T: schemars::JsonSchema>(
 /// The schema of an [`id_keyed_or_list`] member: the mapping configuration
 /// writes, or, for the served form, the list of items by id.
 #[cfg(feature = "schema")]
-pub fn id_keyed_or_list_schema<T: schemars::JsonSchema>(
+pub fn id_keyed_or_list_schema<T: schemars::JsonSchema + crate::Identified>(
     generator: &mut schemars::SchemaGenerator,
 ) -> schemars::Schema {
     if generator.contract().is_serialize() {
@@ -169,6 +169,7 @@ mod keyed {
                 let Some(id) = id else { break };
                 items.push(map.next_value_seed(ItemSeed {
                     id,
+                    member: T::KEY_MEMBER,
                     item: PhantomData,
                 })?);
             }
@@ -190,6 +191,7 @@ mod keyed {
     /// One mapping value, read as an item whose `id` is the mapping key.
     struct ItemSeed<T> {
         id: String,
+        member: &'static str,
         item: PhantomData<T>,
     }
 
@@ -200,6 +202,7 @@ mod keyed {
             T::deserialize(WithId {
                 inner: deserializer,
                 id: self.id,
+                member: self.member,
             })
         }
     }
@@ -210,12 +213,13 @@ mod keyed {
     struct WithId<D> {
         inner: D,
         id: String,
+        member: &'static str,
     }
 
     macro_rules! forward {
         ($($method:ident),* $(,)?) => {$(
             fn $method<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, D::Error> {
-                self.inner.$method(IdVisitor { inner: visitor, id: self.id })
+                self.inner.$method(IdVisitor { inner: visitor, id: self.id, member: self.member })
             }
         )*};
     }
@@ -257,6 +261,7 @@ mod keyed {
             let visitor = IdVisitor {
                 inner: visitor,
                 id: self.id,
+                member: self.member,
             };
             self.inner.deserialize_unit_struct(name, visitor)
         }
@@ -269,6 +274,7 @@ mod keyed {
             let visitor = IdVisitor {
                 inner: visitor,
                 id: self.id,
+                member: self.member,
             };
             self.inner.deserialize_newtype_struct(name, visitor)
         }
@@ -281,6 +287,7 @@ mod keyed {
             let visitor = IdVisitor {
                 inner: visitor,
                 id: self.id,
+                member: self.member,
             };
             self.inner.deserialize_tuple(len, visitor)
         }
@@ -294,6 +301,7 @@ mod keyed {
             let visitor = IdVisitor {
                 inner: visitor,
                 id: self.id,
+                member: self.member,
             };
             self.inner.deserialize_tuple_struct(name, len, visitor)
         }
@@ -307,6 +315,7 @@ mod keyed {
             let visitor = IdVisitor {
                 inner: visitor,
                 id: self.id,
+                member: self.member,
             };
             self.inner.deserialize_struct(name, fields, visitor)
         }
@@ -320,6 +329,7 @@ mod keyed {
             let visitor = IdVisitor {
                 inner: visitor,
                 id: self.id,
+                member: self.member,
             };
             self.inner.deserialize_enum(name, variants, visitor)
         }
@@ -332,6 +342,7 @@ mod keyed {
     struct IdVisitor<V> {
         inner: V,
         id: String,
+        member: &'static str,
     }
 
     macro_rules! pass {
@@ -387,6 +398,7 @@ mod keyed {
             self.inner.visit_newtype_struct(WithId {
                 inner: deserializer,
                 id: self.id,
+                member: self.member,
             })
         }
 
@@ -394,6 +406,7 @@ mod keyed {
             self.inner.visit_map(PrependId {
                 inner: map,
                 id: Some(self.id),
+                member: self.member,
                 pending: None,
             })
         }
@@ -402,6 +415,7 @@ mod keyed {
             self.inner.visit_enum(IdEnum {
                 inner: data,
                 id: self.id,
+                member: self.member,
             })
         }
     }
@@ -410,6 +424,7 @@ mod keyed {
     struct PrependId<A> {
         inner: A,
         id: Option<String>,
+        member: &'static str,
         pending: Option<String>,
     }
 
@@ -423,7 +438,7 @@ mod keyed {
             match self.id.take() {
                 Some(id) => {
                     self.pending = Some(id);
-                    let key: StrDeserializer<'_, A::Error> = "id".into_deserializer();
+                    let key: StrDeserializer<'_, A::Error> = self.member.into_deserializer();
                     seed.deserialize(key).map(Some)
                 }
                 None => self.inner.next_key_seed(seed),
@@ -453,6 +468,7 @@ mod keyed {
     struct IdEnum<A> {
         inner: A,
         id: String,
+        member: &'static str,
     }
 
     impl<'de, A: EnumAccess<'de>> EnumAccess<'de> for IdEnum<A> {
@@ -469,6 +485,7 @@ mod keyed {
                 IdVariant {
                     inner: variant,
                     id: self.id,
+                    member: self.member,
                 },
             ))
         }
@@ -477,6 +494,7 @@ mod keyed {
     struct IdVariant<A> {
         inner: A,
         id: String,
+        member: &'static str,
     }
 
     impl<'de, A: VariantAccess<'de>> VariantAccess<'de> for IdVariant<A> {
@@ -493,6 +511,7 @@ mod keyed {
             self.inner.newtype_variant_seed(IdSeed {
                 inner: seed,
                 id: self.id,
+                member: self.member,
             })
         }
 
@@ -514,6 +533,7 @@ mod keyed {
                 IdVisitor {
                     inner: visitor,
                     id: self.id,
+                    member: self.member,
                 },
             )
         }
@@ -522,6 +542,7 @@ mod keyed {
     struct IdSeed<S> {
         inner: S,
         id: String,
+        member: &'static str,
     }
 
     impl<'de, S: DeserializeSeed<'de>> DeserializeSeed<'de> for IdSeed<S> {
@@ -531,29 +552,33 @@ mod keyed {
             self.inner.deserialize(WithId {
                 inner: deserializer,
                 id: self.id,
+                member: self.member,
             })
         }
     }
 
-    /// Remove `id` from an item schema, from each branch of a union, and
+    /// Remove the key member (`id` unless the item says otherwise) from an item schema, from each branch of a union, and
     /// return the schema the id had, which a mapping's keys then follow.
     #[cfg(feature = "schema")]
-    pub(super) fn take_id(schema: &mut serde_json::Value) -> Option<serde_json::Value> {
+    pub(super) fn take_id(
+        schema: &mut serde_json::Value,
+        member: &str,
+    ) -> Option<serde_json::Value> {
         use serde_json::Value;
         let Value::Object(object) = schema else {
             return None;
         };
         let mut taken = None;
         if let Some(Value::Object(properties)) = object.get_mut("properties") {
-            taken = properties.remove("id");
+            taken = properties.remove(member);
         }
         if let Some(Value::Array(required)) = object.get_mut("required") {
-            required.retain(|member| member != "id");
+            required.retain(|required| required != member);
         }
         for union in ["oneOf", "anyOf"] {
             if let Some(Value::Array(branches)) = object.get_mut(union) {
                 for branch in branches {
-                    let branch_id = take_id(branch);
+                    let branch_id = take_id(branch, member);
                     taken = taken.or(branch_id);
                 }
             }

@@ -15,11 +15,11 @@ use registry_breg::diagnostics::DiagnosticSeverity;
 use registry_breg::evidence_source::{export_evidence_source, EvidenceSourceOptions};
 use serde_json::{json, Value};
 
-const PERSON: usize = 0;
-const HOUSEHOLD: usize = 1;
-const HOUSEHOLD_MEMBER: usize = 2;
-const ENROLMENT: usize = 3;
-const CONSENT: usize = 4;
+const PERSON: &str = "person";
+const HOUSEHOLD: &str = "household";
+const HOUSEHOLD_MEMBER: &str = "household-member";
+const ENROLMENT: &str = "enrolment";
+const CONSENT: &str = "consent-decision";
 const FOOD_TARGETING: &str = "food-targeting";
 const FEED: &str = "recipient-feed";
 const STEWARD: &str = "steward";
@@ -231,10 +231,9 @@ fn consent_record_is_a_leaf() {
     // Not the key target of a consent probe.
     let mut value = source();
     let mut second = value["recordTypes"][CONSENT].clone();
-    second["id"] = json!("consent-audit");
     second["route"] = json!("consent-audits");
     second["fields"][0]["target"] = json!("consent-decision");
-    value["recordTypes"].as_array_mut().unwrap().push(second);
+    value["recordTypes"]["consent-audit"] = second;
     value["accessProfiles"][FEED]["permissions"]["records"][0]["requireConsent"] =
         json!([{"record": "consent-audit", "on": "id"}]);
     assert_refused(&value, "breg.consent.record-leaf");
@@ -1305,12 +1304,7 @@ fn package_sealed_with_an_earlier_duration(
     let source_path = "source/registry.yaml";
     let mut project: Value =
         serde_json::from_slice(&fs::read(root.join(source_path)).unwrap()).unwrap();
-    let validity = project["recordTypes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|entity| entity["id"] == "consent-decision")
-        .expect("the packaged project declares the consent record")["consentRecord"]["validity"]
+    let validity = project["recordTypes"]["consent-decision"]["consentRecord"]["validity"]
         .as_object_mut()
         .unwrap();
     assert_eq!(validity.remove("maximumDurationDays"), Some(json!(365)));

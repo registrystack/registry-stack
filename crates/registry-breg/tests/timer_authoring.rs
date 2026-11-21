@@ -19,7 +19,7 @@ fn timer_project_value() -> Value {
     let mut source = serde_json::to_value(project).expect("the project serializes");
     remove_nulls(&mut source);
 
-    let record = &mut source["recordTypes"][0];
+    let record = &mut source["recordTypes"]["contact"];
     record["fields"]
         .as_array_mut()
         .expect("fields are a list")
@@ -377,15 +377,16 @@ fn timer_compiles_complete_typed_mapping_and_exact_system_grant() {
 #[test]
 fn encrypted_predicate_and_mapped_fields_are_in_the_exact_anchor_read_ceiling() {
     let mut source = timer_project_value();
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["contact"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"secret", "type":"string", "maximumLength":160,
             "classification":"restricted", "encrypted":true
         }));
-    source["recordTypes"][0]["timers"][0]["when"]["equals"]["secret"] = json!("ready");
-    source["recordTypes"][0]["timers"][0]["input"]["secret"] = json!({"fromField":"secret"});
+    source["recordTypes"]["contact"]["timers"][0]["when"]["equals"]["secret"] = json!("ready");
+    source["recordTypes"]["contact"]["timers"][0]["input"]["secret"] =
+        json!({"fromField":"secret"});
     let action = source["actions"]
         .as_array_mut()
         .unwrap()
@@ -413,13 +414,13 @@ fn encrypted_predicate_and_mapped_fields_are_in_the_exact_anchor_read_ceiling() 
 #[test]
 fn timestamp_predicate_matches_the_stored_instant_across_offsets() {
     let mut source = timer_project_value();
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["contact"]["fields"]
         .as_array_mut()
         .expect("fields are a list")
         .push(json!({
             "id":"gate-at", "type":"timestamp", "classification":"internal"
         }));
-    source["recordTypes"][0]["timers"][0]["when"]["equals"] =
+    source["recordTypes"]["contact"]["timers"][0]["when"]["equals"] =
         json!({"gate-at":"2026-10-28T08:15:30+07:00"});
 
     let registry = compile_value(source.clone()).expect("a timestamp predicate compiles");
@@ -450,7 +451,7 @@ fn timestamp_predicate_matches_the_stored_instant_across_offsets() {
         timer.definition_revision,
         stable.entities()["contact"].timers["activate"].definition_revision
     );
-    source["recordTypes"][0]["timers"][0]["when"]["equals"]["gate-at"] =
+    source["recordTypes"]["contact"]["timers"][0]["when"]["equals"]["gate-at"] =
         json!("2026-10-28T08:15:31+07:00");
     let changed = compile_value(source).expect("a changed timestamp predicate compiles");
     assert_ne!(
@@ -462,7 +463,7 @@ fn timestamp_predicate_matches_the_stored_instant_across_offsets() {
 #[test]
 fn timer_authoring_is_closed_and_root_grants_are_root_only() {
     let mut unknown = timer_project_value();
-    unknown["recordTypes"][0]["timers"][0]["cron"] = json!("daily");
+    unknown["recordTypes"]["contact"]["timers"][0]["cron"] = json!("daily");
     let bytes = serde_json::to_vec(&unknown).unwrap();
     assert!(parse_project_json(&bytes).is_err());
 
@@ -481,8 +482,8 @@ fn timer_reader_refuses_duplicate_members_keys_and_ids() {
     let serialized =
         serde_json::to_string(&timer_project_value()).expect("timer project serializes");
     let mut duplicate_timer_id = timer_project_value();
-    let timer = duplicate_timer_id["recordTypes"][0]["timers"][0].clone();
-    duplicate_timer_id["recordTypes"][0]["timers"]
+    let timer = duplicate_timer_id["recordTypes"]["contact"]["timers"][0].clone();
+    duplicate_timer_id["recordTypes"]["contact"]["timers"]
         .as_array_mut()
         .expect("timers are a list")
         .push(timer);
@@ -555,19 +556,19 @@ fn timer_reader_refuses_duplicate_members_keys_and_ids() {
 #[test]
 fn module_timer_definition_requires_and_uses_root_enablement() {
     let mut source = timer_project_value();
-    let timer = source["recordTypes"][0]
+    let timer = source["recordTypes"]["contact"]
         .as_object_mut()
         .expect("Record type is an object")
         .remove("timers")
         .expect("root timer exists");
-    source["modules"] = json!([{"id":"timer-module","version":"1"}]);
+    source["modules"] = json!({"timer-module": {"version":"1"}});
     let module = parse_module_json(
         &serde_json::to_vec(&json!({
             "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
             "kind":"BRegModule",
             "id":"timer-module",
             "version":"1",
-            "extendRecordTypes":[{"recordType":"contact","timers":timer}]
+            "extendRecordTypes":{"contact": {"timers":timer}}
         }))
         .expect("module source serializes"),
     )
@@ -624,7 +625,7 @@ fn module_timer_definition_requires_and_uses_root_enablement() {
         .any(|diagnostic| diagnostic.code == "breg.timer.grant-missing"));
 
     let mut duplicate_source = timer_project_value();
-    duplicate_source["modules"] = json!([{"id":"timer-module","version":"1"}]);
+    duplicate_source["modules"] = json!({"timer-module": {"version":"1"}});
     let duplicate_project =
         parse_project_json(&serde_json::to_vec(&duplicate_source).unwrap()).unwrap();
     let failure = compile_project(
@@ -635,7 +636,7 @@ fn module_timer_definition_requires_and_uses_root_enablement() {
                 "kind":"BRegModule",
                 "id":"timer-module",
                 "version":"1",
-                "extendRecordTypes":[{"recordType":"contact","timers":timer_project_value()["recordTypes"][0]["timers"].clone()}]
+                "extendRecordTypes":{"contact": {"timers":timer_project_value()["recordTypes"]["contact"]["timers"].clone()}}
             }))
             .unwrap(),
         )
@@ -659,16 +660,14 @@ fn module_timer_definition_requires_and_uses_root_enablement() {
         &serde_json::to_vec(&json!({
             "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
             "kind":"BRegModule","id":"timer-module-2","version":"1",
-            "extendRecordTypes":[{"recordType":"contact","timers":timer_project_value()["recordTypes"][0]["timers"].clone()}]
+            "extendRecordTypes":{"contact": {"timers":timer_project_value()["recordTypes"]["contact"]["timers"].clone()}}
         }))
         .unwrap(),
     )
     .unwrap();
     let mut two_module_source = source;
-    two_module_source["modules"] = json!([
-        {"id":"timer-module","version":"1"},
-        {"id":"timer-module-2","version":"1"}
-    ]);
+    two_module_source["modules"] =
+        json!({"timer-module": {"version":"1"}, "timer-module-2": {"version":"1"}});
     let two_module_project =
         parse_project_json(&serde_json::to_vec(&two_module_source).unwrap()).unwrap();
     let failure = compile_project(
@@ -694,29 +693,29 @@ fn timer_requires_exact_root_grant_and_complete_mapping() {
     assert_refused(dangling_grant, "breg.timer.grant-unknown");
 
     let mut unknown_action = timer_project_value();
-    unknown_action["recordTypes"][0]["timers"][0]["invoke"] = json!("missing");
+    unknown_action["recordTypes"]["contact"]["timers"][0]["invoke"] = json!("missing");
     unknown_action["actions"].as_array_mut().unwrap().pop();
     assert_refused(unknown_action, "breg.timer.action-unknown");
 
     let mut incomplete = timer_project_value();
-    incomplete["recordTypes"][0]["timers"][0]["input"]
+    incomplete["recordTypes"]["contact"]["timers"][0]["input"]
         .as_object_mut()
         .unwrap()
         .remove("planned-at");
     assert_refused(incomplete, "breg.timer.input-incomplete");
 
     let mut wrong_type = timer_project_value();
-    wrong_type["recordTypes"][0]["timers"][0]["input"]["operation-id"] =
+    wrong_type["recordTypes"]["contact"]["timers"][0]["input"]["operation-id"] =
         json!({"fromField":"activates-at"});
     assert_refused(wrong_type, "breg.timer.input-type-mismatch");
 
     let mut multiple_sources = timer_project_value();
-    multiple_sources["recordTypes"][0]["timers"][0]["input"]["planned-at"]["value"] =
+    multiple_sources["recordTypes"]["contact"]["timers"][0]["input"]["planned-at"]["value"] =
         json!("2026-10-28T00:00:00Z");
     assert_refused(multiple_sources, "breg.timer.input-source-invalid");
 
     let mut wrong_predicate_type = timer_project_value();
-    wrong_predicate_type["recordTypes"][0]["timers"][0]["when"]["equals"]["active"] =
+    wrong_predicate_type["recordTypes"]["contact"]["timers"][0]["when"]["equals"]["active"] =
         json!("false");
     assert_refused(wrong_predicate_type, "breg.timer.predicate-invalid");
 }
@@ -734,31 +733,30 @@ fn timer_action_refuses_revision_unchanged_guard_without_a_caller_condition() {
 #[test]
 fn timer_control_predicate_and_mapping_types_are_closed() {
     let mut unknown_at = timer_project_value();
-    unknown_at["recordTypes"][0]["timers"][0]["at"] = json!("missing");
+    unknown_at["recordTypes"]["contact"]["timers"][0]["at"] = json!("missing");
     assert_refused(unknown_at, "breg.timer.control-field-unknown");
 
     let mut wrong_at = timer_project_value();
-    wrong_at["recordTypes"][0]["timers"][0]["at"] = json!("active");
+    wrong_at["recordTypes"]["contact"]["timers"][0]["at"] = json!("active");
     assert_refused(wrong_at, "breg.timer.control-field-type");
 
     let mut same_window = timer_project_value();
-    same_window["recordTypes"][0]["timers"][0]["notAfter"] = json!("activates-at");
+    same_window["recordTypes"]["contact"]["timers"][0]["notAfter"] = json!("activates-at");
     assert_refused(same_window, "breg.timer.control-field-type");
 
     let mut wrong_rearm = timer_project_value();
-    wrong_rearm["recordTypes"][0]["timers"][0]["rearmOn"] = json!("activates-at");
+    wrong_rearm["recordTypes"]["contact"]["timers"][0]["rearmOn"] = json!("activates-at");
     assert_refused(wrong_rearm, "breg.timer.control-field-type");
 
     let mut integer_rearm = timer_project_value();
-    integer_rearm["recordTypes"][0]["fields"][6]["type"] = json!("int64");
+    integer_rearm["recordTypes"]["contact"]["fields"][6]["type"] = json!("int64");
     compile_value(integer_rearm).expect("an integer revision may rearm the same date");
 
     let mut wrong_anchor = timer_project_value();
     wrong_anchor["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(json!({
-            "id":"other","route":"others","primaryDataset":"directory",
+        .insert("other".to_owned(), json!({"route":"others","primaryDataset":"directory",
             "mutationMode":"mutable","fields":[{"id":"name","type":"string","maximumLength":32,"classification":"internal"}]
         }));
     wrong_anchor["actions"][2]["inputs"]
@@ -767,37 +765,39 @@ fn timer_control_predicate_and_mapping_types_are_closed() {
         .push(json!({
             "id":"other","type":"reference","target":"other","required":true,"classification":"internal"
         }));
-    wrong_anchor["recordTypes"][0]["timers"][0]["input"]["other"] = json!({"fromRecordId":true});
+    wrong_anchor["recordTypes"]["contact"]["timers"][0]["input"]["other"] =
+        json!({"fromRecordId":true});
     assert_refused(wrong_anchor, "breg.timer.input-type-mismatch");
 
     let mut unknown_field = timer_project_value();
-    unknown_field["recordTypes"][0]["timers"][0]["input"]["planned-at"] =
+    unknown_field["recordTypes"]["contact"]["timers"][0]["input"]["planned-at"] =
         json!({"fromField":"missing"});
     assert_refused(unknown_field, "breg.timer.input-field-unknown");
 
     let mut due_at = timer_project_value();
     due_at["actions"][2]["inputs"][2]["type"] = json!("timestamp");
-    due_at["recordTypes"][0]["timers"][0]["input"]["operation-id"] = json!({"fromTimer":"due-at"});
+    due_at["recordTypes"]["contact"]["timers"][0]["input"]["operation-id"] =
+        json!({"fromTimer":"due-at"});
     compile_value(due_at).expect("the stored due instant maps to a timestamp input");
 
     let mut wrong_due_at = timer_project_value();
-    wrong_due_at["recordTypes"][0]["timers"][0]["input"]["operation-id"] =
+    wrong_due_at["recordTypes"]["contact"]["timers"][0]["input"]["operation-id"] =
         json!({"fromTimer":"due-at"});
     assert_refused(wrong_due_at, "breg.timer.input-type-mismatch");
 
     let mut literal = timer_project_value();
-    literal["recordTypes"][0]["timers"][0]["input"]["operation-id"] =
+    literal["recordTypes"]["contact"]["timers"][0]["input"]["operation-id"] =
         json!({"value":"00000000-0000-4000-8000-000000000001"});
     compile_value(literal).expect("a typed literal maps to an Action input");
 
     let mut wrong_literal = timer_project_value();
-    wrong_literal["recordTypes"][0]["timers"][0]["input"]["operation-id"] =
+    wrong_literal["recordTypes"]["contact"]["timers"][0]["input"]["operation-id"] =
         json!({"value":"not-a-uuid"});
     assert_refused(wrong_literal, "breg.timer.input-type-mismatch");
 
     let mut non_canonical_integer_literal = timer_project_value();
     non_canonical_integer_literal["actions"][2]["inputs"][2]["type"] = json!("int64");
-    non_canonical_integer_literal["recordTypes"][0]["timers"][0]["input"]["operation-id"] =
+    non_canonical_integer_literal["recordTypes"]["contact"]["timers"][0]["input"]["operation-id"] =
         json!({"value":i64::MAX});
     assert_compiler_refused(
         non_canonical_integer_literal,
@@ -805,13 +805,13 @@ fn timer_control_predicate_and_mapping_types_are_closed() {
     );
 
     let mut non_canonical_integer_predicate = timer_project_value();
-    non_canonical_integer_predicate["recordTypes"][0]["fields"]
+    non_canonical_integer_predicate["recordTypes"]["contact"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"unsafe-count","type":"int64","classification":"internal"
         }));
-    non_canonical_integer_predicate["recordTypes"][0]["timers"][0]["when"]["equals"] =
+    non_canonical_integer_predicate["recordTypes"]["contact"]["timers"][0]["when"]["equals"] =
         json!({"unsafe-count":i64::MAX});
     assert_compiler_refused(
         non_canonical_integer_predicate,
@@ -819,7 +819,8 @@ fn timer_control_predicate_and_mapping_types_are_closed() {
     );
 
     let mut null_literal = timer_project_value();
-    null_literal["recordTypes"][0]["timers"][0]["input"]["operation-id"] = json!({"value":null});
+    null_literal["recordTypes"]["contact"]["timers"][0]["input"]["operation-id"] =
+        json!({"value":null});
     let null_failure = parse_project_json(&serde_json::to_vec(&null_literal).unwrap())
         .expect_err("null is not an authored timer literal");
     assert!(null_failure
@@ -828,18 +829,18 @@ fn timer_control_predicate_and_mapping_types_are_closed() {
         .any(|diagnostic| diagnostic.code == "config.null-value"));
 
     let mut empty_predicate = timer_project_value();
-    empty_predicate["recordTypes"][0]["timers"][0]["when"]["equals"] = json!({});
+    empty_predicate["recordTypes"]["contact"]["timers"][0]["when"]["equals"] = json!({});
     assert_refused(empty_predicate, "breg.timer.predicate-bounds");
 
     let mut wide_predicate = timer_project_value();
-    wide_predicate["recordTypes"][0]["timers"][0]["when"]["equals"] = json!({});
+    wide_predicate["recordTypes"]["contact"]["timers"][0]["when"]["equals"] = json!({});
     for index in 0..17 {
         let field = format!("predicate-{index}");
-        wide_predicate["recordTypes"][0]["fields"]
+        wide_predicate["recordTypes"]["contact"]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({"id":field,"type":"boolean","classification":"internal"}));
-        wide_predicate["recordTypes"][0]["timers"][0]["when"]["equals"]
+        wide_predicate["recordTypes"]["contact"]["timers"][0]["when"]["equals"]
             .as_object_mut()
             .unwrap()
             .insert(field, json!(true));
@@ -943,7 +944,7 @@ fn timer_refuses_remote_function_and_evidence_capabilities() {
             "id":"evidence-key","type":"string","minimumLength":1,"maximumLength":200,
             "required":true,"classification":"internal"
         }));
-    commit_evidence["recordTypes"][0]["timers"][0]["input"]["evidence-key"] =
+    commit_evidence["recordTypes"]["contact"]["timers"][0]["input"]["evidence-key"] =
         json!({"value":"contact"});
     commit_evidence["actions"][2]["commitGuards"] = json!({"evidence":[{
         "id":"commit-status","provider":"provider",
@@ -967,13 +968,13 @@ fn timer_refuses_consent_issuance_capability() {
         .expect("maintained consent fixture parses");
     let mut consent = serde_json::to_value(authored).unwrap();
     remove_nulls(&mut consent);
-    consent["recordTypes"][0]["fields"]
+    consent["recordTypes"]["person"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"activates-at","type":"timestamp","classification":"internal"
         }));
-    consent["recordTypes"][0]["timers"] = json!([{
+    consent["recordTypes"]["person"]["timers"] = json!([{
         "id":"record-consent","at":"activates-at","invoke":"timer-record-consent",
         "input":{
             "subject":{"fromRecordId":true},"recipient":{"value":"wfp"},
@@ -1007,36 +1008,36 @@ fn timer_revision_covers_controls_gate_mapping_action_and_system_grant() {
     let mut variants = Vec::new();
 
     let mut at = source.clone();
-    at["recordTypes"][0]["timers"][0]["at"] = json!("activation-window-end");
-    at["recordTypes"][0]["timers"][0]["notAfter"] = json!("activates-at");
+    at["recordTypes"]["contact"]["timers"][0]["at"] = json!("activation-window-end");
+    at["recordTypes"]["contact"]["timers"][0]["notAfter"] = json!("activates-at");
     variants.push(at);
 
     let mut not_after = source.clone();
-    not_after["recordTypes"][0]["timers"][0]
+    not_after["recordTypes"]["contact"]["timers"][0]
         .as_object_mut()
         .unwrap()
         .remove("notAfter");
     variants.push(not_after);
 
     let mut rearm = source.clone();
-    rearm["recordTypes"][0]["timers"][0]
+    rearm["recordTypes"]["contact"]["timers"][0]
         .as_object_mut()
         .unwrap()
         .remove("rearmOn");
     variants.push(rearm);
 
     let mut predicate = source.clone();
-    predicate["recordTypes"][0]["timers"][0]["when"]["equals"]["active"] = json!(true);
+    predicate["recordTypes"]["contact"]["timers"][0]["when"]["equals"]["active"] = json!(true);
     variants.push(predicate);
 
     let mut mapping = source.clone();
-    mapping["recordTypes"][0]["fields"]
+    mapping["recordTypes"]["contact"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"alternate-planned-at","type":"timestamp","classification":"internal"
         }));
-    mapping["recordTypes"][0]["timers"][0]["input"]["planned-at"] =
+    mapping["recordTypes"]["contact"]["timers"][0]["input"]["planned-at"] =
         json!({"fromField":"alternate-planned-at"});
     let mapping_changed =
         compile_value(mapping).expect("mapped anchor read ceiling change compiles");
@@ -1082,7 +1083,7 @@ fn timer_revision_covers_controls_gate_mapping_action_and_system_grant() {
 #[test]
 fn timer_revision_covers_affected_event_delivery_definition() {
     let mut source = timer_project_value();
-    source["recordTypes"][0]["hooks"] = json!([{
+    source["recordTypes"]["contact"]["hooks"] = json!([{
         "id":"contact-patched","phase":"after","trigger":"patched","projection":["active"],
         "handler":{"type":"url","destinationId":"timer-events"}
     }]);
@@ -1090,7 +1091,7 @@ fn timer_revision_covers_affected_event_delivery_definition() {
     let baseline_timer = &baseline.entities()["contact"].timers["activate"];
     assert_eq!(baseline_timer.event_deliveries.len(), 1);
 
-    source["recordTypes"][0]["hooks"][0]["projection"] = json!(["active", "name"]);
+    source["recordTypes"]["contact"]["hooks"][0]["projection"] = json!(["active", "name"]);
     let changed = compile_value(source).expect("changed event projection compiles");
     let changed_timer = &changed.entities()["contact"].timers["activate"];
     assert_eq!(
@@ -1107,12 +1108,11 @@ fn timer_revision_covers_affected_event_delivery_definition() {
 #[test]
 fn timer_system_authority_is_anchor_and_create_bounded() {
     let mut create_only = timer_project_value();
-    create_only["recordTypes"][0]["mutationMode"] = json!("create-only");
+    create_only["recordTypes"]["contact"]["mutationMode"] = json!("create-only");
     create_only["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(json!({
-            "id":"activation-log","route":"activation-logs","primaryDataset":"directory",
+        .insert("activation-log".to_owned(), json!({"route":"activation-logs","primaryDataset":"directory",
             "mutationMode":"create-only","fields":[
                 {"id":"contact","type":"reference","target":"contact","required":true,"classification":"internal"},
                 {"id":"planned-at","type":"timestamp","required":true,"classification":"internal"},
@@ -1193,44 +1193,47 @@ fn timer_system_authority_is_anchor_and_create_bounded() {
     compile_value(exact_anchor_at_ceiling.clone())
         .expect("an existing exact anchor target counts once at the target ceiling");
 
-    exact_anchor_at_ceiling["recordTypes"][0]["fields"]
+    exact_anchor_at_ceiling["recordTypes"]["contact"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"related-contact","type":"reference","target":"contact",
             "classification":"internal"
         }));
-    exact_anchor_at_ceiling["recordTypes"][0]["timers"][0]["input"]["contact"] =
+    exact_anchor_at_ceiling["recordTypes"]["contact"]["timers"][0]["input"]["contact"] =
         json!({"fromField":"related-contact"});
     assert_refused(exact_anchor_at_ceiling, "breg.timer.bounds-targets");
 
     let mut oversized_anchor_read = timer_project_value();
-    oversized_anchor_read["recordTypes"][0]["fields"]
+    oversized_anchor_read["recordTypes"]["contact"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"large-policy-fact","type":"string","maximumLength":1_000_000,
             "classification":"internal"
         }));
-    oversized_anchor_read["recordTypes"][0]["timers"][0]["when"]["equals"]["large-policy-fact"] =
-        json!("ready");
+    oversized_anchor_read["recordTypes"]["contact"]["timers"][0]["when"]["equals"]
+        ["large-policy-fact"] = json!("ready");
     assert_refused(oversized_anchor_read, "breg.timer.bounds-snapshot-bytes");
 
     let mut proposal_required = timer_project_value();
-    proposal_required["recordTypes"][0]["mutationPolicy"] = json!({"patch":"proposal-required"});
+    proposal_required["recordTypes"]["contact"]["mutationPolicy"] =
+        json!({"patch":"proposal-required"});
     assert_refused(proposal_required, "breg.action.effect-controlled-target");
 
     let mut other_existing = timer_project_value();
     other_existing["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(json!({
-            "id":"other",
-            "route":"others",
-            "primaryDataset":"directory",
-            "mutationMode":"mutable",
-            "fields":[{"id":"active","type":"boolean","classification":"internal"}]
-        }));
+        .insert(
+            "other".to_owned(),
+            json!({
+                "route":"others",
+                "primaryDataset":"directory",
+                "mutationMode":"mutable",
+                "fields":[{"id":"active","type":"boolean","classification":"internal"}]
+            }),
+        );
     other_existing["actions"][2]["inputs"].as_array_mut().unwrap().push(json!({
         "id":"other","type":"reference","target":"other","required":true,"classification":"internal"
     }));
@@ -1243,13 +1246,14 @@ fn timer_system_authority_is_anchor_and_create_bounded() {
             "operation":"patch",
             "set":{"active":{"value":true}}
         }));
-    other_existing["recordTypes"][0]["fields"]
+    other_existing["recordTypes"]["contact"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"other","type":"reference","target":"other","classification":"internal"
         }));
-    other_existing["recordTypes"][0]["timers"][0]["input"]["other"] = json!({"fromField":"other"});
+    other_existing["recordTypes"]["contact"]["timers"][0]["input"]["other"] =
+        json!({"fromField":"other"});
     assert_refused(
         other_existing,
         "breg.timer.action-existing-target-forbidden",
@@ -1265,7 +1269,7 @@ fn timer_system_authority_is_anchor_and_create_bounded() {
 #[test]
 fn timer_control_fields_cannot_be_encrypted() {
     let mut source = timer_project_value();
-    let at = source["recordTypes"][0]["fields"]
+    let at = source["recordTypes"]["contact"]["fields"]
         .as_array_mut()
         .unwrap()
         .iter_mut()

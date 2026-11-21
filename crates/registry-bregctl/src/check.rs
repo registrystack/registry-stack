@@ -541,23 +541,18 @@ impl Documents {
     ) {
         let (document_index, document) = self.document_for_module(module);
         let mut candidates = vec![id_item_steps("recordTypes", record_id)];
-        let extension_items =
-            document
-                .root()
-                .get("extendRecordTypes")
-                .and_then(|entry| match &entry.value.value {
-                    NodeValue::Sequence(items) => Some(items),
-                    _ => None,
-                });
-        if let Some(items) = extension_items {
-            for (index, item) in items.iter().enumerate() {
-                if names(item, Some("recordType"), record_id) {
-                    candidates.push(vec![
-                        Step::Member("extendRecordTypes".to_owned()),
-                        Step::Index(index),
-                    ]);
-                }
-            }
+        if document
+            .root()
+            .get("extendRecordTypes")
+            .is_some_and(|entry| entry.value.get(record_id).is_some())
+        {
+            candidates.push(vec![
+                Step::Member("extendRecordTypes".to_owned()),
+                Step::Select {
+                    key: None,
+                    value: record_id.to_owned(),
+                },
+            ]);
         }
         let mut matches = candidates.into_iter().filter_map(|mut candidate| {
             candidate.extend_from_slice(member_steps);
@@ -1295,7 +1290,7 @@ fn package_code(error: &PackageError) -> &'static str {
         | PackageError::Integrity
         | PackageError::CanonicalJson
         | PackageError::Derivation
-        | PackageError::PredecessorSources(_)
+        | PackageError::PreviousReleaseSources(_)
         | PackageError::EntityIdMember
         | PackageError::MigrationPlan
         | PackageError::ReviewedMigration(_) => "breg.package.integrity-refused",
@@ -1305,6 +1300,10 @@ fn package_code(error: &PackageError) -> &'static str {
         PackageError::RetiredApiVersion => "config.retired-api-version",
     }
 }
+
+/// The next step for a package built before this release. A test pins it to
+/// `registry_breg::package::FRESH_DATABASE_PATH`.
+const PREVIOUS_RELEASE_ACTION: &str = "Create a fresh database, rebuild the package with this release's `bregctl test` and `bregctl package`, and run `bregctl apply --package DIR --initial`.";
 
 fn package_action(error: &PackageError) -> &'static str {
     match error {
@@ -1323,7 +1322,9 @@ fn package_action(error: &PackageError) -> &'static str {
         PackageError::RetiredApiVersion => {
             "Rebuild the package with this bregctl: bregctl package PROJECT --test-receipt RECEIPT --output BUILD, then apply the rebuilt package to a new database: bregctl apply --initial --package BUILD."
         }
-        PackageError::EngineFeatureUpgradeRequired => super::PACKAGE_ENGINE_UPGRADE_REQUIRED,
+        PackageError::EngineFeatureUpgradeRequired | PackageError::PreviousReleaseSources(_) => {
+            PREVIOUS_RELEASE_ACTION
+        }
         _ => REBUILD_PACKAGE,
     }
 }
@@ -1530,10 +1531,10 @@ fn resolve_module_path(document: &Document, steps: &[Step]) -> Resolved {
     best
 }
 
-/// Exact source spellings for a compiler path normalized under
+/// Exact source spelling for a compiler path normalized under
 /// `recordTypes` or explicitly naming `extendRecordTypes`. A module may declare
-/// and extend the same Record type, and it may use more than one extension
-/// block for that type, so every matching block is a candidate.
+/// and extend the same Record type, and an extension is keyed by the Record
+/// type it extends, so at most one block matches.
 fn record_extension_alternatives(document: &Document, steps: &[Step]) -> Vec<Vec<Step>> {
     let [Step::Member(records), record, rest @ ..] = steps else {
         return Vec::new();
@@ -1544,21 +1545,23 @@ fn record_extension_alternatives(document: &Document, steps: &[Step]) -> Vec<Vec
     let Some(extensions) = document.root().get("extendRecordTypes") else {
         return Vec::new();
     };
-    let NodeValue::Sequence(items) = &extensions.value.value else {
+    let NodeValue::Mapping(entries) = &extensions.value.value else {
         return Vec::new();
     };
-    items
+    entries
         .iter()
-        .enumerate()
-        .filter(|(_, item)| match record {
-            Step::Select { value, .. } => names(item, Some("recordType"), value),
+        .filter(|entry| match record {
+            Step::Select { value, .. } => &entry.key == value,
             Step::Any => true,
             Step::Index(_) | Step::Member(_) => false,
         })
-        .map(|(index, _)| {
+        .map(|entry| {
             let mut alternative = vec![
                 Step::Member("extendRecordTypes".to_owned()),
-                Step::Index(index),
+                Step::Select {
+                    key: None,
+                    value: entry.key.clone(),
+                },
             ];
             alternative.extend_from_slice(rest);
             alternative
@@ -1867,6 +1870,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn packages_built_before_this_release_name_the_fresh_database_path() {
+        for error in [
+            PackageError::EngineFeatureUpgradeRequired,
+            PackageError::PreviousReleaseSources("first diagnostic".into()),
+        ] {
+            let action = package_action(&error).to_lowercase();
+            assert!(
+                action.contains(&registry_breg::package::FRESH_DATABASE_PATH.to_lowercase()),
+                "{error}: {action}"
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains(registry_breg::package::FRESH_DATABASE_PATH),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
     fn temporal_and_record_api_name_errors_identify_the_setting_to_change() {
         for (code, setting) in [
             ("breg.field.valid-time-start-required", "required: true"),
@@ -2012,7 +2035,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .any(|binding| binding["sourcePointer"] == "/extendRecordTypes/0/fields/0"));
+            .any(|binding| binding["sourcePointer"] == "/extendRecordTypes/record/fields/0"));
     }
 
     #[test]
@@ -2068,7 +2091,7 @@ mod tests {
             modules: vec![(
                 "combined".to_owned(),
                 module_document(
-                    "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: combined\nversion: 0.1.0\nrecordTypes:\n  - id: record\n    route: records\n    mutationMode: mutable\n    fields:\n      - {id: base, type: string, maximumLength: 20, classification: internal}\nextendRecordTypes:\n  - recordType: record\n    fields:\n      - {id: extension, type: string, maximumLength: 20, classification: internal}\n",
+                    "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: combined\nversion: 0.1.0\nrecordTypes:\n  record:\n    route: records\n    mutationMode: mutable\n    fields:\n      - {id: base, type: string, maximumLength: 20, classification: internal}\nextendRecordTypes:\n  record:\n    fields:\n      - {id: extension, type: string, maximumLength: 20, classification: internal}\n",
                 ),
             )],
         };
@@ -2085,7 +2108,7 @@ mod tests {
         assert_eq!(authoring.documents[1].bindings.len(), 1);
         assert_eq!(
             authoring.documents[1].bindings[0].source_pointer,
-            "/extendRecordTypes/0/fields/0"
+            "/extendRecordTypes/record/fields/0"
         );
     }
 
@@ -2139,20 +2162,20 @@ mod tests {
     #[test]
     fn a_compiler_path_resolves_to_the_pointer_of_the_value_it_names() {
         let project = document(
-            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\nrecordTypes:\n  - id: first\n    route: firsts\n    mutationMode: mutable\n    fields:\n      - id: label\n        type: string\n        maximumLength: 20\n        required: true\n        classification: internal\n  - id: second\n    route: seconds\n    mutationMode: mutable\n    fields:\n      - id: code\n        type: string\n        maximumLength: 20\n        required: true\n        classification: internal\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\nrecordTypes:\n  first:\n    route: firsts\n    mutationMode: mutable\n    fields:\n      - id: label\n        type: string\n        maximumLength: 20\n        required: true\n        classification: internal\n  second:\n    route: seconds\n    mutationMode: mutable\n    fields:\n      - id: code\n        type: string\n        maximumLength: 20\n        required: true\n        classification: internal\n",
         );
         let found = resolve(
             project.root(),
             &parse_steps("recordTypes[id=second].fields[code].type"),
         );
-        assert_eq!(found.pointer, "/recordTypes/1/fields/0/type");
+        assert_eq!(found.pointer, "/recordTypes/second/fields/0/type");
         assert!(found.complete);
 
         let partial = resolve(
             project.root(),
             &parse_steps("recordTypes[id=second].fields[absent].pattern"),
         );
-        assert_eq!(partial.pointer, "/recordTypes/1/fields");
+        assert_eq!(partial.pointer, "/recordTypes/second/fields");
         assert!(!partial.complete);
     }
 

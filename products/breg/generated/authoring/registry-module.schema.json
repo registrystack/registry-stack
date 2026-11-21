@@ -2040,494 +2040,6 @@
       },
       "type": "object"
     },
-    "EntityExtensionSource": {
-      "additionalProperties": false,
-      "properties": {
-        "accessProfiles": {
-          "additionalProperties": {
-            "additionalProperties": false,
-            "properties": {
-              "actorKind": {
-                "$ref": "#/$defs/ActorKindSource"
-              },
-              "allowCount": {
-                "type": "boolean"
-              },
-              "allowDataExport": {
-                "default": false,
-                "type": "boolean"
-              },
-              "default": {
-                "default": false,
-                "type": "boolean"
-              },
-              "display": {
-                "$ref": "#/$defs/PresentationSource"
-              },
-              "filterableFields": {
-                "default": [],
-                "items": {
-                  "type": "string"
-                },
-                "type": "array",
-                "uniqueItems": true
-              },
-              "lookups": {
-                "items": {
-                  "$ref": "#/$defs/LookupPermissionSource"
-                },
-                "type": "array"
-              },
-              "membershipBoundaries": {
-                "items": {
-                  "$ref": "#/$defs/MembershipBoundarySource"
-                },
-                "type": "array"
-              },
-              "operations": {
-                "items": {
-                  "$ref": "#/$defs/Operation"
-                },
-                "type": "array",
-                "uniqueItems": true
-              },
-              "principalClaim": {
-                "description": "The token claim that names the caller. Every profile serves authenticated callers, so every profile names one.",
-                "type": "string"
-              },
-              "provenanceFields": {
-                "items": {
-                  "$ref": "#/$defs/ProvenanceFieldSource"
-                },
-                "type": "array",
-                "uniqueItems": true
-              },
-              "readPaths": {
-                "items": {
-                  "$ref": "#/$defs/ReadPathPermissionSource"
-                },
-                "type": "array"
-              },
-              "readableFields": {
-                "default": [],
-                "items": {
-                  "type": "string"
-                },
-                "type": "array",
-                "uniqueItems": true
-              },
-              "requesterClients": {
-                "description": "The OAuth clients whose tokens may select this profile. Omit to accept every client.",
-                "items": {
-                  "type": "string"
-                },
-                "minItems": 1,
-                "type": "array",
-                "uniqueItems": true
-              },
-              "requireConsent": {
-                "items": {
-                  "$ref": "#/$defs/ConsentRequirementSource"
-                },
-                "type": "array"
-              },
-              "requiredPurposes": {
-                "description": "The verified token's purpose must match one listed value. Omit to accept every purpose.",
-                "items": {
-                  "type": "string"
-                },
-                "minItems": 1,
-                "type": "array",
-                "uniqueItems": true
-              },
-              "requiredScopes": {
-                "$ref": "#/$defs/RequiredScopes",
-                "description": "The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present."
-              },
-              "revisionAccess": {
-                "default": false,
-                "type": "boolean"
-              },
-              "rowBoundaries": {
-                "$ref": "#/$defs/RowBoundaries",
-                "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
-              },
-              "sortableFields": {
-                "default": [],
-                "items": {
-                  "type": "string"
-                },
-                "type": "array",
-                "uniqueItems": true
-              },
-              "spatialQueries": {
-                "$ref": "#/$defs/SpatialQueryPermissionSource"
-              },
-              "taskGrant": {
-                "$ref": "#/$defs/CompiledTaskGrantSource"
-              },
-              "writableFields": {
-                "default": [],
-                "items": {
-                  "type": "string"
-                },
-                "type": "array",
-                "uniqueItems": true
-              }
-            },
-            "required": [
-              "principalClaim",
-              "requiredScopes",
-              "operations",
-              "rowBoundaries"
-            ],
-            "type": "object"
-          },
-          "default": {},
-          "description": "Module profile contributions, read through the sentinels a project profile uses.",
-          "propertyNames": {
-            "$ref": "#/$defs/LocalId"
-          },
-          "type": "object"
-        },
-        "accessRequirements": {
-          "$ref": "#/$defs/AccessRequirementsSource",
-          "description": "Add mandatory requirements only when the entity has none; replacing them is refused."
-        },
-        "constraints": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ConstraintSource"
-          },
-          "type": "array"
-        },
-        "derived": {
-          "items": {
-            "$ref": "#/$defs/DerivedSource"
-          },
-          "type": "array"
-        },
-        "fields": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/FieldSource"
-          },
-          "type": "array"
-        },
-        "geojson": {
-          "$ref": "#/$defs/GeoJsonSource"
-        },
-        "hooks": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/HookSource"
-          },
-          "type": "array"
-        },
-        "indexes": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/IndexSource"
-          },
-          "type": "array"
-        },
-        "mutationPolicy": {
-          "$ref": "#/$defs/MutationPolicySource"
-        },
-        "readPaths": {
-          "items": {
-            "$ref": "#/$defs/ReadPathSource"
-          },
-          "type": "array"
-        },
-        "recordType": {
-          "type": "string"
-        },
-        "selectorProfiles": {
-          "items": {
-            "$ref": "#/$defs/SelectorProfileSource"
-          },
-          "type": "array"
-        },
-        "timers": {
-          "description": "Additive timer definitions. Only a root-project `timerGrants` entry can\nenable a contributed timer.",
-          "items": {
-            "$ref": "#/$defs/TimerSource"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "recordType"
-      ],
-      "type": "object"
-    },
-    "EntitySource": {
-      "additionalProperties": false,
-      "properties": {
-        "accessLog": {
-          "$ref": "#/$defs/AccessLogSource",
-          "description": "Subject-facing record access history, separate from the operational audit."
-        },
-        "accessProfiles": {
-          "additionalProperties": {
-            "additionalProperties": false,
-            "properties": {
-              "actorKind": {
-                "$ref": "#/$defs/ActorKindSource"
-              },
-              "allowCount": {
-                "type": "boolean"
-              },
-              "allowDataExport": {
-                "default": false,
-                "type": "boolean"
-              },
-              "default": {
-                "default": false,
-                "type": "boolean"
-              },
-              "display": {
-                "$ref": "#/$defs/PresentationSource"
-              },
-              "filterableFields": {
-                "default": [],
-                "items": {
-                  "type": "string"
-                },
-                "type": "array",
-                "uniqueItems": true
-              },
-              "lookups": {
-                "items": {
-                  "$ref": "#/$defs/LookupPermissionSource"
-                },
-                "type": "array"
-              },
-              "membershipBoundaries": {
-                "items": {
-                  "$ref": "#/$defs/MembershipBoundarySource"
-                },
-                "type": "array"
-              },
-              "operations": {
-                "items": {
-                  "$ref": "#/$defs/Operation"
-                },
-                "type": "array",
-                "uniqueItems": true
-              },
-              "principalClaim": {
-                "description": "The token claim that names the caller. Every profile serves authenticated callers, so every profile names one.",
-                "type": "string"
-              },
-              "provenanceFields": {
-                "items": {
-                  "$ref": "#/$defs/ProvenanceFieldSource"
-                },
-                "type": "array",
-                "uniqueItems": true
-              },
-              "readPaths": {
-                "items": {
-                  "$ref": "#/$defs/ReadPathPermissionSource"
-                },
-                "type": "array"
-              },
-              "readableFields": {
-                "default": [],
-                "items": {
-                  "type": "string"
-                },
-                "type": "array",
-                "uniqueItems": true
-              },
-              "requesterClients": {
-                "description": "The OAuth clients whose tokens may select this profile. Omit to accept every client.",
-                "items": {
-                  "type": "string"
-                },
-                "minItems": 1,
-                "type": "array",
-                "uniqueItems": true
-              },
-              "requireConsent": {
-                "items": {
-                  "$ref": "#/$defs/ConsentRequirementSource"
-                },
-                "type": "array"
-              },
-              "requiredPurposes": {
-                "description": "The verified token's purpose must match one listed value. Omit to accept every purpose.",
-                "items": {
-                  "type": "string"
-                },
-                "minItems": 1,
-                "type": "array",
-                "uniqueItems": true
-              },
-              "requiredScopes": {
-                "$ref": "#/$defs/RequiredScopes",
-                "description": "The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present."
-              },
-              "revisionAccess": {
-                "default": false,
-                "type": "boolean"
-              },
-              "rowBoundaries": {
-                "$ref": "#/$defs/RowBoundaries",
-                "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
-              },
-              "sortableFields": {
-                "default": [],
-                "items": {
-                  "type": "string"
-                },
-                "type": "array",
-                "uniqueItems": true
-              },
-              "spatialQueries": {
-                "$ref": "#/$defs/SpatialQueryPermissionSource"
-              },
-              "taskGrant": {
-                "$ref": "#/$defs/CompiledTaskGrantSource"
-              },
-              "writableFields": {
-                "default": [],
-                "items": {
-                  "type": "string"
-                },
-                "type": "array",
-                "uniqueItems": true
-              }
-            },
-            "required": [
-              "principalClaim",
-              "requiredScopes",
-              "operations",
-              "rowBoundaries"
-            ],
-            "type": "object"
-          },
-          "default": {},
-          "description": "Module profile contributions, read through the sentinels a project profile uses.",
-          "propertyNames": {
-            "$ref": "#/$defs/LocalId"
-          },
-          "type": "object"
-        },
-        "accessRequirements": {
-          "$ref": "#/$defs/AccessRequirementsSource",
-          "description": "Mandatory request-access requirements checked against every profile, including module contributions."
-        },
-        "apiName": {
-          "type": "string"
-        },
-        "batch": {
-          "$ref": "#/$defs/BatchSource"
-        },
-        "classification": {
-          "$ref": "#/$defs/Classification",
-          "default": "internal"
-        },
-        "consentRecord": {
-          "$ref": "#/$defs/ConsentRecordSource",
-          "description": "Declares this entity's rows as subject-issued consent decisions that\n`requireConsent` permissions check before returning a subject's row."
-        },
-        "constraints": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ConstraintSource"
-          },
-          "type": "array"
-        },
-        "derived": {
-          "items": {
-            "$ref": "#/$defs/DerivedSource"
-          },
-          "type": "array"
-        },
-        "display": {
-          "$ref": "#/$defs/ModelDisplaySource",
-          "default": {}
-        },
-        "eventRecord": {
-          "$ref": "#/$defs/EventRecordSource",
-          "description": "Declares this record type's rows as event records: which fields\nsay what the row is about, when it happened, when it takes effect, what\nit was recorded from and what it corrects. It adds no storage, endpoint\nor authority."
-        },
-        "fields": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/FieldSource"
-          },
-          "type": "array"
-        },
-        "geojson": {
-          "$ref": "#/$defs/GeoJsonSource"
-        },
-        "hooks": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/HookSource"
-          },
-          "type": "array"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "indexes": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/IndexSource"
-          },
-          "type": "array"
-        },
-        "mutationMode": {
-          "$ref": "#/$defs/MutationMode"
-        },
-        "mutationPolicy": {
-          "$ref": "#/$defs/MutationPolicySource"
-        },
-        "primaryDataset": {
-          "type": "string"
-        },
-        "readPaths": {
-          "items": {
-            "$ref": "#/$defs/ReadPathSource"
-          },
-          "type": "array"
-        },
-        "route": {
-          "type": "string"
-        },
-        "selectorProfiles": {
-          "items": {
-            "$ref": "#/$defs/SelectorProfileSource"
-          },
-          "type": "array"
-        },
-        "temporal": {
-          "$ref": "#/$defs/TemporalSource"
-        },
-        "timers": {
-          "items": {
-            "$ref": "#/$defs/TimerSource"
-          },
-          "type": "array"
-        },
-        "tombstone": {
-          "default": false,
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "id",
-        "primaryDataset",
-        "route",
-        "mutationMode"
-      ],
-      "type": "object"
-    },
     "EventConditionSource": {
       "additionalProperties": false,
       "description": "Closed Version 1 event selection language.\n\nA tagged shape leaves room for a later, separately governed rule ABI\nwithout turning fields into an ad hoc expression language. The shared\nreader's union helper decodes it, so an error inside a variant keeps its\nposition (CFG-SCHEMA-8). An unset value is named in `beforeIsNull` or\n`afterIsNull`; `null` is never a comparison literal (CFG-EMPTY-1).",
@@ -4686,12 +4198,229 @@
       "type": "array"
     },
     "extendRecordTypes": {
-      "default": [],
-      "description": "Additive contributions to entities already declared by the project or another module.",
-      "items": {
-        "$ref": "#/$defs/EntityExtensionSource"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "accessProfiles": {
+            "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+                "actorKind": {
+                  "$ref": "#/$defs/ActorKindSource"
+                },
+                "allowCount": {
+                  "type": "boolean"
+                },
+                "allowDataExport": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "default": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "display": {
+                  "$ref": "#/$defs/PresentationSource"
+                },
+                "filterableFields": {
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "lookups": {
+                  "items": {
+                    "$ref": "#/$defs/LookupPermissionSource"
+                  },
+                  "type": "array"
+                },
+                "membershipBoundaries": {
+                  "items": {
+                    "$ref": "#/$defs/MembershipBoundarySource"
+                  },
+                  "type": "array"
+                },
+                "operations": {
+                  "items": {
+                    "$ref": "#/$defs/Operation"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "principalClaim": {
+                  "description": "The token claim that names the caller. Every profile serves authenticated callers, so every profile names one.",
+                  "type": "string"
+                },
+                "provenanceFields": {
+                  "items": {
+                    "$ref": "#/$defs/ProvenanceFieldSource"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "readPaths": {
+                  "items": {
+                    "$ref": "#/$defs/ReadPathPermissionSource"
+                  },
+                  "type": "array"
+                },
+                "readableFields": {
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "requesterClients": {
+                  "description": "The OAuth clients whose tokens may select this profile. Omit to accept every client.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "requireConsent": {
+                  "items": {
+                    "$ref": "#/$defs/ConsentRequirementSource"
+                  },
+                  "type": "array"
+                },
+                "requiredPurposes": {
+                  "description": "The verified token's purpose must match one listed value. Omit to accept every purpose.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "requiredScopes": {
+                  "$ref": "#/$defs/RequiredScopes",
+                  "description": "The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present."
+                },
+                "revisionAccess": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "rowBoundaries": {
+                  "$ref": "#/$defs/RowBoundaries",
+                  "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
+                },
+                "sortableFields": {
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "spatialQueries": {
+                  "$ref": "#/$defs/SpatialQueryPermissionSource"
+                },
+                "taskGrant": {
+                  "$ref": "#/$defs/CompiledTaskGrantSource"
+                },
+                "writableFields": {
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                }
+              },
+              "required": [
+                "principalClaim",
+                "requiredScopes",
+                "operations",
+                "rowBoundaries"
+              ],
+              "type": "object"
+            },
+            "default": {},
+            "description": "Module profile contributions, read through the sentinels a project profile uses.",
+            "propertyNames": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": "object"
+          },
+          "accessRequirements": {
+            "$ref": "#/$defs/AccessRequirementsSource",
+            "description": "Add mandatory requirements only when the entity has none; replacing them is refused."
+          },
+          "constraints": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ConstraintSource"
+            },
+            "type": "array"
+          },
+          "derived": {
+            "items": {
+              "$ref": "#/$defs/DerivedSource"
+            },
+            "type": "array"
+          },
+          "fields": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/FieldSource"
+            },
+            "type": "array"
+          },
+          "geojson": {
+            "$ref": "#/$defs/GeoJsonSource"
+          },
+          "hooks": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/HookSource"
+            },
+            "type": "array"
+          },
+          "indexes": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/IndexSource"
+            },
+            "type": "array"
+          },
+          "mutationPolicy": {
+            "$ref": "#/$defs/MutationPolicySource"
+          },
+          "readPaths": {
+            "items": {
+              "$ref": "#/$defs/ReadPathSource"
+            },
+            "type": "array"
+          },
+          "selectorProfiles": {
+            "items": {
+              "$ref": "#/$defs/SelectorProfileSource"
+            },
+            "type": "array"
+          },
+          "timers": {
+            "description": "Additive timer definitions. Only a root-project `timerGrants` entry can\nenable a contributed timer.",
+            "items": {
+              "$ref": "#/$defs/TimerSource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [],
+        "type": "object"
       },
-      "type": "array"
+      "default": {},
+      "description": "Additive contributions to Record types already declared by the project\nor another module, written as a mapping from the Record type each\nextends to the rest of the extension and held sorted by that Record\ntype.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "functions": {
       "default": [],
@@ -4709,12 +4438,274 @@
       "type": "string"
     },
     "recordTypes": {
-      "default": [],
-      "description": "Record types introduced by this module.",
-      "items": {
-        "$ref": "#/$defs/EntitySource"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "accessLog": {
+            "$ref": "#/$defs/AccessLogSource",
+            "description": "Subject-facing record access history, separate from the operational audit."
+          },
+          "accessProfiles": {
+            "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+                "actorKind": {
+                  "$ref": "#/$defs/ActorKindSource"
+                },
+                "allowCount": {
+                  "type": "boolean"
+                },
+                "allowDataExport": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "default": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "display": {
+                  "$ref": "#/$defs/PresentationSource"
+                },
+                "filterableFields": {
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "lookups": {
+                  "items": {
+                    "$ref": "#/$defs/LookupPermissionSource"
+                  },
+                  "type": "array"
+                },
+                "membershipBoundaries": {
+                  "items": {
+                    "$ref": "#/$defs/MembershipBoundarySource"
+                  },
+                  "type": "array"
+                },
+                "operations": {
+                  "items": {
+                    "$ref": "#/$defs/Operation"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "principalClaim": {
+                  "description": "The token claim that names the caller. Every profile serves authenticated callers, so every profile names one.",
+                  "type": "string"
+                },
+                "provenanceFields": {
+                  "items": {
+                    "$ref": "#/$defs/ProvenanceFieldSource"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "readPaths": {
+                  "items": {
+                    "$ref": "#/$defs/ReadPathPermissionSource"
+                  },
+                  "type": "array"
+                },
+                "readableFields": {
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "requesterClients": {
+                  "description": "The OAuth clients whose tokens may select this profile. Omit to accept every client.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "requireConsent": {
+                  "items": {
+                    "$ref": "#/$defs/ConsentRequirementSource"
+                  },
+                  "type": "array"
+                },
+                "requiredPurposes": {
+                  "description": "The verified token's purpose must match one listed value. Omit to accept every purpose.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "requiredScopes": {
+                  "$ref": "#/$defs/RequiredScopes",
+                  "description": "The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present."
+                },
+                "revisionAccess": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "rowBoundaries": {
+                  "$ref": "#/$defs/RowBoundaries",
+                  "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
+                },
+                "sortableFields": {
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "spatialQueries": {
+                  "$ref": "#/$defs/SpatialQueryPermissionSource"
+                },
+                "taskGrant": {
+                  "$ref": "#/$defs/CompiledTaskGrantSource"
+                },
+                "writableFields": {
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                }
+              },
+              "required": [
+                "principalClaim",
+                "requiredScopes",
+                "operations",
+                "rowBoundaries"
+              ],
+              "type": "object"
+            },
+            "default": {},
+            "description": "Module profile contributions, read through the sentinels a project profile uses.",
+            "propertyNames": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": "object"
+          },
+          "accessRequirements": {
+            "$ref": "#/$defs/AccessRequirementsSource",
+            "description": "Mandatory request-access requirements checked against every profile, including module contributions."
+          },
+          "apiName": {
+            "type": "string"
+          },
+          "batch": {
+            "$ref": "#/$defs/BatchSource"
+          },
+          "classification": {
+            "$ref": "#/$defs/Classification",
+            "default": "internal"
+          },
+          "consentRecord": {
+            "$ref": "#/$defs/ConsentRecordSource",
+            "description": "Declares this entity's rows as subject-issued consent decisions that\n`requireConsent` permissions check before returning a subject's row."
+          },
+          "constraints": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ConstraintSource"
+            },
+            "type": "array"
+          },
+          "derived": {
+            "items": {
+              "$ref": "#/$defs/DerivedSource"
+            },
+            "type": "array"
+          },
+          "display": {
+            "$ref": "#/$defs/ModelDisplaySource",
+            "default": {}
+          },
+          "eventRecord": {
+            "$ref": "#/$defs/EventRecordSource",
+            "description": "Declares this record type's rows as event records: which fields\nsay what the row is about, when it happened, when it takes effect, what\nit was recorded from and what it corrects. It adds no storage, endpoint\nor authority."
+          },
+          "fields": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/FieldSource"
+            },
+            "type": "array"
+          },
+          "geojson": {
+            "$ref": "#/$defs/GeoJsonSource"
+          },
+          "hooks": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/HookSource"
+            },
+            "type": "array"
+          },
+          "indexes": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/IndexSource"
+            },
+            "type": "array"
+          },
+          "mutationMode": {
+            "$ref": "#/$defs/MutationMode"
+          },
+          "mutationPolicy": {
+            "$ref": "#/$defs/MutationPolicySource"
+          },
+          "primaryDataset": {
+            "type": "string"
+          },
+          "readPaths": {
+            "items": {
+              "$ref": "#/$defs/ReadPathSource"
+            },
+            "type": "array"
+          },
+          "route": {
+            "type": "string"
+          },
+          "selectorProfiles": {
+            "items": {
+              "$ref": "#/$defs/SelectorProfileSource"
+            },
+            "type": "array"
+          },
+          "temporal": {
+            "$ref": "#/$defs/TemporalSource"
+          },
+          "timers": {
+            "items": {
+              "$ref": "#/$defs/TimerSource"
+            },
+            "type": "array"
+          },
+          "tombstone": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "primaryDataset",
+          "route",
+          "mutationMode"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "default": {},
+      "description": "Record types introduced by this module, written as a mapping from each\nRecord type id to the rest of the Record type (CFG-ID-5) and held sorted\nby id.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "valueTypes": {
       "additionalProperties": {

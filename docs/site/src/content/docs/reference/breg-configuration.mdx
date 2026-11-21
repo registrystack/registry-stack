@@ -82,7 +82,7 @@ than one language, put the translations in the per-locale label tables of the
 ## Indexes
 
 The compiler appends the record id, the last sort key of every list, to each index under
-`recordTypes[].indexes`; do not declare it. An index declares at most 31 fields
+`recordTypes.<id>.indexes`; do not declare it. An index declares at most 31 fields
 (`breg.index.fields-too-many`). Every `reference` field gets an index of its own unless a declared
 index, or a unique constraint without `when`, already leads with it.
 

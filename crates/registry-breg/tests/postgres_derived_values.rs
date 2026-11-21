@@ -330,8 +330,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"derived-values","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "recordTypes":[{
-            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
+        "recordTypes":{"entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[{"id":"scenario","type":"string","required":true,"minimumLength":1,"maximumLength":64,"classification":"internal"}],
             "derived":[{
                 "id":"contract","sql":"contract.sql","key":"id","execution":"live",
@@ -343,7 +342,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                     {"id":"state","type":"vocabulary-code","vocabulary":"states","values":["open","closed"],"classification":"internal"}
                 ]
             }]
-        }],
+        }},
         "accessProfiles":{"reader": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"records":[{
                 "recordType":"entry","operations":["create","get","list"],

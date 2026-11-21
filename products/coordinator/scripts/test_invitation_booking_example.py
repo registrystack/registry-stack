@@ -75,7 +75,7 @@ class InvitationBookingExample(unittest.TestCase):
 
     def test_source_project_enforces_single_current_claim_and_server_date_expiry(self):
         registry = load_yaml(EXAMPLE / "source-registry/registry.yaml")
-        invitation = registry["recordTypes"][0]
+        invitation = registry["recordTypes"]["invitation"]
         self.assertIn(
             {
                 "id": "invitation-acceptance-identity",

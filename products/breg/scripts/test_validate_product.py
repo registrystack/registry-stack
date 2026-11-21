@@ -695,7 +695,7 @@ class BRegProductCatalogTests(unittest.TestCase):
                 path.name == "registry.yaml"
                 and path.parent.name == "asset-site-placement"
             ):
-                value["recordTypes"].append({"id": "business", "route": "businesses"})
+                value["recordTypes"]["business"] = {"route": "businesses"}
             return value
 
         errors: list[str] = []

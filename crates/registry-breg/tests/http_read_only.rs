@@ -39,7 +39,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 recordTypes:
-  - id: case
+  case:
     primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
@@ -50,7 +50,7 @@ recordTypes:
       - {id: label, type: string, required: true, maximumLength: 100, classification: public}
       - {id: secret, type: string, required: true, maximumLength: 100, classification: restricted}
       - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: internal}
-  - id: protected-note
+  protected-note:
     primaryDataset: test-dataset
     route: notes
     mutationMode: create-only
@@ -104,7 +104,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 recordTypes:
-  - id: household
+  household:
     primaryDataset: test-dataset
     route: households
     mutationMode: mutable
@@ -121,7 +121,7 @@ recordTypes:
       - {id: by-private-note, fields: [private-note]}
     readPaths:
       - {id: people, through: membership, to: person, route: people}
-  - id: membership
+  membership:
     primaryDataset: test-dataset
     route: memberships
     mutationMode: mutable
@@ -129,7 +129,7 @@ recordTypes:
     fields:
       - {id: household, type: reference, target: household, required: true, classification: restricted}
       - {id: person, type: reference, target: person, required: true, classification: restricted}
-  - id: person
+  person:
     primaryDataset: test-dataset
     route: people
     mutationMode: mutable
@@ -195,7 +195,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 recordTypes:
-  - id: benefit-record
+  benefit-record:
     primaryDataset: test-dataset
     route: benefit-records
     mutationMode: mutable
@@ -241,7 +241,7 @@ project:
   canonicalBaseIri: https://authoring.example.test
   timezone: UTC
 recordTypes:
-  - id: public-record
+  public-record:
     primaryDataset: test-dataset
     route: public-records
     mutationMode: mutable
@@ -249,7 +249,7 @@ recordTypes:
     fields:
       - {id: label, type: string, required: true, maximumLength: 100, classification: public}
       - {id: restricted-canary-field, type: string, maximumLength: 100, classification: restricted}
-  - id: protected-ledger
+  protected-ledger:
     primaryDataset: test-dataset
     route: classified-records
     mutationMode: mutable
@@ -319,7 +319,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 recordTypes:
-  - id: logical-record
+  logical-record:
     primaryDataset: test-dataset
     route: logical-records
     mutationMode: mutable
@@ -378,7 +378,7 @@ manifestProjection:
       identifiers:
         - {field: display-token, kind: display}
 recordTypes:
-  - id: permit
+  permit:
     primaryDataset: test-dataset
     route: permits
     mutationMode: mutable
@@ -399,7 +399,7 @@ recordTypes:
       - {type: unique, fields: [permit-number, valid-from]}
       - {type: unique, fields: [import-source, source-record-id]}
       - {type: temporal-non-overlap, scopeFields: [permit-number], startField: valid-from, endField: valid-to}
-  - id: inspection
+  inspection:
     primaryDataset: test-dataset
     route: inspections
     mutationMode: mutable
@@ -419,14 +419,14 @@ recordTypes:
       - {type: unique, fields: [inspection-code, valid-from]}
       - {type: unique, fields: [import-source, source-record-id]}
       - {type: temporal-non-overlap, scopeFields: [inspection-code], startField: valid-from, endField: valid-to}
-  - id: finding
+  finding:
     primaryDataset: test-dataset
     route: findings
     mutationMode: mutable
     classification: public
     fields:
       - {id: inspection, type: reference, target: inspection, required: true, classification: public}
-  - id: certificate
+  certificate:
     primaryDataset: test-dataset
     route: certificates
     mutationMode: mutable
@@ -490,7 +490,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 recordTypes:
-  - id: site
+  site:
     primaryDataset: test-dataset
     route: sites
     mutationMode: mutable
@@ -583,7 +583,7 @@ apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: snapshot-surface, version: "1", defaultLanguage: en, canonicalBaseIri: https://authoring.example.test, timezone: UTC}
 recordTypes:
-  - id: assignment
+  assignment:
     primaryDataset: test-dataset
     route: assignments
     mutationMode: mutable
@@ -2427,14 +2427,14 @@ kind: BRegProject
 project: {id: event-record-http-registry, version: "1", defaultLanguage: en, canonicalBaseIri: https://event-record-http.example.test}
 datasets: [{id: test-dataset}]
 recordTypes:
-  - id: item
+  item:
     primaryDataset: test-dataset
     route: items
     mutationMode: mutable
     classification: restricted
     fields:
       - {id: name, type: string, minimumLength: 1, maximumLength: 100, required: true, classification: restricted}
-  - id: decision
+  decision:
     primaryDataset: test-dataset
     route: decisions
     mutationMode: create-only
@@ -4435,7 +4435,7 @@ project:
   canonicalBaseIri: https://authoring.example.test
   timezone: UTC
 recordTypes:
-  - id: licence
+  licence:
     primaryDataset: test-dataset
     route: licences
     mutationMode: mutable
@@ -4605,7 +4605,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 recordTypes:
-  - id: holder
+  holder:
     primaryDataset: test-dataset
     route: holders
     mutationMode: mutable
@@ -4615,7 +4615,7 @@ recordTypes:
       - {id: label, type: string, required: true, maximumLength: 100, classification: internal}
       - {id: secret, type: string, required: true, maximumLength: 256, classification: restricted, encrypted: true,
          lookup: {normalization: [trim, uppercase], unique: true}}
-  - id: note
+  note:
     primaryDataset: test-dataset
     route: notes
     mutationMode: create-only

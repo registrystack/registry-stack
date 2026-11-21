@@ -60,7 +60,7 @@ project:
 datasets:
   - id: test-dataset
 recordTypes:
-  - id: record
+  record:
     primaryDataset: test-dataset
     route: records
     mutationMode: mutable

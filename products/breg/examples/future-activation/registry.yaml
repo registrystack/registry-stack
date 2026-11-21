@@ -22,7 +22,7 @@ vocabularies:
     values: [scheduled, active, cancelled]
 
 recordTypes:
-  - id: service
+  service:
     route: services
     primaryDataset: services
     mutationMode: mutable

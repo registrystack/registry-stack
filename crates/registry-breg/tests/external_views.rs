@@ -13,7 +13,7 @@ project:
   canonicalBaseIri: https://registry.example.test
 datasets: [{id: local-records}]
 recordTypes:
-  - id: local-record
+  local-record:
     primaryDataset: local-records
     route: local-records
     mutationMode: mutable

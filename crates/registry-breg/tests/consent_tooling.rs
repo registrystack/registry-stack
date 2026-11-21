@@ -17,8 +17,8 @@ use serde_json::{json, Value};
 
 const PACKAGE_REVISION: &str =
     "sha256:1111111111111111111111111111111111111111111111111111111111111111";
-const FOOD_TARGETING: usize = 0;
-const STEWARD: usize = 2;
+const FOOD_TARGETING: &str = "food-targeting";
+const STEWARD: &str = "steward";
 const PERSON_PERMISSION: usize = 0;
 
 fn classify(before: &Value, after: &Value) -> CompiledRegistryDiff {

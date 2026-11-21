@@ -1849,8 +1849,7 @@ mod tests {
             "project": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
                          "canonicalBaseIri": "https://ctl-data.example.test"},
             "datasets": [{"id":"test-dataset"}],
-            "recordTypes": [{
-                "id": ENTITY,
+            "recordTypes": {ENTITY: {
                 "primaryDataset": "test-dataset",
                 "route": "records",
                 "mutationMode": "create-only",
@@ -1859,7 +1858,7 @@ mod tests {
                     {"id": "code", "type": "string", "minimumLength": 2, "maximumLength": 16,
                      "required": true, "classification": "internal"}
                 ]
-            }],
+            }},
             "accessProfiles": {PROFILE: {
                 "principalClaim": "principal",
                 "requiredScopes": "unrestricted",
@@ -1880,20 +1879,22 @@ mod tests {
     fn large_manifest_package_source() -> Vec<u8> {
         let record_types = (0..3)
             .map(|target| {
-                json!({
-                    "id": format!("case-{target}"),
-                    "primaryDataset": "cases",
-                    "route": format!("cases-{target}"),
-                    "mutationMode": "mutable",
-                    "mutationPolicy": {"patch": "proposal-required"},
-                    "batch": {"maximumItems": 2, "maximumBytes": 400},
-                    "fields": [{
-                        "id": "label", "type": "string", "required": true,
-                        "maximumLength": 80, "classification": "internal"
-                    }]
-                })
+                (
+                    format!("case-{target}"),
+                    json!({
+                        "primaryDataset": "cases",
+                        "route": format!("cases-{target}"),
+                        "mutationMode": "mutable",
+                        "mutationPolicy": {"patch": "proposal-required"},
+                        "batch": {"maximumItems": 2, "maximumBytes": 400},
+                        "fields": [{
+                            "id": "label", "type": "string", "required": true,
+                            "maximumLength": 80, "classification": "internal"
+                        }]
+                    }),
+                )
             })
-            .collect::<Vec<_>>();
+            .collect::<serde_json::Map<_, _>>();
         let targets = (0..3)
             .map(|target| {
                 json!({
@@ -2684,8 +2685,7 @@ mod tests {
             "project": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
                          "canonicalBaseIri": "https://ctl-data.example.test"},
             "datasets": [{"id":"test-dataset"}],
-            "recordTypes": [{
-                "id": ENTITY,
+            "recordTypes": {ENTITY: {
                 "primaryDataset": "test-dataset",
                 "route": "records",
                 "mutationMode": "create-only",
@@ -2697,7 +2697,7 @@ mod tests {
                     {"id": "payload", "type": "text", "maximumLength": 3_000_000,
                      "required": true, "classification": "internal"}
                 ]
-            }],
+            }},
             "accessProfiles": {PROFILE: {
                 "principalClaim": "principal",
                 "requiredScopes": "unrestricted",

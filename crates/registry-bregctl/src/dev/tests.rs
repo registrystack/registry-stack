@@ -570,8 +570,8 @@ fn local_principal_source(claim: &str) -> Value {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"generic-local","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://synthetic.example.test"},
         "package":{"sourceRevision":"synthetic-1"},
-        "datasets":[{"id":"test-dataset"}],"recordTypes":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
-            "fields":[{"id":"code","type":"string","maximumLength":64,"required":true,"classification":"internal"}]}],
+        "datasets":[{"id":"test-dataset"}],"recordTypes":{"record": {"primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
+            "fields":[{"id":"code","type":"string","maximumLength":64,"required":true,"classification":"internal"}]}},
         "accessProfiles":{"operator": {"principalClaim":claim,"requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"record","operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"}]}}}
     })
 }
@@ -4278,12 +4278,7 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
     let (_project_temp, project) = write_retained_project();
     let module = project.join("registry.yaml");
     let mut source: Value = serde_norway::from_slice(&fs::read(&module).unwrap()).unwrap();
-    let entity = source["recordTypes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|entity| entity["id"] == "record")
-        .unwrap();
+    let entity = &mut source["recordTypes"]["record"];
     entity["hooks"] = json!([
         {"phase":"after","id":"record-created-v1","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"local-hook"}},
         {"phase":"after","id":"record-patched-v1","trigger":"patched","projection":["label"],"handler":{"type":"url","destinationId":"local-hook"}},
@@ -4339,12 +4334,7 @@ fn explicit_local_event_destinations_bind_exact_compiled_inventory() {
     let (_project_temp, project) = write_retained_project();
     let module = project.join("registry.yaml");
     let mut source: Value = serde_norway::from_slice(&fs::read(&module).unwrap()).unwrap();
-    let entity = source["recordTypes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|entity| entity["id"] == "record")
-        .unwrap();
+    let entity = &mut source["recordTypes"]["record"];
     entity["hooks"] = json!([{
         "phase": "after",
         "id":"record-created-v1","trigger":"created","projection":["code"],

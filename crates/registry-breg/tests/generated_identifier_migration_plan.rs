@@ -161,8 +161,7 @@ fn source(prefix: Option<&str>) -> Source {
         "kind": "BRegModule",
         "id": "core",
         "version": "1",
-        "recordTypes": [{
-            "id": "record",
+        "recordTypes": {"record": {
             "primaryDataset": "records",
             "route": "records",
             "mutationMode": "mutable",
@@ -184,7 +183,7 @@ fn source(prefix: Option<&str>) -> Source {
                 "readableFields": ["jurisdiction", "registration-code"],
                 "rowBoundaries": "unrestricted"
             }}
-        }]
+        }}
     });
     let module = serde_json::to_vec(&module).expect("module serializes");
     let parsed_module = parse_module_yaml(&module).expect("module parses for its digest");
@@ -232,11 +231,10 @@ fn source(prefix: Option<&str>) -> Source {
                 "servesDatasets": ["records"]
             }]
         },
-        "modules": [{
-            "id": "core",
+        "modules": {"core": {
             "version": "1",
             "digest": module_digest(&parsed_module)
-        }]
+        }}
     });
     Source {
         project: serde_json::to_vec(&project).expect("project serializes"),
@@ -248,11 +246,11 @@ fn source_without_generated_field() -> Source {
     let source = source(Some("REG-"));
     let mut module: serde_json::Value =
         serde_json::from_slice(&source.module).expect("module JSON parses");
-    module["recordTypes"][0]["fields"]
+    module["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .expect("fields are an array")
         .retain(|field| field["id"] != "registration-code");
-    module["recordTypes"][0]["accessProfiles"]["reader"]["readableFields"] =
+    module["recordTypes"]["record"]["accessProfiles"]["reader"]["readableFields"] =
         json!(["jurisdiction"]);
     source_with_module(source, module)
 }
@@ -261,8 +259,11 @@ fn source_without_generated_record_type() -> Source {
     let source = source(Some("REG-"));
     let mut module: serde_json::Value =
         serde_json::from_slice(&source.module).expect("module JSON parses");
-    let record = &mut module["recordTypes"][0];
-    record["id"] = json!("retained-record");
+    let mut record = module["recordTypes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("record")
+        .unwrap();
     record["route"] = json!("retained-records");
     record["fields"] = json!([{
         "id": "jurisdiction",
@@ -272,6 +273,7 @@ fn source_without_generated_record_type() -> Source {
         "classification": "internal"
     }]);
     record["accessProfiles"]["reader"]["readableFields"] = json!(["jurisdiction"]);
+    module["recordTypes"]["retained-record"] = record;
     source_with_module(source, module)
 }
 
@@ -280,7 +282,7 @@ fn source_with_module(source: Source, module: serde_json::Value) -> Source {
     let parsed_module = parse_module_yaml(&module).expect("module parses for its digest");
     let mut project: serde_json::Value =
         serde_json::from_slice(&source.project).expect("project JSON parses");
-    project["modules"][0]["digest"] = json!(module_digest(&parsed_module));
+    project["modules"]["core"]["digest"] = json!(module_digest(&parsed_module));
     Source {
         project: serde_json::to_vec(&project).expect("project serializes"),
         module,

@@ -12,7 +12,7 @@ datasets:
   - id: licensing
     display: {label: Licensing, description: Applications awaiting an independent review.}
 recordTypes:
-  - id: application
+  application:
     route: applications
     primaryDataset: licensing
     mutationMode: mutable

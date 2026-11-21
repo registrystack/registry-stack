@@ -233,7 +233,7 @@ async fn a_mean_over_a_decimal_whose_precision_equals_its_scale_keeps_its_leadin
             {"id":"amount-median","type":"percentile","field":"amount","percentile":50,"scale":2}
         ]),
     );
-    source["recordTypes"][0]["fields"][4] = json!(
+    source["recordTypes"]["record"]["fields"][4] = json!(
         {"id":"amount","type":"decimal","precision":2,"scale":2,"classification":"internal"}
     );
     let (database, migration_task, app) = fixture_for(source, &rows).await;
@@ -406,8 +406,11 @@ fn a_profile_that_cannot_read_the_measure_field_is_refused_at_compile_time() {
 /// analyst reads it live, the publisher publishes it, and the reader reads releases.
 fn public_register_source(measures: Value) -> Value {
     let mut source = registry_source(&["category"], measures);
-    source["recordTypes"][0]["classification"] = json!("public");
-    for field in source["recordTypes"][0]["fields"].as_array_mut().unwrap() {
+    source["recordTypes"]["record"]["classification"] = json!("public");
+    for field in source["recordTypes"]["record"]["fields"]
+        .as_array_mut()
+        .unwrap()
+    {
         field["classification"] = json!("public");
     }
     let publisher = json!({
@@ -631,8 +634,7 @@ fn registry_source(dimensions: &[&str], measures: Value) -> Value {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":PACKAGE_ID,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test","timezone":"UTC"},
-        "recordTypes":[{
-            "id":"record","primaryDataset":"statistics-measures","route":"records","mutationMode":"mutable",
+        "recordTypes":{"record": {"primaryDataset":"statistics-measures","route":"records","mutationMode":"mutable",
             "accessLog":{"subjectField":"subject"},
             "fields":[
                 {"id":"subject","type":"string","maximumLength":128,"required":true,"classification":"internal"},
@@ -642,7 +644,7 @@ fn registry_source(dimensions: &[&str], measures: Value) -> Value {
                 {"id":"amount","type":"decimal","precision":10,"scale":2,"classification":"internal"},
                 {"id":"quantity","type":"int64","classification":"internal"}
             ]
-        }],
+        }},
         "accessProfiles":{
             "analyst": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["list"],
@@ -863,11 +865,13 @@ type Parcel = (
 /// and a reader reads the releases.
 fn parcel_source(dimensions: &[&str], measures: Value) -> Value {
     let mut source = registry_source(dimensions, measures);
-    source["recordTypes"].as_array_mut().unwrap().push(json!({
-        "id":"owner","primaryDataset":"statistics-measures","route":"owners","mutationMode":"mutable",
-        "fields":[{"id":"name","type":"string","maximumLength":80,"classification":"internal"}]
-    }));
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"].as_object_mut().unwrap().insert(
+        "owner".to_owned(),
+        json!({"primaryDataset":"statistics-measures","route":"owners","mutationMode":"mutable",
+            "fields":[{"id":"name","type":"string","maximumLength":80,"classification":"internal"}]
+        }),
+    );
+    source["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(

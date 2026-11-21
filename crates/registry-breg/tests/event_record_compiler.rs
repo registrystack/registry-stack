@@ -139,21 +139,21 @@ datasets: [{id: test-dataset}]
 vocabularies:
   - {id: ns-vocab, values: [alpha, beta]}
 recordTypes:
-  - id: subject-record
+  subject-record:
     primaryDataset: test-dataset
     route: subject-records
     mutationMode: mutable
     classification: restricted
     fields:
       - {id: name, type: string, maximumLength: 40, classification: restricted}
-  - id: plain
+  plain:
     primaryDataset: test-dataset
     route: plains
     mutationMode: mutable
     classification: restricted
     fields:
       - {id: name, type: string, maximumLength: 40, classification: restricted}
-  - id: event
+  event:
     primaryDataset: test-dataset
     route: events
     mutationMode: create-only
@@ -739,7 +739,7 @@ fn display_purpose_and_group_are_validated_on_records_and_actions_only() {
     let errors = case_errors("{label: X, purpose: archival}", "");
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0].0, "config.unknown-variant");
-    assert_eq!(errors[0].1, "project.recordTypes[2].display.purpose");
+    assert_eq!(errors[0].1, "project.recordTypes.event.display.purpose");
     assert!(
         errors[0]
             .2
@@ -768,7 +768,7 @@ fn display_purpose_and_group_are_validated_on_records_and_actions_only() {
     assert_eq!(diagnostics[0].code, "config.unknown-key");
     assert_eq!(
         diagnostics[0].path,
-        "project.recordTypes[0].fields[0].display.group"
+        "project.recordTypes.entry.fields[0].display.group"
     );
 
     // Absent members leave no grouping claim.
@@ -960,14 +960,14 @@ kind: BRegProject
 project: {{id: event-record-temporal, version: "1", defaultLanguage: en, canonicalBaseIri: https://event-record-temporal.example.test}}
 datasets: [{{id: test-dataset}}]
 recordTypes:
-  - id: subject-record
+  subject-record:
     primaryDataset: test-dataset
     route: subject-records
     mutationMode: mutable
     classification: restricted
     fields:
       - {{id: name, type: string, maximumLength: 40, classification: restricted}}
-  - id: assignment
+  assignment:
     primaryDataset: test-dataset
     route: assignments
     mutationMode: mutable
@@ -1019,43 +1019,43 @@ fn unknown_event_record_members_and_variants_are_refused_by_the_parser() {
             "recordedAt is never authored",
             "{subjects: [{role: a, field: ref-a}], recordedAt: {at: d1}}",
             "config.unknown-key",
-            "project.recordTypes[2].eventRecord.recordedAt",
+            "project.recordTypes.event.eventRecord.recordedAt",
         ),
         (
             "there is no event time member",
             "{subjects: [{role: a, field: ref-a}], event: {at: d1}}",
             "config.unknown-key",
-            "project.recordTypes[2].eventRecord.event",
+            "project.recordTypes.event.eventRecord.event",
         ),
         (
             "effective has no meaning",
             "{subjects: [{role: a, field: ref-a}], effective: {at: d1, meaning: span}}",
             "config.unknown-key",
-            "project.recordTypes[2].eventRecord.effective.meaning",
+            "project.recordTypes.event.eventRecord.effective.meaning",
         ),
         (
             "unknown interval meaning",
             "{subjects: [{role: a, field: ref-a}], occurredAt: {start: d1, end: d2, meaning: around}}",
             "config.unknown-variant",
-            "project.recordTypes[2].eventRecord.occurredAt.meaning",
+            "project.recordTypes.event.eventRecord.occurredAt.meaning",
         ),
         (
             "unknown correction relation",
             "{subjects: [{role: a, field: ref-a}], correction: {field: to-self, relation: replaces}}",
             "config.unknown-variant",
-            "project.recordTypes[2].eventRecord.correction.relation",
+            "project.recordTypes.event.eventRecord.correction.relation",
         ),
         (
             "unknown duplicate policy",
             "{subjects: [{role: a, field: ref-a}], sourceEventId: {field: ext-id, namespace: \"urn:example:ns\", duplicates: maybe}}",
             "config.unknown-variant",
-            "project.recordTypes[2].eventRecord.sourceEventId.duplicates",
+            "project.recordTypes.event.eventRecord.sourceEventId.duplicates",
         ),
         (
             "the duplicate policy is required",
             "{subjects: [{role: a, field: ref-a}], sourceEventId: {field: ext-id, namespace: \"urn:example:ns\"}}",
             "config.missing-key",
-            "project.recordTypes[2].eventRecord.sourceEventId",
+            "project.recordTypes.event.eventRecord.sourceEventId",
         ),
     ];
     for (name, event_record, code, path) in cases {

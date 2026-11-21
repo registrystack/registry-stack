@@ -777,8 +777,7 @@ fn timer_project_source() -> Value {
         "kind":"BRegProject",
         "project":{"id":PACKAGE_ID,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://retention.example.test"},
         "datasets":[{"id":"services"}],
-        "recordTypes":[{
-            "id":"service","primaryDataset":"services","route":"services","mutationMode":"mutable",
+        "recordTypes":{"service": {"primaryDataset":"services","route":"services","mutationMode":"mutable",
             "fields":[
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
                 {"id":"status","type":"string","required":true,"maximumLength":32,"classification":"internal"},
@@ -788,7 +787,7 @@ fn timer_project_source() -> Value {
                 "id":"activate","at":"activates-at","invoke":"activate-service",
                 "input":{"service":{"fromRecordId":true}}
             }]
-        }],
+        }},
         "timerGrants":[{"recordType":"service","timer":"activate"}],
         "actions":[{
             "id":"activate-service","execution":{"mode":"immediate"},

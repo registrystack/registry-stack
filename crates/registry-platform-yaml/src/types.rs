@@ -688,6 +688,11 @@ impl<'de, T: Deserialize<'de> + Eq + Hash> Deserialize<'de> for UniqueList<T> {
 
 /// An item of a [`UniqueIdList`]: a mapping with an `id` member.
 pub trait Identified {
+    /// The member an item of an id-keyed mapping would otherwise carry its
+    /// key in. It is `id` unless the key names something else, such as the
+    /// Record type an extension extends.
+    const KEY_MEMBER: &'static str = "id";
+
     fn id(&self) -> &str;
 }
 

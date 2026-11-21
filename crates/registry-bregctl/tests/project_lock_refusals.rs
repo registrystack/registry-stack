@@ -65,7 +65,7 @@ project:
 datasets:
   - id: test-dataset
 modules:
-  - id: core
+  core:
     version: "1"
     digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
 "#
@@ -77,7 +77,7 @@ kind: BRegModule
 id: core
 version: "1"
 recordTypes:
-  - id: record
+  record:
     primaryDataset: test-dataset
     route: records
     mutationMode: mutable

@@ -4,9 +4,9 @@ use registry_breg::{compile_project, parse_project_json, CompileProfile, Compile
 use serde_json::{json, Value};
 
 pub const PROJECT: &str = include_str!("../fixtures/consent-access.yaml");
-/// The index of the consent-record entity in the fixture.
+/// The id of the consent-record entity in the fixture.
 #[allow(dead_code)]
-pub const CONSENT_RECORD: usize = 4;
+pub const CONSENT_RECORD: &str = "consent-decision";
 
 pub fn source() -> Value {
     let authored = registry_breg::parse_project_yaml(PROJECT.as_bytes()).unwrap();
@@ -57,8 +57,7 @@ pub fn self_issued_project() -> Value {
     value["recordTypes"][CONSENT_RECORD]["fields"].as_array_mut().unwrap().push(json!(
         {"id": "link", "type": "reference", "target": "consent-subject-link", "classification": "internal"}
     ));
-    value["recordTypes"].as_array_mut().unwrap().push(json!({
-        "id": "consent-subject-link", "primaryDataset": "consent-dataset", "route": "consent-subject-links",
+    value["recordTypes"].as_object_mut().unwrap().insert("consent-subject-link".to_owned(), json!({"primaryDataset": "consent-dataset", "route": "consent-subject-links",
         "mutationMode": "mutable", "classification": "restricted",
         "fields": [
             {"id": "subject", "type": "reference", "target": "person", "required": true, "classification": "restricted"},

@@ -1613,13 +1613,12 @@ mod tests {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"bindings-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "datasets":[{"id":"test-dataset"}],"recordTypes":[{
-            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
+          "datasets":[{"id":"test-dataset"}],"recordTypes":{"entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
               {"id":"serial-code","apiName":"serialNumber","type":"string","maximumLength":64,"classification":"internal"}
             ]
-          }],
+          }},
           "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["review"],
             "permissions":{"records":[{
@@ -1744,10 +1743,9 @@ mod tests {
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"bindings-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "datasets":[{{"id":"test-dataset"}}],"recordTypes":[{{
-                "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
+              "datasets":[{{"id":"test-dataset"}}],"recordTypes":{{"entry":{{"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
                 "fields":[{fields}]
-              }}],
+              }}}},
               "accessProfiles":{{"operator":{{"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "requiredPurposes":["review"],
                 "permissions":{{"records":[{{

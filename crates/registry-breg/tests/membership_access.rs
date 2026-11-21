@@ -122,7 +122,7 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
             "breg.access.membership-source-recursive",
         ),
         (
-            "/recordTypes/1/accessRequirements",
+            "/recordTypes/membership/accessRequirements",
             json!({"rowBoundaries":[{"field":"principal","claim":"principal","operator":"equals"}]}),
             "breg.access.membership-source-row-requirement",
         ),
@@ -142,7 +142,7 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
         );
     }
     let mut value = source("facility");
-    value["recordTypes"][0]["readPaths"] =
+    value["recordTypes"]["organization"]["readPaths"] =
         json!([{"id":"facilities","through":"membership","to":"facility","route":"facilities"}]);
     value["accessProfiles"]["steward"]["permissions"]["records"][0]["readPaths"] =
         json!([{"path":"facilities","readableFields":["label"]}]);

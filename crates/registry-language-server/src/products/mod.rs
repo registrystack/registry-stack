@@ -338,6 +338,7 @@ fn scope(found: &Match<'_>, rule: Scope, path: &Path) -> Option<Option<String>> 
         Scope::Document => Some(Some(path.to_string_lossy().into_owned())),
         Scope::Ancestor { skip, field } => Some(Some(ancestor_field(found, skip, field)?)),
         Scope::EnclosingKey => Some(Some((*found.keys.first()?).to_owned())),
+        Scope::OutermostKey => Some(Some((*found.keys.last()?).to_owned())),
         Scope::Composite(fields) => {
             let values = fields
                 .iter()
@@ -621,14 +622,13 @@ pub(crate) fn build_index(
             messaging_template_files(root, path, &document.value, &mut output);
         }
         if product == ProductKind::Breg {
-            for entity in at_path(&document.value, "recordTypes/*/id") {
+            for entity in at_path(&document.value, "recordTypes/$key") {
                 let kind = SymbolKind::Product(product, "BReg field");
                 if !at_path(&document.value, "recordTypes/*/fields/*/id")
                     .iter()
                     .any(|field| {
                         field.scalar.value == "id"
-                            && ancestor_field(field, 1, "id").as_deref()
-                                == Some(entity.scalar.value.as_str())
+                            && field.keys.last().copied() == Some(entity.scalar.value.as_str())
                     })
                 {
                     output.symbols.push(IndexedSymbol {

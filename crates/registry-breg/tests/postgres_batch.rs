@@ -950,7 +950,7 @@ fn compiled_timer_batch_registry() -> registry_breg::CompiledRegistry {
         .expect("public timer example is valid YAML")
         .expect("public timer example is nonempty")
         .to_json_value();
-    source["recordTypes"][0]["batch"] = json!({"maximumItems":3,"maximumBytes":8192});
+    source["recordTypes"]["widget"]["batch"] = json!({"maximumItems":3,"maximumBytes":8192});
     source["accessProfiles"]["operator"]["requiredScopes"] = json!("unrestricted");
     source["accessProfiles"]["operator"]["permissions"]["records"][0]["operations"] =
         json!(["create", "get", "list", "patch", "tombstone", "batch"]);
@@ -1053,8 +1053,7 @@ fn compiled_registry_with_create_policy(
           "kind":"BRegProject",
           "project":{"id":"batch-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "datasets":[{"id":"test-dataset"}],
-          "recordTypes":[{
-            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
+          "recordTypes":{"widget": {"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
             "batch":{"maximumItems":3,"maximumBytes":8192},
             "constraints":[{"type":"unique","fields":["label"]}],
             "fields":[
@@ -1068,7 +1067,7 @@ fn compiled_registry_with_create_policy(
               {"phase":"after","id":"widget-created","trigger":"created","projection":["label"]},
               {"phase":"after","id":"widget-patched","trigger":"patched","projection":["label","quantity"]}
             ]
-          }],
+          }},
           "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management","case-review"],
             "permissions":{"records":[{

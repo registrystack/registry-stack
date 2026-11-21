@@ -3,9 +3,8 @@
   "kind": "BRegModule",
   "id": "household-contact-actions-core",
   "version": "0.1.0",
-  "recordTypes": [
-    {
-      "id": "person",
+  "recordTypes": {
+    "person": {
       "primaryDataset": "household-contact-actions",
       "route": "persons",
       "mutationMode": "mutable",
@@ -44,8 +43,7 @@
         }
       ]
     },
-    {
-      "id": "household",
+    "household": {
       "primaryDataset": "household-contact-actions",
       "route": "households",
       "mutationMode": "mutable",
@@ -92,8 +90,7 @@
         }
       ]
     },
-    {
-      "id": "service-center",
+    "service-center": {
       "primaryDataset": "household-contact-actions",
       "route": "service-centers",
       "mutationMode": "mutable",
@@ -131,8 +128,7 @@
         }
       ]
     },
-    {
-      "id": "group-membership",
+    "group-membership": {
       "primaryDataset": "household-contact-actions",
       "route": "group-memberships",
       "mutationMode": "mutable",
@@ -178,7 +174,7 @@
         }
       ]
     }
-  ],
+  },
   "actions": [
     {
       "id": "register-household-contact",

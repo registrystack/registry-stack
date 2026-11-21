@@ -792,15 +792,14 @@ fn compiled_crud_alias_fixture() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"fixture-crud-aliases","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"restricted",
+          "recordTypes":{"person": {"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"restricted"},
               {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ],
             "constraints":[{"type":"unique","fields":["person-code"]}]
-          }],
+          }},
           "accessProfiles":{"registrar": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"person","operations":["create","get","list","patch"],
@@ -824,29 +823,26 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"fixture-immediate-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"restricted",
+          "recordTypes":{"person": {"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"restricted"},
               {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ],
             "constraints":[{"type":"unique","fields":["person-code"]}]
-          },{
-            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"restricted",
+          },"household": {"primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"restricted"},
               {"id":"household-code","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"}
             ]
-          },{
-            "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"mutable","classification":"restricted",
+          },"group-membership": {"primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"restricted"},
               {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"},
               {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}
             ]
-          }],
+          }},
           "actions":[{"execution":{"mode":"immediate"},
             "id":"register-household-contact",
             "inputs":[
@@ -959,14 +955,13 @@ fn compiled_spatial_fixture() -> registry_breg::CompiledRegistry {
           "kind":"BRegProject",
           "project":{"id":"spatial-fixture","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "package":{"sourceRevision":"spatial-fixture-source"},
-          "recordTypes":[{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
+          "recordTypes":{"site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
             "fields":[
               {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"public"},
               {"id":"location","type":"crs84-point","precision":9,"required":false,"classification":"public"}
             ],
             "geojson":{"geometryField":"location"}
-          }],
+          }},
           "accessProfiles":{
             "map-reader": {"default":true,"principalClaim":"sub","requiredScopes":["sites.read"],"permissions":{"records":[{
               "recordType":"site","operations":["get","list"],"readableFields":["code","location"],

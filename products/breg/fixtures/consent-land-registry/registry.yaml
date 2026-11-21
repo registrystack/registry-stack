@@ -65,18 +65,7 @@
     ],
     "distributions": []
   },
-  "modules": [
-    {
-      "id": "consent-land-registry-core",
-      "version": "0.1.0",
-      "digest": "sha256:28cc4d11debcfbd30a6bf2e8723a23410c4c60bcf46eedf849317450818a4c75"
-    },
-    {
-      "id": "consent-tenure-right",
-      "version": "0.1.0",
-      "digest": "sha256:681131a78073f9f0e23672bd5760e153a4c88f09f29d968614e76195a2f17936"
-    }
-  ],
+  "modules": {"consent-land-registry-core":{"digest":"sha256:dbbd9279c938260e928f61899ad7d5d867da1c5aafd5e4e1c82e13942ef5379b","version":"0.1.0"},"consent-tenure-right":{"digest":"sha256:d58b09423e2e0953b414f8389563598c7dc7bf22c5df2b0fe8bfa5b0e22adf5f","version":"0.1.0"}},
   "recipients": {
     "organizations": [
       {
@@ -142,7 +131,7 @@
       ]
     }
   ],
-  "recordTypes": [],
+  "recordTypes": {},
   "accessProfiles": {
     "land-registry-operator": {
       "default": true,

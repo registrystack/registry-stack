@@ -131,7 +131,7 @@ class EventJourney(native.Journey):
 def write_source(journey, key_root, proxy_url, paths):
     owner = native.write_breg(journey.root / "breg", journey.urls)
     project = json.loads((owner / "registry.yaml").read_text())
-    record = project["recordTypes"][0]
+    record = project["recordTypes"]["application"]
     record.pop("mutationPolicy", None)
     record["hooks"] = [{"id": "application-" + trigger + "-v1", "phase": "after", "trigger": trigger,
                         "projection": ["tenant"], "handler": {"type": "url", "destinationId": trigger}}

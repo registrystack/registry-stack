@@ -664,28 +664,27 @@ mod tests {
         let mut extension = serde_json::json!({
             "apiVersion": MODULE_API_VERSION, "kind": MODULE_KIND,
             "id": "notifications", "version": "1.0.0",
-            "extendRecordTypes": [{"recordType": "record", "hooks": [{
+            "extendRecordTypes": {"record": { "hooks": [{
                 "phase": "after",
                 "id": "record-labelled-v1", "trigger": "patched", "projection": ["label"],
                 "when": {"type": "fields", "changed": ["label"]},
                 "handler": {"type":"url","destinationId": "receiver"}
-            }]}]
+            }]}}
         });
         assert!(schema.is_valid(&extension));
-        extension["extendRecordTypes"][0]["hooks"][0]["handler"]["url"] =
+        extension["extendRecordTypes"]["record"]["hooks"][0]["handler"]["url"] =
             Value::String("https://example.com/events".into());
         assert!(!schema.is_valid(&extension));
 
         let mut module_with_entity = serde_json::json!({
             "apiVersion": MODULE_API_VERSION, "kind": MODULE_KIND,
             "id": "records", "version": "1",
-            "recordTypes": [{
-                "id": "record", "primaryDataset": "records",
+            "recordTypes": {"record": { "primaryDataset": "records",
                 "route": "records", "mutationMode": "create-only"
-            }]
+            }}
         });
         assert!(schema.is_valid(&module_with_entity));
-        module_with_entity["recordTypes"][0]
+        module_with_entity["recordTypes"]["record"]
             .as_object_mut()
             .expect("entity is an object")
             .remove("primaryDataset");
@@ -760,17 +759,20 @@ mod tests {
         let document = schema_document();
         let value: Value = serde_json::from_str(&document).expect("the schema is JSON");
         for (definition, field) in [
-            ("RegistryIdentitySource", "canonicalBaseIri"),
-            ("EntitySource", "primaryDataset"),
+            (
+                &value["$defs"]["RegistryIdentitySource"],
+                "canonicalBaseIri",
+            ),
+            (
+                &value["properties"]["recordTypes"]["additionalProperties"],
+                "primaryDataset",
+            ),
         ] {
-            let required = value["$defs"][definition]["required"]
+            let required = definition["required"]
                 .as_array()
                 .expect("definition has required members");
             assert!(required.iter().any(|member| member == field));
-            assert_eq!(
-                value["$defs"][definition]["properties"][field]["type"],
-                "string"
-            );
+            assert_eq!(definition["properties"][field]["type"], "string");
         }
 
         let schema = compile(&document);
@@ -782,7 +784,7 @@ mod tests {
         assert!(!schema.is_valid(&missing_iri));
 
         let mut missing_dataset = fixture("asset-site-placement");
-        missing_dataset["recordTypes"][0]
+        missing_dataset["recordTypes"]["asset-item"]
             .as_object_mut()
             .expect("entity is an object")
             .remove("primaryDataset");
@@ -819,7 +821,7 @@ mod tests {
         let document = schema_document();
         let schema = compile(&document);
         let mut instance = fixture("business");
-        instance["recordTypes"][0]["accessProfiles"] = serde_json::json!({
+        instance["recordTypes"]["legal-entity"]["accessProfiles"] = serde_json::json!({
             "entity-local-reader": {
                 "principalClaim": "sub",
                 "requiredScopes": ["registry.read"],
@@ -959,7 +961,7 @@ mod tests {
         let document = schema_document();
         let schema = compile(&document);
         let mut instance = fixture("asset-site-placement");
-        instance["recordTypes"][0]["fields"]
+        instance["recordTypes"]["asset-item"]["fields"]
             .as_array_mut()
             .unwrap()
             .push(serde_json::json!({
@@ -968,7 +970,8 @@ mod tests {
                 "precision":6,
                 "classification":"internal"
             }));
-        instance["recordTypes"][0]["geojson"] = serde_json::json!({"geometryField":"location"});
+        instance["recordTypes"]["asset-item"]["geojson"] =
+            serde_json::json!({"geometryField":"location"});
         instance["accessProfiles"]["asset-operator"]["permissions"]["records"][0]["readableFields"]
             .as_array_mut()
             .unwrap()
@@ -992,7 +995,7 @@ mod tests {
         let document = schema_document();
         let schema = compile(&document);
         let mut instance = fixture("asset-site-placement");
-        instance["recordTypes"][0]["fields"][0]["precision"] = Value::from(2_u64);
+        instance["recordTypes"]["asset-item"]["fields"][0]["precision"] = Value::from(2_u64);
 
         assert!(!schema.is_valid(&instance));
     }
@@ -1002,7 +1005,7 @@ mod tests {
         let document = schema_document();
         let schema = compile(&document);
         let mut instance = fixture("asset-site-placement");
-        instance["recordTypes"][0]["fields"][0]
+        instance["recordTypes"]["asset-item"]["fields"][0]
             .as_object_mut()
             .expect("the field is an object")
             .remove("maximumLength");
@@ -1015,7 +1018,8 @@ mod tests {
         let document = schema_document();
         let schema = compile(&document);
         let mut instance = fixture("asset-site-placement");
-        instance["recordTypes"][0]["fields"][0]["type"] = Value::String("bytes".to_owned());
+        instance["recordTypes"]["asset-item"]["fields"][0]["type"] =
+            Value::String("bytes".to_owned());
 
         assert!(!schema.is_valid(&instance));
     }
@@ -1024,7 +1028,7 @@ mod tests {
     fn schema_accepts_the_minimal_tagged_event_and_webhook_shape() {
         let schema = compile(&schema_document());
         let mut instance = fixture("asset-site-placement");
-        instance["recordTypes"][0]["hooks"] = serde_json::json!([{
+        instance["recordTypes"]["asset-item"]["hooks"] = serde_json::json!([{
             "phase": "after",
             "id": "asset-created-v1",
             "trigger": "created",
@@ -1043,7 +1047,7 @@ mod tests {
     fn schema_rejects_per_event_delivery_policy() {
         let schema = compile(&schema_document());
         let mut instance = fixture("asset-site-placement");
-        instance["recordTypes"][0]["hooks"] = serde_json::json!([{
+        instance["recordTypes"]["asset-item"]["hooks"] = serde_json::json!([{
             "phase": "after",
             "id": "asset-created-v1",
             "trigger": "created",

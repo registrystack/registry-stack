@@ -154,7 +154,7 @@ fn facility_plans_proposal_grants_and_guards_navigate_and_complete_in_scope() {
 fn generated_identifier_scopes_navigate_and_complete_within_the_record_type() {
     let project = Project::new(&[file(
         "registry.yaml",
-        "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: generated-identifiers}\nrecordTypes:\n  - id: application\n    fields:\n      - {id: <|field|>jurisdiction, type: string}\n      - id: number\n        type: string\n        generate: {type: sequence, minimumDigits: 4, scope: [<|scope|>jurisdiction]}\n  - id: unrelated\n    fields: [{id: other-scope, type: string}]\n",
+        "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: generated-identifiers}\nrecordTypes:\n  application:\n    fields:\n      - {id: <|field|>jurisdiction, type: string}\n      - id: number\n        type: string\n        generate: {type: sequence, minimumDigits: 4, scope: [<|scope|>jurisdiction]}\n  unrelated:\n    fields: [{id: other-scope, type: string}]\n",
     )]);
     let index = ProjectIndex::load_product(project.root(), ProductKind::Breg).unwrap();
     assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
@@ -203,15 +203,15 @@ fn module_extension_generated_identifier_scopes_use_the_extended_record_type() {
     let project = Project::new(&[
         file(
             "registry.yaml",
-            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: generated-identifiers}\nmodules: [{id: core}, {id: identifiers}]\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: generated-identifiers}\nmodules: {core: {}, identifiers: {}}\n",
         ),
         file(
             "modules/core/module.yaml",
-            "kind: BRegModule\nid: core\nrecordTypes:\n  - id: application\n    fields: [{id: <|field|>jurisdiction, type: string}]\n  - id: unrelated\n    fields: [{id: other-scope, type: string}]\n",
+            "kind: BRegModule\nid: core\nrecordTypes:\n  application:\n    fields: [{id: <|field|>jurisdiction, type: string}]\n  unrelated:\n    fields: [{id: other-scope, type: string}]\n",
         ),
         file(
             "modules/identifiers/module.yaml",
-            "kind: BRegModule\nid: identifiers\ndependencies: [core]\nextendRecordTypes:\n  - recordType: application\n    fields:\n      - id: number\n        type: string\n        generate: {type: sequence, minimumDigits: 4, scope: [<|scope|>jurisdiction]}\n      - id: broken-number\n        type: string\n        generate: {type: sequence, minimumDigits: 4, scope: [<|missing|>missing-scope]}\n",
+            "kind: BRegModule\nid: identifiers\ndependencies: [core]\nextendRecordTypes:\n  application:\n    fields:\n      - id: number\n        type: string\n        generate: {type: sequence, minimumDigits: 4, scope: [<|scope|>jurisdiction]}\n      - id: broken-number\n        type: string\n        generate: {type: sequence, minimumDigits: 4, scope: [<|missing|>missing-scope]}\n",
         ),
     ]);
     let index = ProjectIndex::load_product(project.root(), ProductKind::Breg).unwrap();
@@ -312,9 +312,9 @@ fn retired_entities_handlers_and_change_request_paths_have_no_editor_fallback() 
 #[test]
 fn module_value_types_extensions_functions_and_empty_input_plans_resolve() {
     let project = Project::new(&[
-        file("registry.yaml", "kind: BRegProject\nmodules: [{id: core}, {id: extra}]\naccessProfiles: {staff: {permissions: {actions: [{action: create, results: [<|result|>created]}]}}}\n"),
-        file("modules/core/module.yaml", "kind: BRegModule\nid: core\nvalueTypes: {bounded-name: {type: string, maximumLength: 64}}\nrecordTypes: [{id: person, fields: [{id: name, typeRef: bounded-name}]}]\nfunctions: [{id: make-person, source: <|asset|>plans/create.rhai}]\nactions: [{id: create, execution: {mode: immediate}, plan: {type: function, function: make-person, inputs: [], writes: [{id: <|effect|>created, target: {recordType: person}, fields: [name]}]}}]\n"),
-        file("modules/extra/module.yaml", "kind: BRegModule\nid: extra\ndependencies: [core]\nextendRecordTypes: [{recordType: <|record|>person, fields: [{id: alias, typeRef: <|type|>bounded-name}]}]\nactions: [{id: update, execution: {mode: immediate}, inputs: [{id: person, type: reference, target: person}], plan: {type: function, function: <|function|>make-person, inputs: [person], writes: [{id: changed, target: {fromInput: person}, fields: [<|field|>alias]}]}}]\n"),
+        file("registry.yaml", "kind: BRegProject\nmodules: {core: {}, extra: {}}\naccessProfiles: {staff: {permissions: {actions: [{action: create, results: [<|result|>created]}]}}}\n"),
+        file("modules/core/module.yaml", "kind: BRegModule\nid: core\nvalueTypes: {bounded-name: {type: string, maximumLength: 64}}\nrecordTypes: {person: {fields: [{id: name, typeRef: bounded-name}]}}\nfunctions: [{id: make-person, source: <|asset|>plans/create.rhai}]\nactions: [{id: create, execution: {mode: immediate}, plan: {type: function, function: make-person, inputs: [], writes: [{id: <|effect|>created, target: {recordType: person}, fields: [name]}]}}]\n"),
+        file("modules/extra/module.yaml", "kind: BRegModule\nid: extra\ndependencies: [core]\nextendRecordTypes: {<|record|>person: {fields: [{id: alias, typeRef: <|type|>bounded-name}]}}\nactions: [{id: update, execution: {mode: immediate}, inputs: [{id: person, type: reference, target: person}], plan: {type: function, function: <|function|>make-person, inputs: [person], writes: [{id: changed, target: {fromInput: person}, fields: [<|field|>alias]}]}}]\n"),
         file("modules/core/plans/create.rhai", "fn plan(ctx) { #{} }\n"),
     ]);
     let index = ProjectIndex::load_product(project.root(), ProductKind::Breg).unwrap();
@@ -353,11 +353,11 @@ fn access_profile_ids_are_declared_by_their_map_keys() {
     let project = Project::new(&[
         file(
             "registry.yaml",
-            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: example}\nmodules: [{id: core}]\nmanifestProjection:\n  accessProfile: <|use|>staff\naccessProfiles:\n  <|definition|>staff:\n    permissions:\n      records:\n        - {recordType: person, readableFields: [name]}\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: example}\nmodules: {core: {}}\nmanifestProjection:\n  accessProfile: <|use|>staff\naccessProfiles:\n  <|definition|>staff:\n    permissions:\n      records:\n        - {recordType: person, readableFields: [name]}\n",
         ),
         file(
             "modules/core/module.yaml",
-            "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: core\nrecordTypes:\n  - id: person\n    fields: [{id: name, type: string}]\n    accessProfiles:\n      <|nested|>reader: {operations: [get]}\n",
+            "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: core\nrecordTypes:\n  person:\n    fields: [{id: name, type: string}]\n    accessProfiles:\n      <|nested|>reader: {operations: [get]}\n",
         ),
     ]);
     let index = ProjectIndex::load_product(project.root(), ProductKind::Breg).unwrap();

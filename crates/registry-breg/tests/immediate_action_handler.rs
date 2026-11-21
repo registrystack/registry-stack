@@ -17,10 +17,10 @@ fn project() -> Value {
     json!({"datasets":[{"id": "test-dataset"}],"functions":[{"id":"register-person-plan","runtime":"rhai","source":"handlers/register.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"action-handler-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "recordTypes":[{"id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","fields":[
+        "recordTypes":{"person": {"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","fields":[
             {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
-        ]}],
+        ]}},
         "actions":[{"execution":{"mode":"immediate"},"id":"register-person","inputs":[
             {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"family-name","type":"string","maximumLength":80,"classification":"restricted"},
@@ -70,7 +70,7 @@ fn runtime_result(expression: &str) -> String {
 
 fn generated_only_project() -> Value {
     let mut source = project();
-    source["recordTypes"][0]["fields"] = json!([{
+    source["recordTypes"]["person"]["fields"] = json!([{
         "id": "number",
         "type": "string",
         "minimumLength": 1,
@@ -1059,7 +1059,7 @@ fn handler_rejects_ambiguous_sources_and_binds_governed_semantics() {
         compile(changed, &valid).unwrap().definition_revision
     );
     let mut changed = project();
-    changed["recordTypes"][0]["fields"][0]["pattern"] = json!("^.+$");
+    changed["recordTypes"]["person"]["fields"][0]["pattern"] = json!("^.+$");
     assert_ne!(
         action.definition_revision,
         compile(changed, &valid).unwrap().definition_revision
@@ -1082,7 +1082,7 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
     };
 
     let mut source = project();
-    source["recordTypes"][0]["fields"][0]["classification"] = json!("public");
+    source["recordTypes"]["person"]["fields"][0]["classification"] = json!("public");
     assert_diagnostic(
         source,
         "breg.action.handler-classification-ceiling",
@@ -1142,7 +1142,7 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
     let mut source = project();
     for index in 0..128 {
         let field = format!("flag-{index}");
-        source["recordTypes"][0]["fields"]
+        source["recordTypes"]["person"]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({
@@ -1160,7 +1160,7 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
     );
 
     let mut source = project();
-    source["recordTypes"][0]["fields"][0]["maximumLength"] = json!(1_000_000);
+    source["recordTypes"]["person"]["fields"][0]["maximumLength"] = json!(1_000_000);
     assert_diagnostic(
         source,
         "breg.action.bounds-snapshot-bytes",
@@ -1395,7 +1395,7 @@ fn handler_package_captures_exact_project_and_module_script_origins() {
         path: asset.path.clone(),
         bytes: asset.bytes.clone(),
     };
-    source["modules"] = json!([{"id":"actions","version":"1","digest":registry_breg::compiler::module_digest_with_assets(&module, &[compiler_asset])}]);
+    source["modules"] = json!({"actions": {"version":"1","digest":registry_breg::compiler::module_digest_with_assets(&module, &[compiler_asset])}});
     let mut module_request = request;
     module_request.project.bytes = serde_json::to_vec(&source).unwrap();
     module_request.modules = vec![PackageModuleSource {
@@ -1438,7 +1438,7 @@ fn fixed_action_fingerprints_omit_handler_and_bind_native_patterns() {
         before.definition_revision,
         compile(&source).definition_revision
     );
-    source["recordTypes"][0]["fields"][0]["pattern"] = json!("^.+$");
+    source["recordTypes"]["person"]["fields"][0]["pattern"] = json!("^.+$");
     assert_ne!(
         before.definition_revision,
         compile(&source).definition_revision
@@ -1448,10 +1448,9 @@ fn fixed_action_fingerprints_omit_handler_and_bind_native_patterns() {
 #[test]
 fn handler_rejects_reference_to_a_create_of_an_incompatible_entity() {
     let mut source = project();
-    let mut second = source["recordTypes"][0].clone();
-    second["id"] = json!("organization");
+    let mut second = source["recordTypes"]["person"].clone();
     second["route"] = json!("organizations");
-    source["recordTypes"].as_array_mut().unwrap().push(second);
+    source["recordTypes"]["organization"] = second;
     source["actions"][0]["plan"]["writes"][1]["target"]["recordType"] = json!("organization");
     source["accessProfiles"]["registrar"]["permissions"]["actions"][0]["targets"]
         .as_array_mut()

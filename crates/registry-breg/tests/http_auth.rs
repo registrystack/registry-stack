@@ -135,7 +135,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 recordTypes:
-  - id: case
+  case:
     primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
@@ -183,7 +183,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 recordTypes:
-  - id: case
+  case:
     primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
@@ -214,7 +214,7 @@ apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: contextual-auth, version: 0.1.0, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
 recordTypes:
-  - id: case
+  case:
     primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
@@ -2785,9 +2785,9 @@ fn dataset_only_claim_source() -> Value {
     json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"dataset-auth", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://statistics.example.test", "timezone":"UTC"},
         "datasets":[{"id":"records"}],
-        "recordTypes":[{"id":"record", "primaryDataset":"records", "route":"records", "mutationMode":"mutable",
+        "recordTypes":{"record": { "primaryDataset":"records", "route":"records", "mutationMode":"mutable",
             "fields":[{"id":"active", "type":"boolean", "required":true, "classification":"internal"},
-                {"id":"occurred-on", "type":"date", "required":true, "classification":"internal"}]}],
+                {"id":"occurred-on", "type":"date", "required":true, "classification":"internal"}]}},
         "accessProfiles":{
             "publisher": { "principalClaim":"registry_principal", "requiredScopes":"unrestricted", "permissions":{
                 "records":[{"recordType":"record", "operations":["list"], "rowBoundaries":"unrestricted", "allowCount":true,

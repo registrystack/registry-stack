@@ -36,22 +36,22 @@ vocabularies:
 datasets:
   - id: people
 recordTypes:
-- id: person
-  primaryDataset: people
-  route: persons
-  mutationMode: mutable
-  classification: restricted
-  fields:
-  - {id: given-name, type: string, maximumLength: 80, required: true, classification: restricted}
-  - {id: district, type: string, maximumLength: 80, required: true, classification: internal}
-- id: household
-  primaryDataset: people
-  route: households
-  mutationMode: mutable
-  classification: internal
-  fields:
-  - {id: head, type: reference, target: person, required: true, classification: restricted}
-  - {id: label, type: string, maximumLength: 80, required: true, classification: internal}
+  person:
+    primaryDataset: people
+    route: persons
+    mutationMode: mutable
+    classification: restricted
+    fields:
+    - {id: given-name, type: string, maximumLength: 80, required: true, classification: restricted}
+    - {id: district, type: string, maximumLength: 80, required: true, classification: internal}
+  household:
+    primaryDataset: people
+    route: households
+    mutationMode: mutable
+    classification: internal
+    fields:
+    - {id: head, type: reference, target: person, required: true, classification: restricted}
+    - {id: label, type: string, maximumLength: 80, required: true, classification: internal}
 accessProfiles:
   food-targeting:
     default: true
@@ -284,10 +284,10 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
     assert_eq!(
         explanation["recordTypes"],
         json!([
-            "person-privacy-notice",
-            "person-notice-clause",
+            "person-consent-decision",
             "person-consent-link",
-            "person-consent-decision"
+            "person-notice-clause",
+            "person-privacy-notice"
         ])
     );
     assert_eq!(
@@ -604,8 +604,8 @@ fn consent_module_fits_an_explicit_manifest_project(flow_module_lock: bool) {
         let (before, _) = registry.rsplit_once("modules:\n").unwrap();
         let module = parse_module_yaml(module_bytes).unwrap();
         format!(
-            "{before}modules: [{}]\n",
-            json!({"id": module.id, "version": module.version})
+            "{before}modules: {}\n",
+            json!({module.id: {"version": module.version}})
         )
     } else {
         registry

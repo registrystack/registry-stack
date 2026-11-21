@@ -79,7 +79,7 @@ async fn activate(
     ExpectedRegistryIdentity,
 ) {
     let mut successor = source.clone();
-    successor["recordTypes"][0]["fields"]
+    successor["recordTypes"]["target"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({"id":"extra","type":"boolean","required":false,"classification":"internal"}));

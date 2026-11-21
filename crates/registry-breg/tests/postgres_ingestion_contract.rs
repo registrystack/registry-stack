@@ -539,8 +539,7 @@ fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegi
             "id": "ingestion-contract-registry", "version": "1", "defaultLanguage": "en",
             "canonicalBaseIri": "https://contract.example.test"
         },
-        "recordTypes": [{
-            "id": "widget", "primaryDataset": "test-dataset", "route": "widgets",
+        "recordTypes": {"widget": { "primaryDataset": "test-dataset", "route": "widgets",
             "mutationMode": "mutable", "classification": "public",
             "batch": {"maximumItems": 3, "maximumBytes": batch_maximum_bytes},
             "constraints": [{"type": "unique", "fields": ["label"]}],
@@ -554,7 +553,7 @@ fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegi
                 {"id": "payload", "type": "text", "maximumLength": 3_000_000,
                  "required": false, "classification": "public"}
             ]
-        }],
+        }},
         "accessProfiles": {
             "operator": { "default": true, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
                 "requiredPurposes": ["case-management"],

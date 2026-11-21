@@ -238,10 +238,10 @@ fn explain_model_lists_authored_source_presence_as_exact_document_pointers() {
         .expect("authoredPaths is an array");
     let has = |pointer: &str| authored.iter().any(|path| path == pointer);
     assert!(has(""), "the empty pointer names the source document root");
-    assert!(has("/recordTypes/0/display"));
-    assert!(has("/recordTypes/0/fields/0/required"));
+    assert!(has("/recordTypes/contact/display"));
+    assert!(has("/recordTypes/contact/fields/0/required"));
     assert!(
-        !has("/recordTypes/0/tombstone"),
+        !has("/recordTypes/contact/tombstone"),
         "a compiled default is absent when the source omitted its member"
     );
 }
@@ -268,7 +268,7 @@ fn model_source_bindings_survive_compiled_order_and_module_extensions() {
             "registry.yaml",
             &format!("/recordTypes/{record_index}")
         )["sourcePointer"],
-        "/recordTypes/1"
+        "/recordTypes/record"
     );
 
     let field_index = item_index(
@@ -281,7 +281,10 @@ fn model_source_bindings_survive_compiled_order_and_module_extensions() {
         "modules/record-notes/module.yaml",
         &explanation_pointer,
     );
-    assert_eq!(binding["sourcePointer"], "/extendRecordTypes/0/fields/0");
+    assert_eq!(
+        binding["sourcePointer"],
+        "/extendRecordTypes/record/fields/0"
+    );
     let module = model["authoring"]["documents"]
         .as_array()
         .unwrap()
@@ -292,12 +295,12 @@ fn model_source_bindings_survive_compiled_order_and_module_extensions() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|path| path == "/extendRecordTypes/0/fields/0/id"));
+        .any(|path| path == "/extendRecordTypes/record/fields/0/id"));
     assert!(!module["authoredPaths"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|path| path == "/extendRecordTypes/0/fields/0/display"));
+        .any(|path| path == "/extendRecordTypes/record/fields/0/display"));
 }
 
 #[test]
@@ -311,7 +314,7 @@ fn model_source_bindings_cover_module_records_actions_inputs_and_record_hooks() 
     assert_eq!(
         source_binding(&model, module_file, &format!("/recordTypes/{record_index}"))
             ["sourcePointer"],
-        "/recordTypes/1"
+        "/recordTypes/facility"
     );
     assert_eq!(
         source_binding(
@@ -319,7 +322,7 @@ fn model_source_bindings_cover_module_records_actions_inputs_and_record_hooks() 
             module_file,
             &format!("/recordTypes/{record_index}/hooks/facility-registered-v1")
         )["sourcePointer"],
-        "/recordTypes/1/hooks/0"
+        "/recordTypes/facility/hooks/0"
     );
 
     let action_index = item_index(&model["actions"], "register-facility");
@@ -388,7 +391,7 @@ fn model_source_bindings_cover_proposal_hooks_and_project_inventories() {
             "modules/facility-core/module.yaml",
             &format!("/recordTypes/{permit_index}/fields/{derived_index}")
         )["sourcePointer"],
-        "/extendRecordTypes/0/derived/0/fields/0"
+        "/extendRecordTypes/permit/derived/0/fields/0"
     );
 }
 

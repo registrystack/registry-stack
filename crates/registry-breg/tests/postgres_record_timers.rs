@@ -2428,7 +2428,7 @@ async fn timestamp_predicate_matches_equivalent_offset_and_database_projection()
         .with_timezone(&Utc);
     let offset = chrono::FixedOffset::east_opt(7 * 60 * 60).unwrap();
     let mut source = timer_project_source();
-    source["recordTypes"][0]["timers"][0]["when"] = json!({
+    source["recordTypes"]["service"]["timers"][0]["when"] = json!({
         "type":"fields",
         "equals":{"activates-at":due.with_timezone(&offset).to_rfc3339_opts(SecondsFormat::Micros, false)}
     });
@@ -3367,7 +3367,7 @@ async fn business_guard_refusal_is_terminal_and_consumes_one_attempt() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mapped_required_input_refusal_is_terminal_and_consumes_one_attempt() {
     let mut source = timer_project_source();
-    source["recordTypes"][0]["timers"][0]["input"]["required-revision"] =
+    source["recordTypes"]["service"]["timers"][0]["input"]["required-revision"] =
         json!({"fromField":"activation-revision"});
     source["actions"][0]["inputs"]
         .as_array_mut()
@@ -3411,7 +3411,7 @@ async fn mapped_required_input_refusal_is_terminal_and_consumes_one_attempt() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unique_effect_conflict_is_terminal_and_consumes_one_attempt() {
     let mut source = timer_project_source();
-    source["recordTypes"][0]["constraints"] =
+    source["recordTypes"]["service"]["constraints"] =
         json!([{"id":"status-unique","type":"unique","fields":["status"]}]);
     let harness = timer_outcome_harness(
         compile_registry(source),
@@ -7434,14 +7434,14 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_changed_predicate_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    source["recordTypes"][0]["timers"][0]["when"] =
+    source["recordTypes"]["service"]["timers"][0]["when"] =
         json!({"type":"fields","equals":{"status":"reviewed"}});
     compile_registry(source)
 }
 
 fn compiled_nullable_timer_at_registry(use_successor_at: bool) -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["service"]["fields"]
         .as_array_mut()
         .expect("service fields are an array")
         .push(json!({
@@ -7454,14 +7454,14 @@ fn compiled_nullable_timer_at_registry(use_successor_at: bool) -> registry_breg:
             .push(json!("successor-at"));
     }
     if use_successor_at {
-        source["recordTypes"][0]["timers"][0]["at"] = json!("successor-at");
+        source["recordTypes"]["service"]["timers"][0]["at"] = json!("successor-at");
     }
     compile_registry(source)
 }
 
 fn compiled_no_window_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    source["recordTypes"][0]["timers"][0]
+    source["recordTypes"]["service"]["timers"][0]
         .as_object_mut()
         .expect("timer fixture is an object")
         .remove("notAfter");
@@ -7470,7 +7470,7 @@ fn compiled_no_window_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_timer_free_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    source["recordTypes"][0]
+    source["recordTypes"]["service"]
         .as_object_mut()
         .expect("service fixture is an object")
         .remove("timers");
@@ -7485,8 +7485,7 @@ fn timer_project_source() -> Value {
         "kind":"BRegProject",
         "project":{"id":PACKAGE_ID,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://timers.example.test"},
         "datasets":[{"id":"services"}],
-        "recordTypes":[{
-            "id":"service","primaryDataset":"services","route":"services","mutationMode":"mutable",
+        "recordTypes":{"service": {"primaryDataset":"services","route":"services","mutationMode":"mutable",
             "fields":[
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
                 {"id":"status","type":"string","required":true,"maximumLength":32,"classification":"internal"},
@@ -7507,7 +7506,7 @@ fn timer_project_source() -> Value {
             }],
             "hooks":[{"phase":"after","id":"service-patched","trigger":"patched","projection":["status","note"],
                 "when":{"type":"fields","afterEquals":{"status":"active"}}}]
-        }],
+        }},
         "timerGrants":[{"recordType":"service","timer":"activate"}],
         "actions":[{
             "id":"activate-service","execution":{"mode":"immediate"},
@@ -7546,10 +7545,9 @@ fn compiled_create_only_registry() -> registry_breg::CompiledRegistry {
         .unwrap()
         .push(json!({"id":"activation-logs"}));
     source["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(json!({
-            "id":"activation-log","primaryDataset":"activation-logs","route":"activation-logs","mutationMode":"mutable",
+        .insert("activation-log".to_owned(), json!({"primaryDataset":"activation-logs","route":"activation-logs","mutationMode":"mutable",
             "fields":[
                 {"id":"activation-number","type":"string","minimumLength":8,"maximumLength":32,"required":true,"classification":"internal",
                  "generate":{"type":"sequence","prefix":"ACT-","minimumDigits":4}},
@@ -7559,7 +7557,7 @@ fn compiled_create_only_registry() -> registry_breg::CompiledRegistry {
             "hooks":[{"phase":"after","id":"activation-log-created","trigger":"created",
                 "projection":["activation-number","operation-id"]}]
         }));
-    source["recordTypes"][0]["timers"][0]["input"] = json!({
+    source["recordTypes"]["service"]["timers"][0]["input"] = json!({
         "planned-at":{"fromField":"activates-at"},
         "operation-id":{"fromTimer":"occurrence-id"}
     });
@@ -7603,30 +7601,30 @@ fn compiled_secondary_get_registry() -> registry_breg::CompiledRegistry {
 fn compiled_secondary_get_registry_for(mapping_field: &str) -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
     source["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(json!({
-            "id":"approval","primaryDataset":"services","route":"approvals","mutationMode":"mutable",
+        .insert("approval".to_owned(), json!({"primaryDataset":"services","route":"approvals","mutationMode":"mutable",
             "fields":[
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
                 {"id":"status","type":"string","required":true,"maximumLength":32,"classification":"internal"}
             ]
         }));
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["service"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"approval","type":"reference","target":"approval","required":true,
             "classification":"internal"
         }));
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["service"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"backup-approval","type":"reference","target":"approval",
             "classification":"internal"
         }));
-    source["recordTypes"][0]["timers"][0]["input"]["approval"] = json!({"fromField":mapping_field});
+    source["recordTypes"]["service"]["timers"][0]["input"]["approval"] =
+        json!({"fromField":mapping_field});
     source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["readableFields"]
         .as_array_mut()
         .unwrap()
@@ -7668,16 +7666,15 @@ fn compiled_secondary_get_registry_for(mapping_field: &str) -> registry_breg::Co
 fn compiled_missing_literal_secondary_get_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
     source["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(json!({
-            "id":"approval","primaryDataset":"services","route":"approvals","mutationMode":"mutable",
+        .insert("approval".to_owned(), json!({"primaryDataset":"services","route":"approvals","mutationMode":"mutable",
             "fields":[
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
                 {"id":"status","type":"string","required":true,"maximumLength":32,"classification":"internal"}
             ]
         }));
-    source["recordTypes"][0]["timers"][0]["input"]["approval"] =
+    source["recordTypes"]["service"]["timers"][0]["input"]["approval"] =
         json!({"value":"00000000-0000-0000-0000-000000000404"});
     source["actions"][0]["inputs"]
         .as_array_mut()
@@ -7704,23 +7701,23 @@ fn compiled_missing_literal_secondary_get_registry() -> registry_breg::CompiledR
 fn compiled_existence_only_secondary_get_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
     source["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(json!({
-            "id":"approval","primaryDataset":"services","route":"approvals","mutationMode":"mutable",
+        .insert("approval".to_owned(), json!({"primaryDataset":"services","route":"approvals","mutationMode":"mutable",
             "fields":[
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
                 {"id":"status","type":"string","required":true,"maximumLength":32,"classification":"internal"}
             ]
         }));
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["service"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"approval","type":"reference","target":"approval","required":true,
             "classification":"internal"
         }));
-    source["recordTypes"][0]["timers"][0]["input"]["approval"] = json!({"fromField":"approval"});
+    source["recordTypes"]["service"]["timers"][0]["input"]["approval"] =
+        json!({"fromField":"approval"});
     source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["readableFields"]
         .as_array_mut()
         .unwrap()
@@ -7750,14 +7747,14 @@ fn compiled_existence_only_secondary_get_registry() -> registry_breg::CompiledRe
 
 fn compiled_same_type_get_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["service"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"related-service","type":"reference","target":"service",
             "classification":"internal"
         }));
-    source["recordTypes"][0]["timers"][0]["input"]["related-service"] =
+    source["recordTypes"]["service"]["timers"][0]["input"]["related-service"] =
         json!({"fromField":"related-service"});
     source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["readableFields"]
         .as_array_mut()
@@ -7782,19 +7779,20 @@ fn compiled_same_type_get_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_encrypted_current_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    source["recordTypes"][0]["hooks"] = json!([]);
-    source["recordTypes"][0]["fields"][1]["encrypted"] = json!(true);
-    source["recordTypes"][0]["fields"][1]["classification"] = json!("restricted");
-    source["recordTypes"][0]["fields"][5]["encrypted"] = json!(true);
-    source["recordTypes"][0]["fields"][5]["classification"] = json!("restricted");
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["service"]["hooks"] = json!([]);
+    source["recordTypes"]["service"]["fields"][1]["encrypted"] = json!(true);
+    source["recordTypes"]["service"]["fields"][1]["classification"] = json!("restricted");
+    source["recordTypes"]["service"]["fields"][5]["encrypted"] = json!(true);
+    source["recordTypes"]["service"]["fields"][5]["classification"] = json!("restricted");
+    source["recordTypes"]["service"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"copied-note","type":"string","maximumLength":128,
             "classification":"internal"
         }));
-    source["recordTypes"][0]["timers"][0]["input"]["current-note"] = json!({"fromField":"note"});
+    source["recordTypes"]["service"]["timers"][0]["input"]["current-note"] =
+        json!({"fromField":"note"});
     source["actions"][0]["inputs"]
         .as_array_mut()
         .unwrap()
@@ -7817,13 +7815,13 @@ fn compiled_encrypted_current_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_int64_rearm_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    source["recordTypes"][0]["fields"][4]["type"] = json!("int64");
+    source["recordTypes"]["service"]["fields"][4]["type"] = json!("int64");
     compile_registry(source)
 }
 
 fn compiled_self_clearing_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    source["recordTypes"][0]["fields"][2]
+    source["recordTypes"]["service"]["fields"][2]
         .as_object_mut()
         .expect("the activates-at field is an object")
         .remove("required");
@@ -7850,7 +7848,7 @@ fn compiled_terminal_lifecycle_registry(
     successor_predicate: bool,
 ) -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    source["recordTypes"][0]["fields"][2]
+    source["recordTypes"]["service"]["fields"][2]
         .as_object_mut()
         .expect("the activates-at field is an object")
         .remove("required");
@@ -7858,7 +7856,7 @@ fn compiled_terminal_lifecycle_registry(
         "input":"service","field":"note","equals":"allow"
     }]});
     if successor_predicate {
-        source["recordTypes"][0]["timers"][0]["when"] =
+        source["recordTypes"]["service"]["timers"][0]["when"] =
             json!({"type":"fields","equals":{"status":"reviewed"}});
     }
     compile_registry(source)
@@ -7875,7 +7873,7 @@ fn compiled_illegal_proposal_required_timer_registry() -> registry_breg::Compile
 
 fn compiled_cross_timer_rearming_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["service"]["fields"]
         .as_array_mut()
         .expect("service fields are an array")
         .push(json!({
@@ -7887,7 +7885,7 @@ fn compiled_cross_timer_rearming_registry() -> registry_breg::CompiledRegistry {
             .expect("service access fields are an array")
             .push(json!("followup-at"));
     }
-    source["recordTypes"][0]["timers"]
+    source["recordTypes"]["service"]["timers"]
         .as_array_mut()
         .expect("service timers are an array")
         .push(json!({
@@ -7916,10 +7914,9 @@ fn compiled_created_record_timer_rearming_registry() -> registry_breg::CompiledR
         .expect("datasets are an array")
         .push(json!({"id":"activation-tasks"}));
     source["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .expect("record types are an array")
-        .push(json!({
-            "id":"activation-task","primaryDataset":"activation-tasks",
+        .insert("activation-task".to_owned(), json!({"primaryDataset":"activation-tasks",
             "route":"activation-tasks","mutationMode":"mutable",
             "fields":[
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
@@ -7988,10 +7985,9 @@ fn compiled_created_record_timer_rearming_registry() -> registry_breg::CompiledR
 fn compiled_timer_and_timer_free_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
     source["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(json!({
-            "id":"case-note","primaryDataset":"services","route":"case-notes","mutationMode":"mutable",
+        .insert("case-note".to_owned(), json!({"primaryDataset":"services","route":"case-notes","mutationMode":"mutable",
             "fields":[
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
                 {"id":"body","type":"string","required":true,"maximumLength":128,"classification":"internal"}
@@ -8011,9 +8007,9 @@ fn compiled_timer_and_timer_free_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_same_entity_timer_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    let mut second = source["recordTypes"][0]["timers"][0].clone();
+    let mut second = source["recordTypes"]["service"]["timers"][0].clone();
     second["id"] = json!("activate-followup");
-    source["recordTypes"][0]["timers"]
+    source["recordTypes"]["service"]["timers"]
         .as_array_mut()
         .unwrap()
         .push(second);

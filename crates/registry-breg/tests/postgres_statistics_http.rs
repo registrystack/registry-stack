@@ -4406,10 +4406,13 @@ async fn a_dry_run_reports_minimum_count_suppressions_and_stores_nothing() {
 async fn a_dry_run_of_an_exact_public_values_dataset_reports_no_suppressions() {
     let mut source = statistics_registry_source();
     source["statisticalDatasets"][0]["disclosure"] = json!({"type":"exact-public-values"});
-    for field in source["recordTypes"][0]["fields"].as_array_mut().unwrap() {
+    for field in source["recordTypes"]["record"]["fields"]
+        .as_array_mut()
+        .unwrap()
+    {
         field["classification"] = json!("public");
     }
-    source["recordTypes"][0]["classification"] = json!("public");
+    source["recordTypes"]["record"]["classification"] = json!("public");
     let (database, app, period) = dry_run_fixture(source, "package-statistics-dry-run-2").await;
     let dry = dry_run(&app, &period, "publisher", claims("publisher", false)).await;
     assert_eq!(dry.status(), StatusCode::OK);
@@ -4449,8 +4452,7 @@ fn statistics_registry_source() -> Value {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"statistics-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test","timezone":"UTC"},
-        "recordTypes":[{
-            "id":"record","primaryDataset":"statistics-http","route":"records","mutationMode":"mutable",
+        "recordTypes":{"record": {"primaryDataset":"statistics-http","route":"records","mutationMode":"mutable",
             "accessLog":{"subjectField":"subject"},
             "fields":[
                 {"id":"subject","type":"string","maximumLength":128,"required":true,"classification":"internal"},
@@ -4459,7 +4461,7 @@ fn statistics_registry_source() -> Value {
                 {"id":"event-date","type":"date","required":true,"classification":"internal"},
                 {"id":"jurisdiction","type":"vocabulary-code","vocabulary":"jurisdiction","required":true,"classification":"internal"}
             ]
-        }],
+        }},
         "accessProfiles":{
             "analyst": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["list"],
@@ -4513,14 +4515,13 @@ fn cap_registry() -> registry_breg::CompiledRegistry {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"statistics-cap-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics-caps.example.test","timezone":"UTC"},
-        "recordTypes":[{
-            "id":"record","primaryDataset":"statistics-caps","route":"records","mutationMode":"mutable",
+        "recordTypes":{"record": {"primaryDataset":"statistics-caps","route":"records","mutationMode":"mutable",
             "fields":[
                 {"id":"active","type":"boolean","required":true,"classification":"internal"},
                 {"id":"category","type":"vocabulary-code","vocabulary":"category","required":true,"classification":"internal"},
                 {"id":"event-date","type":"date","required":true,"classification":"internal"}
             ]
-        }],
+        }},
         "accessProfiles":{
             "analyst": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["list"],"readableFields":["active","category","event-date"],

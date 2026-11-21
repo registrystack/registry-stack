@@ -87,10 +87,9 @@ fn create_only_guard_source(field: &str, expected: &str) -> Value {
         .expect("datasets are an array")
         .push(json!({"id":"activation-logs"}));
     source["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .expect("Record types are an array")
-        .push(json!({
-            "id":"activation-log","primaryDataset":"activation-logs","route":"activation-logs",
+        .insert("activation-log".to_owned(), json!({"primaryDataset":"activation-logs","route":"activation-logs",
             "mutationMode":"mutable","fields":[
                 {"id":"planned-at","type":"timestamp","required":true,"classification":"internal"},
                 {"id":"operation-id","type":"uuid","required":true,"classification":"internal"}

@@ -38,7 +38,7 @@ manifestProjection:
 datasets:
   - id: permits
 recordTypes:
-  - id: public-authority
+  public-authority:
     primaryDataset: permits
     route: public-authorities
     mutationMode: mutable
@@ -47,7 +47,7 @@ recordTypes:
       - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
     constraints:
       - {id: authority-code-unique, type: unique, fields: [code]}
-  - id: permit-transfer
+  permit-transfer:
     primaryDataset: permits
     route: permit-transfers
     mutationMode: create-only

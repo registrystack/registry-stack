@@ -48,7 +48,7 @@ kind: BRegModule
 id: contact-notes
 version: 0.1.0
 extendRecordTypes:
-  - recordType: contact
+  contact:
     fields:
       - id: internal-note
         type: text
@@ -62,7 +62,7 @@ Add the module to `registry.yaml`, before `datasets`:
 ```diff lang="yaml" title="registry.yaml" test-edit
 -datasets:
 +modules:
-+  - id: contact-notes
++  contact-notes:
 +    version: 0.1.0
 +
 +datasets:

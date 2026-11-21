@@ -28,8 +28,7 @@ fn project_with_local_hook() -> Value {
         "kind": "BRegProject",
         "project": {"id": "hook-binding", "version": "1", "defaultLanguage": "en",
                      "canonicalBaseIri": "https://hook-binding.example.test"},
-        "datasets":[{"id":"test-dataset"}],"recordTypes":[{
-            "id": "case",
+        "datasets":[{"id":"test-dataset"}],"recordTypes":{"case": {
             "primaryDataset": "test-dataset",
             "route": "cases",
             "mutationMode": "mutable",
@@ -45,7 +44,7 @@ fn project_with_local_hook() -> Value {
                 "projection": ["label"],
                 "handler": {"type": "rhai", "script": SCRIPT_PATH, "abi": "registry.hook-handler/v1"}
             }]
-        }]
+        }}
     })
 }
 

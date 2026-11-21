@@ -34,7 +34,7 @@ fn presentation_members_use_the_shared_display_text_reader() {
     for base in [
         "/accessProfiles/directory-editor/display",
         "/statisticalDatasets/0/display",
-        "/recordTypes/0/hooks/0/display",
+        "/recordTypes/entry/hooks/0/display",
         "/actions/0/execution/proposal/hooks/0/display",
     ] {
         for member in ["label", "description"] {
@@ -54,7 +54,7 @@ fn presentation_duplicates_are_scoped_to_their_own_kind() {
             "/statisticalDatasets",
             "breg.statistical-dataset.duplicate-label",
         ),
-        ("/recordTypes/0/hooks", "breg.hook.duplicate-label"),
+        ("/recordTypes/entry/hooks", "breg.hook.duplicate-label"),
         (
             "/actions/0/execution/proposal/hooks",
             "breg.proposal-hook.duplicate-label",
@@ -118,9 +118,9 @@ fn presentation_duplicates_are_scoped_to_their_own_kind() {
 #[test]
 fn profile_and_hook_labels_follow_module_extension_namespaces() {
     let mut project = authored_display();
-    project["modules"] = json!([{"id":"extension","version":"0.1.0"}]);
+    project["modules"] = json!({"extension": {"version":"0.1.0"}});
     project["accessProfiles"]["directory-editor"]["display"]["label"] = json!("Reader");
-    project["recordTypes"][0]["hooks"][0]["display"]["label"] = json!("Notification");
+    project["recordTypes"]["entry"]["hooks"][0]["display"]["label"] = json!("Notification");
     let profile = |id: &str| {
         json!({
             id: {
@@ -140,11 +140,11 @@ fn profile_and_hook_labels_follow_module_extension_namespaces() {
     let mut module = json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
         "kind":"BRegModule","id":"extension","version":"0.1.0",
-        "extendRecordTypes":[
-            {"recordType":"entry","accessProfiles":profile("module-reader"),"hooks":[hook("module-notice")]},
-            {"recordType":"entry","accessProfiles":profile("other-reader"),"hooks":[hook("other-notice")]}
-        ]
+        "extendRecordTypes":{"entry":{"accessProfiles":{},"hooks":[hook("module-notice"),hook("other-notice")]}}
     });
+    for id in ["module-reader", "other-reader"] {
+        module["extendRecordTypes"]["entry"]["accessProfiles"][id] = profile(id)[id].clone();
+    }
     let decoded = read_module_yaml("module.yaml", &bytes(&module)).unwrap();
     let report = decoded.document.warnings();
     for code in [
@@ -178,12 +178,12 @@ fn profile_and_hook_labels_follow_module_extension_namespaces() {
             .path
             .starts_with("modules[id=extension].extendRecordTypes[recordType=entry]")));
     }
-    module["extendRecordTypes"][0]["accessProfiles"]["module-reader"]["display"]["label"] =
+    module["extendRecordTypes"]["entry"]["accessProfiles"]["module-reader"]["display"]["label"] =
         json!("unsafe\u{202e}");
     let report = read_module_yaml("module.yaml", &bytes(&module)).unwrap_err();
     assert!(report.diagnostics().iter().any(|item| {
         item.code == "config.invalid-value"
-            && item.path == "/extendRecordTypes/0/accessProfiles/module-reader/display/label"
+            && item.path == "/extendRecordTypes/entry/accessProfiles/module-reader/display/label"
     }));
 }
 
@@ -199,8 +199,7 @@ fn implicit_unique_constraint_id() -> String {
                 "canonicalBaseIri":"https://example.test"
             },
             "datasets":[{"id":"records"}],
-            "recordTypes":[{
-                "id":"item",
+            "recordTypes":{"item": {
                 "primaryDataset":"records",
                 "route":"items",
                 "mutationMode":"mutable",
@@ -211,7 +210,7 @@ fn implicit_unique_constraint_id() -> String {
                     "classification":"internal"
                 }],
                 "constraints":[{"type":"unique","fields":["code"]}]
-            }]
+            }}
         }))
         .unwrap()
         .as_slice(),
@@ -276,7 +275,7 @@ fn locally_defined_ids_and_type_keys_are_refused_at_their_source() {
 #[test]
 fn display_text_is_refused_at_each_breg_authoring_boundary() {
     for path in [
-        "/recordTypes/0/display/label",
+        "/recordTypes/facility/display/label",
         "/actions/1/plan/refusals/0/label",
     ] {
         let mut source = facility();
@@ -367,7 +366,7 @@ project:
 datasets:
   - id: records
 recordTypes:
-  - id: item
+  item:
     primaryDataset: records
     route: items
     mutationMode: mutable
@@ -396,7 +395,7 @@ recordTypes:
                 report.render_human()
             )
         });
-    assert_eq!(diagnostic.path, "/recordTypes/0/constraints/1/id");
+    assert_eq!(diagnostic.path, "/recordTypes/item/constraints/1/id");
     let site = diagnostic
         .source
         .as_ref()
@@ -404,7 +403,7 @@ recordTypes:
     assert_eq!((site.line, site.column), (Some(23), Some(13)));
     assert_eq!(diagnostic.related.len(), 1);
     let related = &diagnostic.related[0];
-    assert_eq!(related.path, "/recordTypes/0/constraints/0");
+    assert_eq!(related.path, "/recordTypes/item/constraints/0");
     assert_eq!((related.line, related.column), (Some(21), Some(9)));
 }
 
@@ -472,16 +471,19 @@ fn hook_ids_share_one_namespace_within_each_authored_file() {
         })
     };
     let mut project = facility();
-    project["recordTypes"][0]["hooks"] = json!([hook("notify-user")]);
-    project["recordTypes"][1]["hooks"] = json!([hook("notify_user")]);
+    project["recordTypes"]["directory-entry"]["hooks"] = json!([hook("notify-user")]);
+    project["recordTypes"]["operator"]["hooks"] = json!([hook("notify_user")]);
     let report = read_project_yaml("registry.yaml", &bytes(&project)).unwrap_err();
     let diagnostic = report
         .diagnostics()
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.hook.id-collision")
         .expect("project hooks share one identifier namespace");
-    assert_eq!(diagnostic.path, "/recordTypes/1/hooks/0/id");
-    assert_eq!(diagnostic.related[0].path, "/recordTypes/0/hooks/0/id");
+    assert_eq!(diagnostic.path, "/recordTypes/operator/hooks/0/id");
+    assert_eq!(
+        diagnostic.related[0].path,
+        "/recordTypes/directory-entry/hooks/0/id"
+    );
     assert!(diagnostic.source.as_ref().unwrap().line.is_some());
     assert!(diagnostic.related[0].line.is_some());
 
@@ -490,18 +492,16 @@ fn hook_ids_share_one_namespace_within_each_authored_file() {
         "kind":"BRegModule",
         "id":"local-module",
         "version":"0.1.0",
-        "recordTypes":[{
-            "id":"entry",
+        "recordTypes":{"entry": {
             "route":"entries",
             "primaryDataset":"directory",
             "mutationMode":"mutable",
             "fields":[],
             "hooks":[hook("notify-user")]
-        }],
-        "extendRecordTypes":[{
-            "recordType":"entry",
+        }},
+        "extendRecordTypes":{"entry": {
             "hooks":[hook("notify_user")]
-        }]
+        }}
     });
     let report = read_module_yaml("module.yaml", &bytes(&module)).unwrap_err();
     let diagnostic = report
@@ -509,8 +509,8 @@ fn hook_ids_share_one_namespace_within_each_authored_file() {
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.hook.id-collision")
         .expect("module record and extension hooks share one identifier namespace");
-    assert_eq!(diagnostic.path, "/extendRecordTypes/0/hooks/0/id");
-    assert_eq!(diagnostic.related[0].path, "/recordTypes/0/hooks/0/id");
+    assert_eq!(diagnostic.path, "/extendRecordTypes/entry/hooks/0/id");
+    assert_eq!(diagnostic.related[0].path, "/recordTypes/entry/hooks/0/id");
     assert!(diagnostic.source.as_ref().unwrap().line.is_some());
     assert!(diagnostic.related[0].line.is_some());
 }
@@ -527,15 +527,19 @@ fn timer_ids_share_positioned_record_type_namespaces_within_each_authored_file()
     };
 
     let mut project = facility();
-    project["recordTypes"][0]["timers"] = json!([timer("activate-entry"), timer("activate_entry")]);
+    project["recordTypes"]["directory-entry"]["timers"] =
+        json!([timer("activate-entry"), timer("activate_entry")]);
     let report = read_project_yaml("registry.yaml", &bytes(&project)).unwrap_err();
     let diagnostic = report
         .diagnostics()
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.timer.id-collision")
         .expect("project timers share one positioned Record type namespace");
-    assert_eq!(diagnostic.path, "/recordTypes/0/timers/1/id");
-    assert_eq!(diagnostic.related[0].path, "/recordTypes/0/timers/0/id");
+    assert_eq!(diagnostic.path, "/recordTypes/directory-entry/timers/1/id");
+    assert_eq!(
+        diagnostic.related[0].path,
+        "/recordTypes/directory-entry/timers/0/id"
+    );
     assert_eq!(diagnostic.source.as_ref().unwrap().file, "registry.yaml");
     assert!(diagnostic.source.as_ref().unwrap().line.is_some());
     assert_eq!(diagnostic.related[0].file, "registry.yaml");
@@ -546,18 +550,16 @@ fn timer_ids_share_positioned_record_type_namespaces_within_each_authored_file()
         "kind":"BRegModule",
         "id":"local-module",
         "version":"0.1.0",
-        "recordTypes":[{
-            "id":"entry",
+        "recordTypes":{"entry": {
             "route":"entries",
             "primaryDataset":"directory",
             "mutationMode":"mutable",
             "fields":[],
             "timers":[timer("activate-entry")]
-        }],
-        "extendRecordTypes":[{
-            "recordType":"entry",
+        }},
+        "extendRecordTypes":{"entry": {
             "timers":[timer("activate_entry")]
-        }]
+        }}
     });
     let report = read_module_yaml("module.yaml", &bytes(&module)).unwrap_err();
     let diagnostic = report
@@ -565,8 +567,8 @@ fn timer_ids_share_positioned_record_type_namespaces_within_each_authored_file()
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.timer.id-collision")
         .expect("module Record and extension timers share one positioned namespace");
-    assert_eq!(diagnostic.path, "/extendRecordTypes/0/timers/0/id");
-    assert_eq!(diagnostic.related[0].path, "/recordTypes/0/timers/0/id");
+    assert_eq!(diagnostic.path, "/extendRecordTypes/entry/timers/0/id");
+    assert_eq!(diagnostic.related[0].path, "/recordTypes/entry/timers/0/id");
     assert_eq!(diagnostic.source.as_ref().unwrap().file, "module.yaml");
     assert!(diagnostic.source.as_ref().unwrap().line.is_some());
     assert_eq!(diagnostic.related[0].file, "module.yaml");
@@ -576,8 +578,8 @@ fn timer_ids_share_positioned_record_type_namespaces_within_each_authored_file()
 #[test]
 fn duplicate_authored_labels_warn_with_normalized_comparison_and_locations() {
     let mut source = facility();
-    source["recordTypes"][0]["display"]["label"] = json!("Café");
-    source["recordTypes"][1]["display"]["label"] = json!("CA\u{200b}FÉ");
+    source["recordTypes"]["directory-entry"]["display"]["label"] = json!("Café");
+    source["recordTypes"]["operator"]["display"]["label"] = json!("CA\u{200b}FÉ");
 
     let decoded = read_project_yaml("registry.yaml", &bytes(&source)).unwrap();
     let report = decoded.document.warnings();
@@ -586,12 +588,15 @@ fn duplicate_authored_labels_warn_with_normalized_comparison_and_locations() {
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.record-type.duplicate-label")
         .expect("equivalent record type labels produce a warning");
-    assert_eq!(diagnostic.path, "/recordTypes/1/display/label");
+    assert_eq!(diagnostic.path, "/recordTypes/operator/display/label");
     assert!(diagnostic.message.contains("directory-entry"));
     assert!(diagnostic.message.contains("operator"));
     assert!(diagnostic.source.as_ref().unwrap().line.is_some());
     assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].path, "/recordTypes/0/display/label");
+    assert_eq!(
+        diagnostic.related[0].path,
+        "/recordTypes/directory-entry/display/label"
+    );
     assert!(diagnostic.related[0].line.is_some());
 }
 
@@ -634,8 +639,8 @@ fn action_refusal_labels_are_scoped_to_their_action() {
 #[test]
 fn reader_refusals_keep_duplicate_label_warnings_for_projects_and_modules() {
     let mut project = facility();
-    project["recordTypes"][0]["display"]["label"] = json!("Café");
-    project["recordTypes"][1]["display"]["label"] = json!("CAFE\u{301}");
+    project["recordTypes"]["directory-entry"]["display"]["label"] = json!("Café");
+    project["recordTypes"]["operator"]["display"]["label"] = json!("CAFE\u{301}");
     let profile = project["accessProfiles"]["facility-reader"].clone();
     project["accessProfiles"]["facility_reader"] = profile;
     let report = read_project_yaml("registry.yaml", &bytes(&project)).unwrap_err();
@@ -657,24 +662,22 @@ fn reader_refusals_keep_duplicate_label_warnings_for_projects_and_modules() {
         "kind":"BRegModule",
         "id":"local-module",
         "version":"0.1.0",
-        "recordTypes":[
-            {
-                "id":"entry-one",
+        "recordTypes":{
+            "entry-one": {
                 "route":"entries",
                 "primaryDataset":"directory",
                 "mutationMode":"mutable",
                 "display":{"label":"Directory entry"},
                 "fields":[]
             },
-            {
-                "id":"entry_one",
+            "entry_one": {
                 "route":"entry-copies",
                 "primaryDataset":"directory",
                 "mutationMode":"mutable",
                 "display":{"label":"directory entry"},
                 "fields":[]
             }
-        ]
+        }
     });
     let report = read_module_yaml("module.yaml", &bytes(&module)).unwrap_err();
     for code in [
@@ -701,25 +704,27 @@ fn reader_refusals_sort_and_bound_warnings_with_integrity_errors_once() {
                 } else {
                     format!("entry-{index}")
                 };
-                json!({
-                    "id":id,
-                    "route":format!("entries-{index}"),
-                    "primaryDataset":"directory",
-                    "mutationMode":"mutable",
-                    "display":{"label":"Repeated entry"},
-                    "fields":[]
-                })
+                (
+                    id,
+                    json!({
+                        "route":format!("entries-{index}"),
+                        "primaryDataset":"directory",
+                        "mutationMode":"mutable",
+                        "display":{"label":"Repeated entry"},
+                        "fields":[]
+                    }),
+                )
             })
-            .collect::<Vec<_>>()
+            .collect::<serde_json::Map<String, Value>>()
     };
     let mut project = facility();
-    project["recordTypes"] = Value::from(repeated_records("entry_100"));
+    project["recordTypes"] = Value::Object(repeated_records("entry_100"));
     let module = json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
         "kind":"BRegModule",
         "id":"local-module",
         "version":"0.1.0",
-        "recordTypes":repeated_records("entry_100")
+        "recordTypes":Value::Object(repeated_records("entry_100"))
     });
 
     for report in [
@@ -882,8 +887,7 @@ fn module_extensions_share_their_target_record_type_namespaces() {
         "kind":"BRegModule",
         "id":"local-module",
         "version":"0.1.0",
-        "recordTypes":[{
-            "id":"entry",
+        "recordTypes":{"entry": {
             "route":"entries",
             "primaryDataset":"directory",
             "mutationMode":"mutable",
@@ -893,16 +897,15 @@ fn module_extensions_share_their_target_record_type_namespaces() {
                 "maximumLength":40,
                 "classification":"internal"
             }]
-        }],
-        "extendRecordTypes":[{
-            "recordType":"entry",
+        }},
+        "extendRecordTypes":{"entry": {
             "fields":[{
                 "id":"case_number",
                 "type":"string",
                 "maximumLength":40,
                 "classification":"internal"
             }]
-        }]
+        }}
     });
     let report = read_module_yaml("module.yaml", &bytes(&source)).unwrap_err();
     let diagnostic = report
@@ -910,9 +913,9 @@ fn module_extensions_share_their_target_record_type_namespaces() {
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.field.id-collision")
         .expect("a module extension shares the target record type's field namespace");
-    assert_eq!(diagnostic.path, "/extendRecordTypes/0/fields/0/id");
+    assert_eq!(diagnostic.path, "/extendRecordTypes/entry/fields/0/id");
     assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].path, "/recordTypes/0/fields/0/id");
+    assert_eq!(diagnostic.related[0].path, "/recordTypes/entry/fields/0/id");
 }
 
 #[test]
@@ -925,8 +928,7 @@ fn compiler_refuses_lookalike_ids_across_project_and_module_files() {
         "kind":"BRegModule",
         "id":"local-module",
         "version":"0.1.0",
-        "recordTypes":[{
-            "id":"directory_entry",
+        "recordTypes":{"directory_entry": {
             "route":"module-directory-entries",
             "primaryDataset":"facility-registry",
             "mutationMode":"mutable",
@@ -936,7 +938,7 @@ fn compiler_refuses_lookalike_ids_across_project_and_module_files() {
                 "maximumLength":40,
                 "classification":"internal"
             }]
-        }]
+        }}
     });
     let module = read_module_yaml("module.yaml", &bytes(&module_source))
         .unwrap()
@@ -967,7 +969,7 @@ fn compiler_refuses_lookalike_ids_across_project_and_module_files() {
 #[test]
 fn compiler_warns_for_duplicate_labels_across_modules_and_extensions() {
     let mut project_source = facility();
-    project_source["modules"] = json!([{"id":"local-module","version":"0.1.0"}]);
+    project_source["modules"] = json!({"local-module": {"version":"0.1.0"}});
     project_source["functions"] = json!([]);
     project_source["actions"] = json!([]);
     {
@@ -975,7 +977,8 @@ fn compiler_warns_for_duplicate_labels_across_modules_and_extensions() {
         let keep = ["operator-editor", "facility-reader", "directory-editor"];
         profiles.retain(|id, _| keep.contains(&id.as_str()));
     }
-    project_source["recordTypes"][0]["fields"][0]["display"] = json!({"label":"Café"});
+    project_source["recordTypes"]["directory-entry"]["fields"][0]["display"] =
+        json!({"label":"Café"});
     let project = read_project_yaml("registry.yaml", &bytes(&project_source))
         .unwrap()
         .value;
@@ -984,8 +987,7 @@ fn compiler_warns_for_duplicate_labels_across_modules_and_extensions() {
         "kind":"BRegModule",
         "id":"local-module",
         "version":"0.1.0",
-        "recordTypes":[{
-            "id":"module-entry",
+        "recordTypes":{"module-entry": {
             "route":"module-entries",
             "primaryDataset":"facility-registry",
             "mutationMode":"mutable",
@@ -996,9 +998,8 @@ fn compiler_warns_for_duplicate_labels_across_modules_and_extensions() {
                 "maximumLength":40,
                 "classification":"internal"
             }]
-        }],
-        "extendRecordTypes":[{
-            "recordType":"directory-entry",
+        }},
+        "extendRecordTypes":{"directory-entry": {
             "fields":[{
                 "id":"alternate-name",
                 "type":"string",
@@ -1006,7 +1007,7 @@ fn compiler_warns_for_duplicate_labels_across_modules_and_extensions() {
                 "classification":"public",
                 "display":{"label":"CAFE\u{301}"}
             }]
-        }]
+        }}
     });
     let module = read_module_yaml("module.yaml", &bytes(&module_source))
         .unwrap()
@@ -1057,7 +1058,7 @@ fn compiler_warns_for_duplicate_labels_across_modules_and_extensions() {
 #[test]
 fn compiler_scopes_refusal_labels_by_action_across_project_and_module() {
     let mut project_source = facility();
-    project_source["modules"] = json!([{"id":"local-module","version":"0.1.0"}]);
+    project_source["modules"] = json!({"local-module": {"version":"0.1.0"}});
     let mut permission = project_source["accessProfiles"]["facility-correction-author"]
         ["permissions"]["actions"][0]
         .clone();
@@ -1299,7 +1300,7 @@ fn named_types_keep_record_attributes_and_reject_them_on_action_inputs() {
         .compile(&document)
         .unwrap();
     let mut source = facility();
-    source["recordTypes"][0]["fields"][0] = json!({
+    source["recordTypes"]["directory-entry"]["fields"][0] = json!({
         "id":"name","typeRef":"city","required":true,"classification":"restricted",
         "encrypted":true,"pattern":"[A-Z]"
     });
@@ -1315,8 +1316,8 @@ fn named_types_keep_record_attributes_and_reject_them_on_action_inputs() {
 fn module_schema_includes_the_readers_named_type_alternative() {
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
         "id":"local-module","version":"0.1.0","valueTypes":{"short-label":{"type":"string","maximumLength":40}},
-        "recordTypes":[{"id":"entry","route":"entries","primaryDataset":"directory","mutationMode":"mutable",
-            "fields":[{"id":"label","typeRef":"short-label","classification":"internal"}]}]});
+        "recordTypes":{"entry": {"route":"entries","primaryDataset":"directory","mutationMode":"mutable",
+            "fields":[{"id":"label","typeRef":"short-label","classification":"internal"}]}}});
     read_module_yaml("module.yaml", &bytes(&source)).unwrap();
     let documents = registry_breg::schema::documents().unwrap();
     let document: Value =
@@ -1331,17 +1332,17 @@ fn module_schema_includes_the_readers_named_type_alternative() {
 
 fn module_with_profiles(owner: &str, second_id: &str) -> String {
     let (list, member) = if owner == "extend" {
-        ("extendRecordTypes", "recordType: entry")
+        ("extendRecordTypes", "")
     } else {
         (
             "recordTypes",
-            "id: entry
-    primaryDataset: test-dataset
+            "    primaryDataset: test-dataset
     route: entries
     mutationMode: mutable
     classification: internal
     fields:
-      - {id: code, type: string, maximumLength: 32, classification: internal}",
+      - {id: code, type: string, maximumLength: 32, classification: internal}
+",
         )
     };
     format!(
@@ -1350,8 +1351,8 @@ kind: BRegModule
 id: extension
 version: 0.1.0
 {list}:
-  - {member}
-    accessProfiles:
+  entry:
+{member}    accessProfiles:
       case-reader:
         display: {{label: Case reader}}
         principalClaim: registry_principal

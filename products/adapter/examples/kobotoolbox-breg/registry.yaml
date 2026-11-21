@@ -29,7 +29,7 @@ datasets:
     display: {label: Households, description: Households registered from field submissions.}
 
 recordTypes:
-  - id: household
+  household:
     route: households
     primaryDataset: households
     mutationMode: mutable

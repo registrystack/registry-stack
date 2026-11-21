@@ -441,9 +441,9 @@ mod tests {
             "apiVersion":crate::compiler::AUTHORING_API_VERSION,"kind":"BRegProject",
             "project":{"id":"label-acquisition","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
             "datasets":[{"id":"records"}],
-            "recordTypes":[{"id":"local-record","primaryDataset":"records","route":"records","mutationMode":"mutable","classification":"internal","fields":[
+            "recordTypes":{"local-record": {"primaryDataset":"records","route":"records","mutationMode":"mutable","classification":"internal","fields":[
                 {"id":"subject-key","type":"string","maximumLength":64,"classification":"internal"},
-                {"id":"tenant","type":"string","maximumLength":32,"classification":"internal"}]}],
+                {"id":"tenant","type":"string","maximumLength":32,"classification":"internal"}]}},
             "externalRecordTypes":[
                 {"id":"member","authority":"urn:test:source","identifierScheme":"urn:test:member","fields":[{"id":"holder","type":"string","classification":"restricted","nullable":true}]},
                 {"id":"label-record","authority":"urn:test:source","identifierScheme":"urn:test:person","fields":[{"id":"name","type":"string","classification":"internal"}]}],

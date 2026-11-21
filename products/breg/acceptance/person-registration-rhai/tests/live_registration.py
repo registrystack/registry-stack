@@ -36,11 +36,9 @@ def main() -> None:
     invalid_project = output / "invalid-pattern-project"
     shutil.copytree(args.project, invalid_project)
     invalid_config = yaml.safe_load((invalid_project / "registry.yaml").read_text(encoding="utf-8"))
-    for entity in invalid_config["recordTypes"]:
-        if entity["id"] == "person":
-            for field in entity["fields"]:
-                if field["id"] == "identifier":
-                    field["pattern"] = "["
+    for field in invalid_config["recordTypes"]["person"]["fields"]:
+        if field["id"] == "identifier":
+            field["pattern"] = "["
     (invalid_project / "registry.yaml").write_text(yaml.safe_dump(invalid_config, sort_keys=False), encoding="utf-8")
     invalid = subprocess.run([
         str(args.bregctl), "--format", "json", "test", str(invalid_project),

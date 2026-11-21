@@ -17,8 +17,7 @@ fn project_value() -> Value {
         "kind": "BRegProject",
         "project": {"id": "webhook-contract", "version": "1", "defaultLanguage": "en",
                      "canonicalBaseIri": "https://webhook-contract.example.test"},
-        "recordTypes": [{
-            "id": "case",
+        "recordTypes": {"case": {
             "primaryDataset": "test-dataset",
             "route": "cases",
             "mutationMode": "mutable",
@@ -48,7 +47,7 @@ fn project_value() -> Value {
                 "trigger": "patched",
                 "projection": ["label"]
             }]
-        }]
+        }}
     })
 }
 
@@ -74,7 +73,7 @@ fn assert_compile_code(value: &Value, code: &str) {
 }
 
 fn webhook_mut(value: &mut Value) -> &mut serde_json::Map<String, Value> {
-    value["recordTypes"][0]["hooks"][0]["handler"]
+    value["recordTypes"]["case"]["hooks"][0]["handler"]
         .as_object_mut()
         .expect("hook object")
 }
@@ -205,7 +204,7 @@ fn destination_auth_delivery_and_deployed_members_are_closed_and_value_free() {
 #[test]
 fn webhook_projection_is_closed_and_classification_is_derived() {
     let mut missing = project_value();
-    missing["recordTypes"][0]["hooks"][0]
+    missing["recordTypes"]["case"]["hooks"][0]
         .as_object_mut()
         .expect("event object")
         .remove("projection");
@@ -214,16 +213,16 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     assert_eq!(failure.diagnostics()[0].code, "config.missing-key");
 
     let mut empty = project_value();
-    empty["recordTypes"][0]["hooks"][0]["projection"] = json!([]);
+    empty["recordTypes"]["case"]["hooks"][0]["projection"] = json!([]);
     assert_compile_code(&empty, "breg.event.projection-empty");
 
     let mut unknown = project_value();
-    unknown["recordTypes"][0]["hooks"][0]["projection"] = json!(["unknown-field"]);
+    unknown["recordTypes"]["case"]["hooks"][0]["projection"] = json!(["unknown-field"]);
     assert_compile_code(&unknown, "breg.event.projection-field-unknown");
 
     let mut restricted = project_value();
-    restricted["recordTypes"][0]["hooks"][0]["projection"] = json!(["secret"]);
-    restricted["recordTypes"][0]["hooks"][0]
+    restricted["recordTypes"]["case"]["hooks"][0]["projection"] = json!(["secret"]);
+    restricted["recordTypes"]["case"]["hooks"][0]
         .as_object_mut()
         .expect("event object")
         .remove("when");
@@ -237,9 +236,9 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     );
 
     let mut minimized = project_value();
-    minimized["recordTypes"][0]["classification"] = json!("restricted");
-    minimized["recordTypes"][0]["hooks"][0]["projection"] = json!(["label"]);
-    minimized["recordTypes"][0]["hooks"][0]
+    minimized["recordTypes"]["case"]["classification"] = json!("restricted");
+    minimized["recordTypes"]["case"]["hooks"][0]["projection"] = json!(["label"]);
+    minimized["recordTypes"]["case"]["hooks"][0]
         .as_object_mut()
         .expect("event object")
         .remove("when");
@@ -255,8 +254,9 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     );
 
     let mut condition_observes_restricted = project_value();
-    condition_observes_restricted["recordTypes"][0]["hooks"][0]["projection"] = json!(["label"]);
-    condition_observes_restricted["recordTypes"][0]["hooks"][0]["when"] = json!({
+    condition_observes_restricted["recordTypes"]["case"]["hooks"][0]["projection"] =
+        json!(["label"]);
+    condition_observes_restricted["recordTypes"]["case"]["hooks"][0]["when"] = json!({
         "type": "fields",
         "afterEquals": {"secret": "eligible"}
     });
@@ -271,11 +271,11 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     );
 
     let mut oversized = project_value();
-    oversized["recordTypes"][0]["fields"][0]["maximumLength"] = json!(300_000);
+    oversized["recordTypes"]["case"]["fields"][0]["maximumLength"] = json!(300_000);
     assert_compile_code(&oversized, "breg.event.hook-projection-too-large");
 
     let mut exact_envelope_boundary = project_value();
-    exact_envelope_boundary["recordTypes"][0]["fields"][0] = json!({
+    exact_envelope_boundary["recordTypes"]["case"]["fields"][0] = json!({
         "id": "label",
         "type": "structured",
         "maximumBytes": 1_046_230,
@@ -287,8 +287,8 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
         "required": true,
         "classification": "public"
     });
-    exact_envelope_boundary["recordTypes"][0]["hooks"][0]["projection"] = json!(["label"]);
-    exact_envelope_boundary["recordTypes"][0]["hooks"][0]
+    exact_envelope_boundary["recordTypes"]["case"]["hooks"][0]["projection"] = json!(["label"]);
+    exact_envelope_boundary["recordTypes"]["case"]["hooks"][0]
         .as_object_mut()
         .expect("event object")
         .remove("when");
@@ -300,14 +300,14 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
             .maximum_payload_bytes,
         1_048_576
     );
-    exact_envelope_boundary["recordTypes"][0]["fields"][0]["maximumBytes"] = json!(1_046_231);
+    exact_envelope_boundary["recordTypes"]["case"]["fields"][0]["maximumBytes"] = json!(1_046_231);
     assert_compile_code(
         &exact_envelope_boundary,
         "breg.event.hook-projection-too-large",
     );
 
     let mut exact_transport_mismatch = project_value();
-    exact_transport_mismatch["recordTypes"][0]["fields"][0] = json!({
+    exact_transport_mismatch["recordTypes"]["case"]["fields"][0] = json!({
         "id": "label",
         "type": "structured",
         "maximumBytes": 1_048_576,
@@ -324,7 +324,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     );
 
     let mut decimal_quote_boundary = project_value();
-    decimal_quote_boundary["recordTypes"][0]["fields"] = json!([{
+    decimal_quote_boundary["recordTypes"]["case"]["fields"] = json!([{
         "id": "label",
         "type": "structured",
         "maximumBytes": 1_048_517,
@@ -341,14 +341,15 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
         "scale": 0,
         "classification": "public"
     }]);
-    decimal_quote_boundary["recordTypes"][0]["hooks"][0]["projection"] = json!(["amount", "label"]);
+    decimal_quote_boundary["recordTypes"]["case"]["hooks"][0]["projection"] =
+        json!(["amount", "label"]);
     assert_compile_code(
         &decimal_quote_boundary,
         "breg.event.hook-projection-too-large",
     );
 
     let mut all_fractional_decimal_boundary = project_value();
-    all_fractional_decimal_boundary["recordTypes"][0]["fields"] = json!([{
+    all_fractional_decimal_boundary["recordTypes"]["case"]["fields"] = json!([{
         "id": "a",
         "type": "structured",
         "maximumBytes": 1_048_518,
@@ -363,7 +364,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
         "required": true,
         "classification": "public"
     }]);
-    all_fractional_decimal_boundary["recordTypes"][0]["hooks"][0]["projection"] =
+    all_fractional_decimal_boundary["recordTypes"]["case"]["hooks"][0]["projection"] =
         json!(["a", "amount"]);
     assert_compile_code(
         &all_fractional_decimal_boundary,
@@ -371,7 +372,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     );
 
     let mut optional_null_boundary = project_value();
-    optional_null_boundary["recordTypes"][0]["fields"] = json!([{
+    optional_null_boundary["recordTypes"]["case"]["fields"] = json!([{
         "id": "a",
         "type": "structured",
         "maximumBytes": 1_048_564,
@@ -385,7 +386,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
         "schema": {"type": "string"},
         "classification": "public"
     }]);
-    optional_null_boundary["recordTypes"][0]["hooks"][0]["projection"] = json!(["a", "b"]);
+    optional_null_boundary["recordTypes"]["case"]["hooks"][0]["projection"] = json!(["a", "b"]);
     assert_compile_code(
         &optional_null_boundary,
         "breg.event.hook-projection-too-large",
@@ -395,8 +396,8 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
 #[test]
 fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
     let mut patched = project_value();
-    patched["recordTypes"][0]["hooks"][0]["trigger"] = json!("patched");
-    patched["recordTypes"][0]["hooks"][0]["when"] = json!({
+    patched["recordTypes"]["case"]["hooks"][0]["trigger"] = json!("patched");
+    patched["recordTypes"]["case"]["hooks"][0]["when"] = json!({
         "type": "fields",
         "changed": ["region"],
         "beforeIsNull": ["region"],
@@ -412,7 +413,7 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
     );
     for member in ["beforeEquals", "afterEquals"] {
         let mut null_literal = patched.clone();
-        null_literal["recordTypes"][0]["hooks"][0]["when"] =
+        null_literal["recordTypes"]["case"]["hooks"][0]["when"] =
             json!({"type": "fields", member: {"region": null}});
         let refused = parse_project_yaml(
             &serde_json::to_vec(&null_literal).expect("test project serializes"),
@@ -425,24 +426,24 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
     }
     for (trigger, member) in [("created", "beforeIsNull"), ("tombstoned", "afterIsNull")] {
         let mut incompatible = project_value();
-        incompatible["recordTypes"][0]["hooks"][0]["trigger"] = json!(trigger);
-        incompatible["recordTypes"][0]["hooks"][0]["when"] =
+        incompatible["recordTypes"]["case"]["hooks"][0]["trigger"] = json!(trigger);
+        incompatible["recordTypes"]["case"]["hooks"][0]["when"] =
             json!({"type": "fields", member: ["region"]});
         assert_compile_code(&incompatible, "breg.event.when-trigger-incompatible");
     }
     for member in ["beforeIsNull", "afterIsNull"] {
         let mut unknown = patched.clone();
-        unknown["recordTypes"][0]["hooks"][0]["when"] =
+        unknown["recordTypes"]["case"]["hooks"][0]["when"] =
             json!({"type": "fields", member: ["unknown"]});
         assert_compile_code(&unknown, "breg.event.when-field-unknown");
     }
 
     let mut empty = project_value();
-    empty["recordTypes"][0]["hooks"][0]["when"] = json!({"type": "fields"});
+    empty["recordTypes"]["case"]["hooks"][0]["when"] = json!({"type": "fields"});
     assert_compile_code(&empty, "breg.event.when-empty");
 
     let mut incompatible_created = project_value();
-    incompatible_created["recordTypes"][0]["hooks"][0]["when"] = json!({
+    incompatible_created["recordTypes"]["case"]["hooks"][0]["when"] = json!({
         "type": "fields",
         "changed": ["region"]
     });
@@ -452,8 +453,8 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
     );
 
     let mut incompatible_tombstone = project_value();
-    incompatible_tombstone["recordTypes"][0]["hooks"][0]["trigger"] = json!("tombstoned");
-    incompatible_tombstone["recordTypes"][0]["hooks"][0]["when"] = json!({
+    incompatible_tombstone["recordTypes"]["case"]["hooks"][0]["trigger"] = json!("tombstoned");
+    incompatible_tombstone["recordTypes"]["case"]["hooks"][0]["when"] = json!({
         "type": "fields",
         "afterEquals": {"region": "north"}
     });
@@ -468,19 +469,19 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
         json!({"type": "fields", "afterEquals": {"unknown": "value"}}),
     ] {
         let mut source = patched.clone();
-        source["recordTypes"][0]["hooks"][0]["when"] = when;
+        source["recordTypes"]["case"]["hooks"][0]["when"] = when;
         assert_compile_code(&source, "breg.event.when-field-unknown");
     }
 
     let mut wrong_type = patched;
-    wrong_type["recordTypes"][0]["hooks"][0]["when"] = json!({
+    wrong_type["recordTypes"]["case"]["hooks"][0]["when"] = json!({
         "type": "fields",
         "afterEquals": {"region": 7}
     });
     assert_compile_code(&wrong_type, "breg.event.when-value-invalid");
 
     let mut structured = project_value();
-    structured["recordTypes"][0]["hooks"][0]["when"] = json!({
+    structured["recordTypes"]["case"]["hooks"][0]["when"] = json!({
         "type": "fields",
         "afterEquals": {"region": {"unexpected": true}}
     });
@@ -496,14 +497,14 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
     assert_eq!(failure.diagnostics()[0].code, "config.invalid-type");
     assert_eq!(
         failure.diagnostics()[0].path,
-        "project.recordTypes[0].hooks[0].when.afterEquals.region"
+        "project.recordTypes.case.hooks[0].when.afterEquals.region"
     );
 }
 
 #[test]
 fn additive_modules_add_nonconflicting_subscriptions_deterministically_and_refuse_conflicts() {
     let mut project_value = project_value();
-    project_value["recordTypes"][0]["hooks"] = json!([]);
+    project_value["recordTypes"]["case"]["hooks"] = json!([]);
     let mut project = parse_project(&project_value);
     let module_a = webhook_module("module-a", "created-a", "destination-a");
     let module_b = webhook_module("module-b", "created-b", "destination-b");
@@ -554,10 +555,9 @@ fn additive_modules_add_nonconflicting_subscriptions_deterministically_and_refus
 fn event_ids_are_unique_across_entities_for_unambiguous_external_types() {
     let mut source = project_value();
     source["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .expect("entities array")
-        .push(json!({
-            "id": "appeal",
+        .insert("appeal".to_owned(), json!({
             "primaryDataset": "test-dataset",
             "route": "appeals",
             "mutationMode": "create-only",
@@ -578,7 +578,7 @@ fn event_ids_are_unique_across_entities_for_unambiguous_external_types() {
 #[test]
 fn outbox_only_event_is_authoring_only_and_production_requires_delivery() {
     let mut source = project_value();
-    source["recordTypes"][0]["hooks"] = json!([{
+    source["recordTypes"]["case"]["hooks"] = json!([{
         "phase": "after",
         "id": "case-created",
         "trigger": "created",
@@ -609,8 +609,7 @@ fn webhook_module(id: &str, event_id: &str, destination_id: &str) -> RegistryMod
             "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
             "id": id,
             "version": "1",
-            "extendRecordTypes": [{
-                "recordType": "case",
+            "extendRecordTypes": {"case": {
                 "hooks": [{
                     "phase": "after",
                     "id": event_id,
@@ -621,7 +620,7 @@ fn webhook_module(id: &str, event_id: &str, destination_id: &str) -> RegistryMod
                         "destinationId": destination_id
                     }
                 }]
-            }]
+            }}
         }))
         .expect("module serializes"),
     )
@@ -667,10 +666,10 @@ fn structured_label(maximum_bytes: u32) -> Value {
 #[test]
 fn the_compiled_payload_proof_measures_envelope_bytes_not_data_bytes() {
     let mut data_object_at_the_bound = project_value();
-    data_object_at_the_bound["recordTypes"][0]["fields"][0] =
+    data_object_at_the_bound["recordTypes"]["case"]["fields"][0] =
         structured_label(DATA_OBJECT_AT_THE_TRANSPORT_BOUND);
-    data_object_at_the_bound["recordTypes"][0]["hooks"][0]["projection"] = json!(["label"]);
-    data_object_at_the_bound["recordTypes"][0]["hooks"][0]
+    data_object_at_the_bound["recordTypes"]["case"]["hooks"][0]["projection"] = json!(["label"]);
+    data_object_at_the_bound["recordTypes"]["case"]["hooks"][0]
         .as_object_mut()
         .expect("event object")
         .remove("when");
@@ -680,7 +679,7 @@ fn the_compiled_payload_proof_measures_envelope_bytes_not_data_bytes() {
     );
 
     let mut envelope_at_the_bound = data_object_at_the_bound.clone();
-    envelope_at_the_bound["recordTypes"][0]["fields"][0] =
+    envelope_at_the_bound["recordTypes"]["case"]["fields"][0] =
         structured_label(DATA_OBJECT_AT_THE_TRANSPORT_BOUND - ENVELOPE_WRAPPER_BYTES);
     assert_eq!(
         compile(&envelope_at_the_bound)
@@ -692,7 +691,7 @@ fn the_compiled_payload_proof_measures_envelope_bytes_not_data_bytes() {
     );
 
     let mut envelope_one_byte_over = envelope_at_the_bound;
-    envelope_one_byte_over["recordTypes"][0]["fields"][0] =
+    envelope_one_byte_over["recordTypes"]["case"]["fields"][0] =
         structured_label(DATA_OBJECT_AT_THE_TRANSPORT_BOUND - ENVELOPE_WRAPPER_BYTES + 1);
     assert_compile_code(
         &envelope_one_byte_over,

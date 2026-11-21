@@ -367,8 +367,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"data-export-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-        "recordTypes":[{
-            "id":"entry", "primaryDataset":"test-dataset", "route":"entries", "mutationMode":"create-only",
+        "recordTypes":{"entry": { "primaryDataset":"test-dataset", "route":"entries", "mutationMode":"create-only",
             "batch":{"maximumItems":60,"maximumBytes":131072},
             "fields":[
                 {"id":"code","type":"string","required":true,"maximumLength":16,
@@ -380,7 +379,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             ],
             "constraints":[{"type":"unique","fields":["code"]}],
             "hooks":[{"phase":"after","id":"entry-created","trigger":"created","projection":["code"]}]
-        }],
+        }},
         "accessProfiles":{PROFILE: { "principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "requiredPurposes":["data-export"],
             "permissions":{"records":[{

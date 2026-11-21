@@ -57,16 +57,9 @@
     },
     "distributions": []
   },
-  "modules": [
-    {
-      "id": "business-core",
-      "version": "0.1.0",
-      "digest": "sha256:9bcc181cb24ddeeb7f5424ce8b50436f083c17fa458089cd4f1555916f927697"
-    }
-  ],
-  "recordTypes": [
-    {
-      "id": "legal-entity",
+  "modules": {"business-core":{"digest":"sha256:f4cfb0ed31b849925a4e2fffbe2ba0b7f58bed21f4043656ba81e8d507bd6724","version":"0.1.0"}},
+  "recordTypes": {
+    "legal-entity": {
       "primaryDataset": "business",
       "route": "legal-entities",
       "mutationMode": "mutable",
@@ -159,8 +152,7 @@
         }
       ]
     },
-    {
-      "id": "filing",
+    "filing": {
       "primaryDataset": "business",
       "route": "filings",
       "mutationMode": "create-only",
@@ -252,8 +244,7 @@
         }
       ]
     },
-    {
-      "id": "officer-appointment",
+    "officer-appointment": {
       "primaryDataset": "business",
       "route": "officer-appointments",
       "mutationMode": "mutable",
@@ -367,7 +358,7 @@
         }
       ]
     }
-  ],
+  },
   "accessProfiles": {
     "public-register": {
       "default": true,

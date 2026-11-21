@@ -737,7 +737,7 @@ project:
 datasets:
   - id: test-dataset
 recordTypes:
-  - id: person
+  person:
     primaryDataset: test-dataset
     route: people
     mutationMode: mutable

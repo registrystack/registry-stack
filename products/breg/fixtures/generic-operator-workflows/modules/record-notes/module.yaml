@@ -14,6 +14,6 @@ extendRecordTypes:
   # a create may omit it. Adding a field to the model grants nobody access to
   # it; list it in an access profile's `readableFields` and `writableFields`
   # before a caller can see or set it.
-  - recordType: record
+  record:
     fields:
       - {id: internal-note, type: string, maximumLength: 500, classification: internal}

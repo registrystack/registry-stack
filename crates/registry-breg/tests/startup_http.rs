@@ -65,7 +65,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 recordTypes:
-  - id: public-record
+  public-record:
     primaryDataset: test-dataset
     route: public-records
     mutationMode: create-only

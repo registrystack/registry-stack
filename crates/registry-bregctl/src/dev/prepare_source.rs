@@ -404,22 +404,62 @@ fn documents(files: &BTreeMap<String, Vec<u8>>) -> Result<BTreeMap<String, Value
         )
         .collect()
 }
-fn inventory(docs: &BTreeMap<String, Value>, compiled: &registry_breg::CompiledRegistry) -> Value {
-    json!(docs.get("registry.yaml").into_iter().flat_map(|doc| doc["recordTypes"].as_array().into_iter().flatten()).filter(|entity| {
-        entity["id"].as_str().is_some_and(|id|compiled.entities().contains_key(id))
-    }).map(|entity| {
+/// The Record types a document declares, keyed by id. A document whose
+/// `recordTypes` is not a mapping is refused rather than read as empty, so a
+/// source written in another shape never yields a silently empty inventory.
+fn record_types<'a>(path: &str, doc: &'a Value) -> Result<&'a serde_json::Map<String, Value>> {
+    doc["recordTypes"]
+        .as_object()
+        .with_context(|| format!("{path} must declare recordTypes as a mapping keyed by id"))
+}
+fn inventory(
+    docs: &BTreeMap<String, Value>,
+    compiled: &registry_breg::CompiledRegistry,
+) -> Result<Value> {
+    let mut entities = Vec::new();
+    for (entity_id, entity) in docs
+        .get("registry.yaml")
+        .map(|doc| record_types("registry.yaml", doc))
+        .transpose()?
+        .into_iter()
+        .flatten()
+        .filter(|(id, _)| compiled.entities().contains_key(id.as_str()))
+    {
         let fields = entity["fields"].as_array().cloned().unwrap_or_default();
         let supported = |field: &Value, selector: bool| {
-            let Some(logical) = entity["id"].as_str().and_then(|id|compiled.entities().get(id)).and_then(|entity|entity.stored_fields.iter().find(|stored|Some(stored.logical.id.as_str()) == field["id"].as_str())).map(|field| &field.logical) else { return false; };
+            let Some(logical) = compiled
+                .entities()
+                .get(entity_id.as_str())
+                .and_then(|entity| {
+                    entity
+                        .stored_fields
+                        .iter()
+                        .find(|stored| Some(stored.logical.id.as_str()) == field["id"].as_str())
+                })
+                .map(|field| &field.logical)
+            else {
+                return false;
+            };
             let name = logical.id.as_bytes();
-            let local_name = matches!(name.first(),Some(b'a'..=b'z')) && name.len() <= 64 && name.iter().all(|b|b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b,b'.'|b'_'|b'-'));
-            local_name && scalar(field) && if selector {registry_breg::evidence_source::supports_selector_field(&logical.field_type)} else {registry_breg::evidence_source::supports_scalar_fact(&logical.field_type)}
+            let local_name = matches!(name.first(), Some(b'a'..=b'z'))
+                && name.len() <= 64
+                && name.iter().all(|b| {
+                    b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
+                });
+            local_name
+                && scalar(field)
+                && if selector {
+                    registry_breg::evidence_source::supports_selector_field(&logical.field_type)
+                } else {
+                    registry_breg::evidence_source::supports_scalar_fact(&logical.field_type)
+                }
         };
         let describe = |field: &Value| json!({"id":field["id"],"type":field["type"]});
-        json!({"id":entity["id"],"selectorFields":fields.iter().filter(|field|identifier(entity,field) && supported(field,true)).map(describe).collect::<Vec<_>>(),
+        entities.push(json!({"id":entity_id,"selectorFields":fields.iter().filter(|field|identifier(entity,field) && supported(field,true)).map(describe).collect::<Vec<_>>(),
             "readableFields":fields.iter().filter(|field|supported(field,false)).map(describe).collect::<Vec<_>>(),
-            "rowFields":fields.iter().filter(|field|row_field(field) && supported(field,false)).map(describe).collect::<Vec<_>>()})
-    }).collect::<Vec<_>>())
+            "rowFields":fields.iter().filter(|field|row_field(field) && supported(field,false)).map(describe).collect::<Vec<_>>()}));
+    }
+    Ok(Value::Array(entities))
 }
 
 pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
@@ -452,7 +492,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     let compiled = crate::compile(&project, crate::ProfileArg::Production, "prepare-source")
         .map_err(|_| anyhow::anyhow!("project no longer compiles"))?;
     let mut report = json!({"ok":true,"command":"dev prepare-source","project":project,"status":"inspect","recoveredPriorApply":recovered,
-        "entities":inventory(&docs,&compiled),"bregUrl":state.breg_origin(),"issuer":state.issuer_origin(),"tokenEndpoint":format!("{}/oauth2/token",state.issuer_origin()),"clientAssertionAudience":state.issuer_origin(),"resource":state.audience(),"scopes":client_scopes,"audience":state.audience()});
+        "entities":inventory(&docs,&compiled)?,"bregUrl":state.breg_origin(),"issuer":state.issuer_origin(),"tokenEndpoint":format!("{}/oauth2/token",state.issuer_origin()),"clientAssertionAudience":state.issuer_origin(),"resource":state.audience(),"scopes":client_scopes,"audience":state.audience()});
     let Some(entity_id) = &args.entity else {
         if args.apply
             || args.selector_field.is_some()
@@ -531,13 +571,19 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     }) {
         bail!("access profile already exists; select a fresh dedicated profile ID");
     }
-    let path = docs.iter().filter(|(path,_)|path.as_str() == "registry.yaml").find(|(_, doc)| doc["recordTypes"].as_array().is_some_and(|entities|entities.iter().any(|e|e["id"] == *entity_id)))
-        .map(|(path,_)|path.clone()).context("source preparation supports entities authored directly in registry.yaml; use the normal reviewed package lifecycle for module-owned entities")?;
+    let path = "registry.yaml".to_owned();
+    let declared = docs
+        .get(&path)
+        .map(|doc| record_types(&path, doc))
+        .transpose()?
+        .is_some_and(|entities| entities.contains_key(entity_id));
+    if !declared {
+        bail!(
+            "source preparation supports entities authored directly in registry.yaml; use the normal reviewed package lifecycle for module-owned entities"
+        );
+    }
     let entity = docs.get_mut(&path).unwrap()["recordTypes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|e| e["id"] == *entity_id)
+        .get_mut(entity_id.as_str())
         .unwrap();
     let fields = entity["fields"]
         .as_array()
@@ -998,7 +1044,7 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/evidence/registry");
         let mut model: Value =
             serde_norway::from_slice(&fs::read(fixture.join("registry.yaml")).unwrap()).unwrap();
-        model["recordTypes"][0]
+        model["recordTypes"]["record"]
             .as_object_mut()
             .unwrap()
             .remove("selectorProfiles");
@@ -1028,10 +1074,10 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .extend(permission.as_object().unwrap().clone());
-            let module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"local-authority","version":"1","extendRecordTypes":[{"recordType":"record","accessProfiles":{"operator":operator}}]});
+            let module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"local-authority","version":"1","extendRecordTypes":{"record":{"accessProfiles":{"operator":operator}}}});
             let module_bytes = serde_norway::to_string(&module).unwrap().into_bytes();
             let parsed = registry_breg::contract::parse_module_yaml(&module_bytes).unwrap();
-            model["modules"] = json!([{"id":"local-authority","version":"1","digest":registry_breg::compiler::module_digest(&parsed)}]);
+            model["modules"] = json!({"local-authority":{"version":"1","digest":registry_breg::compiler::module_digest(&parsed)}});
             let directory = state.project.join("modules/local-authority");
             fs::create_dir_all(&directory).unwrap();
             fs::write(directory.join("module.yaml"), module_bytes).unwrap();
@@ -1327,11 +1373,31 @@ mod tests {
     }
 
     #[test]
+    fn list_form_record_types_are_refused_not_read_as_an_empty_inventory() {
+        let (_temporary, state) = source_fixture();
+        let compiled = crate::compile(
+            &state.project,
+            crate::ProfileArg::Production,
+            "prepare-source",
+        )
+        .unwrap_or_else(|_| panic!("the fixture compiles"));
+        let docs = BTreeMap::from([(
+            "registry.yaml".to_owned(),
+            json!({"recordTypes":[{"id":"record","fields": []}]}),
+        )]);
+        let error = inventory(&docs, &compiled).unwrap_err().to_string();
+        assert!(
+            error.contains("recordTypes as a mapping keyed by id"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn unexportable_selection_is_refused_before_preparing_authority() {
         let (_temporary, mut state) = source_fixture();
         let path = state.project.join("registry.yaml");
         let mut model: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
-        model["recordTypes"][0]["fields"][0]["minimumLength"] = json!(0);
+        model["recordTypes"]["record"]["fields"][0]["minimumLength"] = json!(0);
         let bytes = serde_norway::to_string(&model).unwrap().into_bytes();
         fs::write(&path, &bytes).unwrap();
         private::replace(&state.root().join("project/registry.yaml"), &bytes).unwrap();
@@ -1482,10 +1548,9 @@ mod tests {
         let (_temporary, mut state) = source_fixture();
         let path = state.project.join("registry.yaml");
         let mut model: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let mut target = model["recordTypes"][0].clone();
-        target["id"] = json!("organization");
+        let mut target = model["recordTypes"]["record"].clone();
         target["route"] = json!("organizations");
-        model["recordTypes"].as_array_mut().unwrap().push(target);
+        model["recordTypes"]["organization"] = target;
         let mut target_grant =
             model["accessProfiles"]["operator"]["permissions"]["records"][0].clone();
         target_grant["recordType"] = json!("organization");
@@ -1493,8 +1558,8 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .push(target_grant);
-        model["recordTypes"][0]["fields"].as_array_mut().unwrap().push(json!({"id":"organization","type":"reference","target":"organization","required":true,"classification":"internal"}));
-        model["recordTypes"][0]["constraints"]
+        model["recordTypes"]["record"]["fields"].as_array_mut().unwrap().push(json!({"id":"organization","type":"reference","target":"organization","required":true,"classification":"internal"}));
+        model["recordTypes"]["record"]["constraints"]
             .as_array_mut()
             .unwrap()
             .push(json!({"type":"unique","fields":["organization"]}));

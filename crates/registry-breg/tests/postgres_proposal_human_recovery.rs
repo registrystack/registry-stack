@@ -25,10 +25,10 @@ fn registry(automatic: bool) -> registry_breg::CompiledRegistry {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"human-recovery","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://recovery.example.test"},
         "datasets":[{"id":"directory"}],
-        "recordTypes":[{"id":"contact","primaryDataset":"directory","route":"contacts","mutationMode":"mutable",
+        "recordTypes":{"contact": {"primaryDataset":"directory","route":"contacts","mutationMode":"mutable",
             "mutationPolicy":{"patch":"proposal-required"},"fields":[
                 {"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
-                {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}],
+                {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}},
         "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{
             "review":{"type":"none"},"retention":{"mode":"operator-erase"},"application":if automatic {json!({"mode":"automatic","maximumAttempts":3})} else {json!({"mode":"manual"})}}},
             "inputs":[{"id":"contact","type":"reference","target":"contact","required":true,"classification":"internal"},

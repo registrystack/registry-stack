@@ -20,7 +20,7 @@ vocabularies:
   - {id: grant-status, values: [active, paused]}
   - {id: custody-status, values: [held, released]}
 recordTypes:
-  - id: grant
+  grant:
     primaryDataset: test-dataset
     route: grants
     mutationMode: mutable
@@ -29,7 +29,7 @@ recordTypes:
     fields:
       - {id: grant-number, type: string, minimumLength: 1, maximumLength: 40, required: true, classification: restricted}
       - {id: status, type: vocabulary-code, vocabulary: grant-status, required: true, classification: restricted}
-  - id: grant-pause-decision
+  grant-pause-decision:
     primaryDataset: test-dataset
     route: grant-pause-decisions
     mutationMode: create-only
@@ -52,14 +52,14 @@ recordTypes:
       sources:
         - {role: basis, field: basis-reference, label: Basis, external: {namespace: "urn:example:synthetic:notices"}}
       correction: {field: corrects, relation: corrects}
-  - id: item
+  item:
     primaryDataset: test-dataset
     route: items
     mutationMode: mutable
     classification: restricted
     fields:
       - {id: item-number, type: string, minimumLength: 1, maximumLength: 40, required: true, classification: restricted}
-  - id: custody-record
+  custody-record:
     primaryDataset: test-dataset
     route: custody-records
     mutationMode: mutable
@@ -68,7 +68,7 @@ recordTypes:
     fields:
       - {id: holder-reference, type: string, minimumLength: 1, maximumLength: 80, required: true, classification: restricted}
       - {id: status, type: vocabulary-code, vocabulary: custody-status, required: true, classification: restricted}
-  - id: custody-handover
+  custody-handover:
     primaryDataset: test-dataset
     route: custody-handovers
     mutationMode: create-only

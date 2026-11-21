@@ -46,7 +46,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 recordTypes:
-  - id: case
+  case:
     primaryDataset: test-dataset
     route: cases
     mutationMode: mutable

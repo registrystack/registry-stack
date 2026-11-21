@@ -16,13 +16,13 @@ fn source() -> Value {
     json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"reference-index-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://reference-index.example.test"},
-        "recordTypes":[
-          {"id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
+        "recordTypes":{
+          "site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
            "fields":[{"id":"name","type":"string","maximumLength":80,"classification":"internal"}]},
-          {"id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable","classification":"internal",
+          "asset": {"primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable","classification":"internal",
            "fields":[{"id":"site","type":"reference","target":"site","classification":"internal"},
                      {"id":"owner","type":"reference","target":"site","classification":"internal"},
-                     {"id":"code","type":"string","maximumLength":8,"classification":"internal"}]}],
+                     {"id":"code","type":"string","maximumLength":8,"classification":"internal"}]}},
         "accessProfiles":{"reader": {"principalClaim":"registry_principal","requiredScopes":["asset:read"],
           "permissions":{"records":[{"recordType":"asset","operations":["get","list"],
             "readableFields":["site","owner","code"],"filterableFields":[],"sortableFields":[],
@@ -41,7 +41,7 @@ fn compile(value: &Value, profile: CompileProfile) -> CompiledRegistry {
 }
 
 fn asset_mut(value: &mut Value) -> &mut Value {
-    &mut value["recordTypes"][1]
+    &mut value["recordTypes"]["asset"]
 }
 
 fn statement_sql<'a>(registry: &'a CompiledRegistry, id: &str) -> Option<&'a str> {
@@ -115,9 +115,9 @@ fn reference_index_names_stay_within_the_postgres_identifier_limit() {
     let long_entity = "a".repeat(60);
     let long_field = "b".repeat(60);
     value["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .expect("entities")
-        .push(json!({"id":long_entity,"primaryDataset":"test-dataset","route":"long-entities","mutationMode":"mutable","classification":"internal",
+        .insert(long_entity.clone(), json!({"primaryDataset":"test-dataset","route":"long-entities","mutationMode":"mutable","classification":"internal",
             "fields":[{"id":long_field,"type":"reference","target":"site","classification":"internal"}]}));
     let registry = compile(&value, CompileProfile::Authoring);
     let name = &registry.physical_names().entities[&long_entity].indexes
@@ -262,12 +262,12 @@ fn a_field_predicate_unique_constraint_still_reports_the_list_finding() {
 #[test]
 fn unindexed_read_path_filters_and_sorts_point_at_the_read_path_grant() {
     let mut value = source();
-    value["recordTypes"][0]["readPaths"] =
+    value["recordTypes"]["site"]["readPaths"] =
         json!([{"id":"assets","through":"placement","to":"asset","route":"placed-assets"}]);
     value["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .expect("entities")
-        .push(json!({"id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
+        .insert("placement".to_owned(), json!({"primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
             "fields":[{"id":"site","type":"reference","target":"site","classification":"internal"},
                       {"id":"asset","type":"reference","target":"asset","classification":"internal"}]}));
     value["accessProfiles"]["reader"]["permissions"]["records"]

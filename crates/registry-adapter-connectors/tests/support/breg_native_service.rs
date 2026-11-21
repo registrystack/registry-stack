@@ -332,10 +332,7 @@ impl Breg {
                 "defaultLanguage": "en"
             },
             "package": {"sourceRevision": "adapter-native-connector-proof"},
-            "recordTypes": [
-                {
-                    "id": "item",
-                    "primaryDataset": "synthetic-items",
+            "recordTypes":{"item":{"primaryDataset": "synthetic-items",
                     "route": "items",
                     "mutationMode": "mutable",
                     "classification": "internal",
@@ -344,10 +341,7 @@ impl Breg {
                         {"id": "owner", "type": "string", "required": true, "maximumLength": 80, "classification": "internal"},
                         {"id": "label", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 80, "classification": "internal"}
                     ]
-                },
-                {
-                    "id": "household",
-                    "primaryDataset": "synthetic-items",
+                },"household":{"primaryDataset": "synthetic-items",
                     "route": "households",
                     "mutationMode": "mutable",
                     "classification": "internal",
@@ -360,8 +354,7 @@ impl Breg {
                     "selectorProfiles": [
                         {"id": "by-source-submission", "fields": ["source-submission-id"]}
                     ]
-                }
-            ],
+                }},
             "datasets": [{"id": "synthetic-items"}],
             "functions": [
                 {
@@ -472,8 +465,9 @@ impl Breg {
         });
         if let Some(qfield) = field_site_registry {
             for record_type in registry["recordTypes"]
-                .as_array_mut()
-                .expect("the native record types are an array")
+                .as_object_mut()
+                .expect("the native record types are a map")
+                .values_mut()
             {
                 let owner = record_type["fields"]
                     .as_array_mut()
@@ -494,7 +488,17 @@ impl Breg {
                         .iter()
                         .map(|(id, profile)| (id.clone(), profile.clone())),
                 );
-            for section in ["datasets", "recordTypes", "actions"] {
+            registry["recordTypes"]
+                .as_object_mut()
+                .expect("the native record types are a map")
+                .extend(
+                    qfield["recordTypes"]
+                        .as_object()
+                        .expect("the QField record types are a map")
+                        .iter()
+                        .map(|(id, record_type)| (id.clone(), record_type.clone())),
+                );
+            for section in ["datasets", "actions"] {
                 registry[section]
                     .as_array_mut()
                     .expect("the native registry section is an array")

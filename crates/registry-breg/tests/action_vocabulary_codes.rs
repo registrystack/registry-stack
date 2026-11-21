@@ -259,7 +259,7 @@ fn an_unrelated_target_text_limit_is_additive_while_a_related_action_input_needs
             CONSENT_MODULE,
             SOURCE_REFERENCE,
             &format!(
-                "{SOURCE_REFERENCE}\n  - {{id: review-note, type: text, maximumLength: {max_length}, classification: internal}}"
+                "{SOURCE_REFERENCE}\n    - {{id: review-note, type: text, maximumLength: {max_length}, classification: internal}}"
             ),
         )
     };
@@ -330,7 +330,7 @@ fn an_unrelated_target_string_minimum_is_additive_while_a_related_input_needs_re
             CONSENT_MODULE,
             SOURCE_REFERENCE,
             &format!(
-                "{SOURCE_REFERENCE}\n  - {{id: review-code, type: string, minimumLength: {min_length}, maximumLength: 64, classification: internal}}"
+                "{SOURCE_REFERENCE}\n    - {{id: review-code, type: string, minimumLength: {min_length}, maximumLength: 64, classification: internal}}"
             ),
         )
     };
@@ -427,7 +427,7 @@ fn a_narrowed_target_field_limit_stays_under_migration_review() {
         replace_once(
             CONSENT_MODULE,
             SOURCE_REFERENCE,
-            &format!("{SOURCE_REFERENCE}\n  - {field}"),
+            &format!("{SOURCE_REFERENCE}\n    - {field}"),
         )
     };
 

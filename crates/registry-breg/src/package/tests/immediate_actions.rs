@@ -10,8 +10,8 @@ fn source() -> Value {
     json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"action-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-        "datasets":[{"id":"test-dataset"}],"recordTypes":[{"id":"item", "primaryDataset":"test-dataset", "route":"items", "mutationMode":"mutable",
-            "fields":[{"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}]}],
+        "datasets":[{"id":"test-dataset"}],"recordTypes":{"item": { "primaryDataset":"test-dataset", "route":"items", "mutationMode":"mutable",
+            "fields":[{"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}]}},
         "actions":[{"id":"rename-item", "execution":{"mode":"immediate"}, "inputs":[
             {"id":"item", "apiName":"itemId", "type":"reference", "target":"item", "required":true, "classification":"internal"},
             {"id":"label", "apiName":"newLabel", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}
@@ -42,11 +42,11 @@ fn ordinary_policy_source(auditor_operations: Option<&[&str]>) -> Value {
     let mut source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"policy-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-        "datasets":[{"id":"test-dataset"}],"recordTypes":[{"id":"person", "primaryDataset":"test-dataset", "route":"people", "mutationMode":"mutable",
+        "datasets":[{"id":"test-dataset"}],"recordTypes":{"person": { "primaryDataset":"test-dataset", "route":"people", "mutationMode":"mutable",
             "fields":[
                 {"id":"person-code", "type":"string", "maximumLength":40, "required":true, "classification":"internal"},
                 {"id":"sensitive-note", "type":"string", "maximumLength":120, "classification":"internal"}
-            ]}],
+            ]}},
         "accessProfiles":{"operator": { "default":true, "principalClaim":"principal","requiredScopes":"unrestricted",
             "permissions":{"records":[{"recordType":"person", "operations":["create","get","list"],
                 "readableFields":["person-code","sensitive-note"],
@@ -480,10 +480,9 @@ fn reviewed_successor_does_not_duplicate_action_policies_for_new_entity() {
     let before = compile(&source_without_actions());
     let mut candidate = source_without_actions();
     candidate["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .expect("entities are an array")
-        .push(json!({
-            "id":"task",
+        .insert("task".to_owned(), json!({
             "primaryDataset":"test-dataset",
             "route":"tasks",
             "mutationMode":"mutable",
@@ -556,14 +555,16 @@ fn reviewed_successor_drops_removed_action_policies_for_existing_entity() {
 fn reviewed_successor_tracks_link_only_reference_policies() {
     let mut without_action = source_without_actions();
     without_action["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(json!({
-            "id":"group", "primaryDataset":"test-dataset", "route":"groups", "mutationMode":"mutable",
-            "fields":[{"id":"label", "type":"string", "maximumLength":40,
-                "required":true, "classification":"internal"}]
-        }));
-    without_action["recordTypes"][0]["fields"]
+        .insert(
+            "group".to_owned(),
+            json!({"primaryDataset":"test-dataset", "route":"groups", "mutationMode":"mutable",
+                "fields":[{"id":"label", "type":"string", "maximumLength":40,
+                    "required":true, "classification":"internal"}]
+            }),
+        );
+    without_action["recordTypes"]["item"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -629,13 +630,11 @@ fn reviewed_successor_tracks_link_only_reference_policies() {
 fn reviewed_successor_does_not_drop_action_policies_for_absent_entity_table() {
     let before = compile(&source());
     let mut removed_entity = source_without_actions();
-    removed_entity["recordTypes"] = json!([{
-        "id":"other",
-        "primaryDataset":"test-dataset",
+    removed_entity["recordTypes"] = json!({"other": {"primaryDataset":"test-dataset",
         "route":"others",
         "mutationMode":"mutable",
         "fields":[{"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}]
-    }]);
+    }});
     removed_entity["accessProfiles"] = json!({});
     let after = compile(&removed_entity);
     let plan = reviewed_plan(&before, &after);
@@ -650,7 +649,7 @@ fn reviewed_successor_does_not_drop_action_policies_for_absent_entity_table() {
 
 fn proposal_source(operations: &[&str], readable_inputs: &[&str]) -> Value {
     let mut value = source();
-    value["recordTypes"][0]["mutationPolicy"] = json!({"patch":"proposal-required"});
+    value["recordTypes"]["item"]["mutationPolicy"] = json!({"patch":"proposal-required"});
     value["actions"][0]["execution"] = json!({"mode":"proposal","proposal":{
         "review":{"type":"none"}, "application":{"mode":"manual"}, "retention":{"mode":"retain"}
     }});
@@ -852,7 +851,7 @@ fn proposal_handler_evidence_source() -> Value {
         "contracts": "evidence/contracts.json",
         "subjectResolution": "trusted-provider-exact-selector",
     }]);
-    value["recordTypes"][0]["fields"][0]["minimumLength"] = json!(3);
+    value["recordTypes"]["item"]["fields"][0]["minimumLength"] = json!(3);
     value["actions"][0]["inputs"][1]["minimumLength"] = json!(3);
     value["actions"][0]["commitGuards"] = json!({"evidence": [{
         "id": "commit-status",
@@ -887,7 +886,7 @@ fn commit_evidence_source() -> Value {
         "contracts": "evidence/contracts.json",
         "subjectResolution": "trusted-provider-exact-selector",
     }]);
-    value["recordTypes"][0]["fields"][0]["minimumLength"] = json!(3);
+    value["recordTypes"]["item"]["fields"][0]["minimumLength"] = json!(3);
     value["actions"][0]["inputs"][1]["minimumLength"] = json!(3);
     value["actions"][0]["commitGuards"] = json!({"evidence": [{
         "id": "commit-status",
@@ -1017,9 +1016,9 @@ fn target_record_type_changes_are_reviewed_by_record_type_rules_not_as_action_ch
     let before = compile(&value);
 
     let mut reclassified = value.clone();
-    reclassified["recordTypes"][0]["fields"][0]["classification"] = json!("restricted");
+    reclassified["recordTypes"]["item"]["fields"][0]["classification"] = json!("restricted");
     let mut constrained = value;
-    constrained["recordTypes"][0]["constraints"] =
+    constrained["recordTypes"]["item"]["constraints"] =
         json!([{"id":"label-unique", "type":"unique", "fields":["label"]}]);
 
     for (variant, expected) in [

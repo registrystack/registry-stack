@@ -971,15 +971,14 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"revision-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","tombstone":true,
+          "recordTypes":{"widget": {"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","tombstone":true,
             "classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
               {"id":"label","type":"string","required":true,"maximumLength":100,"classification":"internal"},
               {"id":"secret","type":"string","required":true,"maximumLength":100,"classification":"restricted"}
             ]
-          }],
+          }},
           "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal",
             "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
             "permissions":{"records":[{
@@ -1011,14 +1010,12 @@ fn event_record_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"revision-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"holder","primaryDataset":"test-dataset","route":"holders","mutationMode":"mutable",
+          "recordTypes":{"holder": {"primaryDataset":"test-dataset","route":"holders","mutationMode":"mutable",
             "classification":"restricted",
             "fields":[
               {"id":"name","type":"string","required":true,"maximumLength":32,"classification":"internal"}
             ]
-          },{
-            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","tombstone":true,
+          },"widget": {"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","tombstone":true,
             "classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
@@ -1032,7 +1029,7 @@ fn event_record_registry() -> registry_breg::CompiledRegistry {
               "subjects":[{"role":"holder","field":"holder","label":"Holder","target":"holder"}],
               "occurredAt":{"at":"occurred-on"}
             }
-          }],
+          }},
           "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal",
             "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
             "permissions":{"records":[{

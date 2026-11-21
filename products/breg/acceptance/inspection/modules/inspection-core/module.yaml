@@ -3,9 +3,8 @@
   "kind": "BRegModule",
   "id": "inspection-core",
   "version": "0.1.0",
-  "recordTypes": [
-    {
-      "id": "public-authority",
+  "recordTypes": {
+    "public-authority": {
       "primaryDataset": "inspection",
       "route": "authorities",
       "mutationMode": "mutable",
@@ -42,5 +41,5 @@
         }
       ]
     }
-  ]
+  }
 }

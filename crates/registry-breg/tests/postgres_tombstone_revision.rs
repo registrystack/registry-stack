@@ -590,20 +590,18 @@ fn compiled_registry(tombstone: bool) -> registry_breg::CompiledRegistry {
           "kind":"BRegProject",
           "project":{{"id":"tombstone-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "datasets":[{{"id":"test-dataset"}}],
-          "recordTypes":[{{
-            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable"{tombstone_fragment},"classification":"public",
+          "recordTypes":{{"widget":{{"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable"{tombstone_fragment},"classification":"public",
             "fields":[
               {{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"}},
               {{"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"}},
               {{"id":"quantity","type":"int64","required":true,"classification":"public"}}
             ]{events}
-          }},{{
-            "id":"log","primaryDataset":"test-dataset","route":"logs","mutationMode":"create-only","classification":"public",
+          }},"log":{{"primaryDataset":"test-dataset","route":"logs","mutationMode":"create-only","classification":"public",
             "fields":[
               {{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"}},
               {{"id":"message","type":"string","maximumLength":128,"required":true,"classification":"public"}}
             ]
-          }}],
+          }}}},
           "accessProfiles":{{"operator":{{"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{{"records":[{{

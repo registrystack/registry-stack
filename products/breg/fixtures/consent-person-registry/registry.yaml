@@ -42,12 +42,12 @@ manifestProjection:
       servesDatasets: [consent-person-registry, consent]
   distributions: []
 modules:
-  - id: "consent-person"
+  "consent-person":
     version: "0.1.0"
-    digest: "sha256:731501ef97d5d08267285fe2799311a4c5bb2a4796d89bbe398eb70eac16d4cf"
-  - id: "consent-person-registry-core"
+    digest: "sha256:42f91bad56c86195115faf11eeba46ebb460d083a2dfaca7dc51d3dc366aaf32"
+  "consent-person-registry-core":
     version: "0.1.0"
-    digest: "sha256:e25a708f7a1b652eae0d80efc028f9235cfe285fa1b74b61529e0f575ba1443c"
+    digest: "sha256:4a32c2a78230d234d6a438bc6723f506c60027cf4cd7692926ae1fd9003dab44"
 
 recipients:
   organizations:
@@ -73,7 +73,7 @@ vocabularies:
   - id: consent-invalidation-reason
     values: [captured-in-error, identity-mismatch, notice-withdrawn, controller-decision]
 
-recordTypes: []
+recordTypes: {}
 accessProfiles:
   person-registry-operator:
     default: true

@@ -1428,12 +1428,12 @@ fn a_lookup_change_beyond_the_normalization_list_stays_unsupported() {
     let base = source_for_variant(Variant::EncryptedFlipOn);
     let mut module: serde_json::Value =
         serde_json::from_slice(&base.module_bytes).expect("fixture module is JSON");
-    module["recordTypes"][0]["fields"][1]["lookup"]["unique"] = serde_json::json!(false);
+    module["recordTypes"]["asset"]["fields"][1]["lookup"]["unique"] = serde_json::json!(false);
     let module_bytes = serde_json::to_vec(&module).expect("module serializes");
     let digest = module_digest(&parse_module_yaml(&module_bytes).expect("module parses"));
     let mut project: serde_json::Value =
         serde_json::from_slice(&base.project_bytes).expect("fixture project is JSON");
-    project["modules"][0]["digest"] = serde_json::json!(digest);
+    project["modules"]["core"]["digest"] = serde_json::json!(digest);
     let candidate = compile_source(&SourceFixture {
         project_bytes: serde_json::to_vec(&project).expect("project serializes"),
         module_bytes,
@@ -2550,7 +2550,7 @@ fn timer_migration_source_with_required_fields(
     let base = source_for_variant(Variant::Base);
     let mut module: serde_json::Value =
         serde_json::from_slice(&base.module_bytes).expect("base module is JSON");
-    let asset = &mut module["recordTypes"][0];
+    let asset = &mut module["recordTypes"]["asset"];
     asset["mutationMode"] = serde_json::json!("mutable");
     let fields = asset["fields"]
         .as_array_mut()
@@ -2585,9 +2585,9 @@ fn timer_migration_source_with_required_fields(
             .unwrap_or_else(|| panic!("timer migration field {required_field} exists"))
             ["required"] = serde_json::json!(true);
     }
-    asset["accessProfiles"][0]["operations"] =
+    asset["accessProfiles"]["reader"]["operations"] =
         serde_json::json!(["create", "get", "list", "patch"]);
-    asset["accessProfiles"][0]["readableFields"] = serde_json::json!([
+    asset["accessProfiles"]["reader"]["readableFields"] = serde_json::json!([
         "code",
         "rank",
         "activates-at",
@@ -2601,8 +2601,8 @@ fn timer_migration_source_with_required_fields(
         "processed",
         "secret"
     ]);
-    asset["accessProfiles"][0]["writableFields"] =
-        asset["accessProfiles"][0]["readableFields"].clone();
+    asset["accessProfiles"]["reader"]["writableFields"] =
+        asset["accessProfiles"]["reader"]["readableFields"].clone();
     let (at, not_after, rearm_on, predicate) = timer_fields.fields();
     let mut equals = serde_json::Map::new();
     equals.insert(predicate.to_owned(), serde_json::json!(false));
@@ -2636,7 +2636,7 @@ fn timer_migration_source_with_required_fields(
 
     let mut project: serde_json::Value =
         serde_json::from_slice(&base.project_bytes).expect("base project is JSON");
-    project["modules"][0]["digest"] = serde_json::json!(digest);
+    project["modules"]["core"]["digest"] = serde_json::json!(digest);
     project["timerGrants"] = serde_json::json!([{"recordType":"asset","timer":"activate"}]);
     SourceFixture {
         project_bytes: serde_json::to_vec(&project).expect("timer project serializes"),
@@ -2655,7 +2655,7 @@ fn source_for_variant(variant: Variant) -> SourceFixture {
     };
     SourceFixture {
         project_bytes: format!(
-            r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"{registry_id}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+            r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"{registry_id}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}}}"#
         )
         .into_bytes(),
         module_bytes,
@@ -2693,7 +2693,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         _ => "",
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{fields}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}}}}},{{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}{site_secret}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}}}}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":{{"asset":{{"primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{fields}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}}}}},"site":{{"primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}{site_secret}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}}}}}}}}}"#
     )
     .into_bytes()
 }

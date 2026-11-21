@@ -822,7 +822,10 @@ impl StartupError {
                 "the Registry package carries a local-only identity; replace canonicalBaseIri, rerun schema-test, and rebuild the deployment package"
             }
             Self::PackageRefused(PackageError::EngineFeatureUpgradeRequired) => {
-                "the Registry package predates the required Record timer store; keep it as the active baseline, rebuild a successor with this release using `bregctl test --baseline-package DIR` and `bregctl package --baseline-package DIR`, then run `bregctl plan --package SUCCESSOR` and `bregctl apply --package SUCCESSOR` before restarting the runtime"
+                "the Registry package was built before this release and predates the required Record timer store; it cannot be upgraded in place. Create a fresh database, rebuild the package with this release's `bregctl test` and `bregctl package`, and run `bregctl apply --package DIR --initial`"
+            }
+            Self::PackageRefused(PackageError::PreviousReleaseSources(_)) => {
+                "the Registry package was built before this release and its stored sources are not read by it; it cannot be upgraded in place. Create a fresh database, rebuild the package with this release's `bregctl test` and `bregctl package`, and run `bregctl apply --package DIR --initial`; run `bregctl doctor` to name the first source diagnostics"
             }
             Self::PackageRefused(_) => "the Registry package was refused",
             Self::PackageEnvelopeRefused(_) => "the Registry package was refused",
@@ -3306,17 +3309,18 @@ mod schema_preparation_error_tests {
 
     #[test]
     fn legacy_timer_store_packages_name_the_governed_upgrade_path() {
-        let message = StartupError::PackageRefused(PackageError::EngineFeatureUpgradeRequired)
-            .operational_message();
-        for required in [
-            "keep it as the active baseline",
-            "bregctl test --baseline-package DIR",
-            "bregctl package --baseline-package DIR",
-            "bregctl plan --package SUCCESSOR",
-            "bregctl apply --package SUCCESSOR",
-            "before restarting the runtime",
+        for cause in [
+            PackageError::EngineFeatureUpgradeRequired,
+            PackageError::PreviousReleaseSources(String::new()),
         ] {
-            assert!(message.contains(required), "{required}: {message}");
+            let message = StartupError::PackageRefused(cause).operational_message();
+            assert!(
+                message
+                    .to_lowercase()
+                    .contains(&crate::package::FRESH_DATABASE_PATH.to_lowercase()),
+                "{message}"
+            );
+            assert!(!message.contains("--baseline-package"), "{message}");
         }
     }
 }

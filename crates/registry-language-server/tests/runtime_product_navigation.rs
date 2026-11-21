@@ -11,8 +11,8 @@ use support::{
     EvidenceProject as Project,
 };
 
-const BREG: &str = "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: <|project|>example}\nmodules: [{id: <|module-use|>core}]\naccessProfiles:\n  reader:\n    permissions:\n      records:\n        - recordType: <|use|>person\n          readableFields: [<|field-use|>name]\n";
-const BREG_MODULE: &str = "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|module|>core\nrecordTypes:\n  - id: <|definition|>person\n    fields: [{id: <|field|>name, type: string}]\n";
+const BREG: &str = "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: <|project|>example}\nmodules: {<|module-use|>core: {}}\naccessProfiles:\n  reader:\n    permissions:\n      records:\n        - recordType: <|use|>person\n          readableFields: [<|field-use|>name]\n";
+const BREG_MODULE: &str = "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|module|>core\nrecordTypes:\n  <|definition|>person:\n    fields: [{id: <|field|>name, type: string}]\n";
 const CASEWORK: &str = "apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\nkind: CaseworkProject\nproject: {id: <|project|>intake, version: '1'}\nqueues: {<|definition|>triage: {label: Triage}}\naccessProfiles: {staff: {principalClaim: sub, requiredScopes: [casework:staff], actsAs: staff}}\nreviewPolicies:\n  decision:\n    version: '1'\n    purpose: answer\n    context: {mode: submitted}\n    stages: [{id: review, queue: <|use|>triage, decidingProfiles: [staff], requiredApprovals: 1}]\n    retention: {terminalRetentionDays: 30, accountabilityRetentionDays: 90}\n    displaySchema: {type: object}\n";
 const SCHEDULING: &str = "apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1\nkind: SchedulingProject\nservices: [{id: <|definition|>visit}]\nofferings: [{id: consultation, service: <|use|>visit, location: <|location-use|>office, exactTime: {pool: <|pool-use|>stations}}]\n";
 const RECORDS: &str = "locations: [{id: <|location|>office}]\npools: [{id: <|pool|>stations}]\n";
@@ -147,9 +147,9 @@ apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: directory}
 recordTypes:
-  - id: <|record-definition|>person
+  <|record-definition|>person:
     fields: [{id: <|field-definition|>name, type: string}]
-  - id: other
+  other:
     fields: [{id: secret, type: string}]
 actions:
   - id: rename
@@ -372,8 +372,8 @@ async fn disappearing_module_keeps_unsaved_buffer_until_file_returns() {
 #[test]
 fn module_assets_named_constraints_and_action_results_keep_their_own_scope() {
     let project=Project::new(&[
-        file("registry.yaml","apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: example}\nmodules: [{id: core}, {id: extra}]\naccessProfiles: {staff: {permissions: {actions: [{action: register, results: [<|result|>created-record]}]}}}\n"),
-        file("modules/core/module.yaml","apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: core\nrecordTypes:\n  - id: person\n    fields: [{id: <|field|>name, type: string}]\n    constraints: [{type: unique, id: named-rule, fields: [<|constraint|>name]}]\nactions:\n  - id: register\n    inputs: []\n    execution: {mode: immediate}\n    plan: {type: fixed, effects: [{id: <|effect|>created-record}]}\nfunctions: [{id: core-plan, source: <|script|>scripts/action.rhai}]\n"),
+        file("registry.yaml","apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: example}\nmodules: {core: {}, extra: {}}\naccessProfiles: {staff: {permissions: {actions: [{action: register, results: [<|result|>created-record]}]}}}\n"),
+        file("modules/core/module.yaml","apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: core\nrecordTypes:\n  person:\n    fields: [{id: <|field|>name, type: string}]\n    constraints: [{type: unique, id: named-rule, fields: [<|constraint|>name]}]\nactions:\n  - id: register\n    inputs: []\n    execution: {mode: immediate}\n    plan: {type: fixed, effects: [{id: <|effect|>created-record}]}\nfunctions: [{id: core-plan, source: <|script|>scripts/action.rhai}]\n"),
         file("modules/extra/module.yaml","apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: extra\nfunctions: [{id: extra-plan, source: scripts/action.rhai}]\n"),
         file("modules/core/scripts/action.rhai","// core\n"),
         file("modules/extra/scripts/action.rhai","// extra\n"),
@@ -1019,7 +1019,7 @@ fn authored_unlocked_modules_still_supply_dependency_symbols() {
     let project = Project::new(&[
         file(
             "registry.yaml",
-            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: example}\nmodules: [{id: core}]\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: example}\nmodules: {core: {}}\n",
         ),
         file(
             "modules/core/module.yaml",
@@ -1027,7 +1027,7 @@ fn authored_unlocked_modules_still_supply_dependency_symbols() {
         ),
         file(
             "modules/extra/module.yaml",
-            "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|definition|>extra\nrecordTypes: [{id: supplied}]\n",
+            "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|definition|>extra\nrecordTypes: {supplied: {}}\n",
         ),
     ]);
     let index = ProjectIndex::load_product(project.root(), ProductKind::Breg).unwrap();

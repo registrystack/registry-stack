@@ -16,7 +16,7 @@ datasets:
     display: {label: Licensing}
 
 recordTypes:
-  - id: licence
+  licence:
     route: licences
     primaryDataset: licensing
     mutationMode: mutable
@@ -26,7 +26,7 @@ recordTypes:
       - {id: licence-number, type: string, required: true, maximumLength: 40, classification: internal}
       - {id: holder-key, type: string, required: true, maximumLength: 40, classification: restricted}
       - {id: jurisdiction, type: string, required: true, maximumLength: 40, classification: internal}
-  - id: licensed-business
+  licensed-business:
     route: licensed-businesses
     primaryDataset: licensing
     mutationMode: mutable

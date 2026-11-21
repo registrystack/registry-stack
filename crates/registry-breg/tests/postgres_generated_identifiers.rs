@@ -37,8 +37,7 @@ fn registry_with_limits(
           "kind":"BRegProject",
           "project":{"id":"generated-identifiers","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://identifiers.example.test"},
           "datasets":[{"id":"records"}],
-          "recordTypes":[{
-            "id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable",
+          "recordTypes":{"entry": {"primaryDataset":"records","route":"entries","mutationMode":"mutable",
             "fields":[
               {"id":"jurisdiction","type":"string","minimumLength":1,"maximumLength":16,"required":true,"classification":"internal"},
               {"id":"issued-at","type":"timestamp","required":true,"classification":"internal"},
@@ -49,7 +48,7 @@ fn registry_with_limits(
               {"id":"receipt-code","type":"string","minimumLength":1,"maximumLength":32,"required":true,"classification":"internal",
                "generate":{"type":"random","prefix":"R-","length":12}}
             ]
-          }],
+          }},
           "accessProfiles":{"writer": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted",
             "permissions":{"records":[{
               "recordType":"entry","operations":["create","get"],
@@ -60,10 +59,10 @@ fn registry_with_limits(
         }"#,
     )
     .expect("generated identifier project is JSON");
-    source["recordTypes"][0]["fields"][0]["maximumLength"] = json!(max_scope_length);
-    source["recordTypes"][0]["fields"][2]["maximumLength"] = json!(max_generated_length);
+    source["recordTypes"]["entry"]["fields"][0]["maximumLength"] = json!(max_scope_length);
+    source["recordTypes"]["entry"]["fields"][2]["maximumLength"] = json!(max_generated_length);
     if !scoped {
-        source["recordTypes"][0]["fields"][2]["generate"]["scope"] = json!([]);
+        source["recordTypes"]["entry"]["fields"][2]["generate"]["scope"] = json!([]);
     }
     let project = parse_project_json(&serde_json::to_vec(&source).expect("project serializes"))
         .expect("generated identifier project parses");

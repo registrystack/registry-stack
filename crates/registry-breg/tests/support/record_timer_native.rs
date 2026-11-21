@@ -4574,13 +4574,13 @@ fn fairness_project_bytes(project_bytes: &[u8]) -> Vec<u8> {
     datasets.push(cases);
 
     let record_types = project["recordTypes"]
-        .as_array_mut()
-        .expect("public future-activation Record types are an array");
+        .as_object_mut()
+        .expect("public future-activation Record types are a mapping");
     let mut case = record_types
-        .first()
+        .values()
+        .next()
         .expect("public future-activation has one Record type")
         .clone();
-    case["id"] = json!("case");
     case["route"] = json!("cases");
     case["primaryDataset"] = json!("cases");
     case["display"]["label"] = json!("Case");
@@ -4588,7 +4588,7 @@ fn fairness_project_bytes(project_bytes: &[u8]) -> Vec<u8> {
         json!("A second future-effective Record type used for fairness proof.");
     case["timers"][0]["invoke"] = json!("activate-case");
     case["hooks"][0]["id"] = json!("case-activated-v1");
-    record_types.push(case);
+    record_types.insert("case".to_owned(), case);
 
     let timer_grants = project["timerGrants"]
         .as_array_mut()

@@ -3,9 +3,8 @@
   "kind": "BRegModule",
   "id": "consent-land-registry-core",
   "version": "0.1.0",
-  "recordTypes": [
-    {
-      "id": "parcel",
+  "recordTypes": {
+    "parcel": {
       "primaryDataset": "consent-land-registry",
       "route": "parcels",
       "mutationMode": "mutable",
@@ -43,8 +42,7 @@
         }
       ]
     },
-    {
-      "id": "tenure-right",
+    "tenure-right": {
       "primaryDataset": "consent-land-registry",
       "route": "tenure-rights",
       "mutationMode": "mutable",
@@ -81,5 +79,5 @@
         }
       ]
     }
-  ]
+  }
 }

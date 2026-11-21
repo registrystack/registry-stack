@@ -57,13 +57,7 @@
     },
     "distributions": []
   },
-  "modules": [
-    {
-      "id": "household-history-core",
-      "version": "0.1.0",
-      "digest": "sha256:d09672f1d41a8f71391eade0238ec9edcb9c6ccad9f1c51b50ff23e08708bdb2"
-    }
-  ],
+  "modules": {"household-history-core":{"digest":"sha256:b83dd43f88496eedc301715d1bba09131c0aecbd9bef029411bbadf252156b56","version":"0.1.0"}},
   "accessProfiles": {
     "registry-operator": {
       "default": true,
@@ -154,9 +148,8 @@
       ]
     }
   ],
-  "recordTypes": [
-    {
-      "id": "membership-record",
+  "recordTypes": {
+    "membership-record": {
       "primaryDataset": "household-history",
       "route": "memberships",
       "mutationMode": "mutable",
@@ -234,7 +227,7 @@
         }
       ]
     }
-  ],
+  },
   "datasets": [
     {
       "id": "household-history"

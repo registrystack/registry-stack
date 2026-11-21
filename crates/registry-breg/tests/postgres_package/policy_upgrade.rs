@@ -254,12 +254,11 @@ async fn unrelated_optional_field_applies_without_reviewing_proposal_actions() {
 fn proposal_policy_sources(add_submitter: bool, add_optional_field: bool) -> (Vec<u8>, Vec<u8>) {
     let mut module = json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1", "kind":"BRegModule",
-        "id": "core", "version": "1", "recordTypes": [{
-            "id": "asset", "primaryDataset": "neutral-registry", "route": "assets",
+        "id": "core", "version": "1", "recordTypes": {"asset": { "primaryDataset": "neutral-registry", "route": "assets",
             "mutationMode": "mutable", "mutationPolicy": {"patch": "proposal-required"},
             "fields": [{"id": "label", "type": "string", "maximumLength": 40,
                 "required": true, "classification": "internal"}]
-        }],
+        }},
         "actions": [{
             "id": "correct-label",
             "execution": {"mode": "proposal", "proposal": {
@@ -279,7 +278,7 @@ fn proposal_policy_sources(add_submitter: bool, add_optional_field: bool) -> (Ve
         }]
     });
     if add_optional_field {
-        module["recordTypes"][0]["fields"]
+        module["recordTypes"]["asset"]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({
@@ -350,7 +349,7 @@ fn publish_proposal_policy_package(
 
 fn profile_module(auditor: Option<Value>) -> Vec<u8> {
     let mut module: Value = serde_json::from_slice(&module_bytes(PlanChoice::Schema)).unwrap();
-    let entity = &mut module["recordTypes"][0];
+    let entity = &mut module["recordTypes"]["asset"];
     entity["fields"].as_array_mut().unwrap().push(json!({
         "id": "note", "type": "string", "maximumLength": 80, "classification": "internal"
     }));

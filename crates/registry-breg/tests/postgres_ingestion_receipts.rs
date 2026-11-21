@@ -1249,8 +1249,7 @@ const FIXTURE_HEAD: &str = r#"{
   "kind":"BRegProject",
   "project":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
   "datasets":[{"id":"test-dataset"}],
-  "recordTypes":[{
-    "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
+  "recordTypes":{"widget": {"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
     "batch":{"maximumItems":3,"maximumBytes":8192},
     "constraints":[{"type":"unique","fields":["label"]}],
     "fields":[
@@ -1258,7 +1257,7 @@ const FIXTURE_HEAD: &str = r#"{
       {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"},
       {"id":"quantity","type":"int64","required":true,"classification":"public"}
     ]
-  }],"#;
+  }},"#;
 
 const FIXTURE_TAIL: &str = r#"
   "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",

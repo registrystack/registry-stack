@@ -14,10 +14,10 @@ fn project() -> Value {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"action-handler-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "datasets":[{"id":"test-dataset"}],
-        "recordTypes":[{"id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","fields":[
+        "recordTypes":{"person": {"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","fields":[
             {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
-        ]}],
+        ]}},
         "functions":[{"id":"register-plan","runtime":"rhai","source":"handlers/register.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":["evidence"]}],
         "actions":[{"id":"register-person","execution":{"mode":"immediate"},"inputs":[
             {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},

@@ -16,8 +16,7 @@ fn source() -> Value {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://registry.example.test/access-log"
         },
-        "recordTypes": [{
-            "id": "person",
+        "recordTypes": {"person": {
             "primaryDataset": "people",
             "route": "people",
             "mutationMode": "mutable",
@@ -49,7 +48,7 @@ fn source() -> Value {
                     }
                 }
             }
-        }],
+        }},
         "accessProfiles": {
             "subject": {
                 "default": true,
@@ -110,10 +109,9 @@ fn assert_refused(value: &Value, code: &str) {
 
 fn add_relationship_reader(value: &mut Value) {
     value["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .extend([json!({
-            "id": "case",
+        .extend([("case".to_owned(), json!({
             "primaryDataset": "people",
             "route": "cases",
             "mutationMode": "mutable",
@@ -125,8 +123,7 @@ fn add_relationship_reader(value: &mut Value) {
             "readPaths": [{
                 "id": "people", "through": "case-person", "to": "person", "route": "people"
             }]
-        }), json!({
-            "id": "case-person",
+        })), ("case-person".to_owned(), json!({
             "primaryDataset": "people",
             "route": "case-people",
             "mutationMode": "mutable",
@@ -135,7 +132,7 @@ fn add_relationship_reader(value: &mut Value) {
                 {"id": "case", "type": "reference", "target": "case", "required": true, "classification": "restricted"},
                 {"id": "person", "type": "reference", "target": "person", "required": true, "classification": "restricted"}
             ]
-        })]);
+        }))]);
     let profile = json!({
 
         "principalClaim": "registry_principal",
@@ -245,7 +242,7 @@ fn generated_openapi_publishes_the_subject_owned_bounded_route() {
 #[test]
 fn generated_openapi_omits_access_log_route_without_entity_opt_in() {
     let mut value = source();
-    value["recordTypes"][0]
+    value["recordTypes"]["person"]
         .as_object_mut()
         .unwrap()
         .remove("accessLog");
@@ -263,26 +260,26 @@ fn generated_openapi_omits_access_log_route_without_entity_opt_in() {
 #[test]
 fn subject_field_must_be_required_bounded_plaintext_text() {
     let mut unknown = source();
-    unknown["recordTypes"][0]["accessLog"]["subjectField"] = json!("unknown");
+    unknown["recordTypes"]["person"]["accessLog"]["subjectField"] = json!("unknown");
     assert_refused(&unknown, "breg.access-log.subject-field-invalid");
 
     let mut optional = source();
-    optional["recordTypes"][0]["fields"][0]["required"] = json!(false);
+    optional["recordTypes"]["person"]["fields"][0]["required"] = json!(false);
     assert_refused(&optional, "breg.access-log.subject-field-invalid");
 
     let mut encrypted = source();
-    encrypted["recordTypes"][0]["fields"][0]["encrypted"] = json!(true);
+    encrypted["recordTypes"]["person"]["fields"][0]["encrypted"] = json!(true);
     assert_refused(&encrypted, "breg.access-log.subject-field-invalid");
 
     let mut wrong_type = source();
-    wrong_type["recordTypes"][0]["fields"][0] = json!({
+    wrong_type["recordTypes"]["person"]["fields"][0] = json!({
         "id": "citizen-id", "type": "int64", "required": true,
         "classification": "restricted"
     });
     assert_refused(&wrong_type, "breg.access-log.subject-field-invalid");
 
     let mut too_long = source();
-    too_long["recordTypes"][0]["fields"][0]["maximumLength"] = json!(513);
+    too_long["recordTypes"]["person"]["fields"][0]["maximumLength"] = json!(513);
     assert_refused(&too_long, "breg.access-log.subject-field-invalid");
 }
 
@@ -290,12 +287,12 @@ fn subject_field_must_be_required_bounded_plaintext_text() {
 fn retention_and_exemption_delays_are_bounded() {
     for invalid in [0, 3_651] {
         let mut value = source();
-        value["recordTypes"][0]["accessLog"]["retentionDays"] = json!(invalid);
+        value["recordTypes"]["person"]["accessLog"]["retentionDays"] = json!(invalid);
         assert_refused(&value, "breg.access-log.retention-days-invalid");
     }
     for invalid in [0, 90] {
         let mut value = source();
-        value["recordTypes"][0]["accessLog"]["exemptions"]["investigator"]["delayDays"] =
+        value["recordTypes"]["person"]["accessLog"]["exemptions"]["investigator"]["delayDays"] =
             json!(invalid);
         assert_refused(&value, "breg.access-log.exemption-delay-invalid");
     }
@@ -305,12 +302,12 @@ fn retention_and_exemption_delays_are_bounded() {
 fn trusted_intermediaries_are_explicit_and_bounded() {
     for invalid in ["", "evidence service", "evidence\nservice"] {
         let mut value = source();
-        value["recordTypes"][0]["accessLog"]["trustedIntermediaries"] = json!([invalid]);
+        value["recordTypes"]["person"]["accessLog"]["trustedIntermediaries"] = json!([invalid]);
         assert_refused(&value, "breg.access-log.trusted-intermediary-invalid");
     }
 
     let mut too_many = source();
-    too_many["recordTypes"][0]["accessLog"]["trustedIntermediaries"] = json!((0..65)
+    too_many["recordTypes"]["person"]["accessLog"]["trustedIntermediaries"] = json!((0..65)
         .map(|index| format!("client-{index}"))
         .collect::<Vec<_>>());
     assert_refused(&too_many, "breg.access-log.trusted-intermediaries-too-many");
@@ -319,38 +316,38 @@ fn trusted_intermediaries_are_explicit_and_bounded() {
 #[test]
 fn exemptions_name_read_profiles_and_bounded_policy_text() {
     let mut unknown = source();
-    let exemption = unknown["recordTypes"][0]["accessLog"]["exemptions"]
+    let exemption = unknown["recordTypes"]["person"]["accessLog"]["exemptions"]
         .as_object_mut()
         .unwrap()
         .remove("investigator")
         .unwrap();
-    unknown["recordTypes"][0]["accessLog"]["exemptions"]["missing"] = exemption;
+    unknown["recordTypes"]["person"]["accessLog"]["exemptions"]["missing"] = exemption;
     assert_refused(&unknown, "breg.access-log.exemption-profile-invalid");
 
     let mut nonreader = source();
-    let exemption = nonreader["recordTypes"][0]["accessLog"]["exemptions"]
+    let exemption = nonreader["recordTypes"]["person"]["accessLog"]["exemptions"]
         .as_object_mut()
         .unwrap()
         .remove("investigator")
         .unwrap();
-    nonreader["recordTypes"][0]["accessLog"]["exemptions"]["writer"] = exemption;
+    nonreader["recordTypes"]["person"]["accessLog"]["exemptions"]["writer"] = exemption;
     assert_refused(&nonreader, "breg.access-log.exemption-profile-invalid");
 
     for invalid in ["", " padded", "line\nbreak"] {
         let mut value = source();
-        value["recordTypes"][0]["accessLog"]["exemptions"]["investigator"]["reason"] =
+        value["recordTypes"]["person"]["accessLog"]["exemptions"]["investigator"]["reason"] =
             json!(invalid);
         assert_refused(&value, "breg.access-log.exemption-reason-invalid");
     }
 
     let mut too_long = source();
-    too_long["recordTypes"][0]["accessLog"]["exemptions"]["investigator"]["reason"] =
+    too_long["recordTypes"]["person"]["accessLog"]["exemptions"]["investigator"]["reason"] =
         json!("x".repeat(257));
     assert_refused(&too_long, "breg.access-log.exemption-reason-invalid");
 
     let mut hidden_direction = source();
-    hidden_direction["recordTypes"][0]["accessLog"]["exemptions"]["investigator"]["reason"] =
-        json!("active\u{202e}investigation");
+    hidden_direction["recordTypes"]["person"]["accessLog"]["exemptions"]["investigator"]
+        ["reason"] = json!("active\u{202e}investigation");
     let report = parse_project_json(&serde_json::to_vec(&hidden_direction).unwrap())
         .expect_err("the source reader refuses hidden text direction");
     let diagnostic = report
@@ -360,7 +357,7 @@ fn exemptions_name_read_profiles_and_bounded_policy_text() {
         .expect("the DisplayText refusal is retained");
     assert_eq!(
         diagnostic.path,
-        "project.recordTypes[0].accessLog.exemptions.investigator.reason"
+        "project.recordTypes.person.accessLog.exemptions.investigator.reason"
     );
 
     let mut directly_constructed =
@@ -394,7 +391,8 @@ fn exemption_reason_schema_composes_display_text_and_existing_length_bounds() {
         .expect("the project schema compiles");
     let reason = |text: &str| {
         let mut value = source();
-        value["recordTypes"][0]["accessLog"]["exemptions"]["investigator"]["reason"] = json!(text);
+        value["recordTypes"]["person"]["accessLog"]["exemptions"]["investigator"]["reason"] =
+            json!(text);
         value
     };
 
@@ -412,7 +410,7 @@ fn exemption_reason_schema_composes_display_text_and_existing_length_bounds() {
 fn relationship_exemptions_bind_the_authority_entity_and_read_path() {
     let mut value = source();
     add_relationship_reader(&mut value);
-    value["recordTypes"][0]["accessLog"]["exemptions"]["relationship-investigator"] = json!({
+    value["recordTypes"]["person"]["accessLog"]["exemptions"]["relationship-investigator"] = json!({
         "sourceRecordType": "case",
         "reason": "active-investigation",
         "delayDays": 7
@@ -431,11 +429,11 @@ fn relationship_exemptions_bind_the_authority_entity_and_read_path() {
     assert_refused(&no_grant, "breg.access-log.exemption-profile-invalid");
 
     let mut wrong_target = value.clone();
-    wrong_target["recordTypes"][1]["readPaths"][0]["to"] = json!("case");
+    wrong_target["recordTypes"]["case"]["readPaths"][0]["to"] = json!("case");
     assert_refused(&wrong_target, "breg.access-log.exemption-profile-invalid");
 
     let mut unknown_source = value;
-    unknown_source["recordTypes"][0]["accessLog"]["exemptions"]["relationship-investigator"]
-        ["sourceRecordType"] = json!("missing");
+    unknown_source["recordTypes"]["person"]["accessLog"]["exemptions"]
+        ["relationship-investigator"]["sourceRecordType"] = json!("missing");
     assert_refused(&unknown_source, "breg.access-log.exemption-profile-invalid");
 }

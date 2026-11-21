@@ -709,7 +709,7 @@ Tombstoned Records and retained history keep their original reference IDs.
 A self-reference does not prevent tombstoning that same Record; active references from other Records do.
 There is no automatic cascade or clearing of references.
 
-A registry activated by an earlier compiler receives the lifecycle constraints through a successor package built with the deployed package as `--baseline-package`.
+A registry activated by a package built before this release cannot be upgraded in place. Create a fresh database, rebuild the package with this release, and run `bregctl apply --package DIR --initial`. Later successor packages built with the deployed package as `--baseline-package` receive these constraints.
 Use `bregctl plan` to check the activation prerequisites.
 Before live maintenance, apply the successor to a representative restored-data copy to validate existing links.
 If that apply finds an active Record that references a tombstoned target, repair its reference or tombstone that Record through the current package, refresh the restored-data copy, and repeat the validation before you activate the successor in production.

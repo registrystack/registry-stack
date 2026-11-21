@@ -351,9 +351,8 @@
       "subjectResolution": "trusted-provider-exact-selector"
     }
   ],
-  "recordTypes": [
-    {
-      "id": "landholding",
+  "recordTypes": {
+    "landholding": {
       "primaryDataset": "farmer-landholding-evidence",
       "route": "landholdings",
       "mutationMode": "create-only",
@@ -392,8 +391,7 @@
         }
       ]
     },
-    {
-      "id": "procedure-check",
+    "procedure-check": {
       "primaryDataset": "farmer-landholding-evidence",
       "route": "procedure-checks",
       "mutationMode": "create-only",
@@ -406,7 +404,7 @@
         }
       ]
     }
-  ],
+  },
   "functions": [
     {
       "id": "register-landholding-plan",

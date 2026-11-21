@@ -2688,7 +2688,7 @@ mod tests {
             .unwrap();
         editor.remove("actions");
         editor.remove("proposals");
-        let contact = &mut source["recordTypes"][0];
+        let contact = &mut source["recordTypes"]["contact"];
         contact["constraints"] =
             json!([{"id":"contact-email-unique","type":"unique","fields":["email"]}]);
         contact["fields"].as_array_mut().unwrap().push(json!({
@@ -2699,8 +2699,7 @@ mod tests {
                 "items":{"type":"array","maxItems":4,"items":{"type":"string","maxLength":64}}
             }}
         }));
-        source["recordTypes"].as_array_mut().unwrap().push(json!({
-            "id":"contact-link","route":"contact-links","primaryDataset":"directory",
+        source["recordTypes"].as_object_mut().unwrap().insert("contact-link".to_owned(), json!({"route":"contact-links","primaryDataset":"directory",
             "mutationMode":"mutable","tombstone":true,
             "fields":[
                 {"id":"from","type":"reference","target":"contact","required":true,"classification":"internal"},

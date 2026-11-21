@@ -92,13 +92,12 @@ fn wasm_project() -> Value {
           "kind":"BRegProject",
           "project":{"id":"wasm-admission","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "datasets":[{"id":"test-dataset"}],
-          "recordTypes":[{
-            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
+          "recordTypes":{"person": {"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "fields":[
               {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ]
-          }],
+          }},
           "functions":[{"id":"person-plan","runtime":"wasm","source":"wasm/handler.wasm","entrypoint":"handle","abi":"registry.action-plan/v1"}],
           "actions":[{
             "id":"register-person","execution":{"mode":"immediate"},
@@ -216,7 +215,7 @@ fn a_minimal_abi_module_compiles_into_the_handler_inventory() {
 #[test]
 fn generated_only_create_accepts_an_empty_wasm_write_slot() {
     let mut project = wasm_project();
-    project["recordTypes"][0]["fields"] = json!([{
+    project["recordTypes"]["person"]["fields"] = json!([{
         "id": "person-number",
         "type": "string",
         "minimumLength": 1,

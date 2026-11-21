@@ -5441,7 +5441,7 @@ fn compile_variant(variant: Variant) -> CompiledRegistry {
 
 fn project_bytes(digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"migration-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://migration.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://migration.example.test","title":"Migration Registry","publisher":{{"id":"migration-registry-authority","name":"Migration Publisher"}}}},"authorities":[{{"id":"migration-registry-authority","name":"Migration Publisher"}}],"publicService":{{"id":"migration-registry-service","title":"Migration Registry","competentAuthority":"migration-registry-authority"}},"datasets":[{{"id":"migration-registry","title":"Migration Dataset","owner":"Migration Publisher","status":"active"}}],"dataServices":[{{"id":"migration-registry-data-service","title":"Migration Registry","endpointUrl":"https://migration.example.test","servesDatasets":["migration-registry"]}}]}},"datasets":[{{"id":"migration-registry"}}],"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"migration-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://migration.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://migration.example.test","title":"Migration Registry","publisher":{{"id":"migration-registry-authority","name":"Migration Publisher"}}}},"authorities":[{{"id":"migration-registry-authority","name":"Migration Publisher"}}],"publicService":{{"id":"migration-registry-service","title":"Migration Registry","competentAuthority":"migration-registry-authority"}},"datasets":[{{"id":"migration-registry","title":"Migration Dataset","owner":"Migration Publisher","status":"active"}}],"dataServices":[{{"id":"migration-registry-data-service","title":"Migration Registry","endpointUrl":"https://migration.example.test","servesDatasets":["migration-registry"]}}]}},"datasets":[{{"id":"migration-registry"}}],"modules":{{"core":{{"version":"1","digest":"{digest}"}}}}}}"#
     )
     .into_bytes()
 }
@@ -5453,9 +5453,10 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
     ) {
         let mut source: serde_json::Value =
             serde_json::from_slice(&module_bytes(Variant::Base)).unwrap();
-        source["recordTypes"][0]["fields"][0]["required"] = serde_json::json!(true);
+        source["recordTypes"]["asset"]["fields"][0]["required"] = serde_json::json!(true);
         if matches!(variant, Variant::SubjectWithLog) {
-            source["recordTypes"][0]["accessLog"] = serde_json::json!({"subjectField":"code"});
+            source["recordTypes"]["asset"]["accessLog"] =
+                serde_json::json!({"subjectField":"code"});
         }
         return serde_json::to_vec(&source).unwrap();
     }
@@ -5527,7 +5528,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         _ => "",
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}{batch}{secret}{alias}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}}}}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":{{"asset":{{"primaryDataset":"migration-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}{batch}{secret}{alias}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}}}}}}}}}"#
     )
     .into_bytes()
 }

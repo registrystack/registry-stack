@@ -689,8 +689,7 @@ pub(crate) mod tests {
                     "canonicalBaseIri":"https://refresh.example.test"
                 },
                 "datasets":[{"id":"registry"}],
-                "recordTypes":[{
-                    "id":"record",
+                "recordTypes":{"record": {
                     "primaryDataset":"registry",
                     "route":"records",
                     "mutationMode":"mutable",
@@ -701,7 +700,7 @@ pub(crate) mod tests {
                         "maximumLength":64,
                         "classification":"internal"
                     }]
-                }]
+                }}
             }"#,
         )
         .unwrap();

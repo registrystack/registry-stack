@@ -10,7 +10,7 @@ package:
 datasets:
   - {id: applications}
 recordTypes:
-  - id: application
+  application:
     primaryDataset: applications
     route: applications
     mutationMode: mutable

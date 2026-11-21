@@ -65,8 +65,7 @@ fn registry(automatic: bool, reviewed: bool) -> registry_breg::CompiledRegistry 
         } else {
             json!([])
         },
-        "recordTypes":[{
-            "id":"target",
+        "recordTypes":{"target": {
             "primaryDataset":"directory",
             "route":"targets",
             "mutationMode":"mutable",
@@ -75,7 +74,7 @@ fn registry(automatic: bool, reviewed: bool) -> registry_breg::CompiledRegistry 
                 {"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}
             ]
-        }],
+        }},
         "actions":[{
             "id":"correct-name",
             "execution":{"mode":"proposal","proposal":{

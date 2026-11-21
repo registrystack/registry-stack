@@ -9,13 +9,13 @@ use crate::{
 fn project() -> Value {
     json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "datasets":[{"id":"test-dataset"}],"recordTypes":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","fields":[
+        "datasets":[{"id":"test-dataset"}],"recordTypes":{"record": {"primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","fields":[
             {"id":"code","type":"string","minimumLength":1,"maximumLength":32,"required":true,"classification":"internal"},
             {"id":"registration-number","type":"string","minimumLength":1,"maximumLength":32,"classification":"internal"},
             {"id":"status","type":"string","maximumLength":16,"classification":"internal"},
             {"id":"tenant","type":"string","maximumLength":16,"classification":"internal"}],
             "selectorProfiles":[{"id":"by-code","fields":["code"]},{"id":"by-registration-number","fields":["registration-number"]}],
-            "derived":[{"id":"status-read","sql":"status.sql","key":"id","execution":"live","fields":[{"id":"active","type":"boolean","classification":"internal"}]}]}],
+            "derived":[{"id":"status-read","sql":"status.sql","key":"id","execution":"live","fields":[{"id":"active","type":"boolean","classification":"internal"}]}]}},
         "accessProfiles":{"evidence-source": {"principalClaim":"principal","requiredScopes":["registry.read"],"permissions":{"records":[{
             "recordType":"record","operations":["lookup"],"readableFields":["code","registration-number","status","active"],
             "lookups":[{"selector":"by-code","valueOrigin":"request"},{"selector":"by-registration-number","valueOrigin":"request"}],
@@ -326,7 +326,7 @@ fn logged_entity_export_enables_attribution_and_binds_policy_into_behavior_revis
     let original = project();
     let before = export_evidence_source(&compiled(&original, SQL), &options()).unwrap();
     let mut logged = original.clone();
-    logged["recordTypes"][0]["accessLog"] = json!({
+    logged["recordTypes"]["record"]["accessLog"] = json!({
         "subjectField": "code",
         "retentionDays": 90,
         "trustedIntermediaries": ["evidence-service"]
@@ -350,7 +350,7 @@ fn consumed_behavior_ignores_unselected_fields_but_reaches_sql_and_authority() {
     let original = project();
     let before = export_evidence_source(&compiled(&original, SQL), &options()).unwrap();
     let mut unrelated = original.clone();
-    unrelated["recordTypes"][0]["fields"]
+    unrelated["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({"id":"note","type":"string","maximumLength":64,"classification":"internal"}));
@@ -400,19 +400,19 @@ fn consumed_behavior_ignores_unselected_fields_but_reaches_sql_and_authority() {
 
 fn membership_project() -> Value {
     let mut source = project();
-    source["recordTypes"][0]["fields"].as_array_mut().unwrap().push(json!({
+    source["recordTypes"]["record"]["fields"].as_array_mut().unwrap().push(json!({
         "id":"organization","type":"reference","target":"organization","classification":"internal"
     }));
-    source["recordTypes"].as_array_mut().unwrap().extend([
-        json!({"id":"organization","route":"organizations","primaryDataset":"test-dataset","mutationMode":"mutable","fields":[
-            {"id":"name","type":"string","maximumLength":80,"classification":"internal"}]}),
-        json!({"id":"membership","route":"memberships","primaryDataset":"test-dataset","mutationMode":"mutable","fields":[
+    source["recordTypes"].as_object_mut().unwrap().extend([
+        ("organization".to_owned(), json!({"route":"organizations","primaryDataset":"test-dataset","mutationMode":"mutable","fields":[
+            {"id":"name","type":"string","maximumLength":80,"classification":"internal"}]})),
+        ("membership".to_owned(), json!({"route":"memberships","primaryDataset":"test-dataset","mutationMode":"mutable","fields":[
             {"id":"organization","type":"reference","target":"organization","classification":"internal"},
             {"id":"other-organization","type":"reference","target":"organization","classification":"internal"},
             {"id":"principal","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"other-principal","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"active","type":"boolean","classification":"internal"},
-            {"id":"other-active","type":"boolean","classification":"internal"}]}),
+            {"id":"other-active","type":"boolean","classification":"internal"}]}))
     ]);
     source["accessProfiles"]["evidence-source"]["permissions"]["records"][0]
         ["membershipBoundaries"] = json!([{
@@ -454,7 +454,7 @@ fn membership_behavior_reaches_helper_semantics_source_fields_and_select_authori
         );
     }
     let mut changed_field = original.clone();
-    changed_field["recordTypes"][2]["fields"][2]["maximumLength"] = json!(64);
+    changed_field["recordTypes"]["membership"]["fields"][2]["maximumLength"] = json!(64);
     assert_ne!(
         before.behavior_revision,
         export_evidence_source(&compiled(&changed_field, SQL), &options())
@@ -474,7 +474,7 @@ fn membership_behavior_reaches_helper_semantics_source_fields_and_select_authori
         "effective SELECT rules on the membership source are consumed"
     );
     let mut unrelated = original.clone();
-    unrelated["recordTypes"][2]["fields"]
+    unrelated["recordTypes"]["membership"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -501,8 +501,7 @@ fn reached_derived_source_consumes_its_membership_helper() {
         .unwrap()
         .remove("membershipBoundaries")
         .unwrap();
-    original["recordTypes"].as_array_mut().unwrap().push(json!({
-        "id":"flag","route":"flags","primaryDataset":"test-dataset","mutationMode":"mutable","fields":[
+    original["recordTypes"].as_object_mut().unwrap().insert("flag".to_owned(), json!({"route":"flags","primaryDataset":"test-dataset","mutationMode":"mutable","fields":[
             {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
             {"id":"organization","type":"reference","target":"organization","classification":"internal"},
             {"id":"enabled","type":"boolean","classification":"internal"}]
@@ -567,7 +566,7 @@ fn refuses_a_string_selector_field_that_accepts_the_empty_value() {
     .is_err());
     let mut empty_allowed = project();
     // Omitting `minimumLength` defaults it to 0, so `code` accepts the empty value.
-    empty_allowed["recordTypes"][0]["fields"][0] = json!({"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"});
+    empty_allowed["recordTypes"]["record"]["fields"][0] = json!({"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"});
     let diagnostic = refused(&compiled(&empty_allowed, SQL), &options());
     assert_eq!(diagnostic.code, "breg.evidence-source.refused");
     assert!(diagnostic.message.contains("minimumLength"));
@@ -579,9 +578,12 @@ fn refuses_a_string_selector_field_that_accepts_the_empty_value() {
 #[test]
 fn reached_source_select_authority_is_part_of_consumed_behavior() {
     let mut original = project();
-    original["recordTypes"].as_array_mut().unwrap().push(json!({"id":"flag","primaryDataset":"test-dataset","route":"flags","mutationMode":"mutable","fields":[
+    original["recordTypes"].as_object_mut().unwrap().insert(
+        "flag".to_owned(),
+        json!({"primaryDataset":"test-dataset","route":"flags","mutationMode":"mutable","fields":[
         {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
-        {"id":"enabled","type":"boolean","classification":"internal"}]}));
+        {"id":"enabled","type":"boolean","classification":"internal"}]}),
+    );
     original["accessProfiles"]["evidence-source"]["permissions"]["records"].as_array_mut().unwrap().push(json!({"recordType":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":"unrestricted"}));
     let sql = "SELECT r.id AS id, f.enabled AS active FROM registry_source.record r JOIN registry_source.flag f ON f.code = r.code";
     let mut selection = options();
@@ -609,7 +611,7 @@ fn scalar_documents_preserve_int64_and_nullable_vocabulary_bounds() {
     .is_err());
     assert!(scalar_schema(&FieldTypeSource::Text { max_length: 65_537 }).is_err());
     let mut original = project();
-    original["recordTypes"][0]["fields"][2] = json!({"id":"status","type":"vocabulary-code","vocabulary":"status","values":["active","retired"],"classification":"internal"});
+    original["recordTypes"]["record"]["fields"][2] = json!({"id":"status","type":"vocabulary-code","vocabulary":"status","values":["active","retired"],"classification":"internal"});
     let export = export_evidence_source(&compiled(&original, SQL), &options()).unwrap();
     let response = yaml(
         &export,
@@ -639,7 +641,7 @@ fn refuses_alternative_union_that_exceeds_runtime_projection_bound() {
         let mut fields = Vec::new();
         for index in 0..13 {
             let id = format!("key-{alternative}-{index}");
-            original["recordTypes"][0]["fields"]
+            original["recordTypes"]["record"]["fields"]
                 .as_array_mut()
                 .unwrap()
                 .push(
@@ -652,7 +654,7 @@ fn refuses_alternative_union_that_exceeds_runtime_projection_bound() {
                 .push(json!(id));
             fields.push(id);
         }
-        original["recordTypes"][0]["selectorProfiles"]
+        original["recordTypes"]["record"]["selectorProfiles"]
             .as_array_mut()
             .unwrap()
             .push(json!({"id":selector,"fields":fields}));
@@ -740,8 +742,7 @@ fn long_eligible_selector_names_export_as_stable_distinct_bounded_profiles() {
     let entity = format!("record-{}", "e".repeat(57));
     let first = format!("by-{}a", "s".repeat(60));
     let second = format!("by-{}b", "s".repeat(60));
-    original["recordTypes"][0]["id"] = json!(entity);
-    original["recordTypes"][0]
+    original["recordTypes"]["record"]
         .as_object_mut()
         .unwrap()
         .remove("derived");
@@ -749,8 +750,14 @@ fn long_eligible_selector_names_export_as_stable_distinct_bounded_profiles() {
         json!(entity);
     original["accessProfiles"]["evidence-source"]["permissions"]["records"][0]["readableFields"] =
         json!(["code", "status"]);
-    original["recordTypes"][0]["selectorProfiles"] = json!([
+    original["recordTypes"]["record"]["selectorProfiles"] = json!([
         {"id":first,"fields":["code"]},{"id":second,"fields":["code"]}]);
+    let renamed = original["recordTypes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("record")
+        .unwrap();
+    original["recordTypes"][&entity] = renamed;
     original["accessProfiles"]["evidence-source"]["permissions"]["records"][0]["lookups"] = json!([
         {"selector":first,"valueOrigin":"request"},{"selector":second,"valueOrigin":"request"}]);
     let source = parse_project_json(&serde_json::to_vec(&original).unwrap()).unwrap();
@@ -803,7 +810,7 @@ fn refuses_a_composite_selector_beyond_the_aggregate_selector_bound() {
     let mut fields = Vec::new();
     for index in 0..3 {
         let id = format!("part-{index}");
-        original["recordTypes"][0]["fields"]
+        original["recordTypes"]["record"]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({"id":id,"type":"string","minimumLength":1,"maximumLength":1000,"classification":"internal"}));
@@ -814,7 +821,7 @@ fn refuses_a_composite_selector_beyond_the_aggregate_selector_bound() {
             .push(json!(id));
         fields.push(id);
     }
-    original["recordTypes"][0]["selectorProfiles"]
+    original["recordTypes"]["record"]["selectorProfiles"]
         .as_array_mut()
         .unwrap()
         .push(json!({"id":"by-parts","fields":fields}));

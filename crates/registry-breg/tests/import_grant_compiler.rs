@@ -37,7 +37,7 @@ fn diagnostic<'a>(
 /// A RecordType loaded through Import even when ordinary writes require Proposals.
 fn governed_project(required_for: &[&str], loader_operations: &[&str]) -> Value {
     let mut enrollment = json!({
-        "id":"enrollment","primaryDataset":"test-dataset","route":"enrollments","mutationMode":"mutable",
+        "primaryDataset":"test-dataset","route":"enrollments","mutationMode":"mutable",
         "batch":{"maximumItems":10,"maximumBytes":65536},
         "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
     });
@@ -52,7 +52,7 @@ fn governed_project(required_for: &[&str], loader_operations: &[&str]) -> Value 
     json!({
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
       "project":{"id":"import-grants","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "datasets":[{"id":"test-dataset"}], "recordTypes":[enrollment],
+      "datasets":[{"id":"test-dataset"}], "recordTypes":{"enrollment": enrollment},
       "accessProfiles":{"loader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
         "permissions":{"records":[{
           "recordType":"enrollment","operations":loader_operations,"readableFields":["label"],"writableFields":["label"],
@@ -129,10 +129,6 @@ fn adding_mutation_policy_to_an_imported_entity_removes_no_route() {
 /// `import` before ordinary mutations require Proposals.
 fn ungoverned_project() -> Value {
     let mut project = governed_project(&[], &["import"]);
-    project["recordTypes"]
-        .as_array_mut()
-        .expect("entities")
-        .truncate(1);
     project["accessProfiles"]["loader"]["default"] = json!(true);
     project
 }
@@ -147,7 +143,7 @@ fn enrollment_routes(registry: &CompiledRegistry) -> Vec<String> {
 #[test]
 fn import_requires_entity_batch_bounds() {
     let mut project = governed_project(&["patch"], &["import"]);
-    project["recordTypes"][0]
+    project["recordTypes"]["enrollment"]
         .as_object_mut()
         .expect("entity object")
         .remove("batch");

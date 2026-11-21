@@ -25,8 +25,7 @@ fn registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(br#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
       "project":{"id":"client-capabilities","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test","timezone":"UTC"},
-      "recordTypes":[{
-        "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","tombstone":true,"classification":"internal",
+      "recordTypes":{"entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","tombstone":true,"classification":"internal",
         "batch":{"maximumItems":4,"maximumBytes":16384},
         "fields":[
           {"id":"code","type":"string","maximumLength":64,"required":true,"classification":"internal"},
@@ -36,8 +35,7 @@ fn registry() -> registry_breg::CompiledRegistry {
         ],
         "temporal":{"startField":"valid-from","endField":"valid-to"},
         "constraints":[{"type":"temporal-non-overlap","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]
-      },{
-        "id":"timestamp-entry","primaryDataset":"test-dataset","route":"timestamp-entries","mutationMode":"mutable","classification":"internal",
+      },"timestamp-entry": {"primaryDataset":"test-dataset","route":"timestamp-entries","mutationMode":"mutable","classification":"internal",
         "fields":[
           {"id":"code","type":"string","maximumLength":64,"required":true,"classification":"internal"},
           {"id":"valid-from","type":"timestamp","required":true,"classification":"internal"},
@@ -45,7 +43,7 @@ fn registry() -> registry_breg::CompiledRegistry {
         ],
         "temporal":{"startField":"valid-from","endField":"valid-to"},
         "constraints":[{"type":"temporal-non-overlap","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]
-      }],
+      }},
       "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["case-management"],
         "permissions":{"records":[{"recordType":"entry","operations":["create","get","list","patch","batch","tombstone","revisions","snapshot"],

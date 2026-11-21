@@ -1180,10 +1180,10 @@ mod tests {
             "project": {"id": "statistics-today", "version": "1", "defaultLanguage": "en",
                 "canonicalBaseIri": "https://statistics.example.test", "timezone": "Asia/Colombo"},
             "datasets": [{"id": "directory"}],
-            "recordTypes": [{"id": "site", "primaryDataset": "directory", "route": "sites",
+            "recordTypes": {"site": { "primaryDataset": "directory", "route": "sites",
                 "mutationMode": "mutable",
                 "fields": [{"id": "code", "type": "string", "required": true,
-                    "maximumLength": 32, "classification": "internal"}]}]
+                    "maximumLength": 32, "classification": "internal"}]}}
         });
         let project =
             crate::contract::parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();

@@ -15,7 +15,7 @@ datasets:
     display: {label: Applications, description: Sample application records.}
 
 recordTypes:
-  - id: application
+  application:
     route: applications
     primaryDataset: applications
     mutationMode: mutable

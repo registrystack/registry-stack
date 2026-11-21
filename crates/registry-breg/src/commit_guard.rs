@@ -177,10 +177,10 @@ mod tests {
             "kind": "BRegProject",
             "project": project,
             "datasets": [{"id": "guards"}],
-            "recordTypes": [{"id": "site", "primaryDataset": "guards", "route": "sites",
+            "recordTypes": {"site": { "primaryDataset": "guards", "route": "sites",
                 "mutationMode": "mutable",
                 "fields": [{"id": "code", "type": "string", "required": true,
-                    "maximumLength": 32, "classification": "internal"}]}]
+                    "maximumLength": 32, "classification": "internal"}]}}
         });
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         compile_project(&project, &[], CompileProfile::Authoring).unwrap()

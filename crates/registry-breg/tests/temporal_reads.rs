@@ -14,15 +14,14 @@ fn openapi(boundary_type: &str) -> Value {
         "project": {"id": "licences", "version": "1", "defaultLanguage": "en",
             "canonicalBaseIri": "https://licences.example.test", "timezone": "Asia/Colombo"},
         "datasets": [{"id": "licences"}],
-        "recordTypes": [{
-            "id": "licence", "primaryDataset": "licences", "route": "licences", "mutationMode": "mutable",
+        "recordTypes": {"licence": { "primaryDataset": "licences", "route": "licences", "mutationMode": "mutable",
             "fields": [
                 {"id": "holder", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"},
                 {"id": "valid-from", "type": boundary_type, "required": true, "classification": "internal"},
                 {"id": "valid-to", "type": boundary_type, "classification": "internal"}
             ],
             "temporal": {"startField": "valid-from", "endField": "valid-to"}
-        }],
+        }},
         "accessProfiles": {"reader": { "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
             "permissions": {"records": [{
                 "recordType": "licence", "operations": ["list"],

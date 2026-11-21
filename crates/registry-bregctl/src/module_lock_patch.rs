@@ -4,8 +4,9 @@
 use registry_breg::contract::ModuleLockSource;
 use registry_breg::parse_project_yaml;
 use registry_platform_yaml::{Position, Reader};
+use std::collections::BTreeMap;
 
-/// Replaces a flow-style `modules` sequence using the shared reader's exact
+/// Replaces a flow-style `modules` mapping using the shared reader's exact
 /// source span. JSON is valid YAML here; changing only this value keeps its
 /// enclosing mapping, punctuation, comments, and unrelated formatting intact.
 pub(crate) fn patch_flow_module_locks(bytes: &[u8], locks: &[ModuleLockSource]) -> Option<Vec<u8>> {
@@ -15,16 +16,32 @@ pub(crate) fn patch_flow_module_locks(bytes: &[u8], locks: &[ModuleLockSource]) 
     let start = source_offset(source, modules.span.start)?;
     let end = source_offset(source, modules.span.end)?;
     let value = source.get(start..end)?;
-    if !value.starts_with('[') || !value.ends_with(']') {
+    if !value.starts_with('{') || !value.ends_with('}') {
         return None;
     }
-    let replacement = serde_json::to_vec(locks).ok()?;
+    let replacement = serde_json::to_vec(&module_locks_json(locks)).ok()?;
     let mut rendered = Vec::with_capacity(bytes.len() - value.len() + replacement.len());
     rendered.extend_from_slice(&bytes[..start]);
     rendered.extend_from_slice(&replacement);
     rendered.extend_from_slice(&bytes[end..]);
     let parsed = parse_project_yaml(&rendered).ok()?;
     (parsed.modules == locks).then_some(rendered)
+}
+
+/// The `modules` value as authored: a mapping from module id to its lock, in
+/// id order. The id is the key, so no lock repeats it as a member.
+pub(crate) fn module_locks_json(locks: &[ModuleLockSource]) -> BTreeMap<&str, serde_json::Value> {
+    locks
+        .iter()
+        .map(|lock| {
+            let mut entry = serde_json::Map::new();
+            entry.insert("version".to_owned(), lock.version.clone().into());
+            if let Some(digest) = &lock.digest {
+                entry.insert("digest".to_owned(), digest.clone().into());
+            }
+            (lock.id.as_str(), serde_json::Value::Object(entry))
+        })
+        .collect()
 }
 
 /// Reader columns count Unicode scalar values, not UTF-8 bytes, and omit a
@@ -72,7 +89,7 @@ struct Block {
 ///
 /// `None` means the in-place patch does not apply: the authored entries do not
 /// name exactly the ids in `locks`, or the `modules` block is not the ordinary
-/// block-style list the patch understands. The caller then rewrites the whole
+/// block-style mapping the patch understands. The caller then rewrites the whole
 /// block instead.
 pub(crate) fn patch_module_locks(bytes: &[u8], locks: &[ModuleLockSource]) -> Option<Vec<u8>> {
     let project = parse_project_yaml(bytes).ok()?;
@@ -83,20 +100,26 @@ pub(crate) fn patch_module_locks(bytes: &[u8], locks: &[ModuleLockSource]) -> Op
     let mut lines = source.lines;
     let modules = mapping(&lines, "modules")?;
     let item_indent = modules.indent + 2;
-    let item_starts = (modules.start + 1..modules.end)
-        .filter(|index| {
-            indentation(&lines[*index]) == item_indent
-                && lines[*index][item_indent..].starts_with("- id:")
-        })
-        .collect::<Vec<_>>();
-    if item_starts.len() != project.modules.len() {
-        return None;
+    let mut item_starts = Vec::with_capacity(project.modules.len());
+    for authored in &project.modules {
+        item_starts.push(find_key(
+            &lines,
+            modules.start + 1,
+            modules.end,
+            item_indent,
+            &authored.id,
+        )??);
     }
 
     let mut replacements = Vec::new();
     for (index, authored) in project.modules.iter().enumerate() {
         let expected = locks.iter().find(|lock| lock.id == authored.id)?;
-        let item_end = item_starts.get(index + 1).copied().unwrap_or(modules.end);
+        let item_end = item_starts
+            .iter()
+            .copied()
+            .filter(|start| *start > item_starts[index])
+            .min()
+            .unwrap_or(modules.end);
         let item = Block {
             start: item_starts[index],
             end: item_end,
@@ -261,13 +284,16 @@ mod tests {
     fn flow_module_locks_preserve_json_and_unicode_surroundings() {
         let prefix = "\u{feff}{\"apiVersion\":\"id.registrystack.org/formats/breg/project/v1alpha1\",\"kind\":\"BRegProject\",\"project\":{\"id\":\"flow-lock\",\"canonicalBaseIri\":\"https://example.test/é\",\"version\":\"1\",\"defaultLanguage\":\"en\"},\"modules\":";
         let suffix = ",\"datasets\":[{\"id\":\"records\"}]}\n";
-        let source = format!("{prefix}[{{\"id\":\"core\",\"version\":\"1\"}}]{suffix}");
+        let source = format!("{prefix}{{\"core\":{{\"version\":\"1\"}}}}{suffix}");
         let locks = [lock("core")];
         let rendered =
             patch_flow_module_locks(source.as_bytes(), &locks).expect("JSON module locks patch");
         assert_eq!(
             String::from_utf8(rendered).expect("UTF-8"),
-            format!("{prefix}{}{suffix}", serde_json::to_string(&locks).unwrap())
+            format!(
+                "{prefix}{}{suffix}",
+                serde_json::to_string(&module_locks_json(&locks)).unwrap()
+            )
         );
     }
 
@@ -275,13 +301,16 @@ mod tests {
     fn flow_module_locks_preserve_yaml_surroundings_and_refresh_inventory() {
         let prefix = "# retained project comment\napiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: flow-lock\n  canonicalBaseIri: https://example.test\n  version: \"1\"\n  defaultLanguage: en\nmodules: ";
         let suffix = " # retained lock comment with ] and [\ndatasets: [{id: records}]\n";
-        let source = format!("{prefix}[{{id: retired, version: \"1\"}}]{suffix}");
+        let source = format!("{prefix}{{retired: {{version: \"1\"}}}}{suffix}");
         let locks = [lock("core"), lock("extra")];
         let rendered = patch_flow_module_locks(source.as_bytes(), &locks)
             .expect("YAML flow module locks patch");
         assert_eq!(
             String::from_utf8(rendered).expect("UTF-8"),
-            format!("{prefix}{}{suffix}", serde_json::to_string(&locks).unwrap())
+            format!(
+                "{prefix}{}{suffix}",
+                serde_json::to_string(&module_locks_json(&locks)).unwrap()
+            )
         );
     }
 
@@ -292,13 +321,16 @@ mod tests {
             let suffix = " # retained lock comment with ] and [\ndatasets: [{id: records}]\n"
                 .replace('\n', newline);
             let source =
-                format!("{prefix}[{newline}  {{id: core, version: \"1\"}}{newline}]{suffix}");
+                format!("{prefix}{{{newline}  core: {{version: \"1\"}}{newline}}}{suffix}");
             let locks = [lock("core")];
             let rendered = patch_flow_module_locks(source.as_bytes(), &locks)
                 .expect("flow locks patch across accepted line endings");
             assert_eq!(
                 String::from_utf8(rendered).expect("UTF-8"),
-                format!("{prefix}{}{suffix}", serde_json::to_string(&locks).unwrap()),
+                format!(
+                    "{prefix}{}{suffix}",
+                    serde_json::to_string(&module_locks_json(&locks)).unwrap()
+                ),
                 "surrounding source must retain {newline:?} line endings"
             );
         }

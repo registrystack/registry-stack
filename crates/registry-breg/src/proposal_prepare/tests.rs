@@ -22,12 +22,12 @@ fn source(effects: Value) -> Value {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"proposal-preparation","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
         "datasets":[{"id":"records"}],
-        "recordTypes":[{"id":"target","primaryDataset":"records","route":"targets","mutationMode":"mutable","mutationPolicy":{"create":"proposal-required","patch":"proposal-required"},"fields":[
+        "recordTypes":{"target": {"primaryDataset":"records","route":"targets","mutationMode":"mutable","mutationPolicy":{"create":"proposal-required","patch":"proposal-required"},"fields":[
             {"id":"first","type":"string","maximumLength":64,"classification":"internal"},
             {"id":"second","type":"string","maximumLength":64,"classification":"internal"},
             {"id":"parent","type":"reference","target":"target","classification":"internal"},
             {"id":"notes","type":"text","maximumLength":1048576,"classification":"internal"}
-        ]}],
+        ]}},
         "actions":[{"id":"change-target","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"}}},"inputs":[
             {"id":"one","type":"reference","target":"target","classification":"internal"},
             {"id":"two","type":"reference","target":"target","classification":"internal"},
@@ -154,7 +154,7 @@ fn encrypted_participation_is_refused_before_targets_resolve() {
     // A forged effect attempting to read or write outside the reviewed
     // plaintext ceiling must fail before target locks or materialization.
     let registry = fixture_with(json!([patch_effect()]), |source| {
-        source["recordTypes"][0]["fields"].as_array_mut().unwrap().push(json!({"id":"secret","type":"string","maximumLength":64,"classification":"restricted","encrypted":true}))
+        source["recordTypes"]["target"]["fields"].as_array_mut().unwrap().push(json!({"id":"secret","type":"string","maximumLength":64,"classification":"restricted","encrypted":true}))
     });
     let input = map(json!({"one":TARGET,"value":"changed"}));
     let legitimate = candidate(&registry, &input).unwrap();
@@ -430,7 +430,7 @@ fn unchanged_encrypted_members_fit_the_stored_packet_expansion_budget() {
     const ENVELOPE_FIXED_BYTES: usize = 33;
     const MAX_ENVELOPE_MEMBER_OVERHEAD: usize = 72;
     let registry = fixture_with(json!([patch_effect()]), |source| {
-        source["recordTypes"][0]["fields"].as_array_mut().unwrap().extend((0..ENCRYPTED_FIELDS).map(|index|json!({"id":format!("secret-{index}"),"type":"string","maximumLength":PLAINTEXT_BYTES_PER_FIELD,"classification":"restricted","encrypted":true})))
+        source["recordTypes"]["target"]["fields"].as_array_mut().unwrap().extend((0..ENCRYPTED_FIELDS).map(|index|json!({"id":format!("secret-{index}"),"type":"string","maximumLength":PLAINTEXT_BYTES_PER_FIELD,"classification":"restricted","encrypted":true})))
     });
     let base64_bytes = 4 * (PLAINTEXT_BYTES_PER_FIELD + ENVELOPE_FIXED_BYTES).div_ceil(3);
     let envelope = json!({crate::history_schema::ENVELOPE_MEMBER_TAG:"A".repeat(base64_bytes)});

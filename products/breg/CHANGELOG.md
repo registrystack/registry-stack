@@ -24,6 +24,30 @@
   The lock digest of every module that declares or extends a Record type
   changes, even when it declares no profiles. After converting, run
   `bregctl project lock` for each such module.
+- BREAKING: `recordTypes` is a mapping from each Record type id to the rest of
+  its entry, in the project and in a module. The old list shape is refused, and
+  so is an `id` member inside an entry, with a message that names the mapping.
+  A repeated key is refused at the repeating key. Migration:
+  `recordTypes: {permit: {primaryDataset: ...}}` in place of
+  `recordTypes: [{id: permit, primaryDataset: ...}]`. Source pointers that
+  `bregctl check` and `bregctl explain` report name the Record type id in place
+  of its position.
+- BREAKING: `extendRecordTypes` is a mapping from the extended Record type to
+  the extension, with no inner `recordType`, so a module extends a type once.
+  The old list and an inner `recordType` are refused with a message that names
+  the mapping. Migration: `extendRecordTypes: {entry: {fields: ...}}` in place
+  of `extendRecordTypes: [{recordType: entry, fields: ...}]`.
+- BREAKING: a project's `modules` lock is a mapping from each module id to its
+  `version` and `digest`, and `bregctl project lock` writes it sorted by id.
+  Migration: `modules: {core: {version: 0.1.0, digest: sha256:...}}` in place of
+  `modules: [{id: core, version: 0.1.0, digest: sha256:...}]`. Run
+  `bregctl project lock`.
+- Every module digest changes with these conversions, because an empty
+  `recordTypes: []` is now `{}` and every entry is keyed. After converting, run
+  `bregctl project lock` for each module. Registry revisions change with them.
+  A package built before this release is refused with a message that names the
+  fresh-database path: recreate the database, build a package with this
+  release, then run `bregctl apply --package DIR --initial`.
 - BREAKING: BReg no longer reads the `entityId` member that packages compiled
   by v0.38.0 to v0.41.0 wrote in place of `recordType`. A database whose active
   BReg package was compiled by v0.41.0 or earlier can no longer be upgraded in

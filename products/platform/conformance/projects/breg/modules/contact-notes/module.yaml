@@ -4,7 +4,7 @@ kind: BRegModule
 id: contact-notes
 version: 0.1.0
 extendRecordTypes:
-  - recordType: contact
+  contact:
     fields:
       - {id: internal-note, type: string, maximumLength: 500, classification: internal}
     accessProfiles:

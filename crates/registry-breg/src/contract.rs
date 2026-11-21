@@ -78,10 +78,30 @@ pub struct RegistryProject {
     pub package: Option<PackageIdentitySource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest_projection: Option<ManifestProjectionSource>,
-    #[serde(default)]
+    /// Written as a mapping from each module id to its locked version and digest
+    /// (CFG-ID-5) and held sorted by id.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<ModuleLockSource>")
+    )]
     pub modules: Vec<ModuleLockSource>,
-    #[serde(default, deserialize_with = "unique_ids")]
-    #[serde(rename = "recordTypes")]
+    /// Written as a mapping from each Record type id to the rest of the Record
+    /// type (CFG-ID-5) and held sorted by id.
+    #[serde(
+        default,
+        rename = "recordTypes",
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<EntitySource>")
+    )]
     pub entities: Vec<EntitySource>,
     #[serde(default)]
     pub datasets: Vec<DatasetSource>,
@@ -746,50 +766,56 @@ fn resolve_local_value_types(value: &mut Value) -> Result<(), (String, &'static 
         .cloned()
         .unwrap_or_default();
     for collection in ["recordTypes", "extendRecordTypes", "actions"] {
-        if let Some(items) = value.get_mut(collection).and_then(Value::as_array_mut) {
-            for (item_index, item) in items.iter_mut().enumerate() {
-                let member = if collection != "actions" {
-                    "fields"
-                } else {
-                    "inputs"
+        let member = if collection != "actions" {
+            "fields"
+        } else {
+            "inputs"
+        };
+        // Record types and extensions are mappings keyed by id, Actions a list.
+        // A collection in any other shape is left for the reader to refuse.
+        let items: Vec<(String, &mut Value)> = match value.get_mut(collection) {
+            Some(Value::Object(items)) => items
+                .iter_mut()
+                .map(|(key, item)| (key.clone(), item))
+                .collect(),
+            Some(Value::Array(items)) => items
+                .iter_mut()
+                .enumerate()
+                .map(|(index, item)| (index.to_string(), item))
+                .collect(),
+            _ => continue,
+        };
+        for (item_key, item) in items {
+            let Some(fields) = item.get_mut(member).and_then(Value::as_array_mut) else {
+                continue;
+            };
+            for (field_index, field) in fields.iter_mut().enumerate() {
+                let Some(object) = field.as_object_mut() else {
+                    continue;
                 };
-                if let Some(fields) = item.get_mut(member).and_then(Value::as_array_mut) {
-                    for (field_index, field) in fields.iter_mut().enumerate() {
-                        let Some(object) = field.as_object_mut() else {
-                            continue;
-                        };
-                        let Some(reference) = object.remove("typeRef") else {
-                            continue;
-                        };
-                        let Some(reference) = reference.as_str() else {
-                            return Err((
-                                format!(
-                                    "/{collection}/{item_index}/{member}/{field_index}/typeRef"
-                                ),
-                                "typeRef must be a local value type identifier",
-                            ));
-                        };
-                        let Some(definition) = types.get(reference).and_then(Value::as_object)
-                        else {
-                            return Err((
-                                format!(
-                                    "/{collection}/{item_index}/{member}/{field_index}/typeRef"
-                                ),
-                                "typeRef must name a declared local value type",
-                            ));
-                        };
-                        for (key, value) in definition {
-                            if object.contains_key(key) {
-                                return Err((
-                                    format!(
-                                        "/{collection}/{item_index}/{member}/{field_index}/{key}"
-                                    ),
-                                    "typeRef constraints cannot be overridden at the use site",
-                                ));
-                            }
-                            object.insert(key.clone(), value.clone());
-                        }
+                let Some(reference) = object.remove("typeRef") else {
+                    continue;
+                };
+                let Some(reference) = reference.as_str() else {
+                    return Err((
+                        format!("/{collection}/{item_key}/{member}/{field_index}/typeRef"),
+                        "typeRef must be a local value type identifier",
+                    ));
+                };
+                let Some(definition) = types.get(reference).and_then(Value::as_object) else {
+                    return Err((
+                        format!("/{collection}/{item_key}/{member}/{field_index}/typeRef"),
+                        "typeRef must name a declared local value type",
+                    ));
+                };
+                for (key, value) in definition {
+                    if object.contains_key(key) {
+                        return Err((
+                            format!("/{collection}/{item_key}/{member}/{field_index}/{key}"),
+                            "typeRef constraints cannot be overridden at the use site",
+                        ));
                     }
+                    object.insert(key.clone(), value.clone());
                 }
             }
         }
@@ -1567,11 +1593,34 @@ pub struct RegistryModule {
     /// Identifiers of modules that must be applied before this module.
     #[serde(default)]
     pub dependencies: Vec<String>,
-    /// Record types introduced by this module.
-    #[serde(default, rename = "recordTypes", deserialize_with = "unique_ids")]
+    /// Record types introduced by this module, written as a mapping from each
+    /// Record type id to the rest of the Record type (CFG-ID-5) and held sorted
+    /// by id.
+    #[serde(
+        default,
+        rename = "recordTypes",
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<EntitySource>")
+    )]
     pub entities: Vec<EntitySource>,
-    /// Additive contributions to entities already declared by the project or another module.
-    #[serde(default, rename = "extendRecordTypes")]
+    /// Additive contributions to Record types already declared by the project
+    /// or another module, written as a mapping from the Record type each
+    /// extends to the rest of the extension and held sorted by that Record
+    /// type.
+    #[serde(
+        default,
+        rename = "extendRecordTypes",
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<EntityExtensionSource>")
+    )]
     pub extend_entities: Vec<EntityExtensionSource>,
     #[serde(default, deserialize_with = "local_id_map")]
     #[cfg_attr(
@@ -1615,6 +1664,21 @@ where
 {
     registry_platform_yaml::UniqueList::<T>::deserialize(deserializer)
         .map(|items| items.into_iter().collect())
+}
+
+impl registry_platform_yaml::Identified for ModuleLockSource {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+/// An extension is named by the Record type it extends, so that is its key.
+impl registry_platform_yaml::Identified for EntityExtensionSource {
+    const KEY_MEMBER: &'static str = "recordType";
+
+    fn id(&self) -> &str {
+        &self.entity
+    }
 }
 
 impl registry_platform_yaml::Identified for EntitySource {
@@ -2089,6 +2153,7 @@ pub struct BatchSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EntityExtensionSource {
     #[serde(rename = "recordType")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub entity: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geojson: Option<GeoJsonSource>,
@@ -5539,6 +5604,14 @@ const PLAN_CAPABILITIES_REPLACEMENT: &str = "Remove `plan.capabilities`. Declare
 /// replaced it.
 const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
     RemovedKey {
+        pointer: "/recordTypes/*/id",
+        replacement: "Write recordTypes as a mapping from each id to the rest of its entry, recordTypes: {RECORD_TYPE_ID: {route: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/modules/*/id",
+        replacement: "Write modules as a mapping from each module id to its lock, modules: {MODULE_ID: {version: ..., digest: ...}}, with no id member.",
+    },
+    RemovedKey {
         pointer: "/accessProfiles/*/id",
         replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {PROFILE_ID: {principalClaim: ...}}, with no id member.",
     },
@@ -5698,6 +5771,14 @@ const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
 
 /// Members a module no longer accepts, each with the member that replaced it.
 const MODULE_REMOVED_KEYS: &[RemovedKey<'static>] = &[
+    RemovedKey {
+        pointer: "/recordTypes/*/id",
+        replacement: "Write recordTypes as a mapping from each id to the rest of its entry, recordTypes: {RECORD_TYPE_ID: {route: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/extendRecordTypes/*/recordType",
+        replacement: "Write extendRecordTypes as a mapping from the Record type each entry extends to the rest of the entry, extendRecordTypes: {RECORD_TYPE_ID: {fields: ...}}, with no recordType member.",
+    },
     RemovedKey {
         pointer: "/recordTypes/*/accessProfiles/*/id",
         replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {PROFILE_ID: {principalClaim: ...}}, with no id member.",
@@ -6048,15 +6129,26 @@ fn field_option_diagnostics(
         ("actions", "inputs"),
         ("extendRecordTypes", "fields"),
     ] {
-        if let Some(items) = value.get(collection).and_then(Value::as_array) {
-            for (index, item) in items.iter().enumerate() {
-                if let Some(items) = item.get(fields).and_then(Value::as_array) {
-                    for (field_index, field) in items.iter().enumerate() {
-                        check(
-                            field,
-                            format!("/{collection}/{index}/{fields}/{field_index}"),
-                        );
-                    }
+        // Record types and extensions are keyed by id, Actions are a list.
+        let items: Vec<(String, &Value)> = match value.get(collection) {
+            Some(Value::Object(items)) => items
+                .iter()
+                .map(|(key, item)| (key.replace('~', "~0").replace('/', "~1"), item))
+                .collect(),
+            Some(Value::Array(items)) => items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| (index.to_string(), item))
+                .collect(),
+            _ => Vec::new(),
+        };
+        for (item_key, item) in items {
+            if let Some(items) = item.get(fields).and_then(Value::as_array) {
+                for (field_index, field) in items.iter().enumerate() {
+                    check(
+                        field,
+                        format!("/{collection}/{item_key}/{fields}/{field_index}"),
+                    );
                 }
             }
         }

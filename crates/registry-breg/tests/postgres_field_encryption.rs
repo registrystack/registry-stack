@@ -100,11 +100,11 @@ manifestProjection:
       servesDatasets: [fixture-registry]
   distributions: []
 modules:
-  - id: field-encryption-core
+  field-encryption-core:
     version: 1.0.0
     digest: MODULE_DIGEST
 recordTypes:
-  - id: holder
+  holder:
     primaryDataset: fixture-registry
     route: holders
     mutationMode: mutable
@@ -122,7 +122,7 @@ recordTypes:
       - {id: big, type: string, maximumLength: 16384, classification: restricted, encrypted: true}
     constraints:
       - {type: unique, fields: [label]}
-  - id: note
+  note:
     primaryDataset: fixture-registry
     route: notes
     mutationMode: create-only

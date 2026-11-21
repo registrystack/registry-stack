@@ -741,7 +741,7 @@ if source.count(operator_record) != 1:
 source = source.replace(operator_record, operator_record.replace(
     "[create, get, list, patch]", "[create, get, list, patch, revisions]") + "          revisionAccess: true\n", 1)
 insert_after("accessProfiles:\n",
-             "  - id: loader\n"
+             "  loader:\n"
              "    principalClaim: registry_principal\n"
              "    requiredScopes: [registry:generic:load]\n"
              "    requiredPurposes: [registry-operations]\n"

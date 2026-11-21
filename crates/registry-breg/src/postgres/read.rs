@@ -3082,10 +3082,9 @@ mod tests {
                   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
                   "kind":"BRegProject",
                   "project":{"id":"retained-plaintext-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-                  "datasets":[{"id":"test-dataset"}],"recordTypes":[{
-                    "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
+                  "datasets":[{"id":"test-dataset"}],"recordTypes":{"asset": {"primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
                     "fields":[{"id":"details","type":"structured","maximumBytes":256,"classification":"restricted","encrypted":true,"schema":{"type":"object","additionalProperties":false,"properties":{"__bregEncryptedV1":{"type":"string"}},"required":["__bregEncryptedV1"]}}]
-                  }],
+                  }},
                   "accessProfiles":{"reader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"asset","operations":["get"],"readableFields":["details"],"rowBoundaries":"unrestricted"}]}}}
                 }"#,
             )
@@ -3167,14 +3166,13 @@ mod tests {
                   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
                   "kind":"BRegProject",
                   "project":{"id":"geojson-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-                  "datasets":[{"id":"test-dataset"}],"recordTypes":[{
-                    "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
+                  "datasets":[{"id":"test-dataset"}],"recordTypes":{"site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
                     "fields":[
                       {"id":"code","type":"string","required":true,"maximumLength":32,"classification":"public"},
                       {"id":"location","type":"crs84-point","precision":6,"required":false,"classification":"public"}
                     ],
                     "geojson":{"geometryField":"location"}
-                  }],
+                  }},
                   "accessProfiles":{"public": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "permissions":{"records":[{"recordType":"site","operations":["get","list"],"readableFields":["code","location"], "rowBoundaries": "unrestricted"}]}
                   }}
@@ -3214,14 +3212,13 @@ mod tests {
                   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
                   "kind":"BRegProject",
                   "project":{"id":"spatial-span-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-                  "datasets":[{"id":"test-dataset"}],"recordTypes":[{
-                    "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
+                  "datasets":[{"id":"test-dataset"}],"recordTypes":{"site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
                     "fields":[
                       {"id":"code","type":"string","required":true,"maximumLength":32,"classification":"public"},
                       {"id":"location","type":"crs84-point","precision":6,"required":false,"classification":"public"}
                     ],
                     "geojson":{"geometryField":"location"}
-                  }],
+                  }},
                   "accessProfiles":{"public": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "permissions":{"records":[{
                       "recordType":"site",
@@ -3297,10 +3294,9 @@ mod tests {
                   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
                   "kind":"BRegProject",
                   "project":{"id":"task-read","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-                  "datasets":[{"id":"test-dataset"}],"recordTypes":[{
-                    "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"public",
+                  "datasets":[{"id":"test-dataset"}],"recordTypes":{"case": {"primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"public",
                     "fields":[{"id":"label","type":"string","required":true,"maximumLength":32,"classification":"public"}]
-                  }],
+                  }},
                   "accessProfiles":{"task-reader": {"principalClaim":"registry_principal","actorKind":"agent",
                     "requesterClients":["agent-client"],"requiredScopes":"unrestricted","requiredPurposes":["review"],
                     "taskGrant":{"sourceIssuer":"https://casework.test"},
@@ -3368,13 +3364,12 @@ mod tests {
                   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
                   "kind":"BRegProject",
                   "project":{"id":"plan-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-                  "datasets":[{"id":"test-dataset"}],"recordTypes":[{
-                    "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"public",
+                  "datasets":[{"id":"test-dataset"}],"recordTypes":{"case": {"primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"public",
                     "fields":[
                       {"id":"label","type":"string","required":true,"maximumLength":32,"classification":"public"},
                       {"id":"secret","type":"string","required":true,"maximumLength":32,"classification":"restricted"}
                     ]
-                  }],
+                  }},
                   "accessProfiles":{"public": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "permissions":{"records":[{
                       "recordType":"case","operations":["list"],
@@ -3631,14 +3626,13 @@ mod tests {
                   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
                   "kind":"BRegProject",
                   "project":{"id":"spatial-relation-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-                  "datasets":[{"id":"test-dataset"}],"recordTypes":[{
-                    "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
+                  "datasets":[{"id":"test-dataset"}],"recordTypes":{"site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
                     "fields":[
                       {"id":"code","type":"string","required":true,"maximumLength":32,"classification":"public"},
                       {"id":"location","type":"crs84-point","precision":6,"required":false,"classification":"public"}
                     ],
                     "geojson":{"geometryField":"location"}
-                  }],
+                  }},
                   "accessProfiles":{"public": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "permissions":{"records":[{
                       "recordType":"site",
@@ -3918,8 +3912,8 @@ mod evaluation_date_tests {
                   "kind":"BRegProject",
                   "project":{{"id":"colombo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"{timezone_member}}},
                   "datasets":[{{"id":"test-dataset"}}],
-                  "recordTypes":[{{"id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
-                    "fields":[{{"id":"code","type":"string","required":true,"maximumLength":32,"classification":"internal"}}]}}]
+                  "recordTypes":{{"site":{{"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
+                    "fields":[{{"id":"code","type":"string","required":true,"maximumLength":32,"classification":"internal"}}]}}}}
                 }}"#
         );
         compile_project(

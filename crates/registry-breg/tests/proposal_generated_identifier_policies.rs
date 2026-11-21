@@ -16,8 +16,7 @@ fn project() -> Value {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://proposal-policy.example.test"
         },
-        "recordTypes": [{
-            "id": "registration",
+        "recordTypes": {"registration": {
             "primaryDataset": "test-dataset",
             "route": "registrations",
             "mutationMode": "mutable",
@@ -30,7 +29,7 @@ fn project() -> Value {
                 "classification": "internal",
                 "generate": {"type": "sequence", "minimumDigits": 1}
             }]
-        }],
+        }},
         "actions": [{
             "id": "register",
             "inputs": [{
@@ -120,7 +119,7 @@ fn manual_proposal_generated_only_create_emits_insert_policy() {
 #[test]
 fn patch_only_proposal_does_not_gain_generated_identifier_insert_policy() {
     let mut project = project();
-    project["recordTypes"][0]["fields"]
+    project["recordTypes"]["registration"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({

@@ -8,7 +8,7 @@ project:
   timezone: UTC
 datasets: [{id: entries}]
 recordTypes:
-  - id: entry
+  entry:
     primaryDataset: entries
     route: entries
     mutationMode: create-only

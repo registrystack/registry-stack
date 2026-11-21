@@ -146,8 +146,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "kind":"BRegProject",
           "project":{"id":"generated-identifier-batch-import","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://identifiers.example.test"},
           "datasets":[{"id":"records"}],
-          "recordTypes":[{
-            "id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"internal",
+          "recordTypes":{"entry": {"primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"internal",
             "batch":{"maximumItems":3,"maximumBytes":8192},
             "constraints":[{"type":"unique","fields":["label"]}],
             "fields":[
@@ -156,7 +155,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"number","type":"string","minimumLength":1,"maximumLength":32,"required":true,"classification":"internal",
                "generate":{"type":"sequence","prefix":"REG-","minimumDigits":4,"scope":["jurisdiction"]}}
             ]
-          }],
+          }},
           "accessProfiles":{"writer": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{"records":[{

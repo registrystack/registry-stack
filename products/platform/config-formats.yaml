@@ -219,12 +219,12 @@ formats:
     conformance:
       requiredText: /project/id
       optionalText: /project/display/description
-      integer: /recordTypes/0/fields/0/maximumLength
+      integer: /recordTypes/contact/fields/0/maximumLength
       boolean: /accessProfiles/directory-editor/default
-      idList: /recordTypes
+      idList: none
       set: /accessProfiles/directory-editor/requiredPurposes
       reference: /accessProfiles/directory-editor/permissions/records/0/recordType
-      operand: /recordTypes/0/constraints/0/when/0/value
+      operand: /recordTypes/contact/constraints/0/when/0/value
     securityMembers:
       - pointer: /accessProfiles/*/requiredScopes
         whenOmitted: refused

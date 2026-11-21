@@ -24,8 +24,7 @@ async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate()
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
+          "recordTypes":{"entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
               {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"status","type":"vocabulary-code","vocabulary":"status","classification":"internal"},
@@ -39,7 +38,7 @@ async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate()
                 {"type":"active-lifecycle"}
               ]
             }]
-          }],
+          }},
           "accessProfiles":{"operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
               "recordType":"entry","operations":["get"],"readableFields":["code","status","ended-on"],
               "rowBoundaries": "unrestricted"

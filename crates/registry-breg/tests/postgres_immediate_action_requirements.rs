@@ -328,7 +328,7 @@ async fn action_input_equality_is_authorized_atomic_and_replayed_from_the_receip
 async fn current_date_offset_is_enforced_at_immediate_commit() {
     let mut source = support::project();
     source["project"]["timezone"] = json!("UTC");
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["parent"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -369,7 +369,9 @@ async fn ordered_input_guards_compare_dates_and_instants_against_stored_fields()
         support::project(),
         &["status", "zone", "opened-on", "opened-at", "expires-on"],
     );
-    let fields = source["recordTypes"][0]["fields"].as_array_mut().unwrap();
+    let fields = source["recordTypes"]["parent"]["fields"]
+        .as_array_mut()
+        .unwrap();
     for (id, kind) in [
         ("opened-on", "date"),
         ("opened-at", "timestamp"),
@@ -945,7 +947,7 @@ async fn authored_guard_reason_requires_all_guard_and_boundary_facts_to_be_reada
         &["status", "zone"][..],
     ] {
         let mut source = with_parent_get(support::project(), readable);
-        source["recordTypes"][0]["fields"].as_array_mut().unwrap().push(json!({"id":"secondary","type":"string","maximumLength":32,"classification":"restricted"}));
+        source["recordTypes"]["parent"]["fields"].as_array_mut().unwrap().push(json!({"id":"secondary","type":"string","maximumLength":32,"classification":"restricted"}));
         source["actions"][0]["commitGuards"]["targets"][0]["reason"] = json!("parent-inactive");
         // A second unreadable guard must conceal even a readable failed guard.
         source["actions"][0]["commitGuards"]["targets"].as_array_mut().unwrap().push(
@@ -1023,7 +1025,7 @@ async fn action_effect_fields_are_authorized_under_a_locale_collation() {
     // set whatever the database collation is.
     let mut source = support::project();
     for (field, api_name) in [("award-number", "awardNumber"), ("awarded-by", "awardedBy")] {
-        source["recordTypes"][1]["fields"]
+        source["recordTypes"]["child"]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({

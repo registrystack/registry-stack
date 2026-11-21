@@ -678,8 +678,7 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
             "canonicalBaseIri": "https://immediate-action-review.example.test"
         },
         "datasets": [{"id": "test-dataset"}],
-        "recordTypes": [{
-            "id": "lock-record",
+        "recordTypes": {"lock-record": {
             "primaryDataset": "test-dataset",
             "route": "lock-records",
             "mutationMode": "mutable",
@@ -697,7 +696,7 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
                 "target": "lock-record",
                 "classification": "restricted"
             }]
-        }],
+        }},
         "actions": [{
             "id": "cross-link-lock-record",
             "execution":{"mode":"immediate"},
@@ -1077,13 +1076,12 @@ fn compiled_wide_action_registry() -> registry_breg::CompiledRegistry {
             "canonicalBaseIri": "https://immediate-action-review.example.test"
         },
         "datasets": [{"id": "test-dataset"}],
-        "recordTypes": [{
-            "id": "wide-record",
+        "recordTypes": {"wide-record": {
             "primaryDataset": "test-dataset",
             "route": "wide-records",
             "mutationMode": "mutable",
             "fields": entity_fields
-        }],
+        }},
         "actions": [{
             "id": "patch-wide-flags",
             "execution":{"mode":"immediate"},

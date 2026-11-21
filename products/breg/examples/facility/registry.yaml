@@ -26,7 +26,7 @@ reviewAuthorities:
       description: Logical authenticated review authority resolved by deployment configuration.
 
 recordTypes:
-  - id: directory-entry
+  directory-entry:
     route: directory-entries
     primaryDataset: facility-registry
     mutationMode: mutable
@@ -37,7 +37,7 @@ recordTypes:
       - {id: name, type: string, required: true, minimumLength: 1, maximumLength: 160, classification: public}
       - {id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: internal}
       - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
-  - id: operator
+  operator:
     route: operators
     primaryDataset: facility-registry
     mutationMode: mutable
@@ -49,7 +49,7 @@ recordTypes:
       - {id: operator-code, apiName: operatorCode, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
       - {id: status, type: vocabulary-code, vocabulary: operator-status, required: true, classification: internal}
       - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
-  - id: facility
+  facility:
     route: facilities
     primaryDataset: facility-registry
     mutationMode: mutable
@@ -69,7 +69,7 @@ recordTypes:
       - {id: postal-code, apiName: postalCode, typeRef: postal-code, required: true, classification: internal}
       - {id: status, type: vocabulary-code, vocabulary: facility-status, required: true, classification: internal}
       - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
-  - id: facility-assignment
+  facility-assignment:
     route: facility-assignments
     primaryDataset: facility-registry
     mutationMode: create-only

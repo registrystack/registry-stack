@@ -85,13 +85,12 @@ fn project_source(definition: Value, use_site: &str) -> Value {
         },
         "datasets": [{"id": "records"}],
         "valueTypes": {"shared-value": definition},
-        "recordTypes": [{
-            "id": "entry",
+        "recordTypes": {"entry": {
             "primaryDataset": "records",
             "route": "entries",
             "mutationMode": "mutable",
             "fields": fields
-        }],
+        }},
         "actions": actions,
         "accessProfiles": access_profiles
     })
@@ -257,7 +256,7 @@ fn assert_scalar_required(
 fn unknown_value_type_uses_name_the_record_field_or_action_input_in_both_formats() {
     let scalar = json!({"type": "string", "maximumLength": 24});
     for (use_site, path) in [
-        ("field", "/recordTypes/0/fields/0/typeRef"),
+        ("field", "/recordTypes/entry/fields/0/typeRef"),
         ("action", "/actions/0/inputs/0/typeRef"),
     ] {
         let mut project = project_source(scalar.clone(), use_site);
@@ -276,7 +275,7 @@ fn unknown_value_type_uses_name_the_record_field_or_action_input_in_both_formats
 
 fn set_type_reference(source: &mut Value, use_site: &str, reference: &str) {
     let field = if use_site == "field" {
-        &mut source["recordTypes"][0]["fields"][0]
+        &mut source["recordTypes"]["entry"]["fields"][0]
     } else {
         &mut source["actions"][0]["inputs"][0]
     };
@@ -335,7 +334,7 @@ fn module_host(with_action_permission: bool) -> RegistryProject {
             "canonicalBaseIri": "https://authoring.example.test/module-host"
         },
         "datasets": [{"id": "records"}],
-        "modules": [{"id": "definitions", "version": "1"}]
+        "modules": {"definitions": { "version": "1"}}
     });
     if with_action_permission {
         source["accessProfiles"] = json!({"operator": {
@@ -473,7 +472,7 @@ fn authoring_schemas_expose_scalar_aliases_without_hiding_direct_compound_fields
                 declaration["id"] = json!("value");
                 declaration["classification"] = json!("internal");
                 if use_site == "field" {
-                    direct_compound["recordTypes"][0]["fields"][0] = declaration;
+                    direct_compound["recordTypes"]["entry"]["fields"][0] = declaration;
                 } else {
                     direct_compound["actions"][0]["inputs"][0] = declaration;
                 }

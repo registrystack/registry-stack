@@ -41,10 +41,7 @@ pub(super) const PROJECT: &str = r#"{
   "kind":"BRegProject",
   "project":{"id":"task-authority-http","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
   "datasets":[{"id":"test-dataset"}],
-  "recordTypes":[
-    {
-      "id":"asset-site",
-      "primaryDataset":"test-dataset",
+  "recordTypes":{"asset-site":{"primaryDataset":"test-dataset",
       "route":"sites",
       "mutationMode":"create-only",
       "classification":"internal",
@@ -52,10 +49,7 @@ pub(super) const PROJECT: &str = r#"{
         {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
         {"id":"name","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}
       ]
-    },
-    {
-      "id":"asset-placement",
-      "primaryDataset":"test-dataset",
+    },"asset-placement":{"primaryDataset":"test-dataset",
       "route":"placements",
       "mutationMode":"mutable",
       "classification":"internal",
@@ -63,10 +57,7 @@ pub(super) const PROJECT: &str = r#"{
         {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
         {"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"}
       ]
-    },
-    {
-      "id":"correction-request",
-      "primaryDataset":"test-dataset",
+    },"correction-request":{"primaryDataset":"test-dataset",
       "route":"correction-requests",
       "mutationMode":"mutable",
       "classification":"internal",
@@ -76,8 +67,7 @@ pub(super) const PROJECT: &str = r#"{
         {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
         {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
       ]
-    }
-  ],
+    }},
   "actions":[{
     "id":"file-correction",
     "execution":{"mode":"immediate"},

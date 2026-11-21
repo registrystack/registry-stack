@@ -20,7 +20,7 @@ reviewAuthorities:
     protocol: id.registrystack.org/protocols/review/v1
     display: {label: Local review, description: Review authority used by development-plan checks.}
 recordTypes:
-  - id: record
+  record:
     route: records
     primaryDataset: records
     mutationMode: mutable

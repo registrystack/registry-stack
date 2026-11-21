@@ -492,7 +492,7 @@ async fn native_observers_refuse_callback_candidates_before_action_grant_lookup(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_observer_candidates_have_no_application_authority_even_under_a_forged_owner() {
     let mut source = model::source(json!([model::local_hook("candidate", json!(["started"]))]));
-    source["recordTypes"][0]["hooks"] = json!([{"id":"record-candidate","phase":"after","trigger":"created","projection":["name"],"principal":"clerk","handler":{"type":"rhai","script":"hooks/candidate.rhai","abi":"registry.hook-handler/v1"}}]);
+    source["recordTypes"]["target"]["hooks"] = json!([{"id":"record-candidate","phase":"after","trigger":"created","projection":["name"],"principal":"clerk","handler":{"type":"rhai","script":"hooks/candidate.rhai","abi":"registry.hook-handler/v1"}}]);
     let registry = compile(source, &[("candidate", CANDIDATE)]);
     let (_root, destinations) = runtime(&registry, None);
     let fixture = client_http::ClientFixture::start(registry, claims()).await;

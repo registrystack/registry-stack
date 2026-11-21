@@ -91,7 +91,7 @@ fn record_permissions() -> String {
 
 fn compile_reader(declarations: &str, other_permissions: &str) -> registry_breg::CompiledRegistry {
     let project = format!(
-        "{declarations}\naccessProfiles:\n  - id: reader\n    default: true\n    \
+        "{declarations}\naccessProfiles:\n  reader:\n    default: true\n    \
          principalClaim: registry_principal\n    requiredScopes: unrestricted\n    \
          permissions:\n{other_permissions}      records:\n{}",
         record_permissions()

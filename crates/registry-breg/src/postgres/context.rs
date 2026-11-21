@@ -2847,13 +2847,11 @@ mod tests {
               "kind":"BRegProject",
               "project":{"id":"typed-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "datasets":[{"id":"test-dataset"}],
-              "recordTypes":[
-                {
-                  "id":"parent-entry","primaryDataset":"test-dataset","route":"parents","mutationMode":"mutable",
+              "recordTypes":{
+                "parent-entry": {"primaryDataset":"test-dataset","route":"parents","mutationMode":"mutable",
                   "fields":[{"id":"name","type":"string","minimumLength":1,"maximumLength":8,"required":true,"classification":"internal"}]
                 },
-                {
-                  "id":"typed-entry","primaryDataset":"test-dataset","route":"typed","mutationMode":"mutable",
+                "typed-entry": {"primaryDataset":"test-dataset","route":"typed","mutationMode":"mutable",
                   "fields":[
                     {"id":"enabled","type":"boolean","required":true,"classification":"internal"},
                     {"id":"count","type":"int64","required":true,"classification":"internal"},
@@ -2867,7 +2865,7 @@ mod tests {
                     {"id":"color","type":"vocabulary-code","vocabulary":"colors","required":true,"classification":"internal"}
                   ]
                 }
-              ],
+              },
               "accessProfiles":{"typed": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "permissions":{"records":[
                     {
@@ -2907,10 +2905,10 @@ mod tests {
             "project":{"id":"context-test","version":"0.1.0","defaultLanguage":"en",
                 "canonicalBaseIri":"https://context.example.test"},
             "datasets":[{"id":"context-test"}],
-            "recordTypes":[{"id":"entry","primaryDataset":"context-test","route":"entries","mutationMode":"mutable",
+            "recordTypes":{"entry": {"primaryDataset":"context-test","route":"entries","mutationMode":"mutable",
                 "fields":[
                     {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
-                    {"id":"region","type":"string","minimumLength":1,"maximumLength":64,"required":false,"classification":"internal"}]}],
+                    {"id":"region","type":"string","minimumLength":1,"maximumLength":64,"required":false,"classification":"internal"}]}},
             "accessProfiles":{
                 "operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "requiredPurposes":["operations"],"permissions":{"records":[{"recordType":"entry","operations":["get"],
@@ -2933,14 +2931,13 @@ mod tests {
               "kind":"BRegProject",
               "project":{"id":"action-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "datasets":[{"id":"test-dataset"}],
-              "recordTypes":[{
-                "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
+              "recordTypes":{"household": {"primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
                 "fields":[
                   {"id":"household-code","apiName":"householdCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
                   {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
                   {"id":"status-note","apiName":"statusNote","type":"string","maximumLength":160,"classification":"restricted"}
                 ]
-              }],
+              }},
               "actions":[{
                 "id":"rename-household-local",
                 "execution":{"mode":"immediate"},
@@ -2982,15 +2979,14 @@ mod tests {
               "kind":"BRegProject",
               "project":{"id":"timer-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://timers.example.test"},
               "datasets":[{"id":"services"}],
-              "recordTypes":[{
-                "id":"service","primaryDataset":"services","route":"services","mutationMode":"mutable",
+              "recordTypes":{"service": {"primaryDataset":"services","route":"services","mutationMode":"mutable",
                 "fields":[
                   {"id":"status","type":"string","required":true,"maximumLength":32,"classification":"internal"},
                   {"id":"activates-at","type":"timestamp","required":true,"classification":"internal"}
                 ],
                 "timers":[{"id":"activate","at":"activates-at","invoke":"activate-service",
                   "input":{"service":{"fromRecordId":true}}}]
-              }],
+              }},
               "timerGrants":[{"recordType":"service","timer":"activate"}],
               "actions":[{
                 "id":"activate-service","execution":{"mode":"immediate"},
@@ -3012,14 +3008,14 @@ mod tests {
               "kind":"BRegProject",
               "project":{"id":"timer-create-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://timers.example.test"},
               "datasets":[{"id":"services"},{"id":"logs"}],
-              "recordTypes":[
-                {"id":"service","primaryDataset":"services","route":"services","mutationMode":"mutable",
+              "recordTypes":{
+                "service": {"primaryDataset":"services","route":"services","mutationMode":"mutable",
                   "fields":[{"id":"activates-at","type":"timestamp","required":true,"classification":"internal"}],
                   "timers":[{"id":"activate","at":"activates-at","invoke":"create-activation-log",
                     "input":{"operation-id":{"fromTimer":"occurrence-id"}}}]},
-                {"id":"activation-log","primaryDataset":"logs","route":"activation-logs","mutationMode":"mutable",
+                "activation-log": {"primaryDataset":"logs","route":"activation-logs","mutationMode":"mutable",
                   "fields":[{"id":"operation-id","type":"uuid","required":true,"classification":"internal"}]}
-              ],
+              },
               "timerGrants":[{"recordType":"service","timer":"activate"}],
               "actions":[{"id":"create-activation-log","execution":{"mode":"immediate"},
                 "inputs":[{"id":"operation-id","type":"uuid","required":true,"classification":"internal"}],

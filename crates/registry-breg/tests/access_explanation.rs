@@ -11,8 +11,8 @@ fn source() -> Value {
     json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"access-explanation","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://access.example.test"},
-        "recordTypes":[{"id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
-          "fields":[{"id":"district","type":"string","maximumLength":32,"classification":"internal"}]}],
+        "recordTypes":{"entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
+          "fields":[{"id":"district","type":"string","maximumLength":32,"classification":"internal"}]}},
         "accessProfiles":{"clerk": {"principalClaim":"registry_principal","requiredScopes":["entry:edit"],
           "permissions":{"records":[{"recordType":"entry","operations":["get","patch"],"readableFields":["district"],"writableFields":["district"],
             "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}]}}}
@@ -55,7 +55,7 @@ fn repeated_action_target_source() -> Value {
 
 fn mixed_action_target_source() -> Value {
     let mut candidate = source();
-    candidate["recordTypes"][0]["fields"]
+    candidate["recordTypes"]["entry"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -133,22 +133,22 @@ fn compile_function_action(source: &Value) -> registry_breg::CompiledRegistry {
 
 fn membership_source() -> Value {
     let mut source = source();
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["entry"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"organization", "type":"reference", "target":"organization",
             "classification":"internal"
         }));
-    source["recordTypes"].as_array_mut().unwrap().extend([
-        json!({"id":"organization", "primaryDataset":"test-dataset", "route":"organizations", "mutationMode":"mutable",
-            "fields":[{"id":"label", "type":"string", "maximumLength":32, "classification":"internal"}]}),
-        json!({"id":"membership", "primaryDataset":"test-dataset", "route":"memberships", "mutationMode":"mutable",
+    source["recordTypes"].as_object_mut().unwrap().extend([
+        ("organization".to_owned(), json!({"primaryDataset":"test-dataset", "route":"organizations", "mutationMode":"mutable",
+            "fields":[{"id":"label", "type":"string", "maximumLength":32, "classification":"internal"}]})),
+        ("membership".to_owned(), json!({"primaryDataset":"test-dataset", "route":"memberships", "mutationMode":"mutable",
             "fields":[
                 {"id":"organization", "type":"reference", "target":"organization", "classification":"internal"},
                 {"id":"principal", "type":"string", "maximumLength":64, "classification":"internal"},
                 {"id":"active", "type":"boolean", "classification":"internal"}
-            ]}),
+            ]}))
     ]);
     source["accessProfiles"]["clerk"]["principalClaim"] = json!("sub");
     let grant = &mut source["accessProfiles"]["clerk"]["permissions"]["records"][0];
@@ -164,7 +164,7 @@ fn membership_source() -> Value {
 
 fn timer_source() -> Value {
     let mut candidate = source();
-    let record = &mut candidate["recordTypes"][0];
+    let record = &mut candidate["recordTypes"]["entry"];
     record["fields"].as_array_mut().unwrap().extend([
         json!({"id":"active", "type":"boolean", "classification":"internal"}),
         json!({"id":"activates-at", "type":"timestamp", "classification":"internal"}),
@@ -557,7 +557,7 @@ fn membership_changes_report_authority_narrowing_and_widening() {
     use registry_breg::tooling::{classify_registry_diff, AccessChangeDirection};
 
     let mut source = membership_source();
-    source["recordTypes"][2]["fields"]
+    source["recordTypes"]["membership"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({"id":"approved", "type":"boolean", "classification":"internal"}));

@@ -35,10 +35,10 @@ fn project(first: Value, second: Value) -> Value {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"default-grants","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://default-grants.example.test"},
         "datasets":[{"id":"test-dataset"}],
-        "recordTypes":[
-            {"id":"case","route":"cases","primaryDataset":"test-dataset","mutationMode":"mutable","classification":"internal",
+        "recordTypes":{
+            "case": {"route":"cases","primaryDataset":"test-dataset","mutationMode":"mutable","classification":"internal",
                 "batch":{"maximumItems":3,"maximumBytes":8192},"mutationPolicy":{"patch":"proposal-required"},
-                "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]}],
+                "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]}},
         "actions":[
             {"id":"correct-case","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"}}},"inputs":[
                 {"id":"case-ref","type":"reference","target":"case","required":true,"classification":"internal"},

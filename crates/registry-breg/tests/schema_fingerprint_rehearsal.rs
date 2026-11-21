@@ -696,8 +696,7 @@ fn project_bytes(source_revision: &str) -> Vec<u8> {
     }}],
     "distributions": []
   }},
-  "recordTypes": [{{
-    "id": "case",
+  "recordTypes": {{"case":{{
     "primaryDataset": "test-dataset",
     "route": "cases",
     "mutationMode": "create-only",
@@ -708,7 +707,7 @@ fn project_bytes(source_revision: &str) -> Vec<u8> {
       "classification": "internal"
     }}],
     "indexes": [{{"id": "by-code", "fields": ["code"]}}]
-  }}],
+  }}}},
   "accessProfiles": {{"reader":{{
     "principalClaim": "principal",
     "requiredScopes": "unrestricted",
@@ -758,7 +757,7 @@ async fn fresh_schema_test_installs_exactly_one_validated_native_pattern_constra
     let config = runtime_config(&database, ENVIRONMENT, INSTANCE);
     let mut project: serde_json::Value =
         serde_json::from_slice(&project_bytes(SOURCE_REVISION)).unwrap();
-    project["recordTypes"][0]["fields"][0]["pattern"] = serde_json::json!("^[A-Z]+$");
+    project["recordTypes"]["case"]["fields"][0]["pattern"] = serde_json::json!("^[A-Z]+$");
     let project = serde_json::to_vec(&project).unwrap();
     let registry = compile_project(
         &parse_project_json(&project).unwrap(),

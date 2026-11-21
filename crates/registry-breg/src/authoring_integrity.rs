@@ -412,8 +412,8 @@ fn extension_integrity(
     }
 
     let mut targets = BTreeMap::<String, Namespaces>::new();
-    for (entity_index, entity) in entities.iter().enumerate() {
-        let base = format!("/recordTypes/{entity_index}");
+    for entity in entities {
+        let base = keyed_pointer("/recordTypes", &entity.id);
         let target = targets.entry(entity.id.clone()).or_default();
         target.fields.extend(indexed_ids(
             &format!("{base}/fields"),
@@ -462,8 +462,8 @@ fn extension_integrity(
             |item| &item.id,
         ));
     }
-    for (extension_index, extension) in extensions.iter().enumerate() {
-        let base = format!("/extendRecordTypes/{extension_index}");
+    for extension in extensions {
+        let base = keyed_pointer("/extendRecordTypes", &extension.entity);
         let target = targets.entry(extension.entity.clone()).or_default();
         target.fields.extend(indexed_ids(
             &format!("{base}/fields"),
@@ -621,11 +621,11 @@ pub(crate) fn project_diagnostics(
         ),
         (
             "breg.module.id-collision",
-            indexed_ids("/modules", &project.modules, |item| &item.id),
+            keyed_ids("/modules", &project.modules, |item| &item.id),
         ),
         (
             "breg.record-type.id-collision",
-            indexed_ids("/recordTypes", &project.entities, |item| &item.id),
+            keyed_ids("/recordTypes", &project.entities, |item| &item.id),
         ),
         (
             "breg.dataset.id-collision",
@@ -782,15 +782,18 @@ pub(crate) fn project_diagnostics(
             );
         }
     }
-    for (index, entity) in project.entities.iter().enumerate() {
+    for entity in &project.entities {
         entity_integrity(
             document,
             &mut errors,
-            &format!("/recordTypes/{index}"),
+            &keyed_pointer("/recordTypes", &entity.id),
             entity,
         );
         let entity_profiles = keyed_ids(
-            &format!("/recordTypes/{index}/accessProfiles"),
+            &format!(
+                "{}/accessProfiles",
+                keyed_pointer("/recordTypes", &entity.id)
+            ),
             &entity.access_profiles,
             |profile| &profile.id,
         );
@@ -822,10 +825,9 @@ pub(crate) fn project_diagnostics(
     let hooks = project
         .entities
         .iter()
-        .enumerate()
-        .flat_map(|(entity_index, entity)| {
+        .flat_map(|entity| {
             indexed_ids(
-                &format!("/recordTypes/{entity_index}/hooks"),
+                &format!("{}/hooks", keyed_pointer("/recordTypes", &entity.id)),
                 &entity.hooks,
                 |hook| &hook.id,
             )
@@ -880,7 +882,7 @@ pub(crate) fn project_diagnostics(
         (
             "breg.record-type.duplicate-label",
             "record types",
-            display_labels(
+            keyed_display_labels(
                 "/recordTypes",
                 &project.entities,
                 |item| &item.id,
@@ -1084,8 +1086,8 @@ fn add_nested_display_warnings(
     action_base: &str,
     actions: &[ActionSource],
 ) {
-    for (entity_index, entity) in entities.iter().enumerate() {
-        let values = entity_field_display_labels(&format!("{entity_base}/{entity_index}"), entity);
+    for entity in entities {
+        let values = entity_field_display_labels(&keyed_pointer(entity_base, &entity.id), entity);
         add_duplicate_labels(
             document,
             warnings,
@@ -1156,19 +1158,18 @@ fn add_profile_and_hook_display_warnings(
     let mut hooks = BTreeMap::<&str, Vec<LocatedDisplayText>>::new();
     let members = entities
         .iter()
-        .enumerate()
-        .map(|(index, entity)| {
+        .map(|entity| {
             (
                 entity.id.as_str(),
-                format!("/recordTypes/{index}"),
+                keyed_pointer("/recordTypes", &entity.id),
                 &entity.access_profiles,
                 &entity.hooks,
             )
         })
-        .chain(extensions.iter().enumerate().map(|(index, extension)| {
+        .chain(extensions.iter().map(|extension| {
             (
                 extension.entity.as_str(),
-                format!("/extendRecordTypes/{index}"),
+                keyed_pointer("/extendRecordTypes", &extension.entity),
                 &extension.access_profiles,
                 &extension.hooks,
             )
@@ -1254,7 +1255,7 @@ pub(crate) fn module_diagnostics(
     for (code, values) in [
         (
             "breg.record-type.id-collision",
-            indexed_ids("/recordTypes", &module.entities, |item| &item.id),
+            keyed_ids("/recordTypes", &module.entities, |item| &item.id),
         ),
         (
             "breg.function.id-collision",
@@ -1283,24 +1284,24 @@ pub(crate) fn module_diagnostics(
     let mut hooks = module
         .entities
         .iter()
-        .enumerate()
-        .flat_map(|(entity_index, entity)| {
+        .flat_map(|entity| {
             indexed_ids(
-                &format!("/recordTypes/{entity_index}/hooks"),
+                &format!("{}/hooks", keyed_pointer("/recordTypes", &entity.id)),
                 &entity.hooks,
                 |hook| &hook.id,
             )
         })
         .collect::<Vec<_>>();
-    hooks.extend(module.extend_entities.iter().enumerate().flat_map(
-        |(extension_index, extension)| {
-            indexed_ids(
-                &format!("/extendRecordTypes/{extension_index}/hooks"),
-                &extension.hooks,
-                |hook| &hook.id,
-            )
-        },
-    ));
+    hooks.extend(module.extend_entities.iter().flat_map(|extension| {
+        indexed_ids(
+            &format!(
+                "{}/hooks",
+                keyed_pointer("/extendRecordTypes", &extension.entity)
+            ),
+            &extension.hooks,
+            |hook| &hook.id,
+        )
+    }));
     add_collisions(document, &mut errors, "breg.hook.id-collision", &hooks);
     for (index, action) in module.actions.iter().enumerate() {
         action_integrity(document, &mut errors, &format!("/actions/{index}"), action);
@@ -1310,7 +1311,7 @@ pub(crate) fn module_diagnostics(
         (
             "breg.record-type.duplicate-label",
             "record types",
-            display_labels(
+            keyed_display_labels(
                 "/recordTypes",
                 &module.entities,
                 |item| &item.id,
@@ -1347,21 +1348,21 @@ pub(crate) fn module_diagnostics(
     );
 
     let mut merged_field_labels = BTreeMap::<String, Vec<LocatedDisplayText>>::new();
-    for (entity_index, entity) in module.entities.iter().enumerate() {
+    for entity in &module.entities {
         merged_field_labels
             .entry(entity.id.clone())
             .or_default()
             .extend(entity_field_display_labels(
-                &format!("/recordTypes/{entity_index}"),
+                &keyed_pointer("/recordTypes", &entity.id),
                 entity,
             ));
     }
-    for (extension_index, extension) in module.extend_entities.iter().enumerate() {
+    for extension in &module.extend_entities {
         merged_field_labels
             .entry(extension.entity.clone())
             .or_default()
             .extend(extension_field_display_labels(
-                &format!("/extendRecordTypes/{extension_index}"),
+                &keyed_pointer("/extendRecordTypes", &extension.entity),
                 extension,
             ));
     }

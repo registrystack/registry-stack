@@ -467,15 +467,14 @@ fn compiled_polygon_registry() -> registry_breg::CompiledRegistry {
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
       "project":{"id":"spatial-read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "datasets":[{"id":"test-dataset"}],
-      "recordTypes":[{
-        "id":"plot","primaryDataset":"test-dataset","route":"plots","mutationMode":"mutable","classification":"internal",
+      "recordTypes":{"plot": {"primaryDataset":"test-dataset","route":"plots","mutationMode":"mutable","classification":"internal",
         "fields":[
           {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
           {"id":"boundary","type":"crs84-polygon","precision":6,"maximumPositions":10,
            "bbox":{"west":"100","south":"13","east":"105","north":"14"},"classification":"internal"}
         ],
         "geojson":{"geometryField":"boundary"}
-      }],
+      }},
       "accessProfiles":{"plot-reader": {"default":true,"principalClaim":"registry_principal","requiredScopes":["registry.read"],
           "requiredPurposes":["case-management"],"permissions":{"records":[{
           "recordType":"plot","operations":["create","get","list","patch"],
@@ -2569,7 +2568,7 @@ fn spatial_registry_project_source(module_digest: &str) -> String {
       "kind":"BRegProject",
       "project":{{"id":"spatial-read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
       "datasets":[{{"id":"test-dataset"}}],
-      "modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]
+      "modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}
     }}"#
     )
 }
@@ -2577,8 +2576,7 @@ fn spatial_registry_project_source(module_digest: &str) -> String {
 fn spatial_registry_module_source() -> &'static str {
     r#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core",
       "version":"1",
-      "recordTypes":[{
-        "id":"service-site",
+      "recordTypes":{"service-site": {
         "primaryDataset":"test-dataset",
         "route":"service-sites",
         "mutationMode":"mutable",
@@ -2659,8 +2657,7 @@ fn spatial_registry_module_source() -> &'static str {
           "readableFields":["code","label","location"],
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
         }}
-      },{
-        "id":"service-zone",
+      },"service-zone": {
         "primaryDataset":"test-dataset",
         "route":"service-zones",
         "mutationMode":"mutable",
@@ -2679,8 +2676,7 @@ fn spatial_registry_module_source() -> &'static str {
           "writableFields":["jurisdiction","zone-label"],
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
         }}
-      },{
-        "id":"service-region",
+      },"service-region": {
         "primaryDataset":"test-dataset",
         "route":"service-regions",
         "mutationMode":"mutable",
@@ -2702,7 +2698,7 @@ fn spatial_registry_module_source() -> &'static str {
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}],
           "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1.25,"maximumLatitudeSpanDegrees":1.25}}
         }}
-      }]
+      }}
     }"#
 }
 
@@ -2747,8 +2743,7 @@ fn plain_geojson_registry_source() -> &'static str {
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"plain-geojson-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "recordTypes":[{
-        "id":"plain-site",
+      "recordTypes":{"plain-site": {
         "primaryDataset":"test-dataset",
         "route":"plain-sites",
         "mutationMode":"mutable",
@@ -2758,7 +2753,7 @@ fn plain_geojson_registry_source() -> &'static str {
           {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
         ],
         "geojson":{"geometryField":"location"}
-      }],
+      }},
       "accessProfiles":{"plain-reader": {
         "default":true,
         "principalClaim":"registry_principal",

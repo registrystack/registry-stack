@@ -403,7 +403,7 @@ fn registry(plan: &Plan) -> String {
     yaml.line(0, "recordTypes:");
     for entity in &plan.entities {
         yaml.comment(1, &format!("{} ({})", entity.concept, entity.concept_uri));
-        yaml.entry(1, "- id", &entity.id);
+        yaml.line(1, &format!("{}:", scalar(&entity.id)));
         yaml.entry(2, "primaryDataset", id);
         yaml.entry(2, "route", &entity.route);
         yaml.line(2, "mutationMode: mutable");
@@ -1932,10 +1932,10 @@ mod tests {
             registry["manifestProjection"]["classificationCeiling"],
             "restricted"
         );
-        let entities = registry["recordTypes"].as_array().expect("entities");
+        let entities = registry["recordTypes"].as_object().expect("entities");
         assert_eq!(entities.len(), 3);
-        let person = &entities[0];
-        assert_eq!(person["id"], "person");
+        let person = &entities["person"];
+        assert!(person.get("id").is_none());
         assert_eq!(person["route"], "persons");
         let fields = person["fields"].as_array().expect("fields");
         assert_eq!(fields[0]["id"], "person-code");
@@ -1947,7 +1947,7 @@ mod tests {
             .expect("marital-status");
         assert_eq!(marital["type"], "vocabulary-code");
         assert_eq!(marital["classification"], "restricted");
-        let household = &entities[1];
+        let household = &entities["household"];
         let address = household["fields"]
             .as_array()
             .expect("fields")
@@ -1958,7 +1958,7 @@ mod tests {
         assert_eq!(address["type"], "structured");
         assert_eq!(address["schema"]["additionalProperties"], false);
         assert_eq!(address["schema"]["properties"]["city"]["type"], "string");
-        let membership = &entities[2];
+        let membership = &entities["group-membership"];
         let person_ref = membership["fields"]
             .as_array()
             .expect("fields")

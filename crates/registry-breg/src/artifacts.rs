@@ -4853,15 +4853,14 @@ mod spatial_tests {
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
             "kind":"BRegProject",
             "project":{"id":"spatial-artifacts","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-artifacts.example.test"},
-            "datasets":[{"id":"test-dataset"}],"recordTypes":[{
-                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
+            "datasets":[{"id":"test-dataset"}],"recordTypes":{"site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
                 "geojson":{"geometryField":"location"},
                 "fields":[
                     {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
                     {"id":"label","type":"string","maximumLength":64,"classification":"internal"},
                     {"id":"location","apiName":"position","type":"crs84-point","precision":9,"classification":"internal"}
                 ]
-            }],
+            }},
             "accessProfiles":{
                 "map": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"site","operations":["get","list"],"readableFields":["code","label","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.5,"maximumLatitudeSpanDegrees":0.25}}, "rowBoundaries": "unrestricted"}]}},
                 "plain": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"site","operations":["get","list"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]}},

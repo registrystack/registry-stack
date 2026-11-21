@@ -3588,13 +3588,12 @@ mod tests {
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"polygon-ddl","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://polygon-ddl.example.test"},
-              "datasets":[{"id":"test-dataset"}], "recordTypes":[{
-                "id":"area","primaryDataset":"test-dataset","route":"areas","mutationMode":"mutable","classification":"internal",
+              "datasets":[{"id":"test-dataset"}], "recordTypes":{"area": {"primaryDataset":"test-dataset","route":"areas","mutationMode":"mutable","classification":"internal",
                 "fields":[
                   {"id":"boundary","type":"crs84-polygon","precision":6,"maximumPositions":32,"bbox":{"west":"100.000000","south":"10.000000","east":"110.000000","north":"20.000000"},"required":true,"classification":"internal"}
                 ],
                 "geojson":{"geometryField":"boundary"}
-              }]
+              }}
             }"#,
         )
         .expect("polygon DDL project parses");
@@ -3608,14 +3607,13 @@ mod tests {
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"spatial-ddl","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-ddl.example.test"},
-              "datasets":[{"id":"test-dataset"}], "recordTypes":[{
-                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
+              "datasets":[{"id":"test-dataset"}], "recordTypes":{"site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
                 "fields":[
                   {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
                   {"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}
                 ],
                 "geojson":{"geometryField":"location"}
-              }],
+              }},
               "accessProfiles":{"map-reader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                   "recordType":"site","operations":["get","list"],"readableFields":["code","location"],
                   "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
@@ -3675,13 +3673,12 @@ mod tests {
                 "canonicalBaseIri": "https://wide-action-ddl.example.test"
             },
             "datasets": [{"id": "test-dataset"}],
-            "recordTypes": [{
-                "id": "wide-record",
+            "recordTypes": {"wide-record": {
                 "primaryDataset": "test-dataset",
                 "route": "wide-records",
                 "mutationMode": "mutable",
                 "fields": record_fields
-            }],
+            }},
             "actions": [{
                 "id": "patch-wide",
                 "execution": {"mode": "immediate"},

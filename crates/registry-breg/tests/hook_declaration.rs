@@ -35,8 +35,7 @@ fn project_with_hooks(hooks: Value) -> Value {
         "kind": "BRegProject",
         "project": {"id": "hook-contract", "version": "1", "defaultLanguage": "en",
                      "canonicalBaseIri": "https://hook-contract.example.test"},
-        "recordTypes": [{
-            "id": "case",
+        "recordTypes": {"case": {
             "primaryDataset": "test-dataset",
             "route": "cases",
             "mutationMode": "mutable",
@@ -47,7 +46,7 @@ fn project_with_hooks(hooks: Value) -> Value {
                 {"id": "region", "type": "string", "maximumLength": 32, "classification": "internal"}
             ],
             "hooks": hooks
-        }]
+        }}
     })
 }
 
@@ -144,7 +143,7 @@ fn a_hook_reads_as_a_shared_hook_declaration() {
 #[test]
 fn an_events_member_is_refused_as_an_unknown_field_in_a_project() {
     let mut project = project_with_hooks(json!([]));
-    let entity = project["recordTypes"][0]
+    let entity = project["recordTypes"]["case"]
         .as_object_mut()
         .expect("entity object");
     entity.remove("hooks");
@@ -162,7 +161,7 @@ fn an_events_member_is_refused_as_an_unknown_field_in_a_module() {
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
         "id": "case-events",
         "version": "1",
-        "extendRecordTypes": [{"id": "case", "events": [url_hook()]}]
+        "extendRecordTypes": {"case": {"events": [url_hook()]}}
     });
     let failure = parse_module_json(&serde_json::to_vec(&module).expect("module serializes"))
         .expect_err("the unknown key is refused");
@@ -248,8 +247,7 @@ fn a_rhai_hook_program_error_names_its_record_type_and_hook() {
         ),
     ] {
         let mut project = project_with_hooks(json!([url_hook()]));
-        let mut second = project["recordTypes"][0].clone();
-        second["id"] = json!("application");
+        let mut second = project["recordTypes"]["case"].clone();
         second["route"] = json!("applications");
         second["hooks"] = json!([{
             "id": "application-created",
@@ -263,9 +261,9 @@ fn a_rhai_hook_program_error_names_its_record_type_and_hook() {
             }
         }]);
         project["recordTypes"]
-            .as_array_mut()
-            .expect("recordTypes is a list")
-            .push(second);
+            .as_object_mut()
+            .expect("recordTypes is a mapping")
+            .insert("application".to_owned(), second);
 
         let failure =
             compile_with_assets(&project, &[rhai_asset("hooks/application.rhai", source)])
