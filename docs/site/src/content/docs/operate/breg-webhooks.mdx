@@ -132,7 +132,8 @@ project, and it takes `projection: []` and no `when`.
 `profiles` is refused on any other trigger, and the compiler refuses a read trigger that breaks
 these rules (`breg.hook.read-trigger-invalid`).
 The event is written with the subject access log entry, so declare it on a Record type with
-[`accessLog`](../breg-access-log/). A read hook on a Record type without `accessLog` never fires.
+[`accessLog`](../breg-access-log/). A read hook on a Record type without `accessLog` is refused
+(`breg.disclosure.read-hook-access-log-required`), because it would never fire.
 
 The event data carries `recordType`, `recordId`, `revision`, `trigger: read`, an empty `values`, and an
 `access` object with `accessProfile`, `operationId`, `requester`, `purpose`, `accessReason` and

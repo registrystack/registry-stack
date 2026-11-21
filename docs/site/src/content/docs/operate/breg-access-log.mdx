@@ -166,8 +166,8 @@ external view and projection-refresh permissions
 ### Alert on reads
 
 A Record type that declares `accessLog` can raise an event for each logged read by a named profile.
-A read hook on a Record type without `accessLog` compiles and never fires, because the event is
-written with the entry.
+The event is written with the entry, so `bregctl check` refuses a read hook on a Record type without
+`accessLog` (`breg.disclosure.read-hook-access-log-required`).
 Declare a hook with `trigger: read` and the profiles it covers:
 
 ```yaml

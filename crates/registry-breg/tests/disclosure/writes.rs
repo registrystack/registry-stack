@@ -525,6 +525,19 @@ async fn an_automatic_proposal_does_not_overwrite_a_withheld_field() {
         )
         .await;
     assert_eq!(proposal.status, 200, "{}", proposal.text());
-    assert_ne!(proposal.body["state"], "applied", "{}", proposal.text());
+    let application = &proposal.body["applicationStatus"];
+    assert_eq!(application["state"], "blocked", "{}", proposal.text());
+    assert_eq!(
+        application["reason"],
+        "attempts-exhausted",
+        "{}",
+        proposal.text()
+    );
+    assert_eq!(
+        application["recovery"],
+        "correct-input",
+        "{}",
+        proposal.text()
+    );
     history.fixture.finish().await;
 }
