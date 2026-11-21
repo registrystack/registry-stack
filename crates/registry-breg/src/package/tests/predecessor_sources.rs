@@ -5,6 +5,7 @@
 #![cfg(feature = "tooling")]
 
 use super::*;
+use std::fs;
 use std::path::Path;
 
 /// An exact historical package built before access profiles were keyed by id,
@@ -14,34 +15,101 @@ fn list_form_package() -> PathBuf {
         .join("tests/fixtures/pre-record-timer-store-package/package")
 }
 
-#[test]
-fn predecessor_with_list_form_access_profiles_is_refused_for_rehearsal() {
-    let root = list_form_package();
-    load_predecessor_package(
-        &root,
-        &PackageLoadContext {
-            database_initialization_environment: "local",
-        },
+/// A copy of the list-form package that declares this release's engine
+/// features, as a package built by the release before this one does: only its
+/// stored sources predate the id-keyed maps.
+fn list_form_package_with_current_features(parent: &Path) -> PathBuf {
+    fn copy(from: &Path, to: &Path) {
+        fs::create_dir_all(to).expect("copy directory creates");
+        for entry in fs::read_dir(from).expect("fixture directory reads") {
+            let entry = entry.expect("fixture entry reads");
+            let target = to.join(entry.file_name());
+            if entry.file_type().expect("entry type reads").is_dir() {
+                copy(&entry.path(), &target);
+            } else {
+                fs::copy(entry.path(), target).expect("fixture file copies");
+            }
+        }
+    }
+    let root = parent.join("package");
+    copy(&list_form_package(), &root);
+    let manifest_path = root.join(MANIFEST_PATH);
+    let mut envelope: Value =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("manifest reads"))
+            .expect("manifest parses");
+    envelope["manifest"]["engineFeatures"] = serde_json::json!([
+        "statistical_release_store",
+        "caller_scoped_idempotency",
+        "record_timer_store"
+    ]);
+    fs::write(
+        &manifest_path,
+        canonicalize_json(&envelope).expect("manifest canonicalizes"),
     )
-    .expect("the package is a verified predecessor, so only its sources are at issue");
+    .expect("manifest writes");
+    fs::remove_file(root.join(SUM_FILE)).expect("sum file removes");
+    write_sum_file(&root, None, &shared_package_limits(), "test package")
+        .expect("the rewritten package closes");
+    root
+}
 
-    let Err(refusal) = load_predecessor_rehearsal_baseline(
+#[test]
+fn predecessor_with_list_form_sources_is_refused_even_as_a_plain_predecessor() {
+    let parent = tempfile::tempdir().expect("temporary directory creates");
+    let root = list_form_package_with_current_features(parent.path());
+
+    let Err(refusal) = load_predecessor_package(
         &root,
         &PackageLoadContext {
             database_initialization_environment: "local",
         },
     ) else {
-        panic!("list-form access profiles are not read from a predecessor");
+        panic!("stored list-form sources are not read from a predecessor");
     };
 
-    let message = refusal.to_string();
+    let PackageError::PreviousReleaseSources(detail) = &refusal else {
+        panic!("expected the previous-release refusal, got {refusal:?}");
+    };
     assert!(
-        message.contains("stored sources do not compile with this bregctl"),
-        "{message}"
+        detail.contains("Write accessProfiles as a mapping"),
+        "{detail}"
     );
     assert!(
-        message.contains("Write accessProfiles as a mapping"),
-        "{message}"
+        refusal.to_string().contains(FRESH_DATABASE_PATH),
+        "{refusal}"
+    );
+}
+
+/// A package with legacy engine features predates every release that reads
+/// id-keyed maps, so it is refused as a predecessor and as a rehearsal
+/// baseline alike, with the fresh-database path.
+#[test]
+fn predecessor_with_legacy_engine_features_is_refused() {
+    let context = PackageLoadContext {
+        database_initialization_environment: "local",
+    };
+    let root = list_form_package();
+    assert_eq!(
+        load_predecessor_package(&root, &context).err(),
+        Some(PackageError::EngineFeatureUpgradeRequired)
+    );
+    assert_eq!(
+        load_predecessor_rehearsal_baseline(&root, &context).err(),
+        Some(PackageError::EngineFeatureUpgradeRequired)
+    );
+}
+
+/// An engine feature this release has never heard of is not read as a
+/// legacy set either.
+#[test]
+fn unknown_engine_features_are_not_read() {
+    let manifest = fs::read(list_form_package().join(MANIFEST_PATH)).expect("manifest reads");
+    let unknown = String::from_utf8(manifest)
+        .expect("manifest is UTF-8")
+        .replace("caller_scoped_idempotency", "future_engine_feature");
+    assert_eq!(
+        parse_package_envelope(unknown.as_bytes()).err(),
+        Some(PackageError::CanonicalJson)
     );
 }
 
@@ -52,7 +120,7 @@ fn entity_id_package() -> PathBuf {
 }
 
 #[test]
-fn predecessor_naming_entity_id_is_refused() {
+fn predecessor_naming_entity_id_is_refused_with_the_fresh_database_path() {
     let Err(refusal) = load_predecessor_package(
         &entity_id_package(),
         &PackageLoadContext {
@@ -63,8 +131,7 @@ fn predecessor_naming_entity_id_is_refused() {
     };
 
     let message = refusal.to_string();
-    assert!(message.contains("entityId"), "{message}");
-    assert!(message.contains("recreate the database"), "{message}");
+    assert!(message.contains(FRESH_DATABASE_PATH), "{message}");
 }
 
 /// A package built before this release, read as a current package, is refused

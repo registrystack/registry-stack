@@ -6141,7 +6141,10 @@ fn capture_rehearsal_baseline(
             command,
             "migration.rehearsal.baseline-unavailable",
             "baselinePackage",
-            "the current compiler cannot rebuild the verified predecessor registry from its packaged sources, so the successor migration cannot be rehearsed; run test with a bregctl release that compiles the predecessor sources",
+            &format!(
+                "the current compiler cannot rebuild the verified predecessor registry from its packaged sources, so the successor migration cannot be rehearsed. A package built before this release cannot be upgraded in place: {}",
+                registry_breg::package::FRESH_DATABASE_PATH
+            ),
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::VerifyPackageIntegrity,
         )
@@ -7058,10 +7061,12 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             };
         }
         ApplyLifecycleError::TargetPackage(error @ PackageError::EngineFeatureUpgradeRequired)
+        | ApplyLifecycleError::TargetPackage(error @ PackageError::EntityIdMember)
         | ApplyLifecycleError::TargetPackage(error @ PackageError::PreviousReleaseSources(_)) => {
             return previous_release_package_failure(command, "package", &error);
         }
         ApplyLifecycleError::CurrentPackage(error @ PackageError::EngineFeatureUpgradeRequired)
+        | ApplyLifecycleError::CurrentPackage(error @ PackageError::EntityIdMember)
         | ApplyLifecycleError::CurrentPackage(error @ PackageError::PreviousReleaseSources(_)) => {
             return previous_release_package_failure(command, "package.root", &error);
         }
@@ -18988,6 +18993,14 @@ fn package_derivation_refuses_with_build_guidance_and_preserves_integrity_refusa
         ),
         (
             ApplyLifecycleError::CurrentPackage(PackageError::EngineFeatureUpgradeRequired),
+            "package.root",
+        ),
+        (
+            ApplyLifecycleError::TargetPackage(PackageError::EntityIdMember),
+            "package",
+        ),
+        (
+            ApplyLifecycleError::CurrentPackage(PackageError::EntityIdMember),
             "package.root",
         ),
         (

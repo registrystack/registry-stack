@@ -15,15 +15,10 @@
   Two default profiles may no longer share an operation on one Proposal
   action (`breg.proposal.default-multiple`).
   `bregctl test --baseline-package` and `bregctl diff --runtime-config` refuse
-  a baseline package built before this release, because its stored sources
-  write `accessProfiles` as a list. The refusal says the baseline package's
-  stored sources do not compile with this `bregctl` and carries the reader's
-  message, and tells the operator to recreate the database and apply a package
-  built by this release. A database whose active package predates this release
-  is recreated.
-  The lock digest of every module that declares or extends a Record type
-  changes, even when it declares no profiles. After converting, run
-  `bregctl project lock` for each such module.
+  a baseline package built before this release, as does `bregctl plan` and
+  `bregctl apply` over a database whose active package was. The refusal names
+  the fresh-database path: recreate the database, build a package with this
+  release, then run `bregctl apply --package DIR --initial`.
 - BREAKING: `recordTypes` is a mapping from each Record type id to the rest of
   its entry, in the project and in a module. The old list shape is refused, and
   so is an `id` member inside an entry, with a message that names the mapping.
@@ -52,7 +47,7 @@
   by v0.38.0 to v0.41.0 wrote in place of `recordType`. A database whose active
   BReg package was compiled by v0.41.0 or earlier can no longer be upgraded in
   place by this release. Recreate it. The package refusal names `entityId` and
-  says to recreate the database.
+  the fresh-database path.
 - BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
   -> `database.caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef`
   the other TLS blocks use. The old key is refused as an unknown key. The value

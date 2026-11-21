@@ -9503,6 +9503,73 @@ fn apply_names_both_digests_when_the_active_package_misses_its_pin() {
     }
 }
 
+/// `apply` against a database whose active package a previous release built
+/// names the one path forward, a fresh database, under the active package's
+/// own code and path, before any database is reached.
+fn assert_apply_over_previous_release_active_package_names_fresh_database_path(
+    fixture_name: &str,
+    code: &str,
+) {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let active = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../registry-breg/tests/fixtures")
+        .join(fixture_name)
+        .join("package")
+        .canonicalize()
+        .expect("the historical package directory resolves");
+    let runtime = fixture.variant(
+        fixture_name,
+        &format!("  root: {}", path(&fixture.package)),
+        &format!("  root: {}", active.display()),
+    );
+    let successor = RuntimePackageFixture::production_with_module(
+        "127.0.0.1:1".parse().unwrap(),
+        String::from_utf8(package_module_bytes())
+            .unwrap()
+            .replace(r#""maximumLength":16"#, r#""maximumLength":32"#)
+            .into_bytes(),
+    );
+
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "apply",
+        "--runtime-config",
+        path(&runtime),
+        "--package",
+        path(&successor.package),
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let report = json_stdout(&output);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], code, "{report}");
+    assert_eq!(diagnostic["path"], "package.root");
+    assert_eq!(diagnostic["suggestedAction"], "correct-package-build");
+    let message = diagnostic["message"].as_str().expect("message is text");
+    assert!(
+        message.contains(registry_breg::package::FRESH_DATABASE_PATH),
+        "{message}"
+    );
+    assert!(!message.contains("--baseline-package"), "{message}");
+}
+
+#[test]
+fn apply_over_a_pre_timer_store_active_package_names_the_fresh_database_path() {
+    assert_apply_over_previous_release_active_package_names_fresh_database_path(
+        "pre-record-timer-store-package",
+        "apply.package.engine-upgrade-required",
+    );
+}
+
+#[test]
+fn apply_over_a_pre_release_entity_id_active_package_names_the_fresh_database_path() {
+    assert_apply_over_previous_release_active_package_names_fresh_database_path(
+        "entity-id-package",
+        "apply.package.engine-upgrade-required",
+    );
+}
+
 /// Run one operator command against a runtime file whose
 /// `package.expectedDigest` pins another package than the one at
 /// `package.root`, and require the refusal to name both digests under the
