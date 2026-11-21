@@ -2632,6 +2632,7 @@ impl MutationTransaction {
             let current = write_plan_row(
                 tx,
                 entity,
+                authority.common.access_profile(),
                 target.record_id,
                 target.expected_revision,
                 write_fields,

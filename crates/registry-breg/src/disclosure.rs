@@ -138,6 +138,40 @@ impl DisclosurePlan<'_> {
         &self.conditions
     }
 
+    /// Whether the profile may not write `written` over `before`. A bound
+    /// `fields` or `history` condition that matches `before` refuses a write
+    /// that names one of its `fields`, the `null` a read showed included, and
+    /// a write that leaves it unmatched, which lifts the mark. Setting a mark
+    /// on a record the condition does not match stays allowed. A `record`
+    /// condition is decided on the resulting state by the row boundary check.
+    pub fn refuses_write(
+        &self,
+        before: &Map<String, Value>,
+        written: &Map<String, Value>,
+    ) -> Result<bool, DisclosureError> {
+        let mut after = before.clone();
+        after.extend(
+            written
+                .iter()
+                .map(|(field, value)| (field.clone(), value.clone())),
+        );
+        for condition in &self.conditions {
+            let names_a_written_field = match &condition.withhold {
+                DisclosureWithhold::Record => continue,
+                DisclosureWithhold::History => false,
+                DisclosureWithhold::Fields(fields) => {
+                    written.keys().any(|field| fields.contains(field))
+                }
+            };
+            if when_matches(self.entity, &condition.when, before)?
+                && (names_a_written_field || !when_matches(self.entity, &condition.when, &after)?)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn any_matching(
         &self,
         state: &Map<String, Value>,
@@ -418,6 +452,43 @@ mod tests {
             plan(&entity, "officer").response_fields(&readable),
             readable
         );
+    }
+
+    #[test]
+    fn a_bound_write_cannot_lift_a_mark_or_name_a_withheld_field() {
+        let entity = entity();
+        let registrar = plan(&entity, "registrar");
+        let refuses = |before: Value, written: Value| {
+            registrar
+                .refuses_write(&state(before), &state(written))
+                .unwrap()
+        };
+        // Writing a withheld field, a null included, or lifting either mark.
+        assert!(refuses(json!({"level": "a"}), json!({"phone": "555"})));
+        assert!(refuses(json!({"level": "a"}), json!({"phone": null})));
+        assert!(refuses(json!({"level": "a"}), json!({"level": "c"})));
+        assert!(refuses(json!({"age": 4}), json!({"age": null})));
+        // Moving between two matching values keeps the mark.
+        assert!(!refuses(json!({"level": "a"}), json!({"level": "b"})));
+        // A field no condition names, and setting a mark, stay allowed.
+        assert!(!refuses(json!({"level": "a", "age": 4}), json!({"age": 5})));
+        assert!(!refuses(
+            json!({"level": "c"}),
+            json!({"level": "a", "phone": "555", "age": 4})
+        ));
+        // A `record` condition is left to the row boundary check.
+        assert!(!refuses(json!({"level": "secret"}), json!({"level": "c"})));
+        // An exempt profile writes anything.
+        assert!(!plan(&entity, "officer")
+            .refuses_write(
+                &state(json!({"level": "a", "age": 4})),
+                &state(json!({"level": "c", "age": null, "phone": null}))
+            )
+            .unwrap());
+        // A state that cannot be evaluated is an error.
+        assert!(registrar
+            .refuses_write(&state(json!({"level": 7})), &state(json!({"phone": "555"})))
+            .is_err());
     }
 
     #[test]
