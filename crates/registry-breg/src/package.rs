@@ -783,7 +783,8 @@ pub enum PackageError {
     /// A package whose generated files name a Record type `entityId`, as
     /// releases up to v0.41.0 wrote them.
     #[error(
-        "the package names a Record type `entityId`, as v0.41.0 and earlier wrote it, where this release writes `recordType`. It cannot be upgraded in place: recreate the database"
+        "the package names a Record type `entityId`, as v0.41.0 and earlier wrote it, where this release writes `recordType`. It cannot be upgraded in place: {path}",
+        path = FRESH_DATABASE_PATH
     )]
     EntityIdMember,
     /// A package built before this release, whose stored sources this
