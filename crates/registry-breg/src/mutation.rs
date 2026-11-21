@@ -3067,6 +3067,21 @@ pub(super) async fn write_plan_row(
         )
         .await?;
     }
+    // A state a `record` condition withholds from the writer is outside its
+    // boundary, as for a Patch or a Create, before the restrictive row policy
+    // can refuse it. A state that cannot be evaluated counts as withheld.
+    let mut after = before.cloned().unwrap_or_default();
+    after.extend(
+        fields
+            .iter()
+            .map(|(field, value)| (field.clone(), value.clone())),
+    );
+    if crate::disclosure::plan(entity, writer)
+        .withholds_record(&after)
+        .unwrap_or(true)
+    {
+        return Err(MutationError::WriteOutsideBoundary);
+    }
     let record_id = record_uuid.to_string();
     let mut current = match expected_revision {
         None => {
@@ -4600,6 +4615,9 @@ fn map_field_database_error(
     entity: &CompiledEntity,
     disclosure: Option<ConstraintDisclosure<'_>>,
 ) -> MutationError {
+    if violates_record_disclosure_policy(&error, entity) {
+        return MutationError::WriteOutsideBoundary;
+    }
     if error.code() == Some(&SqlState::UNIQUE_VIOLATION)
         && matches!(disclosure, Some(ConstraintDisclosure::ProposalApplication))
     {
@@ -4676,6 +4694,35 @@ fn map_field_database_error(
         }
     }
     map_database_error(error)
+}
+
+/// Whether `error` is the restrictive row policy of one of `entity`'s `record`
+/// conditions refusing a written state. Every write path checks that state
+/// against the writer first, so this answers, as the boundary refusal it is, a
+/// state that the writer's check allows but the database context's profile
+/// does not. Only that policy's violation qualifies: any other insufficient
+/// privilege stays a fault. The policy name is matched because PostgreSQL may
+/// translate the message around it but not the name.
+fn violates_record_disclosure_policy(
+    error: &tokio_postgres::Error,
+    entity: &CompiledEntity,
+) -> bool {
+    if error.code() != Some(&SqlState::INSUFFICIENT_PRIVILEGE) {
+        return false;
+    }
+    let Some(message) = error.as_db_error().map(|error| error.message()) else {
+        return false;
+    };
+    entity
+        .disclosure_conditions
+        .iter()
+        .filter(|condition| condition.withhold == crate::model::DisclosureWithhold::Record)
+        .any(|condition| {
+            message.contains(&crate::generated_ddl::disclosure_policy_name(
+                &entity.id,
+                &condition.id,
+            ))
+        })
 }
 
 /// A guarded boundary records a refusal only for a failure that proves the
