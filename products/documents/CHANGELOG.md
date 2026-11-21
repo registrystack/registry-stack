@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- BREAKING: in the runtime configuration, `database.trustedRootCertificateRef` -> `database.caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef` the other TLS blocks use. The old key is refused as an unknown key. The value is unchanged: a secret reference to the PEM CA bundle the connection trusts.
+
 - Serve Prometheus metrics on an optional operator-private listener. Set
   `metricsListener.bind` in `runtime.yaml` to a loopback or private address,
   distinct from the serving listener. It is off by default, and the serving

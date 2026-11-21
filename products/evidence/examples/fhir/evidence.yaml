@@ -1,6 +1,8 @@
 apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
 kind: EvidenceProject
-id: fhir-record-evidence
+project:
+  id: fhir-record-evidence
+  version: "1"
 selectorProfiles:
   patient-by-id:
     maximumAggregateBytes: 64
@@ -24,12 +26,12 @@ selectorProfiles:
         minimumBytes: 1
         maximumBytes: 64
 functions:
-- id: derive-coverage-status
-  interface: assertion-derive/v1
-  source: functions/derive-coverage-status.rhai
-- id: derive-healthcare-establishment
-  interface: assertion-derive/v1
-  source: functions/derive-healthcare-establishment.rhai
+  derive-coverage-status:
+    interface: assertion-derive/v1
+    source: functions/derive-coverage-status.rhai
+  derive-healthcare-establishment:
+    interface: assertion-derive/v1
+    source: functions/derive-healthcare-establishment.rhai
 sources:
   coverage-record:
     pack: {id: fhir-read-through, version: '1'}

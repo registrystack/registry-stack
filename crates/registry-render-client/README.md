@@ -7,8 +7,7 @@ object. It requests the JSON PDF representation, validates its checksum,
 requires matching response trace context, and checks the bounded product
 problem envelope. It follows no redirects or ambient proxies. Every digest is
 labelled, `sha256:<hex>`: a `RenderedDocument` carries `pdf_digest`, checked
-against the bytes, and `data_digest`, beside their deprecated bare hex
-`pdf_sha256` and `data_sha256`, which must agree with them.
+against the bytes, and `data_digest`.
 
 Known RFC3339, asset name, base64, JPEG/PNG prefix and size errors are refused
 before a language facade asks its provider for a token. The client permits a

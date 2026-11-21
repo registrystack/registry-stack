@@ -486,7 +486,7 @@ impl DatabaseConnectionCause {
                 "the database connection configuration was refused; correct the runtime database settings"
             }
             Self::Secret => {
-                "a database connection secret could not be resolved; verify database.runtimeUrlRef, database.migrationUrlRef, database.trustedRootCertificateRef, and the enabled secret provider"
+                "a database connection secret could not be resolved; verify database.runtimeUrlRef, database.migrationUrlRef, database.caBundleRef, and the enabled secret provider"
             }
         }
     }
@@ -634,7 +634,7 @@ mod tests {
         for reference in [
             "database.runtimeUrlRef",
             "database.migrationUrlRef",
-            "database.trustedRootCertificateRef",
+            "database.caBundleRef",
         ] {
             assert!(cause.message().contains(reference), "{}", cause.message());
         }

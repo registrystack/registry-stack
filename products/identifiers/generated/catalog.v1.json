@@ -4583,7 +4583,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/job-runtime.v1alpha1.schema.json",
-        "sha256": "8f19b718605d42cb268bd7a9df40f7ac4f0ac2a6d0805dccb783728022670503",
+        "sha256": "948d893e3e3613e2577ad131ac07eac7440a66fcfd9368f7219636891245bda6",
         "mediaType": "application/schema+json"
       }
     },
@@ -4709,7 +4709,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/runtime.v1alpha1.schema.json",
-        "sha256": "6973fbcf86612af5be1b160808839e5bd6ddb2da66796defd5bc53703b14f711",
+        "sha256": "e488b0c50b714031f9505241b6a5c9cb15b9f50e823ef68e6a18fb343353380c",
         "mediaType": "application/schema+json"
       }
     },
@@ -5105,7 +5105,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "73d4d416be219d5a3b3d7bebc1eca6a12178681c7a211934dcd2127d9052fce1",
+        "sha256": "4a02526d00324efad59aca20e47c48401af4e281930d651e10c22ae570d63b96",
         "mediaType": "application/schema+json"
       }
     },
@@ -5209,11 +5209,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "429bb0eff36b65f8cc0e76b13155828664b2c8284320a11fafa08ec17e8bd65f"
+        "sha256": "4ad15d5473df87d0dfd1e0b2fa0f9f74fd610fd9ba1d304be5711eab6403b005"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "957f7d0c65557e1f1f9b3a3c583cf7f21d4f217dc6fa665bf0d0e795af7cc081",
+        "sha256": "ac880ee5cadd7b3bf63acb087fba76bd2bf83136a468e05036470e6e08ed529f",
         "mediaType": "application/schema+json"
       }
     },
@@ -5245,11 +5245,11 @@
       "description": "Registry Coordinator runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/runtime.rs",
-        "sha256": "3cb518408ec97e49cbdaaf37e0094b7e4ce3152c3597766c47c27074cdb9882e"
+        "sha256": "a0424a3812eb8fbe1398214ab6ee15f888f9a92da21143ea08e0a9f1df3d47d1"
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "026e85bfaf50e3edcbae4aef2310967f1bc6569118668370a0a6963a8c9d7200",
+        "sha256": "8752417782957e2be39377ce0932c23b1b9b5027a69a81585752805a66e18bdf",
         "mediaType": "application/schema+json"
       }
     },
@@ -5317,11 +5317,11 @@
       "description": "Registry Discovery authoring, runtime configuration, and index JSON Schema.",
       "source": {
         "path": "products/discovery/schemas/origins.schema.json",
-        "sha256": "19f90f5a2f87b250dcd54d16fe1810fbea6bdd58e6ec46891e20b3c5110605d5"
+        "sha256": "c46a82a755524da6e3c8ab61a88b37b828b5d7cc95c09c98ca1ce0fa72aa6e83"
       },
       "artifact": {
         "path": "products/discovery/schemas/origins.schema.json",
-        "sha256": "19f90f5a2f87b250dcd54d16fe1810fbea6bdd58e6ec46891e20b3c5110605d5",
+        "sha256": "c46a82a755524da6e3c8ab61a88b37b828b5d7cc95c09c98ca1ce0fa72aa6e83",
         "mediaType": "application/schema+json"
       }
     },
@@ -5429,7 +5429,7 @@
       },
       "artifact": {
         "path": "products/documents/generated/runtime/runtime.schema.json",
-        "sha256": "3ccee874a50d707d955425e46a70caecb1f0203787ad0b1183b78bc5f78f8869",
+        "sha256": "93ad66566ca8cd15468565ae01f966a85ce5b8f6f00588babde370d155190402",
         "mediaType": "application/schema+json"
       }
     },
@@ -5627,7 +5627,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/project.schema.json",
-        "sha256": "f91af7d0c873134675c27063eafcea7500210443225dd0f9e8309e1f6680f13d",
+        "sha256": "ab0849717b630aeedff77ca4f55418964e32102ae6d49bc789d7a81c9ced2f50",
         "mediaType": "application/schema+json"
       }
     },
@@ -5785,7 +5785,7 @@
       "description": "Registry Messaging project, template, and HTTP provider authoring JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "8bed9e73bd0387785aedfb00959f5b9156d082e49e958b8836eae2a80d98a443"
+        "sha256": "c9ac98430ca6c4b4cf404688dda544d196aa624cc9dfb56cf737a3e2c8b8b359"
       },
       "artifact": {
         "path": "products/messaging/generated/authoring/project.schema.json",
@@ -5803,7 +5803,7 @@
       "description": "Registry Messaging project, template, and HTTP provider authoring JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "8bed9e73bd0387785aedfb00959f5b9156d082e49e958b8836eae2a80d98a443"
+        "sha256": "c9ac98430ca6c4b4cf404688dda544d196aa624cc9dfb56cf737a3e2c8b8b359"
       },
       "artifact": {
         "path": "products/messaging/generated/authoring/provider.schema.json",
@@ -5821,11 +5821,11 @@
       "description": "Registry Messaging runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "8bed9e73bd0387785aedfb00959f5b9156d082e49e958b8836eae2a80d98a443"
+        "sha256": "c9ac98430ca6c4b4cf404688dda544d196aa624cc9dfb56cf737a3e2c8b8b359"
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "3e58a90a1119e95d2a383da5a81013886c9e7548a463d18e60159ae48c783e26",
+        "sha256": "3c5429e7eedfcaf3ff2d79b7979f8996fafbfc93edc454e98acf09715810fb18",
         "mediaType": "application/schema+json"
       }
     },
@@ -5839,7 +5839,7 @@
       "description": "Registry Messaging project, template, and HTTP provider authoring JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "8bed9e73bd0387785aedfb00959f5b9156d082e49e958b8836eae2a80d98a443"
+        "sha256": "c9ac98430ca6c4b4cf404688dda544d196aa624cc9dfb56cf737a3e2c8b8b359"
       },
       "artifact": {
         "path": "products/messaging/generated/authoring/template.schema.json",
@@ -6163,11 +6163,11 @@
       "description": "Registry Scheduling runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling/src/schema.rs",
-        "sha256": "72c9a636e83d70101ef7110c0da9cd257cb8b3789f6df27910890eabbf8ae990"
+        "sha256": "9f6f12cdf82d0d7fbe30b1876893a4483a4d753d195f882a12da44a5b66450cf"
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "a3395d362cb9532a2b0b13465c3901aedbb29dc4e650cf073f74a1e65732cf1c",
+        "sha256": "9f7a0846f8fb02c785b0663f3d96cc473b32a2c47d2fbc6dd21f6354faa9d58a",
         "mediaType": "application/schema+json"
       }
     },

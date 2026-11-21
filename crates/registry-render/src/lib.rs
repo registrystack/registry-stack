@@ -11,7 +11,7 @@
 //!
 //! - **Injected bytes are the hashed bytes**: `sys.inputs.data` is exactly
 //!   the RFC 8785 canonicalization of the envelope whose sha256 is
-//!   `dataSha256`.
+//!   `dataDigest`.
 //! - **Fresh world and library per render**: inputs live on the `Library`,
 //!   so nothing request-scoped is shared or memoized across renders;
 //!   `comemo::evict()` runs after every compile.

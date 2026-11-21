@@ -463,7 +463,7 @@ fn the_project_schema_closes_its_shape_and_requires_the_normalized_keys() {
     for key in [
         "apiVersion",
         "kind",
-        "id",
+        "project",
         "selectorProfiles",
         "functions",
         "sources",
@@ -1238,15 +1238,14 @@ fn project_check_refuses_separator_lookalikes_in_the_selector_profile_namespace(
 fn project_check_bounds_mixed_semantic_errors_and_duplicate_label_warnings_once() {
     let mut document = yaml_as_json(NORMALIZED_PROJECT);
     document["selectorProfiles"]["record-by-id"]["maximumAggregateBytes"] = serde_json::json!(32);
-    let template = document["functions"][0].clone();
+    let template = document["functions"]["derive-adult-status"].clone();
     let functions = document["functions"]
-        .as_array_mut()
-        .expect("the canonical functions are a list");
+        .as_object_mut()
+        .expect("the canonical functions are a map");
     for index in 0..=MAXIMUM_DIAGNOSTICS_PER_FILE {
         let mut function = template.clone();
-        function["id"] = serde_json::json!(format!("extra-function-{index}"));
         function["label"] = serde_json::json!("Repeated function label");
-        functions.push(function);
+        functions.insert(format!("extra-function-{index}"), function);
     }
 
     let bytes = serde_json::to_vec(&document).expect("the project renders");

@@ -133,7 +133,7 @@ fn a_complete_normalized_starter_is_preserved_with_its_assets_and_grants() {
     )
     .expect("copied normalized project")
     .value;
-    assert_eq!(project_document.id.to_string(), "reviewed-evidence");
+    assert_eq!(project_document.project.id.to_string(), "reviewed-evidence");
     assert_eq!(project_document.functions.len(), 1);
     assert_eq!(project_document.assertion_definitions.len(), 1);
     let authority = registry_evidence_authoring::target::read_authority(
@@ -1000,7 +1000,7 @@ fn every_generated_starter_file_says_what_its_blocks_do() {
     .expect("generated project is normalized")
     .value;
     assert_eq!(authored.functions.len(), 1);
-    assert!(authored.functions.iter().all(|function| {
+    assert!(authored.functions.values().all(|function| {
         function.source.starts_with("functions/") && function.source.ends_with(".rhai")
     }));
     let record_status = "record-status".parse().expect("valid local identifier");
@@ -1066,7 +1066,7 @@ fn every_generated_starter_file_says_what_its_blocks_do() {
     )
     .expect("generated target is normalized")
     .value;
-    assert_eq!(target.project, authored.id);
+    assert_eq!(target.project, authored.project.id);
     assert_eq!(target.authority, "dev-authority.yaml");
     let authority_file = project.join(&target.authority);
     let authority = registry_evidence_authoring::target::read_authority(

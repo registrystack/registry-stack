@@ -833,10 +833,7 @@ fn database_trusted_root_applies_to_the_runtime_and_migration_connections() {
     let config_path = fixture.path("runtime.yaml");
     fs::write(
         &config_path,
-        runtime_with_database_members(
-            &fixture,
-            "  trustedRootCertificateRef: secret:file/database-roots\n",
-        ),
+        runtime_with_database_members(&fixture, "  caBundleRef: secret:file/database-roots\n"),
     )
     .expect("runtime config writes");
     std::env::set_var("BREG_RUNTIME_CONFIG_DATABASE_URL", DATABASE_URL_CANARY);
@@ -847,7 +844,7 @@ fn database_trusted_root_applies_to_the_runtime_and_migration_connections() {
 
     let config = load_runtime_config(&config_path).expect("runtime config loads");
 
-    assert!(config.database().trusted_root_certificate_ref().is_some());
+    assert!(config.database().ca_bundle_ref().is_some());
     for connection in [
         config.runtime_database_connection_config(),
         config.migration_database_connection_config(),
@@ -865,10 +862,7 @@ fn database_trusted_root_refuses_a_secret_holding_no_pem_certificate() {
     let config_path = fixture.path("runtime.yaml");
     fs::write(
         &config_path,
-        runtime_with_database_members(
-            &fixture,
-            "  trustedRootCertificateRef: secret:file/database-roots\n",
-        ),
+        runtime_with_database_members(&fixture, "  caBundleRef: secret:file/database-roots\n"),
     )
     .expect("runtime config writes");
     std::env::set_var("BREG_RUNTIME_CONFIG_DATABASE_URL", DATABASE_URL_CANARY);
@@ -900,7 +894,7 @@ fn database_without_a_trusted_root_reads_as_absent() {
 
     let config = load_runtime_config(&config_path).expect("runtime config loads");
 
-    assert!(config.database().trusted_root_certificate_ref().is_none());
+    assert!(config.database().ca_bundle_ref().is_none());
 }
 
 #[cfg(not(feature = "postgres-test"))]

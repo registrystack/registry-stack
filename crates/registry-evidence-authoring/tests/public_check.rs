@@ -15,9 +15,9 @@ const DEFINITION: &str = "certificate-status";
 
 fn project_value() -> Value {
     json!({
-        "id": "certificate-check",
+        "project": {"id": "certificate-check", "version": "1"},
         "selectorProfiles": {"certificate-number": {"maximumAggregateBytes": 32, "fields": {"number": {"type": "string", "minimumBytes": 4, "maximumBytes": 32}}}},
-        "functions": [{"id": "derive-certificate-check", "interface": "assertion-derive/v1", "source": "functions/derive.rhai"}],
+        "functions": {"derive-certificate-check": {"interface": "assertion-derive/v1", "source": "functions/derive.rhai"}},
         "sources": {"certificate-record": {"pack": {"id": "synthetic-register", "version": "1"}, "route": "certificate", "connection": "synthetic-register", "inputs": {"recordId": {"selector": {"role": "certificate", "profile": "certificate-number", "field": "number"}}}, "acquisitionPosture": "record-transformed"}},
         "assertionDefinitions": {DEFINITION: {
             "question": "What is the current status of this certificate?",

@@ -230,7 +230,7 @@ pub(crate) fn create_local_target(
         "apiVersion": target::TARGET_API_VERSION,
         "kind": target::TARGET_KIND,
         "id": "local",
-        "project": project.id,
+        "project": project.project.id,
         "package": {"root": ".generated/package"},
         "authority": "authority.yaml",
         "service": {
@@ -369,7 +369,7 @@ fn local_authority(project: &EvidenceProject, target_id: &str) -> Result<Value> 
         "apiVersion": target::AUTHORITY_API_VERSION,
         "kind": target::AUTHORITY_KIND,
         "target": target_id,
-        "project": project.id,
+        "project": project.project.id,
         "accessProfiles": profiles
     }))
 }
@@ -378,7 +378,7 @@ fn explain(args: ExplainArgs, format: OutputFormat) -> Result<ExitCode> {
     let project = read_project(&args.project)?;
     let path = target_path(&args.target);
     let target = read_target(&path)?;
-    if target.project != project.id {
+    if target.project != project.project.id {
         bail!("target must name this EvidenceProject");
     }
     let root = plain_parent(&path, "target parent")?;

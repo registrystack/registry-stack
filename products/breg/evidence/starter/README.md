@@ -5,8 +5,8 @@ an `evidencectl init --starter` input. First initialize `../offline-starter` and
 import the explicit registry's Source as described in the parent README.
 
 Copy `functions/` and `fixtures/` into the editable project's corresponding
-directories. In its existing `evidence.yaml`, append the `functions` entries and
-merge the `assertionDefinitions` entries from `definitions.yaml.fragment`.
+directories. In its existing `evidence.yaml`, merge the `functions` and
+`assertionDefinitions` entries from `definitions.yaml.fragment`.
 This is ordinary authoring, not a separate import format. Do not replace the
 existing Sources, selector profiles, Functions or offline definition.
 

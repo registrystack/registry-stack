@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 fn project() -> project::EvidenceProject {
     serde_json::from_value(json!({
-        "id":"synthetic-evidence", "selectorProfiles":{"person-by-id":{"maximumAggregateBytes":64,"fields":{"person-id":{"type":"string","minimumBytes":1,"maximumBytes":64}}}},
-        "functions":[{"id":"derive-status","interface":"assertion-derive/v1","source":"functions/derive.rhai"}],
+        "project":{"id":"synthetic-evidence","version":"1"}, "selectorProfiles":{"person-by-id":{"maximumAggregateBytes":64,"fields":{"person-id":{"type":"string","minimumBytes":1,"maximumBytes":64}}}},
+        "functions":{"derive-status":{"interface":"assertion-derive/v1","source":"functions/derive.rhai"}},
         "sources":{"person":{"pack":{"id":"synthetic-register","version":"0.1.0"},"route":"evidence-person","connection":"population","inputs":{"personId":{"selector":{"role":"person","profile":"person-by-id","field":"person-id"}}},"acquisitionPosture":"record-transformed"}},
         "assertionDefinitions":{"active-status":{"question":"Is the person active?","semantics":{"requirement":"urn:example:requirement:active","kind":"criterion","evidenceType":"urn:example:evidence:active","referenceFrameworks":["urn:example:framework:status"]},"purpose":"status-verification","grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":["urn:example:audience:consumer"]},"subjects":[{"role":"person","selectors":["person-by-id"]}],"acquisition":{"source":"person"},"derive":{"function":"derive-status"},"outputs":{"active":{"concept":"urn:example:concept:active","type":"boolean"}},"validitySeconds":300,"subjectBinding":"audience-scoped","representations":["signed-jws"]}}
     })).unwrap()
@@ -185,8 +185,8 @@ fn constructed_presentation_fields_share_display_text_validation() {
                 *label = Some(value.to_owned());
             },
         ),
-        ("/functions/0/description", |project, value| {
-            project.functions[0].description = Some(value.to_owned());
+        ("/functions/derive-status/description", |project, value| {
+            project.functions.values_mut().next().unwrap().description = Some(value.to_owned());
         }),
         (
             "/assertionDefinitions/active-status/label",
@@ -306,13 +306,16 @@ fn question_presentation_does_not_change_definition_dependencies() {
 }
 
 #[test]
-fn definition_dependencies_ignore_function_declaration_order() {
+fn definition_dependencies_ignore_functions_the_definition_does_not_name() {
     let original = project();
-    let mut reordered = original.clone();
-    reordered.functions.reverse();
+    let mut extended = original.clone();
+    let unused = extended.functions.values().next().unwrap().clone();
+    extended
+        .functions
+        .insert(LocalId::new("derive-unused").unwrap(), unused);
     assert_eq!(
         compile::definition_dependencies(&original, "active-status"),
-        compile::definition_dependencies(&reordered, "active-status")
+        compile::definition_dependencies(&extended, "active-status")
     );
 
     let mut changed = serde_json::to_value(&original).unwrap();
@@ -565,7 +568,7 @@ fn presentation_metadata_does_not_change_compiled_semantics_or_behavior_dependen
     let mut edited = serde_json::to_value(&original).unwrap();
     edited["label"] = json!("Friendly project name");
     edited["sources"]["person"]["description"] = json!("Reviewed source explanation");
-    edited["functions"][0]["label"] = json!("Extract a person");
+    edited["functions"]["derive-status"]["label"] = json!("Extract a person");
     edited["selectorProfiles"]["person-by-id"]["label"] = json!("Person identifier");
     edited["assertionDefinitions"]["active-status"]["description"] = json!("Presentation only");
     edited["assertionDefinitions"]["active-status"]["outputs"]["active"]["label"] = json!("Active");
@@ -623,10 +626,8 @@ fn retired_source_batch_and_acquisition_capability_wire_is_refused() {
 #[test]
 fn colliding_local_ids_retain_distinct_artifacts_and_deterministic_output() {
     let mut value = serde_json::to_value(project()).unwrap();
-    value["functions"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"id":"derive-extra","interface":"assertion-derive/v1","source":"functions/derive-extra.rhai"}));
+    value["functions"]["derive-extra"] =
+        json!({"interface":"assertion-derive/v1","source":"functions/derive-extra.rhai"});
     value["assertionDefinitions"]["active-status"]["outputs"] = json!({
         "active-extra":{
             "concept":"urn:example:concept:first",
@@ -794,7 +795,8 @@ fn checked_pack_facts_replace_retired_search_then_fetch_fact_closure() {
     value["sources"]["fetch"] = value["sources"]["person"].clone();
     value["sources"]["person"]["facts"] = json!({"search_only":{"type":"boolean"}});
     value["sources"]["fetch"]["facts"] = json!({"active":{"type":"boolean"}});
-    value["functions"].as_array_mut().unwrap().push(json!({"id":"extract-fetch","interface":"source-extract/v1","source":"functions/fetch.rhai"}));
+    value["functions"]["extract-fetch"] =
+        json!({"interface":"source-extract/v1","source":"functions/fetch.rhai"});
     value["sources"]["fetch"]["extract"] = json!({"function":"extract-fetch"});
     value["assertionDefinitions"]["active-status"]["acquisition"] =
         json!({"type":"search-then-fetch","search":"person","fetch":"fetch"});
@@ -903,7 +905,8 @@ fn retired_reused_source_functions_and_prior_fact_contexts_are_refused() {
     value["sources"]["search"] = value["sources"]["person"].clone();
     value["sources"]["search"]["facts"] = json!({"reference":{"type":"string","maximumBytes":64}});
     value["sources"]["search"]["extract"] = json!({"function":"extract-search"});
-    value["functions"].as_array_mut().unwrap().push(json!({"id":"extract-search","interface":"source-extract/v1","source":"functions/search.rhai"}));
+    value["functions"]["extract-search"] =
+        json!({"interface":"source-extract/v1","source":"functions/search.rhai"});
     value["assertionDefinitions"]["from-search"] =
         value["assertionDefinitions"]["active-status"].clone();
     value["assertionDefinitions"]["from-search"]["semantics"]["requirement"] =

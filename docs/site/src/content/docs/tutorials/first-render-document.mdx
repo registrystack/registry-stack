@@ -184,14 +184,11 @@ grep -i '^x-registry' render-work/headers.txt
 ```text test-expect
 x-registry-pdf-digest: sha256:1e2dc9c981d19ef62549c3100395a106bc8fb30e01bef21c26844e45a0c29f9f
 x-registry-data-digest: sha256:685d9fbcaac74fea3e7ea7839e79da9f0ceb56e9cf218f9ae1fe9d0d0d09e9fa
-x-registry-pdf-sha256: 1e2dc9c981d19ef62549c3100395a106bc8fb30e01bef21c26844e45a0c29f9f
-x-registry-data-sha256: 685d9fbcaac74fea3e7ea7839e79da9f0ceb56e9cf218f9ae1fe9d0d0d09e9fa
 x-registry-warning-count: 0
 x-registry-document-version: letter v1
 ```
 
-The headers carry the two hashes compile printed, as labelled digests and as the deprecated bare
-hex, and the warning count. Compare the files themselves:
+The headers carry the two hashes compile printed, as labelled digests, and the warning count. Compare the files themselves:
 
 ```sh
 cmp render-work/letter.pdf render-work/served.pdf && echo identical

@@ -445,9 +445,8 @@ or production systems. Test credentials alone do not prevent delivery to a real 
    failed, and destroy the drill hosts and their copies of the secrets.
 
 {/* Evidence: crates/registry-messaging/src/config.rs;
-    release/notes/config-conventions/messaging.md, "BREAKING: the runtime file's keys and
-    apiVersion are renamed" (a package the previous release built is refused, apply to a new
-    database);
+    release/notes/v0.40.0.md, "Rewrite configuration and rebuild packages" (a package the
+    previous release built is refused, apply to a new database);
     crates/registry-messaging/src/config.rs, TlsTermination::DevelopmentLoopback;
     crates/registry-messaging/src/runtime.rs, assemble() and Listeners::serve_until();
     crates/registry-messaging/src/http.rs, Readiness and ready(). */}

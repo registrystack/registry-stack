@@ -153,7 +153,7 @@ def runtime_config(work, roles, pack, listener, prefix="", identities=IDENTITIES
         "database": {
             "migrationUrlRef": f"secret:file/{prefix}migration-url",
             "runtimeUrlRef": f"secret:file/{prefix}runtime-url",
-            "trustedRootCertificateRef": "secret:file/postgres-ca",
+            "caBundleRef": "secret:file/postgres-ca",
             "pool": {"maximumConnections": 4}, "roles": roles,
         },
         "package": {"root": str(pack)},

@@ -42,6 +42,111 @@ fn the_normalized_project_reads_with_its_envelope() {
 }
 
 #[test]
+fn the_project_is_named_by_its_project_block() {
+    let decoded = project::read_project("evidence.yaml", PROJECT_TEXT.as_bytes())
+        .expect("the canonical project is valid");
+    assert_eq!(decoded.value.project.id.as_str(), "standalone-evidence");
+    assert_eq!(decoded.value.project.version, "1");
+}
+
+#[test]
+fn top_level_id_and_version_are_unknown_keys() {
+    let text = PROJECT_TEXT.replacen(
+        "project:\n  id: standalone-evidence\n  version: \"1\"\n",
+        "id: standalone-evidence\nversion: \"1\"\n",
+        1,
+    );
+    assert_ne!(text, PROJECT_TEXT);
+    let report = project::read_project("evidence.yaml", text.as_bytes())
+        .expect_err("the retired top-level identity is refused");
+    let found = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect::<Vec<_>>();
+    assert!(found.contains(&("config.unknown-key", "/id")), "{found:?}");
+    assert!(
+        found.contains(&("config.unknown-key", "/version")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn the_project_block_requires_a_version() {
+    let text = PROJECT_TEXT.replacen("  version: \"1\"\n", "", 1);
+    assert_ne!(text, PROJECT_TEXT);
+    let report = project::read_project("evidence.yaml", text.as_bytes())
+        .expect_err("a project without a version is refused");
+    assert!(
+        report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "config.missing-key"
+                && diagnostic.path == "/project"
+                && diagnostic.message.contains("version")),
+        "{:?}",
+        report.diagnostics()
+    );
+}
+
+#[test]
+fn functions_are_keyed_by_their_id_and_carry_no_inner_id() {
+    let decoded = project::read_project("evidence.yaml", PROJECT_TEXT.as_bytes())
+        .expect("the canonical project is valid");
+    assert_eq!(
+        decoded
+            .value
+            .functions
+            .keys()
+            .map(|id| id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "derive-adult-status",
+            "derive-licence-status",
+            "derive-parent-relationship",
+            "derive-residence-region",
+        ]
+    );
+
+    let text = PROJECT_TEXT.replacen(
+        "  derive-adult-status:\n",
+        "  derive-adult-status:\n    id: derive-adult-status\n",
+        1,
+    );
+    assert_ne!(text, PROJECT_TEXT);
+    let report = project::read_project("evidence.yaml", text.as_bytes())
+        .expect_err("an inner function id is refused");
+    assert!(
+        report.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "config.unknown-key"
+                && diagnostic.path == "/functions/derive-adult-status/id"
+        }),
+        "{:?}",
+        report.diagnostics()
+    );
+}
+
+#[test]
+fn a_function_id_written_twice_is_refused_at_the_second_key() {
+    let text = PROJECT_TEXT.replacen(
+        "  derive-residence-region:\n",
+        "  derive-adult-status:\n    interface: assertion-derive/v1\n    source: functions/derive-adult-status.rhai\n  derive-residence-region:\n",
+        1,
+    );
+    assert_ne!(text, PROJECT_TEXT);
+    let report = project::read_project("evidence.yaml", text.as_bytes())
+        .expect_err("a repeated Function id is refused");
+    assert!(
+        report.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "yaml.duplicate-key"
+                && diagnostic.path == "/functions/derive-adult-status"
+        }),
+        "{:?}",
+        report.diagnostics()
+    );
+}
+
+#[test]
 fn the_normalized_project_refuses_retired_parallel_members() {
     let report = project::read_project(
         "evidence.yaml",
@@ -219,7 +324,7 @@ fn selector_structural_errors_use_shared_leaf_diagnostics() {
             "minimumBytes: 0",
             "config.out-of-range",
             "minimumBytes",
-            10,
+            12,
             23,
         ),
         (
@@ -227,7 +332,7 @@ fn selector_structural_errors_use_shared_leaf_diagnostics() {
             "maximumBytes: 8193",
             "config.out-of-range",
             "maximumBytes",
-            11,
+            13,
             23,
         ),
         (
@@ -235,7 +340,7 @@ fn selector_structural_errors_use_shared_leaf_diagnostics() {
             "minimumBytes: 'MARKER'",
             "config.expected-integer",
             "minimumBytes",
-            10,
+            12,
             23,
         ),
         (
@@ -243,7 +348,7 @@ fn selector_structural_errors_use_shared_leaf_diagnostics() {
             "type: MARKER",
             "config.unknown-variant",
             "type",
-            9,
+            11,
             15,
         ),
         (
@@ -251,7 +356,7 @@ fn selector_structural_errors_use_shared_leaf_diagnostics() {
             "maximumBytes: 64\n        conformanceUnknown: MARKER",
             "config.unknown-key",
             "conformanceUnknown",
-            12,
+            14,
             9,
         ),
     ] {

@@ -381,7 +381,7 @@ fn validate_normalized_starter(files: &[StarterFile]) -> Result<bool> {
         registry_evidence_authoring::project::read_project("evidence.yaml", project_bytes)?.value;
     let target =
         registry_evidence_authoring::target::read_target("local-target.yaml", target_bytes)?.value;
-    if target.project != project.id || target.authority != "dev-authority.yaml" {
+    if target.project != project.project.id || target.authority != "dev-authority.yaml" {
         bail!("the starter local-target.yaml must name its EvidenceProject and dev-authority.yaml");
     }
     let authority = registry_evidence_authoring::target::read_authority(
@@ -390,7 +390,7 @@ fn validate_normalized_starter(files: &[StarterFile]) -> Result<bool> {
         &project,
     )?
     .value;
-    if authority.target != target.id || authority.project != project.id {
+    if authority.target != target.id || authority.project != project.project.id {
         bail!("the starter dev-authority.yaml must name its EvidenceTarget and EvidenceProject");
     }
     Ok(true)
@@ -553,9 +553,9 @@ fn write_normalized_starter(root: &Path, source: AuthoringSource<'_>) -> anyhow:
     let project = json!({
         "apiVersion": registry_evidence_authoring::project::PROJECT_API_VERSION,
         "kind": registry_evidence_authoring::project::PROJECT_KIND,
-        "id":"local-evidence",
+        "project":{"id":"local-evidence","version":"1"},
         "selectorProfiles":{"record-reference":{"maximumAggregateBytes":64,"fields":{"record-reference":{"type":"string","minimumBytes":1,"maximumBytes":64}}}},
-        "functions":[{"id":"derive-record-status","interface":"assertion-derive/v1","source":"functions/derive-record-status.rhai"}],
+        "functions":{"derive-record-status":{"interface":"assertion-derive/v1","source":"functions/derive-record-status.rhai"}},
         "sources":{"record-status":source_document},
         "assertionDefinitions":{"record-status":{
             "question":"Does the selected synthetic record satisfy the reviewed condition?",

@@ -929,7 +929,7 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
-    const PROJECT: &str = "apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1\nkind: EvidenceProject\nid: synthetic\nselectorProfiles: {}\nfunctions: []\nsources: {}\nassertionDefinitions: {}\n";
+    const PROJECT: &str = "apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1\nkind: EvidenceProject\nproject: {id: synthetic, version: \"1\"}\nselectorProfiles: {}\nfunctions: {}\nsources: {}\nassertionDefinitions: {}\n";
     fn project(root: &Path) {
         fs::write(root.join("evidence.yaml"), PROJECT).unwrap();
     }

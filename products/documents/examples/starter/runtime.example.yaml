@@ -31,7 +31,7 @@ database:
   migrationUrlRef: secret:file/migration-database-url
   # Both connections require TLS and verify the server's host name. A
   # private CA's PEM bundle replaces the system roots:
-  # trustedRootCertificateRef: secret:file/postgres-ca.pem
+  # caBundleRef: secret:file/postgres-ca.pem
 authentication:
   oidc:
     issuer: https://identity.example.test/realms/registry

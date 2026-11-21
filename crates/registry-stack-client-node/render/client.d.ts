@@ -5,7 +5,7 @@ export interface RenderClientConfig {
   maximumResponseBytes?: number;
   trustedRootCertificates?: string;
 }
-export interface RenderedDocument { pdfBase64: string; pdfDigest: string; dataDigest: string; /** @deprecated pdfDigest without its sha256: label. */ pdfSha256: string; /** @deprecated dataDigest without its sha256: label. */ dataSha256: string; documentVersion: string; warnings: string[]; }
+export interface RenderedDocument { pdfBase64: string; pdfDigest: string; dataDigest: string; documentVersion: string; warnings: string[]; }
 export interface SealFacts { id: string; level: "B-B" | "B-T"; certificateDigest: string; timestampedAt?: string; testOnly?: true; }
 export interface SealedDocument { pdfBase64: string; documentDigest: string; signedFileDigest: string; dataDigest: string; documentVersion: string; packageDigest: string; warnings: string[]; seal: SealFacts; }
 export interface RenderRequest { issuedAt: string; data: unknown; locale?: string; assets?: Record<string,string>; }

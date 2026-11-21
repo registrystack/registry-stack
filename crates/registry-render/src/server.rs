@@ -1080,8 +1080,8 @@ async fn render_route(
                 outcome: Some("rendered"),
                 problem: None,
                 reason: None,
-                pdf_sha256: Some(rendered.pdf_sha256.clone()),
-                data_sha256: Some(rendered.data_sha256.clone()),
+                pdf_digest: Some(sha256_label(&rendered.pdf_sha256)),
+                data_digest: Some(sha256_label(&rendered.data_sha256)),
                 seal_id: None,
                 test_only: false,
                 document_digest: None,
@@ -1266,7 +1266,7 @@ async fn seal_route(
                 bundle_version: rendered.bundle_version,
                 bundle_hash: rendered.bundle_hash.clone(),
                 outcome: Some("sealed"),
-                data_sha256: Some(rendered.data_sha256.clone()),
+                data_digest: Some(sha256_label(&rendered.data_sha256)),
                 document_digest: Some(sealed.document_digest.clone()),
                 signed_file_digest: Some(sealed.signed_file_digest.clone()),
                 certificate_digest: Some(sealed.certificate_digest.clone()),
@@ -1617,10 +1617,9 @@ fn sanitize_document_type(raw: &str) -> String {
     }
 }
 
-/// The rendered document in the representation the caller accepts. The
-/// labelled `pdfDigest` and `dataDigest` sit beside the bare hex `pdfSha256`
-/// and `dataSha256`, which are deprecated and kept for existing callers; the
-/// PDF representation does the same in headers.
+/// The rendered document in the representation the caller accepts, with
+/// the labelled `pdfDigest` and `dataDigest`; the PDF representation carries
+/// them in headers.
 fn respond_rendered(
     headers: &HeaderMap,
     rendered: WorkerRendered,
@@ -1638,8 +1637,6 @@ fn respond_rendered(
             "pdfBase64": rendered.pdf_base64,
             "pdfDigest": pdf_digest,
             "dataDigest": data_digest,
-            "pdfSha256": rendered.pdf_sha256,
-            "dataSha256": rendered.data_sha256,
             "documentVersion": format!("{} v{}", rendered.document_id, rendered.document_version),
             "warnings": rendered.warnings,
         });
@@ -1664,8 +1661,6 @@ fn respond_rendered(
     let map = response.headers_mut();
     insert_header(map, "X-Registry-Pdf-Digest", &pdf_digest);
     insert_header(map, "X-Registry-Data-Digest", &data_digest);
-    insert_header(map, "X-Registry-Pdf-Sha256", &rendered.pdf_sha256);
-    insert_header(map, "X-Registry-Data-Sha256", &rendered.data_sha256);
     insert_header(
         map,
         "X-Registry-Warning-Count",

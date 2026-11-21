@@ -423,13 +423,15 @@ mod tests {
                 project.join(registry_evidence_authoring::project::PROJECT_FILE),
                 r#"apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
 kind: EvidenceProject
-id: source-command-test
+project:
+  id: source-command-test
+  version: "1"
 selectorProfiles:
   baseline-reference:
     maximumAggregateBytes: 64
     fields: {value: {type: string, minimumBytes: 1, maximumBytes: 64}}
 functions:
-  - {id: baseline-derive, interface: assertion-derive/v1, source: functions/baseline-derive.rhai}
+  baseline-derive: {interface: assertion-derive/v1, source: functions/baseline-derive.rhai}
 sources:
   baseline:
     pack: {id: baseline-pack, version: '1'}
@@ -575,10 +577,7 @@ assertionDefinitions:
             .expect("scan EvidenceProject")
             .expect("EvidenceProject document")
             .to_json_value();
-        project["functions"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({"id":"record-active-derive","interface":"assertion-derive/v1","source":"functions/record-active-derive.rhai"}));
+        project["functions"]["record-active-derive"] = json!({"interface":"assertion-derive/v1","source":"functions/record-active-derive.rhai"});
         project["assertionDefinitions"]["record-active"] = json!({
             "question":"Is the record active?",
             "semantics":{"requirement":"urn:test:record-active","kind":"criterion","evidenceType":"urn:test:evidence:record-active","referenceFrameworks":["urn:test:framework"]},

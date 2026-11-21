@@ -72,7 +72,7 @@
     {"path": "profile/context/registry-discovery-v1alpha1.jsonld", "version": "v1alpha1", "sha256": "d42c559086ab0f63fed783e7965d852ae6df58aef8dd47d97e2abc6d6844028f"},
     {"path": "profile/schema/registry-discovery-v1alpha1.schema.json", "version": "v1alpha1", "sha256": "e79c2118febed50237a25121e2378507a8c1e281d534fa5086485a4121204063"},
     {"path": "profile/shapes/registry-discovery-v1alpha1.shacl.ttl", "version": "v1alpha1", "sha256": "19890b75f14c5292c38317f12b10272c508c49936dba9918f9970f75242bcec1"},
-    {"path": "schemas/origins.schema.json", "version": "v1alpha1", "sha256": "19f90f5a2f87b250dcd54d16fe1810fbea6bdd58e6ec46891e20b3c5110605d5"},
+    {"path": "schemas/origins.schema.json", "version": "v1alpha1", "sha256": "c46a82a755524da6e3c8ab61a88b37b828b5d7cc95c09c98ca1ce0fa72aa6e83"},
     {"path": "schemas/evidence-mapping.schema.json", "version": "v1alpha1", "sha256": "47cbeecaaa07a52b0af259faff736b4e32e6a0c1ed674634b4cc6815cb369fd4"},
     {"path": "schemas/runtime.schema.json", "version": "v1alpha1", "sha256": "d4c5894f466ce1683e7d0b3db2b86413fa71cb7cea81843d12dc1ccbafd5cff8"},
     {"path": "schemas/index.schema.json", "version": "v1alpha1", "sha256": "97014247dcc83bc148d355a5e56ffaf8ab0a522cd0f462c93a97fda19bcb6ffc"},
@@ -81,7 +81,7 @@
     {"path": "standards-oracle/uv.lock", "version": "revision-3", "sha256": "970302805249159017e5f72c434a2e00d099f6a95ee87838ad67927bec8da35d"}
   ],
   "fixtures": [
-    {"path": "fixtures/schema-negative-corpus.json", "sha256": "6fa3bcc6b535df0ba9b30cc95f24e55ff3cad76888888b4ff9837ee652f99fdf"},
+    {"path": "fixtures/schema-negative-corpus.json", "sha256": "4d7790fb112afa957dbd74d5ec935852fabf99dd91e1c8d6c5803a18e2d8b963"},
     {"path": "fixtures/descriptions/repeated-service-bindings.jsonld", "sha256": "03d281647751c60489d1b2940c3a79bba2cfaa932b186daccb0b0ac310f17f24"},
     {"path": "fixtures/rdf/repeated-service-bindings.nt", "sha256": "3fa531e2b9a27eab260ae3e2838124e5886e1d22b717322f37bf3e0d27099746"}
   ]

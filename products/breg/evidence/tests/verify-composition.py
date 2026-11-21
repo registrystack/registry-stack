@@ -156,8 +156,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
         "source import must create no assertion meaning or caller grant"
     )
     assert not (project / "sources").exists(), "Sources belong to EvidenceProject"
-    imported_functions = {item["id"]: item for item in imported["functions"]}
-    assert not any(name.startswith("registry-status-") for name in imported_functions), (
+    assert not any(name.startswith("registry-status-") for name in imported["functions"]), (
         "source preparation and extraction remain in the pinned pack closure"
     )
     assert (project / "adapter-packs/registry-status/pack.yaml").is_file()
@@ -165,7 +164,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
 
     # Ordinary authoring follows import. This fragment is never passed as a project.
     fragment = read(INPUTS / "starter/definitions.yaml.fragment")
-    imported["functions"].extend(fragment["functions"])
+    imported["functions"].update(fragment["functions"])
     imported["assertionDefinitions"].update(fragment["assertionDefinitions"])
     write(project / "evidence.yaml", imported)
     for directory in ["functions", "fixtures"]:

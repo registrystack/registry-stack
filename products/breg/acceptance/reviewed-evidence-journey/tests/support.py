@@ -344,7 +344,7 @@ sed -i 's/^host /hostssl /' /var/lib/postgresql/data/pg_hba.conf
             self.db_configs[name] = {
                 "runtimeUrlRef": "secret:file/" + runtime,
                 "migrationUrlRef": "secret:file/" + migration,
-                "trustedRootCertificateRef": "secret:file/postgres-ca",
+                "caBundleRef": "secret:file/postgres-ca",
             }
             if name != "casework":
                 self.db_configs[name].update(

@@ -581,12 +581,12 @@ acceptances:
             .iter()
             .find(|diagnostic| diagnostic.code == "evidence.project.function-compile")
             .expect("the Function compilation error is retained");
-        assert_eq!(compilation.path, "/functions/0");
+        assert_eq!(compilation.path, "/functions/derive-adult-status");
         let compilation_source = compilation.source.as_ref().expect("placed error");
         assert_eq!(compilation_source.file, project_file.to_string_lossy());
         assert_eq!(
             (compilation_source.line, compilation_source.column),
-            (Some(13), Some(3))
+            (Some(16), Some(5))
         );
 
         let warning = report
@@ -757,7 +757,7 @@ acceptances:
         let mut repeated_functions = String::new();
         for index in 0..102 {
             repeated_functions.push_str(&format!(
-                "- id: repeated-function-{index}\n  label: Indistinguishable Function label\n  interface: assertion-derive/v1\n  source: functions/derive-licence-status.rhai\n"
+                "  repeated-function-{index}:\n    label: Indistinguishable Function label\n    interface: assertion-derive/v1\n    source: functions/derive-licence-status.rhai\n"
             ));
         }
         repeated_functions.push_str(source_marker);
@@ -780,7 +780,10 @@ acceptances:
             report.diagnostics()[0].code,
             "evidence.project.function-compile"
         );
-        assert_eq!(report.diagnostics()[0].path, "/functions/0");
+        assert_eq!(
+            report.diagnostics()[0].path,
+            "/functions/derive-adult-status"
+        );
         assert_eq!(
             report.diagnostics()[0].source.as_ref().unwrap().file,
             project_file.to_string_lossy()
@@ -839,12 +842,12 @@ acceptances:
             .iter()
             .find(|diagnostic| diagnostic.code == "evidence.project.asset-path")
             .expect("the missing asset is refused");
-        assert_eq!(asset.path, "/functions/0/source");
+        assert_eq!(asset.path, "/functions/derive-adult-status/source");
         let asset_source = asset.source.as_ref().expect("placed asset refusal");
         assert_eq!(asset_source.file, project_file.to_string_lossy());
         assert_eq!(
             (asset_source.line, asset_source.column),
-            (Some(15), Some(11))
+            (Some(17), Some(13))
         );
 
         let warning = report

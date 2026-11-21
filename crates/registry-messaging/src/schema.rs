@@ -789,11 +789,7 @@ mod tests {
                 "{definition}.{property} must be absolute"
             );
         }
-        for property in [
-            "runtimeUrlRef",
-            "migrationUrlRef",
-            "trustedRootCertificateRef",
-        ] {
+        for property in ["runtimeUrlRef", "migrationUrlRef", "caBundleRef"] {
             assert_eq!(
                 document["$defs"]["DatabaseConfig"]["properties"][property]["$ref"],
                 "#/$defs/SecretReference",

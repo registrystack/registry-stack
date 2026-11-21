@@ -488,7 +488,7 @@ async fn app_with_project_options(
     let database_config = DatabaseConfig {
         runtime_url_ref: format!("secret:env/{secret_name}"),
         migration_url_ref: format!("secret:env/{secret_name}"),
-        trusted_root_certificate_ref: None,
+        ca_bundle_ref: None,
         test_only_plaintext: true,
     };
     PostgresStore::connect_migration(&database_config, &secrets)

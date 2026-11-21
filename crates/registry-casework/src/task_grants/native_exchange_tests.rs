@@ -1112,7 +1112,7 @@ async fn fixture(
     let db_config = crate::DatabaseConfig {
         runtime_url_ref: format!("secret:env/{name}"),
         migration_url_ref: format!("secret:env/{name}"),
-        trusted_root_certificate_ref: None,
+        ca_bundle_ref: None,
         test_only_plaintext: true,
     };
     let store = PostgresStore::connect_migration(&db_config, &secrets)

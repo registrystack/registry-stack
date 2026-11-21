@@ -58,7 +58,7 @@
   the ten multi-word `required_gates` values, `minimized-json`, `non-public`,
   `as-needed`, `under-development`, and the fulfillment modes using the complete
   old-to-new table in
-  [the Manifest migration notes](../../../release/notes/config-conventions/manifest.md).
+  [the Manifest migration notes](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/manifest.md).
 - BREAKING: the Rust library removes `render_entity_shacl`, whose only
   maintained consumer was Registry Relay. Use `render_shacl` over the whole
   manifest instead.
@@ -67,7 +67,7 @@
   Generated reader schemas and editor mappings are available, and
   `validate-profiles` warns about YAML files no descriptor or fixture lists.
 
-The [complete Manifest migration notes](../../../release/notes/config-conventions/manifest.md)
+The [complete Manifest migration notes](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/manifest.md)
 include every configuration change, exact replacement value, and diagnostic
 code mapping. The [product changelog](../CHANGELOG.md) also records Rust API
 changes.

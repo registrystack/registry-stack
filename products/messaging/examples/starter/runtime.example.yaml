@@ -54,7 +54,7 @@ database:
   migrationUrlRef: secret:file/migration-database-url
   # The PEM bundle of the private CA in front of PostgreSQL, when the
   # deployment terminates database TLS with one.
-  # trustedRootCertificateRef: secret:file/postgres-ca.pem
+  # caBundleRef: secret:file/postgres-ca.pem
   # `testOnlyPlaintext: true` is the one plaintext escape, and only a build
   # carrying the `postgres-test` feature accepts it.
   # testOnlyPlaintext: true
@@ -110,7 +110,7 @@ providers:
       usernameRef: secret:file/smtp-username
       passwordRef: secret:file/smtp-password
     # attemptTimeoutMilliseconds: 30000
-    # trustedRootCertificateRef: secret:file/smtp-ca.pem
+    # caBundleRef: secret:file/smtp-ca.pem
     # allowedPrivateCidrs: [10.20.0.0/16]
   sms-gateway:
     type: http

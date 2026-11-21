@@ -79,7 +79,7 @@ fn the_resolver_enables_exactly_the_declared_providers() {
 #[test]
 fn database_debug_redacts_every_reference() {
     let database: DatabaseConfig = read_block(
-        "runtimeUrlRef: secret:env/RUNTIME_URL\nmigrationUrlRef: secret:env/MIGRATION_URL\ntrustedRootCertificateRef: secret:file/ca",
+        "runtimeUrlRef: secret:env/RUNTIME_URL\nmigrationUrlRef: secret:env/MIGRATION_URL\ncaBundleRef: secret:file/ca",
     )
     .expect("database parses");
     let rendered = format!("{database:?}");
@@ -89,9 +89,18 @@ fn database_debug_redacts_every_reference() {
         [
             ("database.runtimeUrlRef", "secret:env/RUNTIME_URL"),
             ("database.migrationUrlRef", "secret:env/MIGRATION_URL"),
-            ("database.trustedRootCertificateRef", "secret:file/ca"),
+            ("database.caBundleRef", "secret:file/ca"),
         ]
     );
+}
+
+#[test]
+fn database_refuses_the_retired_trust_anchor_spelling() {
+    let error = read_block::<DatabaseConfig>(
+        "runtimeUrlRef: secret:env/RUNTIME_URL\nmigrationUrlRef: secret:env/MIGRATION_URL\ntrustedRootCertificateRef: secret:file/ca",
+    )
+    .expect_err("the trust anchor is named caBundleRef");
+    assert_eq!(codes(&error), ["config.unknown-key"], "{error}");
 }
 
 #[test]

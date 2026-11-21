@@ -474,9 +474,6 @@
           ],
           "description": "Human explanation for authors and reviewers; excluded from behavior revisions."
         },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
         "interface": {
           "$ref": "#/$defs/FunctionInterface"
         },
@@ -496,7 +493,6 @@
         }
       },
       "required": [
-        "id",
         "interface",
         "source"
       ],
@@ -842,6 +838,23 @@
       ],
       "type": "object"
     },
+    "ProjectIdentity": {
+      "additionalProperties": false,
+      "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\nSchema name `ProjectIdentity`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
     "ProjectionDisclosure": {
       "enum": [
         "top-level"
@@ -1157,13 +1170,13 @@
       "description": "Human explanation for authors and reviewers; excluded from behavior revisions."
     },
     "functions": {
-      "items": {
+      "additionalProperties": {
         "$ref": "#/$defs/Function"
       },
-      "type": "array"
-    },
-    "id": {
-      "$ref": "#/$defs/LocalId"
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "kind": {
       "const": "EvidenceProject",
@@ -1190,6 +1203,10 @@
         "null"
       ]
     },
+    "project": {
+      "$ref": "#/$defs/ProjectIdentity",
+      "description": "The shared identity: `project.id` names this project and\n`project.version` is a human release label. The compiled bundle carries\nonly the id."
+    },
     "selectorProfiles": {
       "additionalProperties": {
         "$ref": "#/$defs/SelectorProfile"
@@ -1212,7 +1229,7 @@
   "required": [
     "apiVersion",
     "kind",
-    "id",
+    "project",
     "selectorProfiles",
     "functions",
     "sources",

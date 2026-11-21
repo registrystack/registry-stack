@@ -86,7 +86,7 @@ pub fn config(
         database: registry_platform_config::DatabaseConfig {
             runtime_url_ref: "secret:env/COORDINATOR_TEST_DATABASE_URL".into(),
             migration_url_ref: "secret:env/COORDINATOR_TEST_DATABASE_URL".into(),
-            trusted_root_certificate_ref: None,
+            ca_bundle_ref: None,
             test_only_plaintext: false,
         },
         namespace: format!("coordinator_{}", uuid::Uuid::new_v4().simple()),

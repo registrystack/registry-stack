@@ -55,10 +55,12 @@ pub struct RenderAuditEvent {
     /// failing check of a timestamp exchange.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'static str>,
+    /// `sha256:<hex>` over the rendered PDF.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pdf_sha256: Option<String>,
+    pub pdf_digest: Option<String>,
+    /// `sha256:<hex>` over the canonical request envelope the template read.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub data_sha256: Option<String>,
+    pub data_digest: Option<String>,
     /// The runtime seal id, on every entry of a call to the seal route that
     /// named a sealable document.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -110,8 +112,8 @@ impl RenderAuditEvent {
             outcome: None,
             problem: None,
             reason: None,
-            pdf_sha256: None,
-            data_sha256: None,
+            pdf_digest: None,
+            data_digest: None,
             seal_id: None,
             test_only: false,
             document_digest: None,
@@ -162,8 +164,8 @@ impl RenderAuditEvent {
             outcome: Some("refused"),
             problem: Some(problem.kind.slug().to_owned()),
             reason: problem.reason(),
-            pdf_sha256: None,
-            data_sha256: None,
+            pdf_digest: None,
+            data_digest: None,
             seal_id: None,
             test_only: false,
             document_digest: None,
@@ -275,8 +277,8 @@ fn unfinished(event: RenderAuditEvent) -> Result<serde_json::Value, RenderProble
     })?;
     if let Some(fields) = unfinished.as_object_mut() {
         for field in [
-            "pdfSha256",
-            "dataSha256",
+            "pdfDigest",
+            "dataDigest",
             "documentDigest",
             "signedFileDigest",
             "certificateDigest",
@@ -325,7 +327,7 @@ mod tests {
     fn an_unfinished_seal_keeps_its_seal_and_drops_every_response_value() {
         let sealed = RenderAuditEvent {
             outcome: Some("sealed"),
-            data_sha256: Some("d".repeat(64)),
+            data_digest: Some(format!("sha256:{}", "d".repeat(64))),
             document_digest: Some(format!("sha256:{}", "a".repeat(64))),
             signed_file_digest: Some(format!("sha256:{}", "b".repeat(64))),
             certificate_digest: Some(format!("sha256:{}", "c".repeat(64))),
@@ -336,8 +338,8 @@ mod tests {
         assert_eq!(entry["outcome"], "unfinished");
         assert_eq!(entry["sealId"], "ministry");
         for field in [
-            "pdfSha256",
-            "dataSha256",
+            "pdfDigest",
+            "dataDigest",
             "documentDigest",
             "signedFileDigest",
             "certificateDigest",

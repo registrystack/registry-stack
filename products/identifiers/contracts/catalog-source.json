@@ -206,21 +206,6 @@
       "reason": "RegistryReleaseLockV1 identifiers belong to retired registryctl release tooling."
     },
     {
-      "glob": "release/notes/config-conventions/breg.md",
-      "classification": "historical-documentation",
-      "reason": "The BReg configuration-conventions release note records a previous schema identifier, not an active schema source."
-    },
-    {
-      "glob": "release/notes/config-conventions/casework.md",
-      "classification": "historical-documentation",
-      "reason": "The Casework configuration-conventions release note records previous CLI schema identifiers, not active schemas."
-    },
-    {
-      "glob": "release/notes/config-conventions/evidence.md",
-      "classification": "historical-documentation",
-      "reason": "The Evidence configuration-conventions release note records previous authoring schema identifiers, not active schema sources."
-    },
-    {
       "path": "crates/registry-adapter-core/src/naming.rs",
       "uri": "https://id.registrystack.org/problems/registry-adapter/",
       "classification": "planned-resolution",

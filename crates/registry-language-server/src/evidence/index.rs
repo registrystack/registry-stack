@@ -60,7 +60,10 @@ pub(crate) fn build_index(
         return builder.index;
     }
     let value = &document.value;
-    if let Some(id) = value.get_scalar("id") {
+    if let Some(id) = value
+        .get("project")
+        .and_then(|project| project.get_scalar("id"))
+    {
         builder.define(
             SymbolKey::global(EvidenceKind::Project, &id.value),
             &path,
@@ -74,10 +77,9 @@ pub(crate) fn build_index(
             &profile.key,
         );
     }
-    for function in sequence(value.get("functions")) {
-        let Some(id) = function.get_scalar("id") else {
-            continue;
-        };
+    for function in mapping(value.get("functions")) {
+        let id = &function.key;
+        let function = &function.value;
         builder.define(
             SymbolKey::global(EvidenceKind::Function, &id.value),
             &path,
@@ -279,9 +281,9 @@ pub(crate) fn build_index(
             }
         }
     }
-    for function in sequence(value.get("functions")) {
-        let (Some(id), Some(asset)) = (function.get_scalar("id"), function.get_scalar("source"))
-        else {
+    for function in mapping(value.get("functions")) {
+        let id = &function.key;
+        let Some(asset) = function.value.get_scalar("source") else {
             continue;
         };
         let Some(script) = documents.get(&root.join(&asset.value)) else {
@@ -290,8 +292,13 @@ pub(crate) fn build_index(
         if let Some(interface) = read
             .as_ref()
             .ok()
-            .and_then(|p| p.value.functions.iter().find(|f| f.id.as_str() == id.value))
-            .map(|f| f.interface)
+            .and_then(|p| {
+                p.value
+                    .functions
+                    .iter()
+                    .find(|(function_id, _)| function_id.as_str() == id.value)
+            })
+            .map(|(_, f)| f.interface)
         {
             for finding in
                 registry_evidence_authoring::derivation::validate_function(script, interface)

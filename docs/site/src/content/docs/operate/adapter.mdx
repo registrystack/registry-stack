@@ -67,7 +67,7 @@ Serving needs TLS to PostgreSQL, even on loopback: `database.testOnlyPlaintext` 
 test builds.
 Without a configured root, the system roots verify the server.
 When the certificate comes from a private CA, name that CA with
-`database.trustedRootCertificateRef`.
+`database.caBundleRef`.
 
 {/* Evidence: crates/registry-adapter-engine/src/job_sources.rs test_only_plaintext;
     crates/registry-adapter/src/serve.rs ServeError. */}

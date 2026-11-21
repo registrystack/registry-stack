@@ -163,7 +163,7 @@ class RuntimeConfigTest(unittest.TestCase):
             "hashKeyRef: secret:file/audit-key",
         ):
             self.assertIn(required, config)
-        self.assertNotIn("trustedRootCertificateRef", config)
+        self.assertNotIn("caBundleRef", config)
 
     def test_the_database_trust_root_is_named_when_present(self):
         config = demo.runtime_config(
@@ -171,7 +171,7 @@ class RuntimeConfigTest(unittest.TestCase):
             Path("/run/secrets/db-root-ca"),
         )
         self.assertIn(
-            "trustedRootCertificateRef: secret:file/db-root-ca",
+            "caBundleRef: secret:file/db-root-ca",
             config,
         )
 

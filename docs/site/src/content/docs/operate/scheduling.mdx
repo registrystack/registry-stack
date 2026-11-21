@@ -100,7 +100,7 @@ Grant the runtime role nothing yourself. `apply` grants it exactly what serving 
 the schema, read and write on the Scheduling tables, usage and select on the outbox identity
 sequence, and read on the activation ledgers. It reissues the grants on every run, so a table a
 later migration adds is covered. The runtime requires TLS on its database connection and refuses
-one it cannot verify; `database.trustedRootCertificateRef` names the CA bundle when a private CA
+one it cannot verify; `database.caBundleRef` names the CA bundle when a private CA
 fronts PostgreSQL.
 
 {/* Evidence: crates/registry-scheduling/migrations/0200_scheduling.sql;

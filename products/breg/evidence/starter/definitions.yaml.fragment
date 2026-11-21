@@ -1,10 +1,10 @@
 functions:
-- id: record-active
-  interface: assertion-derive/v1
-  source: functions/record-active.rhai
-- id: record-status-pair
-  interface: assertion-derive/v1
-  source: functions/record-status-pair.rhai
+  record-active:
+    interface: assertion-derive/v1
+    source: functions/record-active.rhai
+  record-status-pair:
+    interface: assertion-derive/v1
+    source: functions/record-status-pair.rhai
 assertionDefinitions:
   record-active:
     question: Does the BReg record currently have active status?

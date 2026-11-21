@@ -1422,7 +1422,7 @@ fn primary_signing_references_require_the_enabled_file_provider_offline() {
         document["database"]
             .as_object_mut()
             .unwrap()
-            .remove("trustedRootCertificateRef");
+            .remove("caBundleRef");
         let error = refused(&serde_norway::to_string(&document).unwrap());
         assert_eq!(error.code, "coordinator.runtime-config.refused");
         assert_eq!(
@@ -1455,7 +1455,7 @@ fn observation_signing_reference_requires_the_enabled_file_provider_offline() {
     document["database"]
         .as_object_mut()
         .unwrap()
-        .remove("trustedRootCertificateRef");
+        .remove("caBundleRef");
     let error = refused(&serde_norway::to_string(&document).unwrap());
     assert_eq!(error.code, "coordinator.runtime-config.refused");
     assert_eq!(

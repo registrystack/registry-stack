@@ -1,7 +1,6 @@
 apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1
 kind: DiscoveryOrigins
 origins:
-  - originId: example-evidence
+  - id: example-evidence
     catalogUrl: https://evidence.example.invalid/catalog.jsonld
     profile: registry-discovery-v1alpha1
-    enabled: true

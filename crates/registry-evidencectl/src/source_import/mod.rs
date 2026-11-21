@@ -609,8 +609,24 @@ fn current_artifact(
         .iter()
         .filter_map(|function| function["id"].as_str())
         .collect::<BTreeSet<_>>();
+    // A Source fragment lists its Functions as declarations that carry their
+    // id; the project keys the same declarations by that id.
+    let functions = decoded
+        .value
+        .functions
+        .iter()
+        .filter(|(id, _)| function_ids.contains(id.as_str()))
+        .map(|(id, function)| {
+            let mut value = serde_json::to_value(function)?;
+            value
+                .as_object_mut()
+                .context("a Function declaration is an object")?
+                .insert("id".to_owned(), json!(id));
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>>>()?;
     let fragment = json!({
-        "functions":decoded.value.functions.iter().filter(|function| function_ids.contains(function.id.as_str())).collect::<Vec<_>>(),
+        "functions":functions,
         "sourceId":source_id,
         "source":source
     });
@@ -643,7 +659,7 @@ fn merge_normalized_fragments(
         .context("EvidenceProject selectorProfiles")?;
     let mut functions = object
         .remove("functions")
-        .and_then(|value| value.as_array().cloned())
+        .and_then(|value| value.as_object().cloned())
         .context("EvidenceProject Functions")?;
     let mut sources = object
         .remove("sources")
@@ -670,8 +686,7 @@ fn merge_normalized_fragments(
                     .flatten()
                     .filter_map(|function| function["id"].as_str())
                     .collect::<BTreeSet<_>>();
-                functions
-                    .retain(|function| function["id"].as_str().is_none_or(|id| !ids.contains(id)));
+                functions.retain(|id, _| !ids.contains(id.as_str()));
                 if let Some(id) = fragment["sourceId"].as_str() {
                     sources.remove(id);
                 }
@@ -699,20 +714,35 @@ fn merge_normalized_fragments(
                 continue;
             }
             let fragment: Value = serde_json::from_str(text)?;
+            let source_id = fragment["sourceId"]
+                .as_str()
+                .context("normalized sourceId")?;
             for function in fragment["functions"]
                 .as_array()
                 .context("normalized Functions")?
             {
-                functions.push(function.clone());
+                let mut function = function
+                    .as_object()
+                    .context("a fragment Function is an object")?
+                    .clone();
+                let id = function
+                    .remove("id")
+                    .and_then(|id| id.as_str().map(str::to_owned))
+                    .context("a fragment Function names its id")?;
+                // `functions` holds the project's own Functions and those of
+                // the fragments merged so far; a repeated id would replace one.
+                if functions.contains_key(&id) {
+                    bail!(
+                        "source `{source_id}` declares Function `{id}`, which the project or another imported source already declares; give each Function a distinct id"
+                    );
+                }
+                functions.insert(id, Value::Object(function));
             }
-            let id = fragment["sourceId"]
-                .as_str()
-                .context("normalized sourceId")?;
-            sources.insert(id.to_owned(), fragment["source"].clone());
+            sources.insert(source_id.to_owned(), fragment["source"].clone());
         }
     }
     object.insert("selectorProfiles".to_owned(), Value::Object(selectors));
-    object.insert("functions".to_owned(), Value::Array(functions));
+    object.insert("functions".to_owned(), Value::Object(functions));
     object.insert("sources".to_owned(), Value::Object(sources));
     object.insert(
         "apiVersion".to_owned(),

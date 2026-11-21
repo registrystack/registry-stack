@@ -175,7 +175,7 @@ async fn fixture_for_role_with_templates(
     let config = crate::DatabaseConfig {
         runtime_url_ref: format!("secret:env/{name}"),
         migration_url_ref: format!("secret:env/{name}"),
-        trusted_root_certificate_ref: None,
+        ca_bundle_ref: None,
         test_only_plaintext: true,
     };
     let (audit, audit_capture) = crate::CaseworkAudit::capture();

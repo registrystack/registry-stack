@@ -384,7 +384,7 @@ async fn fixture_publishing_with_hook_and_status(
     let database = DatabaseConfig {
         runtime_url_ref: format!("secret:env/{secret_name}"),
         migration_url_ref: format!("secret:env/{secret_name}"),
-        trusted_root_certificate_ref: None,
+        ca_bundle_ref: None,
         test_only_plaintext: true,
     };
     let migration_store =
@@ -9982,7 +9982,7 @@ async fn refuses_a_pre_1_0_ledger_at_migrate_and_readiness(version: i64) {
     let database = DatabaseConfig {
         runtime_url_ref: format!("secret:env/{secret_name}"),
         migration_url_ref: format!("secret:env/{secret_name}"),
-        trusted_root_certificate_ref: None,
+        ca_bundle_ref: None,
         test_only_plaintext: true,
     };
     let store = PostgresStore::connect_migration(&database, &secrets).expect("the migration store");

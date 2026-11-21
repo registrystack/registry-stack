@@ -242,7 +242,7 @@ fn load_access_profiles(project: &Path) -> Result<BTreeMap<String, LoadedProfile
         text.as_bytes(),
     )?
     .value;
-    if target.project != project_doc.id {
+    if target.project != project_doc.project.id {
         bail!("local-target.yaml must name this EvidenceProject");
     }
     let relative = Path::new(&target.authority);

@@ -138,13 +138,10 @@ fn a_usable_project_and_named_function_report_nothing() {
 fn normalized_rule_codes_remain_machine_addressable() {
     let mut codes = Vec::new();
     codes.extend(normalized_findings(|project| {
-        project.functions.push(project.functions[0].clone());
-    }));
-    codes.extend(normalized_findings(|project| {
         project.assertion_definitions.clear();
     }));
     codes.extend(normalized_findings(|project| {
-        project.functions[0].source = "../bad.rhai".to_owned();
+        project.functions.values_mut().next().unwrap().source = "../bad.rhai".to_owned();
     }));
     codes.extend(normalized_findings(|project| {
         project
@@ -199,7 +196,6 @@ fn normalized_rule_codes_remain_machine_addressable() {
             "derive-selector-profile",
             "function-interface",
             "function-source",
-            "function-unique",
             "output-bounds",
             "output-concept",
             "output-type",
@@ -396,7 +392,7 @@ fn the_normalized_reader_refuses_values_at_the_bounded_field() {
             "id: standalone-evidence",
             "id: Standalone",
             "config.invalid-value",
-            "/id",
+            "/project/id",
         ),
         (
             "maximumAggregateBytes: 64",
@@ -525,16 +521,6 @@ fn normalized_references_report_the_retained_derivation_interface() {
 
 #[test]
 fn normalized_project_and_semantic_diagnostics_keep_exact_sites() {
-    let findings = normalized_findings(|project| {
-        project.functions.push(project.functions[0].clone());
-    });
-    assert_normalized_finding(
-        &findings,
-        "function-unique",
-        "/functions",
-        "function IDs must be unique",
-    );
-
     let findings = normalized_findings(|project| project.assertion_definitions.clear());
     assert_normalized_finding(
         &findings,
@@ -544,12 +530,12 @@ fn normalized_project_and_semantic_diagnostics_keep_exact_sites() {
     );
 
     let findings = normalized_findings(|project| {
-        project.functions[0].source = "../extract.rhai".to_owned();
+        project.functions.values_mut().next().unwrap().source = "../extract.rhai".to_owned();
     });
     assert_normalized_finding(
         &findings,
         "function-source",
-        "/functions/0/source",
+        "/functions/derive-adult-status/source",
         "name one project-relative .rhai function asset without traversal",
     );
 
@@ -846,7 +832,6 @@ fn named_function_abi_reports_compile_signature_and_interface_failures() {
         ),
     ] {
         let declaration = json!({
-            "id": case.replace(' ', "-"),
             "interface": "source-extract/v1",
             "source": format!("functions/{}.rhai", case.replace(' ', "-")),
         });
@@ -862,8 +847,8 @@ fn retired_question_answer_and_inline_operation_grammar_is_closed() {
     let retired = [
         serde_json::to_string(&base_question()).unwrap(),
         "apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\nid: old-question\nquestion: Old?\n".to_owned(),
-        "apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1\nkind: EvidenceProject\nid: old-project\nquestions: []\n".to_owned(),
-        "apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1\nkind: EvidenceProject\nid: old-project\naccessPolicies: []\n".to_owned(),
+        "apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1\nkind: EvidenceProject\nproject:\n  id: old-project\n  version: \"1\"\nquestions: []\n".to_owned(),
+        "apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1\nkind: EvidenceProject\nproject:\n  id: old-project\n  version: \"1\"\naccessPolicies: []\n".to_owned(),
     ];
     for document in retired {
         assert!(

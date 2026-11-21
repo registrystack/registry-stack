@@ -45,7 +45,7 @@ fn provider() -> SmtpProvider {
         host: relay.ip().to_string(),
         port: Some(relay.port()),
         tls: SmtpTlsMode::DevelopmentLoopback,
-        trusted_root_certificate_ref: None,
+        ca_bundle_ref: None,
         authentication: None,
         attempt_timeout_milliseconds: 10_000,
         allowed_private_cidrs: Vec::new(),

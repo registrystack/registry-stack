@@ -67,10 +67,6 @@ pub struct RenderedDocument {
     pub pdf_digest: String,
     /// SHA-256 over the canonical request envelope the template read.
     pub data_digest: String,
-    /// Deprecated: `pdf_digest` without its `sha256:` label.
-    pub pdf_sha256: String,
-    /// Deprecated: `data_digest` without its `sha256:` label.
-    pub data_sha256: String,
     pub document_version: String,
     pub warnings: Vec<String>,
 }
@@ -144,7 +140,7 @@ fn serialize_base64<S: serde::Serializer>(bytes: &[u8], serializer: S) -> Result
 }
 
 /// The sealed answer as sent. A member the server adds later is ignored,
-/// except `pdfDigest` and `pdfSha256`, which the sealed contract excludes.
+/// except `pdfDigest`, which the sealed contract excludes.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SealedWire {
@@ -158,8 +154,6 @@ struct SealedWire {
     seal: SealWire,
     #[serde(default)]
     pdf_digest: Option<Value>,
-    #[serde(default)]
-    pdf_sha256: Option<Value>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -380,9 +374,8 @@ impl RenderClient {
             .decode(&document.pdf_base64)
             .map_err(|_| error("protocol"))?;
         if !pdf.starts_with(b"%PDF-")
-            || digest_hex(&document.pdf_digest) != Some(document.pdf_sha256.as_str())
-            || digest_hex(&document.data_digest) != Some(document.data_sha256.as_str())
-            || hex::encode(Sha256::digest(&pdf)) != document.pdf_sha256
+            || digest_hex(&document.pdf_digest) != Some(hex::encode(Sha256::digest(&pdf)).as_str())
+            || digest_hex(&document.data_digest).is_none()
             || !bounded_version_and_warnings(
                 document_type,
                 &document.document_version,
@@ -447,7 +440,6 @@ impl RenderClient {
         let document_hex = digest_hex(&wire.document_digest);
         if !pdf.starts_with(b"%PDF-")
             || wire.pdf_digest.is_some()
-            || wire.pdf_sha256.is_some()
             || document_hex.is_none()
             || digest_hex(&wire.data_digest).is_none()
             || digest_hex(&wire.package_digest).is_none()

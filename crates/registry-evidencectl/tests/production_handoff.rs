@@ -987,11 +987,11 @@ impl Fixture {
         let project = json!({
             "apiVersion":"id.registrystack.org/formats/evidence/project/v1alpha1",
             "kind":"EvidenceProject",
-            "id":"production-handoff",
+            "project":{"id":"production-handoff","version":"1"},
             "selectorProfiles":{"person-reference-v1":{"maximumAggregateBytes":200,"fields":{"person-id":{"type":"string","minimumBytes":1,"maximumBytes":200}}}},
-            "functions":[
-                {"id":"adult-status-derive","interface":"assertion-derive/v1","source":"functions/adult-status-derive.rhai"}
-            ],
+            "functions":{
+                "adult-status-derive":{"interface":"assertion-derive/v1","source":"functions/adult-status-derive.rhai"}
+            },
             "sources":{"people": source_binding(
                 "people",
                 vec![("personId", "subject", "person-reference-v1", "person-id")],
@@ -1143,11 +1143,11 @@ privacyExpectation:
             project["selectorProfiles"]["child-reference-v1"] = json!({"maximumAggregateBytes":200,"fields":{"child-id":{"type":"string","minimumBytes":1,"maximumBytes":200}}});
             project["selectorProfiles"]["candidate-reference-v1"] = json!({"maximumAggregateBytes":200,"fields":{"candidate-id":{"type":"string","minimumBytes":1,"maximumBytes":200}}});
             for function in [
-                json!({"id":"age-bracket-derive","interface":"assertion-derive/v1","source":"functions/age-bracket-derive.rhai"}),
-                json!({"id":"immunization-summary-derive","interface":"assertion-derive/v1","source":"functions/immunization-summary-derive.rhai"}),
-                json!({"id":"parent-relationship-derive","interface":"assertion-derive/v1","source":"functions/parent-relationship-derive.rhai"}),
+                "age-bracket-derive",
+                "immunization-summary-derive",
+                "parent-relationship-derive",
             ] {
-                project["functions"].as_array_mut().unwrap().push(function);
+                project["functions"][function] = json!({"interface":"assertion-derive/v1","source":format!("functions/{function}.rhai")});
             }
             project["sources"]["immunizations"] = source_binding(
                 "immunizations",

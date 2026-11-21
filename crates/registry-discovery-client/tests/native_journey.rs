@@ -431,7 +431,7 @@ fn evidence_description(provider_base: &str, untrusted: bool) -> Vec<u8> {
 fn write_authoring_project(root: &Path, provider: &ProviderDeployment, invalid: bool) {
     let invalid_origin = if invalid {
         format!(
-            "  - originId: invalid-origin\n    catalogUrl: {}/origins/invalid.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: true\n",
+            "  - id: invalid-origin\n    catalogUrl: {}/origins/invalid.jsonld\n    profile: registry-discovery-v1alpha1\n",
             provider.base_url
         )
     } else {
@@ -440,7 +440,7 @@ fn write_authoring_project(root: &Path, provider: &ProviderDeployment, invalid: 
     fs::write(
         root.join("origins.yaml"),
         format!(
-            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - originId: evidence-origin\n    catalogUrl: {base}/origins/evidence.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: true\n  - originId: untrusted-origin\n    catalogUrl: {base}/origins/untrusted.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: true\n{invalid_origin}",
+            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - id: evidence-origin\n    catalogUrl: {base}/origins/evidence.jsonld\n    profile: registry-discovery-v1alpha1\n  - id: untrusted-origin\n    catalogUrl: {base}/origins/untrusted.jsonld\n    profile: registry-discovery-v1alpha1\n{invalid_origin}",
             base = provider.base_url,
         ),
     )

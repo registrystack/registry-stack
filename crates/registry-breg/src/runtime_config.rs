@@ -534,7 +534,7 @@ impl RuntimeConfigError {
                 "Point secretProviders.file.root at a path with no symbolic link in it."
             }
             Self::InvalidDatabase => {
-                "Name database.runtimeUrlRef, database.migrationUrlRef, and database.trustedRootCertificateRef (PEM root certificates), when given, by secret reference, give each SQL role a lowercase identifier, and use two references when the roles differ."
+                "Name database.runtimeUrlRef, database.migrationUrlRef, and database.caBundleRef (PEM root certificates), when given, by secret reference, give each SQL role a lowercase identifier, and use two references when the roles differ."
             }
             Self::PlaintextDatabase => {
                 "Remove database.testOnlyPlaintext; a deployment reaches PostgreSQL over TLS."
@@ -1607,7 +1607,7 @@ impl RuntimeConfig {
             return ConnectionConfig::from_test_config(postgres, self.database.pool_bounds)
                 .map_err(|_| RuntimeConfigError::InvalidDatabase);
         }
-        let connection = match &self.database.trusted_root_certificate_ref {
+        let connection = match &self.database.ca_bundle_ref {
             Some(roots_ref) => {
                 let roots = self.secret_resolver()?.resolve_reference(roots_ref)?;
                 ConnectionConfig::require_tls_config_with_roots_pem(
@@ -1997,7 +1997,7 @@ impl fmt::Debug for SecretProvidersConfig {
 pub struct DatabaseConfig {
     runtime_url_ref: SecretReference,
     migration_url_ref: SecretReference,
-    trusted_root_certificate_ref: Option<SecretReference>,
+    ca_bundle_ref: Option<SecretReference>,
     #[cfg(feature = "postgres-test")]
     test_only_plaintext: bool,
     pool_bounds: PoolBounds,
@@ -2018,9 +2018,9 @@ impl DatabaseConfig {
             raw.database.migration_url_ref,
             RuntimeConfigError::InvalidDatabase,
         )?;
-        let trusted_root_certificate_ref = raw
+        let ca_bundle_ref = raw
             .database
-            .trusted_root_certificate_ref
+            .ca_bundle_ref
             .map(|reference| parse_secret_reference(reference, RuntimeConfigError::InvalidDatabase))
             .transpose()?;
         let roles = SqlRoles::from_raw(raw.roles)?;
@@ -2039,7 +2039,7 @@ impl DatabaseConfig {
         Ok(Self {
             runtime_url_ref,
             migration_url_ref,
-            trusted_root_certificate_ref,
+            ca_bundle_ref,
             #[cfg(feature = "postgres-test")]
             test_only_plaintext: raw.database.test_only_plaintext,
             pool_bounds,
@@ -2053,8 +2053,8 @@ impl DatabaseConfig {
 
     /// The secret reference to the PEM root certificates the database
     /// connections trust, when the platform roots are not used.
-    pub fn trusted_root_certificate_ref(&self) -> Option<&SecretReference> {
-        self.trusted_root_certificate_ref.as_ref()
+    pub fn ca_bundle_ref(&self) -> Option<&SecretReference> {
+        self.ca_bundle_ref.as_ref()
     }
 }
 
@@ -2065,11 +2065,8 @@ impl fmt::Debug for DatabaseConfig {
             .field("runtime_url_ref", &"<redacted>")
             .field("migration_url_ref", &"<redacted>")
             .field(
-                "trusted_root_certificate_ref",
-                &self
-                    .trusted_root_certificate_ref
-                    .as_ref()
-                    .map(|_| "<redacted>"),
+                "ca_bundle_ref",
+                &self.ca_bundle_ref.as_ref().map(|_| "<redacted>"),
             )
             .field("pool_bounds", &self.pool_bounds)
             .finish()

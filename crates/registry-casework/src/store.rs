@@ -699,10 +699,10 @@ fn tls_connector(
     {
         return Err(StoreError::Configuration);
     }
-    if let Some(reference) = &config.trusted_root_certificate_ref {
+    if let Some(reference) = &config.ca_bundle_ref {
         let certificate = secrets.resolve(reference).map_err(|error| {
             StoreError::SecretConfiguration(describe_secret_failure(
-                "database.trustedRootCertificateRef",
+                "database.caBundleRef",
                 reference,
                 &error,
             ))

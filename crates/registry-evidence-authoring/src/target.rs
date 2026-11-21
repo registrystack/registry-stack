@@ -340,7 +340,7 @@ pub fn validate_authority(
     project: &EvidenceProject,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
-    if authority.project != project.id {
+    if authority.project != project.project.id {
         findings.push(Finding::new(
             FieldPath::root().key("project"),
             "authority-project",

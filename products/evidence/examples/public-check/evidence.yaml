@@ -1,6 +1,8 @@
 apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
 kind: EvidenceProject
-id: certificate-check
+project:
+  id: certificate-check
+  version: "1"
 selectorProfiles:
   certificate-number:
     maximumAggregateBytes: 32
@@ -10,9 +12,9 @@ selectorProfiles:
         minimumBytes: 4
         maximumBytes: 32
 functions:
-- id: derive-certificate-check
-  interface: assertion-derive/v1
-  source: functions/derive-certificate-check.rhai
+  derive-certificate-check:
+    interface: assertion-derive/v1
+    source: functions/derive-certificate-check.rhai
 sources:
   certificate-record:
     pack: {id: synthetic-register, version: '1'}

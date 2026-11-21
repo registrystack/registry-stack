@@ -324,6 +324,10 @@
       "additionalProperties": false,
       "description": "The job store block: the item table's single connection reference.\nSecret references only, resolved by the job host.",
       "properties": {
+        "caBundleRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "The root certificate the connection trusts beside the platform\nroots; absent, the platform roots alone."
+        },
         "runtimeUrlRef": {
           "$ref": "#/$defs/SecretReference",
           "description": "The runtime connection reference of the item table's database."
@@ -331,10 +335,6 @@
         "testOnlyPlaintext": {
           "description": "Plaintext connections for the loopback test database only;\nrefused when true in any build without the job host's test\nfeature.",
           "type": "boolean"
-        },
-        "trustedRootCertificateRef": {
-          "$ref": "#/$defs/SecretReference",
-          "description": "The root certificate the connection trusts beside the platform\nroots; absent, the platform roots alone."
         }
       },
       "required": [

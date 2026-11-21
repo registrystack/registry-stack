@@ -189,7 +189,7 @@ fn absent_secret_provider_requirement(provider: &str, reference_pattern: &str) -
                     "properties": {
                         "runtimeUrlRef": forbidden,
                         "migrationUrlRef": forbidden,
-                        "trustedRootCertificateRef": forbidden
+                        "caBundleRef": forbidden
                     }
                 },
                 "authentication": {
@@ -793,7 +793,7 @@ mod tests {
 
     fn runtime_instance_with_every_secret_reference() -> Value {
         let mut instance = runtime_instance("secret:env/CASEWORK_JWKS", "both");
-        instance["database"]["trustedRootCertificateRef"] =
+        instance["database"]["caBundleRef"] =
             Value::String("secret:file/database-ca.pem".to_owned());
         instance["audit"]["hashKeyRef"] = Value::String("secret:env/CASEWORK_AUDIT_KEY".to_owned());
         instance["contextProviders"] = serde_json::json!({
@@ -853,7 +853,7 @@ mod tests {
         optional_references_absent["database"]
             .as_object_mut()
             .unwrap()
-            .remove("trustedRootCertificateRef");
+            .remove("caBundleRef");
         optional_references_absent
             .as_object_mut()
             .unwrap()
@@ -872,7 +872,7 @@ mod tests {
         let pointers = [
             "/database/runtimeUrlRef",
             "/database/migrationUrlRef",
-            "/database/trustedRootCertificateRef",
+            "/database/caBundleRef",
             "/authentication/oidc/jwksSource/documentRef",
             "/audit/hashKeyRef",
             "/contextProviders/facility-registry/clientIdRef",

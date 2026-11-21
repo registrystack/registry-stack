@@ -27,13 +27,13 @@ fn read_decoded(root: &Path) -> Result<(Decoded<EvidenceProject>, BTreeMap<Strin
     let bytes = authored::read_authored_file(&file, "Evidence project")?;
     let decoded = project::read_project(project::PROJECT_FILE, &bytes)?;
     let mut scripts = BTreeMap::new();
-    for (index, function) in decoded.value.functions.iter().enumerate() {
+    for (id, function) in &decoded.value.functions {
         let path = safe_asset(directory, &function.source).map_err(|_| {
             let finding = registry_evidence_authoring::Finding {
                 code: "asset-path",
                 field: registry_evidence_authoring::FieldPath::root()
                     .key("functions")
-                    .index(index)
+                    .map_key(id.to_string())
                     .key("source"),
                 message: "Function source must name a plain asset inside this project".to_owned(),
             };
@@ -435,7 +435,7 @@ pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Resu
         let target =
             registry_evidence_authoring::target::read_target(&path.to_string_lossy(), &bytes)?
                 .value;
-        if target.project != project.id {
+        if target.project != project.project.id {
             bail!("target must name this EvidenceProject");
         }
         let authority_path = safe_asset(target_directory(path), &target.authority)?;
@@ -479,7 +479,7 @@ pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Resu
         report: crate::report::success(
             command,
             "complete",
-            json!({"project":root,"target":target.as_deref(),"proof":"authoring","diagnostics":diagnostics.to_json_value(),"projectPresentation":{"id":project.id,"label":project.label,"description":project.description},"selectorProfiles":project.selector_profiles,"capabilityCeilings":{"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size},"assertionDefinitions":definitions,"sources":project.sources.iter().map(|(id,source)| json!({"id":id,"label":source.label,"description":source.description,"pack":source.pack,"route":source.route,"connection":source.connection,"inputs":source.inputs,"acquisitionPosture":source.acquisition_posture,"projection":source.projection.as_ref().map(|projection| json!({"source":projection.source,"entrypoint":projection.entrypoint,"schema":projection.schema,"digest":compiled.model["sources"][id.as_str()]["projection"]["digest"]})),"facts":compiled.source_facts.get(id.as_str())})).collect::<Vec<_>>(),"functions":compiled.functions,"authority":authority,"offline":true,"networkAccess":false,"secretResolution":false,"fixtureExecution":false}),
+            json!({"project":root,"target":target.as_deref(),"proof":"authoring","diagnostics":diagnostics.to_json_value(),"projectPresentation":{"id":project.project.id,"version":project.project.version,"label":project.label,"description":project.description},"selectorProfiles":project.selector_profiles,"capabilityCeilings":{"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size},"assertionDefinitions":definitions,"sources":project.sources.iter().map(|(id,source)| json!({"id":id,"label":source.label,"description":source.description,"pack":source.pack,"route":source.route,"connection":source.connection,"inputs":source.inputs,"acquisitionPosture":source.acquisition_posture,"projection":source.projection.as_ref().map(|projection| json!({"source":projection.source,"entrypoint":projection.entrypoint,"schema":projection.schema,"digest":compiled.model["sources"][id.as_str()]["projection"]["digest"]})),"facts":compiled.source_facts.get(id.as_str())})).collect::<Vec<_>>(),"functions":compiled.functions,"authority":authority,"offline":true,"networkAccess":false,"secretResolution":false,"fixtureExecution":false}),
         ),
         diagnostics,
     })
@@ -976,9 +976,9 @@ fn filesystem_pack_closure_reaches_the_checked_compiler_without_conversion() {
     std::fs::write(pack_root.join("schemas/inputs.json"), &inputs).unwrap();
     std::fs::write(pack_root.join("schemas/facts.json"), &facts).unwrap();
     let project: EvidenceProject = serde_json::from_value(json!({
-        "id":"pack-bridge",
+        "project":{"id":"pack-bridge","version":"1"},
         "selectorProfiles":{"record-by-id":{"maximumAggregateBytes":64,"fields":{"record-id":{"type":"string","minimumBytes":1,"maximumBytes":64}}}},
-        "functions":[{"id":"derive-record","interface":"assertion-derive/v1","source":"functions/derive.rhai"}],
+        "functions":{"derive-record":{"interface":"assertion-derive/v1","source":"functions/derive.rhai"}},
         "sources":{"record":{"pack":{"id":"synthetic-register","version":"0.1.0"},"route":"evidence-record","connection":"register","inputs":{"recordId":{"selector":{"role":"subject","profile":"record-by-id","field":"record-id"}}},"acquisitionPosture":"record-transformed"}},
         "assertionDefinitions":{"record-match":{"question":"Does the record match?","semantics":{"requirement":"urn:example:requirement:record","kind":"criterion","evidenceType":"urn:example:evidence:record","referenceFrameworks":["urn:example:framework:record"]},"purpose":"record-check","grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":["urn:example:audience:consumer"]},"subjects":[{"role":"subject","selectors":["record-by-id"]}],"acquisition":{"source":"record"},"derive":{"function":"derive-record"},"outputs":{"matched":{"concept":"urn:example:concept:matched","type":"boolean"}},"validitySeconds":300,"subjectBinding":"audience-scoped","representations":["signed-jws"]}}
     }))

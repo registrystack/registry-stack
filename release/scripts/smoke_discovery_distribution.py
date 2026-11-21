@@ -470,10 +470,9 @@ def _write_project(project: Path, catalog_url: str) -> None:
         "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\n"
         "kind: DiscoveryOrigins\n"
         "origins:\n"
-        "  - originId: evidence-one\n"
+        "  - id: evidence-one\n"
         f"    catalogUrl: {catalog_url}\n"
-        "    profile: registry-discovery-v1alpha1\n"
-        "    enabled: true\n",
+        "    profile: registry-discovery-v1alpha1\n",
         encoding="utf-8",
     )
     (project / "mappings/adult-status.yaml").write_text(

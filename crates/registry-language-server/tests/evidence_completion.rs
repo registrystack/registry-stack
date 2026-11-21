@@ -19,7 +19,7 @@ fn sources_complete_with_the_declared_names() {
 fn functions_complete_only_the_matching_interface() {
     let source = SOURCE.replace(
         "functions:\n",
-        "functions:\n  - {id: retired-extract, interface: source-extract/v1, source: functions/retired.rhai}\n",
+        "functions:\n  retired-extract: {interface: source-extract/v1, source: functions/retired.rhai}\n",
     );
     let p = Project::new(&source);
     p.write(
@@ -41,7 +41,7 @@ fn retired_acquisition_channels_offer_no_sources_or_functions() {
     let source = SOURCE
         .replace(
             "functions:\n",
-            "functions:\n  - {id: retired-extract, interface: source-extract/v1, source: functions/retired.rhai}\n",
+            "functions:\n  retired-extract: {interface: source-extract/v1, source: functions/retired.rhai}\n",
         )
         .replace(
             "    connection: population\n",

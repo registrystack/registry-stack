@@ -361,7 +361,7 @@ fn tls_connector(
     {
         return Err(invalid("no crypto provider could be installed"));
     }
-    if let Some(reference) = &config.trusted_root_certificate_ref {
+    if let Some(reference) = &config.ca_bundle_ref {
         let certificate = resolver
             .resolve(reference)
             .map_err(|_| invalid("the trusted root could not be resolved"))?;

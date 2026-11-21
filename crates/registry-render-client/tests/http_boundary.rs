@@ -62,15 +62,13 @@ async fn client(status: u16, body: Value) -> (RenderClient, tokio::task::JoinHan
 fn request() -> Value {
     json!({"issuedAt":"2026-10-23T00:00:00Z","data":{"number":"R-1"}})
 }
-/// A rendered answer: the labelled digests and their deprecated bare hex.
+/// A rendered answer, with its labelled digests.
 fn rendered(pdf: &[u8], version: &str) -> Value {
     let pdf_hex = hex::encode(Sha256::digest(pdf));
     json!({
         "pdfBase64": base64::engine::general_purpose::STANDARD.encode(pdf),
         "pdfDigest": format!("sha256:{pdf_hex}"),
         "dataDigest": format!("sha256:{}", "0".repeat(64)),
-        "pdfSha256": pdf_hex,
-        "dataSha256": "0".repeat(64),
         "documentVersion": version,
         "warnings": [],
     })
@@ -110,15 +108,12 @@ async fn one_authenticated_document_and_integrity_refusal() {
         .await
         .is_ok());
     task.abort();
-    // The labelled digest must match the bytes, be labelled, and agree with
-    // its deprecated bare hex; a missing digest is refused.
+    // The PDF digest must match the bytes, and both digests must be
+    // labelled; a missing digest is refused.
     let mut refused = Vec::new();
     for (member, value) in [
         ("pdfDigest", json!(format!("sha256:{}", "f".repeat(64)))),
         ("pdfDigest", json!(hex::encode(Sha256::digest(pdf)))),
-        ("pdfSha256", json!("f".repeat(64))),
-        ("dataDigest", json!(format!("sha256:{}", "f".repeat(64)))),
-        ("dataSha256", json!("f".repeat(64))),
         ("dataDigest", json!("0".repeat(64))),
     ] {
         let mut changed = body.clone();

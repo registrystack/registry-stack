@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- BREAKING: in `origins.yaml` (`DiscoveryOrigins`), `origins[].originId` ->
+  `origins[].id`, as a pre-1.0 cleanup. The old key is refused as an unknown
+  key. The id is now a local identifier: a lowercase letter, then up to 63
+  lowercase letters, digits, `_` or `-`. Uppercase letters, `.`, a leading
+  digit and ids longer than 64 characters were accepted before and are now
+  refused at `/origins/N/id`. The `discovery.origins.invalid-origin-id` finding
+  is gone; the shared local identifier check reports instead.
+- `origins[].enabled` is optional and defaults to `true`. `enabled: false`
+  still leaves an origin out of `discoveryctl package`.
+- The index, the resolve API and record ids are unchanged: the published
+  member stays `originId`, and a record id hashes the same inputs as before.
+
 ## 0.47.0 - 2026-11-20
 
 - BREAKING: `discoveryctl api --client` is removed. Pass `--url URL --header @FILE`
@@ -116,4 +128,4 @@
   under `listener`, rename both keys, and multiply each value by 1000.
 
 Migration steps and the diagnostic code table:
-`release/notes/config-conventions/discovery.md`.
+[`release/notes/config-conventions/discovery.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/discovery.md).

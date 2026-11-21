@@ -779,10 +779,39 @@ class MessagingUpgradeTest(unittest.TestCase):
             messaging.project, messaging.package = root / "project", root / "package"
             messaging.secrets, messaging.audit, messaging.port = root, root, 1
             with unittest.mock.patch.object(MODULE, "dump_yaml") as dump:
-                messaging.author(unittest.mock.Mock())
+                messaging.author(unittest.mock.Mock(release=None))
         document = dump.call_args.args[1]
         claim = document["authentication"]["oidc"]["scopeClaim"]
         self.assertEqual(MODULE.MESSAGING_SENDER[claim], "messaging:send")
+
+    def test_each_side_reads_the_database_ca_bundle_under_its_own_key(self) -> None:
+        # Fixed releases, so a threshold set to the wrong release fails here.
+        for release, key in (
+            ((0, 46, 1), "trustedRootCertificateRef"),
+            ((0, 47, 0), "trustedRootCertificateRef"),
+            ((0, 48, 0), "caBundleRef"),
+            (None, "caBundleRef"),
+        ):
+            with self.subTest(release=release):
+                self.assertEqual(MODULE.database_ca_bundle_key(release), key)
+
+    def test_the_upgrade_renames_the_database_ca_bundle_key_the_old_side_wrote(self) -> None:
+        earlier = (0, 47, 0)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            messaging = self.messaging(root)
+            messaging.project, messaging.package = root / "project", root / "package"
+            messaging.secrets, messaging.audit, messaging.port = root, root, 1
+            with unittest.mock.patch.object(MODULE, "dump_yaml", dump_json), \
+                    unittest.mock.patch.object(MODULE, "load_yaml", load_json):
+                messaging.author(unittest.mock.Mock(release=earlier))
+                written = dict(load_json(messaging.runtime)["database"])
+                messaging.rename_database_ca_bundle(unittest.mock.Mock(release=None))
+                upgraded = dict(load_json(messaging.runtime)["database"])
+        reference = "secret:file/postgres-ca.pem"
+        self.assertEqual(written.pop("trustedRootCertificateRef"), reference)
+        self.assertEqual(upgraded.pop("caBundleRef"), reference)
+        self.assertEqual(written, upgraded)
 
 
 # JSON is YAML, so the runtime document round-trips without PyYAML.

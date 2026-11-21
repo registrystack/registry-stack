@@ -242,16 +242,13 @@ async fn hash_mismatches_are_refused() {
         seal_with(200, body, None, None).await.unwrap_err().kind,
         "protocol"
     );
-    // A pdfDigest or pdfSha256 member is not part of the sealed contract.
-    for member in ["pdfDigest", "pdfSha256"] {
-        let mut body = sealed_body("B-T");
-        body[member] = json!(sha(&signed_file()));
-        assert_eq!(
-            seal_with(200, body, None, None).await.unwrap_err().kind,
-            "protocol",
-            "{member}"
-        );
-    }
+    // A pdfDigest member is not part of the sealed contract.
+    let mut body = sealed_body("B-T");
+    body["pdfDigest"] = json!(sha(&signed_file()));
+    assert_eq!(
+        seal_with(200, body, None, None).await.unwrap_err().kind,
+        "protocol"
+    );
 }
 
 #[tokio::test]
@@ -516,7 +513,7 @@ async fn render_takes_the_same_correlation_key() {
     type Received = std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>;
     async fn echoing(State(received): State<Received>, headers: HeaderMap) -> Response {
         let pdf = b"%PDF-fixture";
-        let body = json!({"pdfBase64":base64::engine::general_purpose::STANDARD.encode(pdf),"pdfDigest":sha(pdf),"dataDigest":digest_of("0"),"pdfSha256":sha(pdf).trim_start_matches("sha256:"),"dataSha256":"0".repeat(64),"documentVersion":"receipt v1","warnings":[]});
+        let body = json!({"pdfBase64":base64::engine::general_purpose::STANDARD.encode(pdf),"pdfDigest":sha(pdf),"dataDigest":digest_of("0"),"documentVersion":"receipt v1","warnings":[]});
         let mut response = (
             StatusCode::OK,
             Body::from(serde_json::to_vec(&body).unwrap()),

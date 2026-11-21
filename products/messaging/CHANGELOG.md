@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
+  -> `database.caBundleRef` and, for an `smtp` provider,
+  `providers.*.trustedRootCertificateRef` -> `providers.*.caBundleRef`, as a
+  pre-1.0 cleanup, to match the `caBundleRef` the other TLS blocks use. The old
+  key is refused as an unknown key. The value is unchanged: a secret reference
+  to the PEM CA bundle each connection trusts.
+
 - The metrics listener accepts `metricsListener.networkExposure`. Set
   `metricsListener.networkExposure: container-private` to also allow the
   unspecified address (for example `0.0.0.0`), for a container whose network
@@ -224,7 +231,7 @@ or discard of earlier rows.
   The runtime schema requires the member with `minItems: 1` and
   `uniqueItems: true`. Migration: write a repeated client once; a script that
   matches the product code for an omitted member or an empty list must match
-  the reader codes. See `release/notes/config-conventions/messaging.md`.
+  the reader codes. See [`release/notes/config-conventions/messaging.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/messaging.md).
 - BREAKING: `messagingctl plan` writes `databaseId: not-recorded`, where it
   wrote `notRecorded` (CFG-NAME-2, through the shared `DatabaseIdCheck`).
   Migration: a script that compares the old value compares the new one.
@@ -261,7 +268,7 @@ or discard of earlier rows.
   `database-activation`, `dev-session`, and `messaging-package` replace the
   same words written with underscores. No alias is read or written.
   Migration: a script that matches `artifact` matches the new word; the
-  table is in `release/notes/config-conventions/messaging.md`.
+  table is in [`release/notes/config-conventions/messaging.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/messaging.md).
 - BREAKING: the dispatch queue's job words are spelled in kebab-case, as the
   shared dispatch primitive now writes them: the stored job state
   `dead-lettered` replaces `dead_lettered`, and the audit journal's
@@ -272,24 +279,24 @@ or discard of earlier rows.
   contract and `messagingctl` output are unchanged. Migration: a query or
   alert that matches one of these words in the job table or the audit
   journal must match the new spelling. Details are in
-  `release/notes/config-conventions/messaging.md`.
+  [`release/notes/config-conventions/messaging.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/messaging.md).
 - BREAKING: `authentication.oidc.jwksSource` in `runtime.yaml` is tagged by
   `type`, where it was tagged by `kind`: `jwksSource: {kind: static, ...}`
   becomes `jwksSource: {type: static, ...}`. The values `discovery`, `uri`,
   and `static` are unchanged. `kind` is refused as `config.removed-key` at
   `/authentication/oidc/jwksSource/kind`, naming `type`. Migration: rename the
   key and keep its value; the step is in
-  `release/notes/config-conventions/messaging.md` under "Stable move".
+  [`release/notes/config-conventions/messaging.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/messaging.md) under "Stable move".
 - BREAKING: the `messagingctl --format json` reports of `check` and
   `package` name the project the way the `--project` flag does: `project`,
   `projectDigest`, and `projectFiles` replace `package`, `packageDigest`, and
   `packageFiles`. Migration steps are in
-  `release/notes/config-conventions/messaging.md`.
+  [`release/notes/config-conventions/messaging.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/messaging.md).
 - BREAKING: an optional member written as an explicit `null` is refused with
   `config.null-value` at the member (`actorKind: null` in an access profile,
   `metricsListener: null` in the runtime file). Migration: remove the key;
   leaving it out means what `null` did. Migration steps are in
-  `release/notes/config-conventions/messaging.md`.
+  [`release/notes/config-conventions/messaging.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/messaging.md).
 - BREAKING: `authentication.oidc.assertionIssuers: {}` is refused: delete the
   member to apply no assertion-issuer rule. The generated runtime schema types
   the client keys as `ExternalId` and requires at least one client.
@@ -305,7 +312,7 @@ or discard of earlier rows.
   `attemptTimeoutMilliseconds` and `maximumConcurrentRequests`. Each old
   spelling is refused with its replacement. The audit events and
   `messagingctl` reports name the retention periods with the same keys.
-  Migration steps are in `release/notes/config-conventions/messaging.md`.
+  Migration steps are in [`release/notes/config-conventions/messaging.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/messaging.md).
 - BREAKING: `messagingctl check --runtime-config` reports every refusal at
   its line and column with its own `messaging.<area>.<condition>` or shared
   `config.*` code and a JSON Pointer path, where it reported `config.refused`
@@ -316,7 +323,7 @@ or discard of earlier rows.
   refused by the reader at the member. `RuntimeConfigError::path` is
   replaced by `RuntimeConfigError::pointer`. Migration steps and the
   old-to-new code table are in
-  `release/notes/config-conventions/messaging.md`.
+  [`release/notes/config-conventions/messaging.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/messaging.md).
 - BREAKING: `messaging.yaml`, `template.yaml`, and `provider.yaml` follow
   the Registry Stack configuration conventions. `messaging.yaml` declares
   `apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1`,
@@ -332,13 +339,13 @@ or discard of earlier rows.
   finding at its file, line, and column with a `messaging.<area>.<condition>`
   or shared code, where they reported one `config.refused` or
   `package.project-refused`. Migration steps are in
-  `release/notes/config-conventions/messaging.md`.
+  [`release/notes/config-conventions/messaging.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/messaging.md).
 - BREAKING: every `messagingctl --format json` report names its format with
   `apiVersion: id.registrystack.org/formats/messaging/ctl-report/v1alpha1`
   and `kind: MessagingCtlReport`, written after `ok`, `command`, and
   `status`. `examples/formats/ctl-report.json` is the report `check` writes
   for the starter project. Migration steps are in
-  `release/notes/config-conventions/messaging.md`.
+  [`release/notes/config-conventions/messaging.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/messaging.md).
 - BREAKING: a spent idempotency key is scoped to the caller's issuer and
   subject, as in Scheduling and Casework, instead of the caller's keyed audit
   pseudonym, so rotating `audit.hashKeyRef` no longer frees spent keys: an

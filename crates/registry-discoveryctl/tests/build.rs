@@ -220,7 +220,7 @@ fn authoring_project(catalog_url: &str) -> TempDir {
     fs::write(
         project.path().join("origins.yaml"),
         format!(
-            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - originId: evidence-one\n    catalogUrl: {catalog_url}\n    profile: registry-discovery-v1alpha1\n    enabled: true\n"
+            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - id: evidence-one\n    catalogUrl: {catalog_url}\n    profile: registry-discovery-v1alpha1\n"
         ),
     )
     .expect("origins");
@@ -274,6 +274,36 @@ async fn package_fetches_each_origin_once_and_preserves_semantic_revisions() {
     assert_eq!(first.catalog_revision, second.catalog_revision);
     assert_eq!(first.mapping_revision, second.mapping_revision);
     assert_ne!(first.built_at, second.built_at);
+    task.abort();
+}
+
+#[tokio::test]
+async fn record_id_is_pinned_for_a_fixed_origin_and_binding() {
+    // The expected value is the SHA-256 of the RFC 8785 form of
+    // {"bindingId":"urn:registrystack:discovery:binding:sha256:2f9ccc46...","originId":"evidence-one"},
+    // computed outside this crate. A change to the hash input changes every
+    // published record id, so it must show up here.
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (catalog_url, task) = provider(description(), StatusCode::OK, Arc::clone(&counter)).await;
+    let project = authoring_project(&catalog_url);
+    let index = build_project_at(
+        project.path(),
+        &project.path().join("package"),
+        true,
+        datetime!(2026-08-14 00:00:00 UTC),
+    )
+    .await
+    .expect("build");
+    assert_eq!(index.services.len(), 1);
+    assert_eq!(index.services[0].origin_id, "evidence-one");
+    assert_eq!(
+        index.services[0].binding_id,
+        "urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c"
+    );
+    assert_eq!(
+        index.services[0].record_id,
+        "urn:registrystack:discovery:record:sha256:046e636fff8b099ad08c28d16d4cd4ad3948156b41c0b62088ec7f65431475b1"
+    );
     task.abort();
 }
 
@@ -390,7 +420,7 @@ async fn identical_claimed_service_ids_from_distinct_origins_remain_separate() {
     fs::write(
         project.path().join("origins.yaml"),
         format!(
-            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - originId: evidence-one\n    catalogUrl: {first_url}\n    profile: registry-discovery-v1alpha1\n    enabled: true\n  - originId: evidence-two\n    catalogUrl: {second_url}\n    profile: registry-discovery-v1alpha1\n    enabled: true\n"
+            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - id: evidence-one\n    catalogUrl: {first_url}\n    profile: registry-discovery-v1alpha1\n  - id: evidence-two\n    catalogUrl: {second_url}\n    profile: registry-discovery-v1alpha1\n"
         ),
     )
     .expect("origins");
@@ -636,7 +666,7 @@ async fn compiled_service_bound_leaves_the_previous_output_untouched() {
         String::from("apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n");
     for index in 0..origins_needed {
         origins.push_str(&format!(
-            "  - originId: evidence-{index:03}\n    catalogUrl: {base_url}/catalog-{index:03}.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: true\n"
+            "  - id: evidence-{index:03}\n    catalogUrl: {base_url}/catalog-{index:03}.jsonld\n    profile: registry-discovery-v1alpha1\n"
         ));
     }
     fs::write(project.path().join("origins.yaml"), origins).expect("origins");

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
+  -> `database.caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef`
+  the other TLS blocks use. The old key is refused as an unknown key. The value
+  is unchanged: a secret reference to the PEM CA bundle the connection trusts.
+
 - Report the review completion backlog as metrics:
   `casework_completion_deliveries` by state, including `dead-lettered`, and
   `casework_completion_oldest_undelivered_age_seconds`. Review counts and the
@@ -674,7 +679,7 @@ or discard of earlier rows.
   action name: v0.40.0 does not upgrade v0.39.0 state in place; apply to a
   new database. Audit records are not rewritten. Migration: update the
   adapter and its callers. See
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - The name of a source action follows the local identifier grammar
   (CFG-ID-1): a lowercase letter, then at most 63 lowercase letters,
   digits, underscores, or hyphens. A hyphen is the one character newly
@@ -695,7 +700,7 @@ or discard of earlier rows.
   operations into the task assertion unchanged; the registry still decides
   what each one permits. Migration: none for a template whose operations
   start with a letter and fit in 64 characters; otherwise write the name the
-  registry declares. See `release/notes/config-conventions/casework.md`.
+  registry declares. See [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: the clock, staffing, inbox, paging, and caseload words are
   kebab-case (CFG-NAME-2). The `state` of a clock occurrence is
   `verification-pending` or `source-facts-missing` where it was
@@ -713,7 +718,7 @@ or discard of earlier rows.
   and partial indexes with the new words; no stored clock, staffing, history,
   replay, or cursor value is rewritten. v0.40.0 does not upgrade v0.39.0
   state in place; apply to a new database. Update callers that send or compare
-  these values. See `release/notes/config-conventions/casework.md`,
+  these values. See [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md),
   "Protocol words".
 - BREAKING: the history, event, and audit words are kebab-case (CFG-NAME-2).
   The `kind` of a work item history entry (`caseload-moved`, `draft-saved`,
@@ -742,7 +747,7 @@ or discard of earlier rows.
   already written keep their spelling. v0.40.0 does not upgrade v0.39.0 state
   in place; apply to a new database. Update callers that compare a history
   `kind` or select audit records by event name. See
-  `release/notes/config-conventions/casework.md`, "Protocol words".
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md), "Protocol words".
 - BREAKING: the validation reason of a refused review submission is
   kebab-case (CFG-NAME-2). The `Registry-Casework-Validation-Reason`
   response header, the `validation.reason` member the Rust, Node.js, and
@@ -752,7 +757,7 @@ or discard of earlier rows.
   know the new words and reports a refused submission as a protocol failure,
   so upgrade the client with the runtime. Nothing stored holds a reason, so
   nothing is migrated. See
-  `release/notes/config-conventions/casework.md`, "Protocol words".
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md), "Protocol words".
 - BREAKING: the words `caseworkctl` prints in its JSON reports are
   kebab-case (CFG-NAME-2). `caseworkctl lifecycle` respells nine event ids
   (`attempt_reserved` is `attempt-reserved`, `observe_waiting_applicant` is
@@ -767,7 +772,7 @@ or discard of earlier rows.
   `authoring-input`, `operator-action`, `command-arguments`, or
   `dev-session`. No file, HTTP response, or stored row carries one of these
   words, so nothing is migrated: update a script that compares one. See
-  `release/notes/config-conventions/casework.md`, "Protocol words".
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md), "Protocol words".
 - BREAKING: the review protocol words are kebab-case (CFG-NAME-2), in every
   place Casework writes one. `changes_requested` is `changes-requested` as
   the `lifecycle` of a review request, the `status` of a review result, and
@@ -784,7 +789,7 @@ or discard of earlier rows.
   rewritten. Audit records already written keep their spelling. v0.40.0 does
   not upgrade v0.39.0 state in place; apply to a new database. Update callers
   that compare these values. See
-  `release/notes/config-conventions/casework.md`, "Protocol words".
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md), "Protocol words".
 - BREAKING: `caseworkctl lifecycle` spells the `id` of every enforcement
   layer in lowercase kebab-case, as `bregctl explain lifecycle` spells its
   own: every underscore became a hyphen, so `caller_authentication` is
@@ -849,7 +854,7 @@ or discard of earlier rows.
   package, plan, and apply; `caseworkctl plan` refuses a package that would
   strand in-flight work under a queue, an access profile, or a review
   producer it no longer declares. See
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: activation refuses a policy package that no longer declares the
   review producer of an in-flight review. A review request keeps the id of
   the producer that submitted it, and that producer reads, cancels, and
@@ -881,7 +886,7 @@ or discard of earlier rows.
   Migration: respell the
   value in `casework.yaml` without changing the review kind's `version`,
   then package, plan, and apply. See
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: the two waiting states of a work item are kebab-case
   (CFG-NAME-2): `waiting-applicant` (was `waiting_applicant`) and
   `waiting-application` (was `waiting_application`). An old value under
@@ -894,7 +899,7 @@ or discard of earlier rows.
   does not upgrade v0.39.0 state in place; apply to a new database. Respell
   the two values in `casework.yaml` without changing a template's `version`,
   then package, plan, and apply. See
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: a clock in `casework.yaml` is tagged by `type` (CFG-ID-7), where
   the member was `scope`, and its four values are kebab-case (CFG-NAME-2):
   `first-submitted-at` (was `firstSubmittedAt`), `review-completed` (was
@@ -907,7 +912,7 @@ or discard of earlier rows.
   does not upgrade v0.39.0 state in place; apply to a new database.
   Migration: rename `scope` to `type` and respell the four
   values in `casework.yaml`, then package, plan, and apply. See
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: `authentication.oidc.allowedClients` in `runtime.yaml` is
   required (CFG-EMPTY-2) and takes `unrestricted` or a list of at least one
   client, none repeated (CFG-ID-6). On development loopback an omitted member
@@ -920,7 +925,7 @@ or discard of earlier rows.
   init` and the maintained examples write `allowedClients: unrestricted`.
   Migration: list the clients that call the deployment, or write
   `allowedClients: unrestricted` on development loopback, and write a
-  repeated client once. See `release/notes/config-conventions/casework.md`.
+  repeated client once. See [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: `casework.yaml` names the project in a top-level `project`
   block (CFG-ENV-6), where the block was called `casework`, and `project.id`
   is a local identifier (CFG-ID-1), where it was any non-empty text. The old
@@ -928,7 +933,7 @@ or discard of earlier rows.
   Migration: rename `casework` to `project`, rewrite `project.id` if it is
   not a lowercase letter followed by at most 63 lowercase letters, digits,
   underscores, or hyphens, then package, plan, and apply. See
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: five `caseworkctl` reports respell values in kebab-case
   (CFG-NAME-2) and type their identifiers (CFG-ID-1). `plan` writes
   `databaseIdCheck: not-recorded` (was `notRecorded`); `lifecycle` names the
@@ -974,7 +979,7 @@ or discard of earlier rows.
   pattern of the OpenAPI document accepts `_`. Migration: rewrite a source
   id or a target id that is not a local identifier, then package, plan, and
   apply; no other file changes. The step is in
-  `release/notes/config-conventions/casework.md` under "Stable move".
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md) under "Stable move".
 - BREAKING: `casework.yaml` carries the format identifier as its
   `apiVersion` (CFG-ENV-2):
   `id.registrystack.org/formats/casework/project/v1alpha1`, where it was
@@ -984,7 +989,7 @@ or discard of earlier rows.
   the new one. Migration: write the new `apiVersion`, then run
   `caseworkctl package`, `caseworkctl plan`, and `caseworkctl apply`,
   because the header is part of the packaged policy. The step is in
-  `release/notes/config-conventions/casework.md` under "Stable move".
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md) under "Stable move".
 - BREAKING: each `caseworkctl --format json` report names its own format
   (CFG-ENV-2, CFG-ENV-3). `apiVersion` is
   `id.registrystack.org/formats/casework/<report>/v1alpha3`, such as
@@ -994,7 +999,7 @@ or discard of earlier rows.
   21 reports. Every other member, the schema file names, and the schema
   `$id` values are unchanged. Migration: a script that selects a report by
   `kind` or checks `apiVersion` matches the new values; the table is in
-  `release/notes/config-conventions/casework.md` under "Stable move".
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md) under "Stable move".
 - BREAKING: the keys of three id-keyed `runtime.yaml` maps are typed
   (CFG-ID-1, CFG-ID-2). A key under `sources` is a local identifier
   (`^[a-z][a-z0-9_-]{0,63}$`), the grammar `casework.yaml` already holds a
@@ -1004,7 +1009,7 @@ or discard of earlier rows.
   `config.invalid-value` at the key's own pointer. Migration: none for a
   file the runtime started with; rewrite an empty, over-long, or
   control-character key. The step is in
-  `release/notes/config-conventions/casework.md` under "Stable move".
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md) under "Stable move".
 - BREAKING: four `runtime.yaml` keys take the names the conventions give a
   retention period, an attempt timeout, and a retry delay (CFG-NAME-5):
   `audit.retainDays` is `audit.retentionDays`,
@@ -1014,7 +1019,7 @@ or discard of earlier rows.
   `attemptTimeoutMilliseconds` and `retrySeconds` is `retryDelaySeconds`.
   Values, units, defaults, and bounds are unchanged. Each old key is refused
   as `config.removed-key`, naming its replacement. Migration: rename the
-  keys; the step is in `release/notes/config-conventions/casework.md` under
+  keys; the step is in [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md) under
   "Stable move".
 - BREAKING: `runtime.yaml` carries `apiVersion:
   id.registrystack.org/formats/casework/runtime/v1alpha1`, the format
@@ -1023,14 +1028,14 @@ or discard of earlier rows.
   refused as `config.retired-api-version` at `/apiVersion`, naming the new
   one; `kind: CaseworkRuntimeConfig` is unchanged. Migration: replace the
   `apiVersion` line; the step is in
-  `release/notes/config-conventions/casework.md` under "Stable move".
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md) under "Stable move".
 - BREAKING: `authentication.oidc.jwksSource` in `runtime.yaml` is tagged by
   `type`, where it was tagged by `kind`: `jwksSource: {kind: static, ...}`
   becomes `jwksSource: {type: static, ...}`. The values `discovery`, `uri`,
   and `static` are unchanged. `kind` is refused as `config.removed-key` at
   `/authentication/oidc/jwksSource/kind`, naming `type`. Migration: rename the
   key and keep its value; the step is in
-  `release/notes/config-conventions/casework.md` under "Stable move".
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md) under "Stable move".
 - `caseworkctl simulate --format json` carries `diagnostics`, the warnings the
   readers reported for `casework.yaml`, the simulation, and its holiday sets.
 - `caseworkctl dev grant --format json` carries `diagnostics`, an empty list,
@@ -1043,14 +1048,14 @@ or discard of earlier rows.
   line and column with its own code, `casework.project.invalid` is retired,
   and `null`, anchors, aliases, tags, and numbers or booleans written where
   text is expected are refused. Migration steps and the code table are in
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: `casework.yaml` has a published JSON Schema, which
   `caseworkctl init` copies into the project and names in a modeline. The
   reader refuses an out-of-range number, a repeated item in a set, and an
   issuer that is not an `http` or `https` URL at its position, with
   `config.out-of-range`, `config.duplicate-item`, and `config.invalid-value`.
   Migration steps and the code table are in
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: the `casework` runtime and `caseworkctl` refuse a `runtime.yaml`
   member written as `null`, `~`, or an empty value, where it read as absent;
   omit the key instead. A malformed secret reference, URL, or digest is
@@ -1058,7 +1063,7 @@ or discard of earlier rows.
   out-of-range BReg binding timeout or reconciliation interval or audit
   rotation bound with `config.out-of-range`. `taskAuthority.issuer` must be an
   absolute `http` or `https` URL. Migration steps are in
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: a refused `runtime.yaml` is reported in full: `casework serve`
   prints every problem in the file at its line and column after one
   sentence, and `caseworkctl plan`, `apply`, `status`, `doctor`, and `dev`
@@ -1070,7 +1075,7 @@ or discard of earlier rows.
   checks a runtime file offline against the project, and `--environment`
   checks the values its `${NAME}` expressions take from the current
   environment. Migration steps and the code table are in
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: `caseworkctl check` and `caseworkctl test` report a
   `diagnostics` list in the shared diagnostic shape, where they reported
   `findings`, and count the files they read in `filesChecked`. A missing
@@ -1078,7 +1083,7 @@ or discard of earlier rows.
   the JSON pointer `/sources/N/description`, and an `error` under
   `--production`. `--deny-warnings` replaces `--deny-findings`. Migration
   steps and the old-to-new table are in
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: every refusal `caseworkctl check`, `explain`, `simulate`, and
   `package` make of a project against its imported source descriptions is
   its own diagnostic, placed at the line and column of `casework.yaml` it
@@ -1087,7 +1092,7 @@ or discard of earlier rows.
   The `--against-breg-package` refusals keep their codes and are placed at
   `/sources` or `/sources/N/description`; the stale pin no longer repeats
   either revision. Migration steps and the old-to-new table are in
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: fixtures, simulations, and holiday sets are read through the
   shared configuration reader and have published JSON Schemas. A fixture
   declares `apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1`,
@@ -1103,20 +1108,20 @@ or discard of earlier rows.
   `caseworkctl test` also runs simulations, and each failure is its own
   positioned diagnostic.
   Migration steps and the code table are in
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: a project declares at most 64 sources (`casework.source.too-many`
   at `/sources`), and `caseworkctl check` and `test` refuse a `fixtures/`,
   `simulations/`, or `simulations/holiday-sets/` directory holding more than
   1024 YAML files (`casework.project.too-many-files`), so `filesChecked`
   states its maximum. Migration steps are in
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: `caseworkctl source add` reports its warnings in `diagnostics`,
   where it reported them in `findings`. Each is a `warning` placed at the
   JSON pointer of the BReg `registry.yaml` member it concerns, with that
   file's line and column under `source`; `artifact` is gone and the message
   names no value. `source add` reads `casework.yaml` through the project
   reader, so an invalid project is refused with positioned diagnostics.
-  Migration steps are in `release/notes/config-conventions/casework.md`.
+  Migration steps are in [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: `dev-clients.yaml` declares
   `apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1`
   and `kind: CaseworkDevClients` in place of `version: 1`, is read through
@@ -1133,7 +1138,7 @@ or discard of earlier rows.
   identifiers, a service client's claim values are text,
   `taskAuthority.issuer` is an absolute URL, and a source binding no longer
   takes its timeouts or reconciliation interval.
-  Migration steps are in `release/notes/config-conventions/casework.md`.
+  Migration steps are in [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - BREAKING: `.casework/dev/state.json`, the session state `caseworkctl dev`
   retains, declares
   `apiVersion: id.registrystack.org/formats/casework/dev-state/v1alpha1`
@@ -1156,7 +1161,7 @@ or discard of earlier rows.
   to the project schema for the policy they carry. The reports themselves are
   unchanged. Migration: load the schemas by their new identifiers, and give a
   validator the project schema beside those two; the table is in
-  `release/notes/config-conventions/casework.md`.
+  [`release/notes/config-conventions/casework.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/casework.md).
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

@@ -214,7 +214,7 @@ impl Fixture {
         let config = DatabaseConfig {
             runtime_url_ref: format!("secret:env/{variable}"),
             migration_url_ref: format!("secret:env/{variable}"),
-            trusted_root_certificate_ref: None,
+            ca_bundle_ref: None,
             test_only_plaintext: true,
         };
         let (audit, capture) = CaseworkAudit::capture();

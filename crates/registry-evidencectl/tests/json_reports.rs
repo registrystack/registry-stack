@@ -64,6 +64,44 @@ fn help_honours_the_global_json_format_with_the_catalog_schema() {
     }
 }
 
+/// The check report presents the project by the id and version its project
+/// block declares.
+#[test]
+fn a_check_report_presents_the_project_id_and_version() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let project = workspace.path().join("project");
+    let output = evidencectl()
+        .args([
+            "init",
+            &project.display().to_string(),
+            "--transport",
+            "sqlite-extract",
+            "--profile",
+            "local",
+        ])
+        .output()
+        .expect("scaffold project");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = fs::read_to_string(project.join("evidence.yaml")).expect("project text");
+    assert!(
+        text.contains("\nproject:\n  id: local-evidence\n  version: "),
+        "{text}"
+    );
+
+    let output = evidencectl()
+        .args(["--format", "json", "check", &project.display().to_string()])
+        .output()
+        .expect("run check");
+    let report = json_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{report}");
+    assert_eq!(report["projectPresentation"]["id"], "local-evidence");
+    assert_eq!(report["projectPresentation"]["version"], "1");
+}
+
 /// The refused report answers the same key set a passing report answers, so a
 /// reader inspects one shape instead of branching on the outcome.
 #[test]

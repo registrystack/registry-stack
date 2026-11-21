@@ -127,7 +127,7 @@ The other blocks are checked, so a deployment written now keeps its meaning when
   The connection always uses TLS and verifies the server certificate and its host name; an `sslmode` in the URL does not change that.
 - `database.migrationUrlRef` is the secret reference to the PostgreSQL URL that `documentsctl apply` connects with to apply the schema, record the package in the activation ledger, and grant the runtime role.
   The runtime never uses it, and it requires TLS like the runtime URL.
-- `database.trustedRootCertificateRef` is an optional secret reference to a PEM bundle of the CA certificates that sign the database certificate, for a private CA.
+- `database.caBundleRef` is an optional secret reference to a PEM bundle of the CA certificates that sign the database certificate, for a private CA.
   When it is set, these are the only roots trusted; when it is omitted, the system's trusted roots are used.
 - `database.testOnlyPlaintext` is accepted only by builds with the `postgres-test` feature, for the PostgreSQL test suites.
   An operator build refuses it with `documents.runtime.plaintext-database`, so a local run needs a database that serves TLS too.

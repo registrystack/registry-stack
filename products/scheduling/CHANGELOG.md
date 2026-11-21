@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
+  -> `database.caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef`
+  the other TLS blocks use. The old key is refused as an unknown key. The value
+  is unchanged: a secret reference to the PEM CA bundle the connection trusts.
+
 - Serve Prometheus metrics on an optional operator-private listener. Set
   `metricsListener.bind` in `runtime.yaml` to a loopback or private address,
   distinct from the serving listener. It is off by default, and the serving
@@ -413,7 +418,7 @@ or discard of earlier rows.
   keyword `unrestricted`, which Scheduling accepts in no mode. The maintained
   examples write `allowedClients: [scheduling-booking-agent]`. Migration:
   list the clients that call the deployment, and write a repeated client
-  once. See `release/notes/config-conventions/scheduling.md`.
+  once. See [`release/notes/config-conventions/scheduling.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/scheduling.md).
 - BREAKING: `authentication.oidc.assertionIssuers` in the runtime file
   refuses a client written with an empty issuer list (CFG-EMPTY-2), as
   `config.invalid-value` at `/authentication/oidc/assertionIssuers/<client>`;
@@ -436,7 +441,7 @@ or discard of earlier rows.
   replaces its underscores with hyphens. No schema version rewrites a stored
   word: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
   database.
-  The tables are in `release/notes/config-conventions/scheduling.md`, under
+  The tables are in [`release/notes/config-conventions/scheduling.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/scheduling.md), under
   "Protocol words".
 - BREAKING: `schedulingctl` reports write their own words in kebab-case. A
   diagnostic's `artifact` is `scheduling-project`, `runtime-configuration`,
@@ -458,7 +463,7 @@ or discard of earlier rows.
   `scheduling.hook.proposal-unsupported`, where it was
   `scheduling.hook.proposal_unsupported`. Records and rows already written
   keep their spelling. The old to new table is in
-  `release/notes/config-conventions/scheduling.md`, under "Protocol words".
+  [`release/notes/config-conventions/scheduling.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/scheduling.md), under "Protocol words".
 - `schedulingctl check --runtime-config` is package-free by design (the
   runtime file is checked against the project, as the other products' offline
   checks are); its help and `RUNTIME-CONFIG.md` now say that `package.root` is
@@ -477,14 +482,14 @@ or discard of earlier rows.
   finding was `scheduling.project.duplicate-identifier`,
   `scheduling.records.duplicate-identifier`, or
   `scheduling.fixture.duplicate-identifier`. Migration steps are in
-  `release/notes/config-conventions/scheduling.md`.
+  [`release/notes/config-conventions/scheduling.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/scheduling.md).
 - BREAKING: `authentication.oidc.jwksSource` in `runtime.yaml` is tagged by
   `type`, where it was tagged by `kind`: `jwksSource: {kind: static, ...}`
   becomes `jwksSource: {type: static, ...}`. The values `discovery`, `uri`,
   and `static` are unchanged. `kind` is refused as `config.removed-key` at
   `/authentication/oidc/jwksSource/kind`, naming `type`. Migration: rename the
   key and keep its value; the step is in
-  `release/notes/config-conventions/scheduling.md` under "Stable move".
+  [`release/notes/config-conventions/scheduling.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/scheduling.md) under "Stable move".
 - BREAKING: `authentication.oidc.assertionIssuers: {}` is refused: delete the
   member to apply no assertion-issuer rule. The generated runtime schema types
   the client keys as `ExternalId` and requires at least one client.
@@ -501,7 +506,7 @@ or discard of earlier rows.
   and a fixture expectation are tagged by `type` with kebab-case values, and
   an empty restricting list is refused. Each old spelling is refused with
   its replacement. The HTTP contract and the clients are unchanged.
-  Migration steps are in `release/notes/config-conventions/scheduling.md`.
+  Migration steps are in [`release/notes/config-conventions/scheduling.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/scheduling.md).
 - BREAKING: the runtime file's `apiVersion` is
   `id.registrystack.org/formats/scheduling/runtime/v1alpha1`, the retention
   periods are `attemptReceiptRetentionDays` and `hookPayloadRetentionDays`,
@@ -512,7 +517,7 @@ or discard of earlier rows.
   at `runtime.yaml`. `RuntimeConfigError::path` is replaced by
   `RuntimeConfigError::pointer` and `RuntimeConfigError::code`. Migration
   steps and the old-to-new code table are in
-  `release/notes/config-conventions/scheduling.md`.
+  [`release/notes/config-conventions/scheduling.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/scheduling.md).
 - BREAKING: `schedulingctl check` exits 1 on any finding, reports
   `diagnostics` and `filesChecked` in place of `findings`, takes
   `--deny-warnings` in place of `--deny-findings`, and checks a runtime file
@@ -524,7 +529,7 @@ or discard of earlier rows.
   `schedulingctl.activation.earlier-release`, and this release makes no
   promise to upgrade a database v0.39.0 wrote, because the product has no
   production deployment yet. Start from a new database. Migration steps are in
-  `release/notes/config-conventions/scheduling.md`.
+  [`release/notes/config-conventions/scheduling.md`](https://github.com/registrystack/registry-stack/blob/v0.40.0/release/notes/config-conventions/scheduling.md).
 - A hold or an appointment is owned by the verified token issuer and subject
   that booked it, stored on the claim, rather than by the audit-keyed
   pseudonym of that pair. Listing by external reference, reading,

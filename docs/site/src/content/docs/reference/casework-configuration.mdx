@@ -164,7 +164,7 @@ When the two name different PostgreSQL roles, apply grants the runtime role the 
 Those privileges are schema usage, read and write on the Casework tables, and read-only on the activation ledger and the schema migration table.
 When they name one role, or the runtime role can still write the ledger, apply records `single`, and `status` and `doctor` say that the runtime credential can activate packages.
 
-`database.trustedRootCertificateRef` is optional.
+`database.caBundleRef` is optional.
 Plaintext PostgreSQL is available only to builds with the `postgres-test` feature and an explicit `testOnlyPlaintext: true` setting.
 
 Unless a database URL sets them, every Casework connection uses these values, all in seconds as Casework reads the URL:

@@ -333,7 +333,7 @@ pub(crate) fn compile_with_target(
     let authority = if let Some(target_model) = &target.normalized_target {
         let (project_model, _) = crate::normalized::read(snapshot.root())
             .map_err(|error| crate::authored::project_refusal(error, snapshot.root(), project))?;
-        if target_model.project != project_model.id {
+        if target_model.project != project_model.project.id {
             return Err(TargetDocumentDiagnostic {
                 code: "evidence.target.project",
                 path: format!(

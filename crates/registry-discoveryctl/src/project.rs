@@ -18,8 +18,9 @@ use std::path::{Component, Path, PathBuf};
 
 use registry_discovery::{check_runtime, RUNTIME_KIND};
 use registry_platform_yaml::{
-    ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, NodeValue, Position,
-    Reader, Related, RemovedKey, Report, Severity, Source, UniqueList, Url, MAXIMUM_DOCUMENT_BYTES,
+    ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, LocalId, NodeValue,
+    Position, Reader, Related, RemovedKey, Report, Severity, Source, UniqueList, Url,
+    MAXIMUM_DOCUMENT_BYTES,
 };
 use serde::{Deserialize, Serialize};
 
@@ -38,10 +39,7 @@ pub const MAX_ORIGINS: usize = 128;
 pub const MAX_MAPPINGS: usize = 2_048;
 pub const MAX_ALTERNATIVES: usize = 32;
 pub const MAX_EVIDENCE_TYPES_PER_ALTERNATIVE: usize = 32;
-const MAX_ORIGIN_ID_BYTES: usize = 128;
 const MAX_IDENTIFIER_CHARACTERS: usize = 4_096;
-#[cfg(feature = "schema")]
-const ORIGIN_ID_PATTERN: &str = "^[A-Za-z0-9._-]+$";
 #[cfg(feature = "schema")]
 const IDENTIFIER_PATTERN: &str = "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$";
 #[cfg(feature = "schema")]
@@ -102,21 +100,21 @@ pub struct OriginsFile {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ApprovedOrigin {
-    /// The origin's name in this project: 1 to 128 characters from `A-Z`,
-    /// `a-z`, `0-9`, `.`, `_`, and `-`.
-    #[cfg_attr(
-        feature = "schema",
-        schemars(length(min = 1, max = MAX_ORIGIN_ID_BYTES), regex(pattern = ORIGIN_ID_PATTERN))
-    )]
-    pub origin_id: String,
+    /// The origin's name in this project, unique among its origins.
+    pub id: LocalId,
     /// Exact production HTTPS URL without credentials, query, or fragment.
     /// Loopback HTTP is a development exception `discoveryctl` accepts only
     /// with `--allow-loopback`, not part of this production authoring schema.
     #[cfg_attr(feature = "schema", schemars(extend("pattern" = CATALOG_URL_PATTERN)))]
     pub catalog_url: Url,
     pub profile: OriginProfile,
-    /// Whether `discoveryctl package` collects this origin.
+    /// Whether `discoveryctl package` collects this origin. Absent, it does.
+    #[serde(default = "enabled_by_default")]
     pub enabled: bool,
+}
+
+fn enabled_by_default() -> bool {
+    true
 }
 
 /// One requirement and the evidence type alternatives that satisfy it.
@@ -482,32 +480,22 @@ fn check_origins(
     let mut ids: BTreeMap<&str, String> = BTreeMap::new();
     let mut urls: BTreeMap<&str, String> = BTreeMap::new();
     for (index, origin) in file.origins.iter().enumerate() {
-        let id_pointer = format!("/origins/{index}/originId");
+        let id_pointer = format!("/origins/{index}/id");
         let url_pointer = format!("/origins/{index}/catalogUrl");
-        if !valid_origin_id(&origin.origin_id) {
-            findings.push(error_at(
-                document,
-                "discovery.origins.invalid-origin-id",
-                &id_pointer,
-                "an originId is 1 to 128 characters from A-Z, a-z, 0-9, `.`, `_`, and `-`",
-                "Rename the origin using only letters, digits, `.`, `_`, and `-`.",
-            ));
-        } else if let Some(first) = ids.get(origin.origin_id.as_str()) {
+        if let Some(first) = ids.get(origin.id.as_str()) {
             let mut diagnostic = error_at(
                 document,
                 "discovery.origins.duplicate-origin-id",
                 &id_pointer,
-                "an earlier origin already has this originId",
-                "Give each origin its own originId.",
+                "an earlier origin already has this id",
+                "Give each origin its own id.",
             );
-            diagnostic.related.push(related(
-                document,
-                first,
-                "the first origin with this originId",
-            ));
+            diagnostic
+                .related
+                .push(related(document, first, "the first origin with this id"));
             findings.push(diagnostic);
         } else {
-            ids.insert(&origin.origin_id, id_pointer);
+            ids.insert(origin.id.as_str(), id_pointer);
         }
         if !valid_catalog_url(origin.catalog_url.as_str(), allow_loopback) {
             findings.push(error_at(
@@ -947,14 +935,6 @@ fn valid_catalog_url(value: &str, allow_loopback: bool) -> bool {
         && registry_discovery_profile::is_valid_endpoint_url(value, allow_loopback)
 }
 
-fn valid_origin_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_ORIGIN_ID_BYTES
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-}
-
 fn valid_identifier(value: &str) -> bool {
     value.chars().count() <= MAX_IDENTIFIER_CHARACTERS
         && registry_discovery::valid_uri_identifier(value)
@@ -1012,10 +992,9 @@ mod tests {
     const ORIGINS: &str = r#"apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1
 kind: DiscoveryOrigins
 origins:
-  - originId: evidence-one
+  - id: evidence-one
     catalogUrl: https://unreachable.example.invalid/catalog.jsonld
     profile: registry-discovery-v1alpha1
-    enabled: true
 "#;
 
     const MAPPING: &str = r#"apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1
@@ -1033,6 +1012,50 @@ alternatives:
         let root = project(ORIGINS, &[]);
         let checked = check_project(root.path(), false).expect("offline check");
         assert_eq!(checked.origins.len(), 1);
+    }
+
+    #[test]
+    fn an_origin_is_enabled_unless_it_says_enabled_false() {
+        let root = project(ORIGINS, &[]);
+        let checked = check_project(root.path(), false).expect("enabled by default");
+        assert_eq!(checked.origins[0].id.as_str(), "evidence-one");
+        assert!(checked.origins[0].enabled);
+
+        let disabled = ORIGINS.replace(
+            "    profile: registry-discovery-v1alpha1\n",
+            "    profile: registry-discovery-v1alpha1\n    enabled: false\n",
+        );
+        let root = project(&disabled, &[]);
+        let checked = check_project(root.path(), false).expect("explicitly disabled");
+        assert!(!checked.origins[0].enabled);
+    }
+
+    #[test]
+    fn an_origin_id_is_a_local_identifier() {
+        for invalid in ["Evidence-One", "evidence.one", "1-evidence"] {
+            let origins = ORIGINS.replace("id: evidence-one", &format!("id: {invalid}"));
+            let root = project(&origins, &[]);
+            let diagnostics = refusal(root.path());
+            assert_eq!(diagnostics.len(), 1, "{invalid}");
+            assert_eq!(diagnostics[0].path, "/origins/0/id", "{invalid}");
+            assert!(
+                diagnostics[0].message.contains("local identifier"),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_origin_id_key_is_id_and_origin_id_is_an_unknown_key() {
+        let origins = ORIGINS.replace("  - id: evidence-one", "  - originId: evidence-one");
+        let root = project(&origins, &[]);
+        let diagnostics = refusal(root.path());
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "config.unknown-key" && diagnostic.path == "/origins/0/originId"
+            }),
+            "{diagnostics:?}"
+        );
     }
 
     #[test]
@@ -1103,7 +1126,7 @@ alternatives:
     #[test]
     fn duplicate_origins_point_at_the_first_one() {
         let origins = format!(
-            "{ORIGINS}  - originId: evidence-one\n    catalogUrl: https://unreachable.example.invalid/catalog.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: false\n"
+            "{ORIGINS}  - id: evidence-one\n    catalogUrl: https://unreachable.example.invalid/catalog.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: false\n"
         );
         let root = project(&origins, &[]);
         let diagnostics = refusal(root.path());
@@ -1114,9 +1137,9 @@ alternatives:
                 "discovery.origins.duplicate-catalog-url"
             ]
         );
-        assert_eq!(diagnostics[0].path, "/origins/1/originId");
-        assert_eq!(line_and_column(&diagnostics[0]), (Some(8), Some(15)));
-        assert_eq!(diagnostics[0].related[0].path, "/origins/0/originId");
+        assert_eq!(diagnostics[0].path, "/origins/1/id");
+        assert_eq!(line_and_column(&diagnostics[0]), (Some(7), Some(9)));
+        assert_eq!(diagnostics[0].related[0].path, "/origins/0/id");
         assert_eq!(diagnostics[0].related[0].line, Some(4));
     }
 
@@ -1205,7 +1228,7 @@ alternatives:
     fn every_unknown_key_is_reported_with_its_position() {
         let origins = ORIGINS
             .replace("catalogUrl:", "catalogURL:")
-            .replace("enabled:", "enabled: true\n    disabled:");
+            .replace("profile:", "disabled: true\n    profile:");
         let root = project(&origins, &[]);
         let diagnostics = refusal(root.path());
         let unknown: Vec<_> = diagnostics
@@ -1217,7 +1240,7 @@ alternatives:
             unknown,
             [
                 ("/origins/0/catalogURL", (Some(5), Some(5))),
-                ("/origins/0/disabled", (Some(8), Some(5))),
+                ("/origins/0/disabled", (Some(6), Some(5))),
             ]
         );
         assert!(diagnostics[0].suggested_action.contains("catalogUrl"));
