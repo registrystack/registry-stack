@@ -696,20 +696,7 @@ async fn a_proposal_applied_by_a_bound_profile_is_refused() {
 /// Run one automatic application attempt and return the Proposal's
 /// application status, as the protection officer reads it.
 async fn run_automatic(history: &History, submitted: &registry_breg_client::BRegProposal) -> Value {
-    history
-        .fixture
-        .mutations
-        .run_automatic_proposal_once_for_test()
-        .await
-        .expect("the automatic attempt runs");
-    let proposal = history
-        .get(
-            &format!("/v1/proposals/{}", submitted.id()),
-            PROTECTION_OFFICER,
-        )
-        .await;
-    assert_eq!(proposal.status, 200, "{}", proposal.text());
-    proposal.body["applicationStatus"].clone()
+    run_automatic_with(history, &history.fixture.mutations, submitted).await
 }
 
 /// An automatic Proposal is checked against the profile that submitted it. An
@@ -779,6 +766,223 @@ async fn an_automatic_proposal_of_the_emergency_registrar_applies() {
     assert_eq!(p["emailAddress"], REDIRECTED_EMAIL);
     assert_eq!(p["historyProtected"], true);
     history.fixture.finish().await;
+}
+
+/// Assert that one automatic attempt left the Proposal blocked for correction
+/// and `f` unchanged.
+async fn assert_automatic_refused(history: &History, seeded: &Seeded, application: &Value) {
+    assert_eq!(application["state"], "blocked", "{application}");
+    assert_eq!(application["reason"], "attempts-exhausted", "{application}");
+    assert_eq!(application["recovery"], "correct-input", "{application}");
+    assert_no_sentinel(&application.to_string());
+    assert_unchanged(history, seeded).await;
+}
+
+/// Rewrite the stored snapshot of the protection officer's submitted version
+/// with `snapshot`, an SQL expression over the stored `snapshot`. The
+/// submitting profile lies outside the snapshot digest, so the version still
+/// loads.
+async fn rewrite_snapshot(
+    history: &History,
+    submitted: &registry_breg_client::BRegProposal,
+    snapshot: &str,
+) {
+    let rewritten = history
+        .fixture
+        .database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_internal.registry_proposal_submissions SET snapshot = {snapshot}
+                 WHERE proposal_id::text = $1 AND snapshot->>'submittedProfile' = $2"
+            ),
+            &[&submitted.id().to_string(), &PROTECTION_OFFICER],
+        )
+        .await
+        .expect("the snapshot is rewritten");
+    assert_eq!(rewritten, 1, "the submit recorded the protection officer");
+}
+
+/// A version that records no submitting profile is checked against the
+/// system apply profile, which no condition exempts, so even an exempt
+/// submitter's Proposal is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_automatic_proposal_whose_version_records_no_profile_is_blocked() {
+    let history = start().await;
+    let seeded = seed(&history).await;
+    let submitted = submit_as(
+        &history,
+        PROTECTION_OFFICER,
+        "correct-person-email",
+        &seeded.f,
+        REDIRECTED_EMAIL,
+    )
+    .await;
+    rewrite_snapshot(&history, &submitted, "snapshot - 'submittedProfile'").await;
+    let application = run_automatic(&history, &submitted).await;
+    assert_automatic_refused(&history, &seeded, &application).await;
+    history.fixture.finish().await;
+}
+
+/// The record timer is never withheld from, but a Proposal version that names
+/// it as the submitter is checked against the system apply profile instead.
+/// No submit records the timer, so the stored version is rewritten.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_automatic_proposal_whose_version_names_the_record_timer_is_blocked() {
+    let history = start().await;
+    let seeded = seed(&history).await;
+    let submitted = submit_as(
+        &history,
+        PROTECTION_OFFICER,
+        "correct-person-email",
+        &seeded.f,
+        REDIRECTED_EMAIL,
+    )
+    .await;
+    rewrite_snapshot(
+        &history,
+        &submitted,
+        "jsonb_set(snapshot, '{submittedProfile}', '\"system-record-timer\"')",
+    )
+    .await;
+    let application = run_automatic(&history, &submitted).await;
+    assert_automatic_refused(&history, &seeded, &application).await;
+    history.fixture.finish().await;
+}
+
+/// A mutation service over the fixture's database that holds `source` as its
+/// registry, as after an activation that changes only access profiles and
+/// their exemptions. `person` declares no `record` condition, so its schema is
+/// the one the fixture installed.
+fn reconfigured_mutations(
+    history: &History,
+    source: Value,
+) -> registry_breg::postgres::PostgresRecordMutationService {
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap())
+        .expect("the reconfigured fixture parses");
+    let registry = compile_project(&project, &[], CompileProfile::Authoring)
+        .unwrap_or_else(|errors| panic!("the reconfigured fixture compiles: {errors:#?}"));
+    assert_eq!(
+        registry.registry_id(),
+        history.fixture.registry.registry_id()
+    );
+    let lock_key =
+        registry_breg::postgres::RegistryLockKey::derive(registry.registry_id()).unwrap();
+    let (audit, _capture) = registry_breg::audit::test_support::capturing(
+        registry_platform_audit::AuditProfile::production_from_secret_bytes(vec![0x61; 32].into())
+            .unwrap(),
+    );
+    registry_breg::postgres::PostgresRecordMutationService::new(
+        history.fixture.pool.clone(),
+        std::sync::Arc::new(registry),
+        history.fixture.identity.clone(),
+        "client-capability-test",
+        lock_key,
+        std::time::Duration::from_secs(2),
+        audit,
+    )
+}
+
+/// Run one automatic attempt through `mutations` and return the Proposal's
+/// application status, as the protection officer reads it.
+async fn run_automatic_with(
+    history: &History,
+    mutations: &registry_breg::postgres::PostgresRecordMutationService,
+    submitted: &registry_breg_client::BRegProposal,
+) -> Value {
+    mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .expect("the automatic attempt runs");
+    let proposal = history
+        .get(
+            &format!("/v1/proposals/{}", submitted.id()),
+            PROTECTION_OFFICER,
+        )
+        .await;
+    assert_eq!(proposal.status, 200, "{}", proposal.text());
+    proposal.body["applicationStatus"].clone()
+}
+
+/// The write fixture with the protection officer removed from the
+/// configuration: its profile and every exemption that names it.
+fn without_protection_officer() -> Value {
+    let mut source = writes_source();
+    source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|profile| profile["id"] != PROTECTION_OFFICER);
+    for record in source["recordTypes"].as_array_mut().unwrap() {
+        for condition in record["disclosureConditions"].as_array_mut().unwrap() {
+            condition["exemptProfiles"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|profile| profile != PROTECTION_OFFICER);
+        }
+    }
+    source
+}
+
+/// The write fixture with the protection officer no longer exempt from the
+/// contacts condition. It no longer filters on the email it would then not
+/// read, as `bregctl check` requires.
+fn protection_officer_bound_by_contacts() -> Value {
+    let mut source = writes_source();
+    for record in source["recordTypes"].as_array_mut().unwrap() {
+        if record["id"] != "person" {
+            continue;
+        }
+        let contacts = &mut record["disclosureConditions"][0];
+        assert_eq!(contacts["id"], "hide-contacts");
+        contacts["exemptProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|profile| profile != PROTECTION_OFFICER);
+    }
+    let officer = source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|profile| profile["id"] == PROTECTION_OFFICER)
+        .unwrap();
+    let grant = &mut officer["permissions"]["records"][0];
+    assert_eq!(grant["recordType"], "person");
+    grant["filterableFields"] = json!(["family-name"]);
+    source
+}
+
+/// Submit the protection officer's automatic Proposal on `f`, then run its
+/// attempt under `source`. The exemption is read from the configuration that
+/// applies the Proposal, not the one it was submitted under.
+async fn assert_blocked_after_reconfiguration(source: Value) {
+    let history = start().await;
+    let seeded = seed(&history).await;
+    let submitted = submit_as(
+        &history,
+        PROTECTION_OFFICER,
+        "correct-person-email",
+        &seeded.f,
+        REDIRECTED_EMAIL,
+    )
+    .await;
+    let mutations = reconfigured_mutations(&history, source);
+    let application = run_automatic_with(&history, &mutations, &submitted).await;
+    assert_automatic_refused(&history, &seeded, &application).await;
+    history.fixture.finish().await;
+}
+
+/// A submitter removed from the configuration before the apply is bound by
+/// every condition, so its automatic Proposal is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_automatic_proposal_of_a_removed_submitter_is_blocked() {
+    assert_blocked_after_reconfiguration(without_protection_officer()).await;
+}
+
+/// A submitter the condition no longer exempts at the apply is bound, so its
+/// automatic Proposal is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_automatic_proposal_of_a_submitter_no_longer_exempt_is_blocked() {
+    assert_blocked_after_reconfiguration(protection_officer_bound_by_contacts()).await;
 }
 
 /// A bound profile may not tombstone a record that a `fields` or a `history`
