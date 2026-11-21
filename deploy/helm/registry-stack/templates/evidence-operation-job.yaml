@@ -12,7 +12,7 @@ metadata:
   annotations:
     registrystack.org/package-digest: {{ .Values.evidence.bundle.expectedDigest | quote }}
 spec:
-  backoffLimit: {{ .Values.evidence.operation.backoffLimit }}
+  backoffLimit: 0
   ttlSecondsAfterFinished: {{ .Values.evidence.operation.ttlSecondsAfterFinished }}
   activeDeadlineSeconds: {{ .Values.evidence.operation.activeDeadlineSeconds }}
   template:

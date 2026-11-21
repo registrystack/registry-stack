@@ -783,6 +783,40 @@ class EvidenceOperationTest(ChartTest):
         self.assertTrue(volumes(job)["authority"]["persistentVolumeClaim"]["readOnly"])
 
 
+class OperationRetryTest(ChartTest):
+    """A failed operation is never retried by Kubernetes, and cleanup finds Job and policy."""
+
+    KINDS = (("breg", BREG_JOB, "apply-initial"), ("casework", CASEWORK_JOB, "apply"), ("evidence", EVIDENCE_JOB, "check"))
+
+    def test_every_operation_job_runs_once(self):
+        for product, show_only, kind in self.KINDS:
+            with self.subTest(product=product):
+                docs = render_operation(show_only, product, "retry-001", kind)
+                self.assertEqual(of_kind(docs, "Job")[0]["spec"]["backoffLimit"], 0)
+
+    def test_backoff_limit_is_not_a_value(self):
+        for product, _, _ in self.KINDS:
+            with self.subTest(product=product):
+                self.assert_refused(
+                    ["--set", f"{product}.operation.backoffLimit=0"],
+                    f"at '/{product}/operation'", "backoffLimit",
+                )
+
+    def test_cleanup_selector_matches_job_and_policy(self):
+        """The README deletes by these two labels. Keep both resources carrying them."""
+        for product, show_only, kind in self.KINDS:
+            with self.subTest(product=product):
+                docs = render_operation(show_only, product, "cleanup-001", kind)
+                selector = {
+                    "registrystack.org/operation-id": "cleanup-001",
+                    "app.kubernetes.io/component": f"{product}-operation",
+                }
+                for resource in ("Job", "NetworkPolicy"):
+                    labels = of_kind(docs, resource)[0]["metadata"]["labels"]
+                    for key, value in selector.items():
+                        self.assertEqual(labels.get(key), value, f"{product} {resource} {key}")
+
+
 class ExtensionTest(ChartTest):
     @classmethod
     def setUpClass(cls):

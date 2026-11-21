@@ -77,7 +77,6 @@
                 "expectedDigest": {"$ref": "#/definitions/requiredDigest"}
               }
             },
-            "backoffLimit": {"type": "integer", "minimum": 0, "maximum": 3},
             "ttlSecondsAfterFinished": {"type": "integer", "minimum": 60, "maximum": 604800},
             "activeDeadlineSeconds": {"type": "integer", "minimum": 60, "maximum": 7200}
           }
@@ -175,7 +174,6 @@
             "kind": {"enum": ["plan", "apply", "doctor"]},
             "operatorReference": {"type": "string", "maxLength": 256},
             "backupReferences": {"type": "array", "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 512}},
-            "backoffLimit": {"type": "integer", "minimum": 0, "maximum": 3},
             "ttlSecondsAfterFinished": {"type": "integer", "minimum": 60, "maximum": 604800},
             "activeDeadlineSeconds": {"type": "integer", "minimum": 60, "maximum": 7200}
           }
@@ -246,7 +244,6 @@
             "name": {"type": "string", "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 30},
             "kind": {"enum": ["check", "authority-activate", "authority-history"]},
             "operatorReference": {"type": "string", "maxLength": 256},
-            "backoffLimit": {"type": "integer", "minimum": 0, "maximum": 3},
             "ttlSecondsAfterFinished": {"type": "integer", "minimum": 60, "maximum": 604800},
             "activeDeadlineSeconds": {"type": "integer", "minimum": 60, "maximum": 7200}
           }

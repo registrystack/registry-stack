@@ -1,8 +1,9 @@
 # Registry Stack Helm chart
 
 This chart is a public reference. It is not a supported product, is not
-published with Registry Stack releases, and has not been qualified for
-production.
+published with Registry Stack releases, and has not been proven
+for production. Before you rely on it, test install, restore and node failure
+on your own infrastructure.
 
 ## Supported releases
 
@@ -25,8 +26,8 @@ no serving workload. BReg, Casework, and Evidence operation Jobs are separate,
 explicit render paths.
 
 Use the [deployment guide](../../README.md) for Ubuntu K3s and existing
-Kubernetes. Prepare the named inputs and qualify the selected release,
-dependencies and recovery procedure on the target infrastructure.
+Kubernetes. Prepare the named inputs. Then test the selected release, its
+dependencies and your recovery procedure on the target infrastructure.
 
 ## Ownership boundary
 
@@ -65,10 +66,10 @@ BReg, Casework, and Evidence run as UID and GID 65532. App Kit defaults to its i
 contract of UID and GID 1000. Change `appKit.securityContext.runAsUser` and
 `.runAsGroup` together only when the prebuilt image uses different non-root
 IDs. Its staging init container uses those same IDs, so the serving process
-owns the copied files. Every container drops all capabilities, uses the runtime
-default seccomp profile, refuses privilege escalation, has a read-only root
-filesystem, and disables the service-account token. Serving Deployments use
-one replica and `Recreate`, so Helm does not perform a mixed-package rolling
+owns the copied files. Every container drops all capabilities and uses the
+runtime default seccomp profile. It also refuses privilege escalation, has a
+read-only root filesystem, and disables the service-account token. Serving
+Deployments use one replica and `Recreate`, so Helm does not perform a mixed-package rolling
 update.
 
 No BReg, Casework, or Evidence Pod sets `fsGroup`. Kubelet can otherwise
@@ -107,9 +108,9 @@ mode. The chart deliberately does not run a privileged ownership-fixing
 container.
 
 Kubernetes ConfigMap and Secret projections are symlinks, which BReg refuses.
-The non-root staging init container reads projections with mode `0444`, copies
-them into memory-backed, UID-owned `0700` subdirectories as real `0400` files,
-and the BReg container mounts only those final subdirectories read-only. The
+The non-root staging init container reads projections with mode `0444`. It
+copies them into memory-backed, UID-owned `0700` subdirectories as real `0400`
+files. The BReg container mounts only those final subdirectories read-only. The
 serving Pod never projects or mounts `breg.migrationSecrets`.
 
 The runtime Secret should contain only values the serving process needs, such
@@ -119,8 +120,8 @@ names must match the `secret:file/<name>` references in `runtime.yaml`. A key
 collision between the two Secrets makes an operation init container fail
 visibly instead of silently replacing a value.
 
-For an OIDC issuer or another native HTTPS dependency whose certificate uses a
-private authority, put the PEM roots in the runtime Secret and set
+Some native HTTPS dependencies, such as an OIDC issuer, use a certificate from
+a private authority. For these, put the PEM roots in the runtime Secret and set
 `breg.caBundleKey` to that key. Serving and operation containers then receive
 only `SSL_CERT_FILE=/etc/breg-secrets/<key>`. The value is empty by default, so
 public Web PKI remains the native client's default. Keep the database-specific
@@ -131,8 +132,8 @@ in the runtime URL, and `database.roles.migration` names the different role in
 the migration URL. The serving Pod receives no migration URL. Keep
 `identity.databaseId`, `identity.instanceId`, and the role names stable across
 the serving Deployment and every operation Job. One replica plus `Recreate`
-prevents simultaneous chart-managed BReg versions, but it does not authorise
-an instance-claim adoption: select `claim-adopt` only after every other copy of
+prevents simultaneous chart-managed BReg versions. It does not authorise an
+instance-claim adoption. Select `claim-adopt` only after every other copy of
 the Registry has stopped and is permanently retired.
 
 ## App Kit input contract
@@ -140,7 +141,7 @@ the Registry has stopped and is permanently retired.
 `appKit.config.configMapName` and `appKit.secrets.secretName` reference the
 prebuilt application's existing inputs. Keep the image's `host.json` in the
 ConfigMap at `appKit.config.mountPath`. The staging init container copies all
-projected keys to memory-backed, owner-only regular files, and the serving
+projected keys to memory-backed, owner-only regular files. The serving
 container mounts only those staged subdirectories read-only at:
 
 - `appKit.config.mountPath`, default `/etc/registry-app-kit/config`
@@ -266,7 +267,7 @@ configure the socket group so UID/GID 65532 can connect.
 Every Pod disables service-account token mounting. Therefore the reference
 Vault Agent configuration that reads a Kubernetes service-account token is not
 supported by this chart. Use a proxy authentication method whose credential is
-provided by `evidence.transitProxy.secrets`, with a narrowly scoped provider
+provided by `evidence.transitProxy.secrets`. Give it a narrowly scoped provider
 policy that permits only metadata read and signing for the pinned key version.
 No token, AppRole secret, or provider credential belongs in values, the proxy
 ConfigMap, or the Evidence Secret.
@@ -289,10 +290,10 @@ types. Expose a component through its Ingress.
 
 NetworkPolicy is enabled by default. An empty ingress peer list admits no
 other Pod, so list the ingress controller explicitly. On K3s, traffic that
-originates on the Pod's own node is still accepted before policy is applied,
-so host processes and `hostNetwork` Pods on that node can reach the plaintext
-service ports even with an empty list. Treat access to the node as access to
-those ports. Each item under
+originates on the Pod's own node is still accepted before policy is applied.
+Host processes and `hostNetwork` Pods on that node can therefore reach the
+plaintext service ports even with an empty list. Treat access to the node as
+access to those ports. Each item under
 `networkPolicy.ingress` is a standard `NetworkPolicyPeer`, for example a
 namespace selector alone or a namespace and Pod selector together.
 
@@ -305,7 +306,7 @@ The chosen CNI must enforce NetworkPolicy.
 Casework additionally exposes `casework.networkPolicy.bregContextEgress` for
 the BReg API and token endpoint needed by current-source context providers.
 Configure the scoped BReg client and access profile. Casework readiness checks
-its database and audit sink. Qualify each configured provider separately.
+its database and audit sink. Test each configured provider separately.
 
 Deploy partner endpoints as a separate release of this chart with their own
 namespace and HTTPS hostname. The extension values define an exact public path,
@@ -321,13 +322,14 @@ blocks can still be combined. Review extension egress as you would any
 NetworkPolicy. The core workloads' own egress is not subject to this guard.
 
 The database manifests in `deploy/postgres` admit connections only from Pods
-labelled `registrystack.org/database-client: "true"`, which the chart sets on
-BReg, Casework and App Kit serving Pods and on BReg and Casework operation Pods.
+labelled `registrystack.org/database-client: "true"`. The chart sets that
+label on BReg, Casework and App Kit serving Pods. It also sets it on BReg and
+Casework operation Pods.
 Evidence and extension Pods do not carry it.
 
-For a bounded test environment whose real TLS names are not available through
-cluster DNS, `breg.hostAliases` applies standard Pod host aliases to BReg
-serving and operation Pods, and `appKit.hostAliases` applies them to App Kit.
+A bounded test environment may lack real TLS names in cluster DNS. In that
+case, `breg.hostAliases` applies standard Pod host aliases to BReg
+serving and operation Pods. `appKit.hostAliases` applies them to App Kit.
 Each entry has `ip` and a non-empty `hostnames` list. Both default empty. Use
 normal DNS for production endpoint changes.
 
@@ -395,6 +397,11 @@ example with `kubectl logs job/<job-name> --namespace <namespace> >
 Evidence authority commands write text. Store the file with the change record.
 Raise `ttlSecondsAfterFinished` only when you cannot collect it in time.
 
+Every operation Job runs one Pod, and Kubernetes never retries it. The chart
+fixes `backoffLimit: 0`, and it is not a setting. The Job's logs are therefore
+the report of that one attempt. After a failure, review the report and start a
+new operation with a new name.
+
 ## Render one Casework operation
 
 Normal releases render no Casework Job. First stop the release with the
@@ -436,6 +443,16 @@ credentials or personal data in them. Run `stop` before `apply`, as above, and
 do not set `casework.serve: true` until the operation succeeds and its report
 has been reviewed.
 
+After you have saved and reviewed the report, delete the Job and its
+NetworkPolicy. The operator does this for BReg operations, because it ties each
+policy to its Job. Helm does not for these manual steps, so the policy stays
+until you remove it:
+
+```bash
+sudo k3s kubectl -n directory delete job,networkpolicy \
+  -l registrystack.org/operation-id=apply-001,app.kubernetes.io/component=casework-operation
+```
+
 Rendering proves manifest shape only. It does not prove database migration,
 backup validity, restore, BReg context access, ingress routing, or a composed
 Casework journey. `doctor` also does not exercise every issuer, provider, or
@@ -444,7 +461,7 @@ source integration.
 ## Render one Evidence operation
 
 Normal releases render no Evidence Job. Install the reviewed bundle and
-runtime inputs, then stop the release with the operator's `stop` command and
+runtime inputs. Then stop the release with the operator's `stop` command and
 confirm that no Pod of the release is running, as for Casework above. Activate
 the separately reviewed authority, inspect its result or history, then permit
 serving:
@@ -471,7 +488,7 @@ helm template evidence-operation ./deploy/helm/registry-stack \
 | `authority-history` | `evidence authority history --runtime-config ...` reads committed history after an uncertain or completed activation. |
 
 Only `check` has the released `--format json` option. The v0.46.0 authority
-commands have no output-format flag, so the chart preserves their native text
+commands have no output-format flag. The chart preserves their native text
 reports and exit status instead of claiming JSON output.
 
 Activation receives only `evidence.activationSecrets`, the compiled authority,
@@ -482,17 +499,27 @@ deny-all NetworkPolicy carry the unique
 `registrystack.org/operation-id: <evidence.operation.name>` selector and have no
 Helm hook annotation.
 
-The Casework operations have no status kind, and BReg exposes no metrics
-port, so neither is wired here.
+After you have saved and reviewed the report, delete the Job and its
+NetworkPolicy, as for Casework above. Use the component
+`evidence-operation` and the operation name you rendered:
+
+```bash
+sudo k3s kubectl -n directory delete job,networkpolicy \
+  -l registrystack.org/operation-id=activate-001,app.kubernetes.io/component=evidence-operation
+```
+
+The Casework operations have no status kind, and the chart exposes no BReg
+metrics port.
 
 The v0.46.0 `evidence` binary has no `authority check` subcommand, and the
 released Evidence image contains no `evidencectl`, so the chart does not invent
 either operation. The check Job deliberately omits
-`--require-runtime-dependencies` and `--require-audit-under`: a production dependency check needs the
-long-running workload-local Transit proxy, which would prevent a standard Job
-sidecar from completing on every Kubernetes version supported by this chart.
+`--require-runtime-dependencies` and `--require-audit-under`. A production
+dependency check needs the long-running workload-local Transit proxy. That
+proxy would prevent a standard Job sidecar from completing on every Kubernetes
+version supported by this chart.
 The serving process performs the actual package, authority, secret, signer,
-audit, and source-credential startup checks, and `/ready` rechecks the signer,
+audit, and source-credential startup checks. `/ready` rechecks the signer,
 audit writer, subject-binding key, and source credentials. Route traffic only
 after readiness succeeds. A rendered Job is not a live signer, source,
 authority, audit durability, or assertion proof.
@@ -507,8 +534,8 @@ with the pinned Helm binary:
 HELM_BIN=/path/to/helm bash deploy/helm/registry-stack/tests/chart-contract.sh
 ```
 
-The suite lints the chart, renders serving and inactive releases, renders each
-sensitive operation shape, checks security and persistence invariants, and
-proves malformed digests are refused. It does not start Kubernetes, BReg,
+The suite lints the chart, renders serving and inactive releases, and renders
+each sensitive operation shape. It checks security and persistence invariants
+and proves malformed digests are refused. It does not start Kubernetes, BReg,
 Casework, Evidence, PostgreSQL, a Transit provider, an ingress controller, or
 App Kit.
