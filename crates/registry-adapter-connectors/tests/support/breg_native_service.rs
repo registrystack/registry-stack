@@ -494,14 +494,14 @@ impl Breg {
                 );
             for section in ["datasets", "actions"] {
                 registry[section]
-                    .as_array_mut()
-                    .expect("the native registry section is an array")
+                    .as_object_mut()
+                    .expect("the native registry section is a map")
                     .extend(
                         qfield[section]
-                            .as_array()
-                            .expect("the QField registry section is an array")
+                            .as_object()
+                            .expect("the QField registry section is a map")
                             .iter()
-                            .cloned(),
+                            .map(|(id, entry)| (id.clone(), entry.clone())),
                     );
             }
         }
