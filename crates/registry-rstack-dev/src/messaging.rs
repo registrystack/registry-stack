@@ -65,14 +65,26 @@ pub(super) fn providers(root: &Path, plan: &Plan) -> Result<Vec<Provider>> {
         &project.field,
         "manifest",
     )?;
+    let declared = match &manifest["providers"] {
+        Value::Null => None,
+        Value::Object(declared) => Some(declared),
+        _ => {
+            return Err(plan::SemanticRefusal::new(
+                &project.field,
+                "The Messaging providers are not a mapping from each provider id to its entry.",
+                "Key each provider by its id in messaging.yaml, then run the check again.",
+            )
+            .into());
+        }
+    };
     let mut providers = Vec::new();
-    for entry in manifest["providers"].as_array().into_iter().flatten() {
+    for (id, entry) in declared.into_iter().flatten() {
         let kind = match entry["type"].as_str() {
             Some("smtp") => ProviderKind::Smtp,
             Some("http") => ProviderKind::Http,
             _ => continue,
         };
-        let id = entry["id"].as_str().unwrap_or_default().to_owned();
+        let id = id.to_owned();
         let (callbacks, maximum_concurrent_requests) = if kind == ProviderKind::Http {
             let package = read_yaml(
                 &project
@@ -304,7 +316,9 @@ mod tests {
 
     #[test]
     fn smtp_and_http_providers_are_read_with_their_package_capabilities() {
-        let root = project("\n  - {id: mail-relay, type: smtp}\n  - {id: sms-gateway, type: http}\n  - {id: other, type: aws-sms}");
+        let root = project(
+            "\n  mail-relay: {type: smtp}\n  sms-gateway: {type: http}\n  other: {type: aws-sms}",
+        );
         let directory = root.path().join("providers/sms-gateway");
         fs::create_dir_all(&directory).unwrap();
         fs::write(
@@ -325,14 +339,21 @@ mod tests {
 
     #[test]
     fn a_project_without_providers_needs_no_sink() {
-        let root = project("[]");
+        let root = project("{}");
         assert!(providers(root.path(), &plan()).unwrap().is_empty());
         assert!(!needs_mailpit(root.path(), &plan()).unwrap());
     }
 
     #[test]
+    fn a_list_of_providers_is_refused_naming_the_mapping() {
+        let root = project("\n  - {id: mail-relay, type: smtp}");
+        let refusal = providers(root.path(), &plan()).err().unwrap().to_string();
+        assert!(refusal.contains("mapping"), "{refusal}");
+    }
+
+    #[test]
     fn an_http_provider_without_a_package_is_refused_naming_it() {
-        let root = project("\n  - {id: sms-gateway, type: http}");
+        let root = project("\n  sms-gateway: {type: http}");
         let refusal = providers(root.path(), &plan()).err().unwrap().to_string();
         assert!(refusal.contains("sms-gateway"), "{refusal}");
     }

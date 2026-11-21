@@ -101,9 +101,8 @@ fn assert_generated_inline_value_schemas(project: &Path) {
         &fs::read(project.join("registry.yaml")).expect("derived registry reads"),
     )
     .expect("derived registry is YAML");
-    let records = registry["recordTypes"]
-        .as_array()
-        .expect("recordTypes is an array");
+    let records = &registry["recordTypes"];
+    assert!(records.is_object(), "recordTypes is a mapping by id");
 
     let profession = field(records, "professional-license", "profession-code");
     assert_eq!(profession["type"], "structured");
@@ -146,10 +145,9 @@ fn assert_generated_inline_value_schemas(project: &Path) {
     assert_list_wrapper(&conditions["schema"]);
 }
 
-fn field<'a>(records: &'a [Value], record: &str, field: &str) -> &'a Value {
+fn field<'a>(records: &'a Value, record: &str, field: &str) -> &'a Value {
     records
-        .iter()
-        .find(|candidate| candidate["id"] == record)
+        .get(record)
         .and_then(|record| record["fields"].as_array())
         .and_then(|fields| fields.iter().find(|candidate| candidate["id"] == field))
         .unwrap_or_else(|| panic!("derived registry carries {record}.{field}"))
