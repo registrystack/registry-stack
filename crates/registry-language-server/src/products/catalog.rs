@@ -22,7 +22,7 @@ const BREG_DECLARATIONS: &[N] = &[
     ),
     N::scoped("recordTypes/*/readPaths/*/id", "BReg read path", 1, "id"),
     N::scoped(
-        "recordTypes/*/accessProfiles/*/id",
+        "recordTypes/*/accessProfiles/$key",
         "BReg record type access profile",
         1,
         "id",
@@ -51,7 +51,7 @@ const BREG_DECLARATIONS: &[N] = &[
     N::scoped("actions/*/inputs/*/id", "BReg action input", 1, "id"),
     N::scoped("actions/*/plan/effects/*/id", "BReg action effect", 1, "id"),
     N::scoped("actions/*/plan/writes/*/id", "BReg action effect", 3, "id"),
-    N::global("accessProfiles/*/id", "BReg access profile"),
+    N::global("accessProfiles/$key", "BReg access profile"),
     N::global("vocabularies/*/id", "BReg vocabulary"),
     N::global("evidenceProviders/*/id", "BReg Evidence provider"),
     N::global(

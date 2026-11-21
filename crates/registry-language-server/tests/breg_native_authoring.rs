@@ -292,7 +292,7 @@ async fn canonical_function_reference_changes_are_visible_through_lsp() {
 
 #[test]
 fn retired_entities_handlers_and_change_request_paths_have_no_editor_fallback() {
-    let project = Project::new(&[file("registry.yaml", "kind: BRegProject\nentities: [{id: retired, fields: [{id: old-field}], changeRequest: {planner: {script: old.rhai}}}]\nactions: [{id: old-action, effects: [{id: old-effect}], handler: {script: <|script|>old.rhai}}]\naccessProfiles: [{id: staff, permissions: {entities: [{entity: <|entity|>retired}]}}]\n"), file("old.rhai", "// retired\n")]);
+    let project = Project::new(&[file("registry.yaml", "kind: BRegProject\nentities: [{id: retired, fields: [{id: old-field}], changeRequest: {planner: {script: old.rhai}}}}\nactions: [{id: old-action, effects: [{id: old-effect}], handler: {script: <|script|>old.rhai}}]\naccessProfiles: {staff: {permissions: {entities: [{entity: <|entity|>retired}]}}}\n"), file("old.rhai", "// retired\n")]);
     let index = ProjectIndex::load_product(project.root(), ProductKind::Breg).unwrap();
     assert!(!index
         .symbols()
@@ -312,7 +312,7 @@ fn retired_entities_handlers_and_change_request_paths_have_no_editor_fallback() 
 #[test]
 fn module_value_types_extensions_functions_and_empty_input_plans_resolve() {
     let project = Project::new(&[
-        file("registry.yaml", "kind: BRegProject\nmodules: [{id: core}, {id: extra}]\naccessProfiles: [{id: staff, permissions: {actions: [{action: create, results: [<|result|>created]}]}}]\n"),
+        file("registry.yaml", "kind: BRegProject\nmodules: [{id: core}, {id: extra}]\naccessProfiles: {staff: {permissions: {actions: [{action: create, results: [<|result|>created]}]}}}\n"),
         file("modules/core/module.yaml", "kind: BRegModule\nid: core\nvalueTypes: {bounded-name: {type: string, maximumLength: 64}}\nrecordTypes: [{id: person, fields: [{id: name, typeRef: bounded-name}]}]\nfunctions: [{id: make-person, source: <|asset|>plans/create.rhai}]\nactions: [{id: create, execution: {mode: immediate}, plan: {type: function, function: make-person, inputs: [], writes: [{id: <|effect|>created, target: {recordType: person}, fields: [name]}]}}]\n"),
         file("modules/extra/module.yaml", "kind: BRegModule\nid: extra\ndependencies: [core]\nextendRecordTypes: [{recordType: <|record|>person, fields: [{id: alias, typeRef: <|type|>bounded-name}]}]\nactions: [{id: update, execution: {mode: immediate}, inputs: [{id: person, type: reference, target: person}], plan: {type: function, function: <|function|>make-person, inputs: [person], writes: [{id: changed, target: {fromInput: person}, fields: [<|field|>alias]}]}}]\n"),
         file("modules/core/plans/create.rhai", "fn plan(ctx) { #{} }\n"),
@@ -345,5 +345,46 @@ fn module_value_types_extensions_functions_and_empty_input_plans_resolve() {
         )[0]
         .path,
         project.path("modules/core/plans/create.rhai")
+    );
+}
+
+#[test]
+fn access_profile_ids_are_declared_by_their_map_keys() {
+    let project = Project::new(&[
+        file(
+            "registry.yaml",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: example}\nmodules: [{id: core}]\nmanifestProjection:\n  accessProfile: <|use|>staff\naccessProfiles:\n  <|definition|>staff:\n    permissions:\n      records:\n        - {recordType: person, readableFields: [name]}\n",
+        ),
+        file(
+            "modules/core/module.yaml",
+            "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: core\nrecordTypes:\n  - id: person\n    fields: [{id: name, type: string}]\n    accessProfiles:\n      <|nested|>reader: {operations: [get]}\n",
+        ),
+    ]);
+    let index = ProjectIndex::load_product(project.root(), ProductKind::Breg).unwrap();
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    let path = project.path("registry.yaml");
+    let definitions = index.definitions_at(&path, project.cursor("registry.yaml", "use"));
+    assert_eq!(definitions.len(), 1, "{definitions:?}");
+    assert_eq!(
+        definitions[0].range.start,
+        project.cursor("registry.yaml", "definition")
+    );
+    let references =
+        index.references_at(&path, project.cursor("registry.yaml", "definition"), false);
+    assert!(
+        references.iter().any(|reference| reference.path == path
+            && reference.range.start == project.cursor("registry.yaml", "use")),
+        "{references:?}"
+    );
+    let module = project.path("modules/core/module.yaml");
+    assert!(
+        index
+            .document_symbols(&module)
+            .iter()
+            .any(|symbol| symbol.name == "reader"
+                && symbol.location.range.start
+                    == project.cursor("modules/core/module.yaml", "nested")),
+        "{:?}",
+        index.document_symbols(&module)
     );
 }

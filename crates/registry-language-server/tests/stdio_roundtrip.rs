@@ -22,7 +22,7 @@ actions:
     plan:
       type: fixed
       effects: []
-accessProfiles: []
+accessProfiles: {}
 "#;
 
 #[test]
