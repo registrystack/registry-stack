@@ -345,6 +345,26 @@ fn a_uniqueness_constraint_on_a_withheld_field_is_refused() {
     compile(&unrelated).expect("a constraint on a field no condition withholds compiles");
 }
 
+/// An encrypted field's unique blind index answers a repeated value with a
+/// conflict in the same way as a uniqueness constraint.
+#[test]
+fn a_unique_blind_index_on_a_withheld_field_is_refused() {
+    let encrypted_phone = |unique: bool| {
+        let mut value = source();
+        value["recordTypes"][0]["fields"][4] = json!({"id":"phone","type":"string","maximumLength":32,
+            "classification":"restricted","encrypted":true,"lookup":{"unique":unique}});
+        person_permission(&mut value, 1)["filterableFields"] = json!(["family-name"]);
+        value
+    };
+    compile(&encrypted_phone(false))
+        .expect("a withheld encrypted field without a unique index compiles");
+    assert_refused(
+        &encrypted_phone(true),
+        "breg.disclosure.withheld-field-unique",
+        &format!("{FIELDS_COND}.fields[field=phone]"),
+    );
+}
+
 fn statistics_source() -> Value {
     json!({"datasets":[{"id": "statistics-test"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
