@@ -80,7 +80,10 @@ fn the_access_preview_names_the_conditions_that_bind_the_profile() {
     );
     let exempt =
         serde_json::to_value(preview_access(&registry, scenario("officer")).unwrap()).unwrap();
-    assert_eq!(exempt["disclosureConditions"], json!([]));
+    assert!(
+        exempt.get("disclosureConditions").is_none(),
+        "an exempt profile has no conditions to name: {exempt}"
+    );
     assert!(
         !bound.to_string().contains("\"value\":true"),
         "the preview carries no `when` literal: {bound}"

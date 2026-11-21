@@ -60,6 +60,7 @@ pub struct AccessPreview {
     pub effective_profile: Option<AccessProfileSource>,
     /// The identifiers of the disclosure conditions that bind the profile, in
     /// authored order. A condition's `when` literals are never shown here.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub disclosure_conditions: Vec<String>,
     /// The consent recipients the requester client acts for; empty for an
     /// unmapped or absent client, which fails every consent check closed.

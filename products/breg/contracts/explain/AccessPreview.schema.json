@@ -37,6 +37,11 @@
       "description": "Passthrough of the compiled access profile the scenario resolved to, or null when no profile matched. Shape follows AccessProfileSource and is outside this contract version.",
       "x-registry-passthrough": "bregctl writes the resolved access profile as the engine holds it; its shape follows AccessProfileSource and is outside this contract version."
     },
+    "disclosureConditions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "The ids of the disclosure conditions of the Record type that bind the previewed profile, in authored order. Present only when at least one does. A condition's when literals are never shown here."
+    },
     "recipients": {
       "type": "array",
       "items": { "type": "string" },
