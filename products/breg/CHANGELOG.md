@@ -101,7 +101,8 @@
   refuses a `requiredFilters` that has an empty alternative, repeats an
   alternative, has more than eight alternatives or an alternative of more than
   32 fields, names a field outside the same grant's `filterableFields` or one
-  that cannot take `eq`, or sits on a grant without `list`. An empty
+  that cannot take `eq`, or sits on a grant without `list` or with
+  `allowDataExport`, whose pages carry no filter. An empty
   `requiredFilters` is refused when the file is read, with
   `config.invalid-value`, so an author omits the key to put no criteria on
   lists. A field repeated within one alternative is refused the same way, with
@@ -114,7 +115,7 @@
   `400` on a list operation only where an admitted profile requires a filter.
   The ODRL export omits a list grant under `requiredFilters`, with the reason
   `required-filters`, and still exports its get. The key governs `list` only.
-  Lookups, get, read paths, bulk export and `snapshot` are unchanged.
+  Lookups, get, read paths and `snapshot` are unchanged.
 - Runtime Action metadata (`GET /v1/registry`, `metadata/registry.json` and the
   OpenAPI `x-registry-action` extension) carries `execution.review` (`none` or
   `required`) and `execution.application` (`manual` or `automatic`) for each

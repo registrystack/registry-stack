@@ -6318,6 +6318,18 @@ fn validate_required_filters(
             "requiredFilters governs list, so the grant must include list",
         ));
     }
+    // A bulk export lists its pages with no `$filter`, so its first page would
+    // always answer `query.filter_required`.
+    if access.allow_data_export {
+        errors.push(Diagnostic::error(
+            "breg.access-profile.required-filters-export-unsupported",
+            format!(
+                "recordTypes[id={}].accessProfiles[id={}].allowDataExport",
+                entity.id, access.id
+            ),
+            "a bulk export lists without a $filter, so a grant with requiredFilters cannot export",
+        ));
+    }
     if access.required_filters.len() > MAXIMUM_REQUIRED_FILTER_ALTERNATIVES {
         errors.push(Diagnostic::error(
             "breg.access-profile.required-filters-too-many",

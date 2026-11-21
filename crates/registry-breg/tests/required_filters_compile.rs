@@ -103,6 +103,28 @@ fn lookups_and_gets_are_not_governed() {
     }
 }
 
+/// A bulk export lists its pages with no `$filter`, so under `requiredFilters`
+/// its first page would always answer `query.filter_required`.
+#[test]
+fn a_grant_with_required_filters_cannot_export() {
+    let mut value = source(json!([{"fields":["national-id"]}]), json!(["get", "list"]));
+    value["accessProfiles"]["registrar"]["permissions"]["records"][0]["allowDataExport"] =
+        json!(true);
+    let found = refusal(&value);
+    assert!(
+        found.contains(&(
+            "breg.access-profile.required-filters-export-unsupported".to_owned(),
+            "recordTypes[id=person].accessProfiles[id=registrar].allowDataExport".to_owned()
+        )),
+        "{found:?}"
+    );
+    value["accessProfiles"]["registrar"]["permissions"]["records"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("requiredFilters");
+    assert!(compile(&value).is_ok());
+}
+
 #[test]
 fn invalid_required_filters_are_refused_with_a_code_and_path() {
     let base = "recordTypes[id=person].accessProfiles[id=registrar].requiredFilters";
