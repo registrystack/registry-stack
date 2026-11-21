@@ -10,19 +10,19 @@ project:
 # endpoint and credentials are runtime configuration. `idempotentSubmit`
 # declares that the provider drops a repeat carrying the same idempotency key.
 providers:
-  - id: mail-relay
+  mail-relay:
     type: smtp
-  - id: sms-gateway
+  sms-gateway:
     type: http
     idempotentSubmit: true
 # What a caller selects: a channel, the provider carrying it, the sender
 # identity, and for SMS the most segments one message may use.
 senderProfiles:
-  - id: transactional
+  transactional:
     channel: email
     provider: mail-relay
     sender: notices@example.org
-  - id: reminders-sms
+  reminders-sms:
     channel: sms
     provider: sms-gateway
     sender: Registry
@@ -37,7 +37,7 @@ templates:
 # Who may call this deployment and what each caller may do. A client appears
 # in exactly one profile.
 accessProfiles:
-  - id: case-notices
+  case-notices:
     principalClaim: sub
     requiredScopes: [messaging:send]
     requesterClients: [case-system]
@@ -47,7 +47,7 @@ accessProfiles:
     templates: [appointment-reminder, appointment-reminder-sms]
     requestsPerMinute: 60
     burst: 10
-  - id: operations
+  operations:
     principalClaim: sub
     requiredScopes: [messaging:operate]
     requesterClients: [operations-console]

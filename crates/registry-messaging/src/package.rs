@@ -495,12 +495,19 @@ fn project_integrity_diagnostics(project: &Decoded<MessagingProject>) -> Vec<Dia
     fn collisions<'a>(
         document: &Document,
         code: &str,
+        at_key: bool,
         entries: impl IntoIterator<Item = (&'a str, String)>,
     ) -> Vec<Diagnostic> {
         let entries = entries.into_iter().collect::<Vec<_>>();
         let authored = entries
             .iter()
-            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+            .map(|(id, pointer)| {
+                if at_key {
+                    AuthoredId::at_key(id, pointer)
+                } else {
+                    AuthoredId::at_value(id, pointer)
+                }
+            })
             .collect::<Vec<_>>();
         local_id_collision_diagnostics(document, code, &authored)
     }
@@ -508,26 +515,28 @@ fn project_integrity_diagnostics(project: &Decoded<MessagingProject>) -> Vec<Dia
     let mut diagnostics = collisions(
         &project.document,
         "messaging.project.provider-id-collision",
+        true,
         project
             .value
             .providers
             .iter()
-            .enumerate()
-            .map(|(index, provider)| (provider.id.as_str(), format!("/providers/{index}/id"))),
+            .map(|provider| (provider.id.as_str(), format!("/providers/{}", provider.id))),
     );
     diagnostics.extend(collisions(
         &project.document,
         "messaging.project.sender-profile-id-collision",
-        project
-            .value
-            .sender_profiles
-            .iter()
-            .enumerate()
-            .map(|(index, profile)| (profile.id.as_str(), format!("/senderProfiles/{index}/id"))),
+        true,
+        project.value.sender_profiles.iter().map(|profile| {
+            (
+                profile.id.as_str(),
+                format!("/senderProfiles/{}", profile.id),
+            )
+        }),
     ));
     diagnostics.extend(collisions(
         &project.document,
         "messaging.project.template-id-collision",
+        false,
         project
             .value
             .templates
@@ -538,12 +547,13 @@ fn project_integrity_diagnostics(project: &Decoded<MessagingProject>) -> Vec<Dia
     diagnostics.extend(collisions(
         &project.document,
         "messaging.project.access-profile-id-collision",
-        project
-            .value
-            .access_profiles
-            .iter()
-            .enumerate()
-            .map(|(index, profile)| (profile.id.as_str(), format!("/accessProfiles/{index}/id"))),
+        true,
+        project.value.access_profiles.iter().map(|profile| {
+            (
+                profile.id.as_str(),
+                format!("/accessProfiles/{}", profile.id),
+            )
+        }),
     ));
     diagnostics
 }
@@ -1448,7 +1458,7 @@ pub(crate) mod tests {
                 "kind: MessagingProject\n",
                 "project: {id: operations, version: \"1\"}\n",
                 "accessProfiles:\n",
-                "  - {id: operations, principalClaim: sub, requesterClients: [console],\n",
+                "  operations: {principalClaim: sub, requesterClients: [console],\n",
                 "     requiredScopes: unrestricted, actsAs: operator,\n",
                 "     requestsPerMinute: 60, burst: 10}\n",
             ),
@@ -1779,8 +1789,8 @@ pub(crate) mod tests {
         let root = starter_copy();
         let manifest_path = root.path().join(PACKAGE_FILE);
         let manifest = std::fs::read_to_string(&manifest_path).unwrap().replace(
-            "  - id: sms-gateway\n    type: http\n    idempotentSubmit: true\n",
-            "  - id: sms-gateway\n    type: http\n    idempotentSubmit: true\n  - id: sms_gateway\n    type: smtp\n",
+            "  sms-gateway:\n    type: http\n    idempotentSubmit: true\n",
+            "  sms-gateway:\n    type: http\n    idempotentSubmit: true\n  sms_gateway:\n    type: smtp\n",
         );
         std::fs::write(&manifest_path, manifest).unwrap();
         std::fs::remove_dir_all(root.path().join("templates/appointment-reminder-sms")).unwrap();
@@ -1804,8 +1814,8 @@ pub(crate) mod tests {
         let root = starter_copy();
         let manifest_path = root.path().join(PACKAGE_FILE);
         let manifest = std::fs::read_to_string(&manifest_path).unwrap().replace(
-            "  - id: sms-gateway\n    type: http\n    idempotentSubmit: true\n",
-            "  - id: sms-gateway\n    type: http\n    idempotentSubmit: true\n  - id: sms_gateway\n    type: smtp\n",
+            "  sms-gateway:\n    type: http\n    idempotentSubmit: true\n",
+            "  sms-gateway:\n    type: http\n    idempotentSubmit: true\n  sms_gateway:\n    type: smtp\n",
         );
         std::fs::write(&manifest_path, manifest).unwrap();
         let template_path = root.path().join(REMINDER).join(TEMPLATE_FILE);

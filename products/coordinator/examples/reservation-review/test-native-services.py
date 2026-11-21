@@ -347,7 +347,7 @@ def write_reservation_messaging(root: Path) -> Path:
     project_path = root / "messaging.yaml"
     project = json.loads(project_path.read_text())
     project["templates"].append({"id": "reservation-confirmed", "version": "1"})
-    project["accessProfiles"][0]["templates"].append("reservation-confirmed")
+    project["accessProfiles"]["case-notices"]["templates"].append("reservation-confirmed")
     native.private(project_path, project)
     target = root / "templates/reservation-confirmed/1"
     native.private(

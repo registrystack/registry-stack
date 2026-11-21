@@ -405,19 +405,19 @@ def write_messaging(root):
     _write(root / "messaging.yaml", {
         "apiVersion": "id.registrystack.org/formats/messaging/project/v1alpha1",
         "kind": "MessagingProject", "project": {"id": "coordinator-messaging", "version": "1"},
-        "providers": [{"id": "mail-relay", "type": "smtp"}],
-        "senderProfiles": [{"id": "transactional", "channel": "email", "provider": "mail-relay",
-                            "sender": "notices@example.invalid"}],
+        "providers": {"mail-relay": {"type": "smtp"}},
+        "senderProfiles": {"transactional": {"channel": "email", "provider": "mail-relay",
+                                             "sender": "notices@example.invalid"}},
         "templates": [{"id": "application-follow-up", "version": "1"},
                       {"id": "appointment-confirmed", "version": "1"},
                       {"id": "application-approved", "version": "1"}],
-        "accessProfiles": [{
-            "id": "case-notices", "principalClaim": "sub", "requiredScopes": ["messaging:send"],
+        "accessProfiles": {"case-notices": {
+            "principalClaim": "sub", "requiredScopes": ["messaging:send"],
             "requesterClients": ["case-system"], "actorKind": "service", "actsAs": "sender",
             "senderProfiles": ["transactional"],
             "templates": ["application-follow-up", "appointment-confirmed", "application-approved"],
             "requestsPerMinute": 600, "burst": 100,
-        }],
+        }},
     })
     template = root / "templates/application-follow-up/1"
     _write(template / "template.yaml", {"apiVersion": "id.registrystack.org/formats/messaging/template/v1alpha1", "kind": "MessagingTemplate",

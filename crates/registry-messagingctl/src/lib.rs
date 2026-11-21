@@ -2527,7 +2527,7 @@ project:
   id: operations
   version: '1'
 accessProfiles:
-  - id: operations
+  operations:
     principalClaim: sub
     requiredScopes: [messaging:operate]
     requesterClients: [operations-console]
@@ -2794,7 +2794,7 @@ audit:
         std::fs::create_dir_all(&authoring).unwrap();
         std::fs::write(
             authoring.join("messaging.yaml"),
-            format!("{PACKAGE}providers:\n  - id: mail-relay\n    type: smtp\n"),
+            format!("{PACKAGE}providers:\n  mail-relay:\n    type: smtp\n"),
         )
         .unwrap();
         let inputs = package_inputs(&authoring).unwrap();
@@ -3087,17 +3087,18 @@ audit:
         let project = directory.join("messaging.yaml");
         let text = std::fs::read_to_string(&project).unwrap();
         let text = text.replace(
-            "  - id: sms-gateway\n    type: http\n    idempotentSubmit: true",
-            "  - id: sms-gateway\n    type: http\n    idempotentSubmit: true\n  - id: mail_relay\n    type: smtp",
+            "  sms-gateway:\n    type: http\n    idempotentSubmit: true",
+            "  sms-gateway:\n    type: http\n    idempotentSubmit: true\n  mail_relay:\n    type: smtp",
         );
         std::fs::write(&project, &text).unwrap();
         let position = |id: &str| {
             text.lines()
                 .enumerate()
                 .find_map(|(line, text)| {
-                    text.strip_prefix("  - id: ")
+                    text.strip_prefix("  ")
+                        .and_then(|key| key.strip_suffix(':'))
                         .filter(|authored| *authored == id)
-                        .map(|_| (line as u64 + 1, 9_u64))
+                        .map(|_| (line as u64 + 1, 3_u64))
                 })
                 .expect("the provider id is authored")
         };
@@ -3114,7 +3115,7 @@ audit:
             .iter()
             .find(|diagnostic| diagnostic["code"] == "messaging.project.provider-id-collision")
             .expect("the provider collision is reported");
-        assert_eq!(diagnostic["path"], "/providers/2/id");
+        assert_eq!(diagnostic["path"], "/providers/mail_relay");
         assert_eq!(diagnostic["source"]["file"], project.display().to_string());
         assert_eq!(
             (
@@ -3132,7 +3133,7 @@ audit:
             .unwrap()
             .contains("mail_relay"));
         assert_eq!(diagnostic["related"].as_array().unwrap().len(), 1);
-        assert_eq!(diagnostic["related"][0]["path"], "/providers/0/id");
+        assert_eq!(diagnostic["related"][0]["path"], "/providers/mail-relay");
         assert_eq!(
             diagnostic["related"][0]["file"],
             project.display().to_string()
@@ -3176,7 +3177,7 @@ audit:
         );
         assert_eq!(
             diagnostics[0]["path"],
-            "/accessProfiles/1/requesterClients/0"
+            "/accessProfiles/operations/requesterClients/0"
         );
 
         let (exit, report) = json_run(&[

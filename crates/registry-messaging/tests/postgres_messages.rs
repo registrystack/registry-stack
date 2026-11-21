@@ -771,7 +771,8 @@ async fn retrying_harness() -> Harness {
         let path = package.join("messaging.yaml");
         let source = std::fs::read_to_string(&path).unwrap();
         let mut manifest: Value = serde_norway::from_str(&source).unwrap();
-        manifest["senderProfiles"][1]["onUncertain"] = Value::String("retry".to_owned());
+        manifest["senderProfiles"]["reminders-sms"]["onUncertain"] =
+            Value::String("retry".to_owned());
         std::fs::write(path, serde_norway::to_string(&manifest).unwrap()).unwrap();
     })
     .await

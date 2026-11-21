@@ -2727,8 +2727,9 @@ pub(crate) mod tests {
         let runtime = runtime_value(root.path());
         let canary = "DO_NOT_DISCLOSE_PACKAGE_VALUE";
         let mut package = package_value();
-        package["accessProfiles"][0]["id"] = json!(canary);
-        package["accessProfiles"][0]["principalClaim"] = json!(canary);
+        package["accessProfiles"]["case-notices"]["principalClaim"] = json!(canary);
+        let profile = package["accessProfiles"]["case-notices"].take();
+        package["accessProfiles"] = json!({ canary: profile });
         let path = write_project(root.path(), &runtime, &package);
         let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
         assert!(matches!(error, RuntimeConfigError::Package(_)), "{error}");
@@ -2749,7 +2750,7 @@ pub(crate) mod tests {
         let root = tempfile::tempdir().unwrap();
         let runtime = runtime_value(root.path());
         let mut package = package_value();
-        package["accessProfiles"][0]["templates"] = json!([]);
+        package["accessProfiles"]["case-notices"]["templates"] = json!([]);
         let path = write_project(root.path(), &runtime, &package);
         let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
         assert!(matches!(error, RuntimeConfigError::Package(_)), "{error}");
@@ -2760,14 +2761,14 @@ pub(crate) mod tests {
         );
 
         let mut package = package_value();
-        package["accessProfiles"][0]["providerUrl"] = json!("https://x.test");
+        package["accessProfiles"]["case-notices"]["providerUrl"] = json!("https://x.test");
         let path = write_project(root.path(), &runtime, &package);
         let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
         assert!(matches!(error, RuntimeConfigError::Package(_)), "{error}");
         assert!(error.to_string().contains("providerUrl"), "{error}");
 
         let mut package = package_value();
-        package["providers"][0]["endpointRef"] = json!("${RELAY_URL}");
+        package["providers"]["mail-relay"]["endpointRef"] = json!("${RELAY_URL}");
         let path = write_project(root.path(), &runtime, &package);
         let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
         assert!(!error.to_string().contains("RELAY_URL"), "{error}");
@@ -2785,7 +2786,7 @@ pub(crate) mod tests {
             refusals,
             [(
                 "config.substitution-not-allowed",
-                "/providers/0/endpointRef"
+                "/providers/mail-relay/endpointRef"
             )]
         );
     }
@@ -3121,12 +3122,12 @@ pub(crate) mod tests {
             .as_object_mut()
             .expect("providers is a mapping");
         let declarations = package["providers"]
-            .as_array_mut()
-            .expect("package providers is a list");
+            .as_object_mut()
+            .expect("package providers is a mapping");
         for index in 0..pairs {
             for id in [format!("relay-{index:03}"), format!("relay_{index:03}")] {
                 providers.insert(id.clone(), connection.clone());
-                declarations.push(json!({"id": id, "type": "smtp"}));
+                declarations.insert(id, json!({"type": "smtp"}));
             }
         }
         (runtime, package)

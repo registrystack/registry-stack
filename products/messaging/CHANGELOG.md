@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- BREAKING: `providers`, `senderProfiles`, and `accessProfiles` in
+  `messaging.yaml` are mappings from each item's id to the rest of its entry,
+  as a pre-1.0 cleanup so an item has one name and a duplicate cannot be
+  written. The old list shape is refused, and so is an `id` member inside an
+  entry, with a message that names the mapping, and a repeated key is refused
+  at the repeating key. `templates` stays a list, because a template is named
+  by its id and version. Migration: write
+  `providers: {mail-relay: {type: smtp}}` in place of
+  `providers: [{id: mail-relay, type: smtp}]`, and likewise for the other two.
+  Items are held sorted by id. Check findings report the item's id in place of
+  its position, for example `/senderProfiles/reminders-sms/onUncertain`. The
+  authoring schema states each mapping's entry count as `minProperties` and
+  `maxProperties` in place of `minItems` and `maxItems`. The installed
+  package's digest changes with the rewritten `messaging.yaml`, so rebuild
+  packages with `messagingctl package`.
+
 - BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
   -> `database.caBundleRef` and, for an `smtp` provider,
   `providers.*.trustedRootCertificateRef` -> `providers.*.caBundleRef`, as a

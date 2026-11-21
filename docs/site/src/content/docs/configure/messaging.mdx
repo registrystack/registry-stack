@@ -52,19 +52,19 @@ Any edit to these files changes the digest, and the digest is what the operator 
 # endpoint and credentials are runtime configuration. `idempotentSubmit`
 # declares that the provider drops a repeat carrying the same idempotency key.
 providers:
-  - id: mail-relay
+  mail-relay:
     type: smtp
-  - id: sms-gateway
+  sms-gateway:
     type: http
     idempotentSubmit: true
 # What a caller selects: a channel, the provider carrying it, the sender
 # identity, and for SMS the most segments one message may use.
 senderProfiles:
-  - id: transactional
+  transactional:
     channel: email
     provider: mail-relay
     sender: notices@example.org
-  - id: reminders-sms
+  reminders-sms:
     channel: sms
     provider: sms-gateway
     sender: Registry
@@ -83,7 +83,7 @@ The access profiles decide who may call:
 
 ```yaml title="messaging.yaml" test-excerpt="tutorial-work/notices/messaging.yaml"
 accessProfiles:
-  - id: case-notices
+  case-notices:
     principalClaim: sub
     requiredScopes: [messaging:send]
     requesterClients: [case-system]

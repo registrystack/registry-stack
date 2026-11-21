@@ -261,7 +261,7 @@ async fn the_idempotency_key_follows_the_capability_persisted_at_acceptance() {
     let project = project(
         json!({"sms-gateway": http_connection(&upstream, json!({"type": "none"}))}),
         |package| {
-            package["providers"][1]
+            package["providers"]["sms-gateway"]
                 .as_object_mut()
                 .expect("provider")
                 .remove("idempotentSubmit");
