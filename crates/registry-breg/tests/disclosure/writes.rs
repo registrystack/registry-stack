@@ -2,9 +2,10 @@
 
 //! Write canaries. A profile that a condition binds may not overwrite a field
 //! the condition withholds from it, nor lift the mark that withholds it, on any
-//! write path: Patch, batch, an immediate Action and a Proposal apply. It may
-//! still set a mark and write a field no condition names. A profile the
-//! condition exempts writes as before.
+//! write path: Patch, batch, an immediate Action and a Proposal apply. Nor may
+//! it tombstone a record the condition matches. It may still set a mark and
+//! write a field no condition names. A profile the condition exempts writes as
+//! before.
 
 use super::*;
 
@@ -12,11 +13,17 @@ const SHIELDED_EMAIL: &str = "shielded@example.invalid";
 const SHIELDED_PHONE: &str = "555-0199";
 const REDIRECTED_EMAIL: &str = "redirected@example.invalid";
 
-/// The history fixture, with person patches and batches for every profile and
-/// three Actions that set a person's email: an immediate one, a Proposal one
-/// applied by hand and a Proposal one applied automatically.
+/// The history fixture, with person patches, batches and tombstones and
+/// residence tombstones for every profile, and three Actions that set a
+/// person's email: an immediate one, a Proposal one applied by hand and a
+/// Proposal one applied automatically.
 fn writes_source() -> Value {
     let mut source = history_source();
+    for record in source["recordTypes"].as_array_mut().unwrap() {
+        if record["id"] == "residence" {
+            record["tombstone"] = json!(true);
+        }
+    }
     let inputs = json!([
         {"id": "person", "apiName": "personId", "type": "reference", "target": "person",
          "required": true, "classification": "internal"},
@@ -48,8 +55,22 @@ fn writes_source() -> Value {
         if !writer {
             let grant = &mut permissions["records"][0];
             assert_eq!(grant["recordType"], "person");
-            grant["operations"] = json!(["get", "list", "patch", "batch", "snapshot", "revisions"]);
+            grant["operations"] = json!([
+                "get",
+                "list",
+                "patch",
+                "batch",
+                "tombstone",
+                "snapshot",
+                "revisions"
+            ]);
             grant["writableFields"] = json!(PERSON_FIELDS);
+            let residence = &mut permissions["records"][1];
+            assert_eq!(residence["recordType"], "residence");
+            residence["operations"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("tombstone"));
         }
         for list in ["actions", "proposals"] {
             if permissions[list].is_null() {
@@ -219,6 +240,26 @@ async fn apply(
         .execute_proposal(&apply)
         .await
         .map(|reply| reply.value)
+}
+
+/// DELETE a record of `route` as `profile`, against the entity tag `etag`.
+async fn tombstone_as(
+    history: &History,
+    profile: &str,
+    route: &str,
+    id: &str,
+    etag: &str,
+) -> Reply {
+    let key = history.key();
+    history
+        .send(
+            Method::DELETE,
+            &format!("/v1/records/{route}/{id}"),
+            profile,
+            &[("idempotency-key", &key), ("if-match", etag)],
+            None,
+        )
+        .await
 }
 
 /// The person as the protection officer, exempt from every condition, reads it.
@@ -539,5 +580,71 @@ async fn an_automatic_proposal_does_not_overwrite_a_withheld_field() {
         "{}",
         proposal.text()
     );
+    history.fixture.finish().await;
+}
+
+/// A bound profile may not tombstone a record that a `fields` or a `history`
+/// condition marks. It still tombstones an unmarked record, and an exempt
+/// profile tombstones a marked one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bound_profile_cannot_tombstone_a_marked_record() {
+    let history = start().await;
+    let seeded = seed(&history).await;
+    // The registrar is bound by the contacts mark on `f`, the emergency
+    // registrar only by the history mark on `p`.
+    for (what, profile, id) in [
+        ("fields mark", REGISTRAR, &seeded.f),
+        ("history mark", EMERGENCY_REGISTRAR, &seeded.p),
+    ] {
+        let etag = etag_as(&history, profile, id).await;
+        let reply = tombstone_as(&history, profile, "people", id, &etag).await;
+        assert_refused(&reply, what);
+    }
+    assert_unchanged(&history, &seeded).await;
+
+    let etag = etag_as(&history, REGISTRAR, &seeded.open).await;
+    let reply = tombstone_as(&history, REGISTRAR, "people", &seeded.open, &etag).await;
+    assert!(
+        reply.status == 200 || reply.status == 204,
+        "an unmarked record tombstones: {} {}",
+        reply.status,
+        reply.text()
+    );
+    let etag = etag_as(&history, PROTECTION_OFFICER, &seeded.f).await;
+    let reply = tombstone_as(&history, PROTECTION_OFFICER, "people", &seeded.f, &etag).await;
+    assert!(
+        reply.status == 200 || reply.status == 204,
+        "an exempt profile tombstones a marked record: {} {}",
+        reply.status,
+        reply.text()
+    );
+    for id in [&seeded.open, &seeded.f] {
+        let gone = history.get(&person(id), PROTECTION_OFFICER).await;
+        assert_eq!(gone.status, 404, "{}", gone.text());
+    }
+    history.fixture.finish().await;
+}
+
+/// A record a `record` condition withholds stays hidden from a bound
+/// tombstone, which answers exactly as for an identifier that names nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bound_tombstone_of_a_withheld_record_answers_as_an_absent_one() {
+    let history = start().await;
+    let seeded = seed(&history).await;
+    // The registrar cannot read `r`, so it sends the entity tag of a record
+    // it can read.
+    let etag = etag_as(&history, REGISTRAR, &seeded.open).await;
+    let withheld = tombstone_as(&history, REGISTRAR, "residences", &seeded.r, &etag).await;
+    let absent = tombstone_as(&history, REGISTRAR, "residences", ABSENT_ID, &etag).await;
+    assert_ne!(withheld.status / 100, 2, "{}", withheld.text());
+    assert_same_absence(&withheld.answer(), &absent.answer());
+    assert_no_sentinel(&withheld.text());
+    let kept = history
+        .get(
+            &format!("/v1/records/residences/{}", seeded.r),
+            PROTECTION_OFFICER,
+        )
+        .await;
+    assert_eq!(kept.status, 200, "{}", kept.text());
     history.fixture.finish().await;
 }

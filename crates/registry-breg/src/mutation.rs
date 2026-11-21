@@ -2917,6 +2917,13 @@ async fn apply_current_row(
             if expected.ct_eq(current_etag.as_bytes()).unwrap_u8() != 1 {
                 return Err(MutationError::PreconditionFailed);
             }
+            match crate::disclosure::plan(&request.plan.entity, request.claims.access_profile())
+                .refuses_tombstone(&current.data)
+            {
+                Ok(false) => {}
+                Ok(true) => return Err(MutationError::WriteOutsideBoundary),
+                Err(_) => return Err(MutationError::Unavailable),
+            }
             apply_tombstone_row(transaction, request, current).await
         }
         _ => Err(MutationError::InvalidRequest),
