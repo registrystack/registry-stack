@@ -25,7 +25,7 @@ const MAX_PREDICATES: usize = 4;
 /// The most literals a `field-in` predicate lists.
 const MAX_IN_VALUES: usize = 32;
 
-/// The compiled form of an entity's conditions, in authored order. A condition
+/// The compiled form of an entity's conditions, by id. A condition
 /// that fails validation is still compiled, because the compile result is
 /// discarded whenever a diagnostic is raised.
 pub(super) fn compile_conditions(source: &EntitySource) -> Vec<CompiledDisclosureCondition> {
@@ -171,16 +171,8 @@ pub(super) fn validate(
             &format!("a record type declares at most {MAX_CONDITIONS} disclosure conditions"),
         ));
     }
-    let mut ids = BTreeSet::new();
     for condition in &entity.disclosure_conditions {
         let root = format!("recordTypes[].disclosureConditions[id={}]", condition.id);
-        if !ids.insert(condition.id.as_str()) {
-            errors.push(Diagnostic::error(
-                "breg.disclosure.id-duplicate",
-                format!("recordTypes[].disclosureConditions[id={}].id", condition.id),
-                "a disclosure condition identifier is duplicated within its record type",
-            ));
-        }
         validate_when(entity, condition, &root, errors);
         validate_fields(entity, condition, &root, errors);
         validate_exempt_profiles(condition, &exemptable, &root, errors);

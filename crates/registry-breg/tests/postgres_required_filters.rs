@@ -49,15 +49,15 @@ impl ReadinessProbe for Ready {
 }
 
 fn compiled() -> CompiledRegistry {
-    let source = json!({"datasets":[{"id": "records"}],
+    let source = json!({"datasets":{"records": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "recordTypes":[{"id":"item","primaryDataset":"records","route":"items","mutationMode":"mutable","classification":"internal",
-            "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted",
+        "recordTypes":{"item": {"primaryDataset":"records","route":"items","mutationMode":"mutable","classification":"internal",
+            "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}]}},
+        "accessProfiles":{"reader": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted",
             "permissions":{"records":[{"recordType":"item","operations":["get","list"],"rowBoundaries":"unrestricted",
                 "readableFields":["label"],"filterableFields":["label"],
-                "requiredFilters":[{"fields":["label"]}]}]}}]
+                "requiredFilters":[{"fields":["label"]}]}]}}}
     });
     compile_project(
         &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),

@@ -2212,14 +2212,18 @@ async fn metadata_advertises_required_filters_beside_filterable_fields() {
 fn disclosure_harness() -> Harness {
     let source = PROJECT
         .replace(
-            "      - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: internal}\n  - id: protected-note",
-            "      - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: internal}\n      - {id: memo, type: string, maximumLength: 100, classification: internal}\n    disclosureConditions:\n      - id: hide-memo\n        when: [{type: field-equals, field: label, value: sealed}]\n        withhold: fields\n        fields: [memo]\n        exemptProfiles: [caseworker]\n      - id: hide-case\n        when: [{type: field-equals, field: label, value: closed}]\n        withhold: record\n        exemptProfiles: [caseworker]\n  - id: protected-note",
+            "      - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: internal}\n  protected-note:",
+            "      - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: internal}\n      - {id: memo, type: string, maximumLength: 100, classification: internal}\n    disclosureConditions:\n      hide-memo:\n        when: [{type: field-equals, field: label, value: sealed}]\n        withhold: fields\n        fields: [memo]\n        exemptProfiles: [caseworker]\n      hide-case:\n        when: [{type: field-equals, field: label, value: closed}]\n        withhold: record\n        exemptProfiles: [caseworker]\n  protected-note:",
         )
         .replace(
             "          readableFields: [label]\n          filterableFields: [label]\n          sortableFields: [label]",
             "          readableFields: [label, memo]\n          filterableFields: [label]\n          sortableFields: [label]",
         );
-    assert_ne!(source, PROJECT, "the project carries the conditions");
+    assert!(
+        source.contains("    disclosureConditions:\n")
+            && source.contains("readableFields: [label, memo]"),
+        "the project carries the conditions and the memo grant"
+    );
     Harness::from_project(&source, true)
 }
 
@@ -2248,8 +2252,8 @@ async fn metadata_flags_a_field_that_may_be_withheld_without_the_condition_liter
     assert_eq!(
         list["disclosure"],
         json!([
-            {"id": "hide-memo", "withhold": "fields", "fields": ["memo"]},
-            {"id": "hide-case", "withhold": "record"}
+            {"id": "hide-case", "withhold": "record"},
+            {"id": "hide-memo", "withhold": "fields", "fields": ["memo"]}
         ])
     );
     let text = metadata.to_string();

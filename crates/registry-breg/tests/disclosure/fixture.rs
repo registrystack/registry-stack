@@ -45,13 +45,13 @@ fn grant(record_type: &str, readable: Value, filterable: Value) -> Value {
         "filterableFields": filterable})
 }
 
-fn profile(id: &str, default: bool, filterable_contacts: bool) -> Value {
+fn profile(default: bool, filterable_contacts: bool) -> Value {
     let person_filter = if filterable_contacts {
         json!(["family-name", "email-address"])
     } else {
         json!(["family-name"])
     };
-    json!({"id": id, "default": default, "principalClaim": "registry_principal",
+    json!({"default": default, "principalClaim": "registry_principal",
     "requiredScopes": "unrestricted",
     "permissions": {"records": [
         grant("person", json!(["family-name", "protection-level", "history-protected", "email-address", "phone-number"]), person_filter),
@@ -63,13 +63,13 @@ fn profile(id: &str, default: bool, filterable_contacts: bool) -> Value {
 /// The project source, as authored.
 pub fn project_source() -> Value {
     assert_eq!(READ_FIELDS.len(), 3);
-    json!({"datasets": [{"id": "test-dataset"}],
+    json!({"datasets": {"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": "disclosure", "version": "1", "defaultLanguage": "en",
                     "canonicalBaseIri": "https://disclosure.example.test"},
-        "recordTypes": [
-            {"id": "person", "primaryDataset": "test-dataset", "route": "people",
+        "recordTypes": {
+            "person": {"primaryDataset": "test-dataset", "route": "people",
              "mutationMode": "mutable", "classification": "internal",
              "fields": [
                 {"id": "family-name", "type": "string", "maximumLength": 64, "classification": "internal"},
@@ -77,41 +77,37 @@ pub fn project_source() -> Value {
                 {"id": "history-protected", "type": "boolean", "classification": "internal"},
                 {"id": "email-address", "type": "string", "maximumLength": 128, "classification": "internal"},
                 {"id": "phone-number", "type": "string", "maximumLength": 32, "classification": "internal"}],
-             "disclosureConditions": [
-                {"id": "hide-contacts",
-                 "when": [{"type": "field-in", "field": "protection-level", "values": ["protected", "substitute-address"]}],
+             "disclosureConditions": {
+                "hide-contacts": {"when": [{"type": "field-in", "field": "protection-level", "values": ["protected", "substitute-address"]}],
                  "withhold": "fields", "fields": ["email-address", "phone-number"],
                  "exemptProfiles": [PROTECTION_OFFICER, EMERGENCY_REGISTRAR]},
-                {"id": "hide-history",
-                 "when": [{"type": "field-equals", "field": "history-protected", "value": true}],
-                 "withhold": "history", "exemptProfiles": [PROTECTION_OFFICER]}]},
-            {"id": "residence", "primaryDataset": "test-dataset", "route": "residences",
+                "hide-history": {"when": [{"type": "field-equals", "field": "history-protected", "value": true}],
+                 "withhold": "history", "exemptProfiles": [PROTECTION_OFFICER]}}},
+            "residence": {"primaryDataset": "test-dataset", "route": "residences",
              "mutationMode": "mutable", "classification": "internal",
              "fields": [
                 {"id": "person-id", "type": "uuid", "classification": "internal"},
                 {"id": "protection-level", "type": "string", "maximumLength": 32, "classification": "internal"},
                 {"id": "address", "type": "string", "maximumLength": 128, "classification": "internal"}],
-             "disclosureConditions": [
-                {"id": "hide-residence",
-                 "when": [{"type": "field-in", "field": "protection-level", "values": ["protected", "substitute-address"]}],
+             "disclosureConditions": {
+                "hide-residence": {"when": [{"type": "field-in", "field": "protection-level", "values": ["protected", "substitute-address"]}],
                  "withhold": "record",
-                 "exemptProfiles": [PROTECTION_OFFICER, EMERGENCY_REGISTRAR]}]},
-            {"id": "name-usage", "primaryDataset": "test-dataset", "route": "name-usages",
+                 "exemptProfiles": [PROTECTION_OFFICER, EMERGENCY_REGISTRAR]}}},
+            "name-usage": {"primaryDataset": "test-dataset", "route": "name-usages",
              "mutationMode": "mutable", "classification": "internal",
              "fields": [
                 {"id": "person-id", "type": "uuid", "classification": "internal"},
                 {"id": "protection-level", "type": "string", "maximumLength": 32, "classification": "internal"},
                 {"id": "old-name", "type": "string", "maximumLength": 64, "classification": "internal"},
                 {"id": "closed-on", "type": "date", "classification": "internal"}],
-             "disclosureConditions": [
-                {"id": "hide-closed-name",
-                 "when": [{"type": "field-is-not-null", "field": "closed-on"},
+             "disclosureConditions": {
+                "hide-closed-name": {"when": [{"type": "field-is-not-null", "field": "closed-on"},
                           {"type": "field-in", "field": "protection-level", "values": ["protected", "substitute-address"]}],
-                 "withhold": "record", "exemptProfiles": [PROTECTION_OFFICER]}]}],
-        "accessProfiles": [
-            profile(REGISTRAR, true, false),
-            profile(PROTECTION_OFFICER, false, true),
-            profile(EMERGENCY_REGISTRAR, false, true)]})
+                 "withhold": "record", "exemptProfiles": [PROTECTION_OFFICER]}}}},
+        "accessProfiles": {
+            REGISTRAR: profile(true, false),
+            PROTECTION_OFFICER: profile(false, true),
+            EMERGENCY_REGISTRAR: profile(false, true)}})
 }
 
 pub fn compile_fixture() -> CompiledRegistry {

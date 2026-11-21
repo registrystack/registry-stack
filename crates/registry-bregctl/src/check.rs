@@ -1699,7 +1699,6 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
         "breg.access-profile.required-filters-duplicate" => "Keep each field once per alternative, and each alternative once under requiredFilters.",
         "breg.access-profile.required-filters-field-not-filterable" => "Add the field to this permission's filterableFields, or remove it from requiredFilters.",
         "breg.access-profile.required-filters-field-not-equality-filterable" => "Choose a field whose type supports an eq filter, or remove it from requiredFilters.",
-        "breg.disclosure.id-duplicate" => "Give each disclosure condition of a record type its own id.",
         "breg.disclosure.too-many" => "Keep at most eight disclosureConditions on a record type. Merge conditions that share a withhold and exemptProfiles.",
         "breg.disclosure.when-field-invalid" => "Name a stored, unencrypted boolean, string, text, vocabulary-code, int64, date or uuid field of this record type.",
         "breg.disclosure.when-value-invalid" => "Give one to four predicates, and a non-null literal that fits the field type. A field-in predicate lists one to 32 values.",

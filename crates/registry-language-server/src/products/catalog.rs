@@ -271,11 +271,9 @@ const BREG_REFERENCES: &[N] = &[
         "recordTypes/*/accessProfiles/*/filterableFields/*",
         "BReg field",
     ),
-    N::scoped(
+    N::rooted(
         "recordTypes/*/accessProfiles/*/requiredFilters/*/fields/*",
         "BReg field",
-        2,
-        "id",
     ),
     N::rooted(
         "recordTypes/*/accessProfiles/*/sortableFields/*",

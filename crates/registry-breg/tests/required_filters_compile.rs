@@ -7,20 +7,20 @@ use registry_breg::{compile_project, parse_project_json, CompileProfile, Compile
 use serde_json::{json, Value};
 
 fn source(required_filters: Value, operations: Value) -> Value {
-    json!({"datasets":[{"id": "test-dataset"}],
+    json!({"datasets":{"test-dataset": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"required-filters","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://required-filters.example.test"},
-        "recordTypes":[{"id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"internal",
+        "recordTypes":{"person": {"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"internal",
           "fields":[{"id":"national-id","type":"string","maximumLength":32,"classification":"internal"},
                     {"id":"family-name","type":"string","maximumLength":64,"classification":"internal"},
                     {"id":"birth-date","type":"date","classification":"internal"},
-                    {"id":"district","type":"string","maximumLength":32,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+                    {"id":"district","type":"string","maximumLength":32,"classification":"internal"}]}},
+        "accessProfiles":{"registrar": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
           "permissions":{"records":[{"recordType":"person","operations":operations,
             "rowBoundaries":"unrestricted",
             "readableFields":["national-id","family-name","birth-date","district"],
             "filterableFields":["national-id","family-name","birth-date"],
-            "requiredFilters":required_filters}]}}]
+            "requiredFilters":required_filters}]}}}
     })
 }
 
@@ -47,8 +47,8 @@ fn alternatives_compile_onto_the_list_family_only() {
         json!([{"fields":["national-id"]},{"fields":["family-name","birth-date"]}]),
         json!(["get", "list"]),
     );
-    value["recordTypes"][0]["temporal"] = Value::Null;
-    value["recordTypes"][0]
+    value["recordTypes"]["person"]["temporal"] = Value::Null;
+    value["recordTypes"]["person"]
         .as_object_mut()
         .unwrap()
         .remove("temporal");
@@ -71,7 +71,7 @@ fn alternatives_compile_onto_the_list_family_only() {
 #[test]
 fn a_grant_without_required_filters_compiles_to_none() {
     let mut value = source(json!([]), json!(["get", "list"]));
-    value["accessProfiles"][0]["permissions"]["records"][0]
+    value["accessProfiles"]["registrar"]["permissions"]["records"][0]
         .as_object_mut()
         .unwrap()
         .remove("requiredFilters");
@@ -89,9 +89,9 @@ fn lookups_and_gets_are_not_governed() {
         json!([{"fields":["national-id"]}]),
         json!(["get", "list", "lookup"]),
     );
-    value["recordTypes"][0]["selectorProfiles"] =
+    value["recordTypes"]["person"]["selectorProfiles"] =
         json!([{"id":"by-national-id","fields":["national-id"]}]);
-    value["accessProfiles"][0]["permissions"]["records"][0]["lookups"] =
+    value["accessProfiles"]["registrar"]["permissions"]["records"][0]["lookups"] =
         json!([{"selector":"by-national-id","valueOrigin":"request"}]);
     let registry = compile(&value).expect("lookup grant compiles");
     for operation in &registry.queries().operations {
@@ -166,7 +166,7 @@ fn a_repeated_field_inside_an_alternative_is_refused_by_the_reader() {
         found,
         vec![(
             "config.duplicate-item",
-            "project.accessProfiles[0].permissions.records[0].requiredFilters[0].fields[1]"
+            "project.accessProfiles.registrar.permissions.records[0].requiredFilters[0].fields[1]"
         )],
         "{failure:?}"
     );

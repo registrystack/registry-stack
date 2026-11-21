@@ -19,11 +19,7 @@ const REDIRECTED_EMAIL: &str = "redirected@example.invalid";
 /// Proposal one applied automatically.
 fn writes_source() -> Value {
     let mut source = history_source();
-    for record in source["recordTypes"].as_array_mut().unwrap() {
-        if record["id"] == "residence" {
-            record["tombstone"] = json!(true);
-        }
-    }
+    source["recordTypes"]["residence"]["tombstone"] = json!(true);
     let inputs = json!([
         {"id": "person", "apiName": "personId", "type": "reference", "target": "person",
          "required": true, "classification": "internal"},
@@ -33,19 +29,28 @@ fn writes_source() -> Value {
         {"id": "contact", "target": {"fromInput": "person"}, "operation": "patch",
          "set": {"email-address": {"fromInput": "email"}}}]});
     let guards = json!({"targets": [{"input": "person", "revision": "unchanged"}]});
-    source["actions"].as_array_mut().unwrap().extend([
-        json!({"id": "set-person-email", "inputs": inputs, "plan": plan,
+    source["actions"].as_object_mut().unwrap().extend([
+        (
+            "set-person-email".to_owned(),
+            json!({"inputs": inputs, "plan": plan,
             "execution": {"mode": "immediate"}}),
-        json!({"id": "propose-person-email", "inputs": inputs, "plan": plan,
+        ),
+        (
+            "propose-person-email".to_owned(),
+            json!({"inputs": inputs, "plan": plan,
             "commitGuards": guards, "execution": proposal_execution(json!({"mode": "manual"}))}),
-        json!({"id": "correct-person-email", "inputs": inputs, "plan": plan,
+        ),
+        (
+            "correct-person-email".to_owned(),
+            json!({"inputs": inputs, "plan": plan,
             "commitGuards": guards,
             "execution": proposal_execution(json!({"mode": "automatic", "maximumAttempts": 1}))}),
+        ),
     ]);
     let targets = json!([{"recordType": "person", "rowBoundaries": "unrestricted"}]);
     let lifecycle = proposal_lifecycle();
-    for profile in source["accessProfiles"].as_array_mut().unwrap() {
-        let writer = profile["id"] == WRITER;
+    for (id, profile) in source["accessProfiles"].as_object_mut().unwrap() {
+        let writer = id == WRITER;
         let permissions = &mut profile["permissions"];
         if !writer {
             let grant = &mut permissions["records"][0];
@@ -106,8 +111,8 @@ fn proposal_lifecycle() -> Value {
 fn tied_source() -> Value {
     let mut source = writes_source();
     let tied = ["group-code", "status", "listed-on", "contact-since"];
-    for record in source["recordTypes"].as_array_mut().unwrap() {
-        if record["id"] != "person" {
+    for (id, record) in source["recordTypes"].as_object_mut().unwrap() {
+        if id != "person" {
             continue;
         }
         record["fields"].as_array_mut().unwrap().extend([
@@ -116,8 +121,7 @@ fn tied_source() -> Value {
             json!({"id": "listed-on", "type": "date", "classification": "internal"}),
             json!({"id": "contact-since", "type": "date", "classification": "internal"}),
         ]);
-        let contacts = &mut record["disclosureConditions"][0];
-        assert_eq!(contacts["id"], "hide-contacts");
+        let contacts = &mut record["disclosureConditions"]["hide-contacts"];
         contacts["fields"]
             .as_array_mut()
             .unwrap()
@@ -129,7 +133,11 @@ fn tied_source() -> Value {
             {"id": "listed-before-contact", "type": "compare", "left": "listed-on",
              "operator": "less-than-or-equal", "right": "contact-since"}]);
     }
-    for profile in source["accessProfiles"].as_array_mut().unwrap() {
+    for profile in source["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
         for grant in profile["permissions"]["records"].as_array_mut().unwrap() {
             if grant["recordType"] != "person" {
                 continue;
@@ -609,20 +617,14 @@ const ACTION_CLERK: &str = "action-clerk";
 /// it when `exempt` holds.
 fn action_clerk_source(exempt: bool) -> Value {
     let mut source = writes_source();
-    source["accessProfiles"].as_array_mut().unwrap().push(json!({
-        "id": ACTION_CLERK, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
+    source["accessProfiles"][ACTION_CLERK] = json!({
+        "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
         "permissions": {"actions": [
             {"action": "set-person-email", "operations": ["invoke"],
-             "targets": [{"recordType": "person", "rowBoundaries": "unrestricted"}]}]}}));
+             "targets": [{"recordType": "person", "rowBoundaries": "unrestricted"}]}]}});
     if exempt {
-        let person = source["recordTypes"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|record| record["id"] == "person")
-            .unwrap();
-        let contacts = &mut person["disclosureConditions"][0];
-        assert_eq!(contacts["id"], "hide-contacts");
+        let contacts =
+            &mut source["recordTypes"]["person"]["disclosureConditions"]["hide-contacts"];
         contacts["exemptProfiles"]
             .as_array_mut()
             .unwrap()
@@ -909,11 +911,16 @@ async fn run_automatic_with(
 fn without_protection_officer() -> Value {
     let mut source = writes_source();
     source["accessProfiles"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .retain(|profile| profile["id"] != PROTECTION_OFFICER);
-    for record in source["recordTypes"].as_array_mut().unwrap() {
-        for condition in record["disclosureConditions"].as_array_mut().unwrap() {
+        .remove(PROTECTION_OFFICER)
+        .expect("the fixture holds the protection officer");
+    for record in source["recordTypes"].as_object_mut().unwrap().values_mut() {
+        for condition in record["disclosureConditions"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+        {
             condition["exemptProfiles"]
                 .as_array_mut()
                 .unwrap()
@@ -928,23 +935,11 @@ fn without_protection_officer() -> Value {
 /// read, as `bregctl check` requires.
 fn protection_officer_bound_by_contacts() -> Value {
     let mut source = writes_source();
-    for record in source["recordTypes"].as_array_mut().unwrap() {
-        if record["id"] != "person" {
-            continue;
-        }
-        let contacts = &mut record["disclosureConditions"][0];
-        assert_eq!(contacts["id"], "hide-contacts");
-        contacts["exemptProfiles"]
-            .as_array_mut()
-            .unwrap()
-            .retain(|profile| profile != PROTECTION_OFFICER);
-    }
-    let officer = source["accessProfiles"]
+    source["recordTypes"]["person"]["disclosureConditions"]["hide-contacts"]["exemptProfiles"]
         .as_array_mut()
         .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == PROTECTION_OFFICER)
-        .unwrap();
+        .retain(|profile| profile != PROTECTION_OFFICER);
+    let officer = &mut source["accessProfiles"][PROTECTION_OFFICER];
     let grant = &mut officer["permissions"]["records"][0];
     assert_eq!(grant["recordType"], "person");
     grant["filterableFields"] = json!(["family-name"]);
@@ -1130,18 +1125,27 @@ fn residence_source() -> Value {
         {"id": "protect", "target": {"fromInput": "residence"}, "operation": "patch",
          "set": {"protection-level": {"fromInput": "level"}}}]});
     let guards = json!({"targets": [{"input": "residence", "revision": "unchanged"}]});
-    source["actions"].as_array_mut().unwrap().extend([
-        json!({"id": "protect-residence", "inputs": inputs, "plan": plan,
+    source["actions"].as_object_mut().unwrap().extend([
+        (
+            "protect-residence".to_owned(),
+            json!({"inputs": inputs, "plan": plan,
             "execution": {"mode": "immediate"}}),
-        json!({"id": "propose-residence-protection", "inputs": inputs, "plan": plan,
+        ),
+        (
+            "propose-residence-protection".to_owned(),
+            json!({"inputs": inputs, "plan": plan,
             "commitGuards": guards, "execution": proposal_execution(json!({"mode": "manual"}))}),
-        json!({"id": "correct-residence-protection", "inputs": inputs, "plan": plan,
+        ),
+        (
+            "correct-residence-protection".to_owned(),
+            json!({"inputs": inputs, "plan": plan,
             "commitGuards": guards,
             "execution": proposal_execution(json!({"mode": "automatic", "maximumAttempts": 2}))}),
+        ),
     ]);
     let targets = json!([{"recordType": "residence", "rowBoundaries": "unrestricted"}]);
-    for profile in source["accessProfiles"].as_array_mut().unwrap() {
-        if profile["id"] == WRITER {
+    for (id, profile) in source["accessProfiles"].as_object_mut().unwrap() {
+        if id == WRITER {
             continue;
         }
         let permissions = &mut profile["permissions"];
