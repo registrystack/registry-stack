@@ -492,7 +492,8 @@ exist, so it cannot be used to guess the value.
 profiles the project declares. The record timer, which runs under the reserved `system-record-timer`
 profile, is never withheld from, so a timer keeps firing on a record that is hidden from people. A
 timer may not read a field that a `fields` condition withholds from some profile, because what the
-timer writes would reveal it.
+timer writes would reveal it. For the same reason, a timer on a Record type with a `record`
+condition may not create a record that a profile the condition binds can read.
 
 ### How a condition is evaluated
 
@@ -535,6 +536,9 @@ refuses:
 - a Record timer whose `at`, `notAfter`, `rearmOn`, `when` or `fromField` input reads a withheld
   field (`breg.disclosure.timer-reads-withheld-field`). The timer runs without the condition, so
   its Action, or the moment it fires, would reveal the value;
+- a Record timer on a Record type with a `record` condition whose Action creates a record the profile
+  reads (`breg.disclosure.timer-creates-readable-record`). The created record would carry the id of
+  a hidden record, and any value the timer maps from it;
 - a statistical dataset that would count or read a withheld record or field
   (`breg.disclosure.statistics-withheld-field`, `breg.disclosure.statistics-live-bound`,
   `breg.disclosure.statistics-publisher-bound`). See

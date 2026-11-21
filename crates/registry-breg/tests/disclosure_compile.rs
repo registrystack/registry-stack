@@ -1168,3 +1168,51 @@ fn a_record_timer_cannot_read_a_withheld_field_for_a_bound_profile() {
     conditions(&mut exempt)[2]["exemptProfiles"] = json!(["protection-officer", "registrar"]);
     assert!(!has_code(&exempt, code), "{:?}", refusal_or_empty(&exempt));
 }
+
+/// The timer fixture with a `call-log` Record type that the timer's Action
+/// also creates, carrying the anchor's id and a value read from it.
+fn logging_timer_source(log_readers: &[&str]) -> Value {
+    let mut value = timer_source();
+    value["recordTypes"].as_array_mut().unwrap().push(json!({
+        "id":"call-log","primaryDataset":"test-dataset","route":"call-logs","mutationMode":"create-only",
+        "classification":"internal",
+        "fields":[
+            {"id":"person","type":"reference","target":"person","required":true,"classification":"internal"},
+            {"id":"noted","type":"string","maximumLength":64,"required":true,"classification":"internal"}]}));
+    value["actions"][0]["plan"]["effects"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"id":"logged","target":{"recordType":"call-log"},"operation":"create",
+            "set":{"person":{"fromInput":"person"},"noted":{"fromInput":"note"}}}),
+        );
+    for profile in value["accessProfiles"].as_array_mut().unwrap() {
+        if log_readers.contains(&profile["id"].as_str().unwrap()) {
+            profile["permissions"]["records"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"recordType":"call-log","operations":["get","list"],
+                    "rowBoundaries":"unrestricted","readableFields":["person","noted"]}));
+        }
+    }
+    value
+}
+
+#[test]
+fn a_record_timer_cannot_create_a_record_a_profile_the_record_condition_binds_reads() {
+    let code = "breg.disclosure.timer-creates-readable-record";
+
+    // `hide-protected` withholds the whole person from the registrar, so a
+    // call log the registrar reads would name a person it must not see.
+    let read_by_bound = logging_timer_source(&["registrar"]);
+    assert_refused(&read_by_bound, code, COND);
+
+    // A log only an exempt profile reads reveals nothing past the condition.
+    let read_by_exempt = logging_timer_source(&["protection-officer"]);
+    compile(&read_by_exempt).expect("only an exempt profile reads the created record");
+
+    // Exempting the reader from the record condition lifts the refusal.
+    let mut exempt = read_by_bound.clone();
+    conditions(&mut exempt)[0]["exemptProfiles"] = json!(["protection-officer", "registrar"]);
+    assert!(!has_code(&exempt, code), "{:?}", refusal_or_empty(&exempt));
+}

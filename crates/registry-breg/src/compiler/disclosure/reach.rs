@@ -4,12 +4,14 @@
 //! refuses one surface for the profiles the condition does not exempt, so a
 //! withheld field cannot be recovered through geometry queries, boundaries,
 //! read paths, Record timers, derived fields, external views or statistics.
+//! A Record timer is also refused a created record that carries a record a
+//! `record` condition hides.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::contract::{
     AccessProfileSource, DerivedSource, DisclosureConditionSource, DisclosureWithholdSource,
-    EntitySource, TimerPredicateSource,
+    EntitySource, Operation, TimerPredicateSource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::external_views::CompiledExternalViews;
@@ -205,6 +207,58 @@ pub(super) fn validate_timers(
                     timer.id
                 ),
             ));
+        }
+    }
+}
+
+/// A Record timer also fires on a record a `record` condition hides. An
+/// Action it invokes that creates a record writes the hidden record's id, and
+/// any value the timer maps from it, into the created record, so no profile
+/// the condition binds may read the created record type.
+pub(in crate::compiler) fn validate_timer_creates(
+    entity: &EntitySource,
+    timer: &str,
+    created: &BTreeSet<&str>,
+    entities: &BTreeMap<String, EntitySource>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    for condition in entity
+        .disclosure_conditions
+        .iter()
+        .filter(|condition| condition.withhold == DisclosureWithholdSource::Record)
+    {
+        for profile in bound(entity, condition) {
+            for record_type in created {
+                let reads = entities.get(*record_type).is_some_and(|created| {
+                    created.access_profiles.iter().any(|reader| {
+                        reader.id == profile.id
+                            && (reader.allow_data_export
+                                || reader.operations.iter().any(|operation| {
+                                    matches!(
+                                        operation,
+                                        Operation::Get
+                                            | Operation::Lookup
+                                            | Operation::List
+                                            | Operation::Revisions
+                                            | Operation::Snapshot
+                                    )
+                                }))
+                    })
+                });
+                if reads {
+                    errors.push(Diagnostic::error(
+                        "breg.disclosure.timer-creates-readable-record",
+                        format!(
+                            "recordTypes[id={}].disclosureConditions[id={}]",
+                            entity.id, condition.id
+                        ),
+                        &format!(
+                            "Record timer `{timer}` creates a `{record_type}` record that access profile `{}` reads, and the timer runs without the condition, so the created record would reveal a record the condition hides from that profile: have the Action change only its own record, remove the read from the profile, or exempt the profile",
+                            profile.id
+                        ),
+                    ));
+                }
+            }
         }
     }
 }

@@ -130,13 +130,14 @@
   enforces a `record` condition as a restrictive row policy. `bregctl check` refuses a bound profile
   whose filters, sorts, lookups, export, hook projections, read paths, row, membership or consent
   boundaries, derived fields, spatial queries, Evidence facts, external view links or statistical
-  datasets reach a withheld value, and a Record timer that reads a withheld field
-  (`breg.disclosure.*`). Runtime metadata flags `mayBeWithheld` and
-  lists the bound conditions without their literals, `bregctl explain access` lists them in full, the
-  access preview names the ids that bind a profile, and the ODRL export omits a grant a condition
-  binds (`disclosure-condition`). Proposal inputs stay visible to reviewers, and a uniqueness or
-  reference conflict can reveal that a withheld record exists. Packages that use the new key change
-  revision, and the metadata, OpenAPI and Explain documents gain members that earlier clients ignore.
+  datasets reach a withheld value, a Record timer that reads a withheld field, and a Record timer
+  on a hidden record that creates a record a bound profile reads (`breg.disclosure.*`). Runtime
+  metadata flags `mayBeWithheld` and lists the bound conditions without their literals,
+  `bregctl explain access` lists them in full, the access preview names the ids that bind a
+  profile, and the ODRL export omits a grant a condition binds (`disclosure-condition`). Proposal
+  inputs stay visible to reviewers, and a uniqueness or reference conflict can reveal that a
+  withheld record exists. Packages that use the new key change revision, and the metadata, OpenAPI
+  and Explain documents gain members that earlier clients ignore.
 - An access profile can set `requireAccessReason: true`. A request under it without a valid
   `Registry-Access-Reason` header (unpadded base64url UTF-8, at most 512 bytes) is refused with
   `400 request.access_reason_required`. The reason is stored on the subject access log entry and
