@@ -129,18 +129,18 @@
   a `record` condition would hide from the writer is refused with `write.outside-boundary`. So is a
   Patch, Batch item, immediate Action or Proposal applied by hand, when a condition that binds the
   applying profile matches the record and the write names a field it withholds or would lift the
-  mark. An import item it refuses answers the generic `412 precondition.failed`. The OpenAPI
-  declares that 403 wherever a condition binds a writing profile, and its `detail` names disclosure
-  conditions beside row boundaries. PostgreSQL enforces a `record` condition as a restrictive row
-  policy. `bregctl check` refuses a bound profile whose filters, sorts, lookups, export, hook
-  projections, read paths, row, membership or consent boundaries, derived fields, spatial queries,
-  Evidence facts, external view links or statistical datasets reach a withheld value, a uniqueness
-  constraint or unique encrypted lookup on a field a `fields` condition withholds, a Record timer
-  that reads a withheld field, and a Record timer on a hidden record that creates a record a bound
-  profile reads (`breg.disclosure.*`). Runtime metadata flags `mayBeWithheld` and lists the bound
-  conditions without their literals, `bregctl explain access` lists them in full, the access preview
-  names the ids that bind a profile, and the ODRL export omits a grant a condition binds
-  (`disclosure-condition`). Proposal inputs stay visible to reviewers, and a uniqueness or reference
+  mark. An import item it refuses answers the generic `412 precondition.failed`. The OpenAPI of
+  Create, Patch and Batch declares that 403 wherever a binding condition can refuse the write, and
+  its `detail` names disclosure conditions beside row boundaries. PostgreSQL enforces a `record`
+  condition as a restrictive row policy. `bregctl check` refuses a bound profile whose filters,
+  sorts, lookups, export, hook projections, read paths, row, membership or consent boundaries,
+  derived fields, spatial queries, Evidence facts, external view links or statistical datasets reach
+  a withheld value, a uniqueness constraint or unique encrypted lookup on a field a `fields`
+  condition withholds, a Record timer that reads a withheld field, and a Record timer on a hidden
+  record that creates a record a bound profile reads (`breg.disclosure.*`). Runtime metadata flags
+  `mayBeWithheld` and lists the bound conditions without their literals, `bregctl explain access`
+  lists them in full, the access preview names the ids that bind a profile, and the ODRL export
+  omits a grant a condition binds (`disclosure-condition`). Proposal inputs stay visible to reviewers, and a uniqueness or reference
   conflict can reveal that a withheld record exists. Packages that use the new key change revision,
   and the metadata, OpenAPI and Explain documents gain members that earlier clients ignore.
 - An access profile can set `requireAccessReason: true`. A request under it without a valid
