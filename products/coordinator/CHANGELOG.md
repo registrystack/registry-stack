@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- BREAKING: a `CoordinatorProject`'s human `label` and `description` move from
+  the top level into the shared `project` block, as `project.label` and
+  `project.description` (pre-1.0 cleanup, so every product accepts them in the
+  same place). A top-level `label` or `description` is refused with
+  `config.removed-key` and the fix "Move label to project.label." Neither
+  changes the workflow's stable identity or behavior revision, and the
+  compiled presentation is unchanged.
+
 - BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
   -> `database.caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef`
   the other TLS blocks use. The old key is refused as an unknown key. The value
