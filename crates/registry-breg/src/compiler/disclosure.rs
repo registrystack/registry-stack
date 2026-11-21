@@ -184,6 +184,7 @@ pub(super) fn validate(
         reach::validate_spatial_queries(entity, condition, &root, errors);
         reach::validate_boundaries(entity, condition, &root, errors);
         reach::validate_read_paths(entity, condition, entities, &root, errors);
+        reach::validate_timers(entity, condition, &root, errors);
     }
 }
 

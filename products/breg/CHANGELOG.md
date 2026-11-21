@@ -130,7 +130,8 @@
   enforces a `record` condition as a restrictive row policy. `bregctl check` refuses a bound profile
   whose filters, sorts, lookups, export, hook projections, read paths, row, membership or consent
   boundaries, derived fields, spatial queries, Evidence facts, external view links or statistical
-  datasets reach a withheld value (`breg.disclosure.*`). Runtime metadata flags `mayBeWithheld` and
+  datasets reach a withheld value, and a Record timer that reads a withheld field
+  (`breg.disclosure.*`). Runtime metadata flags `mayBeWithheld` and
   lists the bound conditions without their literals, `bregctl explain access` lists them in full, the
   access preview names the ids that bind a profile, and the ODRL export omits a grant a condition
   binds (`disclosure-condition`). Proposal inputs stay visible to reviewers, and a uniqueness or
