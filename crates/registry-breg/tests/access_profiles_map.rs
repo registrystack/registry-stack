@@ -331,3 +331,77 @@ version: 0.1.0
         );
     }
 }
+
+/// A project Record type that carries its own `accessProfiles`.
+fn project_with_record_type_profiles(profiles: &str) -> String {
+    format!("{HEAD}    accessProfiles:\n{profiles}")
+}
+
+#[test]
+fn an_id_member_inside_a_project_record_type_profile_is_refused_like_the_root() {
+    let root = parse_project_yaml(
+        project(
+            "accessProfiles:
+  reader:
+    id: reader
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
+",
+        )
+        .as_bytes(),
+    )
+    .expect_err("an inner id is refused");
+    let expected = root.diagnostics()[0]
+        .message
+        .split(" (line")
+        .next()
+        .unwrap();
+    let failure = parse_project_yaml(
+        project_with_record_type_profiles(
+            "      reader:
+        id: reader
+        principalClaim: registry_principal
+        requiredScopes: unrestricted
+",
+        )
+        .as_bytes(),
+    )
+    .expect_err("an inner id is refused");
+    let [diagnostic] = failure.diagnostics() else {
+        panic!("one refusal: {failure:?}");
+    };
+    assert_eq!(diagnostic.code, "config.removed-key", "{diagnostic:?}");
+    assert_eq!(diagnostic.message.split(" (line").next().unwrap(), expected);
+    assert!(
+        diagnostic
+            .message
+            .contains("accessProfiles: {PROFILE_ID: {"),
+        "the refusal names the mapping shape: {}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn a_list_of_project_record_type_profiles_is_refused_with_the_mapping_named() {
+    let failure = parse_project_yaml(
+        project_with_record_type_profiles(
+            "      - id: reader
+        principalClaim: registry_principal
+        requiredScopes: unrestricted
+",
+        )
+        .as_bytes(),
+    )
+    .expect_err("the list is refused");
+    let [diagnostic] = failure.diagnostics() else {
+        panic!("one refusal: {failure:?}");
+    };
+    assert_eq!(diagnostic.code, "config.removed-key", "{diagnostic:?}");
+    assert!(
+        diagnostic
+            .message
+            .contains("accessProfiles: {PROFILE_ID: {"),
+        "the refusal names the mapping shape: {}",
+        diagnostic.message
+    );
+}

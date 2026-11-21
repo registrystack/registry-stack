@@ -91,9 +91,8 @@ pub(super) const PROJECT: &str = r#"{
       "tenant":{"fromInput":"tenant"},"placement":{"fromInput":"placement"},"proposed-site":{"fromInput":"proposed-site"},"reason":{"fromInput":"reason"}
     }}]}
   }],
-  "accessProfiles":[
-    {
-      "id":"steward",
+  "accessProfiles":{
+    "steward":{
       "default":true,
       "principalClaim":"sub",
       "requiredScopes":"unrestricted",
@@ -116,8 +115,7 @@ pub(super) const PROJECT: &str = r#"{
         ]
       }
     },
-    {
-      "id":"submitter",
+    "submitter":{
       "default":false,
       "principalClaim":"sub",
       "requiredScopes":"unrestricted",
@@ -151,8 +149,7 @@ pub(super) const PROJECT: &str = r#"{
       "requiredPurposes":["review"],
       "taskGrant":{"sourceIssuer":"https://casework.example"}
     },
-    {
-      "id":"applier",
+    "applier":{
       "principalClaim":"sub",
       "requiredScopes":"unrestricted",
       "requiredPurposes":["apply"],
@@ -167,7 +164,7 @@ pub(super) const PROJECT: &str = r#"{
         ]
       }
     }
-  ]
+  }
 }"#;
 
 pub(super) struct Deployment {

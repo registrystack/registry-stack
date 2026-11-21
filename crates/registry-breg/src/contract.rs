@@ -5543,6 +5543,10 @@ const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
         replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {PROFILE_ID: {principalClaim: ...}}, with no id member.",
     },
     RemovedKey {
+        pointer: "/recordTypes/*/accessProfiles/*/id",
+        replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {PROFILE_ID: {principalClaim: ...}}, with no id member.",
+    },
+    RemovedKey {
         pointer: "/recordTypes/*/changeControl",
         replacement: CHANGE_CONTROL_REPLACEMENT,
     },

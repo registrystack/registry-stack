@@ -183,14 +183,14 @@ impl Breg {
                 "plan":{"type":"function", "function":"update-item-plan", "inputs":["target","label"],
                     "refusals":[{"code":"label-not-eligible", "label":"The label is not eligible."}],
                     "writes":[{"id":"item", "target":{"fromInput":"target"}, "operation":"patch", "fields":["label"]}]}}],
-            "accessProfiles":[
-                {"id":"writer", "default":true, "principalClaim":"sub", "requiredScopes":["applications:read"], "actorKind":"service", "requesterClients":["application-reader"],
+            "accessProfiles":{
+                "writer": {"default":true, "principalClaim":"sub", "requiredScopes":["applications:read"], "actorKind":"service", "requesterClients":["application-reader"],
                     "permissions":{"records":[{"recordType":"item", "operations":["create","get","list"], "readableFields":["owner","label"], "writableFields":["owner","label"],
                         "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]}],
                         "actions":[{"action":"update-item", "operations":["invoke"], "targets":[{"recordType":"item", "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]}], "results":["item"]}]}},
-                {"id":"reader", "principalClaim":"sub", "requiredScopes":["applications:read"], "actorKind":"service", "requesterClients":["application-reader"],
+                "reader": {"principalClaim":"sub", "requiredScopes":["applications:read"], "actorKind":"service", "requesterClients":["application-reader"],
                     "permissions":{"records":[{"recordType":"item", "operations":["get"], "readableFields":["owner","label"], "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]}]}}
-            ]
+            }
         });
         for (id, automatic) in [("propose-item", true), ("manual-item", false)] {
             let mut policy =
@@ -205,11 +205,11 @@ impl Breg {
                 "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
                 "plan":{"type":"fixed","effects":[{"id":"item","target":{"fromInput":"target"},"operation":"patch","set":{"label":{"fromInput":"label"}}}]}
             }));
-            registry["accessProfiles"][0]["permissions"]["actions"].as_array_mut().unwrap().push(json!({
+            registry["accessProfiles"]["writer"]["permissions"]["actions"].as_array_mut().unwrap().push(json!({
                 "action":id,"operations":["start"],"targets":[{"recordType":"item","rowBoundaries":[{"field":"owner","claim":"sub","operator":"equals"}]}]
             }));
         }
-        registry["accessProfiles"][0]["permissions"]["proposals"] = json!([
+        registry["accessProfiles"]["writer"]["permissions"]["proposals"] = json!([
             {"action":"propose-item","operations":["get","submit","cancel"],"ownership":"caller","targets":[{"recordType":"item","rowBoundaries":[{"field":"owner","claim":"sub","operator":"equals"}]}]},
             {"action":"manual-item","operations":["get","submit","cancel","apply"],"ownership":"caller","targets":[{"recordType":"item","rowBoundaries":[{"field":"owner","claim":"sub","operator":"equals"}]}]}
         ]);
