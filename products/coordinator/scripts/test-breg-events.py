@@ -136,7 +136,7 @@ def write_source(journey, key_root, proxy_url, paths):
     record["hooks"] = [{"id": "application-" + trigger + "-v1", "phase": "after", "trigger": trigger,
                         "projection": ["tenant"], "handler": {"type": "url", "destinationId": trigger}}
                        for trigger in ("created", "patched")]
-    seed = next(profile for profile in project["accessProfiles"] if profile["id"] == "seeder")
+    seed = project["accessProfiles"]["seeder"]
     seed["permissions"]["records"][0]["operations"].append("patch")
     project["actions"].append({
         "id": "update-email", "execution": {"mode": "immediate"},

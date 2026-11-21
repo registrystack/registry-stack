@@ -198,7 +198,8 @@ def write_breg(root, urls, review_policy=None, *, borrower=False):
         **({"reviewAuthorities": [{"id": "casework",
             "protocol": "id.registrystack.org/protocols/review/v1"}]} if review_policy is not None else {}),
         "recordTypes": [applications], "actions": actions,
-        "accessProfiles": profiles,
+        "accessProfiles": {profile["id"]: {key: value for key, value in profile.items() if key != "id"}
+                           for profile in profiles},
     })
     clients = [
         _owner_client("seed-client", ["records:get"], ["seeder"], TENANT_CLAIMS),

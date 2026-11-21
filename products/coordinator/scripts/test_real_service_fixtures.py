@@ -99,7 +99,7 @@ class NativeFixtureContracts(unittest.TestCase):
         for action in project["actions"]:
             self.assertEqual(action["execution"]["mode"], "proposal")
             self.assertNotIn("application", action["execution"]["proposal"])
-        for profile in project["accessProfiles"]:
+        for profile in project["accessProfiles"].values():
             if profile.get("actorKind") == "service":
                 for grant in profile["permissions"].get("proposals", []):
                     self.assertFalse({"apply", "retry"}.intersection(grant["operations"]))
