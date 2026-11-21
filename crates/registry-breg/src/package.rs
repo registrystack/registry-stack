@@ -141,6 +141,9 @@ fn legacy_engine_features() -> BTreeSet<PackageEngineFeature> {
     ])
 }
 
+/// Every reader, a predecessor reader included, requires the current feature
+/// set. The one earlier set predates every release that reads id-keyed maps,
+/// so it gets the fresh-database refusal.
 fn validate_engine_features(manifest: &PackageManifest) -> Result<()> {
     if manifest.engine_features == current_engine_features() {
         return Ok(());
@@ -149,16 +152,6 @@ fn validate_engine_features(manifest: &PackageManifest) -> Result<()> {
         return Err(PackageError::EngineFeatureUpgradeRequired);
     }
     Err(PackageError::Derivation)
-}
-
-fn validate_predecessor_engine_features(manifest: &PackageManifest) -> Result<()> {
-    if manifest.engine_features == current_engine_features()
-        || manifest.engine_features == legacy_engine_features()
-    {
-        Ok(())
-    } else {
-        Err(PackageError::Derivation)
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -4304,8 +4297,9 @@ fn load_predecessor_closure(
 ) -> Result<(VerifiedPredecessorPackage, BTreeMap<String, Vec<u8>>)> {
     let production = context.database_initialization_environment != "local";
     let (manifest, loaded) = load_verified_closure(root, shared, production)?;
-    validate_predecessor_engine_features(&manifest)?;
+    validate_engine_features(&manifest)?;
     validate_source_inventory(&manifest)?;
+    parse_package_sources(&manifest, &loaded)?;
     let governed = package_predecessor_governed_model(&manifest, &loaded)?;
     validate_predecessor_registry_bindings(&manifest, &governed)?;
     let package_digest = shared.digest().to_owned();
@@ -4823,20 +4817,13 @@ fn source_refusal(failure: &CompileFailure) -> PackageError {
     PackageError::PreviousReleaseSources(detail)
 }
 
-/// Compile the sources of one verified package closure. The caller
-/// decides whether generated artifacts must also match byte for byte.
-fn compile_package_sources(
+/// Parse the stored sources of one verified package closure. A package built
+/// before this release holds sources this reader refuses, and every reader of
+/// the closure, a predecessor reader included, says so.
+fn parse_package_sources(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
-) -> Result<CompiledRegistry> {
-    validate_source_inventory(manifest)?;
-    let fixture_journeys = loaded
-        .get(&manifest.sources.fixture_journeys)
-        .ok_or(PackageError::Derivation)?;
-    if fixture_journeys.is_empty() || fixture_journeys.len() as u64 > MAX_PACKAGE_SOURCE_FILE_BYTES
-    {
-        return Err(PackageError::Derivation);
-    }
+) -> Result<(RegistryProject, Vec<RegistryModule>)> {
     let project_bytes = loaded
         .get(&manifest.sources.project)
         .ok_or(PackageError::Derivation)?;
@@ -4854,6 +4841,24 @@ fn compile_package_sources(
                 })
         })
         .collect::<Result<Vec<RegistryModule>>>()?;
+    Ok((project, modules))
+}
+
+/// Compile the sources of one verified package closure. The caller
+/// decides whether generated artifacts must also match byte for byte.
+fn compile_package_sources(
+    manifest: &PackageManifest,
+    loaded: &BTreeMap<String, Vec<u8>>,
+) -> Result<CompiledRegistry> {
+    validate_source_inventory(manifest)?;
+    let fixture_journeys = loaded
+        .get(&manifest.sources.fixture_journeys)
+        .ok_or(PackageError::Derivation)?;
+    if fixture_journeys.is_empty() || fixture_journeys.len() as u64 > MAX_PACKAGE_SOURCE_FILE_BYTES
+    {
+        return Err(PackageError::Derivation);
+    }
+    let (project, modules) = parse_package_sources(manifest, loaded)?;
     let module_assets = captured_compiler_assets(manifest, loaded)?;
     let project_assets = module_assets
         .iter()

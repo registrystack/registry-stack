@@ -432,11 +432,11 @@ fn a_runtime_bound_baseline_is_verified_without_opening_runtime_dependencies() {
     );
 }
 
-/// A package built before access profiles were keyed by id stores them as a
-/// list. This bregctl does not read that form, so the package is refused as a
-/// baseline with the reader's diagnostic.
+/// A package built before access profiles were keyed by id predates the
+/// Record timer store too, so it is refused as a baseline with the one path
+/// forward, a fresh database.
 #[test]
-fn a_runtime_bound_baseline_stored_with_list_form_access_profiles_is_refused() {
+fn a_runtime_bound_baseline_built_before_this_release_is_refused() {
     let directory = TestDirectory::create();
     let legacy = PublishedPackage {
         package: Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -464,19 +464,8 @@ fn a_runtime_bound_baseline_stored_with_list_form_access_profiles_is_refused() {
     ]);
     assert_eq!(diffed.status.code(), Some(1), "{diffed:?}");
     let diagnostic = &json_stdout(&diffed)["diagnostics"][0];
-    assert_eq!(
-        diagnostic["code"],
-        "diff.baseline.predecessor-sources-refused"
-    );
+    assert_eq!(diagnostic["code"], "diff.baseline.engine-upgrade-required");
     let message = diagnostic["message"].as_str().expect("message is text");
-    assert!(
-        message.contains("stored sources do not compile with this bregctl"),
-        "{message}"
-    );
-    assert!(
-        message.contains("Write accessProfiles as a mapping"),
-        "{message}"
-    );
     assert!(
         message.contains(registry_breg::package::FRESH_DATABASE_PATH),
         "{message}"

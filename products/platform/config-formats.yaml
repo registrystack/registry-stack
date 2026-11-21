@@ -445,7 +445,7 @@ formats:
       function: parse_package_envelope
       type: PackageEnvelope
     check: bregctl check --package {package}
-    example: crates/registry-breg/tests/fixtures/native-minimal-package/package.json
+    example: crates/registry-breg/tests/fixtures/pre-record-timer-store-package/package/package.json
     conformance:
       requiredText: /manifest/packageId
       optionalText: none
