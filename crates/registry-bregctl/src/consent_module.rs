@@ -1084,7 +1084,7 @@ mod tests {
     fn no_manifest_projection_or_a_populated_flow_list_is_refused() {
         assert!(append_manifest_projection_dataset("a: 1\n", DATASET_ITEM).is_none());
         assert!(append_manifest_projection_dataset(
-            "manifestProjection:\n  datasets: {x: {}}\n",
+            "manifestProjection:\n  datasets: [{id: x}]\n",
             DATASET_ITEM
         )
         .is_none());
