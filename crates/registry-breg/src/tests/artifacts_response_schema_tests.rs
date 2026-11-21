@@ -38,12 +38,12 @@ fn unconditioned_action_schema_accepts_only_empty_optional_preconditions() {
 #[test]
 fn prospective_row_boundary_refusal_is_documented_only_where_it_can_apply() {
     for operation in [Operation::Create, Operation::Patch, Operation::Batch] {
-        assert!(super::problem_responses(operation, true).contains_key("403"));
-        assert!(!super::problem_responses(operation, false).contains_key("403"));
+        assert!(super::problem_responses(operation, true, false).contains_key("403"));
+        assert!(!super::problem_responses(operation, false, false).contains_key("403"));
     }
-    assert!(!super::problem_responses(Operation::Create, true).contains_key("412"));
-    assert!(super::problem_responses(Operation::Batch, true).contains_key("412"));
-    assert!(super::problem_responses(Operation::Patch, false).contains_key("412"));
+    assert!(!super::problem_responses(Operation::Create, true, false).contains_key("412"));
+    assert!(super::problem_responses(Operation::Batch, true, false).contains_key("412"));
+    assert!(super::problem_responses(Operation::Patch, false, false).contains_key("412"));
     let example = super::problem_example(
         "403",
         "write.outside-boundary",
@@ -1086,6 +1086,84 @@ fn compiled_bound_writer_registry() -> CompiledRegistry {
              "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"},
                  "application": {"mode": "manual"}, "retention": {"mode": "operator-erase"}}}}],
         "accessProfiles": [profile("registrar", true), profile("officer", false)]
+    });
+    let project =
+        parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles")
+}
+
+#[test]
+fn the_required_filter_refusal_is_documented_only_where_a_profile_requires_a_filter() {
+    let declares = |responses: &Value| {
+        responses["400"]["content"]["application/problem+json"]["examples"]
+            .get("query.filter_required")
+            .is_some()
+    };
+    let static_list = |registry: &CompiledRegistry| {
+        let openapi: Value = serde_json::from_slice(
+            &registry
+                .artifacts()
+                .get("generated/openapi.json")
+                .expect("OpenAPI is generated")
+                .bytes,
+        )
+        .unwrap();
+        openapi["paths"]["/v1/records/people"]["get"]["responses"].clone()
+    };
+
+    let registry = compiled_required_filter_registry(true);
+    assert!(declares(&static_list(&registry)));
+    let route = registry
+        .routes()
+        .routes
+        .iter()
+        .find(|route| route.entity_id == "person" && route.operation == Operation::List)
+        .expect("compiled list route exists");
+    let entity = &registry.entities()["person"];
+    for (profile, declared) in [("registrar", true), ("clerk", false)] {
+        let operation = super::openapi_operation(super::OpenApiOperationSpec {
+            registry_identifier: registry.registry_id(),
+            route,
+            entity,
+            response_entity: entity,
+            query: registry.queries(),
+            schema_ref: "person",
+            request_schema_ref: "person",
+            readable_fields: None,
+            access_profiles: super::OpenApiAccessProfiles::Selected(profile),
+        });
+        assert_eq!(declares(&operation["responses"]), declared, "{profile}");
+    }
+
+    assert!(!declares(&static_list(&compiled_required_filter_registry(
+        false
+    ))));
+}
+
+/// `registrar` and `clerk` both list `person`. With `required`, the registrar
+/// must filter its list by the national identifier.
+fn compiled_required_filter_registry(required: bool) -> CompiledRegistry {
+    let grant = json!({"recordType": "person", "operations": ["get", "list"],
+        "rowBoundaries": "unrestricted", "readableFields": ["national-id", "family-name"],
+        "filterableFields": ["national-id"]});
+    let mut registrar = grant.clone();
+    if required {
+        registrar["requiredFilters"] = json!([{"fields": ["national-id"]}]);
+    }
+    let source = json!({"datasets": [{"id": "test-dataset"}],
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1", "kind": "BRegProject",
+        "project": {"id": "required-filter", "version": "1", "defaultLanguage": "en",
+            "canonicalBaseIri": "https://required-filter.example.test"},
+        "recordTypes": [{"id": "person", "primaryDataset": "test-dataset", "route": "people",
+            "mutationMode": "mutable", "classification": "internal",
+            "fields": [
+                {"id": "national-id", "type": "string", "maximumLength": 32, "classification": "internal"},
+                {"id": "family-name", "type": "string", "maximumLength": 64, "classification": "internal"}]}],
+        "accessProfiles": [
+            {"id": "registrar", "default": true, "principalClaim": "registry_principal",
+             "requiredScopes": ["registry.registrar"], "permissions": {"records": [registrar]}},
+            {"id": "clerk", "principalClaim": "registry_principal",
+             "requiredScopes": ["registry.clerk"], "permissions": {"records": [grant]}}]
     });
     let project =
         parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("fixture parses");

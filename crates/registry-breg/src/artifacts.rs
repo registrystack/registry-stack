@@ -3364,9 +3364,11 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
         "200"
     };
     let mut responses = Map::from_iter([(success_status.to_owned(), success)]);
-    for (status, problems) in
-        problem_responses(spec.route.operation, operation_may_refuse_write(spec))
-    {
+    for (status, problems) in problem_responses(
+        spec.route.operation,
+        operation_may_refuse_write(spec),
+        operation_may_require_filter(spec),
+    ) {
         let examples = problems
             .iter()
             .map(|problem| {
@@ -4059,9 +4061,18 @@ fn operation_may_refuse_write(spec: OpenApiOperationSpec<'_>) -> bool {
     }
 }
 
+/// Whether a list by a profile the document describes may be refused for want
+/// of the search criteria the profile's grant requires.
+fn operation_may_require_filter(spec: OpenApiOperationSpec<'_>) -> bool {
+    query_profiles_for_route(spec.route, spec.query, spec.access_profiles)
+        .iter()
+        .any(|operation| !operation.required_filters.is_empty())
+}
+
 fn problem_responses(
     operation: Operation,
     may_refuse_write: bool,
+    may_require_filter: bool,
 ) -> BTreeMap<&'static str, Vec<ProblemExample>> {
     let mut responses = BTreeMap::from([
         (
@@ -4115,7 +4126,7 @@ fn problem_responses(
             },
         ]);
     }
-    if operation == Operation::List {
+    if operation == Operation::List && may_require_filter {
         responses.entry("400").or_default().push(ProblemExample {
             code: "query.filter_required",
             detail: "The list did not carry the search criteria its access profile requires.",

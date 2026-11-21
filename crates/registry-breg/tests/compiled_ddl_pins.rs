@@ -73,10 +73,11 @@
 //! bytes, so it moves the revisions of the fixtures that lock a module. SQL and
 //! Action fingerprints stay fixed.
 //! The `query.filter_required` and `request.access_reason_required` Problems
-//! in the generated Problem schema, and the `query.filter_required` example on
-//! every list operation, likewise move artifact revisions only. A registry
-//! with no disclosure condition, required filter or access reason keeps its
-//! exact SQL and Action fingerprints.
+//! in the generated Problem schema likewise move artifact revisions only. The
+//! `query.filter_required` example appears only on a list operation where an
+//! admitted profile requires a filter. A registry with no disclosure
+//! condition, required filter or access reason keeps its exact SQL and Action
+//! fingerprints.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
@@ -99,7 +100,7 @@ const FIXTURES: &[Fixture] = &[
         ),
         module: None,
         ddl_sha256: "6d6431e3e4fb3eb254ef8f3b2e895aed2c09ed4ee7ca506627e1d063359f4578",
-        revision: "sha256:123afd2f14dc039b5c8407e1afcb9888a20908c4d6923edc0e2e23178f8eda3a",
+        revision: "sha256:e3a33d64389ca4178ce483bded79f75b56b3396202caf539ad61c8def57b86e7",
     },
     Fixture {
         name: "asset-registration-actions",
