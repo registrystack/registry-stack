@@ -4797,7 +4797,7 @@
       "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
       "source": {
         "path": "crates/registry-breg/src/artifacts.rs",
-        "sha256": "163830f07dc1978cf3be74d6914a9ee4977c9e018d3cd3a8703ceb355b94fefd"
+        "sha256": "4eafda1e96537072f79750d43737221c315a4efd39c0cf5b0c1d83ca78bcb0f3"
       },
       "artifact": {
         "path": "products/breg/generated/facility/generated/action-contracts.schema.json",
@@ -5035,7 +5035,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "3ab7bc77d99a887599695c1555d84b090f0b783dfa2e93ddb63fd227bae353bb",
+        "sha256": "b820a427ca30bc6239d124fccdfddf6624a5f26ce5d18504f9602f24b966352f",
         "mediaType": "application/schema+json"
       }
     },
@@ -5053,7 +5053,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "e11ab11e8ab5b1731a9ad8cf98c554758f3b2ae6b033b59256b1d9d87fa6c694",
+        "sha256": "37811edd522de1156f1578bc105aec2d57eaca75df220fe3442d4f71c489cc11",
         "mediaType": "application/schema+json"
       }
     },
