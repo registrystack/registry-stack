@@ -1389,7 +1389,7 @@ def encrypted_project(root, name):
     for anchor, addition in [
         (
             "\nactions:\n",
-            "  - id: note\n"
+            "  note:\n"
             "    route: notes\n"
             "    primaryDataset: directory\n"
             "    mutationMode: mutable\n"
