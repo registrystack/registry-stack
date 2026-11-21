@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The schema of an id-keyed mapping states how many entries it may hold.
 
-use registry_platform_yaml::{id_keyed_schema, id_keyed_schema_bounded, LocalId};
+use registry_platform_yaml::{id_keyed_schema, id_keyed_schema_bounded, Identified, LocalId};
 use schemars::{JsonSchema, SchemaGenerator};
 use serde_json::Value;
 
@@ -10,6 +10,12 @@ use serde_json::Value;
 struct Entry {
     id: LocalId,
     title: String,
+}
+
+impl Identified for Entry {
+    fn id(&self) -> &str {
+        self.id.as_str()
+    }
 }
 
 fn schema_of(bounded: Option<(u64, u64)>) -> Value {
