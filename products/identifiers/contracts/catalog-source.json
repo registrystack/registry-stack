@@ -125,6 +125,11 @@
       "reason": "The retired idempotency.conflict Problem is a synthetic client decoding fixture that proves unknown-code fallback after the wire rename."
     },
     {
+      "glob": "crates/registry-breg/tests/fixtures/entity-id-package/package/openapi/openapi.json",
+      "classification": "fixture",
+      "reason": "The hash-covered entityId refusal fixture keeps the OpenAPI contract an earlier release emitted, including retired Problems, so the refusal test reads an unchanged package."
+    },
+    {
       "glob": "crates/registry-breg-client/tests/http_boundary.rs",
       "classification": "fixture",
       "reason": "Unknown future Base Registry Engine Problem codes are synthetic test inputs outside the active resolver catalog by design."
