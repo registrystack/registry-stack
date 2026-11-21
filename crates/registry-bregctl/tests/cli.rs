@@ -26,6 +26,7 @@ use registry_breg::package::{
     PreparedPackage, FIXTURE_JOURNEYS_PATH, MAX_PACKAGE_SOURCE_FILE_BYTES,
 };
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_config::package::{write_sum_file, PackageLimits};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -9508,20 +9509,17 @@ fn apply_names_both_digests_when_the_active_package_misses_its_pin() {
 
 /// `apply` against a database whose active package a previous release built
 /// names the one path forward, a fresh database, under the active package's
-/// own code and path, before any database is reached.
+/// own code and path, before any database is reached. `plan` reads the
+/// database's recorded state before it loads the active package, so its
+/// refusals are covered where a database is reachable and by the
+/// `lifecycle_failure` unit tests for each route.
 fn assert_apply_over_previous_release_active_package_names_fresh_database_path(
-    fixture_name: &str,
+    active: &Path,
     code: &str,
 ) {
     let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
-    let active = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../registry-breg/tests/fixtures")
-        .join(fixture_name)
-        .join("package")
-        .canonicalize()
-        .expect("the historical package directory resolves");
     let runtime = fixture.variant(
-        fixture_name,
+        "previous-release-active",
         &format!("  root: {}", path(&fixture.package)),
         &format!("  root: {}", active.display()),
     );
@@ -9557,19 +9555,145 @@ fn assert_apply_over_previous_release_active_package_names_fresh_database_path(
     assert!(!message.contains("--baseline-package"), "{message}");
 }
 
+fn historical_package(fixture_name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../registry-breg/tests/fixtures")
+        .join(fixture_name)
+        .join("package")
+        .canonicalize()
+        .expect("the historical package directory resolves")
+}
+
+fn copy_package(from: &Path, to: &Path) {
+    fs::create_dir_all(to).expect("copy directory creates");
+    for entry in fs::read_dir(from).expect("package directory reads") {
+        let entry = entry.expect("package entry reads");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("entry type reads").is_dir() {
+            copy_package(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).expect("package file copies");
+            set_owner_writable(&target);
+        }
+    }
+}
+
+/// Rewrites the manifest of a copied package, then sums the files again so
+/// the copy closes.
+fn rewrite_package_manifest(root: &Path, rewrite: impl FnOnce(&mut Value)) {
+    let manifest_path = root.join("package.json");
+    let mut envelope: Value =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("manifest reads"))
+            .expect("manifest parses");
+    rewrite(&mut envelope["manifest"]);
+    fs::write(
+        &manifest_path,
+        canonicalize_json(&envelope).expect("manifest canonicalizes"),
+    )
+    .expect("manifest writes");
+    fs::remove_file(root.join("SHA256SUMS")).expect("sum file removes");
+    write_sum_file(
+        root,
+        None,
+        &PackageLimits {
+            max_files: 4096,
+            max_file_bytes: 64 * 1024 * 1024,
+            max_total_bytes: 256 * 1024 * 1024,
+            max_depth: 16,
+            max_path_bytes: 512,
+        },
+        "test package",
+    )
+    .expect("the rewritten package closes");
+}
+
+/// A copy of a historical package that declares this release's engine
+/// features, as a package built by the release before this one does, so only
+/// its stored sources predate this release.
+fn historical_package_with_current_engine_features(fixture_name: &str, parent: &Path) -> PathBuf {
+    let root = parent.join(fixture_name);
+    copy_package(&historical_package(fixture_name), &root);
+    rewrite_package_manifest(&root, |manifest| {
+        manifest["engineFeatures"] = json!([
+            "statistical_release_store",
+            "caller_scoped_idempotency",
+            "record_timer_store"
+        ]);
+    });
+    root
+}
+
+/// A copy of a package built by this release whose route inventory names each
+/// Record type `entityId`, as v0.41.0 and earlier wrote it. Its stored sources
+/// and engine features are current, so only its generated files are refused.
+fn current_package_naming_entity_id(package: &Path, parent: &Path) -> PathBuf {
+    let root = parent.join("entity-id-active");
+    copy_package(package, &root);
+    let inventory = "inventories/routes.json";
+    let mut routes: Value =
+        serde_json::from_slice(&fs::read(root.join(inventory)).expect("route inventory reads"))
+            .expect("route inventory parses");
+    let mut renamed_routes = 0;
+    for route in routes["routes"].as_array_mut().expect("routes are listed") {
+        if let Some(record_type) = route.as_object_mut().unwrap().remove("recordType") {
+            route["entityId"] = record_type;
+            renamed_routes += 1;
+        }
+    }
+    assert_ne!(renamed_routes, 0, "the inventory names Record types");
+    // The package reader accepts only canonical bytes, so key order follows.
+    let renamed = canonicalize_json(&routes).expect("route inventory canonicalizes");
+    fs::write(root.join(inventory), &renamed).expect("route inventory writes");
+    rewrite_package_manifest(&root, |manifest| {
+        let entry = manifest["files"]
+            .as_array_mut()
+            .expect("manifest lists files")
+            .iter_mut()
+            .find(|entry| entry["path"] == inventory)
+            .expect("manifest lists the route inventory");
+        entry["sha256"] = json!(sha256_prefixed(&renamed));
+        entry["size"] = json!(renamed.len());
+    });
+    root
+}
+
 #[test]
 fn apply_over_a_pre_timer_store_active_package_names_the_fresh_database_path() {
     assert_apply_over_previous_release_active_package_names_fresh_database_path(
-        "pre-record-timer-store-package",
+        &historical_package("pre-record-timer-store-package"),
         "apply.package.engine-upgrade-required",
     );
 }
 
 #[test]
-fn apply_over_a_pre_release_entity_id_active_package_names_the_fresh_database_path() {
+fn apply_over_a_pre_release_entity_id_active_package_names_the_engine_upgrade() {
     assert_apply_over_previous_release_active_package_names_fresh_database_path(
-        "entity-id-package",
+        &historical_package("entity-id-package"),
         "apply.package.engine-upgrade-required",
+    );
+}
+
+#[test]
+fn apply_over_an_active_package_with_list_form_sources_names_the_fresh_database_path() {
+    let parent = tempfile::tempdir().expect("temporary directory creates");
+    let active = historical_package_with_current_engine_features(
+        "pre-record-timer-store-package",
+        parent.path(),
+    );
+    assert_apply_over_previous_release_active_package_names_fresh_database_path(
+        &active,
+        "apply.package.predecessor-sources-refused",
+    );
+}
+
+#[test]
+fn apply_over_an_active_package_naming_entity_id_names_the_fresh_database_path() {
+    let parent = tempfile::tempdir().expect("temporary directory creates");
+    let current = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let active = current_package_naming_entity_id(&current.package, parent.path());
+    assert_apply_over_previous_release_active_package_names_fresh_database_path(
+        &active,
+        "apply.package.entity-id-refused",
     );
 }
 
