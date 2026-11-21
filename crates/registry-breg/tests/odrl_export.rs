@@ -375,6 +375,44 @@ fn row_membership_and_consent_restrictions_omit_the_complete_read_grant() {
         }));
 }
 
+/// A list under `requiredFilters` must pin one alternative, which ODRL cannot
+/// express, so the list grant is omitted. A get is not filtered and stays.
+#[test]
+fn a_grant_with_required_filters_omits_its_list_grant_only() {
+    let export = |required: bool| {
+        let mut source = supported_source();
+        let grant = &mut source["accessProfiles"][0]["permissions"]["records"][0];
+        grant["filterableFields"] = json!(["jurisdiction"]);
+        if required {
+            grant["requiredFilters"] = json!([{"fields": ["jurisdiction"]}]);
+        }
+        export_odrl(&compile_source(&source), Some("directory-editor"))
+            .unwrap()
+            .coverage
+    };
+
+    let open = export(false);
+    for operation in ["get", "list"] {
+        assert_eq!(grant(&open, operation)["status"], "exported", "{operation}");
+    }
+
+    let filtered = export(true);
+    assert_eq!(grant(&filtered, "get")["status"], "exported");
+    assert_eq!(grant(&filtered, "get")["reasons"], json!([]));
+    assert_eq!(grant(&filtered, "list")["status"], "omitted");
+    assert_eq!(
+        grant(&filtered, "list")["reasons"],
+        json!(["required-filters"])
+    );
+    for operation in ["create", "patch"] {
+        assert_eq!(
+            grant(&filtered, operation)["reasons"],
+            json!(["unsupported-operation"]),
+            "{operation}"
+        );
+    }
+}
+
 #[test]
 fn a_profile_that_requires_an_access_reason_omits_the_complete_read_grant() {
     // A profile that requires a reason holds no Action or Proposal permission,
