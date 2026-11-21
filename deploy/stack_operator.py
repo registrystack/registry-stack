@@ -254,6 +254,12 @@ class Installation:
         self.upgrade_record_name = f"{args.release}-operator-upgrade"
         self.active_job = None
         self.target = decode_json(args.values.read_text(), "Operator values")
+        for path in ("breg.package.expectedDigest", "breg.package.existingClaim"):
+            value = self.target
+            for key in path.split("."):
+                value = value.get(key) if isinstance(value, dict) else None
+            if value is None:
+                raise OperationError(f"The values file has no {path}. Add it for the staged BReg package.")
 
     def kubectl(self, *args, data=None, timeout=60):
         return command_output([*self.kube, *args], f"kubectl {args[0]}", data, timeout)
@@ -342,7 +348,15 @@ class Installation:
         # If creation times out, the Job might still exist. Leave the lock for
         # the operator until Kubernetes and the product ledger agree.
         self.active_job = name
-        created = decode_json(self.kubectl("create", "-f", "-", "-o", "json", data=json.dumps(job)), "Job")
+        try:
+            created = decode_json(self.kubectl("create", "-f", "-", "-o", "json", data=json.dumps(job)), "Job")
+        except OperationError as error:
+            # A live Job needs its policy. After a refused create, drop the
+            # policy and the lock only once Kubernetes confirms the Job is
+            # absent. A timed-out create stays uncertain, as above.
+            if not isinstance(error.__cause__, subprocess.TimeoutExpired):
+                self.abandon_job(name, policy["metadata"]["name"] if policy else None)
+            raise
         if policy:
             reference = {"apiVersion": "batch/v1", "kind": "Job", "name": name, "uid": created["metadata"]["uid"]}
             patch = {"metadata": {"ownerReferences": [reference]}}
@@ -376,6 +390,22 @@ class Installation:
             suffix = f" ({code})" if re.fullmatch(r"[a-z0-9.-]{1,100}", str(code)) else ""
             raise OperationError(f"BReg {kind} failed in Job {name}{suffix}. Review the Job and product ledger.")
         return report, digest
+
+    def abandon_job(self, job, policy):
+        """Release a Job's policy and lock once Kubernetes confirms it never created the Job."""
+        try:
+            if self.kubectl("get", "job", job, "--ignore-not-found", "-o", "name").strip():
+                return
+        except OperationError as error:
+            kept = f" Check it before deleting NetworkPolicy {policy}." if policy else ""
+            print(f"registry-stack: Cannot confirm whether Job {job} exists.{kept} {error}", file=sys.stderr)
+            return
+        self.active_job = None
+        if policy:
+            try:
+                self.kubectl("delete", "networkpolicy", policy, "--ignore-not-found")
+            except OperationError as error:
+                print(f"registry-stack: NetworkPolicy {policy} has no Job and was not removed. Delete it. {error}", file=sys.stderr)
 
     def remove_policy(self, policy, job):
         """Remove the operation's database egress once its Job has a known outcome."""
@@ -571,8 +601,8 @@ class Installation:
     def adopt(self):
         self.require_no_upgrade_record()
         report, digest = self.job("claim-status")
-        claim = report.get("instanceClaim", report.get("status", {}))
-        if not claim.get("claim") or type(claim.get("matches")) is not bool:
+        claim = report.get("instanceClaim")
+        if not isinstance(claim, dict) or not claim.get("claim") or type(claim.get("matches")) is not bool:
             raise OperationError("The target did not show a restored logical copy with a prior instance claim.")
         if self.releases() and (
             not claim["matches"] or self.values()["breg"]["package"]["expectedDigest"] != digest
@@ -638,7 +668,14 @@ def main():
                 print(json.dumps(installation.adopt(), indent=2))
             else:
                 print(json.dumps(installation.apply(), indent=2))
-    except (OperationError, OSError, KeyError, TypeError, AttributeError) as error:
+    except KeyError as error:
+        # Installation checks the values file on load, so a missing key comes
+        # from what Helm, Kubernetes or BReg returned.
+        parser.exit(1, (
+            f"registry-stack: Missing key {error} in the Helm release values or a BReg report. "
+            "Inspect them before retrying.\n"
+        ))
+    except (OperationError, OSError, TypeError, AttributeError) as error:
         parser.exit(1, f"registry-stack: {error}\n")
 
 
