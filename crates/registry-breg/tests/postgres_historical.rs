@@ -996,7 +996,7 @@ fn compiled_timestamp_registry() -> registry_breg::CompiledRegistry {
 }
 
 fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::CompiledRegistry {
-    let project = r#"{"datasets":[{"id": "test-dataset"}],
+    let project = r#"{"datasets":{"test-dataset": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"history-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},

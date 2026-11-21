@@ -59,11 +59,11 @@ manifestProjection:
 # A vocabulary is a closed code list. A `vocabulary-code` field accepts only
 # these values, and the compiler refuses any other value at authoring time.
 vocabularies:
-  - id: record-status
+  record-status:
     values: [draft, active, retired]
 
 datasets:
-  - id: generic-registry
+  generic-registry: {}
 
 recordTypes:
   # Reference data the records point at. It is classified `public` because a

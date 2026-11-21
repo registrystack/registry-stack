@@ -4,7 +4,7 @@ use registry_breg::{compile_project, parse_project_json, CompileProfile, Compile
 use serde_json::{json, Value};
 
 fn source() -> Value {
-    json!({"datasets":[{"id": "test-dataset"}],
+    json!({"datasets":{"test-dataset": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"access-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://access-example.example.test"},
         "recordTypes":{"entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",

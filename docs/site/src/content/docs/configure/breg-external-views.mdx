@@ -32,7 +32,7 @@ type in `registry.yaml`:
 
 ```yaml title="registry.yaml"
 externalRecordTypes:
-  - id: person
+  person:
     authority: urn:example:population-register
     identifierScheme: urn:example:person-number
     display: {label: Person}
@@ -41,7 +41,7 @@ externalRecordTypes:
       - {id: family-name, type: string, classification: restricted}
 
 externalProjections:
-  - id: person-live
+  person-live:
     recordType: person
     sourceRoute: person-exact
     sourceRouteVersion: "1"
@@ -52,7 +52,7 @@ externalProjections:
     fields: [given-name, family-name]
 
 externalViews:
-  - id: licence-holder-live
+  licence-holder-live:
     recordType: licence
     links:
       - id: holder
@@ -120,7 +120,7 @@ copy of the approved fields for each linked person and answers queries from that
 
 ```yaml title="registry.yaml"
 externalProjections:
-  - id: person-indexed
+  person-indexed:
     recordType: person
     sourceRoute: person-batch
     sourceRouteVersion: "1"
@@ -132,7 +132,7 @@ externalProjections:
     fields: [given-name, family-name]
 
 externalViews:
-  - id: licence-holder-indexed
+  licence-holder-indexed:
     recordType: licence
     links:
       - id: holder

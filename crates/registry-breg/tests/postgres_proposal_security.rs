@@ -42,7 +42,7 @@ fn source(membership: bool) -> Value {
     }
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"proposal-security","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://proposal.example.test"},
-        "datasets":[{"id":"directory"}],"recordTypes":{
+        "datasets":{"directory": {}},"recordTypes":{
             "organization": {"primaryDataset":"directory","route":"organizations","mutationMode":"mutable",
                 "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"}]},
             "membership": {"primaryDataset":"directory","route":"memberships","mutationMode":"mutable","fields":[
@@ -927,10 +927,7 @@ async fn saved_review_document_requires_current_subject_consent() {
         .unwrap()
         .push(record_consent);
     project["recipients"] = json!({"organizations":[{"id":"review-org","name":"Review organization","contact":"privacy@example.test","clients":["agent-client"]}]});
-    project["vocabularies"] = json!([
-        {"id":"data-use-purpose","values":["registry-administration"]},
-        {"id":"consent-decision","values":["given","withdrawn","refused","invalidated"]}
-    ]);
+    project["vocabularies"] = json!({"data-use-purpose": {"values":["registry-administration"]}, "consent-decision": {"values":["given","withdrawn","refused","invalidated"]}});
     project["actions"]["correct-name"]["execution"]["proposal"]["attachments"] = json!([
         {"id":"support","required":true,"maximumBytes":4096,"contentTypes":["text/plain"],"classification":"restricted"}
     ]);
@@ -1665,7 +1662,7 @@ async fn progress_review_binding() -> (
 async fn applicant_progress_rechecks_withdrawal_and_audit_before_release() {
     let mut project = source(false);
     project["reviewAuthorities"] =
-        json!([{"id":"casework","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"casework": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     project["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({
         "type":"required","authority":"casework","source":"proposal-security",
         "policy":{"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))}
@@ -1818,7 +1815,7 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableContextFields"] =
         json!(["currentName", "proposedName"]);
     source["reviewAuthorities"] =
-        json!([{"id":"casework","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"casework": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"casework","source":"proposal-security",
         "policy":{"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))}});
     source["accessProfiles"].as_object_mut().unwrap().insert("review-status".to_owned(), json!({"principalClaim":"registry_principal",

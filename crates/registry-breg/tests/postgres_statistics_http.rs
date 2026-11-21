@@ -4166,7 +4166,7 @@ journeys:
         .await
         .unwrap()
         .get(0);
-    source["statisticalDatasets"][0]["population"] = json!("active eq false");
+    source["statisticalDatasets"]["records-by-category"]["population"] = json!("active eq false");
     let candidate = compile_statistics_registry(source.clone());
     assert_ne!(
         prior.statistical_datasets()["records-by-category"].definition_digest,
@@ -4405,7 +4405,8 @@ async fn a_dry_run_reports_minimum_count_suppressions_and_stores_nothing() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_dry_run_of_an_exact_public_values_dataset_reports_no_suppressions() {
     let mut source = statistics_registry_source();
-    source["statisticalDatasets"][0]["disclosure"] = json!({"type":"exact-public-values"});
+    source["statisticalDatasets"]["records-by-category"]["disclosure"] =
+        json!({"type":"exact-public-values"});
     for field in source["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .unwrap()
@@ -4442,13 +4443,15 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
 
 fn quarterly_registry() -> registry_breg::CompiledRegistry {
     let mut source = statistics_registry_source();
-    source["statisticalDatasets"][0]["period"]["granularity"] = json!("quarter");
-    source["statisticalDatasets"][0]["period"]["firstPeriod"] = json!("2025-Q1");
+    source["statisticalDatasets"]["records-by-category"]["period"]["granularity"] =
+        json!("quarter");
+    source["statisticalDatasets"]["records-by-category"]["period"]["firstPeriod"] =
+        json!("2025-Q1");
     compile_statistics_registry(source)
 }
 
 fn statistics_registry_source() -> Value {
-    json!({"datasets":[{"id": "statistics-http"}],
+    json!({"datasets":{"statistics-http": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"statistics-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test","timezone":"UTC"},
@@ -4489,15 +4492,11 @@ fn statistics_registry_source() -> Value {
                 ]
             }}
         },
-        "vocabularies":[
-            {"id":"category","values":["a","b"]},
-            {"id":"jurisdiction","values":["north","south"]}
-        ],
-        "statisticalDatasets":[{
-            "id":"records-by-category","unit":"record","population":"active eq true",
+        "vocabularies":{"category": {"values":["a","b"]}, "jurisdiction": {"values":["north","south"]}},
+        "statisticalDatasets":{"records-by-category": {"unit":"record","population":"active eq true",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["category"],"disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}
-        }]
+        }}
     })
 }
 
@@ -4511,7 +4510,7 @@ fn cap_registry() -> registry_breg::CompiledRegistry {
     let codes = (0..50)
         .map(|value| format!("c{value:02}"))
         .collect::<Vec<_>>();
-    let source = json!({"datasets":[{"id": "statistics-caps"}],
+    let source = json!({"datasets":{"statistics-caps": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"statistics-cap-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics-caps.example.test","timezone":"UTC"},
@@ -4537,12 +4536,11 @@ fn cap_registry() -> registry_breg::CompiledRegistry {
                 ]
             }}
         },
-        "vocabularies":[{"id":"category","values":codes}],
-        "statisticalDatasets":[{
-            "id":"daily-by-category","unit":"record","population":"active eq true",
+        "vocabularies":{"category": {"values":codes}},
+        "statisticalDatasets":{"daily-by-category": {"unit":"record","population":"active eq true",
             "period":{"type":"flow","field":"event-date","granularity":"day","firstPeriod":"2025-01-01"},
             "dimensions":["category"],"disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}
-        }]
+        }}
     });
     let bytes = serde_json::to_vec(&source).expect("cap fixture serializes");
     let project = parse_project_json(&bytes).expect("cap fixture parses");
@@ -4723,8 +4721,8 @@ async fn exercise_statistical_profile_admission(releases: bool) {
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
     let mut source = statistics_registry_source();
-    for profile in source["accessProfiles"].as_array_mut().unwrap() {
-        if profile["id"] == "analyst" || profile["id"] == "reader" {
+    for (id, profile) in source["accessProfiles"].as_object_mut().unwrap() {
+        if id == "analyst" || id == "reader" {
             profile["requiredScopes"] = json!(["statistics.read"]);
             profile["requiredPurposes"] = json!(["statistics"]);
         }

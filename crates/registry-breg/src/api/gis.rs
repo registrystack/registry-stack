@@ -1487,7 +1487,7 @@ mod tests {
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: gis-test, version: "1", defaultLanguage: en, canonicalBaseIri: https://gis-test.example.test}
-datasets: [{"id":"test-dataset"}]
+datasets: {"test-dataset": {}}
 recordTypes:
   service-site:
     primaryDataset: test-dataset

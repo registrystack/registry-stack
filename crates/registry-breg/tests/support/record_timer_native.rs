@@ -4561,17 +4561,17 @@ fn fairness_project_bytes(project_bytes: &[u8]) -> Vec<u8> {
         .to_json_value();
 
     let datasets = project["datasets"]
-        .as_array_mut()
-        .expect("public future-activation datasets are an array");
+        .as_object_mut()
+        .expect("public future-activation datasets are a mapping");
     let mut cases = datasets
-        .first()
+        .values()
+        .next()
         .expect("public future-activation has one dataset")
         .clone();
-    cases["id"] = json!("cases");
     cases["display"]["label"] = json!("Cases");
     cases["display"]["description"] =
         json!("Synthetic future-effective case records used for fairness proof.");
-    datasets.push(cases);
+    datasets.insert("cases".to_owned(), cases);
 
     let record_types = project["recordTypes"]
         .as_object_mut()

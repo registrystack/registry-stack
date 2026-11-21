@@ -342,13 +342,12 @@
       }
     }
   },
-  "evidenceProviders": [
-    {
-      "id": "farmer-registry",
+  "evidenceProviders": {
+    "farmer-registry": {
       "contracts": "evidence/farmer-contracts.json",
       "subjectResolution": "trusted-provider-exact-selector"
     }
-  ],
+  },
   "recordTypes": {
     "landholding": {
       "primaryDataset": "farmer-landholding-evidence",
@@ -423,9 +422,7 @@
       ]
     }
   },
-  "datasets": [
-    {
-      "id": "farmer-landholding-evidence"
-    }
-  ]
+  "datasets": {
+    "farmer-landholding-evidence": {}
+  }
 }

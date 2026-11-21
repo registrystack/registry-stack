@@ -20,7 +20,7 @@ fn project(rows: Value, classification: &str) -> Value {
     json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"task-rows","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://task-rows.example.test"},
-        "datasets":[{"id":"test-dataset"}],
+        "datasets":{"test-dataset": {}},
         "recordTypes":{
             "case": {"route":"cases","primaryDataset":"test-dataset","mutationMode":"mutable","classification":classification,
                 "mutationPolicy":{"patch":"proposal-required"},

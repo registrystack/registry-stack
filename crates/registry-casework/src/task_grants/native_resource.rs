@@ -40,7 +40,7 @@ pub(super) const PROJECT: &str = r#"{
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
   "project":{"id":"task-authority-http","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-  "datasets":[{"id":"test-dataset"}],
+  "datasets":{"test-dataset": {}},
   "recordTypes":{"asset-site":{"primaryDataset":"test-dataset",
       "route":"sites",
       "mutationMode":"create-only",

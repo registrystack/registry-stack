@@ -32,7 +32,7 @@ fn project_with_entities(entities: Value) -> Value {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://logical-sql-names.example.test"
         },
-        "datasets": [{"id": "records"}, {"id": "records-a"}, {"id": "records-b"}],
+        "datasets": {"records": {}, "records-a": {}, "records-b": {}},
         "recordTypes": entities
     })
 }

@@ -615,7 +615,7 @@ pub(crate) fn project_diagnostics(
     for (code, values) in [
         (
             "breg.evidence-provider.id-collision",
-            indexed_ids("/evidenceProviders", &project.evidence_providers, |item| {
+            keyed_ids("/evidenceProviders", &project.evidence_providers, |item| {
                 &item.id
             }),
         ),
@@ -629,11 +629,11 @@ pub(crate) fn project_diagnostics(
         ),
         (
             "breg.dataset.id-collision",
-            indexed_ids("/datasets", &project.datasets, |item| &item.id),
+            keyed_ids("/datasets", &project.datasets, |item| &item.id),
         ),
         (
             "breg.review-authority.id-collision",
-            indexed_ids("/reviewAuthorities", &project.review_authorities, |item| {
+            keyed_ids("/reviewAuthorities", &project.review_authorities, |item| {
                 &item.id
             }),
         ),
@@ -647,21 +647,15 @@ pub(crate) fn project_diagnostics(
         ),
         (
             "breg.vocabulary.id-collision",
-            indexed_ids("/vocabularies", &project.vocabularies, |item| &item.id),
+            keyed_ids("/vocabularies", &project.vocabularies, |item| &item.id),
         ),
         (
             "breg.statistical-dataset.id-collision",
-            project
-                .statistical_datasets
-                .iter()
-                .enumerate()
-                .map(|(index, item)| {
-                    (
-                        item.id.as_str().to_owned(),
-                        format!("/statisticalDatasets/{index}/id"),
-                    )
-                })
-                .collect(),
+            keyed_ids(
+                "/statisticalDatasets",
+                &project.statistical_datasets,
+                |item| item.id.as_str(),
+            ),
         ),
     ] {
         add_collisions(document, &mut errors, code, &values);
@@ -672,9 +666,12 @@ pub(crate) fn project_diagnostics(
         "breg.access-profile.id-collision",
         &keyed_ids("/accessProfiles", &project.access_profiles, |item| &item.id),
     );
-    for (index, dataset) in project.statistical_datasets.iter().enumerate() {
+    for dataset in &project.statistical_datasets {
         let values = indexed_ids(
-            &format!("/statisticalDatasets/{index}/measures"),
+            &format!(
+                "{}/measures",
+                keyed_pointer("/statisticalDatasets", dataset.id.as_str())
+            ),
             &dataset.measures,
             |item| item.id().as_str(),
         );
@@ -857,7 +854,7 @@ pub(crate) fn project_diagnostics(
         (
             "breg.statistical-dataset.duplicate-label",
             "statistical datasets",
-            display_labels(
+            keyed_display_labels(
                 "/statisticalDatasets",
                 &project.statistical_datasets,
                 |item| &item.id,
@@ -867,7 +864,7 @@ pub(crate) fn project_diagnostics(
         (
             "breg.dataset.duplicate-label",
             "datasets",
-            display_labels(
+            keyed_display_labels(
                 "/datasets",
                 &project.datasets,
                 |item| &item.id,
@@ -877,7 +874,7 @@ pub(crate) fn project_diagnostics(
         (
             "breg.review-authority.duplicate-label",
             "review authorities",
-            display_labels(
+            keyed_display_labels(
                 "/reviewAuthorities",
                 &project.review_authorities,
                 |item| &item.id,
@@ -897,7 +894,7 @@ pub(crate) fn project_diagnostics(
         (
             "breg.action.duplicate-label",
             "actions",
-            display_labels(
+            keyed_display_labels(
                 "/actions",
                 &project.actions,
                 |item| &item.id,

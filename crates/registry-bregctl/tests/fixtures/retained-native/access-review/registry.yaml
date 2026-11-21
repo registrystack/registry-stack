@@ -57,4 +57,4 @@ accessProfiles:
             - {field: district, claim: assigned_districts, operator: in}
 
 datasets:
-  - id: access-review
+  access-review: {}

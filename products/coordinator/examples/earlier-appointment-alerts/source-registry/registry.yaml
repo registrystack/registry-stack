@@ -9,11 +9,11 @@ project:
 package:
   sourceRevision: earlier-appointment-alert-source-v1
 datasets:
-  - {id: alert-subscriptions}
+  alert-subscriptions: {}
 vocabularies:
-  - id: alert-scope
+  alert-scope:
     values: [appointment]
-  - id: alert-state
+  alert-state:
     values: [active, claimed, dispatching, notified, withdrawn]
 recordTypes:
   alert-subscription:

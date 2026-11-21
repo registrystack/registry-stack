@@ -77,7 +77,7 @@ project:
 package:
   sourceRevision: field-encryption-source
 datasets:
-  - id: fixture-registry
+  fixture-registry:
     display: {label: Fixture Dataset}
 manifestProjection:
   accessProfile: operator

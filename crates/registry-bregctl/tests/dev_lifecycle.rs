@@ -877,7 +877,7 @@ fn installed_dev_rehearses_subject_bound_rows_with_two_local_clients() {
 kind: BRegProject
 project: {id: subject-bound-registry, version: "1", defaultLanguage: en, canonicalBaseIri: https://subject-bound.example.test}
 package: {sourceRevision: synthetic-1}
-datasets: [{id: test-dataset}]
+datasets: {test-dataset: {}}
 recordTypes:
   record:
     primaryDataset: test-dataset

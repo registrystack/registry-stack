@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- BREAKING: the project's `datasets`, `vocabularies`, `statisticalDatasets`,
+  `reviewAuthorities`, `evidenceProviders`, `externalRecordTypes`,
+  `externalProjections` and `externalViews` are mappings from each id to the
+  rest of its entry. The old list shape is refused, and so is an `id` member
+  inside an entry, with a message that names the mapping. A repeated key is
+  refused at the repeating key. Migration: write
+  `datasets: {registry: {display: ...}}` in place of
+  `datasets: [{id: registry, display: ...}]`, and the same for each of the
+  other seven. An entry with nothing else to say is `registry: {}`. Source
+  pointers that `bregctl check` and `bregctl explain` report name the id in
+  place of its position. Compiled output, explanations and the manifest
+  metadata under `manifestProjection` keep their shapes. The project holds
+  these collections sorted by id, so only `datasets` and `reviewAuthorities`,
+  which a command used to list in the order the project wrote them, now list
+  in id order. `bregctl init --from-model` and the consent module write the
+  mapping, and `caseworkctl provider add` prints `accessProfiles` and
+  `reviewAuthorities` fragments as mappings under the change path
+  `accessProfiles/ID` and `reviewAuthorities/ID`.
 - BREAKING: `actions` and `functions` are mappings from each id to the rest of
   its entry, in the project and in a module. The old list shape is refused, and
   so is an `id` member inside an entry, with a message that names the mapping.
@@ -12,8 +30,10 @@
   report name the id in place of its position. Compiled output keeps its array
   shape. A module's actions are now held sorted by id, so a command that listed
   them in the order the module wrote them lists them in id order. The lock
-  digest of every module that declares an action or a function changes. After
-  converting, run `bregctl project lock` for each such module.
+  digest of every module changes, even a module that declares no action or
+  function, because a module now serializes `functions` as a mapping (`{}`
+  when empty) where it serialized a list (`[]`). After converting, run
+  `bregctl project lock` for each module.
 - BREAKING: `accessProfiles` is a mapping from each profile id to the rest of
   its entry, as a pre-1.0 cleanup so a profile has one name and a duplicate
   cannot be written. The change covers the project's `accessProfiles` and the

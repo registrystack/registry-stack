@@ -29,12 +29,12 @@ recipients:
     members: [wfp, ngo-alpha]
 retiredConsentScopes: [food-targeting-2025]
 vocabularies:
-- id: data-use-purpose
-  values: [food-assistance, health-referral]
-- id: consent-decision
-  values: [given, refused, withdrawn, invalidated]
+  data-use-purpose:
+    values: [food-assistance, health-referral]
+  consent-decision:
+    values: [given, refused, withdrawn, invalidated]
 datasets:
-- id: consent-dataset
+  consent-dataset: {}
 recordTypes:
   person:
     primaryDataset: consent-dataset

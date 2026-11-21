@@ -56,7 +56,7 @@ fn registry_source() -> Value {
             "defaultLanguage":"en",
             "canonicalBaseIri":"https://proposal-recovery.example.test"
         },
-        "datasets":[{"id":"directory"}],
+        "datasets":{"directory": {}},
         "recordTypes":{"target": {
             "primaryDataset":"directory",
             "route":"targets",

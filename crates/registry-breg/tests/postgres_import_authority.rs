@@ -62,7 +62,7 @@ const FIXTURE: &str = r#"{
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
   "project":{"id":"import-authority-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-  "datasets":[{"id":"test-dataset"}],
+  "datasets":{"test-dataset": {}},
           "recordTypes":{"widget": {"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
     "mutationPolicy":{"create":"proposal-required"},
     "batch":{"maximumItems":3,"maximumBytes":8192},

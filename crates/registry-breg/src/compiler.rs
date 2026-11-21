@@ -9297,7 +9297,7 @@ mod polygon_compiler_tests {
                     "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
                     "kind":"BRegProject",
                     "project":{{"id":"polygon-compiler","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://polygon.example.test"}},
-                    "datasets":[{{"id":"test-dataset"}}],
+                    "datasets":{{"test-dataset": {{}}}},
                     "recordTypes":{{"area":{{"primaryDataset":"test-dataset","route":"areas","mutationMode":"mutable",
                         "geojson":{{"geometryField":"geometry"}},
                         "fields":[{field}]

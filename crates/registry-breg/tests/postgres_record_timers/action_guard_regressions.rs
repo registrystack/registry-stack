@@ -83,9 +83,9 @@ async fn create_only_timer_executes_when_the_anchor_guard_allows_it() {
 fn create_only_guard_source(field: &str, expected: &str) -> Value {
     let mut source = timer_project_source();
     source["datasets"]
-        .as_array_mut()
-        .expect("datasets are an array")
-        .push(json!({"id":"activation-logs"}));
+        .as_object_mut()
+        .expect("datasets are a mapping")
+        .insert("activation-logs".to_owned(), json!({}));
     source["recordTypes"]
         .as_object_mut()
         .expect("Record types are an array")

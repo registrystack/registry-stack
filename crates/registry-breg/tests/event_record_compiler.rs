@@ -135,9 +135,9 @@ const CASES: &str = r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: event-record-cases, version: "1", defaultLanguage: en, canonicalBaseIri: https://event-record-cases.example.test}
-datasets: [{id: test-dataset}]
+datasets: {test-dataset: {}}
 vocabularies:
-  - {id: ns-vocab, values: [alpha, beta]}
+  ns-vocab: {values: [alpha, beta]}
 recordTypes:
   subject-record:
     primaryDataset: test-dataset
@@ -958,7 +958,7 @@ fn descriptor_does_not_change_temporal_roles() {
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {{id: event-record-temporal, version: "1", defaultLanguage: en, canonicalBaseIri: https://event-record-temporal.example.test}}
-datasets: [{{id: test-dataset}}]
+datasets: {{test-dataset: {{}}}}
 recordTypes:
   subject-record:
     primaryDataset: test-dataset

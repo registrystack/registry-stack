@@ -9,11 +9,11 @@ project:
   display: {label: Reviewed directory, description: A contact directory with reviewed name corrections.}
 
 datasets:
-  - id: directory
+  directory:
     display: {label: Directory, description: Institutional contact records.}
 
 reviewAuthorities:
-  - id: local-review
+  local-review:
     protocol: id.registrystack.org/protocols/review/v1
     display: {label: Directory review, description: External review authority bound by deployment configuration.}
 

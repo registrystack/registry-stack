@@ -433,9 +433,8 @@
       }
     }
   },
-  "vocabularies": [
-    {
-      "id": "service-zone",
+  "vocabularies": {
+    "service-zone": {
       "values": [
         "north",
         "central",
@@ -443,8 +442,7 @@
         "edge"
       ]
     },
-    {
-      "id": "service-kind",
+    "service-kind": {
       "values": [
         "clinic",
         "school",
@@ -452,7 +450,7 @@
         "depot"
       ]
     }
-  ],
+  },
   "recordTypes": {
     "service-area": {
       "primaryDataset": "spatial-service-sites",
@@ -625,9 +623,7 @@
       ]
     }
   },
-  "datasets": [
-    {
-      "id": "spatial-service-sites"
-    }
-  ]
+  "datasets": {
+    "spatial-service-sites": {}
+  }
 }

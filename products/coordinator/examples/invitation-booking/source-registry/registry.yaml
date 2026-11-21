@@ -9,9 +9,9 @@ project:
 package:
   sourceRevision: invitation-source-v1
 datasets:
-  - {id: invitations}
+  invitations: {}
 vocabularies:
-  - id: invitation-state
+  invitation-state:
     values: [issued, accepting, booked, no-capacity, expired, revoked]
 recordTypes:
   invitation:

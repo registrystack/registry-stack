@@ -1248,7 +1248,7 @@ const FIXTURE_HEAD: &str = r#"{
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
   "project":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-  "datasets":[{"id":"test-dataset"}],
+  "datasets":{"test-dataset": {}},
   "recordTypes":{"widget": {"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
     "batch":{"maximumItems":3,"maximumBytes":8192},
     "constraints":[{"type":"unique","fields":["label"]}],

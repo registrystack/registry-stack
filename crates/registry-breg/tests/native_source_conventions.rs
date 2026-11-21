@@ -33,7 +33,7 @@ fn authored_display() -> Value {
 fn presentation_members_use_the_shared_display_text_reader() {
     for base in [
         "/accessProfiles/directory-editor/display",
-        "/statisticalDatasets/0/display",
+        "/statisticalDatasets/entry-counts/display",
         "/recordTypes/entry/hooks/0/display",
         "/actions/register-entry/execution/proposal/hooks/0/display",
     ] {
@@ -62,10 +62,10 @@ fn presentation_duplicates_are_scoped_to_their_own_kind() {
     ];
     let mut source = authored_display();
     for (base, _) in cases {
-        let first = if base == "/accessProfiles" {
-            "directory-editor"
-        } else {
-            "0"
+        let first = match base {
+            "/accessProfiles" => "directory-editor",
+            "/statisticalDatasets" => "entry-counts",
+            _ => "0",
         };
         let entries = source.pointer_mut(base).unwrap();
         let entry = match entries {
@@ -79,10 +79,15 @@ fn presentation_duplicates_are_scoped_to_their_own_kind() {
 
     for (base, code) in cases {
         let mut duplicate = source.clone();
-        let by_id = base == "/accessProfiles";
+        let keyed_first = match base {
+            "/accessProfiles" => Some("directory-editor"),
+            "/statisticalDatasets" => Some("entry-counts"),
+            _ => None,
+        };
+        let by_id = keyed_first.is_some();
         let entries = duplicate.pointer_mut(base).unwrap();
-        let mut second = if by_id {
-            entries["directory-editor"].clone()
+        let mut second = if let Some(first) = keyed_first {
+            entries[first].clone()
         } else {
             entries[0].clone()
         };
@@ -99,7 +104,7 @@ fn presentation_duplicates_are_scoped_to_their_own_kind() {
         assert_eq!(warnings.len(), 1, "{}", report.render_human());
         assert_eq!(warnings[0].code, code);
         let (first_key, second_key) = if by_id {
-            ("directory-editor", "second-definition")
+            (keyed_first.unwrap(), "second-definition")
         } else {
             ("0", "1")
         };
@@ -198,7 +203,7 @@ fn implicit_unique_constraint_id() -> String {
                 "defaultLanguage":"en",
                 "canonicalBaseIri":"https://example.test"
             },
-            "datasets":[{"id":"records"}],
+            "datasets":{"records": {}},
             "recordTypes":{"item": {
                 "primaryDataset":"records",
                 "route":"items",
@@ -257,11 +262,6 @@ fn refusal(source: &Value, path: &str, code: &str) {
 
 #[test]
 fn locally_defined_ids_and_type_keys_are_refused_at_their_source() {
-    for path in ["/datasets/0/id", "/reviewAuthorities/0/id"] {
-        let mut source = facility();
-        *source.pointer_mut(path).unwrap() = json!("Bad Local ID");
-        refusal(&source, path, "config.invalid-value");
-    }
     let mut source = facility();
     *source
         .pointer_mut("/actions/correct-address/execution/proposal/reviewContext/id")
@@ -271,7 +271,7 @@ fn locally_defined_ids_and_type_keys_are_refused_at_their_source() {
         "/actions/correct-address/execution/proposal/reviewContext/id",
         "config.invalid-value",
     );
-    for collection in ["functions", "actions"] {
+    for collection in ["functions", "actions", "datasets", "reviewAuthorities"] {
         let mut source = facility();
         let entries = source[collection].as_object_mut().unwrap();
         let (_, entry) = entries
@@ -383,7 +383,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://example.test
 datasets:
-  - id: records
+  records: {{}}
 recordTypes:
   item:
     primaryDataset: records

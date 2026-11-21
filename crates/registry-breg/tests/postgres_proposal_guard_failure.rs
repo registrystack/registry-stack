@@ -57,7 +57,7 @@ fn registry_with_current_date_offset(
 ) -> registry_breg::CompiledRegistry {
     let mut source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"guard-failure-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://guard.example.test"},
-        "datasets":[{"id":"directory"}],
+        "datasets":{"directory": {}},
         "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable",
             "mutationPolicy":{"patch":"proposal-required"},
             "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},

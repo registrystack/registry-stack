@@ -194,9 +194,9 @@ def write_breg(root, urls, review_policy=None, *, borrower=False):
         "project": {"id": SOURCE, "version": "1", "defaultLanguage": "en",
                      "canonicalBaseIri": "https://synthetic.example.invalid/coordinator"},
         "package": {"sourceRevision": "coordinator-synthetic-1"},
-        "datasets": [{"id": "synthetic-applications"}],
-        **({"reviewAuthorities": [{"id": "casework",
-            "protocol": "id.registrystack.org/protocols/review/v1"}]} if review_policy is not None else {}),
+        "datasets": {"synthetic-applications": {}},
+        **({"reviewAuthorities": {"casework": {
+            "protocol": "id.registrystack.org/protocols/review/v1"}}} if review_policy is not None else {}),
         "recordTypes": {"application": {key: value for key, value in applications.items() if key != "id"}}, "actions": {action["id"]: {key: value for key, value in action.items() if key != "id"}
                     for action in actions},
         "accessProfiles": {profile["id"]: {key: value for key, value in profile.items() if key != "id"}

@@ -49,4 +49,5 @@ tokio = { workspace = true, features = ["rt"] }
 uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+registry-breg.workspace = true
 tokio-postgres.workspace = true

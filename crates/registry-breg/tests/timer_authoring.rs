@@ -908,10 +908,9 @@ fn timer_refuses_remote_function_and_evidence_capabilities() {
         "refusals":[],
         "writes":[{"id":"activated","target":{"fromInput":"contact"},"operation":"patch","fields":["active"]}]
     });
-    evidence["evidenceProviders"] = json!([{
-        "id":"provider","contracts":"evidence/contracts.json",
+    evidence["evidenceProviders"] = json!({"provider": {"contracts":"evidence/contracts.json",
         "subjectResolution":"trusted-provider-exact-selector"
-    }]);
+    }});
     evidence["actions"]["activate-contact"]["evidence"] = json!([{
         "id":"status","provider":"provider",
         "requirement":"urn:example:client:requirement:status:v1",
@@ -932,10 +931,9 @@ fn timer_refuses_remote_function_and_evidence_capabilities() {
     );
 
     let mut commit_evidence = timer_project_value();
-    commit_evidence["evidenceProviders"] = json!([{
-        "id":"provider","contracts":"evidence/contracts.json",
+    commit_evidence["evidenceProviders"] = json!({"provider": {"contracts":"evidence/contracts.json",
         "subjectResolution":"trusted-provider-exact-selector"
-    }]);
+    }});
     commit_evidence["actions"]["activate-contact"]["inputs"]
         .as_array_mut()
         .unwrap()

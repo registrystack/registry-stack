@@ -240,7 +240,7 @@ fn registry(plan: &Plan) -> String {
         ),
     );
     yaml.line(0, "datasets:");
-    yaml.entry(1, "- id", id);
+    yaml.line(1, &format!("{id}:"));
     yaml.line(2, "display:");
     yaml.entry(3, "label", title);
     yaml.line(0, "manifestProjection:");
@@ -374,7 +374,7 @@ fn registry(plan: &Plan) -> String {
         );
         yaml.line(0, "vocabularies:");
         for vocabulary in &plan.vocabularies {
-            yaml.entry(1, "- id", &vocabulary.id);
+            yaml.line(1, &format!("{}:", vocabulary.id));
             yaml.line(
                 2,
                 &format!(

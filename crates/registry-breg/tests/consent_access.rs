@@ -267,9 +267,9 @@ fn consent_vocabularies_are_reserved() {
     for id in ["registry-recipients", "registry-consent-scopes"] {
         let mut value = source();
         value["vocabularies"]
-            .as_array_mut()
+            .as_object_mut()
             .unwrap()
-            .push(json!({"id": id, "values": ["forged"]}));
+            .insert(id.to_owned(), json!({"values": ["forged"]}));
         assert_refused(&value, "breg.consent.vocabulary-reserved");
     }
 

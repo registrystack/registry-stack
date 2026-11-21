@@ -3588,7 +3588,7 @@ mod tests {
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"polygon-ddl","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://polygon-ddl.example.test"},
-              "datasets":[{"id":"test-dataset"}], "recordTypes":{"area": {"primaryDataset":"test-dataset","route":"areas","mutationMode":"mutable","classification":"internal",
+              "datasets":{"test-dataset": {}}, "recordTypes":{"area": {"primaryDataset":"test-dataset","route":"areas","mutationMode":"mutable","classification":"internal",
                 "fields":[
                   {"id":"boundary","type":"crs84-polygon","precision":6,"maximumPositions":32,"bbox":{"west":"100.000000","south":"10.000000","east":"110.000000","north":"20.000000"},"required":true,"classification":"internal"}
                 ],
@@ -3607,7 +3607,7 @@ mod tests {
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"spatial-ddl","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-ddl.example.test"},
-              "datasets":[{"id":"test-dataset"}], "recordTypes":{"site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
+              "datasets":{"test-dataset": {}}, "recordTypes":{"site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
                 "fields":[
                   {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
                   {"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}
@@ -3672,7 +3672,7 @@ mod tests {
                 "defaultLanguage": "en",
                 "canonicalBaseIri": "https://wide-action-ddl.example.test"
             },
-            "datasets": [{"id": "test-dataset"}],
+            "datasets": {"test-dataset": {}},
             "recordTypes": {"wide-record": {
                 "primaryDataset": "test-dataset",
                 "route": "wide-records",

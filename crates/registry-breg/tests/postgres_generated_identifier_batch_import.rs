@@ -145,7 +145,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"generated-identifier-batch-import","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://identifiers.example.test"},
-          "datasets":[{"id":"records"}],
+          "datasets":{"records": {}},
           "recordTypes":{"entry": {"primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"internal",
             "batch":{"maximumItems":3,"maximumBytes":8192},
             "constraints":[{"type":"unique","fields":["label"]}],

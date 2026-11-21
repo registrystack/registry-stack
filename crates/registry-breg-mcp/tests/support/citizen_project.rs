@@ -46,7 +46,7 @@ pub fn project() -> Value {
     }
     json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"native-citizen-proof","canonicalBaseIri":"https://synthetic.example.test/citizen","version":"1","defaultLanguage":"en"},
-        "package":{"sourceRevision":"native-citizen-proof"},"datasets":[{"id":"addresses"}],
+        "package":{"sourceRevision":"native-citizen-proof"},"datasets":{"addresses": {}},
         "recordTypes":{"person-address": {"route":"person-addresses","primaryDataset":"addresses","mutationMode":"mutable",
             "classification":"internal","fields":fields.into_iter().map(|id|json!({"id":id,"apiName":match id {"address-line"=>"addressLine", "postal-code"=>"postalCode", other=>other},"type":"string","required":true,"maximumLength":200,"classification":"internal"})).collect::<Vec<_>>()}},
         "actions":{"correct-address": {"execution":{"mode":"proposal","proposal":{

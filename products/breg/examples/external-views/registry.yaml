@@ -12,7 +12,7 @@ project:
 package:
   sourceRevision: synthetic-licensing-0.1.0
 datasets:
-  - id: licensing
+  licensing:
     display: {label: Licensing}
 
 recordTypes:
@@ -38,14 +38,14 @@ recordTypes:
       - {id: jurisdiction, type: string, required: true, maximumLength: 40, classification: internal}
 
 externalRecordTypes:
-  - id: person
+  person:
     authority: urn:example:population-register
     identifierScheme: urn:example:person-number
     display: {label: Person}
     fields:
       - {id: given-name, type: string, classification: restricted}
       - {id: family-name, type: string, classification: restricted}
-  - id: holding
+  holding:
     authority: urn:example:business-register
     identifierScheme: urn:example:holding-number
     display: {label: Shareholding}
@@ -57,7 +57,7 @@ externalRecordTypes:
       - {id: person-key, type: string, classification: restricted, nullable: true}
 
 externalProjections:
-  - id: person-live
+  person-live:
     recordType: person
     sourceRoute: person-exact
     sourceRouteVersion: "1"
@@ -66,7 +66,7 @@ externalProjections:
     mode: live
     cardinality: one
     fields: [given-name, family-name]
-  - id: person-indexed
+  person-indexed:
     recordType: person
     sourceRoute: person-batch
     sourceRouteVersion: "1"
@@ -76,7 +76,7 @@ externalProjections:
     cardinality: one
     cacheTtlSeconds: 300
     fields: [given-name, family-name]
-  - id: holdings-live
+  holdings-live:
     recordType: holding
     sourceRoute: holdings-by-business
     sourceRouteVersion: "1"
@@ -86,7 +86,7 @@ externalProjections:
     mode: live
     cardinality: many
     fields: [share-class, share-count, shareholder-type, shareholder-key]
-  - id: holdings-indexed
+  holdings-indexed:
     recordType: holding
     sourceRoute: holdings-by-business
     sourceRouteVersion: "1"
@@ -99,25 +99,25 @@ externalProjections:
     fields: [share-class, share-count, shareholder-type, shareholder-key, person-key]
 
 externalViews:
-  - id: licence-holder-live
+  licence-holder-live:
     recordType: licence
     links:
       - id: holder
         projection: person-live
         fromField: holder-key
-  - id: licence-holder-indexed
+  licence-holder-indexed:
     recordType: licence
     links:
       - id: holder
         projection: person-indexed
         fromField: holder-key
-  - id: business-holdings-live
+  business-holdings-live:
     recordType: licensed-business
     links:
       - id: holdings
         projection: holdings-live
         fromField: business-key
-  - id: business-holdings-indexed
+  business-holdings-indexed:
     recordType: licensed-business
     links:
       - id: holdings

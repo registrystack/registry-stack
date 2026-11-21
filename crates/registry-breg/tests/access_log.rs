@@ -7,7 +7,7 @@ use registry_platform_canonical_json::parse_json_strict;
 use serde_json::{json, Value};
 
 fn source() -> Value {
-    json!({"datasets":[{"id": "people"}],
+    json!({"datasets":{"people": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {

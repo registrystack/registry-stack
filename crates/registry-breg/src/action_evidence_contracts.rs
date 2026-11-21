@@ -37,6 +37,12 @@ pub struct EvidenceProviderSource {
     pub contracts: String,
     pub subject_resolution: EvidenceSubjectResolution,
 }
+impl registry_platform_yaml::Identified for EvidenceProviderSource {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

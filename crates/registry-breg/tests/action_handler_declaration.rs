@@ -9,7 +9,7 @@ fn project() -> Value {
     json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"plan-contract","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://plans.example.test"},
-        "datasets":[{"id":"test"}],
+        "datasets":{"test": {}},
         "recordTypes":{"person": {"primaryDataset":"test","route":"people","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maximumLength":64,"required":true,"classification":"internal"}]}},
         "functions":{"person-plan": {"runtime":"rhai","source":"plans/person.rhai","entrypoint":"calculate","abi":ACTION_PLAN_ABI_V1}},

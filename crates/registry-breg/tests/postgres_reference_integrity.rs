@@ -809,7 +809,7 @@ fn event_record_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"reference-integrity-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "datasets":[{"id":"records"}],
+          "datasets":{"records": {}},
           "recordTypes":{"subject": {"primaryDataset":"records","route":"subjects","mutationMode":"mutable","tombstone":true,"classification":"internal",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -1109,7 +1109,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"reference-integrity-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "datasets":[{"id":"records"}],
+          "datasets":{"records": {}},
           "recordTypes":{"target": {"primaryDataset":"records","route":"targets","mutationMode":"mutable","tombstone":true,"classification":"internal",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"},

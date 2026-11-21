@@ -41,7 +41,7 @@ use zeroize::Zeroizing;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "explicit one-million-unit measurement; run with --ignored --nocapture"]
 async fn million_unit_three_dimension_statistics_measurement() {
-    let source = json!({"datasets":[{"id": "load"}],
+    let source = json!({"datasets":{"load": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"statistics-load","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://load.example.test","timezone":"UTC"},
@@ -51,8 +51,7 @@ async fn million_unit_three_dimension_statistics_measurement() {
                 {"id":"category","type":"vocabulary-code","vocabulary":"category","required":true,"classification":"internal"},
                 {"id":"region","type":"vocabulary-code","vocabulary":"region","required":true,"classification":"internal"},
                 {"id":"event-date","type":"date","required":true,"classification":"internal"}]}},
-        "vocabularies":[{"id":"category","values":["a","b","c","d"]},
-            {"id":"region","values":["north","south","east","west"]}],
+        "vocabularies":{"category": {"values":["a","b","c","d"]}, "region": {"values":["north","south","east","west"]}},
         "accessProfiles":{"publisher": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
             "recordType":"unit","operations":["list"],"allowCount":true,"rowBoundaries":"unrestricted",
             "readableFields":["active","category","region","event-date"],
@@ -62,10 +61,10 @@ async fn million_unit_three_dimension_statistics_measurement() {
                     {"dataset":"units-by-category","operations":["read-releases"]}
                 ]
             }}},
-        "statisticalDatasets":[{"id":"units-by-category","unit":"unit","population":"active ne null",
+        "statisticalDatasets":{"units-by-category": {"unit":"unit","population":"active ne null",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["active","category","region"],
-            "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}}]
+            "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}}}
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let compiled = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());

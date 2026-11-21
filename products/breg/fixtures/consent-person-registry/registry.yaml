@@ -64,13 +64,13 @@ recipients:
       name: Referral network
       members: [food-agency, health-ngo]
 vocabularies:
-  - id: data-use-purpose
+  data-use-purpose:
     values: [food-assistance, health-referral]
-  - id: consent-decision
+  consent-decision:
     values: [given, refused, withdrawn, invalidated]
-  - id: consent-channel
+  consent-channel:
     values: [self-service, assisted, steward-review, import]
-  - id: consent-invalidation-reason
+  consent-invalidation-reason:
     values: [captured-in-error, identity-mismatch, notice-withdrawn, controller-decision]
 
 recordTypes: {}
@@ -223,5 +223,5 @@ accessProfiles:
         readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
 
 datasets:
-- id: consent-person-registry
-- id: consent
+  consent-person-registry: {}
+  consent: {}

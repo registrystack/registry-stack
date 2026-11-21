@@ -967,7 +967,7 @@ fn json_from_bytes(bytes: &[u8]) -> Value {
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"revision-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -1006,7 +1006,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
 
 fn event_record_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"revision-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},

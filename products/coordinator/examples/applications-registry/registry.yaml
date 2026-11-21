@@ -8,7 +8,7 @@ project:
 package:
   sourceRevision: applications-v1
 datasets:
-  - {id: applications}
+  applications: {}
 recordTypes:
   application:
     primaryDataset: applications

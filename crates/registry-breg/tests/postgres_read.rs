@@ -1911,7 +1911,7 @@ fn compile_registry_source(source: &str) -> registry_breg::CompiledRegistry {
 }
 
 fn registry_source() -> String {
-    r#"{"datasets":[{"id": "test-dataset"}],
+    r#"{"datasets":{"test-dataset": {}},
 	          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
 	          "kind":"BRegProject",
 	          "project":{"id":"read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},

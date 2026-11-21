@@ -175,7 +175,7 @@ impl Breg {
             "recordTypes":{"item":{"primaryDataset":"synthetic-items", "route":"items", "mutationMode":"mutable", "classification":"internal",
                 "fields":[{"id":"owner", "type":"string", "required":true, "maximumLength":80, "classification":"internal"},
                     {"id":"label", "type":"string", "required":true, "minimumLength":1, "maximumLength":80, "classification":"internal"}]}},
-            "datasets":[{"id":"synthetic-items"}],
+            "datasets":{"synthetic-items": {}},
             "functions":{"update-item-plan": {"runtime":"rhai","source":"scripts/update-item.rhai","entrypoint":"plan","abi":"registry.action-plan/v1"}},
             "actions":{"update-item": { "execution":{"mode":"immediate"}, "inputs":[
                 {"id":"target", "apiName":"targetId", "type":"reference", "target":"item", "required":true, "classification":"internal"},
@@ -198,13 +198,13 @@ impl Breg {
             if !automatic {
                 policy["application"] = json!({"mode":"manual"});
             }
-            registry["actions"].as_array_mut().unwrap().push(json!({
-                "id":id,"execution":{"mode":"proposal","proposal":policy},
+            registry["actions"][id] = json!({
+                "execution":{"mode":"proposal","proposal":policy},
                 "inputs":[{"id":"target","apiName":"targetId","type":"reference","target":"item","required":true,"classification":"internal"},
                     {"id":"label","type":"string","required":true,"minimumLength":1,"maximumLength":80,"classification":"internal"}],
                 "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
                 "plan":{"type":"fixed","effects":[{"id":"item","target":{"fromInput":"target"},"operation":"patch","set":{"label":{"fromInput":"label"}}}]}
-            }));
+            });
             registry["accessProfiles"]["writer"]["permissions"]["actions"].as_array_mut().unwrap().push(json!({
                 "action":id,"operations":["start"],"targets":[{"recordType":"item","rowBoundaries":[{"field":"owner","claim":"sub","operator":"equals"}]}]
             }));
@@ -220,7 +220,7 @@ impl Breg {
             crate::support::private_file(&service.root.join("status-key"), &status_key);
         }
         if event_origin.is_some() {
-            registry["actions"][2]["execution"]["proposal"]["hooks"] = json!([
+            registry["actions"]["manual-item"]["execution"]["proposal"]["hooks"] = json!([
                 {"id":"notify-submitted","transitions":["submitted"],"handler":{"type":"url","destinationId":"coordinator"}}
             ]);
             crate::support::private_file(&service.root.join("event-key"), &[0x5a; 32]);

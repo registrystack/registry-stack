@@ -69,7 +69,18 @@ macro_rules! serialize_tagged_union {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RegistryProject {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            schema_with = "registry_platform_yaml::id_keyed_schema::<crate::action_evidence_contracts::EvidenceProviderSource>"
+        )
+    )]
     pub evidence_providers: Vec<crate::action_evidence_contracts::EvidenceProviderSource>,
     pub api_version: String,
     pub kind: String,
@@ -103,9 +114,25 @@ pub struct RegistryProject {
         schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<EntitySource>")
     )]
     pub entities: Vec<EntitySource>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<DatasetSource>")
+    )]
     pub datasets: Vec<DatasetSource>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<ReviewAuthoritySource>")
+    )]
     pub review_authorities: Vec<ReviewAuthoritySource>,
     #[serde(default, deserialize_with = "local_id_map")]
     #[cfg_attr(
@@ -156,16 +183,68 @@ pub struct RegistryProject {
         )
     )]
     pub access_profiles: Vec<ProjectAccessProfileSource>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<VocabularySource>")
+    )]
     pub vocabularies: Vec<VocabularySource>,
     /// Declared count tables computed from governed Registry records.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            schema_with = "registry_platform_yaml::id_keyed_schema::<StatisticalDatasetSource>"
+        )
+    )]
     pub statistical_datasets: Vec<StatisticalDatasetSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            schema_with = "registry_platform_yaml::id_keyed_schema::<crate::external_views::ExternalRecordTypeSource>"
+        )
+    )]
     pub external_record_types: Vec<crate::external_views::ExternalRecordTypeSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            schema_with = "registry_platform_yaml::id_keyed_schema::<crate::external_views::ExternalProjectionDeclaration>"
+        )
+    )]
     pub external_projections: Vec<crate::external_views::ExternalProjectionDeclaration>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            schema_with = "registry_platform_yaml::id_keyed_schema::<crate::external_views::ExternalViewDeclaration>"
+        )
+    )]
     pub external_views: Vec<crate::external_views::ExternalViewDeclaration>,
     /// Named organizations and frozen groups that consent may be given to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1711,6 +1790,30 @@ where
 impl registry_platform_yaml::Identified for FunctionSource {
     fn id(&self) -> &str {
         &self.id
+    }
+}
+
+impl registry_platform_yaml::Identified for DatasetSource {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl registry_platform_yaml::Identified for ReviewAuthoritySource {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl registry_platform_yaml::Identified for VocabularySource {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl registry_platform_yaml::Identified for StatisticalDatasetSource {
+    fn id(&self) -> &str {
+        self.id.as_str()
     }
 }
 
@@ -5657,6 +5760,38 @@ const PLAN_CAPABILITIES_REPLACEMENT: &str = "Remove `plan.capabilities`. Declare
 /// Members `registry.yaml` no longer accepts, each with the member that
 /// replaced it.
 const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
+    RemovedKey {
+        pointer: "/datasets/*/id",
+        replacement: "Write datasets as a mapping from each id to the rest of its entry, datasets: {DATASET_ID: {display: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/vocabularies/*/id",
+        replacement: "Write vocabularies as a mapping from each id to the rest of its entry, vocabularies: {VOCABULARY_ID: {values: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/reviewAuthorities/*/id",
+        replacement: "Write reviewAuthorities as a mapping from each id to the rest of its entry, reviewAuthorities: {AUTHORITY_ID: {protocol: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/statisticalDatasets/*/id",
+        replacement: "Write statisticalDatasets as a mapping from each id to the rest of its entry, statisticalDatasets: {DATASET_ID: {unit: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/evidenceProviders/*/id",
+        replacement: "Write evidenceProviders as a mapping from each id to the rest of its entry, evidenceProviders: {PROVIDER_ID: {contracts: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/externalRecordTypes/*/id",
+        replacement: "Write externalRecordTypes as a mapping from each id to the rest of its entry, externalRecordTypes: {RECORD_TYPE_ID: {authority: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/externalProjections/*/id",
+        replacement: "Write externalProjections as a mapping from each id to the rest of its entry, externalProjections: {PROJECTION_ID: {recordType: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/externalViews/*/id",
+        replacement: "Write externalViews as a mapping from each id to the rest of its entry, externalViews: {VIEW_ID: {recordType: ...}}, with no id member.",
+    },
     RemovedKey {
         pointer: "/actions/*/id",
         replacement: "Write actions as a mapping from each id to the rest of its entry, actions: {ACTION_ID: {execution: ...}}, with no id member.",

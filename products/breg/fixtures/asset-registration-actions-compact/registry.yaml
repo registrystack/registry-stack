@@ -78,10 +78,10 @@ accessProfiles:
           rowBoundaries:
             - {field: jurisdiction, claim: jurisdiction, operator: equals}
 vocabularies:
-  - id: asset-type
+  asset-type:
     values: [equipment, vehicle, furniture]
-  - id: inspection-result
+  inspection-result:
     values: [passed, failed, needs-follow-up]
 
 datasets:
-- id: asset-registration-actions
+  asset-registration-actions: {}

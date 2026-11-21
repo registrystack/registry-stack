@@ -239,7 +239,7 @@ fn the_retired_v2_abi_is_refused_and_wasm_needs_a_wasm_capable_build() {
 }
 
 fn household_contact_project(extra: &str) -> String {
-    r#"{"datasets":[{"id": "test-dataset"}],
+    r#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"immediate-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -518,7 +518,7 @@ fn create_effects_may_rely_entirely_on_server_generated_fields() {
         ),
     ] {
         let project = json!({
-            "datasets": [{"id": "test-dataset"}],
+            "datasets": {"test-dataset": {}},
             "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
             "kind": "BRegProject",
             "project": {
@@ -692,7 +692,7 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
         .iter()
         .any(|diagnostic| diagnostic.code == "breg.action.effect-overlapping-write"));
 
-    let cycle = br#"{"datasets":[{"id": "test-dataset"}],
+    let cycle = br#"{"datasets":{"test-dataset": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"action-cycle","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -737,11 +737,11 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
 #[test]
 fn action_inputs_resolve_project_vocabulary_values_for_type_compatibility() {
     let compiled = compile_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"action-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "vocabularies":[{"id":"asset-type","values":["bridge","road"]}],
+          "vocabularies":{"asset-type": {"values":["bridge","road"]}},
           "recordTypes":{"asset": {"primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
             "fields":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}]
           }},
@@ -769,7 +769,7 @@ fn action_inputs_resolve_project_vocabulary_values_for_type_compatibility() {
 #[test]
 fn action_inputs_reject_unknown_project_vocabulary_references() {
     let failure = compile_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"action-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -814,7 +814,7 @@ fn action_bounds_apply_before_runtime_target_work() {
             .to_owned(),
     );
     let source = format!(
-        r#"{{"datasets":[{{"id": "test-dataset"}}],
+        r#"{{"datasets":{{"test-dataset": {{}}}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{{"id":"action-bounds","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -869,7 +869,7 @@ fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
             .as_object_mut()
             .unwrap()
             .extend(field_type.as_object().unwrap().clone());
-        let project = json!({"datasets":[{"id": "test-dataset"}],
+        let project = json!({"datasets":{"test-dataset": {}},
             "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
             "kind": "BRegProject",
             "project": {"id": "action-size-bounds", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
@@ -934,7 +934,7 @@ fn generated_create_fields_count_toward_the_proposal_snapshot_ceiling() {
         }));
     }
     let project = json!({
-        "datasets": [{"id": "test-dataset"}],
+        "datasets": {"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {

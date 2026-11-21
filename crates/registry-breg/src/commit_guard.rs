@@ -176,7 +176,7 @@ mod tests {
             "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
             "kind": "BRegProject",
             "project": project,
-            "datasets": [{"id": "guards"}],
+            "datasets": {"guards": {}},
             "recordTypes": {"site": { "primaryDataset": "guards", "route": "sites",
                 "mutationMode": "mutable",
                 "fields": [{"id": "code", "type": "string", "required": true,

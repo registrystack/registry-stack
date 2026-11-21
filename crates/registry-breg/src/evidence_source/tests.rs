@@ -9,7 +9,7 @@ use crate::{
 fn project() -> Value {
     json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "datasets":[{"id":"test-dataset"}],"recordTypes":{"record": {"primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","fields":[
+        "datasets":{"test-dataset": {}},"recordTypes":{"record": {"primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","fields":[
             {"id":"code","type":"string","minimumLength":1,"maximumLength":32,"required":true,"classification":"internal"},
             {"id":"registration-number","type":"string","minimumLength":1,"maximumLength":32,"classification":"internal"},
             {"id":"status","type":"string","maximumLength":16,"classification":"internal"},

@@ -1179,7 +1179,7 @@ mod tests {
             "kind": "BRegProject",
             "project": {"id": "statistics-today", "version": "1", "defaultLanguage": "en",
                 "canonicalBaseIri": "https://statistics.example.test", "timezone": "Asia/Colombo"},
-            "datasets": [{"id": "directory"}],
+            "datasets": {"directory": {}},
             "recordTypes": {"site": { "primaryDataset": "directory", "route": "sites",
                 "mutationMode": "mutable",
                 "fields": [{"id": "code", "type": "string", "required": true,

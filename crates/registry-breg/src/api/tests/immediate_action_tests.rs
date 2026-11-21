@@ -20,7 +20,7 @@ const PROJECT: &str = r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: action-admission, version: "1", defaultLanguage: en, canonicalBaseIri: https://action-admission.example.test}
-datasets: [{id: test-dataset}]
+datasets: {test-dataset: {}}
 recordTypes:
   case:
     primaryDataset: test-dataset
@@ -1985,7 +1985,7 @@ async fn task_statistics_reads_bind_the_grant_to_the_request_principal_and_purpo
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"task-statistics","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://statistics.example.test","timezone":"UTC"},
-        "datasets":[{"id":"records"}],
+        "datasets":{"records": {}},
         "recordTypes":{"record": {"primaryDataset":"records","route":"records","mutationMode":"mutable",
             "fields":[{"id":"active","type":"boolean","required":true,"classification":"internal"},
                 {"id":"occurred-on","type":"date","required":true,"classification":"internal"}]}},
@@ -1999,9 +1999,9 @@ async fn task_statistics_reads_bind_the_grant_to_the_request_principal_and_purpo
                 "requiredPurposes":["case-management","case-audit"],
                 "taskGrant":{"sourceIssuer":"https://casework.example"},
                 "permissions":{"datasets":[{"dataset":"counts","operations":["read-releases"]}]}}},
-        "statisticalDatasets":[{"id":"counts","unit":"record","population":"active eq true",
+        "statisticalDatasets":{"counts": {"unit":"record","population":"active eq true",
             "period":{"type":"flow","field":"occurred-on","granularity":"month","firstPeriod":"2025-01"},
-            "dimensions":["active"],"disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}}]});
+            "dimensions":["active"],"disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}}}});
     let project =
         crate::contract::parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());

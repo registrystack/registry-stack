@@ -363,7 +363,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
 }
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
-    let source = json!({"datasets":[{"id": "test-dataset"}],
+    let source = json!({"datasets":{"test-dataset": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"data-export-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},

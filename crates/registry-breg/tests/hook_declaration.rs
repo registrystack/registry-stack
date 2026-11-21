@@ -30,7 +30,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 fn project_with_hooks(hooks: Value) -> Value {
-    json!({"datasets":[{"id": "test-dataset"}],
+    json!({"datasets":{"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": "hook-contract", "version": "1", "defaultLanguage": "en",

@@ -215,12 +215,8 @@
       ]
     }
   },
-  "datasets": [
-    {
-      "id": "public-units"
-    },
-    {
-      "id": "protected-units"
-    }
-  ]
+  "datasets": {
+    "public-units": {},
+    "protected-units": {}
+  }
 }

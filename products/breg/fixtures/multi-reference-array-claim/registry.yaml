@@ -36,7 +36,7 @@ manifestProjection:
       servesDatasets: [permits]
   distributions: []
 datasets:
-  - id: permits
+  permits: {}
 recordTypes:
   public-authority:
     primaryDataset: permits

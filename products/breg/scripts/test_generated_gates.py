@@ -223,7 +223,7 @@ class GeneratedGateTests(unittest.TestCase):
             self.assertTrue({"recordTypes", "valueTypes", "functions", "actions"} <= properties.keys(), name)
             self.assertNotIn("entities", properties)
             self.assertNotIn("extendEntities", properties)
-            action = schema["$defs"]["ActionSource"]["properties"]
+            action = properties["actions"]["additionalProperties"]["properties"]
             self.assertTrue({"plan", "execution", "commitGuards"} <= action.keys())
             self.assertNotIn("handler", action)
             self.assertNotIn("effects", action)

@@ -203,18 +203,15 @@
       }
     }
   },
-  "vocabularies": [
-    {
-      "id": "operator-status",
+  "vocabularies": {
+    "operator-status": {
       "values": [
         "active",
         "inactive"
       ]
     }
-  ],
-  "datasets": [
-    {
-      "id": "facility-registry-actions"
-    }
-  ]
+  },
+  "datasets": {
+    "facility-registry-actions": {}
+  }
 }

@@ -56,7 +56,7 @@ recordTypes:
       - {id: label, type: string, required: true, maximumLength: 100, classification: public}
       - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: internal}
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   public:

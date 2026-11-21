@@ -53,7 +53,7 @@ fn registry() -> registry_breg::CompiledRegistry {
             "canonicalBaseIri":"https://proposal-generated.example.test"
         },
         "package":{"sourceRevision":"proposal-generated-identifiers-test"},
-        "datasets":[{"id":"directory"}],
+        "datasets":{"directory": {}},
         "recordTypes":{"target": {
             "primaryDataset":"directory",
             "route":"targets",

@@ -2846,7 +2846,7 @@ mod tests {
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"typed-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-              "datasets":[{"id":"test-dataset"}],
+              "datasets":{"test-dataset": {}},
               "recordTypes":{
                 "parent-entry": {"primaryDataset":"test-dataset","route":"parents","mutationMode":"mutable",
                   "fields":[{"id":"name","type":"string","minimumLength":1,"maximumLength":8,"required":true,"classification":"internal"}]
@@ -2891,7 +2891,7 @@ mod tests {
                   ]
                 }
               }},
-              "vocabularies":[{"id":"colors","values":["red","blue"]}]
+              "vocabularies":{"colors": {"values":["red","blue"]}}
             }"#,
         )
         .expect("typed context project parses");
@@ -2904,7 +2904,7 @@ mod tests {
             "apiVersion": crate::compiler::AUTHORING_API_VERSION, "kind":"BRegProject",
             "project":{"id":"context-test","version":"0.1.0","defaultLanguage":"en",
                 "canonicalBaseIri":"https://context.example.test"},
-            "datasets":[{"id":"context-test"}],
+            "datasets":{"context-test": {}},
             "recordTypes":{"entry": {"primaryDataset":"context-test","route":"entries","mutationMode":"mutable",
                 "fields":[
                     {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
@@ -2930,7 +2930,7 @@ mod tests {
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"action-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-              "datasets":[{"id":"test-dataset"}],
+              "datasets":{"test-dataset": {}},
               "recordTypes":{"household": {"primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
                 "fields":[
                   {"id":"household-code","apiName":"householdCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
@@ -2977,7 +2977,7 @@ mod tests {
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"timer-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://timers.example.test"},
-              "datasets":[{"id":"services"}],
+              "datasets":{"services": {}},
               "recordTypes":{"service": {"primaryDataset":"services","route":"services","mutationMode":"mutable",
                 "fields":[
                   {"id":"status","type":"string","required":true,"maximumLength":32,"classification":"internal"},
@@ -3005,7 +3005,7 @@ mod tests {
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"timer-create-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://timers.example.test"},
-              "datasets":[{"id":"services"},{"id":"logs"}],
+              "datasets":{"services": {}, "logs": {}},
               "recordTypes":{
                 "service": {"primaryDataset":"services","route":"services","mutationMode":"mutable",
                   "fields":[{"id":"activates-at","type":"timestamp","required":true,"classification":"internal"}],

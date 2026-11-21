@@ -267,9 +267,7 @@
       }
     }
   },
-  "datasets": [
-    {
-      "id": "household-contact-actions"
-    }
-  ]
+  "datasets": {
+    "household-contact-actions": {}
+  }
 }

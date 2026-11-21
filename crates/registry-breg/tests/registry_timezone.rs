@@ -43,7 +43,7 @@ fn date_interval_project(start_type: &str) -> Value {
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": "licences", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://licences.example.test"},
-        "datasets": [{"id": "licences"}],
+        "datasets": {"licences": {}},
         "recordTypes": {"licence": { "primaryDataset": "licences", "route": "licences", "mutationMode": "mutable",
             "fields": [
                 {"id": "holder", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"},

@@ -454,7 +454,7 @@ async fn parcels_with_no_owner_in_two_cells_are_one_contributor_at_their_total()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_dataset_without_dimensions_releases_its_grand_total_through_the_dry_run_and_publish() {
     let mut without_dimensions = source();
-    without_dimensions["statisticalDatasets"][0]["dimensions"] = json!([]);
+    without_dimensions["statisticalDatasets"][DATASET]["dimensions"] = json!([]);
     let (database, task, app) = fixture(
         protected(compiled_from(&without_dimensions), field_contributor()),
         &parcels(),
@@ -558,7 +558,7 @@ fn field_contributor() -> Value {
 /// a minimum of 0, an int64 count of units, every field public, and a
 /// publisher, a release reader and a live analyst.
 fn source() -> Value {
-    json!({"datasets":[{"id":"protected-sums"}],
+    json!({"datasets":{"protected-sums": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":PACKAGE_ID,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test","timezone":"UTC"},
@@ -597,12 +597,8 @@ fn source() -> Value {
             "reader": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
                 "datasets":[{"dataset":DATASET,"operations":["read-releases"]}]}}
         },
-        "vocabularies":[
-            {"id":"district","values":["d1","d2"]},
-            {"id":"category","values":["a","b","c"]}
-        ],
-        "statisticalDatasets":[{
-            "id":DATASET,"unit":"record","population":"active eq true",
+        "vocabularies":{"district": {"values":["d1","d2"]}, "category": {"values":["a","b","c"]}},
+        "statisticalDatasets":{"DATASET": {"unit":"record","population":"active eq true",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["district","category"],
             "measures":[
@@ -611,7 +607,7 @@ fn source() -> Value {
                 {"id":"units-sum","type":"sum","field":"units"}
             ],
             "disclosure":{"type":"exact-public-values"}
-        }]
+        }}
     })
 }
 

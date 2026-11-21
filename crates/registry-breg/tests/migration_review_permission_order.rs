@@ -34,7 +34,7 @@ fn project(first: Value, second: Value) -> Value {
     json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"default-grants","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://default-grants.example.test"},
-        "datasets":[{"id":"test-dataset"}],
+        "datasets":{"test-dataset": {}},
         "recordTypes":{
             "case": {"route":"cases","primaryDataset":"test-dataset","mutationMode":"mutable","classification":"internal",
                 "batch":{"maximumItems":3,"maximumBytes":8192},"mutationPolicy":{"patch":"proposal-required"},

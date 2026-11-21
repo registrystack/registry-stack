@@ -11,7 +11,7 @@ project:
   version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://registry.example.test
-datasets: [{id: local-records}]
+datasets: {local-records: {}}
 recordTypes:
   local-record:
     primaryDataset: local-records
@@ -22,14 +22,14 @@ recordTypes:
       - {id: subject-key, type: string, maximumLength: 32, classification: internal}
       - {id: local-title, type: string, maximumLength: 120, classification: internal}
 externalRecordTypes:
-  - id: external-subject
+  external-subject:
     authority: urn:example:source
     identifierScheme: urn:example:subject-key
     fields:
       - {id: label, type: string, classification: internal}
       - {id: code, type: integer, classification: restricted}
 externalProjections:
-  - id: approved-subjects
+  approved-subjects:
     recordType: external-subject
     sourceRoute: subjects-by-key
     sourceRouteVersion: "1"
@@ -40,7 +40,7 @@ externalProjections:
     cacheTtlSeconds: 600
     fields: [label, code]
 externalViews:
-  - id: local-with-subject
+  local-with-subject:
     recordType: local-record
     links:
       - id: subject
@@ -300,7 +300,7 @@ fn selector_scheme_is_refused_on_a_cardinality_one_projection() {
             "    cardinality: one\n    selectorScheme: urn:example:other-key\n",
         ),
         "breg.external-view.selector-scheme",
-        "/externalProjections/0/selectorScheme",
+        "/externalProjections/approved-subjects/selectorScheme",
     );
 }
 
@@ -309,13 +309,13 @@ fn selector_scheme_is_required_on_a_cardinality_many_projection() {
     rejects_at(
         &PROJECT.replace("cardinality: one", "cardinality: many"),
         "breg.external-view.selector-scheme",
-        "/externalProjections/0/selectorScheme",
+        "/externalProjections/approved-subjects/selectorScheme",
     );
 }
 
 #[test]
 fn one_local_field_cannot_link_projections_with_different_selector_schemes() {
-    let second_projection = r#"  - id: other-subjects
+    let second_projection = r#"  other-subjects:
     recordType: external-subject
     sourceRoute: subjects-by-other-key
     sourceRouteVersion: "1"
@@ -336,7 +336,7 @@ externalViews:
     rejects_at(
         &source,
         "breg.external-view.selector-scheme-conflict",
-        "/externalViews/0/links/1/fromField",
+        "/externalViews/local-with-subject/links/1/fromField",
     );
 }
 

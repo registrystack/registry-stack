@@ -313,7 +313,7 @@ async fn stock_to_keycloak_preserves_native_proposal_issuer_isolation() {
     // A native governed Action replaces the retired Request-as-Record approval fixture.
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"issuer-proposal","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://issuer-proposal.example.test"},
-        "datasets":[{"id":"records"}],"recordTypes":{"record": {"primaryDataset":"records","route":"records","mutationMode":"mutable",
+        "datasets":{"records": {}},"recordTypes":{"record": {"primaryDataset":"records","route":"records","mutationMode":"mutable",
         "fields":[{"id":"label","type":"string","required":true,"maximumLength":100,"classification":"internal"},
         {"id":"district","type":"string","required":true,"maximumLength":100,"classification":"internal"}]}},
         "actions":{"correct-label": {"execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}},

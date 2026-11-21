@@ -10,7 +10,7 @@ fn source() -> Value {
     json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"action-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-        "datasets":[{"id":"test-dataset"}],"recordTypes":{"item": { "primaryDataset":"test-dataset", "route":"items", "mutationMode":"mutable",
+        "datasets":{"test-dataset": {}},"recordTypes":{"item": { "primaryDataset":"test-dataset", "route":"items", "mutationMode":"mutable",
             "fields":[{"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}]}},
         "actions":{"rename-item": { "execution":{"mode":"immediate"}, "inputs":[
             {"id":"item", "apiName":"itemId", "type":"reference", "target":"item", "required":true, "classification":"internal"},
@@ -42,7 +42,7 @@ fn ordinary_policy_source(auditor_operations: Option<&[&str]>) -> Value {
     let mut source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"policy-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-        "datasets":[{"id":"test-dataset"}],"recordTypes":{"person": { "primaryDataset":"test-dataset", "route":"people", "mutationMode":"mutable",
+        "datasets":{"test-dataset": {}},"recordTypes":{"person": { "primaryDataset":"test-dataset", "route":"people", "mutationMode":"mutable",
             "fields":[
                 {"id":"person-code", "type":"string", "maximumLength":40, "required":true, "classification":"internal"},
                 {"id":"sensitive-note", "type":"string", "maximumLength":120, "classification":"internal"}
@@ -844,11 +844,9 @@ fn proposal_handler_evidence_source() -> Value {
         "entrypoint": "plan",
         "abi": "registry.action-plan/v1",
     }});
-    value["evidenceProviders"] = json!([{
-        "id": "provider",
-        "contracts": "evidence/contracts.json",
+    value["evidenceProviders"] = json!({"provider": {"contracts": "evidence/contracts.json",
         "subjectResolution": "trusted-provider-exact-selector",
-    }]);
+    }});
     value["recordTypes"]["item"]["fields"][0]["minimumLength"] = json!(3);
     value["actions"]["rename-item"]["inputs"][1]["minimumLength"] = json!(3);
     value["actions"]["rename-item"]["commitGuards"] = json!({"evidence": [{
@@ -879,11 +877,9 @@ fn proposal_handler_evidence_source() -> Value {
 
 fn commit_evidence_source() -> Value {
     let mut value = source();
-    value["evidenceProviders"] = json!([{
-        "id": "provider",
-        "contracts": "evidence/contracts.json",
+    value["evidenceProviders"] = json!({"provider": {"contracts": "evidence/contracts.json",
         "subjectResolution": "trusted-provider-exact-selector",
-    }]);
+    }});
     value["recordTypes"]["item"]["fields"][0]["minimumLength"] = json!(3);
     value["actions"]["rename-item"]["inputs"][1]["minimumLength"] = json!(3);
     value["actions"]["rename-item"]["commitGuards"] = json!({"evidence": [{

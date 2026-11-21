@@ -22,7 +22,7 @@ fn project(loader_operations: &[&str]) -> Value {
     json!({
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
       "project":{"id":"import-admission","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "datasets":[{"id":"test-dataset"}],
+      "datasets":{"test-dataset": {}},
       "recordTypes":{"enrollment": {"primaryDataset":"test-dataset","route":"enrollments","mutationMode":"mutable",
         "batch":{"maximumItems":2,"maximumBytes":4096},
         "mutationPolicy":{"patch":"proposal-required"},

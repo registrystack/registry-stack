@@ -27,7 +27,7 @@ fn project() -> Value {
     json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"standing-agent-ceiling","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://standing-agent.example.test"},
-        "datasets":[{"id":"test-dataset"}],
+        "datasets":{"test-dataset": {}},
         "recordTypes":{
             "case": {"route":"cases","primaryDataset":"test-dataset","mutationMode":"mutable","classification":"internal",
                 "batch":{"maximumItems":3,"maximumBytes":8192},"mutationPolicy":{"patch":"proposal-required"},
@@ -418,12 +418,11 @@ fn with_dataset(clerk: &[&str], assistant: &[&str]) -> Value {
             json!({"id": "filed", "type": "date", "required": true, "classification": "internal"}),
         ]);
     value["project"]["timezone"] = json!("UTC");
-    value["statisticalDatasets"] = json!([{
-        "id": "notes-by-status", "unit": "note", "population": "open eq true",
+    value["statisticalDatasets"] = json!({"notes-by-status": {"unit": "note", "population": "open eq true",
         "period": {"type": "flow", "field": "filed", "granularity": "month", "firstPeriod": "2025-01"},
         "dimensions": ["open"],
         "disclosure": {"type":"minimum-count-and-rounding","minimumCount": 5, "roundingBase": 5}
-    }]);
+    }});
     for (profile, operations) in [("clerk", clerk), ("assistant", assistant)] {
         let permissions = &mut value["accessProfiles"][profile]["permissions"];
         let note = &mut permissions["records"][2];

@@ -35,7 +35,7 @@ fn assert_retained_authoring_finding(failure: &CompileFailure) {
 }
 
 fn source() -> Value {
-    serde_json::from_value(json!({"datasets":[{"id": "statistics-test"}],
+    serde_json::from_value(json!({"datasets":{"statistics-test": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -80,15 +80,13 @@ fn source() -> Value {
             }},
             "other-reader": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{}}
         },
-        "vocabularies": [{"id":"category","values":["a","b"]}],
-        "statisticalDatasets": [{
-            "id":"records-by-category",
-            "unit":"record",
+        "vocabularies": {"category": {"values":["a","b"]}},
+        "statisticalDatasets": {"records-by-category": {"unit":"record",
             "population":"active eq true",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["category"],
             "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}
-        }]
+        }}
     }))
     .expect("fixture is JSON")
 }
@@ -126,7 +124,8 @@ fn source_with_swappable_population_fields() -> Value {
                 .push(json!("archived"));
         }
     }
-    value["statisticalDatasets"][0]["population"] = json!("active eq true and archived eq false");
+    value["statisticalDatasets"]["records-by-category"]["population"] =
+        json!("active eq true and archived eq false");
     value
 }
 
@@ -334,7 +333,7 @@ fn access_explanation_states_who_holds_each_dataset_operation() {
     );
 
     let mut without = source();
-    without["statisticalDatasets"] = json!([]);
+    without["statisticalDatasets"] = json!({});
     for profile in [ANALYST, PUBLISHER, READER] {
         grant(&mut without, profile, &[]);
     }
@@ -602,13 +601,16 @@ fn the_removed_dataset_grant_members_are_refused_with_their_new_home_named() {
         ),
     ] {
         let mut value = source();
-        value["statisticalDatasets"][0][member] = written;
+        value["statisticalDatasets"]["records-by-category"][member] = written;
         let refused = read_refusals(&value);
         let [(code, path, message)] = refused.as_slice() else {
             panic!("one diagnostic refuses {member}: {refused:?}");
         };
         assert_eq!(code, "config.removed-key");
-        assert_eq!(path, &format!("project.statisticalDatasets[0].{member}"));
+        assert_eq!(
+            path,
+            &format!("project.statisticalDatasets.records-by-category.{member}")
+        );
         for name in named {
             assert!(
                 message.contains(name),
@@ -683,34 +685,49 @@ fn statistical_dataset_compiles_with_release_reader_authentication() {
 fn statistical_dataset_core_refusals_are_stable_and_actionable() {
     let cases: Vec<RefusalCase> = vec![
         (
-            Box::new(|v| v["statisticalDatasets"][0]["unit"] = json!("missing")),
+            Box::new(|v| {
+                v["statisticalDatasets"]["records-by-category"]["unit"] = json!("missing")
+            }),
             "breg.statistical-dataset.unit-unknown",
         ),
         (
-            Box::new(|v| v["statisticalDatasets"][0]["population"] = json!("active = true")),
+            Box::new(|v| {
+                v["statisticalDatasets"]["records-by-category"]["population"] =
+                    json!("active = true")
+            }),
             "breg.statistical-dataset.population-invalid",
         ),
         (
-            Box::new(|v| v["statisticalDatasets"][0]["period"]["field"] = json!("missing")),
+            Box::new(|v| {
+                v["statisticalDatasets"]["records-by-category"]["period"]["field"] =
+                    json!("missing")
+            }),
             "breg.statistical-dataset.field-unknown",
         ),
         (
-            Box::new(|v| v["statisticalDatasets"][0]["period"]["field"] = json!("category")),
+            Box::new(|v| {
+                v["statisticalDatasets"]["records-by-category"]["period"]["field"] =
+                    json!("category")
+            }),
             "breg.statistical-dataset.period-field-type",
         ),
         (
-            Box::new(|v| v["statisticalDatasets"][0]["dimensions"] = json!(["event-date"])),
+            Box::new(|v| {
+                v["statisticalDatasets"]["records-by-category"]["dimensions"] =
+                    json!(["event-date"])
+            }),
             "breg.statistical-dataset.dimension-type",
         ),
         (
             Box::new(|v| {
-                v["statisticalDatasets"][0]["dimensions"] = json!(["category", "category"])
+                v["statisticalDatasets"]["records-by-category"]["dimensions"] =
+                    json!(["category", "category"])
             }),
             "breg.statistical-dataset.dimension-duplicate",
         ),
         (
             Box::new(|v| {
-                v["statisticalDatasets"][0]
+                v["statisticalDatasets"]["records-by-category"]
                     .as_object_mut()
                     .unwrap()
                     .remove("disclosure");
@@ -784,7 +801,7 @@ fn statistical_disclosure_bounds_are_refused_when_the_project_is_read() {
         ("roundingBase", json!(9_007_199_254_740_992_u64)),
     ] {
         let mut value = source();
-        value["statisticalDatasets"][0]["disclosure"][member] = written;
+        value["statisticalDatasets"]["records-by-category"]["disclosure"][member] = written;
         let failure = parse_project_yaml(&serde_json::to_vec(&value).expect("fixture serializes"))
             .expect_err("a disclosure bound outside 2 to 2^53 - 1 is refused");
         let refused = failure
@@ -792,7 +809,7 @@ fn statistical_disclosure_bounds_are_refused_when_the_project_is_read() {
             .iter()
             .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
             .collect::<Vec<_>>();
-        let path = format!("project.statisticalDatasets[0].disclosure.{member}");
+        let path = format!("project.statisticalDatasets.records-by-category.disclosure.{member}");
         assert_eq!(
             refused,
             vec![("config.out-of-range", path.as_str())],
@@ -870,7 +887,7 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
                     .unwrap()
                     .push(json!("secret"));
             }
-            value["statisticalDatasets"][0]["population"] =
+            value["statisticalDatasets"]["records-by-category"]["population"] =
                 json!("active eq true and secret eq 'x'");
         },
         "breg.statistical-dataset.field-encrypted",
@@ -884,9 +901,15 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
                 }],
                 "groups":[]
             });
-            value["vocabularies"].as_array_mut().unwrap().extend([
-                json!({"id":"data-use-purpose","values":["statistics"]}),
-                json!({"id":"consent-decision","values":["given","refused","withdrawn"]}),
+            value["vocabularies"].as_object_mut().unwrap().extend([
+                (
+                    "data-use-purpose".to_owned(),
+                    json!({"values":["statistics"]}),
+                ),
+                (
+                    "consent-decision".to_owned(),
+                    json!({"values":["given","refused","withdrawn"]}),
+                ),
             ]);
             value["recordTypes"].as_object_mut().unwrap().insert("consent-decision".to_owned(), json!({"primaryDataset":"statistics-test",
                 "route":"consent-decisions","mutationMode":"create-only","classification":"restricted",
@@ -918,7 +941,7 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
 #[test]
 fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
     assert_refused(
-        |value| value["vocabularies"][0]["values"] = json!(["_reserved", "a"]),
+        |value| value["vocabularies"]["category"]["values"] = json!(["_reserved", "a"]),
         "breg.statistical-dataset.dimension-code-reserved",
     );
 
@@ -931,7 +954,7 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
                     .push(json!({
                         "id":id,"type":"boolean","required":true,"classification":"internal"
                     }));
-                value["statisticalDatasets"][0]["dimensions"] = json!([id]);
+                value["statisticalDatasets"]["records-by-category"]["dimensions"] = json!([id]);
             },
             "breg.statistical-dataset.dimension-reserved",
         );
@@ -942,11 +965,11 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
         .collect::<Vec<_>>();
     assert_refused(
         |value| {
-            value["vocabularies"][0]["values"] = json!(codes);
+            value["vocabularies"]["category"]["values"] = json!(codes);
             value["vocabularies"]
-                .as_array_mut()
+                .as_object_mut()
                 .unwrap()
-                .push(json!({"id":"category-two","values":codes}));
+                .insert("category-two".to_owned(), json!({"values":codes}));
             value["recordTypes"]["record"]["fields"]
                 .as_array_mut()
                 .unwrap()
@@ -962,7 +985,8 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
                         .push(json!("category-two"));
                 }
             }
-            value["statisticalDatasets"][0]["dimensions"] = json!(["category", "category-two"]);
+            value["statisticalDatasets"]["records-by-category"]["dimensions"] =
+                json!(["category", "category-two"]);
         },
         "breg.statistical-dataset.cells-exceeded",
     );
@@ -974,9 +998,9 @@ fn with_single_code_dimensions(value: &mut Value, count: usize) {
     for index in 0..count {
         let id = format!("dimension-{index:02}");
         value["vocabularies"]
-            .as_array_mut()
+            .as_object_mut()
             .unwrap()
-            .push(json!({"id":id,"values":["only"]}));
+            .insert(id.to_owned(), json!({"values":["only"]}));
         value["recordTypes"]["record"]["fields"]
             .as_array_mut()
             .unwrap()
@@ -994,7 +1018,7 @@ fn with_single_code_dimensions(value: &mut Value, count: usize) {
         }
         dimensions.push(id);
     }
-    value["statisticalDatasets"][0]["dimensions"] = json!(dimensions);
+    value["statisticalDatasets"]["records-by-category"]["dimensions"] = json!(dimensions);
 }
 
 #[test]
@@ -1028,7 +1052,8 @@ fn statistical_dimension_reserved_names_follow_emitted_logical_field_ids() {
             }
         }
     }
-    value["statisticalDatasets"][0]["dimensions"] = json!(["period-start", "period-end"]);
+    value["statisticalDatasets"]["records-by-category"]["dimensions"] =
+        json!(["period-start", "period-end"]);
     let compiled = compile(&value).expect("logical dimension ids do not collide with CSV names");
     assert_eq!(
         compiled.statistical_datasets()["records-by-category"]
@@ -1048,7 +1073,7 @@ fn statistical_dimension_reserved_names_follow_emitted_logical_field_ids() {
                     "id":"period","apiName":"dimensionPeriod","type":"boolean",
                     "required":true,"classification":"internal"
                 }));
-            value["statisticalDatasets"][0]["dimensions"] = json!(["period"]);
+            value["statisticalDatasets"]["records-by-category"]["dimensions"] = json!(["period"]);
         },
         "breg.statistical-dataset.dimension-reserved",
     );
@@ -1063,9 +1088,9 @@ fn statistical_dataset_refuses_release_documents_over_the_eight_mibibyte_cap() {
                 let field = format!("dimension-{index:02}-{}", "x".repeat(51));
                 let code = format!("code-{index:02}-{}", "x".repeat(120));
                 value["vocabularies"]
-                    .as_array_mut()
+                    .as_object_mut()
                     .unwrap()
-                    .push(json!({"id":field,"values":[code]}));
+                    .insert(field.to_owned(), json!({"values":[code]}));
                 value["recordTypes"]["record"]["fields"]
                     .as_array_mut()
                     .unwrap()
@@ -1083,7 +1108,7 @@ fn statistical_dataset_refuses_release_documents_over_the_eight_mibibyte_cap() {
                 }
                 dimensions.push(field);
             }
-            value["statisticalDatasets"][0]["dimensions"] = json!(dimensions);
+            value["statisticalDatasets"]["records-by-category"]["dimensions"] = json!(dimensions);
         },
         "breg.statistical-dataset.document-exceeded",
     );
@@ -1091,7 +1116,7 @@ fn statistical_dataset_refuses_release_documents_over_the_eight_mibibyte_cap() {
 
 #[test]
 fn statistical_period_unions_refuse_at_the_member_inside_the_form() {
-    let period = "project.statisticalDatasets[0].period";
+    let period = "project.statisticalDatasets.records-by-category.period";
     let stock = |validity: Value| json!({"type":"stock","granularity":"month","firstPeriod":"2025-01","validity":validity});
     for (written, code, path) in [
         (
@@ -1126,7 +1151,7 @@ fn statistical_period_unions_refuse_at_the_member_inside_the_form() {
         ),
     ] {
         let mut value = source();
-        value["statisticalDatasets"][0]["period"] = written;
+        value["statisticalDatasets"]["records-by-category"]["period"] = written;
         let failure = parse_project_yaml(&serde_json::to_vec(&value).expect("fixture serializes"))
             .expect_err("a malformed period is refused when the project is read");
         let refused = failure
@@ -1141,7 +1166,7 @@ fn statistical_period_unions_refuse_at_the_member_inside_the_form() {
 #[test]
 fn a_period_tagged_by_kind_is_refused_with_its_replacement_named() {
     let mut value = source();
-    value["statisticalDatasets"][0]["period"] =
+    value["statisticalDatasets"]["records-by-category"]["period"] =
         json!({"kind":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"});
     let failure = parse_project_yaml(&serde_json::to_vec(&value).expect("fixture serializes"))
         .expect_err("a period tagged by kind is refused when the project is read");
@@ -1154,7 +1179,7 @@ fn a_period_tagged_by_kind_is_refused_with_its_replacement_named() {
         refused,
         vec![(
             "config.removed-key",
-            "project.statisticalDatasets[0].period.kind"
+            "project.statisticalDatasets.records-by-category.period.kind"
         ),],
         "{failure:?}"
     );
@@ -1170,7 +1195,8 @@ fn a_dataset_id_outside_the_local_identifier_grammar_is_refused_when_read() {
     let long = "u".repeat(65);
     for written in ["Units", "1-units", "units.by.category", long.as_str()] {
         let mut value = source();
-        value["statisticalDatasets"][0]["id"] = json!(written);
+        let entry = value["statisticalDatasets"]["records-by-category"].take();
+        value["statisticalDatasets"] = json!({ (written): entry });
         let failure = parse_project_yaml(&serde_json::to_vec(&value).expect("fixture serializes"))
             .expect_err("an id outside the grammar is refused when the project is read");
         let refused = failure
@@ -1178,9 +1204,10 @@ fn a_dataset_id_outside_the_local_identifier_grammar_is_refused_when_read() {
             .iter()
             .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
             .collect::<Vec<_>>();
+        let expected_path = format!("project.statisticalDatasets.{written}");
         assert_eq!(
             refused,
-            vec![("config.invalid-value", "project.statisticalDatasets[0].id")],
+            vec![("config.invalid-value", expected_path.as_str())],
             "{failure:?}"
         );
         assert!(
@@ -1200,7 +1227,7 @@ fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
         json!({"from":"valid-from","until":"valid-to"}),
     ] {
         let mut value = source();
-        value["statisticalDatasets"][0]["period"] = json!({
+        value["statisticalDatasets"]["records-by-category"]["period"] = json!({
             "type":"stock","granularity":"month","firstPeriod":"2025-01","validity":validity
         });
         compile(&value).expect("stock validity compiles");
@@ -1210,7 +1237,10 @@ fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
         "breg.statistical-dataset.period-field-type",
     );
     assert_refused(
-        |value| value["statisticalDatasets"][0]["period"]["firstPeriod"] = json!("2025-13"),
+        |value| {
+            value["statisticalDatasets"]["records-by-category"]["period"]["firstPeriod"] =
+                json!("2025-13")
+        },
         "breg.statistical-dataset.period-first-period",
     );
     for (granularity, invalid_periods) in [
@@ -1225,8 +1255,10 @@ fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
         for invalid in invalid_periods {
             assert_refused(
                 |value| {
-                    value["statisticalDatasets"][0]["period"]["granularity"] = json!(granularity);
-                    value["statisticalDatasets"][0]["period"]["firstPeriod"] = json!(invalid);
+                    value["statisticalDatasets"]["records-by-category"]["period"]["granularity"] =
+                        json!(granularity);
+                    value["statisticalDatasets"]["records-by-category"]["period"]["firstPeriod"] =
+                        json!(invalid);
                 },
                 "breg.statistical-dataset.period-first-period",
             );
@@ -1239,13 +1271,15 @@ fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
         ("year", "9998"),
     ] {
         let mut value = source();
-        value["statisticalDatasets"][0]["period"]["granularity"] = json!(granularity);
-        value["statisticalDatasets"][0]["period"]["firstPeriod"] = json!(first_period);
+        value["statisticalDatasets"]["records-by-category"]["period"]["granularity"] =
+            json!(granularity);
+        value["statisticalDatasets"]["records-by-category"]["period"]["firstPeriod"] =
+            json!(first_period);
         compile(&value).expect("the latest period fitting the wire date domain compiles");
     }
     assert_refused(
         |value| {
-            value["statisticalDatasets"][0]["period"] = json!({
+            value["statisticalDatasets"]["records-by-category"]["period"] = json!({
                 "type":"stock","granularity":"month","firstPeriod":"2025-01","validity":"temporal"
             });
             value["recordTypes"]["record"]
@@ -1271,7 +1305,8 @@ fn definition_digest_excludes_grants_and_first_period_but_covers_values() {
     );
     grant(&mut grant_change, READER, &[]);
     grant(&mut grant_change, OTHER_READER, &["read-releases"]);
-    grant_change["statisticalDatasets"][0]["period"]["firstPeriod"] = json!("2024-01");
+    grant_change["statisticalDatasets"]["records-by-category"]["period"]["firstPeriod"] =
+        json!("2024-01");
     let compiled = compile(&grant_change).expect("grant-only changes compile");
     assert_eq!(
         baseline_digest,
@@ -1279,7 +1314,8 @@ fn definition_digest_excludes_grants_and_first_period_but_covers_values() {
     );
 
     let mut population_change = source();
-    population_change["statisticalDatasets"][0]["population"] = json!("active ne false");
+    population_change["statisticalDatasets"]["records-by-category"]["population"] =
+        json!("active ne false");
     let compiled = compile(&population_change).expect("population change compiles");
     assert_ne!(
         baseline_digest,
@@ -1332,7 +1368,8 @@ fn definition_digest_binds_referenced_stored_field_definitions() {
                 .extend([json!("score"), json!("unused-score")]);
         }
     }
-    baseline_source["statisticalDatasets"][0]["population"] = json!("score eq 1");
+    baseline_source["statisticalDatasets"]["records-by-category"]["population"] =
+        json!("score eq 1");
     let baseline = compile(&baseline_source).expect("integer population compiles");
     let baseline_digest = &baseline.statistical_datasets()["records-by-category"].definition_digest;
 
@@ -1402,7 +1439,8 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
                 .extend([json!("score"), json!("amount"), json!("unused-amount")]);
         }
     }
-    baseline_source["statisticalDatasets"][0]["population"] = json!("score eq 1");
+    baseline_source["statisticalDatasets"]["records-by-category"]["population"] =
+        json!("score eq 1");
     let sql = "SELECT r.id AS id, CASE WHEN r.amount > 1 THEN 2 ELSE 0 END AS score FROM registry_source.record r";
     let baseline =
         compile_with_sql(&baseline_source, sql).expect("derived integer population compiles");
@@ -1470,7 +1508,7 @@ fn population_uses_api_field_names_and_refuses_invalid_typed_predicates() {
                 .push(json!("long-name"));
         }
     }
-    value["statisticalDatasets"][0]["population"] = json!("longName eq true");
+    value["statisticalDatasets"]["records-by-category"]["population"] = json!("longName eq true");
     let compiled = compile(&value).expect("camel-case API field compiles");
     assert!(compiled.statistical_datasets()["records-by-category"]
         .referenced_fields
@@ -1478,7 +1516,10 @@ fn population_uses_api_field_names_and_refuses_invalid_typed_predicates() {
 
     for population in ["active lt true", "active eq 1", "category eq 'missing'"] {
         assert_refused(
-            |value| value["statisticalDatasets"][0]["population"] = json!(population),
+            |value| {
+                value["statisticalDatasets"]["records-by-category"]["population"] =
+                    json!(population)
+            },
             "breg.statistical-dataset.population-invalid",
         );
     }
@@ -1487,14 +1528,18 @@ fn population_uses_api_field_names_and_refuses_invalid_typed_predicates() {
 #[test]
 fn population_in_list_refuses_values_the_runtime_would_read_as_duplicates() {
     let mut distinct = source();
-    distinct["statisticalDatasets"][0]["population"] = json!("category in ('a','b')");
+    distinct["statisticalDatasets"]["records-by-category"]["population"] =
+        json!("category in ('a','b')");
     compile(&distinct).expect("a list of distinct values compiles");
 
     // The runtime compares the text of each value, so a boolean and its
     // quoted spelling are one value.
     for population in ["category in ('a','a')", "active in (true,'true')"] {
         assert_refused(
-            |value| value["statisticalDatasets"][0]["population"] = json!(population),
+            |value| {
+                value["statisticalDatasets"]["records-by-category"]["population"] =
+                    json!(population)
+            },
             "breg.statistical-dataset.population-invalid",
         );
     }
@@ -1503,8 +1548,9 @@ fn population_in_list_refuses_values_the_runtime_would_read_as_duplicates() {
 #[test]
 fn population_text_functions_use_partial_query_terms_with_runtime_bounds() {
     let mut vocabulary = source();
-    vocabulary["vocabularies"][0]["values"] = json!(["alpha", "beta"]);
-    vocabulary["statisticalDatasets"][0]["population"] = json!("startswith(category,'al')");
+    vocabulary["vocabularies"]["category"]["values"] = json!(["alpha", "beta"]);
+    vocabulary["statisticalDatasets"]["records-by-category"]["population"] =
+        json!("startswith(category,'al')");
     compile(&vocabulary).expect("a partial vocabulary-code prefix compiles");
 
     let mut bounded_string = source();
@@ -1523,7 +1569,8 @@ fn population_text_functions_use_partial_query_terms_with_runtime_bounds() {
                 .push(json!("label"));
         }
     }
-    bounded_string["statisticalDatasets"][0]["population"] = json!("contains(label,'a')");
+    bounded_string["statisticalDatasets"]["records-by-category"]["population"] =
+        json!("contains(label,'a')");
     compile(&bounded_string).expect("a search term shorter than the stored minimumLength compiles");
 
     let oversized = "a".repeat(registry_breg::query::MAX_LITERAL_BYTES + 1);
@@ -1534,12 +1581,15 @@ fn population_text_functions_use_partial_query_terms_with_runtime_bounds() {
         format!("contains(category,'{oversized}')"),
     ] {
         assert_refused(
-            |value| value["statisticalDatasets"][0]["population"] = json!(population),
+            |value| {
+                value["statisticalDatasets"]["records-by-category"]["population"] =
+                    json!(population)
+            },
             "breg.statistical-dataset.population-invalid",
         );
     }
 
-    bounded_string["statisticalDatasets"][0]["population"] =
+    bounded_string["statisticalDatasets"]["records-by-category"]["population"] =
         json!("contains(label,'thirteenchars')");
     let failure = compile(&bounded_string).expect_err("a term beyond maximumLength is refused");
     assert!(failure
@@ -1792,7 +1842,7 @@ fn generated_openapi_omits_undeclared_statistical_route_families() {
 fn package_diff_classifies_statistical_dataset_add_change_and_removal() {
     let with_dataset = compile(&source()).expect("dataset compiles");
     let mut without = source();
-    without["statisticalDatasets"] = json!([]);
+    without["statisticalDatasets"] = json!({});
     for profile in [ANALYST, PUBLISHER, READER] {
         grant(&mut without, profile, &[]);
     }
@@ -1820,7 +1870,8 @@ fn package_diff_classifies_statistical_dataset_add_change_and_removal() {
     );
 
     let mut changed_source = source();
-    changed_source["statisticalDatasets"][0]["population"] = json!("active ne false");
+    changed_source["statisticalDatasets"]["records-by-category"]["population"] =
+        json!("active ne false");
     let changed_registry = compile(&changed_source).expect("changed dataset compiles");
     let changed = compiled_registry_change_set(&with_dataset, &changed_registry, "sha256:before");
     let changed = changed
@@ -1839,7 +1890,7 @@ fn package_diff_classifies_statistical_dataset_add_change_and_removal() {
 fn tooling_classifies_statistical_grant_direction_and_definition_review() {
     let baseline = compile(&source()).expect("baseline compiles");
     let mut presented_source = source();
-    presented_source["statisticalDatasets"][0]["display"] =
+    presented_source["statisticalDatasets"]["records-by-category"]["display"] =
         json!({"label":"Records grouped by category","description":"Presentation only"});
     let presented = compile(&presented_source).expect("presented dataset compiles");
     assert_eq!(
@@ -1859,7 +1910,8 @@ fn tooling_classifies_statistical_grant_direction_and_definition_review() {
     );
 
     let mut widened_source = source();
-    widened_source["statisticalDatasets"][0]["display"] = json!({"label":"Updated presentation"});
+    widened_source["statisticalDatasets"]["records-by-category"]["display"] =
+        json!({"label":"Updated presentation"});
     widened_source["accessProfiles"][OTHER_READER]["display"] =
         json!({"label":"Additional reader"});
     grant(&mut widened_source, OTHER_READER, &["read-releases"]);
@@ -1877,7 +1929,8 @@ fn tooling_classifies_statistical_grant_direction_and_definition_review() {
     }));
 
     let mut definition_source = source();
-    definition_source["statisticalDatasets"][0]["population"] = json!("active ne false");
+    definition_source["statisticalDatasets"]["records-by-category"]["population"] =
+        json!("active ne false");
     let changed = compile(&definition_source).expect("definition change compiles");
     let diff = classify_registry_diff(&baseline, &changed, "sha256:before");
     assert!(diff.changes.iter().any(|change| {
@@ -1932,7 +1985,8 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
             "recordType":"lookup","operations":["list"],"readableFields":["flag"],
             "filterableFields":["flag"],"allowCount":true,"rowBoundaries":"unrestricted"
         }));
-    value["statisticalDatasets"][0]["dimensions"] = json!(["evaluated-category"]);
+    value["statisticalDatasets"]["records-by-category"]["dimensions"] =
+        json!(["evaluated-category"]);
     let sql = "SELECT r.id AS id, CASE WHEN l.flag AND r.event_date <= registry_context.evaluation_date() THEN 'a' ELSE 'b' END AS evaluated_category FROM registry_source.record r JOIN registry_source.lookup l ON l.id = r.id";
     let compiled = compile_with_sql(&value, sql).expect("derived statistical dimension compiles");
     let dataset = &compiled.statistical_datasets()["records-by-category"];
@@ -2100,7 +2154,8 @@ fn omitted_measures_compile_to_one_count_measure_named_count() {
 #[test]
 fn declared_measures_compile_in_declared_order_with_their_ids() {
     let mut value = source();
-    value["statisticalDatasets"][0]["measures"] = json!([{"id":"parcels","type":"count"}]);
+    value["statisticalDatasets"]["records-by-category"]["measures"] =
+        json!([{"id":"parcels","type":"count"}]);
     let compiled = compile(&value).expect("a declared count measure compiles");
     assert_eq!(
         measures_of(&compiled),
@@ -2116,12 +2171,12 @@ fn declared_measures_compile_in_declared_order_with_their_ids() {
 #[test]
 fn measure_declarations_are_refused_with_stable_codes() {
     assert_refused(
-        |v| v["statisticalDatasets"][0]["measures"] = json!([]),
+        |v| v["statisticalDatasets"]["records-by-category"]["measures"] = json!([]),
         "breg.statistical-dataset.measures-empty",
     );
     assert_refused(
         |v| {
-            v["statisticalDatasets"][0]["measures"] = json!([
+            v["statisticalDatasets"]["records-by-category"]["measures"] = json!([
                 {"id":"parcels","type":"count"},
                 {"id":"parcels","type":"count"}
             ])
@@ -2130,7 +2185,7 @@ fn measure_declarations_are_refused_with_stable_codes() {
     );
     assert_refused(
         |v| {
-            v["statisticalDatasets"][0]["measures"] = json!([
+            v["statisticalDatasets"]["records-by-category"]["measures"] = json!([
                 {"id":"parcels","type":"count"},
                 {"id":"holdings","type":"count"}
             ])
@@ -2149,7 +2204,7 @@ fn a_measure_with_an_unknown_type_or_member_or_a_bad_id_does_not_read() {
         json!([{"type":"count"}]),
     ] {
         let mut value = source();
-        value["statisticalDatasets"][0]["measures"] = measures.clone();
+        value["statisticalDatasets"]["records-by-category"]["measures"] = measures.clone();
         let bytes = serde_json::to_vec(&value).unwrap();
         assert!(
             parse_project_json(&bytes).is_err(),
@@ -2167,7 +2222,8 @@ fn definition_digest_covers_the_measures_including_the_defaulted_one() {
     };
     let omitted = digest(&source());
     let mut spelled = source();
-    spelled["statisticalDatasets"][0]["measures"] = json!([{"id":"count","type":"count"}]);
+    spelled["statisticalDatasets"]["records-by-category"]["measures"] =
+        json!([{"id":"count","type":"count"}]);
     assert_eq!(
         omitted,
         digest(&spelled),
@@ -2175,7 +2231,8 @@ fn definition_digest_covers_the_measures_including_the_defaulted_one() {
     );
 
     let mut renamed = source();
-    renamed["statisticalDatasets"][0]["measures"] = json!([{"id":"parcels","type":"count"}]);
+    renamed["statisticalDatasets"]["records-by-category"]["measures"] =
+        json!([{"id":"parcels","type":"count"}]);
     assert_ne!(omitted, digest(&renamed));
 }
 
@@ -2197,7 +2254,7 @@ fn live_measure_source(measures: Value) -> Value {
     grant(&mut value, ANALYST, &["read-live"]);
     grant(&mut value, PUBLISHER, &[]);
     grant(&mut value, READER, &[]);
-    value["statisticalDatasets"][0]["measures"] = measures;
+    value["statisticalDatasets"]["records-by-category"]["measures"] = measures;
     value
 }
 
@@ -2451,8 +2508,9 @@ fn public_register_source(measures: Value) -> Value {
             .unwrap()
             .extend([json!("amount"), json!("quantity")]);
     }
-    value["statisticalDatasets"][0]["measures"] = measures;
-    value["statisticalDatasets"][0]["disclosure"] = json!({"type":"exact-public-values"});
+    value["statisticalDatasets"]["records-by-category"]["measures"] = measures;
+    value["statisticalDatasets"]["records-by-category"]["disclosure"] =
+        json!({"type":"exact-public-values"});
     value
 }
 
@@ -2556,7 +2614,8 @@ fn exact_values_over_an_internal_register_name_every_item_to_reclassify() {
         {"id":"facilities","type":"count"},
         {"id":"total-amount","type":"sum","field":"amount"}
     ]));
-    value["statisticalDatasets"][0]["disclosure"] = json!({"type":"exact-public-values"});
+    value["statisticalDatasets"]["records-by-category"]["disclosure"] =
+        json!({"type":"exact-public-values"});
     let failure = compile(&value).expect_err("an internal register is refused");
     let named = exact_not_public(&failure)
         .iter()
@@ -2611,7 +2670,8 @@ fn a_derived_dimension_over_a_non_public_source_entity_is_refused() {
             "recordType":"lookup","operations":["list"],"readableFields":["flag"],
             "filterableFields":["flag"],"allowCount":true,"rowBoundaries":"unrestricted"
         }));
-    value["statisticalDatasets"][0]["dimensions"] = json!(["evaluated-category"]);
+    value["statisticalDatasets"]["records-by-category"]["dimensions"] =
+        json!(["evaluated-category"]);
     let sql = "SELECT r.id AS id, CASE WHEN l.flag THEN 'a' ELSE 'b' END AS evaluated_category FROM registry_source.record r JOIN registry_source.lookup l ON l.id = r.id";
     let failure = compile_with_sql(&value, sql).expect_err("an internal source entity is refused");
     let refusals = exact_not_public(&failure);
@@ -2653,7 +2713,7 @@ fn the_publisher_must_read_the_measure_fields_of_an_exact_release() {
 #[test]
 fn minimum_count_and_rounding_still_refuses_a_released_sum_and_names_the_exact_alternative() {
     let mut value = public_register_source(public_register_measures());
-    value["statisticalDatasets"][0]["disclosure"] =
+    value["statisticalDatasets"]["records-by-category"]["disclosure"] =
         json!({"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5});
     let failure = compile(&value).expect_err("a sum cannot be released with rounding");
     let refusal = failure
@@ -2677,12 +2737,11 @@ fn a_disclosure_block_without_a_type_is_refused_when_the_project_is_read() {
         json!({"type":"public"}),
     ] {
         let mut value = source();
-        value["statisticalDatasets"][0]["disclosure"] = disclosure.clone();
+        value["statisticalDatasets"]["records-by-category"]["disclosure"] = disclosure.clone();
         let refusals = read_refusals(&value);
         assert!(
-            refusals
-                .iter()
-                .any(|(_, path, _)| path.starts_with("project.statisticalDatasets[0].disclosure")),
+            refusals.iter().any(|(_, path, _)| path
+                .starts_with("project.statisticalDatasets.records-by-category.disclosure")),
             "{disclosure}: {refusals:?}"
         );
     }
@@ -2692,7 +2751,7 @@ fn a_disclosure_block_without_a_type_is_refused_when_the_project_is_read() {
 fn the_definition_digest_differs_between_disclosure_methods() {
     let digest = |disclosure: Value| {
         let mut value = public_register_source(json!([{"id":"count","type":"count"}]));
-        value["statisticalDatasets"][0]["disclosure"] = disclosure;
+        value["statisticalDatasets"]["records-by-category"]["disclosure"] = disclosure;
         compile(&value).expect("compiles").statistical_datasets()["records-by-category"]
             .definition_digest
             .clone()
@@ -2725,7 +2784,8 @@ fn exact_source() -> Value {
         "principalClaim":"principal","requiredScopes":"unrestricted",
         "permissions":{"datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]}
     });
-    value["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"analyst"});
+    value["statisticalDatasets"]["records-by-category"]["exactReads"] =
+        json!({"accessProfile":"analyst"});
     value
 }
 
@@ -2770,7 +2830,7 @@ fn exact_reads_stay_out_of_the_definition_digest() {
     let mut without = exact_source();
     grant(&mut without, STATISTICIAN, &[]);
     grant(&mut without, ANALYST, &["read-live"]);
-    without["statisticalDatasets"][0]
+    without["statisticalDatasets"]["records-by-category"]
         .as_object_mut()
         .unwrap()
         .remove("exactReads");
@@ -2785,7 +2845,7 @@ fn exact_reads_stay_out_of_the_definition_digest() {
 fn exact_reads_are_refused_when_missing_unused_or_unknown() {
     assert_exact_refused(
         |v| {
-            v["statisticalDatasets"][0]
+            v["statisticalDatasets"]["records-by-category"]
                 .as_object_mut()
                 .unwrap()
                 .remove("exactReads");
@@ -2799,7 +2859,10 @@ fn exact_reads_are_refused_when_missing_unused_or_unknown() {
         &format!("{ROOT}.exactReads"),
     );
     assert_exact_refused(
-        |v| v["statisticalDatasets"][0]["exactReads"]["accessProfile"] = json!("nobody"),
+        |v| {
+            v["statisticalDatasets"]["records-by-category"]["exactReads"]["accessProfile"] =
+                json!("nobody")
+        },
         &format!("{EXACT}-profile-unknown"),
         &format!("{ROOT}.exactReads.accessProfile"),
     );
@@ -2855,7 +2918,7 @@ fn measure_ids_that_differ_only_by_a_separator_are_refused() {
     assert!(
         refusals.iter().any(|(code, path, message)| {
             code == "breg.statistical-dataset.measure-id-collision"
-                && path == "project.statisticalDatasets[0].measures[1].id"
+                && path == "project.statisticalDatasets.records-by-category.measures[1].id"
                 && message.contains("`mean-amount`")
                 && message.contains("`mean_amount`")
         }),
@@ -2944,7 +3007,8 @@ fn exact_reads_resolve_a_profile_a_module_contributes_to_the_unit() {
         .as_object_mut()
         .unwrap()
         .remove("stats");
-    project["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"stats"});
+    project["statisticalDatasets"]["records-by-category"]["exactReads"] =
+        json!({"accessProfile":"stats"});
     let compiled = compile_with_module(&project, &module)
         .expect("a unit profile a module contributes anchors exactReads");
     assert_eq!(
@@ -2960,7 +3024,8 @@ fn exact_reads_resolve_a_profile_a_module_contributes_to_the_unit() {
 #[test]
 fn an_agent_unit_profile_cannot_anchor_exact_reads() {
     let (mut project, module) = exact_source_with_unit_profile(standing_agent_unit_profile());
-    project["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"stats"});
+    project["statisticalDatasets"]["records-by-category"]["exactReads"] =
+        json!({"accessProfile":"stats"});
     let failure =
         compile_with_module(&project, &module).expect_err("an agent unit profile is refused");
     assert!(
@@ -3116,7 +3181,7 @@ fn two_distinct_counts_over_one_field_are_refused_and_over_two_fields_are_not() 
         .as_array_mut()
         .unwrap()
         .push(json!("agent"));
-    value["statisticalDatasets"][0]["measures"] = json!([
+    value["statisticalDatasets"]["records-by-category"]["measures"] = json!([
         {"id":"owners","type":"distinct-count","field":"owner"},
         {"id":"agents","type":"distinct-count","field":"agent"}
     ]);
@@ -3144,7 +3209,7 @@ fn a_distinct_count_limits_the_dataset_to_four_dimensions() {
                 .unwrap();
             granted.extend(names.iter().skip(1).cloned());
         }
-        value["statisticalDatasets"][0]["dimensions"] = json!(names);
+        value["statisticalDatasets"]["records-by-category"]["dimensions"] = json!(names);
         value
     };
     compile(&with_dimensions(distinct_measures(), 4)).expect("four dimensions are accepted");
@@ -3190,7 +3255,8 @@ fn every_live_reader_publisher_and_exact_profile_must_read_a_distinct_count_fiel
         field["classification"] = json!("public");
     }
     grant(&mut published, PUBLISHER, &["publish", "read-releases"]);
-    published["statisticalDatasets"][0]["disclosure"] = json!({"type":"exact-public-values"});
+    published["statisticalDatasets"]["records-by-category"]["disclosure"] =
+        json!({"type":"exact-public-values"});
     published["accessProfiles"][PUBLISHER]["permissions"]["records"][0]["readableFields"] =
         unreadable.clone();
     let failure = compile(&published).expect_err("the publisher cannot read the field");
@@ -3206,7 +3272,8 @@ fn every_live_reader_publisher_and_exact_profile_must_read_a_distinct_count_fiel
         "principalClaim":"principal","requiredScopes":"unrestricted",
         "permissions":{"datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]}
     });
-    exact["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"analyst"});
+    exact["statisticalDatasets"]["records-by-category"]["exactReads"] =
+        json!({"accessProfile":"analyst"});
     compile(&exact).expect("the exactReads profile reads the field");
     exact["accessProfiles"][ANALYST]["permissions"]["records"][0]["readableFields"] = unreadable;
     assert_distinct_refused(
@@ -3227,7 +3294,7 @@ fn a_distinct_count_is_released_with_rounding_but_a_sum_beside_it_is_not() {
         .push(json!("owner"));
     compile(&value).expect("a count and a distinct count release with rounding");
 
-    value["statisticalDatasets"][0]["measures"] = json!([
+    value["statisticalDatasets"]["records-by-category"]["measures"] = json!([
         {"id":"parcels","type":"count"},
         {"id":"owners","type":"distinct-count","field":"owner"},
         {"id":"total","type":"sum","field":"amount"}
@@ -3522,7 +3589,7 @@ fn a_percentile_limits_the_dataset_to_four_dimensions_and_a_ratio_does_not() {
                 .unwrap();
             granted.extend(names.iter().skip(1).cloned());
         }
-        value["statisticalDatasets"][0]["dimensions"] = json!(names);
+        value["statisticalDatasets"]["records-by-category"]["dimensions"] = json!(names);
         value
     };
     let median = json!([
@@ -3687,7 +3754,7 @@ fn sum_release_source() -> Value {
         .extend([json!("owner"), json!("amount"), json!("quantity")]);
     grant(&mut value, ANALYST, &["read-live", "read-releases"]);
     grant(&mut value, PUBLISHER, &["publish", "read-releases"]);
-    value["statisticalDatasets"][0]["disclosure"] = json!({
+    value["statisticalDatasets"]["records-by-category"]["disclosure"] = json!({
         "type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5,
         "contributor":{"type":"field","field":"owner"},"dominancePercent":15
     });
@@ -3731,14 +3798,15 @@ fn a_sum_release_that_meets_every_rule_is_refused_only_by_the_hold() {
     assert!(all[0].message.contains("exact-public-values"));
     // each-record is accepted too
     let mut each = sum_release_source();
-    each["statisticalDatasets"][0]["disclosure"]["contributor"] = json!({"type":"each-record"});
+    each["statisticalDatasets"]["records-by-category"]["disclosure"]["contributor"] =
+        json!({"type":"each-record"});
     assert_eq!(codes_of(&each), vec![HELD.to_owned()]);
 }
 
 #[test]
 fn every_release_grant_on_a_dataset_with_a_sum_is_held_even_without_a_publisher() {
     let mut read_releases = sum_release_source();
-    read_releases["statisticalDatasets"][0]["disclosure"] =
+    read_releases["statisticalDatasets"]["records-by-category"]["disclosure"] =
         json!({"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5});
     grant(&mut read_releases, PUBLISHER, &[]);
     grant(&mut read_releases, ANALYST, &["read-live", "read-releases"]);
@@ -3753,7 +3821,7 @@ fn every_release_grant_on_a_dataset_with_a_sum_is_held_even_without_a_publisher(
 
     // read-live alone keeps compiling
     let mut live = sum_release_source();
-    live["statisticalDatasets"][0]["disclosure"] =
+    live["statisticalDatasets"]["records-by-category"]["disclosure"] =
         json!({"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5});
     grant(&mut live, PUBLISHER, &[]);
     grant(&mut live, ANALYST, &["read-live"]);
@@ -3763,9 +3831,9 @@ fn every_release_grant_on_a_dataset_with_a_sum_is_held_even_without_a_publisher(
 #[test]
 fn the_hold_is_the_last_diagnostic_of_a_dataset() {
     let mut value = sum_release_source();
-    value["statisticalDatasets"][0]["disclosure"] =
+    value["statisticalDatasets"]["records-by-category"]["disclosure"] =
         json!({"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5});
-    value["statisticalDatasets"][0]["period"]["granularity"] = json!("day");
+    value["statisticalDatasets"]["records-by-category"]["period"]["granularity"] = json!("day");
     let codes = codes_of(&value);
     assert_eq!(codes.last().unwrap(), HELD, "{codes:?}");
     assert!(codes.contains(&code("sum-release-day-granularity")));
@@ -3778,7 +3846,7 @@ fn a_missing_contributor_or_dominance_is_refused_on_the_disclosure() {
         ("dominancePercent", "disclosure-dominance-missing"),
     ] {
         let mut value = sum_release_source();
-        value["statisticalDatasets"][0]["disclosure"]
+        value["statisticalDatasets"]["records-by-category"]["disclosure"]
             .as_object_mut()
             .unwrap()
             .remove(member);
@@ -3797,7 +3865,8 @@ fn a_missing_contributor_or_dominance_is_refused_on_the_disclosure() {
 fn a_contributor_or_dominance_without_a_sum_or_a_publisher_is_refused() {
     let counts = || {
         let mut value = sum_release_source();
-        value["statisticalDatasets"][0]["measures"] = json!([{"id":"parcels","type":"count"}]);
+        value["statisticalDatasets"]["records-by-category"]["measures"] =
+            json!([{"id":"parcels","type":"count"}]);
         value
     };
     let unpublished = || {
@@ -3812,7 +3881,7 @@ fn a_contributor_or_dominance_without_a_sum_or_a_publisher_is_refused() {
     ] {
         for build in [counts as fn() -> Value, unpublished as fn() -> Value] {
             let mut value = build();
-            let disclosure = value["statisticalDatasets"][0]["disclosure"]
+            let disclosure = value["statisticalDatasets"]["records-by-category"]["disclosure"]
                 .as_object_mut()
                 .unwrap();
             for other in ["contributor", "dominancePercent"] {
@@ -3829,7 +3898,7 @@ fn a_contributor_or_dominance_without_a_sum_or_a_publisher_is_refused() {
     // a count-only dataset with neither member compiles
     compile(&{
         let mut value = counts();
-        value["statisticalDatasets"][0]["disclosure"] =
+        value["statisticalDatasets"]["records-by-category"]["disclosure"] =
             json!({"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5});
         value
     })
@@ -3844,16 +3913,16 @@ fn the_contributor_field_must_exist_be_a_reference_and_be_readable_by_the_publis
         (
             "unknown",
             Box::new(|value| {
-                value["statisticalDatasets"][0]["disclosure"]["contributor"]["field"] =
-                    json!("missing");
+                value["statisticalDatasets"]["records-by-category"]["disclosure"]["contributor"]
+                    ["field"] = json!("missing");
             }),
             "does not exist",
         ),
         (
             "not a reference",
             Box::new(|value| {
-                value["statisticalDatasets"][0]["disclosure"]["contributor"]["field"] =
-                    json!("category");
+                value["statisticalDatasets"]["records-by-category"]["disclosure"]["contributor"]
+                    ["field"] = json!("category");
             }),
             "reference",
         ),
@@ -3934,7 +4003,7 @@ fn a_summed_decimal_field_must_declare_a_non_negative_minimum() {
         .ends_with("statisticalDatasets[id=records-by-category].measures[1]"));
     // the int64 sum declares no bounds and is not refused
     let mut int_only = amount_minimum(None);
-    int_only["statisticalDatasets"][0]["measures"] =
+    int_only["statisticalDatasets"]["records-by-category"]["measures"] =
         json!([{"id":"total-units","type":"sum","field":"quantity"}]);
     assert!(!codes_of(&int_only).contains(&code("sum-release-negative-values")));
 }
@@ -3942,16 +4011,18 @@ fn a_summed_decimal_field_must_declare_a_non_negative_minimum() {
 #[test]
 fn a_day_period_is_refused_for_a_sum_release() {
     let mut value = sum_release_source();
-    value["statisticalDatasets"][0]["period"]["granularity"] = json!("day");
-    value["statisticalDatasets"][0]["period"]["firstPeriod"] = json!("2025-01-01");
+    value["statisticalDatasets"]["records-by-category"]["period"]["granularity"] = json!("day");
+    value["statisticalDatasets"]["records-by-category"]["period"]["firstPeriod"] =
+        json!("2025-01-01");
     let refusal = diagnostic_for(&value, "sum-release-day-granularity");
     assert!(refusal
         .path
         .ends_with("statisticalDatasets[id=records-by-category].period"));
     // a count-only release keeps day periods
     let mut counts = source();
-    counts["statisticalDatasets"][0]["period"]["granularity"] = json!("day");
-    counts["statisticalDatasets"][0]["period"]["firstPeriod"] = json!("2025-01-01");
+    counts["statisticalDatasets"]["records-by-category"]["period"]["granularity"] = json!("day");
+    counts["statisticalDatasets"]["records-by-category"]["period"]["firstPeriod"] =
+        json!("2025-01-01");
     compile(&counts).expect("a count release over days compiles");
 }
 
@@ -3978,7 +4049,7 @@ fn a_released_sum_limits_the_dataset_to_four_dimensions_and_names_the_three_caus
                     .extend(names.iter().skip(1).cloned());
             }
         }
-        value["statisticalDatasets"][0]["dimensions"] = json!(names);
+        value["statisticalDatasets"]["records-by-category"]["dimensions"] = json!(names);
         value
     };
     assert!(!codes_of(&with_dimensions(4)).contains(&code("non-additive-dimensions")));
@@ -3996,13 +4067,12 @@ fn a_released_sum_limits_the_dataset_to_four_dimensions_and_names_the_three_caus
 /// field, edited by `mutate`, with the same grants.
 fn two_sum_releases(mutate: impl FnOnce(&mut Value)) -> Value {
     let mut value = sum_release_source();
-    let mut second = value["statisticalDatasets"][0].clone();
-    second["id"] = json!("records-second");
+    let mut second = value["statisticalDatasets"]["records-by-category"].clone();
     mutate(&mut second);
     value["statisticalDatasets"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(second);
+        .insert("records-second".to_owned(), second);
     for profile in [ANALYST, PUBLISHER] {
         let operations =
             value["accessProfiles"][profile]["permissions"]["datasets"][0]["operations"].clone();
@@ -4059,7 +4129,8 @@ fn a_summed_field_released_by_two_datasets_over_one_unit_is_refused_at_the_secon
     // the reverse
     let mut reverse = two_sum_releases(|_| {});
     flag(&mut reverse);
-    reverse["statisticalDatasets"][0]["dimensions"] = json!(["category", "flag"]);
+    reverse["statisticalDatasets"]["records-by-category"]["dimensions"] =
+        json!(["category", "flag"]);
     assert_eq!(released_twice_refusals(&reverse).len(), 1);
     // disjoint dimensions still share the grand total
     let mut disjoint = two_sum_releases(|second| second["dimensions"] = json!(["flag"]));
@@ -4078,10 +4149,9 @@ fn a_summed_field_released_by_two_datasets_over_one_unit_is_refused_at_the_secon
     // a different summed field
     let different_field = two_sum_releases(|second| {
         second["measures"] = json!([{"id":"total-amount","type":"sum","field":"amount"}]);
-        second["id"] = json!("records-second");
     });
     let mut only_amount = different_field;
-    only_amount["statisticalDatasets"][0]["measures"] =
+    only_amount["statisticalDatasets"]["records-by-category"]["measures"] =
         json!([{"id":"total-units","type":"sum","field":"quantity"}]);
     assert!(released_twice_refusals(&only_amount).is_empty());
 }
@@ -4111,12 +4181,12 @@ fn means_ratios_and_percentiles_are_still_refused_for_release_and_name_what_is_c
         json!({"id":"m","type":"percentile","field":"amount","percentile":50,"scale":2}),
     ] {
         let mut value = sum_release_source();
-        value["statisticalDatasets"][0]["measures"] = json!([
+        value["statisticalDatasets"]["records-by-category"]["measures"] = json!([
             {"id":"parcels","type":"count"},
             {"id":"owners","type":"distinct-count","field":"owner"},
             measure
         ]);
-        value["statisticalDatasets"][0]["disclosure"] =
+        value["statisticalDatasets"]["records-by-category"]["disclosure"] =
             json!({"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5});
         let refusal = diagnostic_for(&value, "measure-release-unsupported");
         assert!(
@@ -4133,7 +4203,8 @@ fn means_ratios_and_percentiles_are_still_refused_for_release_and_name_what_is_c
 fn a_dominance_percent_outside_one_to_one_hundred_is_refused_when_the_project_is_read() {
     for percent in [0, 101] {
         let mut value = sum_release_source();
-        value["statisticalDatasets"][0]["disclosure"]["dominancePercent"] = json!(percent);
+        value["statisticalDatasets"]["records-by-category"]["disclosure"]["dominancePercent"] =
+            json!(percent);
         let refusals = read_refusals(&value);
         assert!(
             refusals.iter().any(|(_, path, message)| {
@@ -4144,7 +4215,8 @@ fn a_dominance_percent_outside_one_to_one_hundred_is_refused_when_the_project_is
     }
     let mut value = sum_release_source();
     for percent in [1, 100] {
-        value["statisticalDatasets"][0]["disclosure"]["dominancePercent"] = json!(percent);
+        value["statisticalDatasets"]["records-by-category"]["disclosure"]["dominancePercent"] =
+            json!(percent);
         assert_eq!(codes_of(&value), vec![HELD.to_owned()]);
     }
 }

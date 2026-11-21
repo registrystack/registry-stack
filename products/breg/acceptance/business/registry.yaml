@@ -535,35 +535,30 @@
       }
     }
   },
-  "vocabularies": [
-    {
-      "id": "entity-status",
+  "vocabularies": {
+    "entity-status": {
       "values": [
         "active",
         "dissolved",
         "suspended"
       ]
     },
-    {
-      "id": "filing-type",
+    "filing-type": {
       "values": [
         "incorporation",
         "annual-return",
         "correction"
       ]
     },
-    {
-      "id": "officer-role",
+    "officer-role": {
       "values": [
         "director",
         "secretary",
         "partner"
       ]
     }
-  ],
-  "datasets": [
-    {
-      "id": "business"
-    }
-  ]
+  },
+  "datasets": {
+    "business": {}
+  }
 }

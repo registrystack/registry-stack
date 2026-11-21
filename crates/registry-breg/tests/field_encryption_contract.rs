@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 /// A minimal project whose `case` entity carries one encrypted restricted
 /// field with a unique normalized blind-index lookup.
 fn encrypted_project() -> Value {
-    json!({"datasets":[{"id": "test-dataset"}],
+    json!({"datasets":{"test-dataset": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"field-encryption","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://encryption.example.test"},
         "recordTypes":{"case": {"primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable",

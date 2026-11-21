@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 pub fn source(hooks: Value) -> Value {
     json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"proposal-observers","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "datasets":[{"id":"directory"}],
+        "datasets":{"directory": {}},
         "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable",
             "mutationPolicy":{"patch":"proposal-required"},"fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"restricted"}]}},
         "actions":{"correct-name": {"execution":{"mode":"proposal","proposal":{

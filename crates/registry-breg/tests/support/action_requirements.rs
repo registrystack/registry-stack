@@ -6,8 +6,8 @@ pub fn project() -> Value {
     json!({
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1", "kind": "BRegProject",
         "project": {"id": "action-requirements", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
-        "datasets": [{"id":"test-dataset"}],
-        "vocabularies": [{"id":"status","values":["active","inactive"]}],
+        "datasets": {"test-dataset": {}},
+        "vocabularies": {"status": {"values":["active","inactive"]}},
         "recordTypes": {
             "parent": { "primaryDataset": "test-dataset", "route": "parents", "mutationMode": "mutable",
              "accessRequirements": {"requiredScopes": ["registry:parent:process"]},

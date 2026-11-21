@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use time::macros::date;
 
 fn project() -> Value {
-    json!({"datasets":[{"id": "test-dataset"}],"functions":{"register-person-plan": {"runtime":"rhai","source":"handlers/register.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}},
+    json!({"datasets":{"test-dataset": {}},"functions":{"register-person-plan": {"runtime":"rhai","source":"handlers/register.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"action-handler-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "recordTypes":{"person": {"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","fields":[

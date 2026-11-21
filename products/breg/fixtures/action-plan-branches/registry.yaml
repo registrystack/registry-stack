@@ -6,7 +6,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://action-plans.example.test
   timezone: UTC
-datasets: [{id: entries}]
+datasets: {entries: {}}
 recordTypes:
   entry:
     primaryDataset: entries

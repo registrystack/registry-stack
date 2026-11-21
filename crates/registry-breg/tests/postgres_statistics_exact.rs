@@ -57,7 +57,7 @@ fn registry_source(dimension: &str) -> Value {
         "quantity",
         "evaluated-category"
     ]);
-    json!({"datasets":[{"id": "statistics-exact"}],
+    json!({"datasets":{"statistics-exact": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":PACKAGE_ID,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test","timezone":"UTC"},
@@ -97,9 +97,8 @@ fn registry_source(dimension: &str) -> Value {
                 "rowBoundaries":"unrestricted"
             }]}}
         },
-        "vocabularies":[{"id":"category","values":["a","b","c"]}],
-        "statisticalDatasets":[{
-            "id":"records-by-category","unit":"record","population":"active eq true",
+        "vocabularies":{"category": {"values":["a","b","c"]}},
+        "statisticalDatasets":{"records-by-category": {"unit":"record","population":"active eq true",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":[dimension],
             "measures":[
@@ -109,7 +108,7 @@ fn registry_source(dimension: &str) -> Value {
             ],
             "exactReads":{"accessProfile":"analyst"},
             "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}
-        }]
+        }}
     })
 }
 

@@ -487,7 +487,7 @@ fn exact_selection_accepts_profiles_from_modules_and_extensions() {
             "kind": "BRegProject",
             "project": {"id":"module-profile", "version":"1", "defaultLanguage":"en",
                         "canonicalBaseIri":"https://authoring.example.test"},
-            "datasets": [{"id":"records"}],
+            "datasets": {"records": {}},
             "recordTypes": {"case-file": { "primaryDataset":"records", "route":"case-files",
                 "mutationMode":"mutable",
                 "fields":[{"id":"code", "type":"string", "maximumLength":32,

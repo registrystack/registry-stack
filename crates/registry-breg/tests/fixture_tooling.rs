@@ -788,7 +788,7 @@ fn compiled_fixture_without_writable_note() -> registry_breg::CompiledRegistry {
 
 fn compiled_crud_alias_fixture() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"fixture-crud-aliases","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -819,7 +819,7 @@ fn compiled_crud_alias_fixture() -> registry_breg::CompiledRegistry {
 
 fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"fixture-immediate-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -949,7 +949,7 @@ fn underlying_fixture_error(error: &FixtureError) -> &FixtureError {
 
 fn compiled_spatial_fixture() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"spatial-fixture","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},

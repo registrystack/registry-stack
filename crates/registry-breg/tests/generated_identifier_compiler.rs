@@ -16,7 +16,7 @@ fn project_value() -> Value {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://registry.example.test"
         },
-        "datasets": [{"id": "records"}],
+        "datasets": {"records": {}},
         "recordTypes": {"record": {
             "primaryDataset": "records",
             "route": "records",

@@ -36,7 +36,7 @@ manifestProjection:
     - registry
   distributions: []
 datasets:
-- id: registry
+  registry: {}
 recordTypes:
   record:
     primaryDataset: registry
@@ -213,13 +213,13 @@ accessProfiles:
     requesterClients:
     - context-status
 vocabularies:
-- id: record-status
-  values:
-  - active
-  - retired
+  record-status:
+    values:
+    - active
+    - retired
 reviewAuthorities:
-- id: casework
-  protocol: id.registrystack.org/protocols/review/v1
+  casework:
+    protocol: id.registrystack.org/protocols/review/v1
 actions:
   correct-status:
     execution:

@@ -687,7 +687,7 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
             },
         )
         .collect::<Vec<Value>>();
-    let project = json!({"datasets":[{"id": "test-dataset"}],
+    let project = json!({"datasets":{"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": "runtime-event-destinations", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
@@ -5540,21 +5540,18 @@ fn a_refresh_worker_profile_with_a_consent_boundary_is_refused() {
             .expect("the consent fixture parses");
     let mut project = serde_json::to_value(authored).expect("the project serializes");
     without_nulls(&mut project);
-    project["externalRecordTypes"] = json!([{
-        "id": "external-person", "authority": "urn:example:population-register",
+    project["externalRecordTypes"] = json!({"external-person": {"authority": "urn:example:population-register",
         "identifierScheme": "urn:example:person-number",
         "fields": [{"id": "family-name", "type": "string", "classification": "internal"}]
-    }]);
-    project["externalProjections"] = json!([{
-        "id": "person-indexed", "recordType": "external-person",
+    }});
+    project["externalProjections"] = json!({"person-indexed": {"recordType": "external-person",
         "sourceRoute": "person-batch", "sourceRouteVersion": "1",
         "purpose": "food-assistance", "scope": "population", "mode": "indexed",
         "cardinality": "one", "cacheTtlSeconds": 300, "fields": ["family-name"]
-    }]);
-    project["externalViews"] = json!([{
-        "id": "person-view", "recordType": "person",
+    }});
+    project["externalViews"] = json!({"person-view": {"recordType": "person",
         "links": [{"id": "register", "projection": "person-indexed", "fromField": "district"}]
-    }]);
+    }});
     let mut refresh = project["accessProfiles"]["food-targeting"].clone();
     refresh["default"] = json!(false);
     refresh["requesterClients"] = json!(["wfp-scope"]);

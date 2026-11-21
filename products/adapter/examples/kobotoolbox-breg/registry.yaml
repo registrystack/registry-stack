@@ -25,7 +25,7 @@ package:
   sourceRevision: kobo-households-0.1.0
 
 datasets:
-  - id: households
+  households:
     display: {label: Households, description: Households registered from field submissions.}
 
 recordTypes:

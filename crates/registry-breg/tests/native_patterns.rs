@@ -6,7 +6,7 @@ use registry_breg::generated_ddl::field_pattern_constraint_name;
 use serde_json::json;
 
 fn project(pattern: Option<&str>) -> registry_breg::contract::RegistryProject {
-    let mut value = json!({"datasets":[{"id": "records"}],
+    let mut value = json!({"datasets":{"records": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"native-patterns","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://patterns.example.test"},
         "manifestProjection":{

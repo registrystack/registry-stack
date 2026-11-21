@@ -22,7 +22,7 @@ pub(crate) fn registry(evidence: bool) -> crate::CompiledRegistry {
         .to_vec(),
     }];
     if evidence {
-        source["evidenceProviders"] = json!([{"id":"farmer-registry","contracts":"evidence/contracts.json","subjectResolution":"trusted-provider-exact-selector"}]);
+        source["evidenceProviders"] = json!({"farmer-registry": {"contracts":"evidence/contracts.json","subjectResolution":"trusted-provider-exact-selector"}});
         let action = &mut source["actions"]["correct-address"];
         action["inputs"].as_array_mut().unwrap().push(json!({"id":"subject","type":"string","required":true,"minimumLength":3,"maximumLength":77,"classification":"restricted"}));
         action["commitGuards"]["evidence"] = json!([{

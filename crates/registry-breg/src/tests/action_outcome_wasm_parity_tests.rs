@@ -43,7 +43,7 @@ fn person_action(script: &str) -> CompiledAction {
     let source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"wasm-parity","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "datasets":[{"id":"parity"}],"recordTypes":{"person": {"primaryDataset":"parity","route":"people","mutationMode":"mutable","fields":[
+        "datasets":{"parity": {}},"recordTypes":{"person": {"primaryDataset":"parity","route":"people","mutationMode":"mutable","fields":[
             {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
         ]}},
@@ -88,7 +88,7 @@ fn record_action(script: &str) -> CompiledAction {
     let source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"wasm-parity-records","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "datasets":[{"id":"parity"}],"recordTypes":{"record": {"primaryDataset":"parity","route":"records","mutationMode":"mutable","fields":[
+        "datasets":{"parity": {}},"recordTypes":{"record": {"primaryDataset":"parity","route":"records","mutationMode":"mutable","fields":[
             {"id":"label","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"classification":"restricted"}

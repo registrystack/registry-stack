@@ -111,7 +111,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"generated-identifier-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://identifiers.example.test"},
-          "datasets":[{"id":"applications"}],
+          "datasets":{"applications": {}},
           "recordTypes":{"application": {"primaryDataset":"applications","route":"applications","mutationMode":"mutable",
             "fields":[
               {"id":"jurisdiction","type":"string","minimumLength":1,"maximumLength":40,"required":true,"classification":"internal"},

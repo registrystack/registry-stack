@@ -532,7 +532,7 @@ fn claims_with(
 /// label-only reader the concealment proofs stay outside. The batch byte bound
 /// is a parameter so one variant can sit at the protocol's highest.
 fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegistry> {
-    let fixture = json!({"datasets":[{"id": "test-dataset"}],
+    let fixture = json!({"datasets":{"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {

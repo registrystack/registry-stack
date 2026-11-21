@@ -5115,7 +5115,7 @@ mod tests {
                     "defaultLanguage": "en",
                     "canonicalBaseIri": "https://scan-keys.example.test"
                 },
-                "datasets":[{"id":"test-dataset"}],"recordTypes":{"case": {
+                "datasets":{"test-dataset": {}},"recordTypes":{"case": {
                     "primaryDataset": "test-dataset",
                     "route": "cases",
                     "mutationMode": "mutable",

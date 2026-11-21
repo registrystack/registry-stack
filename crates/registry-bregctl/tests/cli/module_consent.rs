@@ -30,11 +30,11 @@ recipients:
     members: [food-agency, health-ngo]
 vocabularies:
 # Purposes the registry discloses data for.
-- id: data-use-purpose
-  values: [food-assistance, health-referral]
+  data-use-purpose:
+    values: [food-assistance, health-referral]
 
 datasets:
-  - id: people
+  people: {}
 recordTypes:
   person:
     primaryDataset: people
@@ -466,7 +466,7 @@ fn module_add_consent_refuses_an_incomplete_project_without_writing() {
         let (_, rest) = tail.split_once("vocabularies:\n").unwrap();
         format!("{head}vocabularies:\n{rest}")
     };
-    let no_purposes = BASE_PROJECT.replace("- id: data-use-purpose\n", "- id: other-purpose\n");
+    let no_purposes = BASE_PROJECT.replace("  data-use-purpose:\n", "  other-purpose:\n");
     for (source, subject, code) in [
         (
             BASE_PROJECT.to_owned(),
@@ -518,15 +518,10 @@ fn module_add_consent_refuses_a_flow_style_profile_mapping_it_cannot_extend() {
 /// block style the product fixtures use is extended in the same style.
 #[test]
 fn module_add_consent_runs_once_per_subject_and_reuses_shared_vocabularies() {
-    let indented = BASE_PROJECT
-        .replace(
-            "\n- id: data-use-purpose\n  values:",
-            "\n  - id: data-use-purpose\n    values:",
-        )
-        .replace(
-            "principalClaim: principal",
-            "principalClaim: registry_principal",
-        );
+    let indented = BASE_PROJECT.replace(
+        "principalClaim: principal",
+        "principalClaim: registry_principal",
+    );
     let project = TestProject::from_registry_source(indented.as_bytes());
 
     let person = module_add(project.path(), "person");
@@ -548,7 +543,7 @@ fn module_add_consent_runs_once_per_subject_and_reuses_shared_vocabularies() {
     );
     let source = registry_source(project.path());
     assert!(
-        source.contains("\n  - id: consent-channel\n"),
+        source.contains("\n  consent-channel:\n"),
         "the vocabulary item keeps the block's indentation:\n{source}"
     );
     let parsed = parse_project_yaml(source.as_bytes()).expect("the project parses");
@@ -665,8 +660,8 @@ fn consent_module_fits_an_explicit_manifest_project(flow_module_lock: bool) {
         "{before}recipients:\n  organizations:\n  - id: food-agency\n    name: Food Agency\n    contact: dpo@food-agency.example.test\n    clients: [food-agency-portal]\n\nmanifestProjection:\n{after}"
     );
     let with_purposes = with_recipients.replacen(
-        "vocabularies:\n  - id: record-status\n    values: [draft, active, retired]\n",
-        "vocabularies:\n  - id: record-status\n    values: [draft, active, retired]\n  - id: data-use-purpose\n    values: [food-assistance]\n",
+        "vocabularies:\n  record-status:\n    values: [draft, active, retired]\n",
+        "vocabularies:\n  record-status:\n    values: [draft, active, retired]\n  data-use-purpose:\n    values: [food-assistance]\n",
         1,
     );
     fs::write(destination.join("registry.yaml"), with_purposes).expect("prerequisites write");

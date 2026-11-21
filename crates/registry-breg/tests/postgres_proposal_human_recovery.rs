@@ -24,7 +24,7 @@ fn registry(automatic: bool) -> registry_breg::CompiledRegistry {
     let source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"human-recovery","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://recovery.example.test"},
-        "datasets":[{"id":"directory"}],
+        "datasets":{"directory": {}},
         "recordTypes":{"contact": {"primaryDataset":"directory","route":"contacts","mutationMode":"mutable",
             "mutationPolicy":{"patch":"proposal-required"},"fields":[
                 {"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},

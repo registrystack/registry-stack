@@ -146,7 +146,7 @@ fn hook_project_json(
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{{"id":"hook-proposal-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-          "datasets":[{{"id":"test-dataset"}}],
+          "datasets":{{"test-dataset": {{}}}},
           "recordTypes":{{"case":{{"primaryDataset":"test-dataset","route":"cases","mutationMode":"create-only","classification":"restricted",
             "fields":[
               {{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"}},

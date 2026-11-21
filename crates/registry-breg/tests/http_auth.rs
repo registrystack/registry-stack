@@ -147,7 +147,7 @@ recordTypes:
       - {id: jurisdiction, type: string, required: true, maximumLength: 100, classification: internal}
       - {id: tenant, type: string, required: true, maximumLength: 100, classification: internal}
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   public:
@@ -193,7 +193,7 @@ recordTypes:
       - {id: label, type: string, required: true, maximumLength: 100, classification: public}
       - {id: tenant, type: string, required: true, maximumLength: 100, classification: internal}
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   caseworker:
@@ -224,7 +224,7 @@ recordTypes:
       - {id: label, type: string, required: true, maximumLength: 100, classification: public}
       - {id: tenant, type: string, required: true, maximumLength: 100, classification: internal}
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   standing-human:
@@ -2784,7 +2784,7 @@ async fn ambiguous_route_without_default_requires_explicit_selection_without_gue
 fn dataset_only_claim_source() -> Value {
     json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"dataset-auth", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://statistics.example.test", "timezone":"UTC"},
-        "datasets":[{"id":"records"}],
+        "datasets":{"records": {}},
         "recordTypes":{"record": { "primaryDataset":"records", "route":"records", "mutationMode":"mutable",
             "fields":[{"id":"active", "type":"boolean", "required":true, "classification":"internal"},
                 {"id":"occurred-on", "type":"date", "required":true, "classification":"internal"}]}},
@@ -2796,9 +2796,9 @@ fn dataset_only_claim_source() -> Value {
             "reader": { "principalClaim":"registry_principal", "requiredScopes":["statistics:read"], "requiredPurposes":[PURPOSE],
                 "permissions":{"datasets":[{"dataset":"counts", "operations":["read-releases"]}]}}
         },
-        "statisticalDatasets":[{"id":"counts", "unit":"record", "population":"active eq true",
+        "statisticalDatasets":{"counts": {"unit":"record", "population":"active eq true",
             "period":{"type":"flow", "field":"occurred-on", "granularity":"month", "firstPeriod":"2025-01"},
-            "dimensions":["active"], "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}}]
+            "dimensions":["active"], "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}}}
     })
 }
 

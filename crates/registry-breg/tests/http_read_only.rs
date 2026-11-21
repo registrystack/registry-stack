@@ -58,7 +58,7 @@ recordTypes:
     fields:
       - {id: text, type: text, required: true, maximumLength: 200, classification: restricted}
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   public:
@@ -138,7 +138,7 @@ recordTypes:
       - {id: person-code, type: string, required: true, maximumLength: 64, classification: restricted}
       - {id: sensitive-note, type: string, required: false, maximumLength: 64, classification: restricted}
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   operator:
@@ -215,7 +215,7 @@ recordTypes:
               label: Reviewed eligibility score
               description: Calculated eligibility points.
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   operator:
@@ -272,7 +272,7 @@ recordTypes:
           type: url
           destinationId: classified-operations-destination
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   public:
@@ -306,7 +306,7 @@ accessProfiles:
           filterableFields: [classified-status]
           sortableFields: [valid-from]
 vocabularies:
-  - id: classified-status-vocabulary
+  classified-status-vocabulary:
     values: [sealed-canary-value, retired-canary-value]
 "#;
 
@@ -329,7 +329,7 @@ recordTypes:
       - {id: household-kind-code, apiName: householdKind, type: vocabulary-code, vocabulary: household-kind, required: true, classification: public}
       - {id: private-canary-field, apiName: privateCanary, type: string, required: true, maximumLength: 64, classification: restricted}
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   public:
@@ -343,7 +343,7 @@ accessProfiles:
           operations: [get, list]
           readableFields: [household-code, household-kind-code]
 vocabularies:
-  - id: household-kind
+  household-kind:
     values: [single, extended]
 "#;
 
@@ -439,7 +439,7 @@ recordTypes:
       - {type: unique, fields: [hidden-certificate-key]}
       - {type: unique, fields: [certificate-code]}
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   operator:
@@ -501,7 +501,7 @@ recordTypes:
     geojson:
       geometryField: location
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   map-reader:
@@ -596,7 +596,7 @@ recordTypes:
       - {id: starts, type: date, required: true, classification: restricted}
       - {id: ends, type: date, classification: restricted}
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   history:
@@ -2425,7 +2425,7 @@ const EVENT_RECORD_PROJECT: &str = r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: event-record-http-registry, version: "1", defaultLanguage: en, canonicalBaseIri: https://event-record-http.example.test}
-datasets: [{id: test-dataset}]
+datasets: {test-dataset: {}}
 recordTypes:
   item:
     primaryDataset: test-dataset
@@ -4451,7 +4451,7 @@ recordTypes:
     constraints:
       - {type: temporal-non-overlap, scopeFields: [jurisdiction], startField: valid-from, endField: valid-to}
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   caseworker:
@@ -4623,7 +4623,7 @@ recordTypes:
     fields:
       - {id: text, type: string, required: true, maximumLength: 200, classification: restricted}
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   caseworker:

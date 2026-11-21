@@ -21,7 +21,7 @@ fn source(effects: Value) -> Value {
     json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"proposal-preparation","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-        "datasets":[{"id":"records"}],
+        "datasets":{"records": {}},
         "recordTypes":{"target": {"primaryDataset":"records","route":"targets","mutationMode":"mutable","mutationPolicy":{"create":"proposal-required","patch":"proposal-required"},"fields":[
             {"id":"first","type":"string","maximumLength":64,"classification":"internal"},
             {"id":"second","type":"string","maximumLength":64,"classification":"internal"},
@@ -587,19 +587,16 @@ fn rhai_plan_refuses_authority_ceiling_escape_before_target_locks() {
 /// Links `target.first` to an external subject, so a value written there must
 /// be a key the view can send to its source.
 fn link_first(source: &mut Value) {
-    source["externalRecordTypes"] = json!([{
-        "id":"external-subject","authority":"urn:example:source","identifierScheme":"urn:example:subject-key",
+    source["externalRecordTypes"] = json!({"external-subject": {"authority":"urn:example:source","identifierScheme":"urn:example:subject-key",
         "fields":[{"id":"label","type":"string","classification":"internal"}]
-    }]);
-    source["externalProjections"] = json!([{
-        "id":"approved-subjects","recordType":"external-subject","sourceRoute":"subjects-by-key","sourceRouteVersion":"1",
+    }});
+    source["externalProjections"] = json!({"approved-subjects": {"recordType":"external-subject","sourceRoute":"subjects-by-key","sourceRouteVersion":"1",
         "purpose":"local-consultation","scope":"approved-subjects",
         "mode":"indexed","cardinality":"one","cacheTtlSeconds":600,"fields":["label"]
-    }]);
-    source["externalViews"] = json!([{
-        "id":"target-with-subject","recordType":"target",
+    }});
+    source["externalViews"] = json!({"target-with-subject": {"recordType":"target",
         "links":[{"id":"subject","projection":"approved-subjects","fromField":"first"}]
-    }]);
+    }});
 }
 
 const MALFORMED_KEYS: [&str; 3] = [" padded", "trailing ", "bell\u{7}key"];

@@ -52,7 +52,7 @@ fn governed_project(required_for: &[&str], loader_operations: &[&str]) -> Value 
     json!({
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
       "project":{"id":"import-grants","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "datasets":[{"id":"test-dataset"}], "recordTypes":{"enrollment": enrollment},
+      "datasets":{"test-dataset": {}}, "recordTypes":{"enrollment": enrollment},
       "accessProfiles":{"loader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
         "permissions":{"records":[{
           "recordType":"enrollment","operations":loader_operations,"readableFields":["label"],"writableFields":["label"],

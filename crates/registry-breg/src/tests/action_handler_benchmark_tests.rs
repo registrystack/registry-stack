@@ -39,7 +39,7 @@ fn acceptance_action() -> CompiledAction {
     let source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"acceptance-benchmark","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "datasets":[{"id":"records"}],
+        "datasets":{"records": {}},
         "recordTypes":{"person": {"route":"people","primaryDataset":"records","mutationMode":"mutable","fields":[
             {"id":"identifier","type":"string","required":true,"maximumLength":13,"classification":"internal"},
             {"id":"display-name","type":"string","required":true,"minimumLength":1,"maximumLength":200,"classification":"internal"}]}},
@@ -89,7 +89,7 @@ fn characterization_action(script: &str) -> CompiledAction {
     let source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"script-baseline","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "datasets":[{"id":"baseline"}],
+        "datasets":{"baseline": {}},
         "recordTypes":{"record": {"primaryDataset":"baseline","route":"records","mutationMode":"mutable","fields":[
             {"id":"label","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","classification":"restricted"},

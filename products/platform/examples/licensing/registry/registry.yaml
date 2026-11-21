@@ -9,7 +9,7 @@ project:
 package:
   sourceRevision: licensing-example-0.1.0
 datasets:
-  - id: licensing
+  licensing:
     display: {label: Licensing, description: Applications awaiting an independent review.}
 recordTypes:
   application:

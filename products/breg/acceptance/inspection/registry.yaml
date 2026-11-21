@@ -435,9 +435,8 @@
       }
     }
   },
-  "vocabularies": [
-    {
-      "id": "inspection-domain",
+  "vocabularies": {
+    "inspection-domain": {
       "values": [
         "air",
         "water",
@@ -445,8 +444,7 @@
         "noise"
       ]
     },
-    {
-      "id": "permit-status",
+    "permit-status": {
       "values": [
         "draft",
         "active",
@@ -454,10 +452,8 @@
         "withdrawn"
       ]
     }
-  ],
-  "datasets": [
-    {
-      "id": "inspection"
-    }
-  ]
+  },
+  "datasets": {
+    "inspection": {}
+  }
 }

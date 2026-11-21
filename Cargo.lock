@@ -6572,6 +6572,7 @@ dependencies = [
  "anyhow",
  "clap",
  "jsonschema",
+ "registry-breg",
  "registry-casework",
  "registry-casework-breg",
  "registry-casework-core",

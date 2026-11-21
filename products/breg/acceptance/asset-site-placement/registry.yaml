@@ -373,26 +373,22 @@
       }
     }
   },
-  "vocabularies": [
-    {
-      "id": "asset-classification",
+  "vocabularies": {
+    "asset-classification": {
       "values": [
         "equipment",
         "vehicle",
         "furniture"
       ]
     },
-    {
-      "id": "inspection-result",
+    "inspection-result": {
       "values": [
         "passed",
         "failed"
       ]
     }
-  ],
-  "datasets": [
-    {
-      "id": "asset-site-placement"
-    }
-  ]
+  },
+  "datasets": {
+    "asset-site-placement": {}
+  }
 }

@@ -776,7 +776,7 @@ fn timer_project_source() -> Value {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":PACKAGE_ID,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://retention.example.test"},
-        "datasets":[{"id":"services"}],
+        "datasets":{"services": {}},
         "recordTypes":{"service": {"primaryDataset":"services","route":"services","mutationMode":"mutable",
             "fields":[
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},

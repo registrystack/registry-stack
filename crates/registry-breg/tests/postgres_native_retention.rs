@@ -60,7 +60,7 @@ fn map(value: Value) -> Map<String, Value> {
 fn registry_source(automatic: bool) -> Value {
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"proposal-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://proposal.example.test"},
-        "datasets":[{"id":"directory"}],
+        "datasets":{"directory": {}},
         "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable",
             "mutationPolicy":{"patch":"proposal-required"},
             "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
@@ -518,7 +518,7 @@ async fn native_erasure_reports_sensitive_copies_and_preserves_only_bounded_revi
     .await;
     let mut source = registry_source(false);
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
     let configured = authority.registry.clone();
     let human = VerifiedRequestClaims::authenticated_with_actor_kind(
