@@ -1,13 +1,13 @@
 {
   "schema_version": "registry-stack.nightly.v2",
-  "tag": "v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80",
-  "version": "0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80",
-  "base_version": "0.46.1",
-  "source_sha": "0ffaa8483db73144e5c359fc9fe9bdc856b51e80",
-  "created_at": "2026-11-11T06:18:47.529546+00:00",
-  "channel_head": "ba72105b18fdde552ccad462f853f903e6ee3820",
+  "tag": "v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae",
+  "version": "0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae",
+  "base_version": "0.47.0",
+  "source_sha": "09c74b2c268040717b015e25ef30c32b770c82ae",
+  "created_at": "2026-11-21T07:06:56.881036+00:00",
+  "channel_head": "ce69c12ba6f2601d5c3cf576013b6dc7d61dc5a7",
   "roster": {
-    "profile": "registry-stack.nightly-roster.v2.4",
+    "profile": "registry-stack.nightly-roster.v2.6",
     "images": [
       "breg",
       "breg-mcp",
@@ -36,72 +36,74 @@
     ],
     "payloads": [
       "THIRD_PARTY_NOTICES",
-      "adapter-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "adapter-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "adapter-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "adapterctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "adapterctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "adapterctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "breg-mcp-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "breg-mcp-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "breg-mcp-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "breg-review-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "breg-review-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "breg-review-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "breg-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "breg-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "breg-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "bregctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "bregctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "bregctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "casework-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "casework-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "casework-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "caseworkctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "caseworkctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "caseworkctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "coordinator-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "coordinator-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "coordinator-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "coordinatorctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "coordinatorctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "coordinatorctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "discovery-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "discovery-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "discovery-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "discoveryctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "discoveryctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "discoveryctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "evidence-oid4vci-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "evidence-oid4vci-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "evidence-oid4vci-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "evidence-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "evidence-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "evidence-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "evidencectl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "evidencectl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "evidencectl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "messaging-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "messaging-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "messaging-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "messagingctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "messagingctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "messagingctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "registry-manifest-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "registry-manifest-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "registry-manifest-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64",
-      "registry-render-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "registry-render-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "registry-render-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "rstack-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "rstack-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "rstack-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "scheduling-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "scheduling-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "scheduling-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "schedulingctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "schedulingctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "schedulingctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz"
+      "adapter-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "adapter-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "adapter-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "adapterctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "adapterctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "adapterctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "breg-mcp-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "breg-mcp-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "breg-mcp-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "breg-review-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "breg-review-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "breg-review-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "breg-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "breg-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "breg-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "bregctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "bregctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "bregctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "casework-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "casework-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "casework-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "caseworkctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "caseworkctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "caseworkctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "coordinator-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "coordinator-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "coordinator-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "coordinatorctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "coordinatorctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "coordinatorctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "discovery-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "discovery-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "discovery-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "discoveryctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "discoveryctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "discoveryctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "evidence-oid4vci-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "evidence-oid4vci-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "evidence-oid4vci-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "evidence-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "evidence-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "evidence-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "evidencectl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "evidencectl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "evidencectl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "messaging-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "messaging-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "messaging-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "messagingctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "messagingctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "messagingctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "registry-language-server-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "registry-language-server-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "registry-manifest-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "registry-manifest-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "registry-manifest-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64",
+      "registry-render-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "registry-render-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "registry-render-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "rstack-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "rstack-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "rstack-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "scheduling-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "scheduling-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "scheduling-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "schedulingctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "schedulingctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "schedulingctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz"
     ]
   },
   "assets": [
@@ -111,455 +113,463 @@
     },
     {
       "name": "adapter-install.sh",
-      "sha256": "4848fe35195c2838de0a8d3989c870550a1f5030b85d13ad7e71a0dc992f163f"
+      "sha256": "0c9c5662919186bdfe52f88d387aa03722ccafb97144e3d7071de936e4f1fb1d"
     },
     {
-      "name": "adapter-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-install.sh",
-      "sha256": "4848fe35195c2838de0a8d3989c870550a1f5030b85d13ad7e71a0dc992f163f"
+      "name": "adapter-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-install.sh",
+      "sha256": "0c9c5662919186bdfe52f88d387aa03722ccafb97144e3d7071de936e4f1fb1d"
     },
     {
-      "name": "adapter-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "1a2b8c16784ad848911fe04fe525099d4b8aa8ae39e68e1bedec2e48ee9f51b6"
+      "name": "adapter-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "956cb9bc8c2c514b2737ef7e84c59f1563330a6adc1d57ca01be496e3ccaf8d1"
     },
     {
-      "name": "adapter-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "fcdc347ce3a35a2169ef61c5c48f75aaed80acae190e67885e5c3233bcd11acf"
+      "name": "adapter-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "ac38f3a99e0117c9588998ccdfc658aefe8acfd9ffdfc0ac509d0db7784eeb79"
     },
     {
-      "name": "adapter-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "f3e445956dba3dc2562c2005b2cd85c1fff629740afeac8ab9e04dead3870501"
+      "name": "adapter-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "30ad20d578aaf99710933df3757e129a27db1a094bc95142e4aee133db9a9f33"
     },
     {
-      "name": "adapterctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "ea59a1b7cfe8f41eb8aebf7173bb4f8dbca40d97de1f4d712b2174a50cbdc65a"
+      "name": "adapterctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "cc613994f6f488b73be0986351030901b41673e472221fbba031a0e96770023b"
     },
     {
-      "name": "adapterctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "ebe9477ac7e11d56342ebe18cb7fb7769bd96c1ef96ba12bf91adcc42bfb5128"
+      "name": "adapterctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "3e55f890f1214a8845fbf8e60a8255414476647699729d5c99f2cc4c61f76919"
     },
     {
-      "name": "adapterctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "e01dee117aaeb21d3ae77d53e636c0bbc0455e249439ec8861bebb2919d8c154"
+      "name": "adapterctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "32df3e13d846cab7f400dd09fc1238a3bf98da7bbc8c414e323a6002e494ac8b"
     },
     {
       "name": "breg-install.sh",
-      "sha256": "500e3f7cb990e1de2aebda0661f4eee739d3d4b199088c9de95c9a7424ee6d06"
+      "sha256": "cb771ba8d7a9726b8f1347499b91d68352677892d32ba376c033a49529cf0d24"
     },
     {
       "name": "breg-mcp-install.sh",
-      "sha256": "6c8d7fd20a2a4ce76001829aef691da06b43f52cc8808eaee2abbb35e4dee972"
+      "sha256": "352c98d013893a0f6c1718a1f63b75f6f954c2ea6ad95fa88acbd3d02598152b"
     },
     {
-      "name": "breg-mcp-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-install.sh",
-      "sha256": "6c8d7fd20a2a4ce76001829aef691da06b43f52cc8808eaee2abbb35e4dee972"
+      "name": "breg-mcp-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-install.sh",
+      "sha256": "352c98d013893a0f6c1718a1f63b75f6f954c2ea6ad95fa88acbd3d02598152b"
     },
     {
-      "name": "breg-mcp-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "7c7521587a7ff88a5126ecdcb037e83c5fc5857b02aaf583a581adbb329e2d41"
+      "name": "breg-mcp-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "cee8c62ac7826bc18578da1d95553775dc5de677e35b8265d69b6fad5fe5d9fb"
     },
     {
-      "name": "breg-mcp-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "fd864c033214309c71bc70cdee36c26df3a37e42fa00f405493116f88a7338d7"
+      "name": "breg-mcp-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "a1cdeb43bd0e23f3fa5598558ded9e912352ccfeafb1afc6121bcffb28f0cbfe"
     },
     {
-      "name": "breg-mcp-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "fe5239d504dfa24295a0d042f83bf8879ed5956ad8703d727ea1efea6ce0acee"
+      "name": "breg-mcp-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "b7436d7da6b06c444b0c90670b059669eb3f8d740953cdd58a0f3645a7424882"
     },
     {
       "name": "breg-mcp.grype.json",
-      "sha256": "5508f0d86bc4c767dec52e5a71ab25e530d8a5c9d25bf919d9f52b21cf57b5aa"
+      "sha256": "e3cc6db3e871f9850088a1d0e9dfe9f9389f67668131537814d7f03636255471"
     },
     {
       "name": "breg-mcp.sbom.spdx.json",
-      "sha256": "84afe5a30dde12e80ca872cfca60cde47ea2f0228418bd5f266715289346dab3"
+      "sha256": "321afa5e686bb937f6af7e7dc5dad2d81fd089d6f6eda5f18c5889e70f53debd"
     },
     {
       "name": "breg-review-install.sh",
-      "sha256": "c8790943c63f6abb7d21bbc9e43e927739a864993860358e508eb6c12ecdd087"
+      "sha256": "a3981fea7e21ee1a56e1a27d96221221a964f434a927990715680e168f4169a2"
     },
     {
-      "name": "breg-review-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-install.sh",
-      "sha256": "c8790943c63f6abb7d21bbc9e43e927739a864993860358e508eb6c12ecdd087"
+      "name": "breg-review-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-install.sh",
+      "sha256": "a3981fea7e21ee1a56e1a27d96221221a964f434a927990715680e168f4169a2"
     },
     {
-      "name": "breg-review-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "614e1fd39af8a71a280d69c02246c8b7defac00f4af27a355e1f7d975d5d4f91"
+      "name": "breg-review-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "67d5454c0f9399e28e304ad61f00c0d1025e90d78618c57bcfd6b4ab24fd1fe0"
     },
     {
-      "name": "breg-review-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "e6cd28df6aee113504f38781627d0d095bc2ed4222d53c3fc988a1ae08b00f0e"
+      "name": "breg-review-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "e3b32e2846f13f334aa4c3e5838c74498f11e90a5ae147de20781ac06494c0a8"
     },
     {
-      "name": "breg-review-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "c15d0b3a1f426c9eeca6eacea46ae4dfe3a5e5146fe8f19f843602b153a7d25f"
+      "name": "breg-review-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "c8251d2e4ba5364476a86b33a9599812468100cd2908f2893d7dd25a7bb05ffb"
     },
     {
       "name": "breg-review.grype.json",
-      "sha256": "45ee0773688869a9eb06a95c3f1297f171cc8d960e73fdaf362daf339f9d6dad"
+      "sha256": "0875e8c392d854622fe89a93e0a32945a296ef00c735ad96d54aeb5d76208049"
     },
     {
       "name": "breg-review.sbom.spdx.json",
-      "sha256": "fc1f665bfa4f950ae6baa08b29a516e8d62ad91540a9b13ec3382448488bc095"
+      "sha256": "85c01e25876ba603c086c3a3310bafc0b341a2bb324f88b5f5ffb2253fce53fd"
     },
     {
-      "name": "breg-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-install.sh",
-      "sha256": "500e3f7cb990e1de2aebda0661f4eee739d3d4b199088c9de95c9a7424ee6d06"
+      "name": "breg-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-install.sh",
+      "sha256": "cb771ba8d7a9726b8f1347499b91d68352677892d32ba376c033a49529cf0d24"
     },
     {
-      "name": "breg-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "42f02ff36fd543e98711cde0dd7e107222d48731361c0744f509b2f23a68a121"
+      "name": "breg-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "2bee3191931b3cce93513ac63bd37dda2a43338b45d9df5b899af725417518c7"
     },
     {
-      "name": "breg-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "7a19650e56d37bc9cc87ff60dbd341cc6e51e8c079b33fd66f6936e256bdc9c3"
+      "name": "breg-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "877390506899982b80e24397e43f0c70ba21720825d166c4d068c6ecae700d49"
     },
     {
-      "name": "breg-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "ca14c9cf702c776444a48735db162013648aec49b5a6c2e4c08b9a233e880f82"
+      "name": "breg-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "a6b6cb5741953c29b53134fdd2fb74ee08fa25638ef558dd98d9b015248003bb"
     },
     {
       "name": "breg.grype.json",
-      "sha256": "50399c60b59c0a5ada3b0eba4e96916b1c50b15483868ef6318f9250f594847c"
+      "sha256": "2f45ddc662ec921f65728c1998ede2e3193c46d1d0fb7b705b76f6f213b70c8d"
     },
     {
       "name": "breg.sbom.spdx.json",
-      "sha256": "10fe99457df39a7025071ddf0d8d76d645fbb454a1d7b5dd6bf8f4fdb37215e5"
+      "sha256": "d72b700d7cfefee32b5d904858931c5d032414f708efc1fa7f29e24408af2cb9"
     },
     {
-      "name": "bregctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "d3be245877fec1dc7dd4a62a51032a2a4aeb6044f8e3e1d350dd11d86cd5b095"
+      "name": "bregctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "b7a0a7fd8ac76f9d0043fd2b6b348dfe99d9dea1dce6125be49b13ce6bbdd318"
     },
     {
-      "name": "bregctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "e2e27faeab6d4da9c632c87a47c942e5012979cb97536bd9c9afa8338089b6bb"
+      "name": "bregctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "e5b77e7031530688fc2797608f401cb9350347afd12a33c92ec8c5b8a3188546"
     },
     {
-      "name": "bregctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "f88ce803671f942cc1243040ba536419a021b3690adc7c89a23bacd71481dc81"
+      "name": "bregctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "bc07af92783d26f7ec3b1b2e417454fc0718690d06fd1c7e51d64fbcd1f1edfb"
     },
     {
       "name": "casework-install.sh",
-      "sha256": "7bc7ee5d73010bf1cd8d79502468e987097e06f08078f0246a8530192021e8c1"
+      "sha256": "875f8e6d9491e83267caf7e1e4707465d806ddd96bd3a20332503e9e5225a3ac"
     },
     {
-      "name": "casework-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-install.sh",
-      "sha256": "7bc7ee5d73010bf1cd8d79502468e987097e06f08078f0246a8530192021e8c1"
+      "name": "casework-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-install.sh",
+      "sha256": "875f8e6d9491e83267caf7e1e4707465d806ddd96bd3a20332503e9e5225a3ac"
     },
     {
-      "name": "casework-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "52642505718751e4aa4c14dd6c4b84df916d32e313161a1118b0d71013a0d631"
+      "name": "casework-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "7b6aa40bfb86d00589a501cf5f1982e1d91d74869a5c85c4d03cbc93acb9a0c4"
     },
     {
-      "name": "casework-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "f745bd8a224d79dd0ee398ba24281d9efed9d982d657996789aa2af897ee07d5"
+      "name": "casework-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "64471675aee463af16e5abf8c4eeab21de654ab6371b14985650b0da28981fb2"
     },
     {
-      "name": "casework-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "771efd4dad6f6064f4faab618d0d95d805a5c2fb0e161aa2e844253721ae265c"
+      "name": "casework-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "4e116762c0cfecd7b72748ed01d854461b5fb0c8317bc0564ca98f3058b5c43c"
     },
     {
       "name": "casework.grype.json",
-      "sha256": "4690e8664c4c2240bd7bd34724e04b7ca8007a9f3bc243c531ac2b0a2d413642"
+      "sha256": "dd111db99139eebcd525d1f185ef992683b51f0b0bee0bea84eecc18e0389f54"
     },
     {
       "name": "casework.sbom.spdx.json",
-      "sha256": "f655069e28d350d9b13fcff6525b50612bb2fda683767b34eb992352f0cfda09"
+      "sha256": "ae64238a6fee24ea4e6dca45a0106c5f125895db55f2977ae032881deca1f93e"
     },
     {
-      "name": "caseworkctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "653577e350d484016866214c8fc6fa6044d6f76d4ffc1078e44590545cab510c"
+      "name": "caseworkctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "222014aacd093997aec90e912e356f6c1fb247b38d891772364a09aae18d80d0"
     },
     {
-      "name": "caseworkctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "21b1f734a530ea7eb29f9ed8dcb802734bf82a68a385b49e632d84d00556d2b2"
+      "name": "caseworkctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "b48238d8741957ef3f27a60620e20265423e99bddea775c1b01df57eaef1f669"
     },
     {
-      "name": "caseworkctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "5223488bb30f246a2a2a879c3f6fcb5a747e1537377aca6a3753c3dcd2182341"
+      "name": "caseworkctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "1169a599dc1fa432440cd76c19a515536c9b1a0c3fdb97df8d7a399fd6bc6b87"
     },
     {
       "name": "coordinator-install.sh",
-      "sha256": "13fbaccd3b4264a047d7dbf342bcd49158c0c7c99f7a6f2e2d4d3e19481df7ad"
+      "sha256": "957cb5150fbcb71b52d7a3c7a8583ba6c543a9d61c12f5d749b986e680a822c8"
     },
     {
-      "name": "coordinator-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-install.sh",
-      "sha256": "13fbaccd3b4264a047d7dbf342bcd49158c0c7c99f7a6f2e2d4d3e19481df7ad"
+      "name": "coordinator-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-install.sh",
+      "sha256": "957cb5150fbcb71b52d7a3c7a8583ba6c543a9d61c12f5d749b986e680a822c8"
     },
     {
-      "name": "coordinator-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "c44d5975eafd2734070f0f501cc7b2b61fe83f14e21f33439746d558322d081d"
+      "name": "coordinator-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "89857a10cb272f01f01ad12be6dcd9308c869da8e5b892dcf22a5434a4f841ac"
     },
     {
-      "name": "coordinator-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "6cc0608b1c958905a640a5aaf80025bdcdf1072283cdc78d808add5376ef319a"
+      "name": "coordinator-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "5ca29d8fde0d30af0714123cd7fc4b0ca7014ae47f3a13f8743b5c38377c034b"
     },
     {
-      "name": "coordinator-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "7517a6e44d5f89bb54aab209ad3ac12ef493f820352f266aa6fa0bd092f6bcad"
+      "name": "coordinator-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "c1433d6a6d35c6119964e11d43e9d247eeb6f7a6beffe2fc8677981a970c8000"
     },
     {
-      "name": "coordinatorctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "8398d40610516bf9695103f58994246b6186f9157d81d88d69a776c2b7a16f20"
+      "name": "coordinatorctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "dadb29ac4743dc0fb52edc8ddc6c874724b8450011a9bb54890e9a0ab8b6ed77"
     },
     {
-      "name": "coordinatorctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "8721ae55f17f4ee49526225223b353c18afa2184047915ed9b49e2d5d365b9e1"
+      "name": "coordinatorctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "a0579a377764679c3ad3cc1e57c1b1e8476f7ae5b6822c38282a7e3851b8645e"
     },
     {
-      "name": "coordinatorctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "9dcb11e75d3e05ffdeaa34e692aadcdfed0c52f450edbbc1d857429448a2e59b"
+      "name": "coordinatorctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "393447e595cbc833d2e0ea825fdeeb6837fe600fa0a137419a23f1a395a2eab1"
     },
     {
       "name": "discovery-install.sh",
-      "sha256": "2ed04996b6fa07e432375daa89dfddd865de780680e83c138cecec67ef32cefa"
+      "sha256": "d63f50ea2a83040f458769d25663d28413615e167951040908501bda764a3a04"
     },
     {
-      "name": "discovery-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-install.sh",
-      "sha256": "2ed04996b6fa07e432375daa89dfddd865de780680e83c138cecec67ef32cefa"
+      "name": "discovery-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-install.sh",
+      "sha256": "d63f50ea2a83040f458769d25663d28413615e167951040908501bda764a3a04"
     },
     {
-      "name": "discovery-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "89c17d9ba12196e235d6fa78cc6e9365e3f939fc0f904c41a3d19d99e2cee4e2"
+      "name": "discovery-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "eb012dd074dca91907094d90de3a3312071c226f68590595ad8a404b2aafc886"
     },
     {
-      "name": "discovery-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "02841866c769c9d24e5f633f8041dc70ca7621694e6dfa69ac1f5a83fedb70bc"
+      "name": "discovery-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "460cab8751340265848e79a828bbc407e028559d9b72ff701829a2a99d76a9d5"
     },
     {
-      "name": "discovery-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "11c232b30feff54a4e0e233d559ae3dd7897710425c5a177e79c72924e865835"
+      "name": "discovery-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "50efa8c900262dd5e6522cfc4aeb2e6a2d8d90848ba507602123b712f0e2e147"
     },
     {
       "name": "discovery.grype.json",
-      "sha256": "43f907c46e965f525c54c848d2cc814a8f44390e5c1e0599daefd4b434b65b05"
+      "sha256": "4e6eae09162345f426572f2178cfe7684a202a53a749229741f5b1a5deb8668b"
     },
     {
       "name": "discovery.sbom.spdx.json",
-      "sha256": "036319fd108509bd273345335f7e9144a19275c919262acaf8bddfc04cf3ca41"
+      "sha256": "eeea3d2412dedd57c61093bf8e832197403c42fdf534e9f4052000095484bf59"
     },
     {
-      "name": "discoveryctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "95cc9369bae721ae3bb2692a9261899c4cb10b6b542201f32d0ed74e2faf9b7c"
+      "name": "discoveryctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "55e500d14ddf47425a7ac3f04642fd47f2f19f8f471ea78cb55028c6d17c3c35"
     },
     {
-      "name": "discoveryctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "3cdbd032fdd6d2c366a1a161c66a39960dce2fbbe07cfdc080fa5a52044026ea"
+      "name": "discoveryctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "38a103c005757073cdde254a2ca22679283c666df1ffc339bdafb942965bbd1d"
     },
     {
-      "name": "discoveryctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "d0523842e714ef4a01d8d455e66001de74c4b30b1f67f574fd84753c2e7a6b53"
+      "name": "discoveryctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "3c9f64ba9f93267a51c6b748f1ca2d4c0626f0fac7990053aa8774cbc7a95642"
     },
     {
-      "name": "evidence-oid4vci-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "2a187332eb2a490dfa3585370543cf541a4f433b212d3c184cc85f2b47468c2f"
+      "name": "evidence-oid4vci-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "491da29350141fe4cace19615a275070403c395d79e19411df721648fbff9692"
     },
     {
-      "name": "evidence-oid4vci-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "9f4ef2ee31f89bf50fc9fce5940042760665ef3b2df4d8a254528ddc7f5c2caf"
+      "name": "evidence-oid4vci-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "7d41403ae5cbdde4741c6d53dc5c597fb2d5ab6c32b6bf6e6c03e5c7d06a35ca"
     },
     {
-      "name": "evidence-oid4vci-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "c193f803cd10e685e5ccfb7a00fb3cbe8bf18cd2f39fbcf7c352ee71bbb4b9ef"
+      "name": "evidence-oid4vci-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "27ff4f8b69758bffec3c81c2c6d86b3ab14759ed0b0ad512b6c04a2cb57c8f66"
     },
     {
       "name": "evidence-oid4vci.grype.json",
-      "sha256": "4dc39579b19db610e4fd184d5b679b01a691b32b0e31110a6adef7dba8801c5d"
+      "sha256": "93f902167563908b7d0c5155a348ba856f085503ef29821531ebeaac316560d4"
     },
     {
       "name": "evidence-oid4vci.sbom.spdx.json",
-      "sha256": "93f4de1930531bd996624bbf43f41677a4e86044193392fd5bd29de0ebd70fb9"
+      "sha256": "dc705ef9f8927af3ade8ce5ff16d226a5a11401885c093780ab661bc7a1abae7"
     },
     {
-      "name": "evidence-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "148a02335cc699c5f210de7b99c5e8f24ee939cd6263c75ea3ed3e082a4a6e55"
+      "name": "evidence-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "c7c3deb3ed4286c10c418758db05438f4ec4468bf34c5b2e64738cc8dd3fa1cf"
     },
     {
-      "name": "evidence-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "2be2260ebfe579c4d20a8434be190ecf9f1fb4eb698a8bbff6ecedefd91cf8d5"
+      "name": "evidence-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "9aa0ce1cc62d0dceeaa2090407db1e7bff64c2e664dc431e0e2b0983c3f22125"
     },
     {
-      "name": "evidence-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "cea8d1fee09c54554075ec3b93f466c1924fc14400c697dbd6d721debbd8d07c"
+      "name": "evidence-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "adbaec99911791d5d113396f8562ad386bf015ec9b05b286c73d0acfbdbf84b7"
     },
     {
       "name": "evidence.grype.json",
-      "sha256": "c2fe4294898052268bd552207a5e599f73cfafc3811d41878130b82d48df1d41"
+      "sha256": "3320f5c4080d76e3a4209e33841186b9e7ec8da9e06c8cab50299057eb9bf333"
     },
     {
       "name": "evidence.sbom.spdx.json",
-      "sha256": "972ef1fd6f85662783cec13b2250ba98a70f81025a696992ff75175c2ffda083"
+      "sha256": "10aa0fbf09090da9383b019e02adae4f53f43f8d83c3479442b6ae7e6938217b"
     },
     {
       "name": "evidencectl-install.sh",
-      "sha256": "6cc4b4b43fc4760f23a8b83bcbf86be57a99e1c121d1f7c96ff9affccb4aa261"
+      "sha256": "911f56eb45d269330718a93c8b2942b0793181fa66a8f0febff467b288c7c951"
     },
     {
-      "name": "evidencectl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-install.sh",
-      "sha256": "6cc4b4b43fc4760f23a8b83bcbf86be57a99e1c121d1f7c96ff9affccb4aa261"
+      "name": "evidencectl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-install.sh",
+      "sha256": "911f56eb45d269330718a93c8b2942b0793181fa66a8f0febff467b288c7c951"
     },
     {
-      "name": "evidencectl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "499d6c6c65445a9c4c2246c84c61a153e216baf334a9df9edb28d5f087c416a7"
+      "name": "evidencectl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "0de93c121efd4a539d868ad687070afebd12ae2abd5840796fbeb6c8fa0379b4"
     },
     {
-      "name": "evidencectl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "b2d2404ad593577373339d4443f4f700d6d374dc3c85ad5024a199599d878542"
+      "name": "evidencectl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "cc9ce1666adc281dfe143736488e61d1617fe1aa63822b701474623913e64433"
     },
     {
-      "name": "evidencectl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "6489bec8e099673add94cf335bdf5d40f425f8c230bd82f368b6f31062b14cc8"
+      "name": "evidencectl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "7192fc4a22c934c0ab3668b46c1e5ac69150fc6ccf88698124dc466b57c90383"
     },
     {
       "name": "messaging-install.sh",
-      "sha256": "37dd915d2ee22dabc2d45468b3a3a31cbbc595569f48ada900b90324bdbe89ca"
+      "sha256": "c02b2bf2429fe45605db91a68528a49ec7581925d8b9976f6b0efd67ce941183"
     },
     {
-      "name": "messaging-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-install.sh",
-      "sha256": "37dd915d2ee22dabc2d45468b3a3a31cbbc595569f48ada900b90324bdbe89ca"
+      "name": "messaging-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-install.sh",
+      "sha256": "c02b2bf2429fe45605db91a68528a49ec7581925d8b9976f6b0efd67ce941183"
     },
     {
-      "name": "messaging-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "1afd8cb361000bc9bb8d64ff302d298a64d78f34549e737460525745da407dec"
+      "name": "messaging-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "4ab902795b5ff617b8446b972e61a30f1589768a4b2a0aa0d142d08470050b95"
     },
     {
-      "name": "messaging-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "0651ab3c71ecf6a1e2008df1a287bea72c86708ab32793b46e498098b885048e"
+      "name": "messaging-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "0e276117e34dd16604ca3f1590751d929fea42cecc9c3d0d69f3bc81f89bd443"
     },
     {
-      "name": "messaging-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "42cf254336a3dd08446a1d1ca3ed07aaf12ffab3bd138c08abec6dc1901f20c6"
+      "name": "messaging-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "267c9fc3b0df0be382827d5422bbe61ab8d4efaaeea2e5a0fcb624e973a8518b"
     },
     {
       "name": "messaging.grype.json",
-      "sha256": "223f3e98f8af24783bee8d504d97240e395d18f9423f2d3fdb025dc8d20d68cb"
+      "sha256": "ecb24112cc26f965f103cc8b918bab0de73f625111b0f88f242c5e29afd9b0b7"
     },
     {
       "name": "messaging.sbom.spdx.json",
-      "sha256": "41473d35eb7fa82e3b4b51556324951068b5f46aa5ce22400e1b71952e1f123d"
+      "sha256": "42d24604ff615f4f095951884744cc815ebef760fcb9591d9c309cf7056089cb"
     },
     {
-      "name": "messagingctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "b71e254b75e04073b74f68461d32b275374dd276fd3c91e8c000378af6505900"
+      "name": "messagingctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "b6d2835864548581cc41e0919af1dcb4387ac067727e051234f81094638820ba"
     },
     {
-      "name": "messagingctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "cd4b786efe253c3fc07cd2da6cb1bc4ab4afc105e56d5031c2215ba3928bf927"
+      "name": "messagingctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "68bf153fde5f39cefbdb83c449b8651f0edf8edadfa4192eb78afa3374b95e0d"
     },
     {
-      "name": "messagingctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "544cf84a886a5ccc785564e2879ab1e0ad3a1b8709d49ff08b4b6be0fab1807c"
+      "name": "messagingctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "a70356182ff5d64fe0401dc2e6a6af89f55ea4b9adf72fc296202d5022434364"
+    },
+    {
+      "name": "registry-language-server-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "323c115ebec5ef30fab1f7476ec9032b2dd34bf8a776548d33e51ffd978eb7ed"
+    },
+    {
+      "name": "registry-language-server-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "52d6071d9d5b553c09681492167dd70fd00c71039e5d3aac0798bec7cc3d7906"
     },
     {
       "name": "registry-manifest-install.sh",
-      "sha256": "3484c8e5e294b47ebf75baf43ae735d66e715499c80b75aec17b4ec4de020165"
+      "sha256": "e84b02249e4d1172a9536a37e2b88f283b394bd644f76e172b60ba9f3caf3edc"
     },
     {
-      "name": "registry-manifest-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-install.sh",
-      "sha256": "3484c8e5e294b47ebf75baf43ae735d66e715499c80b75aec17b4ec4de020165"
+      "name": "registry-manifest-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-install.sh",
+      "sha256": "e84b02249e4d1172a9536a37e2b88f283b394bd644f76e172b60ba9f3caf3edc"
     },
     {
-      "name": "registry-manifest-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "510e45c24784d36e8f44fe2eed306cada9b432f23ed9aef136298882438e71ae"
+      "name": "registry-manifest-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "dff7beace6a3ebe83e3746e9f60d2bf89707670a636295b5364d6d55af3ba724"
     },
     {
-      "name": "registry-manifest-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "a9fffbccf53b61a64324a5d2dd4eed10610203201637da3076923ad711eff66f"
+      "name": "registry-manifest-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "c1799c2c414005dde37aab6dc6bfc2ac51cf3c39c19c2aca9c7e7ffdc43682ab"
     },
     {
-      "name": "registry-manifest-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64",
-      "sha256": "4606661fdf3d3832e5d6f1baad2ac1a72d9ff85a35909b8b271595a30428fb2d"
+      "name": "registry-manifest-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64",
+      "sha256": "9a3962ebd60c9e902ab71c39ed00b1d469c53fdfea409e5653837efdbabde1a5"
     },
     {
       "name": "registry-render-install.sh",
-      "sha256": "280f3f24254ceb8e27e87127bfa4638ed4d45544b4ccf15b2fe86120a5cf8fa5"
+      "sha256": "280a5b68a9b244b16047aab609ccda3072bb2e7494850fff64de2a914ac5c011"
     },
     {
-      "name": "registry-render-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-install.sh",
-      "sha256": "280f3f24254ceb8e27e87127bfa4638ed4d45544b4ccf15b2fe86120a5cf8fa5"
+      "name": "registry-render-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-install.sh",
+      "sha256": "280a5b68a9b244b16047aab609ccda3072bb2e7494850fff64de2a914ac5c011"
     },
     {
-      "name": "registry-render-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "66fff3128fc30cefade519afd6b4b1c47d7d55885a3f55d44eb6f5a92b974b40"
+      "name": "registry-render-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "75110dd99200c41fccd07674e876640319df709f29bb5830fb38bef60cb1f65e"
     },
     {
-      "name": "registry-render-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "92dd384cae778833c9c0e903ef414077cb4478fe3955da7d9403531aa0797e8b"
+      "name": "registry-render-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "db7d5e51ac73a8b6cc19076f3deba6b1c3d70208e607abd2b879079f9fccf06f"
     },
     {
-      "name": "registry-render-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "56afcf2eb1c066f1b8cbb5d4b6055a51a00c16b44e52d9958c2c324e358ef48a"
+      "name": "registry-render-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "e371fdd158a626e32f7f5e4c5c61d4571dbff2b809a80624e9626f4b94e9ce9f"
     },
     {
       "name": "registry-render.grype.json",
-      "sha256": "8da93dc0293bc5d7ca3e93f03983554a4546b00f46d8738d54492850da1c2ef4"
+      "sha256": "0b675e05f83a2fa90160a8af3878282331b6c6dacf009bddaddb554ff47ea4d9"
     },
     {
       "name": "registry-render.sbom.spdx.json",
-      "sha256": "5f736145672ab030e54df094b29a99c8732094a88a18e5ab7ca081d8dd939d82"
+      "sha256": "1ee8af40dd05a990261ed9761768585d9c93a8277ce2bc1c942bfaa059447c20"
     },
     {
-      "name": "rstack-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "28e5a30bd1d7477ccf133ccc8ccf0745df0eca3328ccc002a924af8f0a79c737"
+      "name": "rstack-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "b210c9ba4678f3f22364f3e0b20098cc0bcb9f82907892f323f0a7d5f3edd729"
     },
     {
-      "name": "rstack-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "883bda379f258d2ebaf9d2874ff459a94fca5f1552b0852cf601574b77b5b56f"
+      "name": "rstack-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "e5491418677ca4141e95eec4e59f49f1ff72e40ddd0255f71814af3dea3bf88a"
     },
     {
-      "name": "rstack-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "be642ce53dd45c3a517096454d809ba4a101cd763e0edd85c4d2248398270ddb"
+      "name": "rstack-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "cf0412f6a5a6563afacd5ee740b25d4def00f4704f51362f1efebdc2b3804100"
     },
     {
       "name": "scheduling-install.sh",
-      "sha256": "5c973e7fdcbf495e059be3a19903bee7bb578cab4dbabd7f9be558a2e226cf6a"
+      "sha256": "443083590353ca9207bdca14bfb23b210f709e086acb7ce3aab2093872cdafe0"
     },
     {
-      "name": "scheduling-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-install.sh",
-      "sha256": "5c973e7fdcbf495e059be3a19903bee7bb578cab4dbabd7f9be558a2e226cf6a"
+      "name": "scheduling-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-install.sh",
+      "sha256": "443083590353ca9207bdca14bfb23b210f709e086acb7ce3aab2093872cdafe0"
     },
     {
-      "name": "scheduling-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "fe7e3f01bfddef563c5c52df24edcbe72f4f2853562ce34baaef29eb8a4fda77"
+      "name": "scheduling-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "b8038382d60a8006c826ce0f79f9d638846f7cd72536ef4fb2e8e6444b3a9d1a"
     },
     {
-      "name": "scheduling-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "ea3c1d6e9ffedd5c192095ad5849acbafe6433bd0b382976780b878530b0d5f2"
+      "name": "scheduling-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "bbee0a0de9800aa569e8167bdb10030b3b2a5b7e19da95153a2156bb51d6d044"
     },
     {
-      "name": "scheduling-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "fc8175a76cf0b9775ea06a33694c9df0538c7d4d2dfe030a9ef2ac6df647f0ec"
+      "name": "scheduling-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "4d3e94548698d9f54ac973743ca39f7bc1bd3abc0acdd13af7bb6fd48952cb02"
     },
     {
       "name": "scheduling.grype.json",
-      "sha256": "17c1dbc4b1a2e4d1310cd710d67b5f4006ba780ce4c6e8663d81e331a2c00bd2"
+      "sha256": "2cd9a0e2663f1198059dc7c99df9c7285b0577d6ef5333e7f941ce21ba79c213"
     },
     {
       "name": "scheduling.sbom.spdx.json",
-      "sha256": "930aa29550de7717e131a37b7757d12f579cd3786e2c2a65e867cb06e6aa8220"
+      "sha256": "e467991448d2bc055aa1eb625ef5c8724f77f08963f1fdcc640641dd9094b33c"
     },
     {
-      "name": "schedulingctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-amd64",
-      "sha256": "59f7fe4eb2fc0d5c343716243514c284fadd9adbfc53c97c7b6bf926962d59e8"
+      "name": "schedulingctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-amd64",
+      "sha256": "54f2e70ab98916ae266e13c8b0624dcecc809b438e28e91d1a9d9c76af217b37"
     },
     {
-      "name": "schedulingctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-linux-arm64",
-      "sha256": "5a7fa2a2db4255a10062640b365599851ba42b969c4311c542ad8c19b6c54d06"
+      "name": "schedulingctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-linux-arm64",
+      "sha256": "e5e43d5d8c982c966d896470a0a6bd63c7769fbb2114654bde71f105709e1903"
     },
     {
-      "name": "schedulingctl-v0.46.1-nightly.20261111.0ffaa8483db73144e5c359fc9fe9bdc856b51e80-macos-arm64.tar.gz",
-      "sha256": "1e636175fbcca11d9e0a8d5808d04db4eea3284c2af5b3a9392de03808a4d458"
+      "name": "schedulingctl-v0.47.0-nightly.20261121.09c74b2c268040717b015e25ef30c32b770c82ae-macos-arm64.tar.gz",
+      "sha256": "0cd1ee686df0aba576359c70edff0e5bdb468b0ce8f571c296f1cd73dec2c8f2"
     }
   ],
   "images": {
-    "breg": "ghcr.io/registrystack/breg@sha256:c379e32aa7237ec43160edc197f8cbfacc2c4ca9292d777872dc44584914cbe6",
-    "breg-mcp": "ghcr.io/registrystack/breg-mcp@sha256:ba8fc7979bc538c96f765f8d1c69cade46b36fc1b0b54a3ae6bf18a252d532f2",
-    "breg-review": "ghcr.io/registrystack/breg-review@sha256:080a55223db94811d324bbe2df756a7f7f109adda3fafd8301bf434560b3d181",
-    "casework": "ghcr.io/registrystack/casework@sha256:0f33d550e5d84f7c611f6f8482f2465266f1df40285d83fce05c1b0a8cfb4e0e",
-    "discovery": "ghcr.io/registrystack/discovery@sha256:3d90e897842a54564f0b1335342550fba05362db44e8c4814654e04d7762f84f",
-    "evidence": "ghcr.io/registrystack/evidence@sha256:97b191b444566cbeaf0f12e9a967de10bf9cc4d4ab629a7cae58c26849e0311a",
-    "evidence-oid4vci": "ghcr.io/registrystack/evidence-oid4vci@sha256:2709c6d8ea15ca5fc0cff800e327771a0f6e6ebefb694779c8579a495cee11b0",
-    "messaging": "ghcr.io/registrystack/messaging@sha256:1d99eaceb7e71aa3f29915867c776c0cef0a8f374d81364b87a051a8af53687e",
-    "registry-render": "ghcr.io/registrystack/registry-render@sha256:89ba18f0caeb88c576afa4ab2ff1893064228b1e9f98d12660b3167482480832",
-    "scheduling": "ghcr.io/registrystack/scheduling@sha256:aea571136f4d1fe56d478fb354cdb5b7620118582f8301c53366c4eaf9712be1"
+    "breg": "ghcr.io/registrystack/breg@sha256:babffebe25bef836faf48056bf9933ec380eca13dbed4e41875559cb5fc71ec0",
+    "breg-mcp": "ghcr.io/registrystack/breg-mcp@sha256:2ffb2dddd7b643e9b7c244a6b306181af79fcf51e22477c426824738bde78efd",
+    "breg-review": "ghcr.io/registrystack/breg-review@sha256:4286f8af864312f7c32ef5ded4cc386e8815602fccb9f870275188fd6c4e9c74",
+    "casework": "ghcr.io/registrystack/casework@sha256:0eee5307eca6de9236fbe31d132312b5c891a928848d3be437b8c416fae05482",
+    "discovery": "ghcr.io/registrystack/discovery@sha256:783e2992904cf73b45dab916c157563a43b3f9e27cfa7d2845e871e222d4912c",
+    "evidence": "ghcr.io/registrystack/evidence@sha256:a78fced8118d3aa18802dabd39d0522dc97fa60227963c64ac3b3e699257ae2a",
+    "evidence-oid4vci": "ghcr.io/registrystack/evidence-oid4vci@sha256:2fdec11e7328812a8ebcdde9c9cb229c497cc351142c9c7455b767920dd20966",
+    "messaging": "ghcr.io/registrystack/messaging@sha256:8be7caac273a709cdb750a922f2812c3a9c39ca11275c1f6dd576e919455f8e3",
+    "registry-render": "ghcr.io/registrystack/registry-render@sha256:3f3891ec966d63c0f998c9df412d2d16340b64aa437b6b9a664ac88bb2bfe014",
+    "scheduling": "ghcr.io/registrystack/scheduling@sha256:b8e0004fa1f0f8fd50aa541884403d339a92345ddd5d04eaf7f60d5097b11418"
   }
 }
