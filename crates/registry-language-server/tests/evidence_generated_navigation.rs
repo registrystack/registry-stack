@@ -43,7 +43,7 @@ fn typescript_and_python_outputs_navigate_to_the_same_normalized_model() {
         .value;
     let scripts = project
         .functions
-        .iter()
+        .values()
         .map(|function| (function.source.clone(), p.read(&function.source)))
         .collect();
     let compiled = registry_evidence_authoring::compile::compile_with_pack_routes(

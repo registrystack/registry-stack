@@ -18,7 +18,7 @@ use registry_evidence_authoring::{
 fn default_scripts(project: &EvidenceProject) -> BTreeMap<String, String> {
     project
         .functions
-        .iter()
+        .values()
         .map(|function| {
             let script = match function.interface {
                 FunctionInterface::AssertionDerive => {
@@ -154,7 +154,7 @@ fuzz_target!(|data: &[u8]| {
     let _ = validate_function(&text, FunctionInterface::AssertionDerive);
     let _ = validate_derive_fact_reads(&text, &baseline.declared_facts);
     let mut scripts = default_scripts(project);
-    for function in &project.functions {
+    for function in project.functions.values() {
         if function.interface == FunctionInterface::AssertionDerive {
             scripts.insert(function.source.clone(), text.clone());
         }
