@@ -4,8 +4,8 @@
   rows:
     - ['`created`', 'Not allowed', 'Not allowed', 'Allowed', 'After']
     - ['`patched`', 'Allowed', 'Allowed', 'Allowed', 'After']
-    - ['`tombstoned`', 'Not allowed', 'Allowed', 'Not allowed', 'Before']
     - ['`read`', 'Not allowed', 'Not allowed', 'Not allowed', 'None. `values` is empty.']
+    - ['`tombstoned`', 'Not allowed', 'Allowed', 'Not allowed', 'Before']
 - id: headers
   title: Webhook request headers
   columns: [Header, Format or value, Meaning]
