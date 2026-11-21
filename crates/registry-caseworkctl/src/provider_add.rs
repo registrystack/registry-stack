@@ -1573,7 +1573,7 @@ struct ComparableReviewStages {
 
 #[derive(Deserialize)]
 struct ComparableReviewOutcomes {
-    #[serde(deserialize_with = "typed::id_keyed_or_list")]
+    #[serde(deserialize_with = "registry_platform_yaml::id_keyed_or_list")]
     outcomes: Vec<ReviewOutcomePolicy>,
 }
 

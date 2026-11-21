@@ -88,7 +88,7 @@ pub enum ClockPolicy {
         due_time: String,
         #[serde(default)]
         at_risk: Option<WorkingDaysBefore>,
-        #[serde(default, deserialize_with = "crate::typed::id_keyed_or_list")]
+        #[serde(default, deserialize_with = "registry_platform_yaml::id_keyed_or_list")]
         reminders: Vec<ClockReminder>,
         #[serde(default)]
         steps: Vec<ClockStep>,
@@ -127,7 +127,7 @@ enum ClockPolicyWire<'a> {
             feature = "schema",
             schemars(
                 default,
-                schema_with = "crate::typed::id_keyed_or_list_schema::<ClockReminder>"
+                schema_with = "registry_platform_yaml::id_keyed_or_list_schema::<ClockReminder>"
             )
         )]
         reminders: &'a [ClockReminder],

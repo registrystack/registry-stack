@@ -110,6 +110,7 @@ mod de;
 mod diagnostic;
 mod document;
 mod envelope;
+mod id_keyed;
 mod integrity;
 mod messages;
 mod node;
@@ -136,6 +137,9 @@ pub use envelope::{
     ApiVersion, Envelope, EnvelopeRule, Expect, FormatSpec, RemovedKey, RetiredApiVersion,
     VersionStatus,
 };
+pub use id_keyed::{id_keyed, id_keyed_by_local_id, id_keyed_or_list, serialize_id_keyed};
+#[cfg(feature = "schema")]
+pub use id_keyed::{id_keyed_or_list_schema, id_keyed_schema};
 pub use integrity::{
     duplicate_display_text_diagnostics, duplicate_display_text_location_diagnostics,
     local_id_collision_diagnostics, AuthoredDisplayText, AuthoredDisplayTextLocation, AuthoredId,

@@ -787,6 +787,12 @@ fn safe_expected(expected: &str) -> Option<String> {
     None
 }
 
+/// Whether `visitor` states `wanted` as what it expects.
+fn visitor_expects<'de, V: Visitor<'de>>(visitor: &V, wanted: &str) -> bool {
+    let expected: &dyn de::Expected = visitor;
+    expected.to_string() == wanted
+}
+
 /// Turn an error a visitor raised at `site` into the reader's problem.
 fn describe(site: &Site<'_>, kind: Kind, buffered: bool) -> Problem {
     let node = site.node;
@@ -1239,7 +1245,14 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDe<'a> {
     }
 
     fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
+        let names_shape = visitor_expects(&visitor, crate::id_keyed::EXPECT_ID_KEYED_MAP);
         self.run(false, |de| {
+            if names_shape && matches!(de.site.node.value, NodeValue::Sequence(_)) {
+                return Err(de.fail(
+                    "config.invalid-type",
+                    messages::expected_id_keyed_map(de.found()),
+                ));
+            }
             let entries = de.mapping()?;
             visitor.visit_map(MapAccess::new(de, entries))
         })

@@ -1007,6 +1007,20 @@ pub(crate) fn expected_collection(list_wanted: bool, found: Found) -> Text {
     }
 }
 
+/// A list written where named items belong in a mapping keyed by their ids.
+pub(crate) fn expected_id_keyed_map(found: Found) -> Text {
+    if found == Found::Substituted {
+        return substitution();
+    }
+    text(
+        format!(
+            "expected a mapping keyed by each item's id, not {}",
+            found.phrase()
+        ),
+        "Write each item as a member of a mapping: its id as the key, and the rest of the item as the value.",
+    )
+}
+
 pub(crate) fn integer_out_of_range(unit: Option<&str>, bounds: &Bounds) -> Text {
     let wanted = whole_number(unit, bounds);
     text(
