@@ -19,6 +19,10 @@
   `bregctl apply` over a database whose active package was. The refusal names
   the fresh-database path: recreate the database, build a package with this
   release, then run `bregctl apply --package DIR --initial`.
+- `bregctl module add consent` refuses a project that already declares an
+  access profile the module would generate, with
+  `module.consent.profile-clash` naming the profile, in place of failing while
+  it renders the project.
 - BREAKING: `recordTypes` is a mapping from each Record type id to the rest of
   its entry, in the project and in a module. The old list shape is refused, and
   so is an `id` member inside an entry, with a message that names the mapping.
