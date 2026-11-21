@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
   -> `database.caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef`
   the other TLS blocks use. The old key is refused as an unknown key. The value
@@ -21,8 +23,6 @@
 - Every database-sampled gauge is read under one 5 second scrape deadline,
   with a server-side statement timeout set to the time left, so the server
   cancels a slow read. Failed reads are logged by error class.
-
-## 0.47.0 - 2026-11-20
 
 - BREAKING: Casework refuses a `casework.yaml` whose access profiles for people
   (staff, supervisor, administrator, an initiator profile and any other requester
