@@ -277,6 +277,27 @@ fn plan(source: &CapturedProjectSource, subject: &str) -> Result<Plan, FailureRe
         .replace(SUBJECT_TOKEN, subject)
         .replace(CLAIM_TOKEN, &yaml_scalar(&principal_claim(source)));
 
+    // The generated profiles are the template's top-level keys. An authored
+    // profile with one of those ids would become a repeated key.
+    if let Some(clash) = profile_items
+        .lines()
+        .filter_map(|line| line.strip_suffix(':'))
+        .find(|id| {
+            project
+                .access_profiles
+                .iter()
+                .any(|profile| profile.id == *id)
+        })
+    {
+        return Err(authoring_failure(
+            "module.consent.profile-clash",
+            "accessProfiles",
+            &format!(
+                "the project already declares an access profile '{clash}', which the consent module would generate; rename or remove it, then add the module again"
+            ),
+        ));
+    }
+
     let (dataset_addition, dataset_conflict_index) = match consent_dataset_plan(source, subject) {
         ConsentDataset::NotProjected => (None, None),
         ConsentDataset::Existing(index) => (None, Some(index)),

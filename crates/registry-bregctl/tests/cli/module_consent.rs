@@ -438,6 +438,27 @@ fn module_add_consent_refuses_a_subject_already_generated_without_writing() {
     assert_eq!(registry_source(project.path()), before);
 }
 
+/// A project profile that already carries a name the module would generate is
+/// refused naming the clash, instead of writing a duplicate key.
+#[test]
+fn module_add_consent_refuses_a_profile_id_the_project_already_declares() {
+    let source = BASE_PROJECT.replace("  registrar:\n", "  person-consent-steward:\n");
+    let project = TestProject::from_registry_source(source.as_bytes());
+
+    let refused = module_add(project.path(), "person");
+
+    assert!(!refused.status.success(), "{refused:?}");
+    let report = json_stdout(&refused);
+    assert_eq!(
+        report["diagnostics"][0]["code"], "module.consent.profile-clash",
+        "{report}"
+    );
+    let message = report["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(message.contains("person-consent-steward"), "{message}");
+    assert_eq!(registry_source(project.path()), source);
+    assert!(!project.path().join("modules").exists());
+}
+
 #[test]
 fn module_add_consent_refuses_an_incomplete_project_without_writing() {
     let no_recipients = {
