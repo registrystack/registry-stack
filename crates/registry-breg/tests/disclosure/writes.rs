@@ -1314,3 +1314,47 @@ async fn known_limit_an_automatic_proposal_cannot_set_a_record_mark_even_for_an_
     assert_eq!(residence_level(&history, &id).await, "none");
     history.fixture.finish().await;
 }
+
+/// Pins a known limit, not the intended behaviour. The automatic apply reads
+/// its target under the engine's own database profile, which no `record`
+/// condition exempts, so a residence the condition already marks is absent to
+/// it even though the submitter is exempt. The Proposal ends blocked after one
+/// of its two attempts, with no retry scheduled and the record unchanged. The
+/// exempt submitter can still apply it by hand.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn known_limit_an_automatic_proposal_cannot_patch_a_record_a_record_condition_hides() {
+    let history = start_with(residence_source()).await;
+    let id = open_residence(&history).await;
+    let reply = protect_as(&history, PROTECTION_OFFICER, &id, "protected").await;
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    let submitted = submit_input_as(
+        &history,
+        PROTECTION_OFFICER,
+        "correct-residence-protection",
+        json!({"residenceId": id, "level": "substitute-address"}),
+    )
+    .await;
+    let application = run_automatic(&history, &submitted).await;
+    assert_eq!(application["state"], "blocked", "{application}");
+    assert_eq!(
+        application["reason"], "application-refused",
+        "{application}"
+    );
+    assert_eq!(application["recovery"], "correct-input", "{application}");
+    assert_eq!(
+        application["automaticRetry"]["attempts"], 1,
+        "{application}"
+    );
+    assert_eq!(
+        application["automaticRetry"]["scheduled"], false,
+        "{application}"
+    );
+    assert_eq!(residence_level(&history, &id).await, "protected");
+
+    let applied = apply(&history, &submitted)
+        .await
+        .expect("the exempt submitter applies it by hand");
+    assert_eq!(applied.state(), BRegProposalState::Applied);
+    assert_eq!(residence_level(&history, &id).await, "substitute-address");
+    history.fixture.finish().await;
+}

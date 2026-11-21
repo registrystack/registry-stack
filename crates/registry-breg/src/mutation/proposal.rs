@@ -4177,11 +4177,15 @@ fn input_targets(
         })
         .collect()
 }
-/// The profile disclosure conditions bind on a Proposal write. An automatic
-/// application writes as the profile that submitted the version, or as the
+/// The profile whose disclosure conditions the write rule checks on a Proposal
+/// write. A manual application is checked as the applier. An automatic
+/// application is checked as the profile that submitted the version, or as the
 /// system apply profile when the version names none. A profile removed or no
-/// longer exempt since submit is bound, so the write is refused. A manual
-/// application writes as the applier.
+/// longer exempt since submit is bound, so the write is refused. This check
+/// does not change who writes: an automatic application still reads and writes
+/// under the system apply profile, which no `record` condition can exempt, so
+/// the row policy refuses a target that condition matches, or would mark,
+/// whatever this check allows.
 fn disclosure_writer<'a>(
     authority: &'a ProposalAuthority,
     frozen: &'a crate::proposal_workflow::ProposalSnapshot,

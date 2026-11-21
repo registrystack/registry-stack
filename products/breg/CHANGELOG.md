@@ -144,9 +144,10 @@
   condition binding it matches. A Proposal applied automatically is checked against the profile that
   submitted the version being applied, so an exempt submitter's Proposal can make that change, and
   one whose submitting profile was removed or lost its exemption is refused. An automatic Proposal
-  still writes under `system-proposal-apply`, so it cannot set a `record` mark even for an exempt
-  submitter, and ends `blocked` with the record unchanged. Use an immediate Action, or apply the
-  Proposal by hand under an exempt profile. An import item the write rule refuses answers the
+  still reads and writes under `system-proposal-apply`, which no condition can exempt, so even for an
+  exempt submitter it cannot change a record a `record` condition matches or set a `record` mark. It
+  ends `blocked` with no retry scheduled and the record unchanged. Use an immediate Action, or apply
+  the Proposal by hand under an exempt profile. An import item the write rule refuses answers the
   generic `412 precondition.failed`. The OpenAPI of Create, Patch, Batch, immediate Action invoke
   and Proposal apply declares that 403 wherever a binding condition can refuse the write, and its
   `detail` names disclosure conditions beside row boundaries. PostgreSQL enforces a `record`
