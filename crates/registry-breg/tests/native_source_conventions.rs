@@ -1339,7 +1339,8 @@ fn an_undeclared_value_type_reference_is_reported_at_the_escaped_pointer() {
         "recordTypes":{"a/b": {"route":"entries","primaryDataset":"directory","mutationMode":"mutable",
             "fields":[{"id":"label","typeRef":"missing","classification":"internal"}]}}});
 
-    let report = read_module_yaml("module.yaml", &bytes(&source)).expect_err("typeRef is undeclared");
+    let report =
+        read_module_yaml("module.yaml", &bytes(&source)).expect_err("typeRef is undeclared");
 
     let diagnostic = &report.diagnostics()[0];
     assert_eq!(diagnostic.code, "breg.value-type.reference-invalid");
