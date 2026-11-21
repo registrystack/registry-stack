@@ -3096,12 +3096,17 @@ fn compile_execution(
     }
 }
 
-/// Identity used by migration classification, independent of presentation and
-/// the target-row snapshot revision. Record schema changes are classified by
-/// their own migration rules; frozen Proposals keep the stricter snapshot fence.
+/// Identity used by migration classification, independent of presentation,
+/// grant order, and the target-row snapshot revision. Grants are keyed by
+/// profile id (one per profile per action), so their order carries no meaning.
+/// Record schema changes are classified by their own migration rules; frozen
+/// Proposals keep the stricter snapshot fence.
 #[must_use]
 pub fn migration_review_revision(action: &CompiledAction) -> String {
     let mut action = action.clone();
+    action
+        .permissions
+        .sort_by(|a, b| a.profile_id.cmp(&b.profile_id));
     action.definition_revision.clear();
     action.display = Default::default();
     action.grouping = None;
@@ -3114,6 +3119,9 @@ pub fn migration_review_revision(action: &CompiledAction) -> String {
         }
     }
     if let crate::model::CompiledActionExecution::Proposal { proposal } = &mut action.execution {
+        proposal
+            .permissions
+            .sort_by(|a, b| a.profile_id.cmp(&b.profile_id));
         for hook in &mut proposal.hooks {
             hook.display = Default::default();
         }
