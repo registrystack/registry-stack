@@ -319,8 +319,12 @@ rewrite its reason.
 ## Reads covered
 
 BReg logs each authorised Record materialised from storage through direct get, list (including GIS
-collection items), lookup, relationship traversal, snapshot, revision, and attachment download
-routes.
+collection items), lookup, relationship traversal, snapshot and revision routes, and the root Records
+returned by an external view read.
+BReg writes no subject-log entry for a Proposal attachment download or a Proposal review read, even
+when the review shows fields of a Record type with `accessLog`.
+Those reads are recorded only in BReg's [audit records](../breg-monitor/#read-audit-records).
+If data subjects must see them, cover them in your own audit.
 Paging lookahead rows are removed first, so they do not become events.
 A refusal before Record access and a query that matches no Record create no subject-log entry.
 An unresolved ambiguous lookup can materialise candidate Records before it refuses the response;
