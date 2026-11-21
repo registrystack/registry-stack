@@ -167,7 +167,8 @@
   the bound conditions without their literals, `bregctl explain access` lists them in full, the
   access preview names the ids that bind a profile, and the ODRL export omits a grant a condition
   binds (`disclosure-condition`). Proposal inputs stay visible to reviewers, and a uniqueness or
-  reference conflict on a Create or Patch can reveal that a withheld record exists. Packages that
+  reference conflict on a Create or Patch can reveal that a withheld record exists. The security
+  model gains obligation 22 and BREG-RES-27 for these limits. Packages that
   use the new key change revision, and the metadata, OpenAPI and Explain documents gain members that
   earlier clients ignore.
 - An access profile can set `requireAccessReason: true`. A request under it without a valid
