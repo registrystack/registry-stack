@@ -72,6 +72,11 @@
 //! Writing `accessProfiles` as a map keyed by id changes the authored module
 //! bytes, so it moves the revisions of the fixtures that lock a module. SQL and
 //! Action fingerprints stay fixed.
+//! The `query.filter_required` and `request.access_reason_required` Problems
+//! in the generated Problem schema, and the `query.filter_required` example on
+//! every list operation, likewise move artifact revisions only. A registry
+//! with no disclosure condition, required filter or access reason keeps its
+//! exact SQL and Action fingerprints.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
@@ -94,7 +99,7 @@ const FIXTURES: &[Fixture] = &[
         ),
         module: None,
         ddl_sha256: "6d6431e3e4fb3eb254ef8f3b2e895aed2c09ed4ee7ca506627e1d063359f4578",
-        revision: "sha256:e2158158511df90e52b9cddb69274415ea303f64a46f76db4cb4bdf616b4e5fa",
+        revision: "sha256:d5ac1bfd15ef4e38a4f83660600bb15c99e8cc057aa40f3d49a631b1a7d1e2b3",
     },
     Fixture {
         name: "asset-registration-actions",
