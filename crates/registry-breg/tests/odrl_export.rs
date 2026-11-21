@@ -376,6 +376,52 @@ fn row_membership_and_consent_restrictions_omit_the_complete_read_grant() {
 }
 
 #[test]
+fn a_profile_that_requires_an_access_reason_omits_the_complete_read_grant() {
+    // A profile that requires a reason holds no Action or Proposal permission,
+    // so the reader is a copy of the editor's record grant without them.
+    let reader = |require_access_reason: bool| {
+        let mut source = supported_source();
+        let mut reader = source["accessProfiles"][0].clone();
+        reader["id"] = json!("reason-reader");
+        reader["default"] = json!(false);
+        reader["requireAccessReason"] = json!(require_access_reason);
+        let permissions = reader["permissions"].as_object_mut().unwrap();
+        permissions.remove("actions");
+        permissions.remove("proposals");
+        source["accessProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(reader);
+        export_odrl(&compile_source(&source), Some("reason-reader")).unwrap()
+    };
+    let read = |export: &registry_breg::odrl_export::OdrlExport, operation: &str| {
+        export.coverage["grants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|grant| grant["recordType"] == "contact" && grant["operation"] == operation)
+            .unwrap_or_else(|| panic!("missing contact/reason-reader/{operation}"))
+            .clone()
+    };
+
+    let open = reader(false);
+    for operation in ["get", "list"] {
+        assert_eq!(read(&open, operation)["status"], "exported");
+    }
+
+    let export = reader(true);
+    for operation in ["get", "list"] {
+        let grant = read(&export, operation);
+        assert_eq!(grant["status"], "omitted");
+        assert_eq!(grant["reasons"], json!(["access-reason"]));
+    }
+    assert_eq!(
+        document(&export, "generated/odrl/policies.jsonld")["@graph"],
+        json!([])
+    );
+}
+
+#[test]
 fn task_grant_mutant_is_not_broadened_and_profile_selection_is_exact() {
     let mut source = supported_source();
     let mut other = source["accessProfiles"]["directory-editor"].clone();

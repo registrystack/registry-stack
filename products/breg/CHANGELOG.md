@@ -156,17 +156,17 @@
 - An access profile can set `requireAccessReason: true`. A request under it without a valid
   `Registry-Access-Reason` header (unpadded base64url UTF-8, at most 512 bytes) is refused with
   `400 request.access_reason_required`. The reason is stored on the subject access log entry and
-  returned as `accessReason`. On a Record type with `accessLog`, each record a direct Create,
-  Patch, Batch item or Tombstone changes gets an entry with the reason and `accessKind: write`,
-  written in the same transaction and raising no read alert. Action and Proposal writes record
-  none. A read entry carries `accessKind: read`. A hook with
-  `trigger: read` and `profiles` raises a value-free event for each logged read by those profiles,
-  carrying an `access` object. The event is written with the access log entry, so `bregctl check`
-  refuses a read hook on a Record type without `accessLog`
-  (`breg.disclosure.read-hook-access-log-required`). `bregctl check` refuses the key on a profile
-  that grants import, invoke, start, `allowDataExport`, or an action, proposal, dataset, external
-  view or projection-refresh permission, which do not check the reason
-  (`breg.access-profile.access-reason-operation-unsupported`).
+  returned as `accessReason`. On a Record type with `accessLog`, each record a direct Create, Patch,
+  Batch item or Tombstone changes gets an entry with the reason and `accessKind: write`, written in
+  the same transaction and raising no read alert. Action and Proposal writes record none. A read
+  entry carries `accessKind: read`. A hook with `trigger: read` and `profiles` raises a value-free
+  event for each logged read by those profiles, carrying an `access` object. The event is written
+  with the access log entry, so `bregctl check` refuses a read hook on a Record type without
+  `accessLog` (`breg.disclosure.read-hook-access-log-required`). `bregctl check` refuses the key on
+  a profile that grants import, invoke, start, `allowDataExport`, or an action, proposal, dataset,
+  external view or projection-refresh permission, which do not check the reason
+  (`breg.access-profile.access-reason-operation-unsupported`). The ODRL export omits each grant of
+  such a profile (`access-reason`).
 - BREAKING: the subject access log keeps the access reason and the access kind in their own
   columns, and the managed schema fingerprint changes with them. Migration: install the release on
   a fresh database.
