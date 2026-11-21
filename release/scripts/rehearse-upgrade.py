@@ -1054,7 +1054,7 @@ def dump_yaml(path: Path, document: Any) -> None:
 # The first release whose Messaging runtime names the database CA bundle
 # `caBundleRef`. Earlier releases name it `trustedRootCertificateRef`, and an
 # operator renames the key before upgrading, as the Messaging CHANGELOG says.
-DATABASE_CA_BUNDLE_RENAMED = (0, 48, 0)
+DATABASE_CA_BUNDLE_RENAMED = (0, 47, 0)
 
 
 def database_ca_bundle_key(release: tuple[int, int, int] | None) -> str:

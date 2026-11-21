@@ -788,7 +788,7 @@ class MessagingUpgradeTest(unittest.TestCase):
         # Fixed releases, so a threshold set to the wrong release fails here.
         for release, key in (
             ((0, 46, 1), "trustedRootCertificateRef"),
-            ((0, 47, 0), "trustedRootCertificateRef"),
+            ((0, 47, 0), "caBundleRef"),
             ((0, 48, 0), "caBundleRef"),
             (None, "caBundleRef"),
         ):
@@ -796,7 +796,7 @@ class MessagingUpgradeTest(unittest.TestCase):
                 self.assertEqual(MODULE.database_ca_bundle_key(release), key)
 
     def test_the_upgrade_renames_the_database_ca_bundle_key_the_old_side_wrote(self) -> None:
-        earlier = (0, 47, 0)
+        earlier = (0, 46, 1)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             messaging = self.messaging(root)
