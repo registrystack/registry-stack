@@ -498,10 +498,10 @@ const CASEWORK_RUNTIME_REFERENCES: &[N] = &[N::global(
 
 const SCHEDULING_DECLARATIONS: &[N] = &[
     N::global("scheduling/id", "Scheduling project"),
-    N::global("services/*/id", "Scheduling service"),
-    N::global("offerings/*/id", "Scheduling offering"),
-    N::global("openings/*/id", "Scheduling opening"),
-    N::global("holidaySets/*/id", "Scheduling holiday set"),
+    N::global("services/$key", "Scheduling service"),
+    N::global("offerings/$key", "Scheduling offering"),
+    N::global("openings/$key", "Scheduling opening"),
+    N::global("holidaySets/$key", "Scheduling holiday set"),
 ];
 const SCHEDULING_REFERENCES: &[N] = &[
     N::global("offerings/*/service", "Scheduling service"),
@@ -652,8 +652,8 @@ const MESSAGING_DOCUMENTS: &[DocumentRules] = &[
     DocumentRules {
         pattern: "@document",
         declarations: &[
-            N::global("providers/*/id", "Messaging provider"),
-            N::global("senderProfiles/*/id", "Messaging sender profile"),
+            N::global("providers/$key", "Messaging provider"),
+            N::global("senderProfiles/$key", "Messaging sender profile"),
             N::global("templates/*/id", "Messaging template"),
             N::global("accessProfiles/*/id", "Messaging access profile"),
         ],

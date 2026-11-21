@@ -130,12 +130,12 @@ const POLICY: &str = r#"apiVersion: id.registrystack.org/formats/scheduling/proj
 kind: SchedulingProject
 project: {id: commitments-test, version: "1"}
 services:
-  - {id: registry-update, label: Registry record update}
-  - {id: registry-review, label: Registry record review}
+  registry-update: {label: Registry record update}
+  registry-review: {label: Registry record review}
 channels: [public, assisted, urgent, walk-in]
-holidaySets: [{id: none, revision: 1, label: test}]
+holidaySets: {none: {revision: 1, label: test}}
 openings:
-  - id: all-day
+  all-day:
     location: north-counter
     holidaySet: none
     weekdays: [mon, tue, wed, thu, fri, sat, sun]
@@ -145,7 +145,7 @@ openings:
     effectiveUntil: "2035-06-30"
     because: test
 offerings:
-  - id: registry-update-30
+  registry-update-30:
     service: registry-update
     label: 30-minute counter update
     mode: exact-time
@@ -162,7 +162,7 @@ offerings:
       startIncrementMinutes: 30
       maximumRecipients: 1
     reminders: [{offsetMinutes: 60, because: test}]
-  - id: registry-update-60
+  registry-update-60:
     service: registry-update
     label: 60-minute counter update
     mode: exact-time
@@ -178,7 +178,7 @@ offerings:
       pool: north-counter
       startIncrementMinutes: 30
       maximumRecipients: 1
-  - id: registry-review-45
+  registry-review-45:
     service: registry-review
     label: 45-minute record review
     mode: exact-time

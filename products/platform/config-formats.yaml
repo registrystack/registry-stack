@@ -1748,12 +1748,12 @@ formats:
     example: products/scheduling/examples/standalone-exact-time/scheduling.yaml
     conformance:
       requiredText: /project/id
-      optionalText: /offerings/0/duplicateActiveKey
-      integer: /offerings/0/exactTime/durationMinutes
+      optionalText: /offerings/registry-update-30/duplicateActiveKey
+      integer: /offerings/registry-update-30/exactTime/durationMinutes
       boolean: none
-      idList: /services
-      set: /openings/0/weekdays
-      reference: /offerings/0/service
+      idList: none
+      set: /openings/bangkok-counter-hours/weekdays
+      reference: /offerings/registry-update-30/service
     securityMembers: []
     restrictingMembers: []
   - id: scheduling/records
@@ -2227,7 +2227,7 @@ formats:
     check: discoveryctl check --project {project}
     example: products/discovery/fixtures/project/origins.yaml
     conformance:
-      requiredText: /origins/0/id
+      requiredText: /origins/example-evidence/catalogUrl
       optionalText: none
       integer: none
       boolean: none

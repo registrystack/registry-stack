@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- BREAKING: `services`, `offerings`, `holidaySets`, `openings`, and `hooks` in
+  `scheduling.yaml` are mappings from each item's id to the rest of its entry,
+  as a pre-1.0 cleanup so an item has one name and a duplicate cannot be
+  written. The old list shape is refused, and so is an `id` member inside an
+  entry, with a message that names the mapping, and a repeated key is refused
+  at the repeating key. The `locations`, `pools`, `windows`, and `exceptions`
+  lists in `records.yaml` and the fixture files are unchanged. Migration: write
+  `services: {registry-update: {label: Registry record update}}` in place of
+  `services: [{id: registry-update, label: Registry record update}]`, and
+  likewise for the other four. Items are held sorted by id. Check findings
+  report the item's id in place of its position, for example
+  `/offerings/registry-update-30/exactTime/durationMinutes`, and the
+  `schedulingctl check` report lists ids in sorted order. The authoring schema
+  states each mapping's entry count as `minProperties` and `maxProperties` in
+  place of `minItems` and `maxItems`. The policy digest changes with the
+  rewritten `scheduling.yaml`, so rebuild packages with
+  `schedulingctl package`. A stored project document written in the list form
+  no longer reads, so reactivate the policy from the rewritten package.
+
 - Accept an optional `project.label` and `project.description` in the project
   block, as every product's project file does. They are display text for
   people and change no scheduling behavior. The policy digest covers the whole

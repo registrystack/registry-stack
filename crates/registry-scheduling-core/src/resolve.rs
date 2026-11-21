@@ -159,7 +159,7 @@ mod tests {
 
     fn opening(id: &str, start: &str, end: &str) -> String {
         format!(
-            "  - id: {id}\n    location: north-counter\n    holidaySet: office-holidays\n    weekdays: [mon]\n    startTime: \"{start}\"\n    endTime: \"{end}\"\n    effectiveFrom: \"2026-10-05\"\n    effectiveUntil: \"2026-10-05\"\n    because: Counter opening hours reviewed by the office manager.\n"
+            "  {id}:\n    location: north-counter\n    holidaySet: office-holidays\n    weekdays: [mon]\n    startTime: \"{start}\"\n    endTime: \"{end}\"\n    effectiveFrom: \"2026-10-05\"\n    effectiveUntil: \"2026-10-05\"\n    because: Counter opening hours reviewed by the office manager.\n"
         )
     }
 
@@ -172,10 +172,10 @@ project:
   id: registry-updates
   version: "1"
 services:
-  - id: registry-update
+  registry-update:
     label: Registry record update
 offerings:
-  - id: registry-update-30
+  registry-update-30:
     service: registry-update
     label: 30-minute counter update
     mode: exact-time
@@ -192,7 +192,7 @@ offerings:
       maximumRecipients: 1
     cancellationCutoffMinutes: 240
 holidaySets:
-  - id: office-holidays
+  office-holidays:
     revision: 1
     label: Public holidays observed by the registry office.
 openings:

@@ -13,11 +13,11 @@ use uuid::Uuid;
 const POLICY: &str = r#"apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
 kind: SchedulingProject
 project: {id: busy-records-test, version: "1"}
-services: [{id: registry-update, label: Registry update}]
+services: {registry-update: {label: Registry update}}
 channels: [public]
-holidaySets: [{id: none, revision: 1, label: test}]
+holidaySets: {none: {revision: 1, label: test}}
 openings:
-  - id: all-day
+  all-day:
     location: north-counter
     holidaySet: none
     weekdays: [mon, tue, wed, thu, fri, sat, sun]
@@ -27,7 +27,7 @@ openings:
     effectiveUntil: "2030-12-31"
     because: test
 offerings:
-  - id: room-30
+  room-30:
     service: registry-update
     label: Room
     mode: exact-time
@@ -44,7 +44,7 @@ offerings:
       startIncrementMinutes: 1
       maximumRecipients: 1
       partyCounts: optional
-  - id: registry-sessions
+  registry-sessions:
     service: registry-update
     label: Registry sessions
     mode: arrival-window

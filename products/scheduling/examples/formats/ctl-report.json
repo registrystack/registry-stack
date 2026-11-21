@@ -14,8 +14,8 @@
     "offerings": {
       "count": 2,
       "ids": [
-        "registry-update-30",
-        "fold-day-update-30"
+        "fold-day-update-30",
+        "registry-update-30"
       ]
     },
     "openings": {
@@ -25,7 +25,7 @@
         "new-york-hall-hours"
       ]
     },
-    "policyDigest": "sha256:7c1a72b9d1dc3e36b2812885397b62688991e4a6c71a7a23852fba8f9f2c0fdc",
+    "policyDigest": "sha256:e89c29748b89bd16aa195229e2a9e64e9d4defe0cae138e833d054907801f8b5",
     "projectId": "registry-updates",
     "projectVersion": "1",
     "services": {

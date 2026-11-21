@@ -3,9 +3,9 @@ apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
 kind: SchedulingProject
 project: {id: reservation-review, version: "1"}
 services:
-  - {id: room-reservation, label: Reviewed room reservation}
+  room-reservation: {label: Reviewed room reservation}
 offerings:
-  - id: room-reservation
+  room-reservation:
     service: room-reservation
     label: Reviewed room reservation
     mode: exact-time
@@ -23,9 +23,9 @@ offerings:
       startIncrementMinutes: 60
       maximumRecipients: 1
 holidaySets:
-  - {id: institution-holidays, revision: 1, label: The operator reviews this calendar.}
+  institution-holidays: {revision: 1, label: The operator reviews this calendar.}
 openings:
-  - id: reservation-hours
+  reservation-hours:
     location: community-hall
     holidaySet: institution-holidays
     weekdays: [mon, tue, wed, thu, fri]

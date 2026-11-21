@@ -1734,7 +1734,10 @@ mod tests {
             assert_eq!(report["filesChecked"], 5);
             let diagnostics = report["diagnostics"].as_array().unwrap();
             assert_eq!(diagnostics.len(), 1, "{report}");
-            assert_eq!(diagnostics[0]["path"], "/openings/0/startTime");
+            assert_eq!(
+                diagnostics[0]["path"],
+                "/openings/bangkok-counter-hours/startTime"
+            );
             assert_eq!(diagnostics[0]["severity"], "error");
             assert!(diagnostics[0]["source"]["line"].as_u64().is_some());
             // The diagnostic names the rule, never the refused value.
@@ -1753,7 +1756,10 @@ mod tests {
         assert!(stderr.is_empty());
         assert_eq!(report["status"], "domain-refusal");
         assert!(report.get("fixtures").is_none(), "{report}");
-        assert_eq!(report["diagnostics"][0]["path"], "/openings/0/startTime");
+        assert_eq!(
+            report["diagnostics"][0]["path"],
+            "/openings/bangkok-counter-hours/startTime"
+        );
     }
 
     /// A reschedule target no claim carries is an authoring error the
@@ -1985,7 +1991,10 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("scheduling.yaml:"), "{text}");
-        assert!(text.contains(" /openings/0/startTime\n"), "{text}");
+        assert!(
+            text.contains(" /openings/bangkok-counter-hours/startTime\n"),
+            "{text}"
+        );
         assert!(text.contains("\n  next: "), "{text}");
         assert!(text.ends_with("1 error, 0 warnings in 5 files\n"), "{text}");
     }
@@ -2101,7 +2110,10 @@ mod tests {
         ]);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stderr.is_empty());
-        assert_eq!(report["diagnostics"][0]["path"], "/openings/0/startTime");
+        assert_eq!(
+            report["diagnostics"][0]["path"],
+            "/openings/bangkok-counter-hours/startTime"
+        );
         assert!(!output.exists());
     }
 
@@ -2126,7 +2138,10 @@ mod tests {
         .unwrap();
         let (exit, report, _) = run_json(&["check", project.to_str().unwrap()]);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
-        assert_eq!(report["diagnostics"][0]["path"], "/offerings/0/because");
+        assert_eq!(
+            report["diagnostics"][0]["path"],
+            "/offerings/registry-update-30/because"
+        );
         let message = report["diagnostics"][0]["message"].as_str().unwrap();
         assert!(message.contains("runtime.yaml only"), "{message}");
     }

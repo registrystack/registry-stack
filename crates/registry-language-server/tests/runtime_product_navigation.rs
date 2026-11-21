@@ -14,9 +14,9 @@ use support::{
 const BREG: &str = "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: <|project|>example}\nmodules: {<|module-use|>core: {}}\naccessProfiles:\n  reader:\n    permissions:\n      records:\n        - recordType: <|use|>person\n          readableFields: [<|field-use|>name]\n";
 const BREG_MODULE: &str = "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|module|>core\nrecordTypes:\n  <|definition|>person:\n    fields: [{id: <|field|>name, type: string}]\n";
 const CASEWORK: &str = "apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\nkind: CaseworkProject\nproject: {id: <|project|>intake, version: '1'}\nqueues: {<|definition|>triage: {label: Triage}}\naccessProfiles: {staff: {principalClaim: sub, requiredScopes: [casework:staff], actsAs: staff}}\nreviewPolicies:\n  decision:\n    version: '1'\n    purpose: answer\n    context: {mode: submitted}\n    stages: [{id: review, queue: <|use|>triage, decidingProfiles: [staff], requiredApprovals: 1}]\n    retention: {terminalRetentionDays: 30, accountabilityRetentionDays: 90}\n    displaySchema: {type: object}\n";
-const SCHEDULING: &str = "apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1\nkind: SchedulingProject\nservices: [{id: <|definition|>visit}]\nofferings: [{id: consultation, service: <|use|>visit, location: <|location-use|>office, exactTime: {pool: <|pool-use|>stations}}]\n";
+const SCHEDULING: &str = "apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1\nkind: SchedulingProject\nservices: {<|definition|>visit: {}}\nofferings: {consultation: {service: <|use|>visit, location: <|location-use|>office, exactTime: {pool: <|pool-use|>stations}}}\n";
 const RECORDS: &str = "locations: [{id: <|location|>office}]\npools: [{id: <|pool|>stations}]\n";
-const MESSAGING: &str = "apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1\nkind: MessagingProject\nproviders: [{id: <|definition|>smtp}]\nsenderProfiles: [{id: transactional, provider: <|use|>smtp}]\ntemplates: [{id: <|template|>notice, version: '1'}, {id: notice, version: '2'}]\naccessProfiles: [{id: staff, senderProfiles: [transactional], templates: [<|template-use|>notice]}]\n";
+const MESSAGING: &str = "apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1\nkind: MessagingProject\nproviders: {<|definition|>smtp: {}}\nsenderProfiles: {transactional: {provider: <|use|>smtp}}\ntemplates: [{id: <|template|>notice, version: '1'}, {id: notice, version: '2'}]\naccessProfiles: {staff: {senderProfiles: [transactional], templates: [<|template-use|>notice]}}\n";
 
 fn projects() -> Vec<(ProductKind, &'static str, Project, &'static str)> {
     vec![
@@ -921,7 +921,7 @@ fn scheduling_reopen_and_messaging_bodies_use_owned_document_contracts() {
         project.cursor("records.yaml", "closure")
     );
     let project=Project::new(&[
-        file("messaging.yaml","kind: MessagingProject\nproviders: [{id: smtp}]\ntemplates: [{id: notice, version: '1'}]\n"),
+        file("messaging.yaml","kind: MessagingProject\nproviders: {smtp: {}}\ntemplates: [{id: notice, version: '1'}]\n"),
         file("templates/notice/1/template.yaml","channel: email\nlocales: [<|locale|>en]\nparts: [subject, <|part|>text]\n"),
         file("templates/notice/1/en/subject.j2","Notification\n"),
         file("templates/notice/1/en/text.j2","{{ message }}\n"),

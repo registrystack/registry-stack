@@ -157,7 +157,7 @@ sends; it holds no address and no secret. Add one at the end of `scheduling.yaml
 
 ```yaml title="scheduling/scheduling.yaml" test-append
 hooks:
-  - id: appointment-confirmed
+  appointment-confirmed:
     phase: after
     trigger: appointment.confirmed
     projection:
@@ -174,7 +174,7 @@ schedulingctl check ./scheduling
 
 ```text test-excerpt
 error[scheduling.runtime.unbound-hook-destination] ./scheduling/runtime.example.yaml:<position> /destinations/hooks
-  destinations.hooks must bind every destination scheduling.yaml hooks[].handler.destinationId names
+  destinations.hooks must bind every destination scheduling.yaml hooks.*.handler.destinationId names
 ```
 
 `check` reads `runtime.example.yaml` as the runtime reads its own file, and refuses a hook with

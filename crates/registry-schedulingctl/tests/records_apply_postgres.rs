@@ -26,10 +26,10 @@ project:
   id: registry-updates
   version: "1"
 services:
-  - id: registry-update
+  registry-update:
     label: Registry record update
 offerings:
-  - id: registry-update-30
+  registry-update-30:
     service: registry-update
     label: 30-minute counter update
     mode: exact-time
@@ -45,7 +45,7 @@ offerings:
       startIncrementMinutes: 30
       maximumRecipients: 1
     cancellationCutoffMinutes: 240
-  - id: registry-arrivals
+  registry-arrivals:
     service: registry-update
     label: Counter arrivals
     mode: arrival-window
@@ -57,11 +57,11 @@ offerings:
       horizonDays: 45
     cancellationCutoffMinutes: 240
 holidaySets:
-  - id: office-holidays
+  office-holidays:
     revision: 1
     label: Public holidays observed by the registry offices.
 openings:
-  - id: bangkok-counter-hours
+  bangkok-counter-hours:
     location: bangkok-counter
     holidaySet: office-holidays
     weekdays: [mon, tue, wed, thu, fri]

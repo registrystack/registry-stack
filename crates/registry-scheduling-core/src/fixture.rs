@@ -1075,10 +1075,10 @@ project:
   id: registry-updates
   version: "1"
 services:
-  - id: registry-update
+  registry-update:
     label: Registry record update
 offerings:
-  - id: registry-update-30
+  registry-update-30:
     service: registry-update
     label: 30-minute counter update
     mode: exact-time
@@ -1096,11 +1096,11 @@ offerings:
     cancellationCutoffMinutes: 240
     duplicateActiveKey: subject
 holidaySets:
-  - id: office-holidays
+  office-holidays:
     revision: 1
     label: Public holidays observed by the registry office.
 openings:
-  - id: counter-hours
+  counter-hours:
     location: north-counter
     holidaySet: office-holidays
     weekdays: [mon, tue, wed, thu, fri]
@@ -1705,10 +1705,10 @@ project:
   id: household-days
   version: "3"
 services:
-  - id: household-day
+  household-day:
     label: Household registration day
 offerings:
-  - id: household-morning
+  household-morning:
     service: household-day
     label: Morning household block
     mode: arrival-window
@@ -1720,11 +1720,11 @@ offerings:
       horizonDays: 45
     cancellationCutoffMinutes: 1440
 holidaySets:
-  - id: office-holidays
+  office-holidays:
     revision: 1
     label: Public holidays observed by the registry office.
 openings:
-  - id: hall-hours
+  hall-hours:
     location: civic-hall
     holidaySet: office-holidays
     weekdays: [sat]
@@ -1824,10 +1824,10 @@ project:
   id: household-days
   version: "3"
 services:
-  - id: household-day
+  household-day:
     label: Household registration day
 offerings:
-  - id: household-morning
+  household-morning:
     service: household-day
     label: Morning household block
     mode: arrival-window
@@ -1838,11 +1838,11 @@ offerings:
       horizonDays: 45
     cancellationCutoffMinutes: 1440
 holidaySets:
-  - id: office-holidays
+  office-holidays:
     revision: 1
     label: Public holidays observed by the registry office.
 openings:
-  - id: hall-hours
+  hall-hours:
     location: civic-hall
     holidaySet: office-holidays
     weekdays: [sat]

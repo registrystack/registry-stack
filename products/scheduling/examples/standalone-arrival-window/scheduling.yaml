@@ -5,10 +5,10 @@ project:
   id: household-days
   version: "3"
 services:
-  - id: household-day
+  household-day:
     label: Household registration day
 offerings:
-  - id: household-morning
+  household-morning:
     service: household-day
     label: Morning household block
     mode: arrival-window
@@ -19,7 +19,7 @@ offerings:
       leadTimeMinutes: 60
       horizonDays: 45
     cancellationCutoffMinutes: 1440
-  - id: household-afternoon
+  household-afternoon:
     service: household-day
     label: Afternoon household block
     mode: arrival-window
@@ -31,11 +31,11 @@ offerings:
       horizonDays: 45
     cancellationCutoffMinutes: 1440
 holidaySets:
-  - id: office-holidays
+  office-holidays:
     revision: 1
     label: Public holidays observed by the registry office.
 openings:
-  - id: hall-hours
+  hall-hours:
     location: civic-hall
     holidaySet: office-holidays
     weekdays: [sat]
@@ -44,7 +44,7 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: The hall opens on Saturday mornings.
-  - id: hall-afternoon-hours
+  hall-afternoon-hours:
     location: civic-hall
     holidaySet: office-holidays
     weekdays: [sat]

@@ -1662,7 +1662,7 @@ pub enum RuntimeConfigError {
     #[error("{path} must use the same origin as destinations.reminders.url")]
     ReminderDestinationOriginMismatch { path: String, pointer: String },
     #[error(
-        "destinations.hooks must bind every destination scheduling.yaml hooks[].handler.destinationId names"
+        "destinations.hooks must bind every destination scheduling.yaml hooks.*.handler.destinationId names"
     )]
     HookDestinationInventoryMismatch,
     #[error("plaintext PostgreSQL is test-only")]
@@ -1866,7 +1866,7 @@ impl RuntimeConfigError {
                 "Use the same scheme, host, and effective port as destinations.reminders.url."
             }
             Self::HookDestinationInventoryMismatch => {
-                "Add a destinations.hooks entry for each destination scheduling.yaml hooks[].handler.destinationId names."
+                "Add a destinations.hooks entry for each destination scheduling.yaml hooks.*.handler.destinationId names."
             }
             Self::PlaintextDatabase => {
                 "Remove database.testOnlyPlaintext; a deployment reaches PostgreSQL over TLS."
@@ -2053,10 +2053,10 @@ project:
   id: registry-updates
   version: "1"
 services:
-  - id: registry-update
+  registry-update:
     label: Registry record update
 offerings:
-  - id: registry-update-30
+  registry-update-30:
     service: registry-update
     label: 30-minute counter update
     mode: exact-time
@@ -2073,12 +2073,12 @@ offerings:
       maximumRecipients: 1
     cancellationCutoffMinutes: 240
 holidaySets:
-  - id: office-holidays
+  office-holidays:
     revision: 1
     label: Public holidays observed by the registry office.
     dates: ["2026-12-25"]
 openings:
-  - id: counter-hours
+  counter-hours:
     location: north-counter
     holidaySet: office-holidays
     weekdays: [mon, tue, wed, thu, fri]
@@ -2095,7 +2095,7 @@ holdPolicy:
 "#;
 
     const OBSERVER: &str = "hooks:
-  - id: appointment-observer
+  appointment-observer:
     phase: after
     trigger: appointment.confirmed
     projection: []
@@ -3782,7 +3782,7 @@ holdPolicy:
         let error = RuntimeConfig::load(&path).unwrap_err();
         assert_eq!(
             policy_refusal(&error),
-            ["/openings/0/because config.substitution-not-allowed"]
+            ["/openings/counter-hours/because config.substitution-not-allowed"]
         );
         assert_eq!(error.code(), "scheduling.package.invalid-project");
         assert!(!error.in_file());
