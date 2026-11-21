@@ -1,0 +1,15 @@
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: native-directory
+    steps:
+      - id: list-contacts
+        recordType: contact
+        accessProfile: directory-editor
+        claims:
+          principal: synthetic-format-reader
+          scopes: [registry:directory:write]
+          purpose: directory-administration
+          directClaims: {jurisdiction: synthetic-district}
+        request: {type: list}
+        expect: {outcome: success, status: 200, count: 0}

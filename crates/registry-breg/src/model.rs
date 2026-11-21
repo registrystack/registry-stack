@@ -277,7 +277,7 @@ pub struct CompiledStatisticalExactReads {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledSourceRelation {
-    #[serde(rename = "recordType", alias = "entityId")]
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub sql_name: String,
     pub stored_fields: Vec<String>,
@@ -1506,7 +1506,7 @@ pub enum HttpMethod {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledRoute {
     pub id: String,
-    #[serde(rename = "recordType", alias = "entityId")]
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub method: HttpMethod,
     pub path: String,
@@ -1701,7 +1701,7 @@ pub enum CompiledRevisionKind {
 pub struct CompiledAccessEntry {
     #[serde(default)]
     pub route_id: String,
-    #[serde(rename = "recordType", alias = "entityId")]
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub operation: Operation,
     pub profile_ids: BTreeSet<String>,
@@ -1814,7 +1814,7 @@ pub enum CompiledQueryTemporalSemantics {
 pub struct CompiledQueryOperation {
     pub id: String,
     pub route_id: String,
-    #[serde(rename = "recordType", alias = "entityId")]
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub profile_id: String,
     pub kind: CompiledQueryKind,

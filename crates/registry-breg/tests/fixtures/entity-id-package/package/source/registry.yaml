@@ -1,0 +1,44 @@
+# Deployment supplies PostgreSQL and authentication through the ordinary target.
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: local-directory
+  canonicalBaseIri: https://directory.example.gov
+  version: 0.1.0
+  defaultLanguage: en
+  display:
+    label: Local directory
+    description: A small registry maintained through generated CRUD.
+
+datasets:
+  - id: directory
+    display: {label: Directory, description: Institutional contact records.}
+
+recordTypes:
+  - id: contact
+    route: contacts
+    primaryDataset: directory
+    mutationMode: mutable
+    display: {label: Contact, description: A named institutional contact.}
+    fields:
+      - {id: name, type: string, required: true, minimumLength: 1, maximumLength: 160, classification: internal}
+      - {id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: internal}
+      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
+
+accessProfiles:
+  - id: directory-editor
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: ["registry:directory:write"]
+    requiredPurposes: [directory-administration]
+    permissions:
+      records:
+        - recordType: contact
+          operations: [create, get, list, patch]
+          readableFields: [name, email, jurisdiction]
+          writableFields: [name, email, jurisdiction]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+
+package:
+  sourceRevision: native-minimal-format-fixture

@@ -23,6 +23,11 @@
   The lock digest of every module that declares or extends a Record type
   changes, even when it declares no profiles. After converting, run
   `bregctl project lock` for each such module.
+- BREAKING: BReg no longer reads the `entityId` member that packages compiled
+  by v0.38.0 to v0.41.0 wrote in place of `recordType`. A database whose active
+  BReg package was compiled by v0.41.0 or earlier can no longer be upgraded in
+  place by this release. Recreate it. The package refusal names `entityId` and
+  says to recreate the database.
 - BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
   -> `database.caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef`
   the other TLS blocks use. The old key is refused as an unknown key. The value

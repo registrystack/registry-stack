@@ -8001,6 +8001,7 @@ fn package_refusal_message(
     match error {
         PackageError::Derivation => PACKAGE_BUILD_MISMATCH.into(),
         PackageError::EngineFeatureUpgradeRequired => PACKAGE_ENGINE_UPGRADE_REQUIRED.into(),
+        PackageError::EntityIdMember => error.to_string().into(),
         PackageError::PredecessorSources(_) => format!(
             "{error}. A package built before this release cannot be a baseline: rebuild it from sources this bregctl accepts, or recreate the database"
         )
@@ -8036,6 +8037,7 @@ fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
             ("package-refused", SuggestedAction::VerifyPackageIntegrity)
         }
         PackageError::Derivation => ("build-mismatch", SuggestedAction::CorrectPackageBuild),
+        PackageError::EntityIdMember => ("entity-id-refused", SuggestedAction::CorrectPackageBuild),
         PackageError::PredecessorSources(_) => (
             "predecessor-sources-refused",
             SuggestedAction::CorrectPackageBuild,
