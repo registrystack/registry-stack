@@ -2164,6 +2164,9 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
             "The list did not carry the search criteria its access profile requires."
         }
         Code::QueryInvalid => "The query request is invalid.",
+        Code::RequestAccessReasonRequired => {
+            "The access profile requires a valid Registry-Access-Reason header."
+        }
         Code::RequestInvalid => "The request is invalid.",
         Code::RequestTimeout => "The request timed out.",
         Code::ResourceNotFound => "The requested resource was not found.",
