@@ -5,10 +5,10 @@ project:
   id: shared-facilities
   version: "1"
 services:
-  - id: room-reservation
+  room-reservation:
     label: Shared room reservation
 offerings:
-  - id: meeting-room
+  meeting-room:
     service: room-reservation
     label: Meeting room
     mode: exact-time
@@ -32,11 +32,11 @@ offerings:
       maximumRecipients: 1
     cancellationCutoffMinutes: 120
 holidaySets:
-  - id: hall-holidays
+  hall-holidays:
     revision: 1
     label: The facility calendar is reviewed by its operator.
 openings:
-  - id: hall-hours
+  hall-hours:
     location: community-hall
     holidaySet: hall-holidays
     weekdays: [mon, tue, wed, thu, fri, sat, sun]

@@ -1718,10 +1718,10 @@ project:
   id: registry-updates
   version: "1"
 services:
-  - id: registry-update
+  registry-update:
     label: Registry record update
 offerings:
-  - id: registry-update-30
+  registry-update-30:
     service: registry-update
     label: 30-minute counter update
     mode: exact-time
@@ -1738,12 +1738,12 @@ offerings:
       maximumRecipients: 1
     cancellationCutoffMinutes: 240
 holidaySets:
-  - id: office-holidays
+  office-holidays:
     revision: 1
     label: Public holidays observed by the registry office.
     dates: ["2026-12-25"]
 openings:
-  - id: counter-hours
+  counter-hours:
     location: north-counter
     holidaySet: office-holidays
     weekdays: [mon, tue, wed, thu, fri]
@@ -1809,10 +1809,10 @@ project:
   id: workshops
   version: "1"
 services:
-  - id: workshop
+  workshop:
     label: Household workshop
 offerings:
-  - id: workshop
+  workshop:
     service: workshop
     label: Household workshop session
     mode: arrival-window
@@ -1822,7 +1822,7 @@ offerings:
       leadTimeMinutes: 60
       horizonDays: 60
     cancellationCutoffMinutes: 60
-  - id: room-hire
+  room-hire:
     service: workshop
     label: Room hire
     mode: exact-time
@@ -1840,11 +1840,11 @@ offerings:
       partyCounts: optional
     cancellationCutoffMinutes: 60
 holidaySets:
-  - id: office-holidays
+  office-holidays:
     revision: 1
     label: Public holidays observed by the registry office.
 openings:
-  - id: counter-hours
+  counter-hours:
     location: north-counter
     holidaySet: office-holidays
     weekdays: [mon, tue, wed, thu, fri]

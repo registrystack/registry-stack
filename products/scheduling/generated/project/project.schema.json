@@ -190,74 +190,6 @@
       ],
       "type": "object"
     },
-    "HolidaySet": {
-      "additionalProperties": false,
-      "description": "A named, revisioned set of holiday dates.",
-      "properties": {
-        "dates": {
-          "description": "The dates the set closes. A set that closes no date omits the member.",
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 256,
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "label": {
-          "$ref": "#/$defs/DisplayText",
-          "description": "An optional human label for the set; the id names it when absent."
-        },
-        "revision": {
-          "format": "uint64",
-          "maximum": 9223372036854775807,
-          "minimum": 1,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "id",
-        "revision"
-      ],
-      "type": "object"
-    },
-    "HookPolicy": {
-      "additionalProperties": false,
-      "description": "One observer hook: the shared Registry Stack hook declaration narrowed to\nthe closed Scheduling contract. It runs after commit, follows one of four\nappointment event triggers, delivers to a URL destination, and takes\nno condition and no proposal principal.",
-      "properties": {
-        "handler": {
-          "$ref": "#/$defs/ObserverHandler"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "phase": {
-          "$ref": "#/$defs/ObserverPhase"
-        },
-        "projection": {
-          "description": "The fields of the trigger's closed projection the observer receives.\nA hook that needs none lists none.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "trigger": {
-          "$ref": "#/$defs/ObserverTrigger"
-        }
-      },
-      "required": [
-        "id",
-        "phase",
-        "trigger",
-        "projection",
-        "handler"
-      ],
-      "type": "object"
-    },
     "LocalId": {
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -302,87 +234,6 @@
       ],
       "type": "string"
     },
-    "OfferingPolicy": {
-      "additionalProperties": false,
-      "description": "One bookable thing a deployment offers.",
-      "properties": {
-        "arrival": {
-          "$ref": "#/$defs/ArrivalOffering",
-          "description": "Present exactly when `mode` is `arrival-window`."
-        },
-        "because": {
-          "$ref": "#/$defs/DisplayText"
-        },
-        "cancellationCutoffMinutes": {
-          "description": "How late before the displayed start a booking may still be cancelled.",
-          "format": "uint32",
-          "maximum": 5256000,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "duplicateActiveKey": {
-          "$ref": "#/$defs/LocalId",
-          "description": "The caller attribute an active-booking duplicate check keys on, when\nthe service defines one. Phone numbers and email addresses are never\nvalid duplicate keys."
-        },
-        "exactTime": {
-          "$ref": "#/$defs/ExactTimeOffering",
-          "description": "Present exactly when `mode` is `exact-time`."
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "label": {
-          "$ref": "#/$defs/DisplayText"
-        },
-        "location": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "mode": {
-          "$ref": "#/$defs/SchedulingMode"
-        },
-        "prerequisites": {
-          "description": "Prerequisite references a requesting party must hold. An offering\nwith no prerequisite omits the member.",
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 256,
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        },
-        "reminders": {
-          "description": "Authored reminder offsets for this offering. The runtime mints one\nrevision-bound intent per offset whose due time is still ahead when\nthe appointment commits; message transport stays external (INT-02).\nAn offering with no reminders omits the member or lists none.",
-          "items": {
-            "$ref": "#/$defs/ReminderOffsetPolicy"
-          },
-          "maxItems": 256,
-          "type": "array"
-        },
-        "requiresCapabilities": {
-          "description": "Capabilities every backing member must have for this offering. An\noffering that requires none omits the member.",
-          "items": {
-            "$ref": "#/$defs/LocalId"
-          },
-          "maxItems": 256,
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        },
-        "service": {
-          "$ref": "#/$defs/LocalId"
-        }
-      },
-      "required": [
-        "id",
-        "service",
-        "label",
-        "mode",
-        "location",
-        "because",
-        "cancellationCutoffMinutes"
-      ],
-      "type": "object"
-    },
     "OpeningCoverage": {
       "description": "Which interval must stay inside published openings and outside closures.\nBuffers always occupy ledger capacity regardless of this choice.",
       "oneOf": [
@@ -397,56 +248,6 @@
           "type": "string"
         }
       ]
-    },
-    "OpeningPatternPolicy": {
-      "additionalProperties": false,
-      "description": "A bounded weekly opening pattern over local wall-clock time. The timezone\ncomes from the location record the pattern references.",
-      "properties": {
-        "because": {
-          "$ref": "#/$defs/DisplayText"
-        },
-        "effectiveFrom": {
-          "type": "string"
-        },
-        "effectiveUntil": {
-          "type": "string"
-        },
-        "endTime": {
-          "type": "string"
-        },
-        "holidaySet": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "location": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "startTime": {
-          "type": "string"
-        },
-        "weekdays": {
-          "items": {
-            "$ref": "#/$defs/PolicyWeekday"
-          },
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        }
-      },
-      "required": [
-        "id",
-        "location",
-        "holidaySet",
-        "weekdays",
-        "startTime",
-        "endTime",
-        "effectiveFrom",
-        "effectiveUntil",
-        "because"
-      ],
-      "type": "object"
     },
     "PartyCountsRequirement": {
       "description": "Whether an exact-time offering requires declared human party counts.\nArrival-window offerings always require them because recipient counts drive\ntheir capacity units.",
@@ -523,23 +324,6 @@
         "arrival-window"
       ],
       "type": "string"
-    },
-    "ServicePolicy": {
-      "additionalProperties": false,
-      "description": "A service a deployment schedules.",
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "label": {
-          "$ref": "#/$defs/DisplayText"
-        }
-      },
-      "required": [
-        "id",
-        "label"
-      ],
-      "type": "object"
     }
   },
   "$id": "https://id.registrystack.org/schemas/scheduling/project/project.v1alpha1.schema.json",
@@ -564,51 +348,247 @@
       "$ref": "#/$defs/HoldPolicy"
     },
     "holidaySets": {
-      "items": {
-        "$ref": "#/$defs/HolidaySet"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "description": "A named, revisioned set of holiday dates.",
+        "properties": {
+          "dates": {
+            "description": "The dates the set closes. A set that closes no date omits the member.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "label": {
+            "$ref": "#/$defs/DisplayText",
+            "description": "An optional human label for the set; the id names it when absent."
+          },
+          "revision": {
+            "format": "uint64",
+            "maximum": 9223372036854775807,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
       },
-      "maxItems": 256,
-      "minItems": 1,
-      "type": "array"
+      "maxProperties": 256,
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "hooks": {
-      "description": "Observer hooks. A project with none omits the member.",
-      "items": {
-        "$ref": "#/$defs/HookPolicy"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "description": "One observer hook: the shared Registry Stack hook declaration narrowed to\nthe closed Scheduling contract. It runs after commit, follows one of four\nappointment event triggers, delivers to a URL destination, and takes\nno condition and no proposal principal.",
+        "properties": {
+          "handler": {
+            "$ref": "#/$defs/ObserverHandler"
+          },
+          "phase": {
+            "$ref": "#/$defs/ObserverPhase"
+          },
+          "projection": {
+            "description": "The fields of the trigger's closed projection the observer receives.\nA hook that needs none lists none.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "trigger": {
+            "$ref": "#/$defs/ObserverTrigger"
+          }
+        },
+        "required": [
+          "phase",
+          "trigger",
+          "projection",
+          "handler"
+        ],
+        "type": "object"
       },
-      "maxItems": 256,
-      "type": "array"
+      "description": "Observer hooks, keyed by hook id (CFG-ID-5) and held sorted by id. A\nproject with none omits the member.",
+      "maxProperties": 256,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "kind": {
       "const": "SchedulingProject",
       "type": "string"
     },
     "offerings": {
-      "items": {
-        "$ref": "#/$defs/OfferingPolicy"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "description": "One bookable thing a deployment offers.",
+        "properties": {
+          "arrival": {
+            "$ref": "#/$defs/ArrivalOffering",
+            "description": "Present exactly when `mode` is `arrival-window`."
+          },
+          "because": {
+            "$ref": "#/$defs/DisplayText"
+          },
+          "cancellationCutoffMinutes": {
+            "description": "How late before the displayed start a booking may still be cancelled.",
+            "format": "uint32",
+            "maximum": 5256000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "duplicateActiveKey": {
+            "$ref": "#/$defs/LocalId",
+            "description": "The caller attribute an active-booking duplicate check keys on, when\nthe service defines one. Phone numbers and email addresses are never\nvalid duplicate keys."
+          },
+          "exactTime": {
+            "$ref": "#/$defs/ExactTimeOffering",
+            "description": "Present exactly when `mode` is `exact-time`."
+          },
+          "label": {
+            "$ref": "#/$defs/DisplayText"
+          },
+          "location": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "mode": {
+            "$ref": "#/$defs/SchedulingMode"
+          },
+          "prerequisites": {
+            "description": "Prerequisite references a requesting party must hold. An offering\nwith no prerequisite omits the member.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "reminders": {
+            "description": "Authored reminder offsets for this offering. The runtime mints one\nrevision-bound intent per offset whose due time is still ahead when\nthe appointment commits; message transport stays external (INT-02).\nAn offering with no reminders omits the member or lists none.",
+            "items": {
+              "$ref": "#/$defs/ReminderOffsetPolicy"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "requiresCapabilities": {
+            "description": "Capabilities every backing member must have for this offering. An\noffering that requires none omits the member.",
+            "items": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "service": {
+            "$ref": "#/$defs/LocalId"
+          }
+        },
+        "required": [
+          "service",
+          "label",
+          "mode",
+          "location",
+          "because",
+          "cancellationCutoffMinutes"
+        ],
+        "type": "object"
       },
-      "maxItems": 256,
-      "minItems": 1,
-      "type": "array"
+      "maxProperties": 256,
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "openings": {
-      "items": {
-        "$ref": "#/$defs/OpeningPatternPolicy"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "description": "A bounded weekly opening pattern over local wall-clock time. The timezone\ncomes from the location record the pattern references.",
+        "properties": {
+          "because": {
+            "$ref": "#/$defs/DisplayText"
+          },
+          "effectiveFrom": {
+            "type": "string"
+          },
+          "effectiveUntil": {
+            "type": "string"
+          },
+          "endTime": {
+            "type": "string"
+          },
+          "holidaySet": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "location": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "startTime": {
+            "type": "string"
+          },
+          "weekdays": {
+            "items": {
+              "$ref": "#/$defs/PolicyWeekday"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "location",
+          "holidaySet",
+          "weekdays",
+          "startTime",
+          "endTime",
+          "effectiveFrom",
+          "effectiveUntil",
+          "because"
+        ],
+        "type": "object"
       },
-      "maxItems": 256,
-      "minItems": 1,
-      "type": "array"
+      "maxProperties": 256,
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "project": {
       "$ref": "#/$defs/ProjectIdentity"
     },
     "services": {
-      "items": {
-        "$ref": "#/$defs/ServicePolicy"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "description": "A service a deployment schedules.",
+        "properties": {
+          "label": {
+            "$ref": "#/$defs/DisplayText"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "type": "object"
       },
-      "maxItems": 256,
-      "minItems": 1,
-      "type": "array"
+      "maxProperties": 256,
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     }
   },
   "required": [

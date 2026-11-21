@@ -57,6 +57,31 @@ pub const SCHEDULING_PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
     },
     removed_keys: &[
         RemovedKey {
+            pointer: "/services/*/id",
+            replacement: "Write services as a mapping from each id to the rest of its entry, \
+                          services: {registry-update: {label: Registry record update}}, with no id member.",
+        },
+        RemovedKey {
+            pointer: "/offerings/*/id",
+            replacement: "Write offerings as a mapping from each id to the rest of its entry, \
+                          offerings: {counter-visit: {service: registry-update, ...}}, with no id member.",
+        },
+        RemovedKey {
+            pointer: "/holidaySets/*/id",
+            replacement: "Write holidaySets as a mapping from each id to the rest of its entry, \
+                          holidaySets: {office-holidays: {revision: 1, ...}}, with no id member.",
+        },
+        RemovedKey {
+            pointer: "/openings/*/id",
+            replacement: "Write openings as a mapping from each id to the rest of its entry, \
+                          openings: {counter-hours: {location: north-counter, ...}}, with no id member.",
+        },
+        RemovedKey {
+            pointer: "/hooks/*/id",
+            replacement: "Write hooks as a mapping from each id to the rest of its entry, \
+                          hooks: {booking-confirmed: {trigger: appointment.confirmed, ...}}, with no id member.",
+        },
+        RemovedKey {
             pointer: "/scheduling",
             replacement: "Write the identity under project, with id and a text version such as \
                           2026.1.",
@@ -1104,39 +1129,47 @@ pub struct SchedulingPolicy {
     pub api_version: String,
     pub kind: String,
     pub project: ProjectIdentity,
-    #[serde(deserialize_with = "crate::typed::unique_id_list")]
+    #[serde(
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
     #[cfg_attr(
         feature = "schema",
         schemars(
-            with = "registry_platform_yaml::UniqueIdList<ServicePolicy>",
-            length(min = 1, max = 256)
+            schema_with = "registry_platform_yaml::id_keyed_schema_bounded::<ServicePolicy, 1, 256>"
         )
     )]
     pub services: Vec<ServicePolicy>,
-    #[serde(deserialize_with = "crate::typed::unique_id_list")]
+    #[serde(
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
     #[cfg_attr(
         feature = "schema",
         schemars(
-            with = "registry_platform_yaml::UniqueIdList<OfferingPolicy>",
-            length(min = 1, max = 256)
+            schema_with = "registry_platform_yaml::id_keyed_schema_bounded::<OfferingPolicy, 1, 256>"
         )
     )]
     pub offerings: Vec<OfferingPolicy>,
-    #[serde(deserialize_with = "crate::typed::unique_id_list")]
+    #[serde(
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
     #[cfg_attr(
         feature = "schema",
         schemars(
-            with = "registry_platform_yaml::UniqueIdList<HolidaySet>",
-            length(min = 1, max = 256)
+            schema_with = "registry_platform_yaml::id_keyed_schema_bounded::<HolidaySet, 1, 256>"
         )
     )]
     pub holiday_sets: Vec<HolidaySet>,
-    #[serde(deserialize_with = "crate::typed::unique_id_list")]
+    #[serde(
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
     #[cfg_attr(
         feature = "schema",
         schemars(
-            with = "registry_platform_yaml::UniqueIdList<OpeningPatternPolicy>",
-            length(min = 1, max = 256)
+            schema_with = "registry_platform_yaml::id_keyed_schema_bounded::<OpeningPatternPolicy, 1, 256>"
         )
     )]
     pub openings: Vec<OpeningPatternPolicy>,
@@ -1152,17 +1185,18 @@ pub struct SchedulingPolicy {
     )]
     pub channels: Vec<Channel>,
     pub hold_policy: HoldPolicy,
-    /// Observer hooks. A project with none omits the member.
+    /// Observer hooks, keyed by hook id (CFG-ID-5) and held sorted by id. A
+    /// project with none omits the member.
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",
-        deserialize_with = "crate::typed::unique_id_list"
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
     )]
     #[cfg_attr(
         feature = "schema",
         schemars(
-            with = "registry_platform_yaml::UniqueIdList<HookPolicy>",
-            length(max = 256)
+            schema_with = "registry_platform_yaml::id_keyed_schema_bounded::<HookPolicy, 0, 256>"
         )
     )]
     pub hooks: Vec<HookPolicy>,
@@ -1276,14 +1310,14 @@ impl SchedulingPolicy {
             declared_channels.push(*channel);
         }
 
-        for (index, service) in self.services.iter().enumerate() {
-            let path = format!("/services/{index}");
-            check_identifier(&service.id, &format!("{path}/id"), &mut findings);
+        for service in &self.services {
+            let path = format!("/services/{}", service.id);
+            check_identifier(&service.id, &path, &mut findings);
             check_label(&service.label, &format!("{path}/label"), &mut findings);
         }
 
-        for (index, set) in self.holiday_sets.iter().enumerate() {
-            let path = format!("/holidaySets/{index}");
+        for set in &self.holiday_sets {
+            let path = format!("/holidaySets/{}", set.id);
             // A holiday set with no dates is complete: it observes none.
             if set.revision == 0 {
                 findings.push(SchedulingDiagnostic::new(
@@ -1294,7 +1328,7 @@ impl SchedulingPolicy {
             if let Some(label) = &set.label {
                 check_because(label, &format!("{path}/label"), &mut findings);
             }
-            check_identifier(&set.id, &format!("{path}/id"), &mut findings);
+            check_identifier(&set.id, &path, &mut findings);
             check_collection_bound(&set.dates, &format!("{path}/dates"), &mut findings);
             for (date_index, date) in set.dates.iter().enumerate() {
                 if !valid_iso_date(date) {
@@ -1306,9 +1340,9 @@ impl SchedulingPolicy {
             }
         }
 
-        for (index, opening) in self.openings.iter().enumerate() {
-            let path = format!("/openings/{index}");
-            check_identifier(&opening.id, &format!("{path}/id"), &mut findings);
+        for opening in &self.openings {
+            let path = format!("/openings/{}", opening.id);
+            check_identifier(&opening.id, &path, &mut findings);
             check_identifier(
                 &opening.location,
                 &format!("{path}/location"),
@@ -1389,10 +1423,10 @@ impl SchedulingPolicy {
             check_because(&opening.because, &format!("{path}/because"), &mut findings);
         }
 
-        for (index, offering) in self.offerings.iter().enumerate() {
-            self.check_offering(offering, index, &mut findings);
+        for offering in &self.offerings {
+            self.check_offering(offering, &mut findings);
         }
-        for (index, offering) in self.offerings.iter().enumerate() {
+        for offering in &self.offerings {
             if let Some(window) = offering
                 .arrival
                 .as_ref()
@@ -1400,7 +1434,7 @@ impl SchedulingPolicy {
             {
                 if self.sells_pool(window) {
                     findings.push(SchedulingDiagnostic::new(
-                        format!("/offerings/{index}/arrival/window"),
+                        format!("/offerings/{}/arrival/window", offering.id),
                         PolicyCheckReason::SupplyIdentifierCollision,
                     ));
                 }
@@ -1426,9 +1460,9 @@ impl SchedulingPolicy {
         }
 
         check_collection_bound(&self.hooks, "/hooks", &mut findings);
-        for (index, hook) in self.hooks.iter().enumerate() {
-            let path = format!("/hooks/{index}");
-            check_identifier(&hook.id, &format!("{path}/id"), &mut findings);
+        for hook in &self.hooks {
+            let path = format!("/hooks/{}", hook.id);
+            check_identifier(&hook.id, &path, &mut findings);
             check_scheduling_hook(hook, &path, &mut findings);
         }
         // Every shared rule a Scheduling hook can break is already named
@@ -1443,14 +1477,9 @@ impl SchedulingPolicy {
         findings
     }
 
-    fn check_offering(
-        &self,
-        offering: &OfferingPolicy,
-        index: usize,
-        findings: &mut Vec<SchedulingDiagnostic>,
-    ) {
-        let path = format!("/offerings/{index}");
-        check_identifier(&offering.id, &format!("{path}/id"), findings);
+    fn check_offering(&self, offering: &OfferingPolicy, findings: &mut Vec<SchedulingDiagnostic>) {
+        let path = format!("/offerings/{}", offering.id);
+        check_identifier(&offering.id, &path, findings);
         check_identifier(&offering.service, &format!("{path}/service"), findings);
         if !service_ids_contains(self, &offering.service) {
             findings.push(SchedulingDiagnostic::new(
@@ -1624,7 +1653,7 @@ impl SchedulingPolicy {
                 PolicyCheckReason::TooManyEntries,
             ));
         }
-        for (index, offering) in self.offerings.iter().enumerate() {
+        for offering in &self.offerings {
             if let Some(named) = offering
                 .arrival
                 .as_ref()
@@ -1632,7 +1661,7 @@ impl SchedulingPolicy {
             {
                 match windows.iter().find(|window| window.id == named) {
                     None => findings.push(SchedulingDiagnostic::new(
-                        format!("/offerings/{index}/arrival/window"),
+                        format!("/offerings/{}/arrival/window", offering.id),
                         PolicyCheckReason::UnknownWindow,
                     )),
                     Some(window)
@@ -1640,7 +1669,7 @@ impl SchedulingPolicy {
                             || window.location != offering.location =>
                     {
                         findings.push(SchedulingDiagnostic::new(
-                            format!("/offerings/{index}/arrival/window"),
+                            format!("/offerings/{}/arrival/window", offering.id),
                             PolicyCheckReason::MismatchedReference,
                         ));
                     }
@@ -1920,8 +1949,7 @@ fn policy_integrity_diagnostics(decoded: &mut Decoded<SchedulingPolicy>) -> Vec<
     fn ids<T: Identified>(base: &str, values: &[T]) -> Vec<(String, String)> {
         values
             .iter()
-            .enumerate()
-            .map(|(index, value)| (value.id().to_owned(), format!("{base}/{index}/id")))
+            .map(|value| (value.id().to_owned(), format!("{base}/{}", value.id())))
             .collect()
     }
     fn collisions(
@@ -1931,7 +1959,7 @@ fn policy_integrity_diagnostics(decoded: &mut Decoded<SchedulingPolicy>) -> Vec<
     ) -> Vec<Diagnostic> {
         let entries = values
             .iter()
-            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+            .map(|(id, pointer)| AuthoredId::at_key(id, pointer))
             .collect::<Vec<_>>();
         local_id_collision_diagnostics(document, code, &entries)
     }
@@ -1983,12 +2011,11 @@ fn policy_integrity_diagnostics(decoded: &mut Decoded<SchedulingPolicy>) -> Vec<
             project
                 .services
                 .iter()
-                .enumerate()
-                .map(|(index, item)| {
+                .map(|item| {
                     (
                         item.id.clone(),
                         item.label.clone(),
-                        format!("/services/{index}/label"),
+                        format!("/services/{}/label", item.id),
                     )
                 })
                 .collect::<Vec<_>>(),
@@ -1999,12 +2026,11 @@ fn policy_integrity_diagnostics(decoded: &mut Decoded<SchedulingPolicy>) -> Vec<
             project
                 .offerings
                 .iter()
-                .enumerate()
-                .map(|(index, item)| {
+                .map(|item| {
                     (
                         item.id.clone(),
                         item.label.clone(),
-                        format!("/offerings/{index}/label"),
+                        format!("/offerings/{}/label", item.id),
                     )
                 })
                 .collect(),
@@ -2376,10 +2402,10 @@ project:
   id: registry-updates
   version: "1"
 services:
-  - id: registry-update
+  registry-update:
     label: Registry record update
 offerings:
-  - id: registry-update-30
+  registry-update-30:
     service: registry-update
     label: 30-minute counter update
     mode: exact-time
@@ -2396,12 +2422,12 @@ offerings:
       maximumRecipients: 1
     cancellationCutoffMinutes: 240
 holidaySets:
-  - id: office-holidays
+  office-holidays:
     revision: 1
     label: Public holidays observed by the registry office.
     dates: ["2026-12-25"]
 openings:
-  - id: counter-hours
+  counter-hours:
     location: north-counter
     holidaySet: office-holidays
     weekdays: [mon, tue, wed, thu, fri]
@@ -2426,8 +2452,8 @@ holdPolicy:
     #[test]
     fn project_check_keeps_a_positioned_duplicate_service_label_warning() {
         let authored = MINIMAL_EXACT_TIME_PROJECT.replacen(
-            "  - id: registry-update\n    label: Registry record update\n",
-            "  - id: registry-update\n    label: Registry record update\n  - id: registry-copy\n    label: registry record update\n",
+            "  registry-update:\n    label: Registry record update\n",
+            "  registry-update:\n    label: Registry record update\n  registry-copy:\n    label: registry record update\n",
             1,
         );
         let decoded = SchedulingPolicy::read(AUTHORED_POLICY_FILE, authored.as_bytes())
@@ -2438,8 +2464,8 @@ holdPolicy:
             .iter()
             .find(|diagnostic| diagnostic.code == "scheduling.project.duplicate-service-label")
             .expect("the duplicate label warning survives project decoding");
-        assert_eq!(finding.path, "/services/1/label");
-        assert_eq!(finding.related[0].path, "/services/0/label");
+        assert_eq!(finding.path, "/services/registry-update/label");
+        assert_eq!(finding.related[0].path, "/services/registry-copy/label");
         assert!(finding.message.contains("`registry-update`"));
         assert!(finding.message.contains("`registry-copy`"));
         assert!(!finding.message.contains("Registry record update"));
@@ -2449,8 +2475,8 @@ holdPolicy:
     fn project_check_keeps_duplicate_label_warnings_beside_semantic_errors() {
         let authored = MINIMAL_EXACT_TIME_PROJECT
             .replacen(
-                "  - id: registry-update\n    label: Registry record update\n",
-                "  - id: registry-update\n    label: Registry record update\n  - id: registry-copy\n    label: registry record update\n",
+                "  registry-update:\n    label: Registry record update\n",
+                "  registry-update:\n    label: Registry record update\n  registry-copy:\n    label: registry record update\n",
                 1,
             )
             .replacen("service: registry-update", "service: missing-service", 1);
@@ -2484,7 +2510,7 @@ holdPolicy:
     #[test]
     fn project_check_combines_integrity_and_semantic_errors_with_warning_floods() {
         for collision in [false, true] {
-            let original = "  - id: registry-update\n    label: Registry record update\n";
+            let original = "  registry-update:\n    label: Registry record update\n";
             let mut services = original.to_owned();
             for index in 0..120 {
                 let id = if collision && index == 119 {
@@ -2492,9 +2518,7 @@ holdPolicy:
                 } else {
                     format!("service-{index}")
                 };
-                services.push_str(&format!(
-                    "  - id: {id}\n    label: Registry record update\n"
-                ));
+                services.push_str(&format!("  {id}:\n    label: Registry record update\n"));
             }
             let mut authored = MINIMAL_EXACT_TIME_PROJECT.replacen(original, &services, 1);
             if !collision {
@@ -2505,7 +2529,7 @@ holdPolicy:
                 .expect_err("a hidden error still refuses the project");
             assert_eq!(report.files_checked(), Some(1));
             assert_eq!(report.diagnostics().len(), 101, "{report:#?}");
-            assert_eq!(report.diagnostics()[0].path, "/services/1/label");
+            assert_eq!(report.diagnostics()[0].path, "/services/service-0/label");
             assert!(report.has_errors());
             let marker = report.diagnostics().last().unwrap();
             assert_eq!(marker.code, "config.too-many-problems");
@@ -2520,8 +2544,8 @@ holdPolicy:
     #[test]
     fn project_check_refuses_separator_lookalikes_in_the_service_namespace() {
         let authored = MINIMAL_EXACT_TIME_PROJECT.replacen(
-            "  - id: registry-update\n    label: Registry record update\n",
-            "  - id: registry-update\n    label: Registry record update\n  - id: registry_update\n    label: Another service\n",
+            "  registry-update:\n    label: Registry record update\n",
+            "  registry-update:\n    label: Registry record update\n  registry_update:\n    label: Another service\n",
             1,
         );
         let report = SchedulingPolicy::read(AUTHORED_POLICY_FILE, authored.as_bytes())
@@ -2531,8 +2555,8 @@ holdPolicy:
             .iter()
             .find(|diagnostic| diagnostic.code == "scheduling.project.service-id-collision")
             .expect("the service collision has its own finding");
-        assert_eq!(finding.path, "/services/1/id");
-        assert_eq!(finding.related[0].path, "/services/0/id");
+        assert_eq!(finding.path, "/services/registry_update");
+        assert_eq!(finding.related[0].path, "/services/registry-update");
         assert!(finding.message.contains("`registry-update`"));
         assert!(finding.message.contains("`registry_update`"));
     }
@@ -2553,6 +2577,113 @@ holdPolicy:
         findings.iter().map(ToString::to_string).collect()
     }
 
+    /// CFG-ID-5: each named collection is a mapping from id to the rest of
+    /// the entry, held sorted by id whatever order it was written in.
+    #[test]
+    fn named_collections_are_id_keyed_maps_held_in_id_order() {
+        let authored = MINIMAL_EXACT_TIME_PROJECT.replacen(
+            "  registry-update:\n    label: Registry record update\n",
+            "  zeta-service:\n    label: Zeta\n  registry-update:\n    label: Registry record update\n  alpha-service:\n    label: Alpha\n",
+            1,
+        );
+        let policy = decode(&authored);
+        let ids: Vec<&str> = policy.services.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["alpha-service", "registry-update", "zeta-service"]);
+        let stored = serde_json::to_value(&policy).expect("the project serializes");
+        assert!(stored["services"]["alpha-service"].get("id").is_none());
+        assert_eq!(stored["services"]["alpha-service"]["label"], "Alpha");
+    }
+
+    /// The list form and an inner `id` are refused for every named
+    /// collection, each naming the mapping that replaces it.
+    #[test]
+    fn the_list_form_and_an_inner_id_are_refused_for_every_named_collection() {
+        let with_hook_list = with_hooks(
+            "  - id: appointment-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: []\n    handler:\n      type: url\n      destinationId: appointment-events\n",
+        );
+        for (authored, pointer) in [
+            (
+                MINIMAL_EXACT_TIME_PROJECT.replacen(
+                    "  registry-update:\n    label: Registry record update\n",
+                    "  - id: registry-update\n    label: Registry record update\n",
+                    1,
+                ),
+                "/services",
+            ),
+            (
+                MINIMAL_EXACT_TIME_PROJECT.replacen(
+                    "  registry-update:\n    label: Registry record update\n",
+                    "  registry-update:\n    id: registry-update\n    label: Registry record update\n",
+                    1,
+                ),
+                "/services/registry-update/id",
+            ),
+            (
+                MINIMAL_EXACT_TIME_PROJECT.replacen(
+                    "  office-holidays:\n",
+                    "  office-holidays:\n    id: office-holidays\n",
+                    1,
+                ),
+                "/holidaySets/office-holidays/id",
+            ),
+            (
+                MINIMAL_EXACT_TIME_PROJECT.replacen(
+                    "  counter-hours:\n",
+                    "  counter-hours:\n    id: counter-hours\n",
+                    1,
+                ),
+                "/openings/counter-hours/id",
+            ),
+            (
+                MINIMAL_EXACT_TIME_PROJECT.replacen(
+                    "  registry-update-30:\n",
+                    "  registry-update-30:\n    id: registry-update-30\n",
+                    1,
+                ),
+                "/offerings/registry-update-30/id",
+            ),
+            (with_hook_list, "/hooks"),
+        ] {
+            let found = refusals(&authored);
+            assert!(
+                found.iter().any(|refusal| refusal.starts_with(pointer)),
+                "{pointer}: {found:?}"
+            );
+        }
+    }
+
+    /// A repeated key is refused at the repeating key, naming the id.
+    #[test]
+    fn a_repeated_opening_key_is_refused_at_its_key_line() {
+        let item = "  counter-hours:\n    location: north-counter\n    holidaySet: office-holidays\n    weekdays: [mon, tue, wed, thu, fri]\n    startTime: \"09:00\"\n    endTime: \"12:30\"\n    effectiveFrom: \"2026-10-01\"\n    effectiveUntil: \"2026-12-31\"\n    because: Counter opening hours reviewed by the office manager.\n";
+        assert!(MINIMAL_EXACT_TIME_PROJECT.contains(item));
+        let authored = MINIMAL_EXACT_TIME_PROJECT.replacen(item, &format!("{item}{item}"), 1);
+        let report = SchedulingPolicy::read(AUTHORED_POLICY_FILE, authored.as_bytes())
+            .expect_err("a repeated key is refused");
+        let finding = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "yaml.duplicate-key")
+            .expect("the repeated key is reported");
+        assert_eq!(finding.path, "/openings/counter-hours");
+        let key_line = authored
+            .lines()
+            .position(|l| l == "  counter-hours:")
+            .unwrap()
+            + 1;
+        let repeat_line = authored
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| *l == "  counter-hours:")
+            .nth(1)
+            .unwrap()
+            .0
+            + 1;
+        assert!(repeat_line > key_line);
+        let source = finding.source.as_ref().expect("the finding is positioned");
+        assert_eq!((source.line, source.column), (Some(repeat_line), Some(3)));
+    }
+
     pub fn minimal_exact_time_policy() -> SchedulingPolicy {
         decode(MINIMAL_EXACT_TIME_PROJECT)
     }
@@ -2566,10 +2697,10 @@ project:
   id: household-days
   version: "3"
 services:
-  - id: household-day
+  household-day:
     label: Household registration day
 offerings:
-  - id: household-morning
+  household-morning:
     service: household-day
     label: Morning household block
     mode: arrival-window
@@ -2581,11 +2712,11 @@ offerings:
       horizonDays: 45
     cancellationCutoffMinutes: 1440
 holidaySets:
-  - id: office-holidays
+  office-holidays:
     revision: 1
     label: Public holidays observed by the registry office.
 openings:
-  - id: hall-hours
+  hall-hours:
     location: civic-hall
     holidaySet: office-holidays
     weekdays: [sat]
@@ -2723,15 +2854,16 @@ holdPolicy:
     #[test]
     fn multi_day_reservations_use_elapsed_minutes_and_continuous_local_openings() {
         let mut document = serde_json::to_value(minimal_exact_time_policy()).unwrap();
-        document["offerings"][0]["exactTime"]["durationSelection"] = serde_json::json!({
+        document["offerings"]["registry-update-30"]["exactTime"]["durationSelection"] = serde_json::json!({
             "minimumMinutes": 30, "maximumMinutes": 10080, "incrementMinutes": 30
         });
-        document["offerings"][0]["exactTime"]["allowResourceSelection"] = true.into();
-        document["openings"][0]["startTime"] = "00:00".into();
-        document["openings"][0]["endTime"] = "24:00".into();
-        document["openings"][0]["weekdays"] =
+        document["offerings"]["registry-update-30"]["exactTime"]["allowResourceSelection"] =
+            true.into();
+        document["openings"]["counter-hours"]["startTime"] = "00:00".into();
+        document["openings"]["counter-hours"]["endTime"] = "24:00".into();
+        document["openings"]["counter-hours"]["weekdays"] =
             serde_json::json!(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
-        document["openings"][0]["effectiveFrom"] = "2026-01-01".into();
+        document["openings"]["counter-hours"]["effectiveFrom"] = "2026-01-01".into();
         let policy: SchedulingPolicy =
             serde_json::from_value(document.clone()).expect("bounded multi-day duration policy");
         assert!(policy.check().is_empty(), "{:?}", policy.check());
@@ -2832,8 +2964,8 @@ holdPolicy:
             invalid_request["durationMinutes"] = invalid;
             assert!(serde_json::from_value::<crate::AdmissionRequest>(invalid_request).is_err());
         }
-        document["offerings"][0]["exactTime"]["durationMinutes"] = 2880.into();
-        document["offerings"][0]["exactTime"]
+        document["offerings"]["registry-update-30"]["exactTime"]["durationMinutes"] = 2880.into();
+        document["offerings"]["registry-update-30"]["exactTime"]
             .as_object_mut()
             .unwrap()
             .remove("durationSelection");
@@ -2943,7 +3075,7 @@ maximumRecipients: 1
         });
         assert!(rendered(&policy.check()).iter().any(|finding| {
             finding.contains(
-                "/offerings/0/exactTime/durationSelection: scheduling.project.invalid-duration-selection",
+                "/offerings/registry-update-30/exactTime/durationSelection: scheduling.project.invalid-duration-selection",
             )
         }));
     }
@@ -2959,8 +3091,8 @@ maximumRecipients: 1
                 .filter(|finding| finding.ends_with("invalid-label"))
                 .collect::<Vec<_>>(),
             [
-                "/services/0/label: scheduling.project.invalid-label",
-                "/offerings/0/label: scheduling.project.invalid-label",
+                "/services/registry-update/label: scheduling.project.invalid-label",
+                "/offerings/registry-update-30/label: scheduling.project.invalid-label",
             ]
         );
 
@@ -3018,10 +3150,17 @@ maximumRecipients: 1
             stored["project"],
             serde_json::json!({"id": "registry-updates", "version": "1"})
         );
-        assert_eq!(stored["offerings"][0]["exactTime"]["maximumRecipients"], 1);
+        assert_eq!(
+            stored["offerings"]["registry-update-30"]["exactTime"]["maximumRecipients"],
+            1
+        );
         assert_eq!(stored["holdPolicy"]["maximumPerCaller"], 3);
-        assert!(stored["offerings"][0].get("arrival").is_none());
-        assert!(stored["offerings"][0].get("requiresCapabilities").is_none());
+        assert!(stored["offerings"]["registry-update-30"]
+            .get("arrival")
+            .is_none());
+        assert!(stored["offerings"]["registry-update-30"]
+            .get("requiresCapabilities")
+            .is_none());
         assert!(stored.get("hooks").is_none());
         let read_back: SchedulingPolicy =
             serde_json::from_value(stored).expect("the stored form reads back");
@@ -3073,7 +3212,7 @@ maximumRecipients: 1
             .collect();
         for path in [
             "/scheduling",
-            "/offerings/0/exactTime/maxRecipients",
+            "/offerings/registry-update-30/exactTime/maxRecipients",
             "/holdPolicy/maxPerCaller",
         ] {
             assert!(paths.contains(&path), "{paths:?}");
@@ -3100,17 +3239,17 @@ maximumRecipients: 1
             (
                 "    cancellationCutoffMinutes: 240\n",
                 "    cancellationCutoffMinutes: 240\n    requiresCapabilities: []\n",
-                "/offerings/0/requiresCapabilities config.",
+                "/offerings/registry-update-30/requiresCapabilities config.",
             ),
             (
                 "    cancellationCutoffMinutes: 240\n",
                 "    cancellationCutoffMinutes: 240\n    prerequisites: []\n",
-                "/offerings/0/prerequisites config.",
+                "/offerings/registry-update-30/prerequisites config.",
             ),
             (
                 "    dates: [\"2026-12-25\"]\n",
                 "    dates: []\n",
-                "/holidaySets/0/dates config.",
+                "/holidaySets/office-holidays/dates config.",
             ),
         ] {
             let yaml = MINIMAL_EXACT_TIME_PROJECT.replace(from, to);
@@ -3141,12 +3280,16 @@ maximumRecipients: 1
             horizon_days: 45,
         });
         let rendered = rendered(&policy.check());
-        assert!(rendered
-            .contains(&"/offerings/0/exactTime: scheduling.project.missing-mode-field".to_owned()));
+        assert!(rendered.contains(
+            &"/offerings/registry-update-30/exactTime: scheduling.project.missing-mode-field"
+                .to_owned()
+        ));
         // The stray arrival block is refused as a whole; its window reference
         // is not validated because the block must be removed, not repaired.
-        assert!(rendered
-            .contains(&"/offerings/0/arrival: scheduling.project.wrong-mode-field".to_owned()));
+        assert!(rendered.contains(
+            &"/offerings/registry-update-30/arrival: scheduling.project.wrong-mode-field"
+                .to_owned()
+        ));
     }
 
     /// A finding about a member the file never writes is placed at the key
@@ -3162,7 +3305,7 @@ maximumRecipients: 1
             .iter()
             .find(|diagnostic| diagnostic.code == "scheduling.project.missing-mode-field")
             .expect("the missing block is reported");
-        assert_eq!(missing.path, "/offerings/0/arrival");
+        assert_eq!(missing.path, "/offerings/registry-update-30/arrival");
         assert!(missing.source.is_some());
     }
 
@@ -3172,10 +3315,12 @@ maximumRecipients: 1
         policy.offerings[0].service = "no-such-service".to_owned();
         policy.openings[0].holiday_set = "no-such-holidays".to_owned();
         let rendered = rendered(&policy.check());
-        assert!(rendered
-            .contains(&"/offerings/0/service: scheduling.project.unknown-service".to_owned()));
         assert!(rendered.contains(
-            &"/openings/0/holidaySet: scheduling.project.unknown-holiday-set".to_owned()
+            &"/offerings/registry-update-30/service: scheduling.project.unknown-service".to_owned()
+        ));
+        assert!(rendered.contains(
+            &"/openings/counter-hours/holidaySet: scheduling.project.unknown-holiday-set"
+                .to_owned()
         ));
     }
 
@@ -3189,7 +3334,7 @@ maximumRecipients: 1
 
         let rendered = rendered(&policy.check_window_records(&windows));
         assert!(rendered.contains(
-            &"/offerings/1/arrival/window: scheduling.project.mismatched-reference".to_owned()
+            &"/offerings/household-afternoon/arrival/window: scheduling.project.mismatched-reference".to_owned()
         ));
     }
 
@@ -3295,7 +3440,8 @@ maximumRecipients: 1
             until(u64::from(registry_platform_calendar::MAXIMUM_PATTERN_SPAN_DAYS) + 1);
         let rendered = rendered(&policy.check());
         assert!(rendered.contains(
-            &"/openings/0/effectiveUntil: scheduling.project.pattern-span-too-large".to_owned()
+            &"/openings/counter-hours/effectiveUntil: scheduling.project.pattern-span-too-large"
+                .to_owned()
         ));
     }
 
@@ -3307,7 +3453,8 @@ maximumRecipients: 1
             1,
         );
         assert_ne!(old, MINIMAL_EXACT_TIME_PROJECT);
-        assert!(refusals(&old).contains(&"/holidaySets/0/because config.removed-key".to_owned()));
+        assert!(refusals(&old)
+            .contains(&"/holidaySets/office-holidays/because config.removed-key".to_owned()));
     }
 
     #[test]
@@ -3332,18 +3479,18 @@ maximumRecipients: 1
         for (section, item, pointer) in [
             (
                 "services",
-                "  - id: registry-update\n    label: Registry record update\n",
-                "/services/1/id",
+                "  registry-update:\n    label: Registry record update\n",
+                "/services/registry-update",
             ),
             (
                 "holidaySets",
-                "  - id: office-holidays\n    revision: 1\n    label: Public holidays observed by the registry office.\n    dates: [\"2026-12-25\"]\n",
-                "/holidaySets/1/id",
+                "  office-holidays:\n    revision: 1\n    label: Public holidays observed by the registry office.\n    dates: [\"2026-12-25\"]\n",
+                "/holidaySets/office-holidays",
             ),
         ] {
             assert_eq!(
                 refusals(&duplicated(item)),
-                [format!("{pointer} config.duplicate-id")],
+                [format!("{pointer} yaml.duplicate-key")],
                 "{section}"
             );
         }
@@ -3371,13 +3518,13 @@ maximumRecipients: 1
         ];
         let rendered_findings = rendered(&policy.check());
         assert!(rendered_findings.contains(
-            &"/offerings/0/reminders/0/offsetMinutes: scheduling.project.invalid-bound".to_owned()
+            &"/offerings/registry-update-30/reminders/0/offsetMinutes: scheduling.project.invalid-bound".to_owned()
         ));
         assert!(rendered_findings.contains(
-            &"/offerings/0/reminders/0/because: scheduling.project.invalid-because".to_owned()
+            &"/offerings/registry-update-30/reminders/0/because: scheduling.project.invalid-because".to_owned()
         ));
         assert!(rendered_findings.contains(
-            &"/offerings/0/reminders/2/offsetMinutes: scheduling.project.duplicate-identifier"
+            &"/offerings/registry-update-30/reminders/2/offsetMinutes: scheduling.project.duplicate-identifier"
                 .to_owned()
         ));
 
@@ -3506,7 +3653,7 @@ maximumRecipients: 1
         let rendered_findings = rendered(&policy.check());
         assert!(
             rendered_findings.contains(
-                &"/offerings/0/arrival/window: scheduling.project.supply-identifier-collision"
+                &"/offerings/household-morning/arrival/window: scheduling.project.supply-identifier-collision"
                     .to_owned()
             ),
             "{rendered_findings:?}"
@@ -4010,7 +4157,7 @@ maximumRecipients: 1
         format!("{MINIMAL_EXACT_TIME_PROJECT}hooks:\n{hooks}")
     }
 
-    const OBSERVER: &str = "  - id: appointment-observer
+    const OBSERVER: &str = "  appointment-observer:
     phase: after
     trigger: appointment.confirmed
     projection: []
@@ -4043,41 +4190,41 @@ maximumRecipients: 1
         ));
 
         for (from, to, pointer) in [
-            ("phase: after", "phase: before", "/hooks/0/phase "),
+            ("phase: after", "phase: before", "/hooks/appointment-observer/phase "),
             (
                 "trigger: appointment.confirmed",
                 "trigger: hold.expired",
-                "/hooks/0/trigger ",
+                "/hooks/appointment-observer/trigger ",
             ),
             (
                 "      type: url\n      destinationId: appointment-events\n",
                 "      type: wasm\n      module: observer.wasm\n      abi: vendor.hook/v9\n",
-                "/hooks/0/handler/type ",
+                "/hooks/appointment-observer/handler/type ",
             ),
             (
                 "      type: url\n      destinationId: appointment-events\n",
                 "      type: rhai\n      script: observer.rhai\n",
-                "/hooks/0/handler/type ",
+                "/hooks/appointment-observer/handler/type ",
             ),
             (
                 "destinationId: appointment-events",
                 "destinationId: https://receiver.example",
-                "/hooks/0/handler/destinationId ",
+                "/hooks/appointment-observer/handler/destinationId ",
             ),
             (
                 "    projection: []\n",
                 "    projection: []\n    when:\n      state: active\n",
-                "/hooks/0/when config.unknown-key",
+                "/hooks/appointment-observer/when config.unknown-key",
             ),
             (
                 "    projection: []\n",
                 "    projection: []\n    principal: scheduling-hook\n",
-                "/hooks/0/principal config.unknown-key",
+                "/hooks/appointment-observer/principal config.unknown-key",
             ),
             (
                 "projection: []",
                 "projection: [actor]",
-                "/hooks/0/projection/0 scheduling.project.unsupported-hook-projection",
+                "/hooks/appointment-observer/projection/0 scheduling.project.unsupported-hook-projection",
             ),
         ] {
             let refusals = refusals(&with_hooks(&OBSERVER.replace(from, to)));
@@ -4092,12 +4239,12 @@ maximumRecipients: 1
             .replace("projection: []", "projection: [revision, reason]");
         assert_eq!(
             refusals(&with_hooks(&cancellation)),
-            ["/hooks/0/projection/1 scheduling.project.unsupported-hook-projection"]
+            ["/hooks/appointment-observer/projection/1 scheduling.project.unsupported-hook-projection"]
         );
 
         assert_eq!(
             refusals(&with_hooks(&format!("{OBSERVER}{OBSERVER}"))),
-            ["/hooks/1/id config.duplicate-id"]
+            ["/hooks/appointment-observer yaml.duplicate-key"]
         );
 
         // A project built in code is held to the same destination grammar.
@@ -4107,7 +4254,7 @@ maximumRecipients: 1
         };
         assert_eq!(
             rendered(&policy.check()),
-            ["/hooks/0/handler/destinationId: scheduling.project.invalid-hook-destination"]
+            ["/hooks/appointment-observer/handler/destinationId: scheduling.project.invalid-hook-destination"]
         );
     }
 
@@ -4117,14 +4264,14 @@ maximumRecipients: 1
     #[test]
     fn legacy_duplicate_and_mismatched_hook_members_are_refused_by_the_shared_shape() {
         for hooks in [
-            "  - id: observer\n    abi: registry.scheduling-hook/v1\n    because: legacy\n",
-            "  - id: observer\n    phase: after\n    phase: before\n    trigger: appointment.confirmed\n    projection: []\n    handler:\n      type: url\n      destinationId: appointment-events\n",
-            "  - id: observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: []\n    handler:\n      type: url\n      script: observer.rhai\n      abi: registry.hook-handler/v1\n",
-            "  - id: observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: []\n    handler:\n      kind: url\n      destinationId: appointment-events\n",
+            "  observer:\n    abi: registry.scheduling-hook/v1\n    because: legacy\n",
+            "  observer:\n    phase: after\n    phase: before\n    trigger: appointment.confirmed\n    projection: []\n    handler:\n      type: url\n      destinationId: appointment-events\n",
+            "  observer:\n    phase: after\n    trigger: appointment.confirmed\n    projection: []\n    handler:\n      type: url\n      script: observer.rhai\n      abi: registry.hook-handler/v1\n",
+            "  observer:\n    phase: after\n    trigger: appointment.confirmed\n    projection: []\n    handler:\n      kind: url\n      destinationId: appointment-events\n",
         ] {
             let refusals = refusals(&with_hooks(hooks));
             assert!(
-                refusals.iter().any(|refusal| refusal.starts_with("/hooks/0")),
+                refusals.iter().any(|refusal| refusal.starts_with("/hooks/observer")),
                 "accepted:\n{hooks}\n{refusals:?}"
             );
         }
@@ -4172,42 +4319,42 @@ maximumRecipients: 1
         policy.openings[0].start_time = "9:00 AM".to_owned();
         assert_eq!(
             rendered(&policy.check()),
-            ["/openings/0/startTime: scheduling.project.malformed-value"]
+            ["/openings/counter-hours/startTime: scheduling.project.malformed-value"]
         );
 
         let mut policy = minimal_exact_time_policy();
         policy.openings[0].end_time = "12.30".to_owned();
         assert_eq!(
             rendered(&policy.check()),
-            ["/openings/0/endTime: scheduling.project.malformed-value"]
+            ["/openings/counter-hours/endTime: scheduling.project.malformed-value"]
         );
 
         let mut policy = minimal_exact_time_policy();
         policy.openings[0].effective_from = "01/10/2026".to_owned();
         assert_eq!(
             rendered(&policy.check()),
-            ["/openings/0/effectiveFrom: scheduling.project.malformed-value"]
+            ["/openings/counter-hours/effectiveFrom: scheduling.project.malformed-value"]
         );
 
         let mut policy = minimal_exact_time_policy();
         policy.holiday_sets[0].dates[0] = "25 December 2026".to_owned();
         assert_eq!(
             rendered(&policy.check()),
-            ["/holidaySets/0/dates/0: scheduling.project.malformed-value"]
+            ["/holidaySets/office-holidays/dates/0: scheduling.project.malformed-value"]
         );
 
         let mut policy = minimal_exact_time_policy();
         policy.openings[0].end_time = "08:00".to_owned();
         assert_eq!(
             rendered(&policy.check()),
-            ["/openings/0/endTime: scheduling.project.inverted-range"]
+            ["/openings/counter-hours/endTime: scheduling.project.inverted-range"]
         );
 
         let mut policy = minimal_exact_time_policy();
         policy.openings[0].effective_until = "2026-09-30".to_owned();
         assert_eq!(
             rendered(&policy.check()),
-            ["/openings/0/effectiveUntil: scheduling.project.inverted-range"]
+            ["/openings/counter-hours/effectiveUntil: scheduling.project.inverted-range"]
         );
     }
 
@@ -4226,7 +4373,7 @@ maximumRecipients: 1
             .lead_time_minutes = 1441;
         assert_eq!(
             rendered(&policy.check()),
-            ["/offerings/0/exactTime/leadTimeMinutes: scheduling.project.lead-time-beyond-horizon"]
+            ["/offerings/registry-update-30/exactTime/leadTimeMinutes: scheduling.project.lead-time-beyond-horizon"]
         );
     }
 
@@ -4292,14 +4439,18 @@ maximumRecipients: 1
             (
                 "durationMinutes: 30",
                 "durationMinutes: 0",
-                "/offerings/0/exactTime/durationMinutes",
+                "/offerings/registry-update-30/exactTime/durationMinutes",
             ),
             (
                 "horizonDays: 60",
                 "horizonDays: 3651",
-                "/offerings/0/exactTime/horizonDays",
+                "/offerings/registry-update-30/exactTime/horizonDays",
             ),
-            ("revision: 1", "revision: 0", "/holidaySets/0/revision"),
+            (
+                "revision: 1",
+                "revision: 0",
+                "/holidaySets/office-holidays/revision",
+            ),
         ] {
             let refusals = refusals(&MINIMAL_EXACT_TIME_PROJECT.replace(from, to));
             assert_eq!(refusals, [format!("{pointer} config.out-of-range")]);
@@ -4338,10 +4489,11 @@ maximumRecipients: 1
             .collect();
         let rendered_findings = rendered(&policy.check());
         assert!(rendered_findings.contains(
-            &"/offerings/0/requiresCapabilities: scheduling.project.too-many-entries".to_owned()
+            &"/offerings/registry-update-30/requiresCapabilities: scheduling.project.too-many-entries".to_owned()
         ));
         assert!(rendered_findings.contains(
-            &"/offerings/0/prerequisites: scheduling.project.too-many-entries".to_owned()
+            &"/offerings/registry-update-30/prerequisites: scheduling.project.too-many-entries"
+                .to_owned()
         ));
 
         let mut at_bound = minimal_exact_time_policy();

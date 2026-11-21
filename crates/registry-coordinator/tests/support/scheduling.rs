@@ -349,11 +349,11 @@ fn policy(reminder_offset_minutes: Option<u32>) -> String {
     r#"apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
 kind: SchedulingProject
 project: {id: coordinator-lifecycle, version: "1"}
-services: [{id: registry-update, label: Registry record update}]
+services: {registry-update: {label: Registry record update}}
 channels: [public]
-holidaySets: [{id: none, revision: 1, label: Synthetic test calendar.}]
+holidaySets: {none: {revision: 1, label: Synthetic test calendar.}}
 openings:
-  - id: all-day
+  all-day:
     location: north-counter
     holidaySet: none
     weekdays: [mon, tue, wed, thu, fri, sat, sun]
@@ -363,7 +363,7 @@ openings:
     effectiveUntil: "$EFFECTIVE_UNTIL"
     because: Synthetic all-day opening for the native composition test.
 offerings:
-  - id: registry-update-30
+  registry-update-30:
     service: registry-update
     label: Registry record update appointment
     mode: exact-time
@@ -383,17 +383,17 @@ offerings:
 $REMINDERS
 holdPolicy: {ttlMinutes: 5, maximumPerCaller: 2, because: Synthetic hold policy.}
 hooks:
-  - id: appointment-confirmed
+  appointment-confirmed:
     phase: after
     trigger: appointment.confirmed
     projection: [appointmentId, offering, start, end, policyRevision, revision, state]
     handler: {type: url, destinationId: confirmed}
-  - id: appointment-rescheduled
+  appointment-rescheduled:
     phase: after
     trigger: appointment.rescheduled
     projection: [appointmentId, offering, start, end, policyRevision, revision, state]
     handler: {type: url, destinationId: rescheduled}
-  - id: appointment-cancelled
+  appointment-cancelled:
     phase: after
     trigger: appointment.cancelled
     projection: [appointmentId, revision, state]

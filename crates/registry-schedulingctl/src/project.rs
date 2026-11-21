@@ -1114,7 +1114,7 @@ mod tests {
         assert_eq!(
             refusals(&project, &error),
             [
-                "scheduling.yaml:46 /openings/0/because scheduling.project.invalid-because",
+                "scheduling.yaml:46 /openings/hall-hours/because scheduling.project.invalid-because",
                 "records.yaml:4 /stray config.unknown-key",
                 "fixtures/household-morning.yaml:6 /stray config.unknown-key",
             ]
@@ -1175,8 +1175,8 @@ mod tests {
         edit(
             &project,
             AUTHORED_POLICY_FILE,
-            "  - id: registry-update\n    label: Registry record update\n",
-            "  - id: registry-update\n    label: Registry record update\n  - id: registry-copy\n    label: registry record update\n",
+            "  registry-update:\n    label: Registry record update\n",
+            "  registry-update:\n    label: Registry record update\n  registry-copy:\n    label: registry record update\n",
         );
         let report =
             check_with_acceptances(&project, false).expect("warnings do not normally refuse check");
@@ -1186,7 +1186,7 @@ mod tests {
             .iter()
             .find(|item| item["code"] == "scheduling.project.duplicate-service-label")
             .unwrap_or_else(|| panic!("the product check reports the duplicate label: {report}"));
-        assert_eq!(warning["path"], "/services/1/label");
+        assert_eq!(warning["path"], "/services/registry-update/label");
         let files_without_acceptances = report["filesChecked"].as_u64().unwrap();
 
         let error = check_with_acceptances(&project, true)
@@ -1255,11 +1255,11 @@ mod tests {
     #[test]
     fn project_warning_flood_and_later_record_findings_share_the_policy_budget() {
         let (_root, project) = initialized("standalone-arrival-window");
-        let original = "  - id: household-day\n    label: Household registration day\n";
+        let original = "  household-day:\n    label: Household registration day\n";
         let mut services = original.to_owned();
         for index in 0..120 {
             services.push_str(&format!(
-                "  - id: service-{index}\n    label: Household registration day\n"
+                "  service-{index}:\n    label: Household registration day\n"
             ));
         }
         edit(&project, AUTHORED_POLICY_FILE, original, &services);
@@ -1279,7 +1279,7 @@ mod tests {
                     .is_some_and(|source| source.file.ends_with(AUTHORED_POLICY_FILE))
             });
         assert_eq!(policy_findings.len(), 101);
-        assert_eq!(policy_findings[0].path, "/services/1/label");
+        assert_eq!(policy_findings[0].path, "/services/service-0/label");
         assert!(report.has_errors());
         let marker = policy_findings.last().unwrap();
         assert_eq!(marker.code, "config.too-many-problems");
@@ -1355,7 +1355,7 @@ mod tests {
         let error = test(&project).unwrap_err();
         assert_eq!(
             refusals(&project, &error),
-            ["scheduling.yaml:46 /openings/0/because scheduling.project.invalid-because"]
+            ["scheduling.yaml:46 /openings/hall-hours/because scheduling.project.invalid-because"]
         );
     }
 
@@ -1425,11 +1425,14 @@ mod tests {
             .unwrap()
             .starts_with("sha256:"));
         let offerings = report["offerings"].as_array().unwrap();
-        assert_eq!(offerings[0]["id"], "household-morning");
-        assert_eq!(offerings[0]["mode"], "arrival-window");
-        assert_eq!(offerings[0]["location"], "civic-hall");
+        let morning = offerings
+            .iter()
+            .find(|offering| offering["id"] == "household-morning")
+            .unwrap();
+        assert_eq!(morning["mode"], "arrival-window");
+        assert_eq!(morning["location"], "civic-hall");
         assert_eq!(
-            offerings[0]["arrival"],
+            morning["arrival"],
             json!({"window": "household-morning-window", "leadTimeMinutes": 60, "horizonDays": 45})
         );
         let windows = report["windows"].as_array().unwrap();
@@ -1473,7 +1476,7 @@ mod tests {
         let error = explain(&project).unwrap_err();
         assert_eq!(
             refusals(&project, &error),
-            ["scheduling.yaml:46 /openings/0/because scheduling.project.invalid-because"]
+            ["scheduling.yaml:46 /openings/hall-hours/because scheduling.project.invalid-because"]
         );
     }
 

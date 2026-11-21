@@ -4591,10 +4591,10 @@ mod tests {
             "apiVersion": "id.registrystack.org/formats/scheduling/project/v1alpha1",
             "kind": "SchedulingProject",
             "project": {"id": "test", "version": "99"},
-            "services": [],
-            "offerings": [],
-            "holidaySets": [],
-            "openings": [],
+            "services": {},
+            "offerings": {},
+            "holidaySets": {},
+            "openings": {},
             "channels": ["public"],
             "holdPolicy": {"ttlMinutes": 5, "maximumPerCaller": 1, "because": "test"}
         }))

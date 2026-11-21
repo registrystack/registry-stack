@@ -5,10 +5,10 @@ project:
   id: registry-updates
   version: "1"
 services:
-  - id: registry-update
+  registry-update:
     label: Registry record update
 offerings:
-  - id: registry-update-30
+  registry-update-30:
     service: registry-update
     label: 30-minute counter update
     mode: exact-time
@@ -30,7 +30,7 @@ offerings:
       - offsetMinutes: 120
         because: A second reminder two hours before, when stations are scarce.
     duplicateActiveKey: subject
-  - id: fold-day-update-30
+  fold-day-update-30:
     service: registry-update
     label: 30-minute fold-day update
     mode: exact-time
@@ -47,11 +47,11 @@ offerings:
       maximumRecipients: 1
     cancellationCutoffMinutes: 240
 holidaySets:
-  - id: office-holidays
+  office-holidays:
     revision: 1
     label: Public holidays observed by the registry offices.
 openings:
-  - id: bangkok-counter-hours
+  bangkok-counter-hours:
     location: bangkok-counter
     holidaySet: office-holidays
     weekdays: [mon, tue, wed, thu, fri]
@@ -60,7 +60,7 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: Counter opening hours reviewed by the office manager.
-  - id: new-york-hall-hours
+  new-york-hall-hours:
     location: new-york-hall
     holidaySet: office-holidays
     weekdays: [sun]
