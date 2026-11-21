@@ -655,17 +655,22 @@ The reason is checked on record reads and direct writes only. A direct Create, P
 Tombstone under the profile must carry the header. On a Record type with `accessLog`, each record it
 changes gets a subject access log entry with `accessKind: write` and the reason, written in the same
 transaction. On a Record type without `accessLog` the header is still required, but nothing stores
-the reason. `bregctl check` refuses the key on a
-profile that grants import, invoke or start operations, bulk data export, or an action, proposal,
-dataset, external view or projection-refresh permission, because those paths do not check it
+the reason. `bregctl check` refuses the key on a profile that grants import, invoke or start
+operations, bulk data export, or an action, proposal, dataset, external view or projection-refresh
+permission, because those paths do not check it
 (`breg.access-profile.access-reason-operation-unsupported`). Bulk export is refused even though it
-would only fail at run time: its list calls send no reason, so every page would be refused.
+would only fail at run time: its list calls send no reason, so every page would be refused. The ODRL
+export omits every grant of such a profile, with the reason `access-reason`, because ODRL has no
+term for the header.
 
 {/* Evidence: crates/registry-breg/src/api/context.rs bind_access_reason;
     crates/registry-breg/src/subject_access_log.rs access_reason;
     crates/registry-breg/src/compiler/disclosure.rs, validate_access_reason_operations and
     validate_module_access_reason_operations;
-    crates/registry-breg/tests/disclosure_compile.rs. */}
+    crates/registry-breg/src/odrl_export.rs, omission_reasons;
+    crates/registry-breg/tests/disclosure_compile.rs;
+    crates/registry-breg/tests/odrl_export.rs,
+    a_profile_that_requires_an_access_reason_omits_the_complete_read_grant. */}
 
 ## What a reader meets when a check fails
 

@@ -324,6 +324,10 @@ fn omission_reasons(
     if !crate::disclosure::plan(entity, profile_id).is_empty() {
         reasons.push("disclosure-condition");
     }
+    // ODRL has no term for the reason header the request must carry.
+    if access.require_access_reason {
+        reasons.push("access-reason");
+    }
     reasons
 }
 
@@ -356,6 +360,7 @@ fn audit_access_profile(access: &AccessProfileSource) {
         revision_access: _,
         provenance_fields: _,
         allow_data_export: _,
+        // Read by `omission_reasons`, which omits the grant as `access-reason`.
         require_access_reason: _,
     } = access;
 }

@@ -82,7 +82,7 @@ These limits were checked against EDC's [policy-definition schema](https://githu
 
 ## What is omitted
 
-A permission with row boundaries, current-membership requirements, subject consent requirements, a task grant, or a disclosure condition that binds the profile is omitted in full. The reason for the last is `disclosure-condition`.
+A permission with row boundaries, current-membership requirements, subject consent requirements, a task grant, a disclosure condition that binds the profile, or a profile that sets `requireAccessReason` is omitted in full. The reasons for the last two are `disclosure-condition` and `access-reason`.
 The exporter never removes an unsupported restriction to produce a broader permission.
 Operations other than `get` and `list` are omitted as unsupported.
 
