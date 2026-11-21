@@ -20,13 +20,15 @@ fn source() -> Value {
                     {"id":"protected","type":"boolean","classification":"internal"},
                     {"id":"district","type":"string","maximumLength":32,"classification":"internal"},
                     {"id":"age","type":"int64","classification":"internal"},
-                    {"id":"phone","type":"string","maximumLength":32,"classification":"internal"}],
+                    {"id":"phone","type":"string","maximumLength":32,"classification":"internal"},
+                    {"id":"subject-id","type":"string","maximumLength":64,"required":true,"classification":"internal"}],
           "disclosureConditions":[
             {"id":"hide-protected","when":[{"type":"field-equals","field":"protected","value":true}],
              "withhold":"record","exemptProfiles":["protection-officer"]},
             {"id":"hide-phone","when":[{"type":"field-is-not-null","field":"protected"},
                                       {"type":"field-in","field":"district","values":["north","south"]}],
              "withhold":"fields","fields":["phone"],"exemptProfiles":["protection-officer"]}],
+          "accessLog":{"subjectField":"subject-id"},
           "hooks":[{"id":"person-read","phase":"after","trigger":"read","profiles":["registrar"],"projection":[]}]}],
         "accessProfiles":[
           {"id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requireAccessReason":true,
@@ -312,6 +314,20 @@ fn an_invalid_read_hook_is_refused() {
         &stray,
         "breg.hook.read-trigger-invalid",
         "recordTypes[id=person].hooks[id=person-created].profiles",
+    );
+}
+
+#[test]
+fn a_read_hook_on_a_record_type_without_an_access_log_is_refused() {
+    let mut value = source();
+    value["recordTypes"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("accessLog");
+    assert_refused(
+        &value,
+        "breg.disclosure.read-hook-access-log-required",
+        "recordTypes[id=person].hooks[id=person-read].trigger",
     );
 }
 

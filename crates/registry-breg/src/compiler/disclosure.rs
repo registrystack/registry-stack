@@ -452,6 +452,15 @@ fn validate_read_hooks(
                 "a read event carries no record values: declare projection: []",
             ));
         }
+        // The read event is written with the subject access log entry, so
+        // without accessLog the alert would never fire.
+        if entity.access_log.is_none() {
+            errors.push(Diagnostic::error(
+                "breg.disclosure.read-hook-access-log-required",
+                format!("{path}.trigger"),
+                "a read hook raises its event with the subject access log entry, so its record type declares accessLog",
+            ));
+        }
     }
 }
 
