@@ -1475,14 +1475,43 @@ class Evidence:
         self.package(side, self.candidate)
 
     def upgrade(self, side: Side) -> None:
-        """Package the unchanged target with this side's evidencectl, install
-        the package, and point the operative runtime at it, the documented
-        upgrade step. The audit stream, secrets, and keys stay where they are.
-        Package digests cover content only, so the new release may produce the
+        """Move the project file to the current shape, then package the
+        unchanged target with this side's evidencectl, install the package,
+        and point the operative runtime at it, the documented upgrade step.
+        The audit stream, secrets, and keys stay where they are. Package
+        digests cover content only, so the new release may produce the
         package and authority already active, which needs no activation.
         """
 
+        self.move_project_to_current_shape()
         self.package(side, self.work / "candidate-upgraded", repeat_is_active=True)
+
+    def move_project_to_current_shape(self) -> None:
+        """Make the edit the Evidence CHANGELOG asks of an operator before
+        upgrading a 0.47.0 project: the top-level `id` moves into a `project`
+        block with a `version`, and the `functions` list becomes a map keyed
+        by each entry's `id`. A project already in that shape is left as
+        written."""
+
+        path = self.project / "evidence.yaml"
+        document = load_yaml(path)
+        if "id" not in document and not isinstance(document.get("functions"), list):
+            return
+        moved: dict[str, Any] = {}
+        for key, value in document.items():
+            if key == "id":
+                moved["project"] = {"id": value, "version": "1"}
+            elif key == "functions" and isinstance(value, list):
+                functions: dict[str, Any] = {}
+                for position, entry in enumerate(value, start=1):
+                    if "id" not in entry:
+                        raise RehearsalError(f"{path}: Function entry {position} of the "
+                                             "previous release's project has no `id`")
+                    functions[entry["id"]] = {k: v for k, v in entry.items() if k != "id"}
+                moved["functions"] = functions
+            else:
+                moved[key] = value
+        dump_yaml(path, moved)
 
     def extract(self) -> Path:
         """Publish the starter's synthetic extract as a fresh read-only SQLite file."""
