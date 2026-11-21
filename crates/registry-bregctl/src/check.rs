@@ -1290,10 +1290,10 @@ fn package_code(error: &PackageError) -> &'static str {
         | PackageError::Integrity
         | PackageError::CanonicalJson
         | PackageError::Derivation
-        | PackageError::PreviousReleaseSources(_)
-        | PackageError::EntityIdMember
         | PackageError::MigrationPlan
         | PackageError::ReviewedMigration(_) => "breg.package.integrity-refused",
+        PackageError::PreviousReleaseSources(_) => "breg.package.predecessor-sources-refused",
+        PackageError::EntityIdMember => "breg.package.entity-id-refused",
         PackageError::EngineFeatureUpgradeRequired => "breg.package.engine-upgrade-required",
         PackageError::Bounds | PackageError::Read => "breg.package.refused",
         PackageError::DeploymentIdentity => "breg.package.deployment-identity-refused",
@@ -1322,9 +1322,9 @@ fn package_action(error: &PackageError) -> &'static str {
         PackageError::RetiredApiVersion => {
             "Rebuild the package with this bregctl: bregctl package PROJECT --test-receipt RECEIPT --output BUILD, then apply the rebuilt package to a new database: bregctl apply --initial --package BUILD."
         }
-        PackageError::EngineFeatureUpgradeRequired | PackageError::PreviousReleaseSources(_) => {
-            PREVIOUS_RELEASE_ACTION
-        }
+        PackageError::EngineFeatureUpgradeRequired
+        | PackageError::PreviousReleaseSources(_)
+        | PackageError::EntityIdMember => PREVIOUS_RELEASE_ACTION,
         _ => REBUILD_PACKAGE,
     }
 }
@@ -1874,6 +1874,7 @@ mod tests {
         for error in [
             PackageError::EngineFeatureUpgradeRequired,
             PackageError::PreviousReleaseSources("first diagnostic".into()),
+            PackageError::EntityIdMember,
         ] {
             let action = package_action(&error).to_lowercase();
             assert!(
@@ -1887,6 +1888,22 @@ mod tests {
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn previous_release_packages_have_their_own_codes_and_a_modified_one_stays_integrity() {
+        assert_eq!(
+            package_code(&PackageError::PreviousReleaseSources("detail".into())),
+            "breg.package.predecessor-sources-refused"
+        );
+        assert_eq!(
+            package_code(&PackageError::EntityIdMember),
+            "breg.package.entity-id-refused"
+        );
+        assert_eq!(
+            package_code(&PackageError::Integrity),
+            "breg.package.integrity-refused"
+        );
     }
 
     #[test]

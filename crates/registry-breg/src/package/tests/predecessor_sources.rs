@@ -166,3 +166,10 @@ fn legacy_engine_feature_refusal_names_the_fresh_database_path() {
     assert!(message.contains(FRESH_DATABASE_PATH), "{message}");
     assert!(!message.contains("successor"), "{message}");
 }
+
+/// A package that names `entityId` gets the same path forward.
+#[test]
+fn entity_id_refusal_names_the_fresh_database_path() {
+    let message = PackageError::EntityIdMember.to_string();
+    assert!(message.ends_with(FRESH_DATABASE_PATH), "{message}");
+}
