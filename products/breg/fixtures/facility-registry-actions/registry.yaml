@@ -60,13 +60,12 @@
     {
       "id": "facility-registry-actions-core",
       "version": "0.1.0",
-      "digest": "sha256:00bf544be4b2fa7a0e6c38126556106b8a1bac7227d67bd0783a63ed7699f562"
+      "digest": "sha256:bd337f2fa3f3ffef1081b9af7e6d0a039c6f294b78edab8c088f34977427a3ab"
     }
   ],
   "recordTypes": [],
-  "accessProfiles": [
-    {
-      "id": "facility-registrar",
+  "accessProfiles": {
+    "facility-registrar": {
       "default": true,
       "principalClaim": "registry_principal",
       "requiredScopes": [
@@ -110,8 +109,7 @@
         ]
       }
     },
-    {
-      "id": "facility-transfer",
+    "facility-transfer": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "registry:facility:transfer"
@@ -145,8 +143,7 @@
         ]
       }
     },
-    {
-      "id": "facility-owner",
+    "facility-owner": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "registry:facility:read"
@@ -181,8 +178,7 @@
         ]
       }
     },
-    {
-      "id": "operator-administrator",
+    "operator-administrator": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "registry:operator:manage"
@@ -212,7 +208,7 @@
         ]
       }
     }
-  ],
+  },
   "vocabularies": [
     {
       "id": "operator-status",

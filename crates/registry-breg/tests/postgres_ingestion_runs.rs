@@ -2930,10 +2930,16 @@ fn timer_ingestion_registry_with_operations(
             "trigger":"created",
             "projection":["status","activates-at"]
         }));
-    source["accessProfiles"][0]["id"] = json!("operator");
-    source["accessProfiles"][0]["requiredScopes"] = json!("unrestricted");
-    source["accessProfiles"][0]["requiredPurposes"] = json!(["case-management"]);
-    source["accessProfiles"][0]["permissions"]["records"][0]["operations"] = json!(operations);
+    let renamed = source["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .remove("service-editor")
+        .expect("the future-activation example has a service-editor profile");
+    source["accessProfiles"]["operator"] = renamed;
+    source["accessProfiles"]["operator"]["requiredScopes"] = json!("unrestricted");
+    source["accessProfiles"]["operator"]["requiredPurposes"] = json!(["case-management"]);
+    source["accessProfiles"]["operator"]["permissions"]["records"][0]["operations"] =
+        json!(operations);
     let bytes = serde_json::to_vec(&source).expect("timer ingestion fixture serializes");
     let project = parse_project_json(&bytes).expect("timer ingestion fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
@@ -5281,8 +5287,7 @@ const FIXTURE_HEAD: &str = r#"{
   }],"#;
 
 const FIXTURE_TAIL: &str = r#"
-  "accessProfiles":[{
-    "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+  "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management","case-review"],
     "permissions":{"records":[{
       "recordType":"widget","operations":["create","get","patch","batch"],
@@ -5290,8 +5295,7 @@ const FIXTURE_TAIL: &str = r#"
       "writableFields":["jurisdiction","label","quantity"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
     }]}
-  },{
-    "id":"operator-minimal","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+  },"operator-minimal": {"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management"],
     "permissions":{"records":[{
       "recordType":"widget","operations":["create","patch","batch"],
@@ -5299,15 +5303,14 @@ const FIXTURE_TAIL: &str = r#"
       "writableFields":["jurisdiction","label","quantity"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
     }]}
-  },{
-    "id":"reader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+  },"reader": {"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["public-reading"],
     "permissions":{"records":[{
       "recordType":"widget","operations":["get","list"],
       "readableFields":["label"],
       "rowBoundaries":"unrestricted"
     }]}
-  }]
+  }}
 }"#;
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
@@ -5386,8 +5389,7 @@ fn patch_only_registry() -> Arc<registry_breg::CompiledRegistry> {
           {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"}
         ]
       }],
-      "accessProfiles":[{
-        "id":"patcher","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+      "accessProfiles":{"patcher": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["case-management"],
         "permissions":{
           "records":[
@@ -5405,7 +5407,7 @@ fn patch_only_registry() -> Arc<registry_breg::CompiledRegistry> {
             }
           ]
         }
-      }]
+      }}
     }"#;
     let project = parse_project_json(project.as_bytes()).expect("the patch-only fixture parses");
     Arc::new(

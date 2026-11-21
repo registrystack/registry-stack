@@ -402,12 +402,11 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "mutationMode":"mutable","classification":"internal",
             "fields":[{"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           }],
-          "accessProfiles":[{
-            "id":"reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          "accessProfiles":{"reader": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"records":[{
               "recordType":"entry","operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("statistics catalog fixture parses");

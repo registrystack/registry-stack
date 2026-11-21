@@ -14,8 +14,8 @@ pub fn source(root: &str) -> Value {
     } else {
         format!("{root}s")
     });
-    value["accessProfiles"][0]["permissions"]["records"][0]["recordType"] = json!(root);
-    value["accessProfiles"][1]["permissions"]["records"][2]["recordType"] = json!(root);
+    value["accessProfiles"]["member"]["permissions"]["records"][0]["recordType"] = json!(root);
+    value["accessProfiles"]["steward"]["permissions"]["records"][2]["recordType"] = json!(root);
     value
 }
 

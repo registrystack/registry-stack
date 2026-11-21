@@ -927,7 +927,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         r#",{"id":"legacy","type":"string","maximumLength":16,"classification":"internal"}"#
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"site","primaryDataset":"spatial-migration-registry","route":"sites","mutationMode":"mutable","classification":"internal","fields":[{{"id":"code","type":"string","maximumLength":16,"required":true,"classification":"internal"}}{point}{legacy}{polygon}]{geometry_field},"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"reader","principalClaim":"principal","operations":["get","list","create","patch"],"readableFields":["code"{geometry_access}],"writableFields":["code"{geometry_access}]{spatial_queries}}}]}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"site","primaryDataset":"spatial-migration-registry","route":"sites","mutationMode":"mutable","classification":"internal","fields":[{{"id":"code","type":"string","maximumLength":16,"required":true,"classification":"internal"}}{point}{legacy}{polygon}]{geometry_field},"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["get","list","create","patch"],"readableFields":["code"{geometry_access}],"writableFields":["code"{geometry_access}]{spatial_queries}}}}}}}]}}"#
     )
     .into_bytes()
 }

@@ -20,9 +20,9 @@ const HOUSEHOLD: usize = 1;
 const HOUSEHOLD_MEMBER: usize = 2;
 const ENROLMENT: usize = 3;
 const CONSENT: usize = 4;
-const FOOD_TARGETING: usize = 0;
-const FEED: usize = 1;
-const STEWARD: usize = 2;
+const FOOD_TARGETING: &str = "food-targeting";
+const FEED: &str = "recipient-feed";
+const STEWARD: &str = "steward";
 
 fn assert_refused(value: &Value, code: &str) {
     let codes = refusal_codes(value);
@@ -291,7 +291,11 @@ fn consent_vocabularies_are_reserved() {
 fn a_consent_record_no_profile_requires_names_the_require_consent_step() {
     let mut value = source();
     value["retiredConsentScopes"] = json!([]);
-    for profile in value["accessProfiles"].as_array_mut().unwrap() {
+    for profile in value["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
         for permission in profile["permissions"]["records"].as_array_mut().unwrap() {
             permission.as_object_mut().unwrap().remove("requireConsent");
         }
@@ -337,8 +341,8 @@ fn self_issued_consent_binds_the_subject_through_the_principal_link() {
 
     // The link must be bound to the caller's principal in every permission.
     let mut value = self_issued_project();
-    value["accessProfiles"][3]["permissions"]["actions"][0]["targets"][0]["rowBoundaries"] =
-        json!("unrestricted");
+    value["accessProfiles"]["consent-self"]["permissions"]["actions"][0]["targets"][0]
+        ["rowBoundaries"] = json!("unrestricted");
     assert_refused(&value, "breg.consent.issuer-self-binding");
 
     // The subject must come from the input the link requirement checks.
@@ -783,8 +787,7 @@ fn assert_only_reserved_claim_refusal(value: &Value, path: &str) {
 fn consent_claim_lookup(field: &str, claim: &str) -> Value {
     let mut value = source();
     value["recordTypes"][CONSENT]["selectorProfiles"] = json!([{"id": field, "fields": [field]}]);
-    value["accessProfiles"].as_array_mut().unwrap().push(json!({
-        "id": "claim-lookup", "principalClaim": "principal", "actorKind": "service",
+    value["accessProfiles"].as_object_mut().unwrap().insert("claim-lookup".to_owned(), json!({"principalClaim": "principal", "actorKind": "service",
         "requesterClients": ["wfp-scope"], "requiredScopes": ["consent:read"],
         "permissions": {"records": [{
             "recordType": "consent-decision", "operations": ["lookup"],

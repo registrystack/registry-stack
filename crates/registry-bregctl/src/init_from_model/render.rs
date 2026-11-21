@@ -461,7 +461,7 @@ fn registry(plan: &Plan) -> String {
         yaml.comment(0, &note);
     }
     yaml.line(0, "accessProfiles:");
-    yaml.entry(1, "- id", OPERATOR_PROFILE);
+    yaml.line(1, &format!("{}:", scalar(OPERATOR_PROFILE)));
     yaml.line(2, "default: true");
     yaml.line(2, "principalClaim: registry_principal");
     yaml.line(
@@ -495,7 +495,7 @@ fn registry(plan: &Plan) -> String {
              admit whole-collection reads; add `rowBoundaries` if reporting callers must be \
              separated by tenant or jurisdiction.",
         );
-        yaml.entry(1, "- id", READER_PROFILE);
+        yaml.line(1, &format!("{}:", scalar(READER_PROFILE)));
         yaml.line(2, "principalClaim: registry_principal");
         yaml.line(
             2,
@@ -2007,10 +2007,9 @@ mod tests {
             sex["concepts"][0]["iri"],
             format!("https://publicschema.org/Sex/{}", first_sex.code)
         );
-        let profiles = registry["accessProfiles"].as_array().expect("profiles");
-        assert_eq!(profiles[0]["id"], OPERATOR_PROFILE);
-        assert_eq!(profiles[1]["id"], READER_PROFILE);
-        let reader_person = &profiles[1]["permissions"]["records"][0];
+        let profiles = registry["accessProfiles"].as_object().expect("profiles");
+        assert!(profiles.contains_key(OPERATOR_PROFILE));
+        let reader_person = &profiles[READER_PROFILE]["permissions"]["records"][0];
         assert_eq!(reader_person["recordType"], "person");
         let readable = reader_person["readableFields"]
             .as_array()

@@ -781,10 +781,10 @@ mod tests {
                {"id":"sealing-reason","type":"vocabulary-code","vocabulary":"sealing-reason","classification":"restricted"}
              ]}
           ],
-          "accessProfiles":[
-            {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":{"records":[{"recordType":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]}},
-            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":{"records":[{"recordType":"protected-case","operations":["get"],"readableFields":["status","sealing-reason"],"rowBoundaries":"unrestricted"}]}}
-          ]
+          "accessProfiles":{
+            "public-reader": {"principalClaim":"sub","requiredScopes":["public.read"],"permissions":{"records":[{"recordType":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]}},
+            "protected-reader": {"principalClaim":"sub","requiredScopes":["protected.read"],"permissions":{"records":[{"recordType":"protected-case","operations":["get"],"readableFields":["status","sealing-reason"],"rowBoundaries":"unrestricted"}]}}
+          }
         });
         let project =
             parse_project_json(&serde_json::to_vec(&project).expect("project serializes"))

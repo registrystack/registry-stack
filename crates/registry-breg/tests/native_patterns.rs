@@ -19,7 +19,7 @@ fn project(pattern: Option<&str>) -> registry_breg::contract::RegistryProject {
         },
         "recordTypes":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"internal",
             "fields":[{"id":"identifier","type":"string","maximumLength":100,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"entry","operations":["get","list"],"readableFields":["identifier"],"rowBoundaries":"unrestricted"}]}}]
+        "accessProfiles":{"reader": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"entry","operations":["get","list"],"readableFields":["identifier"],"rowBoundaries":"unrestricted"}]}}}
     });
     if let Some(pattern) = pattern {
         value["recordTypes"][0]["fields"][0]["pattern"] = json!(pattern);

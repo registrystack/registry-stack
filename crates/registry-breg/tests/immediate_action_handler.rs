@@ -30,7 +30,7 @@ fn project() -> Value {
             {"id":"friend","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"existing","target":{"fromInput":"person"},"operation":"patch","fields":["name","friend"]}
         ],"refusals":[{"code":"blank-name","label":"A name is required."}]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}]
+        "accessProfiles":{"registrar": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}}
     })
 }
 fn compile(source: Value, script: &str) -> Result<CompiledAction, registry_breg::CompileFailure> {
@@ -85,7 +85,8 @@ fn generated_only_project() -> Value {
         "operation": "create",
         "fields": []
     }]);
-    source["accessProfiles"][0]["permissions"]["actions"][0]["results"] = json!(["person"]);
+    source["accessProfiles"]["registrar"]["permissions"]["actions"][0]["results"] =
+        json!(["person"]);
     source
 }
 
@@ -814,7 +815,8 @@ fn handler_compiler_rejects_inputs_outside_the_scalar_abi() {
             "id":"person","target":{"recordType":"person"},"operation":"create",
             "set":{"name":{"fromInput":"name"}}
         }]);
-        fixed["accessProfiles"][0]["permissions"]["actions"][0]["results"] = json!(["person"]);
+        fixed["accessProfiles"]["registrar"]["permissions"]["actions"][0]["results"] =
+            json!(["person"]);
         let fixed = parse_project_json(&serde_json::to_vec(&fixed).unwrap()).unwrap();
         compile_project_with_assets(&fixed, &[], &[], CompileProfile::Authoring).unwrap();
     }
@@ -1417,7 +1419,8 @@ fn fixed_action_fingerprints_omit_handler_and_bind_native_patterns() {
     source.as_object_mut().unwrap().remove("functions");
     source["actions"][0]["inputs"][0]["maximumLength"] = json!(160);
     source["actions"][0]["plan"]["effects"] = json!([{"id":"person","target":{"recordType":"person"},"operation":"create","set":{"name":{"fromInput":"given-name"}}}]);
-    source["accessProfiles"][0]["permissions"]["actions"][0]["results"] = json!(["person"]);
+    source["accessProfiles"]["registrar"]["permissions"]["actions"][0]["results"] =
+        json!(["person"]);
     let compile = |source: &Value| {
         let project = parse_project_json(&serde_json::to_vec(source).unwrap()).unwrap();
         registry_breg::compiler::compile_project(&project, &[], CompileProfile::Authoring)
@@ -1450,7 +1453,7 @@ fn handler_rejects_reference_to_a_create_of_an_incompatible_entity() {
     second["route"] = json!("organizations");
     source["recordTypes"].as_array_mut().unwrap().push(second);
     source["actions"][0]["plan"]["writes"][1]["target"]["recordType"] = json!("organization");
-    source["accessProfiles"][0]["permissions"]["actions"][0]["targets"]
+    source["accessProfiles"]["registrar"]["permissions"]["actions"][0]["targets"]
         .as_array_mut()
         .unwrap()
         .push(json!({"recordType":"organization","rowBoundaries":"unrestricted"}));

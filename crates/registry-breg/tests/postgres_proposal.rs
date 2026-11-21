@@ -86,7 +86,7 @@ fn registry_source(automatic: bool) -> Value {
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
             "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
             "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
-        "accessProfiles":[{"id":"clerk","default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
+        "accessProfiles":{"clerk": {"default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
             "requiredPurposes":["registry-administration"],"permissions":{
                 "records":[{"recordType":"target","operations":["create","get","list"],"readableFields":["name","jurisdiction"],
                     "writableFields":["name","jurisdiction"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],
@@ -94,7 +94,7 @@ fn registry_source(automatic: bool) -> Value {
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}],
                 "proposals":[{"action":"correct-name","operations":["get","list","edit","submit","revise","rebase","retry","cancel","apply"],
                     "ownership":"caller","readableAttachments":["support"],"writableAttachments":["support"],"targets":[{"recordType":"target",
-                    "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}]});
+                    "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}}});
     source
 }
 fn compile(source: Value) -> registry_breg::CompiledRegistry {
@@ -108,7 +108,7 @@ fn registry(automatic: bool) -> registry_breg::CompiledRegistry {
 #[tokio::test]
 async fn holder_identity_is_a_draft_value_but_submit_authority_remains_server_owned() {
     let mut source = registry_source(false);
-    source["accessProfiles"][0]["default"] = json!(false);
+    source["accessProfiles"]["clerk"]["default"] = json!(false);
     source["recordTypes"][0]
         .as_object_mut()
         .unwrap()
@@ -117,13 +117,12 @@ async fn holder_identity_is_a_draft_value_but_submit_authority_remains_server_ow
     source["actions"][0]["inputs"][0] = json!({"id":"applicant","type":"string","maximumLength":64,"required":true,"classification":"internal"});
     source["actions"][0]["commitGuards"] = json!({});
     source["actions"][0]["plan"] = json!({"type":"fixed","effects":[{"id":"application","operation":"create","target":{"recordType":"target"},"set":{"name":{"fromInput":"value"},"applicant":{"fromInput":"applicant"}}}]});
-    source["accessProfiles"][0]["permissions"]["records"] = json!([{"recordType":"target","operations":["get","list"],"readableFields":["name","applicant"],"rowBoundaries":[{"field":"applicant","claim":"sub","operator":"equals"}]}]);
+    source["accessProfiles"]["clerk"]["permissions"]["records"] = json!([{"recordType":"target","operations":["get","list"],"readableFields":["name","applicant"],"rowBoundaries":[{"field":"applicant","claim":"sub","operator":"equals"}]}]);
     for family in ["actions", "proposals"] {
-        source["accessProfiles"][0]["permissions"][family][0]["targets"][0]["rowBoundaries"] =
-            json!([{"field":"applicant","claim":"sub","operator":"equals"}]);
+        source["accessProfiles"]["clerk"]["permissions"][family][0]["targets"][0]
+            ["rowBoundaries"] = json!([{"field":"applicant","claim":"sub","operator":"equals"}]);
     }
-    let mut staff = source["accessProfiles"][0].clone();
-    staff["id"] = json!("on-behalf");
+    let mut staff = source["accessProfiles"]["clerk"].clone();
     staff["default"] = json!(false);
     staff["requiredScopes"] = json!(["proposal:staff"]);
     for family in ["records", "actions", "proposals"] {
@@ -134,7 +133,7 @@ async fn holder_identity_is_a_draft_value_but_submit_authority_remains_server_ow
             grant["targets"][0]["rowBoundaries"] = json!("unrestricted");
         }
     }
-    source["accessProfiles"].as_array_mut().unwrap().push(staff);
+    source["accessProfiles"]["on-behalf"] = staff;
     let holder = VerifiedRequestClaims::authenticated_with_actor_kind(
         "sub",
         "holder",
@@ -256,7 +255,7 @@ async fn holder_identity_is_a_draft_value_but_submit_authority_remains_server_ow
 #[tokio::test]
 async fn required_inputs_are_completed_at_submit_and_supplied_draft_values_stay_typed() {
     let mut source = registry_source(false);
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] =
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
         json!(["target", "value"]);
     let fixture =
         client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
@@ -378,9 +377,9 @@ async fn pending_manual_application_filter_precedes_pagination_and_keeps_authori
         }
         source["actions"].as_array_mut().unwrap().push(action);
         for family in ["actions", "proposals"] {
-            let mut grant = source["accessProfiles"][0]["permissions"][family][0].clone();
+            let mut grant = source["accessProfiles"]["clerk"]["permissions"][family][0].clone();
             grant["action"] = json!(id);
-            source["accessProfiles"][0]["permissions"][family]
+            source["accessProfiles"]["clerk"]["permissions"][family]
                 .as_array_mut()
                 .unwrap()
                 .push(grant);
@@ -586,7 +585,7 @@ async fn pending_manual_application_filter_precedes_pagination_and_keeps_authori
 #[tokio::test]
 async fn proposal_list_scans_hidden_rows_without_exposing_their_continuation() {
     let mut source = registry_source(false);
-    source["accessProfiles"][0]["permissions"]["proposals"][0]
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]
         .as_object_mut()
         .unwrap()
         .remove("ownership");
@@ -1090,11 +1089,12 @@ fn proposal_input_disclosure_grants_require_declared_inputs_and_get_authority() 
         (json!(["value"]), json!(["list"])),
     ] {
         let mut source = registry_source(false);
-        source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] = readable;
-        source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] = operations;
-        source["accessProfiles"][0]["permissions"]["proposals"][0]["readableAttachments"] =
+        source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
+            readable;
+        source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"] = operations;
+        source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableAttachments"] =
             json!([]);
-        source["accessProfiles"][0]["permissions"]["proposals"][0]["writableAttachments"] =
+        source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["writableAttachments"] =
             json!([]);
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         let error = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
@@ -1170,7 +1170,7 @@ async fn known_proposal_http_authorization_refusals_are_value_free_and_audit_gat
         "no-bytes",
         "no-lifecycle",
     ] {
-        let mut profile = source["accessProfiles"][0].clone();
+        let mut profile = source["accessProfiles"]["clerk"].clone();
         profile["id"] = json!(id);
         profile["default"] = json!(false);
         match id {
@@ -1412,11 +1412,11 @@ async fn proposal_review_reads_release_no_values_when_either_audit_append_fails(
         let mut source = registry_source(false);
         source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({
             "id":"review-name","fields":{"proposedName":{"type":"input","input":"value"}}});
-        source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] =
+        source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"] =
             json!(["get", "submit", "get-review-context", "get-review-status"]);
-        source["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+        source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableContextFields"] =
             json!(["proposedName"]);
-        source["accessProfiles"][0]["permissions"]["proposals"][0]["writableAttachments"] =
+        source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["writableAttachments"] =
             json!([]);
         let fixture =
             client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
@@ -1471,7 +1471,8 @@ async fn proposal_list_pages_valid_large_inputs_without_losing_later_proposals()
         .unwrap()
         .push(json!({"id":"memo","type":"text","required":true,
             "maximumLength":320_000,"classification":"internal"}));
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] = json!(["memo"]);
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
+        json!(["memo"]);
     let fixture =
         client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
     // JSON encoding makes this legal text input nearly 2 MiB on the wire.
@@ -2181,9 +2182,9 @@ async fn proposal_list_action_and_state_filters_narrow_the_scan_before_its_budge
     action["id"] = json!("correct-alternate");
     source["actions"].as_array_mut().unwrap().push(action);
     for permission in ["actions", "proposals"] {
-        let mut grant = source["accessProfiles"][0]["permissions"][permission][0].clone();
+        let mut grant = source["accessProfiles"]["clerk"]["permissions"][permission][0].clone();
         grant["action"] = json!("correct-alternate");
-        source["accessProfiles"][0]["permissions"][permission]
+        source["accessProfiles"]["clerk"]["permissions"][permission]
             .as_array_mut()
             .unwrap()
             .push(grant);
@@ -2277,9 +2278,9 @@ async fn proposal_list_audit_counts_only_each_actions_returned_items() {
         action["id"] = json!(id);
         source["actions"].as_array_mut().unwrap().push(action);
         for permission in ["actions", "proposals"] {
-            let mut grant = source["accessProfiles"][0]["permissions"][permission][0].clone();
+            let mut grant = source["accessProfiles"]["clerk"]["permissions"][permission][0].clone();
             grant["action"] = json!(id);
-            source["accessProfiles"][0]["permissions"][permission]
+            source["accessProfiles"]["clerk"]["permissions"][permission]
                 .as_array_mut()
                 .unwrap()
                 .push(grant);
@@ -2940,11 +2941,11 @@ fn timer_proposal_registry() -> registry_breg::CompiledRegistry {
         "activation-not-after",
         "activation-revision",
     ] {
-        source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"]
+        source["accessProfiles"]["clerk"]["permissions"]["records"][0]["readableFields"]
             .as_array_mut()
             .unwrap()
             .push(json!(field));
-        source["accessProfiles"][0]["permissions"]["records"][0]["writableFields"]
+        source["accessProfiles"]["clerk"]["permissions"]["records"][0]["writableFields"]
             .as_array_mut()
             .unwrap()
             .push(json!(field));
@@ -3770,7 +3771,7 @@ async fn reviewed_apply_requires_fresh_exact_approval_and_receipt_recovery_is_lo
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
     source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"]
         .as_array_mut()
         .unwrap()
         .push(json!("get-review-status"));
@@ -4226,9 +4227,9 @@ async fn review_rejection_is_terminal_and_changes_requested_returns_to_the_party
         source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
         // The inputs are readable so the test can send a well-formed Edit or
         // Rebase body to the rejected Proposal.
-        source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] =
+        source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
             json!(["target", "value"]);
-        source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+        source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"]
             .as_array_mut()
             .unwrap()
             .push(json!("get-review-status"));
@@ -4684,21 +4685,17 @@ async fn submission_read_reports_each_version_separately_and_is_gone_after_its_w
 async fn application_actor_requires_its_dedicated_get_grant_and_is_issuer_scoped() {
     async fn applied_under(issuer: &str) -> String {
         let mut source = registry_source(false);
-        source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+        source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"]
             .as_array_mut()
             .unwrap()
             .push(json!("get-application-actor"));
-        let mut observer = source["accessProfiles"][0].clone();
-        observer["id"] = json!("observer");
+        let mut observer = source["accessProfiles"]["clerk"].clone();
         observer["default"] = json!(false);
         observer["permissions"]["actions"] = json!([]);
         observer["permissions"]["proposals"][0]["operations"] = json!(["get", "list"]);
         observer["permissions"]["proposals"][0]["readableAttachments"] = json!([]);
         observer["permissions"]["proposals"][0]["writableAttachments"] = json!([]);
-        source["accessProfiles"]
-            .as_array_mut()
-            .unwrap()
-            .push(observer);
+        source["accessProfiles"]["observer"] = observer;
         let policy = registry_breg::idempotency::IdempotencyPolicy::new(issuer, 7).unwrap();
         let fixture = client_http::ClientFixture::start_with_mutations(
             compile(source),
@@ -4974,18 +4971,14 @@ async fn required_review_automatic_requires_fresh_exact_approval_even_with_a_cac
 async fn proposal_inputs_require_an_explicit_selected_profile_allowlist() {
     let mut source = registry_source(false);
     source["actions"][0]["inputs"][0]["apiName"] = json!("accountRef");
-    let mut reader = source["accessProfiles"][0].clone();
-    reader["id"] = json!("input-reader");
+    let mut reader = source["accessProfiles"]["clerk"].clone();
     reader["default"] = json!(false);
     reader["permissions"]["actions"] = json!([]);
     reader["permissions"]["records"] = json!([]);
     reader["permissions"]["proposals"][0]["operations"] = json!(["get", "list"]);
     reader["permissions"]["proposals"][0]["writableAttachments"] = json!([]);
     reader["permissions"]["proposals"][0]["readableInputs"] = json!(["target"]);
-    source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(reader);
+    source["accessProfiles"]["input-reader"] = reader;
     let fixture =
         client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
     let client = &fixture.http.client;
@@ -5385,7 +5378,7 @@ async fn concurrent_submit_and_apply_each_commit_once_under_revision_fences() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn prepared_lifecycle_recovery_uses_current_authority_and_the_original_exact_condition() {
     let mut source = registry_source(false);
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] =
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
         json!(["target", "value"]);
     let fixture =
         client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
@@ -5606,9 +5599,9 @@ async fn missing_review_binding_preserves_unrelated_builtin_work_and_fails_revie
         "policy":{"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))}});
     source["actions"].as_array_mut().unwrap().push(reviewed);
     for family in ["actions", "proposals"] {
-        let mut grant = source["accessProfiles"][0]["permissions"][family][0].clone();
+        let mut grant = source["accessProfiles"]["clerk"]["permissions"][family][0].clone();
         grant["action"] = json!("reviewed-name");
-        source["accessProfiles"][0]["permissions"][family]
+        source["accessProfiles"]["clerk"]["permissions"][family]
             .as_array_mut()
             .unwrap()
             .push(grant);
@@ -5812,7 +5805,7 @@ async fn client_with_audit_key(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn audit_key_rotation_preserves_stable_ownership_and_exact_replay_but_not_other_callers() {
     let mut source = registry_source(false);
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] =
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
         json!(["target", "value"]);
     let fixture =
         client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
@@ -6122,7 +6115,8 @@ async fn narrowed_attachment_disclosure_refuses_the_old_exact_receipt_without_re
     );
     let saved: Value = serde_json::from_slice(apply.as_bytes()).unwrap();
     let mut next = source;
-    next["accessProfiles"][0]["permissions"]["proposals"][0]["readableAttachments"] = json!([]);
+    next["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableAttachments"] =
+        json!([]);
     assert_eq!(
         fixture.registry.actions().actions[0].definition_revision,
         compile(next.clone()).actions().actions[0].definition_revision
@@ -6193,11 +6187,11 @@ async fn review_context_refuses_active_action_mapping_for_a_retained_submission(
             "changes":{"type":"changes","recordType":"target","fields":["name"]}
         }
     });
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"]
         .as_array_mut()
         .unwrap()
         .extend([json!("get-review-context"), json!("get-review-status")]);
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableContextFields"] =
         json!(["proposedName", "currentName", "changes"]);
     let fixture =
         client_http::ClientFixture::start(compile(source.clone()), claims("author", "zone-a"))
@@ -6323,11 +6317,11 @@ async fn review_context_projects_an_omitted_optional_input_as_null() {
             "relatedName":{"type":"record","input":"related","field":"name"}
         }
     });
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"]
         .as_array_mut()
         .unwrap()
         .push(json!("get-review-context"));
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableContextFields"] =
         json!(["proposedName", "note", "relatedName"]);
     let fixture =
         client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
@@ -6495,13 +6489,13 @@ async fn review_context_projects_an_omitted_optional_input_as_null() {
 async fn retained_attachment_download_survives_tighter_current_upload_policy() {
     let mut source = registry_source(false);
     source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({"id":"retained-document","fields":{"document":{"type":"document","slot":"support"}}});
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"]
         .as_array_mut()
         .unwrap()
         .push(json!("get-review-context"));
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableContextFields"] =
         json!(["document"]);
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] =
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
         json!(["target", "value"]);
     let fixture =
         client_http::ClientFixture::start(compile(source.clone()), claims("author", "zone-a"))
@@ -6862,11 +6856,11 @@ async fn apply_receipt_replay_refuses_a_task_grant_expiring_at_the_idempotency_l
         }
     }
     let mut source = registry_source(false);
-    let mut permission = source["accessProfiles"][0]["permissions"]["proposals"][0].clone();
+    let mut permission = source["accessProfiles"]["clerk"]["permissions"]["proposals"][0].clone();
     permission["operations"] = json!(["get", "apply"]);
     permission["readableAttachments"] = json!([]);
     permission["writableAttachments"] = json!([]);
-    source["accessProfiles"].as_array_mut().unwrap().push(json!({"id":"task-applier","actorKind":"agent",
+    source["accessProfiles"].as_object_mut().unwrap().insert("task-applier".to_owned(), json!({"actorKind":"agent",
         "requesterClients":["agent-client"],"principalClaim":"sub","requiredScopes":["proposal:manage"],
         "requiredPurposes":["registry-administration"],"taskGrant":{"sourceIssuer":"https://casework.example"},
         "permissions":{"proposals":[permission]}}));
@@ -7025,7 +7019,7 @@ async fn compatible_legacy_review_closure_survives_status_apply_successors_and_r
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
     let review_source = "shared.facility.registry:v1";
     source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":review_source,"policy":old_policy});
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"]
         .as_array_mut()
         .unwrap()
         .push(json!("get-review-status"));
@@ -7997,13 +7991,15 @@ fn automatic_recovery_grants_refuse_known_service_and_agent_profiles() {
     compile(registry_source(true));
     for actor in ["service", "agent"] {
         let mut source = registry_source(true);
-        source["accessProfiles"][0]["actorKind"] = json!(actor);
-        source["accessProfiles"][0]["requesterClients"] = json!(["synthetic-recovery-client"]);
+        source["accessProfiles"]["clerk"]["actorKind"] = json!(actor);
+        source["accessProfiles"]["clerk"]["requesterClients"] =
+            json!(["synthetic-recovery-client"]);
         // Reach the recovery ceiling rather than the independent standing
         // agent ceiling on native Record writes.
-        source["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
+        source["accessProfiles"]["clerk"]["permissions"]["records"][0]["operations"] =
             json!(["get", "list"]);
-        source["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] = json!([]);
+        source["accessProfiles"]["clerk"]["permissions"]["records"][0]["writableFields"] =
+            json!([]);
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         let error = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
         assert!(
@@ -8016,8 +8012,7 @@ fn automatic_recovery_grants_refuse_known_service_and_agent_profiles() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn exact_application_status_exposes_bounded_block_and_human_recovery() {
     let mut source = registry_source(true);
-    let mut service = source["accessProfiles"][0].clone();
-    service["id"] = json!("status-service");
+    let mut service = source["accessProfiles"]["clerk"].clone();
     service["default"] = json!(false);
     service["permissions"]["proposals"][0]["operations"] = json!(["get"]);
     service["permissions"]["proposals"][0]["writableAttachments"] = json!([]);
@@ -8025,10 +8020,7 @@ async fn exact_application_status_exposes_bounded_block_and_human_recovery() {
         .as_object_mut()
         .unwrap()
         .remove("actions");
-    source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(service);
+    source["accessProfiles"]["status-service"] = service;
     let human_claims = VerifiedRequestClaims::authenticated_with_actor_kind(
         "sub",
         "author",
@@ -8163,17 +8155,13 @@ fn writable_inputs_source() -> Value {
         json!({"id":"note","type":"string","required":false,"maximumLength":64,
             "classification":"internal"}),
     );
-    let clerk = &mut source["accessProfiles"][0]["permissions"]["proposals"][0];
+    let clerk = &mut source["accessProfiles"]["clerk"]["permissions"]["proposals"][0];
     clerk["readableInputs"] = json!(["target", "value", "note"]);
-    let mut officer = source["accessProfiles"][0].clone();
-    officer["id"] = json!("officer");
+    let mut officer = source["accessProfiles"]["clerk"].clone();
     officer["default"] = json!(false);
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] =
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["writableInputs"] =
         json!(["target", "value"]);
-    source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(officer);
+    source["accessProfiles"]["officer"] = officer;
     source
 }
 
@@ -8700,8 +8688,8 @@ async fn standing_officer_grant_revises_only_named_inputs_and_withdraws_exact_re
     source["reviewAuthorities"] =
         json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
     source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":{"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))}});
-    source["accessProfiles"][1]["requiredScopes"] = json!(["proposal:officer"]);
-    let grant = &mut source["accessProfiles"][1]["permissions"]["proposals"][0];
+    source["accessProfiles"]["officer"]["requiredScopes"] = json!(["proposal:officer"]);
+    let grant = &mut source["accessProfiles"]["officer"]["permissions"]["proposals"][0];
     grant.as_object_mut().unwrap().remove("ownership");
     grant["writableInputs"] = json!(["value"]);
     let review = std::sync::Arc::new(LocalReview {

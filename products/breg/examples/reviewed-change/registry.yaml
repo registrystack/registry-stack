@@ -65,7 +65,7 @@ actions:
             name: {fromInput: name}
 
 accessProfiles:
-  - id: directory-editor
+  directory-editor:
     default: true
     principalClaim: registry_principal
     requiredScopes: ["registry:directory:write"]
@@ -94,7 +94,7 @@ accessProfiles:
             - recordType: contact
               rowBoundaries:
                 - {field: jurisdiction, claim: jurisdiction, operator: equals}
-  - id: directory-reviewer
+  directory-reviewer:
     principalClaim: registry_principal
     requiredScopes: ["registry:directory:review"]
     requiredPurposes: [directory-administration]

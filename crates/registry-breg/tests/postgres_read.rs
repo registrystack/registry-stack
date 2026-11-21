@@ -1870,7 +1870,7 @@ fn compiled_registry_with_composite_lookup() -> registry_breg::CompiledRegistry 
         .as_array_mut()
         .expect("widget has selector profiles")
         .push(json!({"id": "by-amount-and-label", "fields": ["amount", "label"]}));
-    source["accessProfiles"][0]["permissions"]["records"][0]["lookups"]
+    source["accessProfiles"]["operator"]["permissions"]["records"][0]["lookups"]
         .as_array_mut()
         .expect("operator has widget lookups")
         .push(json!({"selector": "by-amount-and-label", "valueOrigin": "request"}));
@@ -1956,8 +1956,7 @@ fn registry_source() -> String {
               "endField":"valid-to"
             }]
 	          }],
-          "accessProfiles":[{
-            "id":"operator",
+          "accessProfiles":{"operator": {
             "default":true,
             "principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],
@@ -1981,8 +1980,7 @@ fn registry_source() -> String {
               "sortableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
             }]}
-          },{
-            "id":"auditor",
+          },"auditor": {
             "principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],
             "requiredPurposes":["case-management"],
@@ -1994,7 +1992,7 @@ fn registry_source() -> String {
               "sortableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
             }]}
-          }]
+          }}
 	        }"#
     .to_owned()
 }

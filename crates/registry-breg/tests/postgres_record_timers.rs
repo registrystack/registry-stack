@@ -7448,7 +7448,7 @@ fn compiled_nullable_timer_at_registry(use_successor_at: bool) -> registry_breg:
             "id":"successor-at","type":"timestamp","classification":"internal"
         }));
     for access_key in ["readableFields", "writableFields"] {
-        source["accessProfiles"][0]["permissions"]["records"][0][access_key]
+        source["accessProfiles"]["service-editor"]["permissions"]["records"][0][access_key]
             .as_array_mut()
             .expect("service access fields are an array")
             .push(json!("successor-at"));
@@ -7520,8 +7520,7 @@ fn timer_project_source() -> Value {
                 "id":"activated","target":{"fromInput":"service"},"operation":"patch","set":{"status":{"value":"active"}}
             }]}
         }],
-        "accessProfiles":[{
-            "id":"service-editor","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+        "accessProfiles":{"service-editor": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["service-administration"],
             "permissions":{"records":[{
                 "recordType":"service","operations":["create","get","patch"],
@@ -7529,7 +7528,7 @@ fn timer_project_source() -> Value {
                 "writableFields":["jurisdiction","status","activates-at","activation-window-end","activation-revision","note"],
                 "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-        }]
+        }}
     })
 }
 
@@ -7628,19 +7627,19 @@ fn compiled_secondary_get_registry_for(mapping_field: &str) -> registry_breg::Co
             "classification":"internal"
         }));
     source["recordTypes"][0]["timers"][0]["input"]["approval"] = json!({"fromField":mapping_field});
-    source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["readableFields"]
         .as_array_mut()
         .unwrap()
         .push(json!("approval"));
-    source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["readableFields"]
         .as_array_mut()
         .unwrap()
         .push(json!("backup-approval"));
-    source["accessProfiles"][0]["permissions"]["records"][0]["writableFields"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["writableFields"]
         .as_array_mut()
         .unwrap()
         .push(json!("approval"));
-    source["accessProfiles"][0]["permissions"]["records"][0]["writableFields"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["writableFields"]
         .as_array_mut()
         .unwrap()
         .push(json!("backup-approval"));
@@ -7654,7 +7653,7 @@ fn compiled_secondary_get_registry_for(mapping_field: &str) -> registry_breg::Co
     source["actions"][0]["commitGuards"] = json!({
         "targets":[{"input":"approval","field":"status","equals":"approved"}]
     });
-    source["accessProfiles"][0]["permissions"]["records"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -7690,7 +7689,7 @@ fn compiled_missing_literal_secondary_get_registry() -> registry_breg::CompiledR
     source["actions"][0]["commitGuards"] = json!({
         "targets":[{"input":"approval","field":"status","equals":"approved"}]
     });
-    source["accessProfiles"][0]["permissions"]["records"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -7722,11 +7721,11 @@ fn compiled_existence_only_secondary_get_registry() -> registry_breg::CompiledRe
             "classification":"internal"
         }));
     source["recordTypes"][0]["timers"][0]["input"]["approval"] = json!({"fromField":"approval"});
-    source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["readableFields"]
         .as_array_mut()
         .unwrap()
         .push(json!("approval"));
-    source["accessProfiles"][0]["permissions"]["records"][0]["writableFields"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["writableFields"]
         .as_array_mut()
         .unwrap()
         .push(json!("approval"));
@@ -7737,7 +7736,7 @@ fn compiled_existence_only_secondary_get_registry() -> registry_breg::CompiledRe
             "id":"approval","type":"reference","target":"approval","required":true,
             "classification":"internal"
         }));
-    source["accessProfiles"][0]["permissions"]["records"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -7760,11 +7759,11 @@ fn compiled_same_type_get_registry() -> registry_breg::CompiledRegistry {
         }));
     source["recordTypes"][0]["timers"][0]["input"]["related-service"] =
         json!({"fromField":"related-service"});
-    source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["readableFields"]
         .as_array_mut()
         .unwrap()
         .push(json!("related-service"));
-    source["accessProfiles"][0]["permissions"]["records"][0]["writableFields"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["writableFields"]
         .as_array_mut()
         .unwrap()
         .push(json!("related-service"));
@@ -7805,11 +7804,11 @@ fn compiled_encrypted_current_registry() -> registry_breg::CompiledRegistry {
         }));
     source["actions"][0]["plan"]["effects"][0]["set"]["copied-note"] =
         json!({"fromInput":"current-note"});
-    source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["readableFields"]
         .as_array_mut()
         .unwrap()
         .push(json!("copied-note"));
-    source["accessProfiles"][0]["permissions"]["records"][0]["writableFields"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["writableFields"]
         .as_array_mut()
         .unwrap()
         .push(json!("copied-note"));
@@ -7883,7 +7882,7 @@ fn compiled_cross_timer_rearming_registry() -> registry_breg::CompiledRegistry {
             "id":"followup-at","type":"timestamp","classification":"internal"
         }));
     for access_key in ["readableFields", "writableFields"] {
-        source["accessProfiles"][0]["permissions"]["records"][0][access_key]
+        source["accessProfiles"]["service-editor"]["permissions"]["records"][0][access_key]
             .as_array_mut()
             .expect("service access fields are an array")
             .push(json!("followup-at"));
@@ -7974,7 +7973,7 @@ fn compiled_created_record_timer_rearming_registry() -> registry_breg::CompiledR
             }
         }
     ]);
-    source["accessProfiles"][0]["permissions"]["records"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"]
         .as_array_mut()
         .expect("profile record permissions are an array")
         .push(json!({
@@ -7998,7 +7997,7 @@ fn compiled_timer_and_timer_free_registry() -> registry_breg::CompiledRegistry {
                 {"id":"body","type":"string","required":true,"maximumLength":128,"classification":"internal"}
             ]
         }));
-    source["accessProfiles"][0]["permissions"]["records"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
         .push(json!({

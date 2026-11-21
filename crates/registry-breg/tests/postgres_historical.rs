@@ -1015,23 +1015,21 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::Co
           "fields":[{"id":"member-count","type":"int64","classification":"restricted"}]
         }]
       }],
-      "accessProfiles":[{
-        "id":"historian","default":true,"principalClaim":"registry_principal",
+      "accessProfiles":{"historian": {"default":true,"principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
         "permissions":{"records":[{
           "recordType":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note","member-count"],
           "filterableFields":["household-code","jurisdiction"],"sortableFields":["household-code"],"allowCount":true,
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
         }]}
-      },{
-        "id":"archivist","principalClaim":"registry_principal",
+      },"archivist": {"principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
         "permissions":{"records":[{
           "recordType":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note"],
           "filterableFields":["household-code","jurisdiction"],"sortableFields":["household-code"],"allowCount":true,
           "rowBoundaries": "unrestricted"
         }]}
-      }]
+      }}
     }"#
     .replace("\"type\":\"date\"", &format!("\"type\":\"{temporal_type}\""));
     let project = parse_project_json(project.as_bytes()).expect("history fixture parses");

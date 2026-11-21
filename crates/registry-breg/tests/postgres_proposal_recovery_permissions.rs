@@ -87,8 +87,7 @@ fn registry_source() -> Value {
                 "set":{"name":{"fromInput":"value"}}
             }]}
         }],
-        "accessProfiles":[{
-            "id":"clerk",
+        "accessProfiles":{"clerk": {
             "default":true,
             "principalClaim":"sub",
             "requiredScopes":["proposal:manage"],
@@ -119,7 +118,7 @@ fn registry_source() -> Value {
                     }]
                 }]
             }
-        }]
+        }}
     })
 }
 
@@ -134,7 +133,7 @@ fn set_operations(profile: &mut Value, operations: Value) {
 }
 
 fn add_profile(source: &mut Value, id: &str, operations: Value) {
-    let mut profile = source["accessProfiles"][0].clone();
+    let mut profile = source["accessProfiles"]["clerk"].clone();
     profile["id"] = json!(id);
     profile["default"] = json!(false);
     profile["permissions"]["records"] = json!([]);
@@ -148,14 +147,14 @@ fn add_profile(source: &mut Value, id: &str, operations: Value) {
 
 fn split_recovery_source(source: &Value) -> Value {
     let mut candidate = source.clone();
-    set_operations(&mut candidate["accessProfiles"][0], json!(["get"]));
+    set_operations(&mut candidate["accessProfiles"]["clerk"], json!(["get"]));
     add_profile(&mut candidate, "canceller", json!(["cancel"]));
     candidate
 }
 
 fn listed_recovery_source(source: &Value) -> Value {
     let mut candidate = source.clone();
-    set_operations(&mut candidate["accessProfiles"][0], json!(["get"]));
+    set_operations(&mut candidate["accessProfiles"]["clerk"], json!(["get"]));
     add_profile(
         &mut candidate,
         "recovery-operator",
@@ -258,7 +257,7 @@ async fn successor_recovery_requires_one_profile_with_a_condition_source_and_can
 
     let mut get_and_cancel = source.clone();
     set_operations(
-        &mut get_and_cancel["accessProfiles"][0],
+        &mut get_and_cancel["accessProfiles"]["clerk"],
         json!(["get", "cancel"]),
     );
     let get_and_cancel = compile(&get_and_cancel);

@@ -83,149 +83,6 @@
       ],
       "type": "object"
     },
-    "AccessProfileSource": {
-      "additionalProperties": false,
-      "properties": {
-        "actorKind": {
-          "$ref": "#/$defs/ActorKindSource"
-        },
-        "allowCount": {
-          "type": "boolean"
-        },
-        "allowDataExport": {
-          "default": false,
-          "type": "boolean"
-        },
-        "default": {
-          "default": false,
-          "type": "boolean"
-        },
-        "display": {
-          "$ref": "#/$defs/PresentationSource"
-        },
-        "filterableFields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "lookups": {
-          "items": {
-            "$ref": "#/$defs/LookupPermissionSource"
-          },
-          "type": "array"
-        },
-        "membershipBoundaries": {
-          "items": {
-            "$ref": "#/$defs/MembershipBoundarySource"
-          },
-          "type": "array"
-        },
-        "operations": {
-          "items": {
-            "$ref": "#/$defs/Operation"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "principalClaim": {
-          "description": "The token claim that names the caller. Every profile serves authenticated callers, so every profile names one.",
-          "type": "string"
-        },
-        "provenanceFields": {
-          "items": {
-            "$ref": "#/$defs/ProvenanceFieldSource"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "readPaths": {
-          "items": {
-            "$ref": "#/$defs/ReadPathPermissionSource"
-          },
-          "type": "array"
-        },
-        "readableFields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "requesterClients": {
-          "description": "The OAuth clients whose tokens may select this profile. Omit to accept every client.",
-          "items": {
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        },
-        "requireConsent": {
-          "items": {
-            "$ref": "#/$defs/ConsentRequirementSource"
-          },
-          "type": "array"
-        },
-        "requiredPurposes": {
-          "description": "The verified token's purpose must match one listed value. Omit to accept every purpose.",
-          "items": {
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        },
-        "requiredScopes": {
-          "$ref": "#/$defs/RequiredScopes",
-          "description": "The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present."
-        },
-        "revisionAccess": {
-          "default": false,
-          "type": "boolean"
-        },
-        "rowBoundaries": {
-          "$ref": "#/$defs/RowBoundaries",
-          "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
-        },
-        "sortableFields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "spatialQueries": {
-          "$ref": "#/$defs/SpatialQueryPermissionSource"
-        },
-        "taskGrant": {
-          "$ref": "#/$defs/CompiledTaskGrantSource"
-        },
-        "writableFields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        }
-      },
-      "required": [
-        "id",
-        "principalClaim",
-        "requiredScopes",
-        "operations",
-        "rowBoundaries"
-      ],
-      "type": "object"
-    },
     "AccessRequirementsSource": {
       "additionalProperties": false,
       "description": "Compile-time requirements, not grants. Profiles must explicitly satisfy them.",
@@ -2187,12 +2044,151 @@
       "additionalProperties": false,
       "properties": {
         "accessProfiles": {
-          "default": [],
-          "description": "Module profile contributions, read through the sentinels a project profile uses.",
-          "items": {
-            "$ref": "#/$defs/AccessProfileSource"
+          "additionalProperties": {
+            "additionalProperties": false,
+            "properties": {
+              "actorKind": {
+                "$ref": "#/$defs/ActorKindSource"
+              },
+              "allowCount": {
+                "type": "boolean"
+              },
+              "allowDataExport": {
+                "default": false,
+                "type": "boolean"
+              },
+              "default": {
+                "default": false,
+                "type": "boolean"
+              },
+              "display": {
+                "$ref": "#/$defs/PresentationSource"
+              },
+              "filterableFields": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "lookups": {
+                "items": {
+                  "$ref": "#/$defs/LookupPermissionSource"
+                },
+                "type": "array"
+              },
+              "membershipBoundaries": {
+                "items": {
+                  "$ref": "#/$defs/MembershipBoundarySource"
+                },
+                "type": "array"
+              },
+              "operations": {
+                "items": {
+                  "$ref": "#/$defs/Operation"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "principalClaim": {
+                "description": "The token claim that names the caller. Every profile serves authenticated callers, so every profile names one.",
+                "type": "string"
+              },
+              "provenanceFields": {
+                "items": {
+                  "$ref": "#/$defs/ProvenanceFieldSource"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "readPaths": {
+                "items": {
+                  "$ref": "#/$defs/ReadPathPermissionSource"
+                },
+                "type": "array"
+              },
+              "readableFields": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "requesterClients": {
+                "description": "The OAuth clients whose tokens may select this profile. Omit to accept every client.",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "requireConsent": {
+                "items": {
+                  "$ref": "#/$defs/ConsentRequirementSource"
+                },
+                "type": "array"
+              },
+              "requiredPurposes": {
+                "description": "The verified token's purpose must match one listed value. Omit to accept every purpose.",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "requiredScopes": {
+                "$ref": "#/$defs/RequiredScopes",
+                "description": "The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present."
+              },
+              "revisionAccess": {
+                "default": false,
+                "type": "boolean"
+              },
+              "rowBoundaries": {
+                "$ref": "#/$defs/RowBoundaries",
+                "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
+              },
+              "sortableFields": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "spatialQueries": {
+                "$ref": "#/$defs/SpatialQueryPermissionSource"
+              },
+              "taskGrant": {
+                "$ref": "#/$defs/CompiledTaskGrantSource"
+              },
+              "writableFields": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "principalClaim",
+              "requiredScopes",
+              "operations",
+              "rowBoundaries"
+            ],
+            "type": "object"
           },
-          "type": "array"
+          "default": {},
+          "description": "Module profile contributions, read through the sentinels a project profile uses.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
         },
         "accessRequirements": {
           "$ref": "#/$defs/AccessRequirementsSource",
@@ -2274,12 +2270,151 @@
           "description": "Subject-facing record access history, separate from the operational audit."
         },
         "accessProfiles": {
-          "default": [],
-          "description": "Module profile contributions, read through the sentinels a project profile uses.",
-          "items": {
-            "$ref": "#/$defs/AccessProfileSource"
+          "additionalProperties": {
+            "additionalProperties": false,
+            "properties": {
+              "actorKind": {
+                "$ref": "#/$defs/ActorKindSource"
+              },
+              "allowCount": {
+                "type": "boolean"
+              },
+              "allowDataExport": {
+                "default": false,
+                "type": "boolean"
+              },
+              "default": {
+                "default": false,
+                "type": "boolean"
+              },
+              "display": {
+                "$ref": "#/$defs/PresentationSource"
+              },
+              "filterableFields": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "lookups": {
+                "items": {
+                  "$ref": "#/$defs/LookupPermissionSource"
+                },
+                "type": "array"
+              },
+              "membershipBoundaries": {
+                "items": {
+                  "$ref": "#/$defs/MembershipBoundarySource"
+                },
+                "type": "array"
+              },
+              "operations": {
+                "items": {
+                  "$ref": "#/$defs/Operation"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "principalClaim": {
+                "description": "The token claim that names the caller. Every profile serves authenticated callers, so every profile names one.",
+                "type": "string"
+              },
+              "provenanceFields": {
+                "items": {
+                  "$ref": "#/$defs/ProvenanceFieldSource"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "readPaths": {
+                "items": {
+                  "$ref": "#/$defs/ReadPathPermissionSource"
+                },
+                "type": "array"
+              },
+              "readableFields": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "requesterClients": {
+                "description": "The OAuth clients whose tokens may select this profile. Omit to accept every client.",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "requireConsent": {
+                "items": {
+                  "$ref": "#/$defs/ConsentRequirementSource"
+                },
+                "type": "array"
+              },
+              "requiredPurposes": {
+                "description": "The verified token's purpose must match one listed value. Omit to accept every purpose.",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "requiredScopes": {
+                "$ref": "#/$defs/RequiredScopes",
+                "description": "The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present."
+              },
+              "revisionAccess": {
+                "default": false,
+                "type": "boolean"
+              },
+              "rowBoundaries": {
+                "$ref": "#/$defs/RowBoundaries",
+                "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
+              },
+              "sortableFields": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "spatialQueries": {
+                "$ref": "#/$defs/SpatialQueryPermissionSource"
+              },
+              "taskGrant": {
+                "$ref": "#/$defs/CompiledTaskGrantSource"
+              },
+              "writableFields": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "principalClaim",
+              "requiredScopes",
+              "operations",
+              "rowBoundaries"
+            ],
+            "type": "object"
           },
-          "type": "array"
+          "default": {},
+          "description": "Module profile contributions, read through the sentinels a project profile uses.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
         },
         "accessRequirements": {
           "$ref": "#/$defs/AccessRequirementsSource",

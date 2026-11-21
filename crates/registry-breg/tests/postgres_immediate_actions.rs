@@ -3550,9 +3550,8 @@ const ACTION_PROJECT: &[u8] = br#"{
       }
     }
   ],
-  "accessProfiles": [
-    {
-      "id": "contact-registrar",
+  "accessProfiles": {
+    "contact-registrar": {
       "default": true,
       "principalClaim": "registry_principal",
       "requiredScopes": [
@@ -3713,8 +3712,7 @@ const ACTION_PROJECT: &[u8] = br#"{
         ]
       }
     },
-    {
-      "id": "contact-shadow",
+    "contact-shadow": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "registry:contact:shadow"
@@ -3768,8 +3766,7 @@ const ACTION_PROJECT: &[u8] = br#"{
         ]
       }
     },
-    {
-      "id": "household-seed-writer",
+    "household-seed-writer": {
       "principalClaim": "registry_principal",
       "requiredScopes": "unrestricted",
       "permissions": {
@@ -3798,7 +3795,7 @@ const ACTION_PROJECT: &[u8] = br#"{
         ]
       }
     }
-  ],
+  },
   "datasets": [
     {
       "id": "test-dataset"

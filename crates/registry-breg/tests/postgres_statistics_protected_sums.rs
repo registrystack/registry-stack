@@ -583,22 +583,22 @@ fn source() -> Value {
                 ]
             }
         ],
-        "accessProfiles":[
-            {"id":"analyst","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+        "accessProfiles":{
+            "analyst": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["list"],
                 "readableFields":["subject","active","district","category","event-date","area","units","owner"],
                 "filterableFields":["subject","active","district","category","event-date"],"allowCount":true,
                 "rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":DATASET,"operations":["read-live","read-releases"]}]}},
-            {"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+            "publisher": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["list"],
                 "readableFields":["subject","active","district","category","event-date","area","units","owner"],
                 "filterableFields":["subject","active","district","category","event-date"],"allowCount":true,
                 "rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":DATASET,"operations":["publish","read-releases"]}]}},
-            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "reader": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
                 "datasets":[{"dataset":DATASET,"operations":["read-releases"]}]}}
-        ],
+        },
         "vocabularies":[
             {"id":"district","values":["d1","d2"]},
             {"id":"category","values":["a","b","c"]}

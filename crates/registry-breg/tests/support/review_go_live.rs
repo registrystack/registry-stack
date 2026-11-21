@@ -29,16 +29,16 @@ async fn reviewed_fixture_with_recovery(
     let mut source = registry_source(json!(policy()));
     source["actions"][0]["execution"]["proposal"]["application"] =
         json!({"mode":if automatic { "automatic" } else { "manual" }});
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] =
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"] =
         json!(["get", "list", "submit", "cancel", "rebase"]);
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] =
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
         json!(["target", "value"]);
     if recovery_contract {
         source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({
             "id":"review-name",
             "fields":{"proposedName":{"type":"input","input":"value"}}
         });
-        source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] = json!([
+        source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"] = json!([
             "get",
             "list",
             "edit",
@@ -50,11 +50,11 @@ async fn reviewed_fixture_with_recovery(
             "get-review-status",
             "get-review-context"
         ]);
-        source["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+        source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableContextFields"] =
             json!(["proposedName"]);
     }
     if !automatic {
-        source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+        source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"]
             .as_array_mut()
             .unwrap()
             .push(json!("apply"));

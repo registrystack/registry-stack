@@ -93,8 +93,7 @@ pub fn self_issued_project() -> Value {
             }
         }]}
     }));
-    value["accessProfiles"].as_array_mut().unwrap().push(json!({
-        "id": "consent-self", "principalClaim": "principal", "requiredScopes": ["consent:self"],
+    value["accessProfiles"].as_object_mut().unwrap().insert("consent-self".to_owned(), json!({"principalClaim": "principal", "requiredScopes": ["consent:self"],
         "permissions": {"actions": [{
             "action": "withdraw-consent", "operations": ["invoke"],
             "targets": [

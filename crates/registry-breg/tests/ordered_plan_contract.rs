@@ -16,7 +16,7 @@ fn project() -> Value {
      {"id":"parent","type":"reference","target":"entry","classification":"internal"}]}],
      "actions":[{"id":"create-pair","execution":{"mode":"immediate"},"inputs":[{"id":"name","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
      "plan":{"type":"fixed","effects":[{"id":"z-result","target":{"recordType":"entry"},"operation":"create","set":{"name":{"fromInput":"name"}}},{"id":"a-result","target":{"recordType":"entry"},"operation":"create","set":{"name":{"fromInput":"name"}}}]}}],
-     "accessProfiles":[{"id":"creator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"create-pair","operations":["invoke"],"targets":[{"recordType":"entry","rowBoundaries":"unrestricted"}],"results":["z-result","a-result"]}]}}]
+     "accessProfiles":{"creator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"create-pair","operations":["invoke"],"targets":[{"recordType":"entry","rowBoundaries":"unrestricted"}],"results":["z-result","a-result"]}]}}}
     })
 }
 fn compile(
@@ -112,9 +112,9 @@ fn modules_share_native_record_types_value_types_and_function_asset_provenance()
     let mut reused = value["actions"][0].clone();
     reused["id"] = json!("create-pair-again");
     value["actions"].as_array_mut().unwrap().push(reused);
-    let mut permission = value["accessProfiles"][0]["permissions"]["actions"][0].clone();
+    let mut permission = value["accessProfiles"]["creator"]["permissions"]["actions"][0].clone();
     permission["action"] = json!("create-pair-again");
-    value["accessProfiles"][0]["permissions"]["actions"]
+    value["accessProfiles"]["creator"]["permissions"]["actions"]
         .as_array_mut()
         .unwrap()
         .push(permission);

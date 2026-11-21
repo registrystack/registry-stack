@@ -4615,7 +4615,7 @@ fn fairness_project_bytes(project_bytes: &[u8]) -> Vec<u8> {
     case_action["plan"]["effects"][0]["id"] = json!("activated-case");
     actions.push(case_action);
 
-    let permissions = project["accessProfiles"][0]["permissions"]["records"]
+    let permissions = project["accessProfiles"]["service-editor"]["permissions"]["records"]
         .as_array_mut()
         .expect("public future-activation Record permissions are an array");
     let mut case_permission = permissions

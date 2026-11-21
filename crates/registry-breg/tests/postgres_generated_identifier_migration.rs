@@ -209,14 +209,13 @@ fn source(generated: bool) -> Source {
                 },
                 identifier
             ],
-            "accessProfiles": [{
-                "id": "reader",
+            "accessProfiles": {"reader": {
                 "principalClaim": "registry_principal",
                 "requiredScopes": "unrestricted",
                 "operations": ["get", "list"],
                 "readableFields": ["jurisdiction", "registration-code"],
                 "rowBoundaries": "unrestricted"
-            }]
+            }}
         }]
     }))
     .expect("module serializes");

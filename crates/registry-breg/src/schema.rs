@@ -794,21 +794,23 @@ mod tests {
         let document = schema_document();
         let schema = compile(&document);
         let mut old_purposes = fixture("asset-site-placement");
-        let required_purposes = old_purposes["accessProfiles"][0]
+        let required_purposes = old_purposes["accessProfiles"]["asset-operator"]
             .as_object_mut()
             .expect("access profile is an object")
             .remove("requiredPurposes")
             .expect("fixture uses canonical requiredPurposes");
-        old_purposes["accessProfiles"][0]["purposes"] = required_purposes;
+        old_purposes["accessProfiles"]["asset-operator"]["purposes"] = required_purposes;
         assert!(!schema.is_valid(&old_purposes));
 
         let mut old_actions = fixture("asset-site-placement");
-        let operations = old_actions["accessProfiles"][0]["permissions"]["records"][0]
-            .as_object_mut()
-            .expect("access permission is an object")
-            .remove("operations")
-            .expect("fixture uses canonical operations");
-        old_actions["accessProfiles"][0]["permissions"]["records"][0]["actions"] = operations;
+        let operations = old_actions["accessProfiles"]["asset-operator"]["permissions"]["records"]
+            [0]
+        .as_object_mut()
+        .expect("access permission is an object")
+        .remove("operations")
+        .expect("fixture uses canonical operations");
+        old_actions["accessProfiles"]["asset-operator"]["permissions"]["records"][0]["actions"] =
+            operations;
         assert!(!schema.is_valid(&old_actions));
     }
 
@@ -817,13 +819,14 @@ mod tests {
         let document = schema_document();
         let schema = compile(&document);
         let mut instance = fixture("business");
-        instance["recordTypes"][0]["accessProfiles"] = serde_json::json!([{
-            "id": "entity-local-reader",
-            "principalClaim": "sub",
-            "requiredScopes": ["registry.read"],
-            "operations": ["get"],
-            "readableFields": ["legal-name"]
-        }]);
+        instance["recordTypes"][0]["accessProfiles"] = serde_json::json!({
+            "entity-local-reader": {
+                "principalClaim": "sub",
+                "requiredScopes": ["registry.read"],
+                "operations": ["get"],
+                "readableFields": ["legal-name"]
+            }
+        });
 
         assert!(!schema.is_valid(&instance));
     }
@@ -833,11 +836,11 @@ mod tests {
         let document = schema_document();
         let schema = compile(&document);
         let written = fixture("business");
-        assert!(written["accessProfiles"][0]["principalClaim"].is_string());
+        assert!(written["accessProfiles"]["public-register"]["principalClaim"].is_string());
         assert!(schema.is_valid(&written));
 
         let mut unnamed = written;
-        unnamed["accessProfiles"][0]
+        unnamed["accessProfiles"]["public-register"]
             .as_object_mut()
             .expect("access profile is an object")
             .remove("principalClaim");
@@ -849,12 +852,7 @@ mod tests {
         let document = schema_document();
         let schema = compile(&document);
         let facility = fixture("facility");
-        let reader = facility["accessProfiles"]
-            .as_array()
-            .expect("the fixture lists access profiles")
-            .iter()
-            .position(|profile| profile["id"] == "statistics-reader")
-            .expect("the fixture declares statistics-reader");
+        let reader = "statistics-reader";
         assert!(
             facility["accessProfiles"][reader]["permissions"]["datasets"][0]["dataset"].is_string()
         );
@@ -877,8 +875,8 @@ mod tests {
         }
 
         let mut entity_permission = facility.clone();
-        entity_permission["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
-            serde_json::json!(["list", "read-live"]);
+        entity_permission["accessProfiles"]["facility-operator"]["permissions"]["records"][0]
+            ["operations"] = serde_json::json!(["list", "read-live"]);
         assert!(
             !schema.is_valid(&entity_permission),
             "an entity permission with a dataset operation"
@@ -919,12 +917,12 @@ mod tests {
             );
         }
 
-        let permissions = &facility["accessProfiles"][0]["permissions"];
+        let permissions = &facility["accessProfiles"]["facility-operator"]["permissions"];
         let entity = permissions["records"][0].clone();
         let dataset = permissions["datasets"][0].clone();
 
         let mut one_list = facility.clone();
-        one_list["accessProfiles"][0]["permissions"] =
+        one_list["accessProfiles"]["facility-operator"]["permissions"] =
             serde_json::json!([entity.clone(), dataset.clone()]);
         assert!(
             !schema.is_valid(&one_list),
@@ -938,7 +936,7 @@ mod tests {
             ("actions", &dataset),
         ] {
             let mut instance = facility.clone();
-            instance["accessProfiles"][0]["permissions"][group] =
+            instance["accessProfiles"]["facility-operator"]["permissions"][group] =
                 serde_json::json!([misplaced.clone()]);
             assert!(
                 !schema.is_valid(&instance),
@@ -947,11 +945,12 @@ mod tests {
         }
 
         let mut unknown_group = facility.clone();
-        unknown_group["accessProfiles"][0]["permissions"]["entities"] = serde_json::json!([]);
+        unknown_group["accessProfiles"]["facility-operator"]["permissions"]["entities"] =
+            serde_json::json!([]);
         assert!(!schema.is_valid(&unknown_group), "an unknown group");
 
         let mut none = facility;
-        none["accessProfiles"][0]["permissions"] = serde_json::json!({});
+        none["accessProfiles"]["facility-operator"]["permissions"] = serde_json::json!({});
         assert!(schema.is_valid(&none), "a profile that grants nothing");
     }
 
@@ -970,11 +969,12 @@ mod tests {
                 "classification":"internal"
             }));
         instance["recordTypes"][0]["geojson"] = serde_json::json!({"geometryField":"location"});
-        instance["accessProfiles"][0]["permissions"]["records"][0]["readableFields"]
+        instance["accessProfiles"]["asset-operator"]["permissions"]["records"][0]["readableFields"]
             .as_array_mut()
             .unwrap()
             .push(Value::String("location".to_owned()));
-        instance["accessProfiles"][0]["permissions"]["records"][0]["spatialQueries"] = serde_json::json!({
+        instance["accessProfiles"]["asset-operator"]["permissions"]["records"][0]
+            ["spatialQueries"] = serde_json::json!({
             "bbox":{
                 "maximumLongitudeSpanDegrees":0.25,
                 "maximumLatitudeSpanDegrees":1.5
@@ -982,8 +982,8 @@ mod tests {
         });
         assert!(schema.is_valid(&instance));
 
-        instance["accessProfiles"][0]["permissions"]["records"][0]["spatialQueries"]["bbox"]
-            ["geometryField"] = Value::String("location".to_owned());
+        instance["accessProfiles"]["asset-operator"]["permissions"]["records"][0]
+            ["spatialQueries"]["bbox"]["geometryField"] = Value::String("location".to_owned());
         assert!(!schema.is_valid(&instance));
     }
 

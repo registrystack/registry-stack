@@ -53,13 +53,12 @@ fn governed_project(required_for: &[&str], loader_operations: &[&str]) -> Value 
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
       "project":{"id":"import-grants","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "datasets":[{"id":"test-dataset"}], "recordTypes":[enrollment],
-      "accessProfiles":[{
-        "id":"loader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
+      "accessProfiles":{"loader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
         "permissions":{"records":[{
           "recordType":"enrollment","operations":loader_operations,"readableFields":["label"],"writableFields":["label"],
           "rowBoundaries":"unrestricted"
         }]}
-      }]
+      }}
     })
 }
 
@@ -134,11 +133,7 @@ fn ungoverned_project() -> Value {
         .as_array_mut()
         .expect("entities")
         .truncate(1);
-    project["accessProfiles"]
-        .as_array_mut()
-        .expect("profiles")
-        .truncate(1);
-    project["accessProfiles"][0]["default"] = json!(true);
+    project["accessProfiles"]["loader"]["default"] = json!(true);
     project
 }
 
@@ -169,7 +164,7 @@ fn import_requires_entity_batch_bounds() {
 #[test]
 fn import_refuses_a_profile_without_a_principal_claim() {
     let mut project = ungoverned_project();
-    let loader = project["accessProfiles"][0]
+    let loader = project["accessProfiles"]["loader"]
         .as_object_mut()
         .expect("profile object");
     loader.remove("principalClaim");
@@ -177,11 +172,11 @@ fn import_refuses_a_profile_without_a_principal_claim() {
     let failure = parse_project_yaml(&source).expect_err("runs are creator-scoped");
     assert_eq!(
         diagnostic(&failure, "config.missing-key").path,
-        "project.accessProfiles[0]"
+        "project.accessProfiles.loader"
     );
 
     let mut project = ungoverned_project();
-    project["accessProfiles"][0]["principalClaim"] = json!("");
+    project["accessProfiles"]["loader"]["principalClaim"] = json!("");
     let failure = compile(&project).expect_err("runs are creator-scoped");
     let codes = codes(&failure);
     let errors = failure
@@ -215,15 +210,12 @@ fn import_refuses_a_profile_without_a_principal_claim() {
 #[test]
 fn import_beside_batch_on_one_entity_is_refused_as_redundant() {
     let mut project = ungoverned_project();
-    project["accessProfiles"]
-        .as_array_mut()
-        .expect("profiles")
-        .push(json!({
-            "id":"bulk-writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
-              "recordType":"enrollment","operations":["create","batch"],"readableFields":["label"],"writableFields":["label"],
-              "rowBoundaries": "unrestricted"
-            }]}
-        }));
+    project["accessProfiles"]["bulk-writer"] = json!({
+        "principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+          "recordType":"enrollment","operations":["create","batch"],"readableFields":["label"],"writableFields":["label"],
+          "rowBoundaries": "unrestricted"
+        }]}
+    });
     let failure =
         compile(&project).expect_err("batch beside import leaves the authority bounding nothing");
     assert_eq!(
@@ -232,7 +224,7 @@ fn import_beside_batch_on_one_entity_is_refused_as_redundant() {
     );
 
     let mut same = ungoverned_project();
-    same["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
+    same["accessProfiles"]["loader"]["permissions"]["records"][0]["operations"] =
         json!(["create", "batch", "import"]);
     let same_profile =
         compile(&same).expect_err("one profile holding batch and import is refused too");
@@ -242,7 +234,7 @@ fn import_beside_batch_on_one_entity_is_refused_as_redundant() {
 #[test]
 fn import_is_unavailable_on_a_proposal_permission() {
     let mut project = ungoverned_project();
-    project["accessProfiles"][0]["permissions"]["proposals"] =
+    project["accessProfiles"]["loader"]["permissions"]["proposals"] =
         json!([{"action":"correct-enrollment", "operations":["import"]}]);
     let source = serde_json::to_vec(&project).unwrap();
     let failure =
@@ -252,7 +244,7 @@ fn import_is_unavailable_on_a_proposal_permission() {
             .diagnostics()
             .iter()
             .any(|diagnostic| diagnostic.path
-                == "project.accessProfiles[0].permissions.proposals[0].operations[0]"
+                == "project.accessProfiles.loader.permissions.proposals[0].operations[0]"
                 && diagnostic.code == "config.unknown-variant"),
         "{:?}",
         failure.diagnostics()
@@ -262,7 +254,8 @@ fn import_is_unavailable_on_a_proposal_permission() {
 #[test]
 fn import_is_a_forbidden_direct_mutation_for_a_task_grant_profile() {
     let mut project = ungoverned_project();
-    project["accessProfiles"][0]["taskGrant"] = json!({"sourceIssuer":"https://casework.example"});
+    project["accessProfiles"]["loader"]["taskGrant"] =
+        json!({"sourceIssuer":"https://casework.example"});
     let failure = compile(&project).expect_err("a task grant cannot load records");
     assert!(
         codes(&failure)

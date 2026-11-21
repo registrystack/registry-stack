@@ -221,9 +221,8 @@
       ]
     }
   ],
-  "accessProfiles": [
-    {
-      "id": "asset-operator",
+  "accessProfiles": {
+    "asset-operator": {
       "default": true,
       "principalClaim": "registry_principal",
       "requiredScopes": "unrestricted",
@@ -315,8 +314,7 @@
         ]
       }
     },
-    {
-      "id": "site-planner",
+    "site-planner": {
       "principalClaim": "registry_principal",
       "requiredScopes": "unrestricted",
       "requiredPurposes": [
@@ -384,7 +382,7 @@
         ]
       }
     }
-  ],
+  },
   "vocabularies": [
     {
       "id": "asset-classification",

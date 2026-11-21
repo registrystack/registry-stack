@@ -329,7 +329,7 @@ actions:
           operation: create
           fields: [code]
 accessProfiles:
-  - id: operator
+  operator:
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry:wasm-fixture:invoke]

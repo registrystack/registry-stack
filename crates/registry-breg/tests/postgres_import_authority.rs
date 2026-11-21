@@ -87,8 +87,7 @@ const FIXTURE: &str = r#"{
       {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"}
     ]
   }],
-  "accessProfiles":[{
-    "id":"loader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+  "accessProfiles":{"loader": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "permissions":{"records":[{
       "recordType":"widget","operations":["import"],
       "readableFields":["jurisdiction","label"],"writableFields":["jurisdiction","label"],
@@ -102,14 +101,13 @@ const FIXTURE: &str = r#"{
       "readableFields":["jurisdiction","label"],"writableFields":["jurisdiction","label"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
     }]}
-  },{
-    "id":"second-loader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+  },"second-loader": {"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "permissions":{"records":[{
       "recordType":"widget","operations":["import"],
       "readableFields":["jurisdiction","label"],"writableFields":["jurisdiction","label"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
     }]}
-  }]
+  }}
 }"#;
 
 fn compiled_registry() -> CompiledRegistry {

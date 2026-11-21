@@ -55,7 +55,7 @@ actions:
       writes:
         - {id: entry, target: {recordType: entry}, operation: create, fields: [label, effective-on, expires-on, renewal-on]}
 accessProfiles:
-  - id: author
+  author:
     default: true
     principalClaim: sub
     requiredScopes: unrestricted

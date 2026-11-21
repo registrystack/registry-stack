@@ -1817,6 +1817,9 @@ fn resolve(root: &Node, steps: &[Step]) -> Resolved {
             (Step::Any, NodeValue::Sequence(items)) if items.len() == 1 => {
                 Some(("0".to_owned(), &items[0]))
             }
+            (Step::Any, NodeValue::Mapping(entries)) if entries.len() == 1 => {
+                Some((escape_pointer_segment(&entries[0].key), &entries[0].value))
+            }
             (Step::Index(index), NodeValue::Sequence(items)) => {
                 items.get(*index).map(|item| (index.to_string(), item))
             }
@@ -2014,7 +2017,7 @@ mod tests {
     fn authoring_lists_exact_pointers_for_each_source_document() {
         let documents = Documents {
             project: document(
-                "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles: []\n",
+                "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles: {}\n",
             ),
             modules: vec![(
                 "base".to_owned(),
@@ -2087,7 +2090,7 @@ mod tests {
     #[test]
     fn named_filter_and_sort_fields_resolve_to_distinct_scalar_elements() {
         let source = document(
-            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: test\n  version: 1.0.0\n  canonicalBaseIri: https://example.test\n  defaultLanguage: en\naccessProfiles:\n  - id: reader\n    principalClaim: principal\n    requiredScopes: unrestricted\n    permissions:\n      records:\n        - recordType: record\n          operations: [list]\n          rowBoundaries: unrestricted\n          filterableFields: [name, category]\n          sortableFields: [name, category]\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: test\n  version: 1.0.0\n  canonicalBaseIri: https://example.test\n  defaultLanguage: en\naccessProfiles:\n  reader:\n    principalClaim: principal\n    requiredScopes: unrestricted\n    permissions:\n      records:\n        - recordType: record\n          operations: [list]\n          rowBoundaries: unrestricted\n          filterableFields: [name, category]\n          sortableFields: [name, category]\n",
         );
         for member in ["filterableFields", "sortableFields"] {
             for (index, field) in ["name", "category"].iter().enumerate() {
@@ -2098,10 +2101,26 @@ mod tests {
                 assert!(resolved.complete, "{path}");
                 assert_eq!(
                     resolved.pointer,
-                    format!("/accessProfiles/0/permissions/records/0/{member}/{index}")
+                    format!("/accessProfiles/reader/permissions/records/0/{member}/{index}")
                 );
             }
         }
+    }
+
+    #[test]
+    fn an_unnamed_profile_step_resolves_when_the_mapping_holds_one_profile() {
+        let source = document(
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: test\n  version: 1.0.0\n  canonicalBaseIri: https://example.test\n  defaultLanguage: en\naccessProfiles:\n  reader:\n    principalClaim: principal\n    requiredScopes: unrestricted\n    permissions:\n      records:\n        - recordType: record\n          operations: [list]\n          rowBoundaries: unrestricted\n",
+        );
+        let resolved = resolve(
+            source.root(),
+            &parse_steps("accessProfiles[].permissions.records[].recordType"),
+        );
+        assert!(resolved.complete);
+        assert_eq!(
+            resolved.pointer,
+            "/accessProfiles/reader/permissions/records/0/recordType"
+        );
     }
 
     #[test]
@@ -2161,7 +2180,7 @@ mod tests {
     #[test]
     fn an_entity_access_path_is_found_under_the_profile_that_grants_it() {
         let project = document(
-            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: clerk\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      records:\n        - recordType: other\n          operations: [get]\n          rowBoundaries: unrestricted\n        - recordType: record\n          operations: [get]\n          rowBoundaries: unrestricted\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  clerk:\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      records:\n        - recordType: other\n          operations: [get]\n          rowBoundaries: unrestricted\n        - recordType: record\n          operations: [get]\n          rowBoundaries: unrestricted\n",
         );
         let steps = parse_steps("recordTypes[id=record].accessProfiles[id=clerk].operations");
         let found = alternatives(&steps)
@@ -2171,14 +2190,14 @@ mod tests {
             .expect("the profile's permission names the entity");
         assert_eq!(
             found.pointer,
-            "/accessProfiles/0/permissions/records/1/operations"
+            "/accessProfiles/clerk/permissions/records/1/operations"
         );
     }
 
     #[test]
     fn an_action_permission_path_is_found_under_the_profile_that_grants_it() {
         let project = document(
-            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: reader\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n  - id: steward\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      records:\n        - recordType: record\n          operations: [get]\n          rowBoundaries: unrestricted\n      actions:\n        - action: import-record\n          operations: [invoke]\n          targets:\n            - {recordType: other, rowBoundaries: unrestricted}\n            - {recordType: record, rowBoundaries: unrestricted}\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  reader:\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n  steward:\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      records:\n        - recordType: record\n          operations: [get]\n          rowBoundaries: unrestricted\n      actions:\n        - action: import-record\n          operations: [invoke]\n          targets:\n            - {recordType: other, rowBoundaries: unrestricted}\n            - {recordType: record, rowBoundaries: unrestricted}\n",
         );
         let steps = parse_steps(
             "actions[id=import-record].permissions[profile=steward].targets[recordType=record].rowBoundaries",
@@ -2190,14 +2209,14 @@ mod tests {
             .expect("the profile's permission names the action");
         assert_eq!(
             found.pointer,
-            "/accessProfiles/1/permissions/actions/0/targets/1/rowBoundaries"
+            "/accessProfiles/steward/permissions/actions/0/targets/1/rowBoundaries"
         );
     }
 
     #[test]
     fn a_proposal_permission_path_is_found_under_the_profile_that_grants_it() {
         let project = document(
-            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: reader\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n  - id: steward\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      proposals:\n        - action: update-record\n          operations: [edit]\n          targets:\n            - {recordType: other, rowBoundaries: unrestricted}\n            - {recordType: record, rowBoundaries: unrestricted}\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  reader:\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n  steward:\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      proposals:\n        - action: update-record\n          operations: [edit]\n          targets:\n            - {recordType: other, rowBoundaries: unrestricted}\n            - {recordType: record, rowBoundaries: unrestricted}\n",
         );
         let steps = parse_steps(
             "actions[id=update-record].execution.proposal.permissions[profile=steward].targets[recordType=record].rowBoundaries",
@@ -2209,7 +2228,7 @@ mod tests {
             .expect("the profile's permission names the Proposal action");
         assert_eq!(
             found.pointer,
-            "/accessProfiles/1/permissions/proposals/0/targets/1/rowBoundaries"
+            "/accessProfiles/steward/permissions/proposals/0/targets/1/rowBoundaries"
         );
     }
 }

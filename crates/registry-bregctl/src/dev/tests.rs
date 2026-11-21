@@ -440,7 +440,7 @@ fn access_free_runtime_preserves_the_legacy_registry_principal() {
     let (_temp, state, clients, mut files) = fixture();
     let mut registry: Value =
         serde_norway::from_slice(files.get("registry.yaml").unwrap()).unwrap();
-    let profiles = registry["accessProfiles"].as_array_mut().unwrap();
+    let profiles = registry["accessProfiles"].as_object_mut().unwrap();
     assert!(!profiles.is_empty());
     profiles.clear();
     registry
@@ -572,7 +572,7 @@ fn local_principal_source(claim: &str) -> Value {
         "package":{"sourceRevision":"synthetic-1"},
         "datasets":[{"id":"test-dataset"}],"recordTypes":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maximumLength":64,"required":true,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"operator","principalClaim":claim,"requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"record","operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"}]}}]
+        "accessProfiles":{"operator": {"principalClaim":claim,"requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"record","operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"}]}}}
     })
 }
 

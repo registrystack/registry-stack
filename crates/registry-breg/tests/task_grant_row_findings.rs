@@ -40,8 +40,8 @@ fn project(rows: Value, classification: &str) -> Value {
                 {"id":"new-label","type":"string","maximumLength":32,"required":true,"classification":classification}],
                 "plan":{"type":"fixed","effects":[{"id":"corrected","target":{"fromInput":"case-ref"},"operation":"patch","set":{"label":{"fromInput":"new-label"}}}]}}
         ],
-        "accessProfiles":[
-            {"id":"delegated","principalClaim":"registry_principal","requiredScopes":["registry.read"],
+        "accessProfiles":{
+            "delegated": {"principalClaim":"registry_principal","requiredScopes":["registry.read"],
                 "requiredPurposes":["correction-review"],"actorKind":"agent","requesterClients":["task-agent"],
                 "taskGrant":{"sourceIssuer":"https://casework.example"},
                 "permissions":{
@@ -50,7 +50,7 @@ fn project(rows: Value, classification: &str) -> Value {
                         {"action":"relabel-note","operations":["invoke"],"targets":[{"recordType":"note","rowBoundaries":rows.clone()}],"results":["relabelled"]},
                         {"action":"correct-case","operations":["start"],"targets":[{"recordType":"case","rowBoundaries":rows.clone()}]}],
                     "proposals":[{"action":"correct-case","operations":["get","edit"],"ownership":"caller","targets":[{"recordType":"case","rowBoundaries":rows}]}]}}
-        ]
+        }
     })
 }
 
@@ -106,7 +106,7 @@ fn public_record_types_and_standing_profiles_draw_no_finding() {
     assert_eq!(unbound_paths(&registry), Vec::<String>::new());
 
     let mut standing = project(json!("unrestricted"), "internal");
-    standing["accessProfiles"][0]
+    standing["accessProfiles"]["delegated"]
         .as_object_mut()
         .expect("profile object")
         .remove("taskGrant");
@@ -115,7 +115,7 @@ fn public_record_types_and_standing_profiles_draw_no_finding() {
         .as_array_mut()
         .expect("actions array")
         .remove(0);
-    let permissions = standing["accessProfiles"][0]["permissions"]
+    let permissions = standing["accessProfiles"]["delegated"]["permissions"]
         .as_object_mut()
         .expect("permissions object");
     permissions["actions"]
@@ -130,7 +130,7 @@ fn public_record_types_and_standing_profiles_draw_no_finding() {
 #[test]
 fn membership_bound_task_grant_profile_draws_no_finding() {
     let mut source = membership_fixture::source("facility");
-    let member = source["accessProfiles"][0]
+    let member = source["accessProfiles"]["member"]
         .as_object_mut()
         .expect("member profile object");
     member.insert("actorKind".to_owned(), json!("agent"));
@@ -144,7 +144,7 @@ fn membership_bound_task_grant_profile_draws_no_finding() {
         membership_fixture::compile(&source).expect("membership-bound task-grant profile compiles");
     assert_eq!(unbound_paths(&registry), Vec::<String>::new());
 
-    source["accessProfiles"][0]["permissions"]["records"][0]
+    source["accessProfiles"]["member"]["permissions"]["records"][0]
         .as_object_mut()
         .expect("record permission object")
         .remove("membershipBoundaries");

@@ -114,14 +114,13 @@ fn wasm_project() -> Value {
               }]
             }
           }],
-          "accessProfiles":[{
-            "id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          "accessProfiles":{"registrar": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"actions":[{
               "action":"register-person","operations":["invoke"],
               "targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],
               "results":["person"]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("the wasm admission project shape parses")
@@ -534,7 +533,7 @@ fn the_per_package_wasm_module_count_is_bounded() {
         }));
     }
     project["actions"] = Value::Array(actions);
-    project["accessProfiles"][0]["permissions"] = json!({ "actions": permissions });
+    project["accessProfiles"]["registrar"]["permissions"] = json!({ "actions": permissions });
     let failure = compile_with_module(project, "wasm/handler.wasm", binary(MINIMAL_ABI_WAT))
         .map(|_| ())
         .expect_err("a package beyond the module-count ceiling is refused");

@@ -1072,8 +1072,8 @@ async fn absent_optional_copy_has_the_same_safe_failure_at_invoke_and_submit() {
     proposal["id"] = json!("invalid-proposal");
     proposal["execution"] = json!({"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}});
     source["actions"].as_array_mut().unwrap().push(proposal);
-    source["accessProfiles"][0]["permissions"]["actions"].as_array_mut().unwrap().push(json!({"action":"invalid-proposal","operations":["start"],"targets":[{"recordType":"entry","rowBoundaries":"unrestricted"}]}));
-    source["accessProfiles"][0]["permissions"]["proposals"] = json!([{"action":"invalid-proposal","operations":["get","edit","submit","cancel"],"ownership":"caller","readableInputs":["note","private-data"],"writableInputs":["note","private-data"],"targets":[{"recordType":"entry","rowBoundaries":"unrestricted"}]}]);
+    source["accessProfiles"]["author"]["permissions"]["actions"].as_array_mut().unwrap().push(json!({"action":"invalid-proposal","operations":["start"],"targets":[{"recordType":"entry","rowBoundaries":"unrestricted"}]}));
+    source["accessProfiles"]["author"]["permissions"]["proposals"] = json!([{"action":"invalid-proposal","operations":["get","edit","submit","cancel"],"ownership":"caller","readableInputs":["note","private-data"],"writableInputs":["note","private-data"],"targets":[{"recordType":"entry","rowBoundaries":"unrestricted"}]}]);
     let project =
         registry_breg::contract::parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let assets = [

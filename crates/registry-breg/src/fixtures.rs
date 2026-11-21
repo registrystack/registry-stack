@@ -7240,9 +7240,9 @@ journeys:
                     {"id":"name","type":"string","maximumLength":80,"required":true,"classification":"internal"}],
                 "plan":{"type":"function","function":"person-plan","inputs":["person","name"],
                     "writes":[{"id":"person","target":{"fromInput":"person"},"operation":"patch","fields":["name"]}]}}],
-            "accessProfiles":[{"id":"person-operator","principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["person-maintenance"],
+            "accessProfiles":{"person-operator": {"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["person-maintenance"],
                 "permissions":{"records":[{"recordType":"person","operations":["get","list"],"readableFields":["name"],"rowBoundaries":"unrestricted"}],
-                    "actions":[{"action":"rename-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}]
+                    "actions":[{"action":"rename-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}}
         })).unwrap()
     }
 

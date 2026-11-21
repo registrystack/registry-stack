@@ -18,7 +18,7 @@ recordTypes:
       - {id: label, type: string, required: true, maximumLength: 100, classification: internal}
       - {id: district, type: string, required: true, maximumLength: 100, classification: internal}
 accessProfiles:
-  - id: clerk
+  clerk:
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry:read]

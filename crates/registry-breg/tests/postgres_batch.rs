@@ -951,8 +951,8 @@ fn compiled_timer_batch_registry() -> registry_breg::CompiledRegistry {
         .expect("public timer example is nonempty")
         .to_json_value();
     source["recordTypes"][0]["batch"] = json!({"maximumItems":3,"maximumBytes":8192});
-    source["accessProfiles"][0]["requiredScopes"] = json!("unrestricted");
-    source["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
+    source["accessProfiles"]["operator"]["requiredScopes"] = json!("unrestricted");
+    source["accessProfiles"]["operator"]["permissions"]["records"][0]["operations"] =
         json!(["create", "get", "list", "patch", "tombstone", "batch"]);
     let bytes = serde_json::to_vec(&source).expect("timer batch fixture serializes");
     let project = parse_project_json(&bytes).expect("timer batch fixture parses");
@@ -1069,8 +1069,7 @@ fn compiled_registry_with_create_policy(
               {"phase":"after","id":"widget-patched","trigger":"patched","projection":["label","quantity"]}
             ]
           }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management","case-review"],
             "permissions":{"records":[{
               "recordType":"widget","operations":["create","get","patch","batch"],
@@ -1078,8 +1077,7 @@ fn compiled_registry_with_create_policy(
               "writableFields":["jurisdiction","label","secret","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          },{
-            "id":"batch-creator","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          },"batch-creator": {"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"widget","operations":["create","batch"],
@@ -1087,8 +1085,7 @@ fn compiled_registry_with_create_policy(
               "writableFields":["jurisdiction","label","secret","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          },{
-            "id":"operator-minimal","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          },"operator-minimal": {"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"widget","operations":["create","patch","batch"],
@@ -1096,7 +1093,7 @@ fn compiled_registry_with_create_policy(
               "writableFields":["jurisdiction","label","secret","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("batch fixture parses");

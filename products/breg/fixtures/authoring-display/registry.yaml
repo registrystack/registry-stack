@@ -78,7 +78,7 @@ actions:
             recorded-on: {fromInput: recorded-on}
 
 accessProfiles:
-  - id: directory-editor
+  directory-editor:
     display: {label: Directory editor, description: Maintains and reads directory entries.}
     default: true
     principalClaim: registry_principal

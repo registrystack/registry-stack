@@ -1808,8 +1808,7 @@ async fn real_postgres_row_local_constraint_problems_name_only_readable_declarat
               {"id":"valid-to","type":"date","validTimeRole":"valid-to","classification":"public"}
             ]
           }],
-          "accessProfiles":[{
-            "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
+          "accessProfiles":{"writer": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"window","operations":["create","get","patch","batch"],
               "readableFields":["jurisdiction","label","valid-from","valid-to","score","status"],
@@ -1821,15 +1820,14 @@ async fn real_postgres_row_local_constraint_problems_name_only_readable_declarat
               "writableFields":["jurisdiction","scope","valid-from","valid-to"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          },{
-            "id":"write-only-end","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
+          },"write-only-end": {"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"window","operations":["create"],
               "readableFields":["jurisdiction","label","valid-from","score","status"],
               "writableFields":["jurisdiction","label","valid-from","valid-to","score","status"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("constraint problem fixture parses");
@@ -3839,8 +3837,7 @@ fn row_boundary_batch_registry() -> registry_breg::CompiledRegistry {
               {"id":"quantity","type":"int64","required":true,"classification":"public"}
             ]
           }],
-          "accessProfiles":[{
-            "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          "accessProfiles":{"writer": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"widget","operations":["create","get","list","patch","batch"],
@@ -3848,7 +3845,7 @@ fn row_boundary_batch_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["jurisdiction","label","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("row boundary batch fixture parses");
@@ -3873,8 +3870,7 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
               {"id":"secret","type":"string","maximumLength":128,"required":false,"classification":"public"}
             ]
           }],
-          "accessProfiles":[{
-            "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          "accessProfiles":{"writer": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"widget","operations":["create","get","list","patch","batch"],
@@ -3884,8 +3880,7 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
               "sortableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          },{
-            "id":"keeper","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          },"keeper": {"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-review"],
             "permissions":{"records":[{
               "recordType":"widget","operations":["get","list","patch"],
@@ -3895,8 +3890,7 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
               "sortableFields":["secret"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          },{
-            "id":"drafter","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          },"drafter": {"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-drafting"],
             "permissions":{"records":[{
               "recordType":"widget","operations":["create","get"],
@@ -3904,7 +3898,7 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["jurisdiction","label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("located refusal fixture parses");
@@ -4363,7 +4357,7 @@ fn timer_write_registry() -> registry_breg::CompiledRegistry {
             {"id":"jurisdiction","type":"string","required":true,"minimumLength":1,"maximumLength":40,"classification":"internal"}
         ]
     }));
-    source["accessProfiles"][0]["permissions"]["records"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -4373,12 +4367,11 @@ fn timer_write_registry() -> registry_breg::CompiledRegistry {
             "writableFields":["message","jurisdiction"],
             "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
         }));
-    let mut blind = source["accessProfiles"][0].clone();
-    blind["id"] = json!("blind-editor");
+    let mut blind = source["accessProfiles"]["service-editor"].clone();
     blind.as_object_mut().unwrap().remove("default");
     blind["permissions"]["records"][0]["readableFields"] =
         json!(["status", "paused", "description", "jurisdiction"]);
-    source["accessProfiles"].as_array_mut().unwrap().push(blind);
+    source["accessProfiles"]["blind-editor"] = blind;
     let bytes = serde_json::to_vec(&source).expect("timer fixture serializes");
     let project = parse_project_json(&bytes).expect("timer fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
@@ -4743,8 +4736,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"name","type":"string","maximumLength":128,"required":true,"classification":"public"}
             ]
           }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management","case-review"],
             "permissions":{"records":[{
               "recordType":"widget","operations":["create","get","list","patch","tombstone"],
@@ -4752,8 +4744,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["jurisdiction","label","note","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          },{
-            "id":"review-operator","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          },"review-operator": {"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"widget","operations":["create","get","list","patch","tombstone"],
@@ -4761,15 +4752,13 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["jurisdiction","label","note","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          },{
-            "id":"label-reader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          },"label-reader": {"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"records":[{
               "recordType":"widget","operations":["get","list"],
               "readableFields":["label"],
               "rowBoundaries": "unrestricted"
             }]}
-          },{
-            "id":"label-editor","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          },"label-editor": {"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"widget","operations":["get","patch"],
@@ -4777,8 +4766,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          },{
-            "id":"case-operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          },"case-operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"log","operations":["create","get","list"],
@@ -4791,7 +4779,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["jurisdiction","name"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("mutation fixture parses");
@@ -5998,8 +5986,7 @@ fn linked_registry() -> registry_breg::CompiledRegistry {
             "id":"local-with-subject","recordType":"local-record",
             "links":[{"id":"subject","projection":"approved-subjects","fromField":"subjectkey"}]
           }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["local-consultation"],
             "permissions":{"records":[{
               "recordType":"local-record","operations":["create","get","list","patch"],
@@ -6008,7 +5995,7 @@ fn linked_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries":"unrestricted"
             }],
             "externalViews":[{"view":"local-with-subject","links":[{"link":"subject","readableFields":["label"]}]}]}
-          }]
+          }}
         }"#,
     )
     .expect("linked fixture parses");

@@ -465,9 +465,11 @@ fn render_registry(source: &CapturedProjectSource, plan: &Plan) -> Result<Vec<u8
         if items.is_empty() {
             continue;
         }
-        edited = append_top_level_items(&edited, key, items).ok_or_else(|| {
+        let mapping = key == "accessProfiles";
+        edited = append_top_level_items(&edited, key, items, mapping).ok_or_else(|| {
+            let shape = if mapping { "mapping" } else { "list" };
             render_failure(&format!(
-                "the top-level {key} list is not a block list this command can extend; write it as a block list and run the command again"
+                "the top-level {key} {shape} is not a block {shape} this command can extend; write it as a block {shape} and run the command again"
             ))
         })?;
     }
@@ -526,19 +528,35 @@ fn renders_exactly(
         if items.is_empty() {
             continue;
         }
-        let Some(Value::Array(items)) = yaml_value("planned items", items.as_bytes()) else {
+        let Some(planned) = yaml_value("planned items", items.as_bytes()) else {
             return false;
         };
-        let slot = document
-            .entry(key.to_owned())
-            .or_insert_with(|| Value::Array(Vec::new()));
-        if slot.is_null() {
-            *slot = Value::Array(Vec::new());
+        let slot = document.entry(key.to_owned()).or_insert(Value::Null);
+        match planned {
+            Value::Array(items) => {
+                if slot.is_null() {
+                    *slot = Value::Array(Vec::new());
+                }
+                let Some(list) = slot.as_array_mut() else {
+                    return false;
+                };
+                list.extend(items);
+            }
+            Value::Object(entries) => {
+                if slot.is_null() {
+                    *slot = Value::Object(serde_json::Map::new());
+                }
+                let Some(mapping) = slot.as_object_mut() else {
+                    return false;
+                };
+                for (id, entry) in entries {
+                    if mapping.insert(id, entry).is_some() {
+                        return false;
+                    }
+                }
+            }
+            _ => return false,
         }
-        let Some(list) = slot.as_array_mut() else {
-            return false;
-        };
-        list.extend(items);
     }
     if let Some(items) = &plan.dataset_addition {
         let Some(Value::Array(items)) = yaml_value("planned items", items.as_bytes()) else {
@@ -570,12 +588,25 @@ fn renders_exactly(
     expected == actual
 }
 
-/// Append block-list items to a top-level key of an authored YAML document,
-/// in the indentation the list already uses, keeping every other line as
-/// written. `items` is rendered at column zero. An absent key is added at the
-/// end and an empty flow list (`[]`) becomes a block list; any other flow list
-/// is refused, because extending it would mean rewriting what the author wrote.
-fn append_top_level_items(source: &str, key: &str, items: &str) -> Option<String> {
+/// Append block-list items, or block-mapping entries when `mapping` is set,
+/// to a top-level key of an authored YAML document, in the indentation the
+/// block already uses, keeping every other line as written. `items` is
+/// rendered at column zero. An absent key is added at the end and an empty
+/// flow collection (`[]` or `{}`) becomes a block one; any other flow value is
+/// refused, because extending it would mean rewriting what the author wrote.
+/// Mapping entries are indented two columns when the block sets no indent.
+fn append_top_level_items(source: &str, key: &str, items: &str, mapping: bool) -> Option<String> {
+    let empty_indent = if mapping { 2 } else { 0 };
+    let indented = |items: &str, indent: usize| {
+        let mut out = String::new();
+        for line in items.split_inclusive('\n') {
+            if !line.trim().is_empty() {
+                out.push_str(&" ".repeat(indent));
+            }
+            out.push_str(line);
+        }
+        out
+    };
     let lines = source.split_inclusive('\n').collect::<Vec<_>>();
     let Some(start) = lines
         .iter()
@@ -587,7 +618,7 @@ fn append_top_level_items(source: &str, key: &str, items: &str) -> Option<String
         }
         rendered.push_str(key);
         rendered.push_str(":\n");
-        rendered.push_str(items);
+        rendered.push_str(&indented(items, empty_indent));
         return Some(rendered);
     };
     let value = lines[start]
@@ -595,11 +626,11 @@ fn append_top_level_items(source: &str, key: &str, items: &str) -> Option<String
         .split_once(':')
         .map(|(_, value)| value.trim())?;
     let mut rendered = String::new();
-    if value == "[]" {
+    if value == if mapping { "{}" } else { "[]" } {
         rendered.push_str(&lines[..start].concat());
         rendered.push_str(key);
         rendered.push_str(":\n");
-        rendered.push_str(items);
+        rendered.push_str(&indented(items, empty_indent));
         rendered.push_str(&lines[start + 1..].concat());
         return Some(rendered);
     }
@@ -614,8 +645,17 @@ fn append_top_level_items(source: &str, key: &str, items: &str) -> Option<String
         .map_or(lines.len(), |(index, _)| index);
     let indent = lines[start + 1..end]
         .iter()
-        .find(|line| line.trim_start().starts_with('-'))
-        .map_or(0, |line| line.len() - line.trim_start_matches(' ').len());
+        .find(|line| {
+            let trimmed = line.trim_start();
+            if mapping {
+                !trimmed.is_empty() && !trimmed.starts_with('#')
+            } else {
+                trimmed.starts_with('-')
+            }
+        })
+        .map_or(empty_indent, |line| {
+            line.len() - line.trim_start_matches(' ').len()
+        });
     // Blank lines and column-zero comments that close the block introduce the
     // next key, so the items go above them.
     let insert_at = (start + 1..end)
@@ -629,12 +669,7 @@ fn append_top_level_items(source: &str, key: &str, items: &str) -> Option<String
     if !rendered.ends_with('\n') {
         rendered.push('\n');
     }
-    for line in items.split_inclusive('\n') {
-        if !line.trim().is_empty() {
-            rendered.push_str(&" ".repeat(indent));
-        }
-        rendered.push_str(line);
-    }
+    rendered.push_str(&indented(items, indent));
     rendered.push_str(&lines[insert_at..].concat());
     Some(rendered)
 }
@@ -959,7 +994,7 @@ mod tests {
     fn items_follow_the_block_indentation_and_stay_above_the_next_key() {
         let source = "a: 1\nlist:\n  - id: first\n    values: [x]\n\n# next\nb: 2\n";
 
-        let rendered = append_top_level_items(source, "list", ITEMS).unwrap();
+        let rendered = append_top_level_items(source, "list", ITEMS, false).unwrap();
 
         assert_eq!(
             rendered,
@@ -970,19 +1005,46 @@ mod tests {
     #[test]
     fn an_absent_key_or_an_empty_flow_list_becomes_a_block_list() {
         assert_eq!(
-            append_top_level_items("a: 1", "list", ITEMS).unwrap(),
+            append_top_level_items("a: 1", "list", ITEMS, false).unwrap(),
             "a: 1\nlist:\n- id: added\n  values: [a]\n"
         );
         assert_eq!(
-            append_top_level_items("list: []\nb: 2\n", "list", ITEMS).unwrap(),
+            append_top_level_items("list: []\nb: 2\n", "list", ITEMS, false).unwrap(),
             "list:\n- id: added\n  values: [a]\nb: 2\n"
         );
     }
 
     #[test]
     fn a_populated_flow_list_is_refused() {
-        assert!(append_top_level_items("list: [{id: x}]\n", "list", ITEMS).is_none());
-        assert!(append_top_level_items("list: &shared\n- id: x\n", "list", ITEMS).is_none());
+        assert!(append_top_level_items("list: [{id: x}]\n", "list", ITEMS, false).is_none());
+        assert!(append_top_level_items("list: &shared\n- id: x\n", "list", ITEMS, false).is_none());
+    }
+
+    const ENTRIES: &str = "added:\n  values: [a]\n";
+
+    #[test]
+    fn mapping_entries_follow_the_block_indentation_and_stay_above_the_next_key() {
+        let source = "a: 1\nmap:\n    first:\n      values: [x]\n\n# next\nb: 2\n";
+
+        let rendered = append_top_level_items(source, "map", ENTRIES, true).unwrap();
+
+        assert_eq!(
+            rendered,
+            "a: 1\nmap:\n    first:\n      values: [x]\n    added:\n      values: [a]\n\n# next\nb: 2\n"
+        );
+    }
+
+    #[test]
+    fn an_absent_key_or_an_empty_flow_mapping_becomes_an_indented_block_mapping() {
+        assert_eq!(
+            append_top_level_items("a: 1", "map", ENTRIES, true).unwrap(),
+            "a: 1\nmap:\n  added:\n    values: [a]\n"
+        );
+        assert_eq!(
+            append_top_level_items("map: {}\nb: 2\n", "map", ENTRIES, true).unwrap(),
+            "map:\n  added:\n    values: [a]\nb: 2\n"
+        );
+        assert!(append_top_level_items("map: {first: {}}\n", "map", ENTRIES, true).is_none());
     }
 
     const DATASET_ITEM: &str =

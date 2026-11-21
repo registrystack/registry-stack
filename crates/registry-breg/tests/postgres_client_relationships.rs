@@ -317,9 +317,8 @@ const UNGRANTED_TARGET_PROJECT: &str = r#"{"datasets":[{"id": "test-dataset"}],
       "fields":[{"id":"person-code","type":"string","required":true,"maximumLength":64,"classification":"restricted"}]
     }
   ],
-  "accessProfiles":[
-    {
-      "id":"operator","default":true,"principalClaim":"registry_principal",
+  "accessProfiles":{
+    "operator": {"default":true,"principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":{
         "records":[
@@ -332,8 +331,7 @@ const UNGRANTED_TARGET_PROJECT: &str = r#"{"datasets":[{"id": "test-dataset"}],
         ]
       }
     },
-    {
-      "id":"writer","principalClaim":"registry_principal",
+    "writer": {"principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":{
         "records":[
@@ -341,8 +339,7 @@ const UNGRANTED_TARGET_PROJECT: &str = r#"{"datasets":[{"id": "test-dataset"}],
         ]
       }
     },
-    {
-      "id":"viewer","principalClaim":"registry_principal",
+    "viewer": {"principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":{
         "records":[
@@ -350,7 +347,7 @@ const UNGRANTED_TARGET_PROJECT: &str = r#"{"datasets":[{"id": "test-dataset"}],
         ]
       }
     }
-  ]
+  }
 }"#;
 
 fn create_binding(
@@ -416,8 +413,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               ]
             }
           ],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal",
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
             "permissions":{
               "records":[
@@ -433,7 +429,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 }
               ]
             }
-          }]
+          }}
         }"#,
     )
     .expect("relationship SDK project parses");

@@ -150,7 +150,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: public
+  public:
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry.read]
@@ -160,7 +160,7 @@ accessProfiles:
           operations: [get]
           readableFields: [label]
           rowBoundaries: unrestricted
-  - id: caseworker
+  caseworker:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management-never-rendered]
@@ -196,7 +196,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: caseworker
+  caseworker:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
@@ -227,7 +227,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: standing-human
+  standing-human:
     principalClaim: sub
     actorKind: human
     requesterClients: [agent-client]
@@ -236,7 +236,7 @@ accessProfiles:
     permissions:
       records:
         - {recordType: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
-  - id: standing-agent
+  standing-agent:
     principalClaim: sub
     requiredScopes: unrestricted
     actorKind: agent
@@ -245,7 +245,7 @@ accessProfiles:
     permissions:
       records:
         - {recordType: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
-  - id: delegated-agent
+  delegated-agent:
     default: true
     principalClaim: sub
     requiredScopes: unrestricted
@@ -2073,8 +2073,9 @@ async fn refusals_and_debug_output_are_value_free() {
 
 fn action_only_claim_source() -> Value {
     let mut source = action_source::project();
-    source["accessProfiles"][0]["requiredPurposes"] = json!([PURPOSE]);
-    source["accessProfiles"][0]["permissions"]["actions"][0]["targets"][0]["rowBoundaries"][0] =
+    source["accessProfiles"]["registrar"]["requiredPurposes"] = json!([PURPOSE]);
+    source["accessProfiles"]["registrar"]["permissions"]["actions"][0]["targets"][0]
+        ["rowBoundaries"][0] =
         json!({"field": "zone", "claim": "allowed_owners", "operator": "in"});
     source
 }
@@ -2174,8 +2175,7 @@ async fn action_only_principal_purpose_and_claim_shape_conflicts_are_checked() {
         AuthenticationConfigError::PurposeClaimMismatch
     );
     let mut conflicting = source;
-    conflicting["accessProfiles"].as_array_mut().unwrap().push(json!({
-        "id": "reader", "principalClaim": "registry_principal", "requiredScopes": ["registry:parent:process"],
+    conflicting["accessProfiles"].as_object_mut().unwrap().insert("reader".to_owned(), json!({"principalClaim": "registry_principal", "requiredScopes": ["registry:parent:process"],
         "permissions": {"records": [{"recordType": "parent", "operations": ["get"], "readableFields": ["status"], "rowBoundaries": [{"field": "zone", "claim": "allowed_owners", "operator": "equals"}]}]}
     }));
     let registry = compile_action_claim_source(&conflicting);
@@ -2788,14 +2788,14 @@ fn dataset_only_claim_source() -> Value {
         "recordTypes":[{"id":"record", "primaryDataset":"records", "route":"records", "mutationMode":"mutable",
             "fields":[{"id":"active", "type":"boolean", "required":true, "classification":"internal"},
                 {"id":"occurred-on", "type":"date", "required":true, "classification":"internal"}]}],
-        "accessProfiles":[
-            {"id":"publisher", "principalClaim":"registry_principal", "requiredScopes":"unrestricted", "permissions":{
+        "accessProfiles":{
+            "publisher": { "principalClaim":"registry_principal", "requiredScopes":"unrestricted", "permissions":{
                 "records":[{"recordType":"record", "operations":["list"], "rowBoundaries":"unrestricted", "allowCount":true,
                     "readableFields":["active","occurred-on"], "filterableFields":["active","occurred-on"]}],
                 "datasets":[{"dataset":"counts", "operations":["publish","read-releases"]}]}},
-            {"id":"reader", "principalClaim":"registry_principal", "requiredScopes":["statistics:read"], "requiredPurposes":[PURPOSE],
+            "reader": { "principalClaim":"registry_principal", "requiredScopes":["statistics:read"], "requiredPurposes":[PURPOSE],
                 "permissions":{"datasets":[{"dataset":"counts", "operations":["read-releases"]}]}}
-        ],
+        },
         "statisticalDatasets":[{"id":"counts", "unit":"record", "population":"active eq true",
             "period":{"type":"flow", "field":"occurred-on", "granularity":"month", "firstPeriod":"2025-01"},
             "dimensions":["active"], "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}}]
@@ -2829,7 +2829,7 @@ async fn dataset_only_principal_and_purpose_mapping_are_checked_at_construction(
         .expect("a purpose used only by the dataset reader is mapped");
 
     let mut mismatched = source.clone();
-    mismatched["accessProfiles"][1]["principalClaim"] = json!("dataset_principal");
+    mismatched["accessProfiles"]["reader"]["principalClaim"] = json!("dataset_principal");
     let mismatched = compile_action_claim_source(&mismatched);
     assert_eq!(
         authenticator(&mismatched, &idp, authority_claims()).unwrap_err(),
@@ -2837,7 +2837,7 @@ async fn dataset_only_principal_and_purpose_mapping_are_checked_at_construction(
     );
 
     let mut without_purpose = source;
-    without_purpose["accessProfiles"][1]
+    without_purpose["accessProfiles"]["reader"]
         .as_object_mut()
         .unwrap()
         .remove("requiredPurposes");
@@ -2864,8 +2864,8 @@ async fn dataset_only_principal_and_purpose_mapping_are_checked_at_construction(
 async fn dataset_only_client_and_standing_actor_mapping_are_checked_at_construction() {
     let idp = MockIdp::start().await;
     let mut source = dataset_only_claim_source();
-    source["accessProfiles"][1]["actorKind"] = json!("service");
-    source["accessProfiles"][1]["requesterClients"] = json!(["statistics-reader-client"]);
+    source["accessProfiles"]["reader"]["actorKind"] = json!("service");
+    source["accessProfiles"]["reader"]["requesterClients"] = json!(["statistics-reader-client"]);
     let registry = compile_action_claim_source(&source);
     let mut verifier = verifier_config(&idp);
     verifier.allowed_clients = vec!["another-client".into()];
@@ -2878,7 +2878,7 @@ async fn dataset_only_client_and_standing_actor_mapping_are_checked_at_construct
     authenticator_with_verifier(&registry, &idp, verifier.clone(), authority_claims())
         .expect("the dataset-only service client is explicitly admitted");
 
-    source["accessProfiles"][1]["actorKind"] = json!("agent");
+    source["accessProfiles"]["reader"]["actorKind"] = json!("agent");
     let registry = compile_action_claim_source(&source);
     assert_eq!(
         authenticator_with_verifier(&registry, &idp, verifier.clone(), authority_claims())
@@ -2897,8 +2897,8 @@ async fn dataset_only_client_and_standing_actor_mapping_are_checked_at_construct
 async fn action_and_proposal_only_clients_are_checked_at_construction() {
     let idp = MockIdp::start().await;
     let mut action_source = action_only_claim_source();
-    action_source["accessProfiles"][0]["actorKind"] = json!("service");
-    action_source["accessProfiles"][0]["requesterClients"] = json!(["workflow-client"]);
+    action_source["accessProfiles"]["registrar"]["actorKind"] = json!("service");
+    action_source["accessProfiles"]["registrar"]["requesterClients"] = json!(["workflow-client"]);
     let action_registry = compile_action_claim_source(&action_source);
     assert!(action_registry
         .entities()
@@ -2920,7 +2920,7 @@ async fn action_and_proposal_only_clients_are_checked_at_construction() {
         .expect("the admitted action-only service client is accepted");
 
     let mut proposal_source = action_source;
-    proposal_source["accessProfiles"][0]["actorKind"] = json!("agent");
+    proposal_source["accessProfiles"]["registrar"]["actorKind"] = json!("agent");
     proposal_source["actions"][0]["execution"] = json!({
         "mode": "proposal",
         "proposal": {
@@ -2929,8 +2929,7 @@ async fn action_and_proposal_only_clients_are_checked_at_construction() {
             "retention": {"mode": "retain"}
         }
     });
-    let mut starter = proposal_source["accessProfiles"][0].clone();
-    starter["id"] = json!("starter");
+    let mut starter = proposal_source["accessProfiles"]["registrar"].clone();
     starter
         .as_object_mut()
         .expect("the starter profile is an object")
@@ -2940,7 +2939,7 @@ async fn action_and_proposal_only_clients_are_checked_at_construction() {
         .expect("the starter profile is an object")
         .remove("requesterClients");
     starter["permissions"]["actions"][0]["operations"] = json!(["start"]);
-    proposal_source["accessProfiles"][0]["permissions"] = json!({
+    proposal_source["accessProfiles"]["registrar"]["permissions"] = json!({
         "proposals": [{
             "action": "register-child",
             "operations": ["edit"],
@@ -2952,9 +2951,9 @@ async fn action_and_proposal_only_clients_are_checked_at_construction() {
         }]
     });
     proposal_source["accessProfiles"]
-        .as_array_mut()
-        .expect("access profiles are a list")
-        .push(starter);
+        .as_object_mut()
+        .expect("access profiles are a map")
+        .insert("starter".to_owned(), starter);
     let proposal_registry = compile_action_claim_source(&proposal_source);
     assert!(proposal_registry.actions().actions[0]
         .permissions
@@ -2998,7 +2997,7 @@ async fn action_and_proposal_only_clients_are_checked_at_construction() {
             "proposedLabel": {"type": "input", "input": "label"}
         }
     });
-    proposal_source["accessProfiles"][0]["permissions"] = json!({
+    proposal_source["accessProfiles"]["registrar"]["permissions"] = json!({
         "proposals": [{
             "action": "register-child",
             "operations": ["get-review-context"],

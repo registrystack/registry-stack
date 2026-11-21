@@ -5556,10 +5556,10 @@ mod held_body_encryption_tests {
                     secret
                 ]
             }],
-            "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+            "accessProfiles":{"caseworker": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"case","rowBoundaries":"unrestricted","operations":["get","list","create","patch"],
                 "readableFields":["label","secret"],"writableFields":["label","secret"]
-            }]}}]
+            }]}}}
         });
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         compile_project(&project, &[], CompileProfile::Authoring).unwrap()
@@ -5932,14 +5932,13 @@ mod temporal_instant_tests {
                 ],
                 "temporal": {"startField": "valid-from", "endField": "valid-to"}
             }],
-            "accessProfiles": [{
-                "id": "reader", "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
+            "accessProfiles": {"reader": { "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
                 "permissions": {"records": [{
                     "recordType": "licence", "operations": ["list"],
                     "readableFields": ["holder", "valid-from", "valid-to"],
                     "rowBoundaries": "unrestricted"
                 }]}
-            }]
+            }}
         });
         let project = parse_project_json(&serde_json::to_vec(&source).expect("JSON"))
             .expect("project parses");

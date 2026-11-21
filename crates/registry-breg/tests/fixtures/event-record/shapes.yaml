@@ -193,7 +193,7 @@ actions:
       effects:
         - {id: number, target: {fromInput: grant-ref}, operation: patch, set: {grant-number: {fromInput: value}}}
 accessProfiles:
-  - id: registrar
+  registrar:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted

@@ -23,10 +23,10 @@ fn source() -> Value {
            "fields":[{"id":"site","type":"reference","target":"site","classification":"internal"},
                      {"id":"owner","type":"reference","target":"site","classification":"internal"},
                      {"id":"code","type":"string","maximumLength":8,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"reader","principalClaim":"registry_principal","requiredScopes":["asset:read"],
+        "accessProfiles":{"reader": {"principalClaim":"registry_principal","requiredScopes":["asset:read"],
           "permissions":{"records":[{"recordType":"asset","operations":["get","list"],
             "readableFields":["site","owner","code"],"filterableFields":[],"sortableFields":[],
-            "rowBoundaries":[{"field":"code","claim":"codes","operator":"in"}]}]}}]
+            "rowBoundaries":[{"field":"code","claim":"codes","operator":"in"}]}]}}}
     })
 }
 
@@ -165,7 +165,7 @@ fn trailing_or_partial_coverage_keeps_the_reference_index() {
 #[test]
 fn unindexed_list_filters_and_sorts_are_authoring_findings_at_the_declaring_field() {
     let mut value = source();
-    let permission = &mut value["accessProfiles"][0]["permissions"]["records"][0];
+    let permission = &mut value["accessProfiles"]["reader"]["permissions"]["records"][0];
     permission["filterableFields"] = json!(["site", "code"]);
     permission["sortableFields"] = json!(["owner", "code"]);
 
@@ -217,7 +217,7 @@ fn an_active_lifecycle_partial_unique_serves_the_list_finding_on_an_ordinary_ent
     let mut value = source();
     asset_mut(&mut value)["constraints"] = json!([{"type":"unique","id":"active-code",
         "fields":["code","site"],"when":[{"type":"active-lifecycle"}]}]);
-    let permission = &mut value["accessProfiles"][0]["permissions"]["records"][0];
+    let permission = &mut value["accessProfiles"]["reader"]["permissions"]["records"][0];
     permission["filterableFields"] = json!(["code"]);
     permission["sortableFields"] = json!(["code"]);
 
@@ -234,7 +234,7 @@ fn a_field_predicate_unique_constraint_still_reports_the_list_finding() {
         .push(json!({"id":"flag","type":"boolean","classification":"internal"}));
     asset_mut(&mut value)["constraints"] = json!([{"type":"unique","id":"flagged-code",
         "fields":["code","site"],"when":[{"type":"field-equals","field":"flag","value":true}]}]);
-    let permission = &mut value["accessProfiles"][0]["permissions"]["records"][0];
+    let permission = &mut value["accessProfiles"]["reader"]["permissions"]["records"][0];
     permission["readableFields"] = json!(["site", "owner", "code", "flag"]);
     permission["filterableFields"] = json!(["code"]);
     permission["sortableFields"] = json!(["code"]);
@@ -270,7 +270,7 @@ fn unindexed_read_path_filters_and_sorts_point_at_the_read_path_grant() {
         .push(json!({"id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
             "fields":[{"id":"site","type":"reference","target":"site","classification":"internal"},
                       {"id":"asset","type":"reference","target":"asset","classification":"internal"}]}));
-    value["accessProfiles"][0]["permissions"]["records"]
+    value["accessProfiles"]["reader"]["permissions"]["records"]
         .as_array_mut()
         .expect("permissions")
         .push(json!({"recordType":"site","operations":["get","list"],"readableFields":["name"],
@@ -301,7 +301,7 @@ fn a_temporal_exclusion_scope_serves_equality_filters_but_not_sorts() {
     asset["temporal"] = json!({"startField":"valid-from","endField":"valid-to"});
     asset["constraints"] = json!([{"type":"temporal-non-overlap","id":"one-code-at-a-time",
         "scopeFields":["code","owner"],"startField":"valid-from","endField":"valid-to"}]);
-    let permission = &mut value["accessProfiles"][0]["permissions"]["records"][0];
+    let permission = &mut value["accessProfiles"]["reader"]["permissions"]["records"][0];
     permission["readableFields"] = json!(["site", "owner", "code", "valid-from", "valid-to"]);
     permission["filterableFields"] = json!(["code", "owner", "valid-from"]);
     permission["sortableFields"] = json!(["code"]);
@@ -333,8 +333,10 @@ fn a_temporal_exclusion_scope_serves_equality_filters_but_not_sorts() {
 #[test]
 fn production_compiles_carry_no_index_findings() {
     let mut value = source();
-    value["accessProfiles"][0]["permissions"]["records"][0]["filterableFields"] = json!(["code"]);
-    value["accessProfiles"][0]["permissions"]["records"][0]["sortableFields"] = json!(["code"]);
+    value["accessProfiles"]["reader"]["permissions"]["records"][0]["filterableFields"] =
+        json!(["code"]);
+    value["accessProfiles"]["reader"]["permissions"]["records"][0]["sortableFields"] =
+        json!(["code"]);
     assert!(!index_findings(&compile(&value, CompileProfile::Authoring)).is_empty());
     value["package"] = json!({"sourceRevision":"reference-index-source"});
     assert!(index_findings(&compile(&value, CompileProfile::Production)).is_empty());
@@ -343,7 +345,7 @@ fn production_compiles_carry_no_index_findings() {
 #[test]
 fn a_consent_records_scope_column_leads_the_consent_key_index() {
     let mut value = consent_fixture::source();
-    let permission = &mut value["accessProfiles"][1]["permissions"]["records"][0];
+    let permission = &mut value["accessProfiles"]["recipient-feed"]["permissions"]["records"][0];
     assert_eq!(permission["recordType"], json!("consent-decision"));
     permission["filterableFields"] = json!(["scope", "purpose"]);
     permission["sortableFields"] = json!(["scope"]);

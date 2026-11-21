@@ -1617,7 +1617,7 @@ fn validate_cross_file_local_id_collisions(
             &mut hooks,
         );
     }
-    for (profile_index, profile) in project.access_profiles.iter().enumerate() {
+    for profile in &project.access_profiles {
         for grant in &profile.permissions.entities {
             entities
                 .entry(&grant.entity)
@@ -1625,7 +1625,7 @@ fn validate_cross_file_local_id_collisions(
                 .profiles
                 .push(SourcedLocalId {
                     id: profile.id.clone(),
-                    path: format!("accessProfiles[{profile_index}].id"),
+                    path: format!("accessProfiles[id={}]", profile.id),
                     source: None,
                 });
         }

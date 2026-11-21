@@ -203,15 +203,14 @@ fn author_inspection_identifies_encrypted_fields() {
 fn model_retains_authored_display_without_inventing_input_labels() {
     let mut source = source();
     let baseline = compile(&source);
-    source["accessProfiles"][1]["display"] =
+    source["accessProfiles"]["facility-reader"]["display"] =
         json!({"label":"Facility reader", "description":"Read the facility directory."});
-    source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "id":"no-grants", "principalClaim":"registry_principal",
+    source["accessProfiles"].as_object_mut().unwrap().insert(
+        "no-grants".to_owned(),
+        json!({"principalClaim":"registry_principal",
             "requiredScopes":"unrestricted", "display":{"label":"Awaiting permission"}
-        }));
+        }),
+    );
     record_mut(&mut source, "facility")["fields"][1]["display"] =
         json!({"label":"Facility name", "description":"Name recorded by the registry."});
     source["actions"][0]["inputs"][1]["display"] = json!({"label":"Operating organisation"});
@@ -220,7 +219,7 @@ fn model_retains_authored_display_without_inventing_input_labels() {
     assert_eq!(model["datasets"], source["datasets"]);
     assert_eq!(
         definition(&model["accessProfiles"], "facility-reader")["display"],
-        source["accessProfiles"][1]["display"]
+        source["accessProfiles"]["facility-reader"]["display"]
     );
     assert_eq!(
         definition(&model["accessProfiles"], "no-grants")["display"]["label"],
@@ -261,7 +260,11 @@ fn model_retains_authored_display_without_inventing_input_labels() {
 fn omitted_and_empty_profile_display_have_identical_compiled_meaning() {
     let mut source = source();
     let omitted = compile(&source);
-    for profile in source["accessProfiles"].as_array_mut().unwrap() {
+    for profile in source["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
         profile["display"] = json!({});
     }
     let explicit_empty = compile(&source);
@@ -296,7 +299,7 @@ fn profile_dataset_and_hook_displays_refuse_record_title_selection() {
         .position(|action| action["execution"]["mode"] == "proposal")
         .unwrap();
     for pointer in [
-        "/accessProfiles/0".to_owned(),
+        "/accessProfiles/directory-editor".to_owned(),
         "/statisticalDatasets/0".to_owned(),
         "/recordTypes/0/hooks/0".to_owned(),
         format!("/actions/{proposal_index}/execution/proposal/hooks/0"),
@@ -495,15 +498,15 @@ fn dataset_inventory_includes_dataset_only_profile_authentication() {
     source["statisticalDatasets"] = json!([{"id":"directory-counts", "display":{"label":"Directory counts"}, "unit":"directory-entry", "population":"active eq true",
         "period":{"type":"flow", "field":"event-date", "granularity":"month", "firstPeriod":"2025-01"},
         "dimensions":["active"], "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5, "roundingBase":5}}]);
-    source["accessProfiles"].as_array_mut().unwrap().extend([
-        json!({"id":"statistics-publisher", "principalClaim":"registry_principal", "requiredScopes":["statistics:publish"],
+    source["accessProfiles"].as_object_mut().unwrap().extend([
+        ("statistics-publisher".to_owned(), json!({"principalClaim":"registry_principal", "requiredScopes":["statistics:publish"],
             "permissions":{"records":[{"recordType":"directory-entry", "operations":["list"], "readableFields":["active","event-date"],
                 "filterableFields":["active","event-date"], "rowBoundaries":"unrestricted", "allowCount":true}],
-                "datasets":[{"dataset":"directory-counts", "operations":["publish","read-releases"]}]}}),
-        json!({"id":"statistics-reader", "default":true, "actorKind":"service", "principalClaim":"dataset_subject",
+                "datasets":[{"dataset":"directory-counts", "operations":["publish","read-releases"]}]}})),
+        ("statistics-reader".to_owned(), json!({"default":true, "actorKind":"service", "principalClaim":"dataset_subject",
             "requesterClients":["statistics-reader-client"],
             "requiredScopes":["statistics:read"], "requiredPurposes":["research"],
-            "permissions":{"datasets":[{"dataset":"directory-counts", "operations":["read-releases"]}]}}),
+            "permissions":{"datasets":[{"dataset":"directory-counts", "operations":["read-releases"]}]}})),
     ]);
     let registry = compile(&source);
     let model = inspect_registry(&registry);

@@ -2144,8 +2144,7 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
             "mutationMode": "mutable",
             "fields": fields
         }],
-        "accessProfiles": [{
-            "id": "writer",
+        "accessProfiles": {"writer": {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
@@ -2156,7 +2155,7 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
                 "writableFields": writable_fields,
               "rowBoundaries": "unrestricted"
             }]}
-        }]
+        }}
     });
     let project_bytes = serde_json::to_vec(&project).expect("fixture serializes");
     let project = parse_project_json(&project_bytes).expect("additive catalog fixture parses");
@@ -2186,8 +2185,7 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
                  "required": true, "classification": "internal"}
             ]
         }],
-        "accessProfiles": [{
-            "id": "writer",
+        "accessProfiles": {"writer": {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
@@ -2198,7 +2196,7 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
                 "writableFields": ["note"],
                 "rowBoundaries": "unrestricted"
             }]}
-        }]
+        }}
     });
     let project_bytes = serde_json::to_vec(&project).expect("fixture serializes");
     let project = parse_project_json(&project_bytes).expect("length catalog fixture parses");
@@ -2225,8 +2223,7 @@ fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledReg
                  "pattern": "^[a-z ]*$", "required": true, "classification": "internal"}
             ]
         }],
-        "accessProfiles": [{
-            "id": "writer",
+        "accessProfiles": {"writer": {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
@@ -2237,7 +2234,7 @@ fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledReg
                 "writableFields": ["note"],
                 "rowBoundaries": "unrestricted"
             }]}
-        }]
+        }}
     });
     let project_bytes = serde_json::to_vec(&project).expect("fixture serializes");
     let project = parse_project_json(&project_bytes).expect("string length fixture parses");
@@ -2279,8 +2276,7 @@ fn vocabulary_catalog_registry_with_constraints(
             ],
             "constraints": constraints
         }],
-        "accessProfiles": [{
-            "id": "writer",
+        "accessProfiles": {"writer": {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
@@ -2291,7 +2287,7 @@ fn vocabulary_catalog_registry_with_constraints(
                 "writableFields": ["status", "kind"],
                 "rowBoundaries": "unrestricted"
             }]}
-        }]
+        }}
     });
     let project_bytes = serde_json::to_vec(&project).expect("fixture serializes");
     let project = parse_project_json(&project_bytes).expect("vocabulary catalog fixture parses");
@@ -2322,9 +2318,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               ]
             }
           ],
-          "accessProfiles":[
-            {
-              "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          "accessProfiles":{
+            "writer": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "requiredPurposes":["operations"],
               "permissions":{
                 "records":[
@@ -2345,8 +2340,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 ]
               }
             },
-            {
-              "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+            "reviewer": {"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "requiredPurposes":["review"],
               "permissions":{"records":[{
                 "recordType":"entry","operations":["get","list"],
@@ -2357,7 +2351,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 ]
               }]}
             }
-          ]
+          }
         }"#,
     )
     .expect("compiled PostgreSQL fixture parses");
@@ -2418,8 +2412,7 @@ fn compiled_action_registry() -> registry_breg::CompiledRegistry {
                 }]
             }
         }],
-        "accessProfiles": [{
-            "id": "operator",
+        "accessProfiles": {"operator": {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
@@ -2431,7 +2424,7 @@ fn compiled_action_registry() -> registry_breg::CompiledRegistry {
                     "results": ["entry"]
                 }]
             }
-        }]
+        }}
     });
     let project_bytes = serde_json::to_vec(&project).expect("Action catalog fixture serializes");
     let project = parse_project_json(&project_bytes).expect("Action catalog fixture parses");
@@ -2459,8 +2452,7 @@ fn derived_registry() -> registry_breg::CompiledRegistry {
               ]
             }]
           }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"records":[{
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"records":[{
               "recordType":"household","operations":["create","get","list"],
               "readableFields":["tenant","size","child-count","observed-on"],
               "writableFields":["tenant","size"],
@@ -2468,7 +2460,7 @@ fn derived_registry() -> registry_breg::CompiledRegistry {
               "sortableFields":["child-count"],
               "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("derived PostgreSQL fixture parses");

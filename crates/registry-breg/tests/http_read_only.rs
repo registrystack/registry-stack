@@ -61,7 +61,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: public
+  public:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
@@ -73,7 +73,7 @@ accessProfiles:
           readableFields: [label]
           filterableFields: [label]
           sortableFields: [label]
-  - id: caseworker
+  caseworker:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
@@ -141,7 +141,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: operator
+  operator:
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry.read]
@@ -169,7 +169,7 @@ accessProfiles:
           readableFields: [sensitive-note]
           filterableFields: [sensitive-note]
           sortableFields: [sensitive-note]
-  - id: viewer
+  viewer:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
@@ -218,7 +218,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: operator
+  operator:
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry.read]
@@ -275,7 +275,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: public
+  public:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
@@ -287,7 +287,7 @@ accessProfiles:
           readableFields: [label]
           filterableFields: [label]
           sortableFields: [label]
-  - id: caseworker
+  caseworker:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
@@ -332,7 +332,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: public
+  public:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
@@ -442,7 +442,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: operator
+  operator:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
@@ -466,7 +466,7 @@ accessProfiles:
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [import-source, certificate-code]
-  - id: redacted-reader
+  redacted-reader:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
@@ -504,7 +504,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: map-reader
+  map-reader:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
@@ -519,7 +519,7 @@ accessProfiles:
             bbox:
               maximumLongitudeSpanDegrees: 2
               maximumLatitudeSpanDegrees: 2
-  - id: tabular
+  tabular:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
@@ -599,7 +599,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: history
+  history:
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry.read]
@@ -614,7 +614,7 @@ accessProfiles:
           allowCount: true
           rowBoundaries:
             - {field: jurisdiction, claim: jurisdictions, operator: in}
-  - id: live-only
+  live-only:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     permissions:
@@ -623,7 +623,7 @@ accessProfiles:
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [label, starts, ends]
-  - id: revision-only
+  revision-only:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     permissions:
@@ -1615,7 +1615,7 @@ async fn lookup_route_conceals_a_substituted_access_profile_selection() {
     // satisfy and a profile that grants no lookup must both read as an unknown
     // resource.
     let project = format!(
-        "{LOOKUP_PATH_PROJECT}  - id: reader
+        "{LOOKUP_PATH_PROJECT}  reader:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
@@ -2458,7 +2458,7 @@ recordTypes:
         - {role: basis, field: basis-reference, label: Basis, external: {namespace: "urn:example:synthetic:notices"}}
       correction: {field: corrects, relation: corrects}
 accessProfiles:
-  - id: full
+  full:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
@@ -2473,7 +2473,7 @@ accessProfiles:
           operations: [get, list]
           readableFields: [item, decided-on, effective-from, effective-until, basis-reference, summary, corrects]
           rowBoundaries: unrestricted
-  - id: narrow
+  narrow:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     requiredPurposes: [narrow-review]
@@ -4454,7 +4454,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: caseworker
+  caseworker:
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry.read]
@@ -4626,7 +4626,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: caseworker
+  caseworker:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted

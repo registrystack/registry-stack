@@ -50,9 +50,8 @@ fn source() -> Value {
                 }
             }
         }],
-        "accessProfiles": [
-            {
-                "id": "subject",
+        "accessProfiles": {
+            "subject": {
                 "default": true,
                 "principalClaim": "registry_principal",
                 "requiredScopes": "unrestricted",
@@ -63,8 +62,7 @@ fn source() -> Value {
                     "rowBoundaries": "unrestricted"
                 }]}
             },
-            {
-                "id": "investigator",
+            "investigator": {
                 "principalClaim": "registry_principal",
                 "requiredScopes": "unrestricted",
                 "permissions": {"records": [{
@@ -74,8 +72,7 @@ fn source() -> Value {
                     "rowBoundaries": "unrestricted"
                 }]}
             },
-            {
-                "id": "writer",
+            "writer": {
                 "principalClaim": "registry_principal",
                 "requiredScopes": "unrestricted",
                 "permissions": {"records": [{
@@ -85,7 +82,7 @@ fn source() -> Value {
                     "rowBoundaries": "unrestricted"
                 }]}
             }
-        ]
+        }
     })
 }
 
@@ -140,7 +137,7 @@ fn add_relationship_reader(value: &mut Value) {
             ]
         })]);
     let profile = json!({
-        "id": "relationship-investigator",
+
         "principalClaim": "registry_principal",
         "requiredScopes": "unrestricted",
         "permissions": {"records": [{
@@ -151,10 +148,7 @@ fn add_relationship_reader(value: &mut Value) {
             "readPaths": [{"path": "people", "readableFields": ["display-name"]}]
         }]}
     });
-    value["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(profile);
+    value["accessProfiles"]["relationship-investigator"] = profile;
 }
 
 #[test]
@@ -432,7 +426,8 @@ fn relationship_exemptions_bind_the_authority_entity_and_read_path() {
     assert_eq!(exemption.source_entity.as_deref(), Some("case"));
 
     let mut no_grant = value.clone();
-    no_grant["accessProfiles"][3]["permissions"]["records"][0]["readPaths"] = json!([]);
+    no_grant["accessProfiles"]["relationship-investigator"]["permissions"]["records"][0]
+        ["readPaths"] = json!([]);
     assert_refused(&no_grant, "breg.access-log.exemption-profile-invalid");
 
     let mut wrong_target = value.clone();

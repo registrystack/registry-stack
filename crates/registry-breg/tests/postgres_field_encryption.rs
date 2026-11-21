@@ -130,7 +130,7 @@ recordTypes:
     fields:
       - {id: text, type: string, maximumLength: 200, required: true, classification: restricted}
 accessProfiles:
-  - id: operator
+  operator:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted

@@ -101,7 +101,19 @@ pub struct RegistryProject {
     /// timers, but cannot contribute this authority.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timer_grants: Vec<TimerGrantSource>,
-    #[serde(default)]
+    /// Written as a mapping from each profile id to the rest of the profile
+    /// (CFG-ID-5) and held sorted by id.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            schema_with = "registry_platform_yaml::id_keyed_schema::<ProjectAccessProfileSource>"
+        )
+    )]
     pub access_profiles: Vec<ProjectAccessProfileSource>,
     #[serde(default)]
     pub vocabularies: Vec<VocabularySource>,
@@ -1667,7 +1679,7 @@ pub struct EntitySource {
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "Vec<sentinel::AuthoredModuleProfile>")
+        schemars(schema_with = "sentinel::module_access_profiles_schema")
     )]
     pub access_profiles: Vec<AccessProfileSource>,
     #[serde(default)]
@@ -2108,7 +2120,7 @@ pub struct EntityExtensionSource {
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "Vec<sentinel::AuthoredModuleProfile>")
+        schemars(schema_with = "sentinel::module_access_profiles_schema")
     )]
     pub access_profiles: Vec<AccessProfileSource>,
     #[serde(default)]
@@ -5205,6 +5217,12 @@ pub struct ProjectAccessProfileSource {
     pub permissions: PermissionsSource,
 }
 
+impl registry_platform_yaml::Identified for ProjectAccessProfileSource {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 /// What an access profile may do. Each member lists the permissions that name
 /// one kind of subject, and a member that is omitted or empty grants nothing.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -5520,6 +5538,10 @@ const PLAN_CAPABILITIES_REPLACEMENT: &str = "Remove `plan.capabilities`. Declare
 /// Members `registry.yaml` no longer accepts, each with the member that
 /// replaced it.
 const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
+    RemovedKey {
+        pointer: "/accessProfiles/*/id",
+        replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {PROFILE_ID: {principalClaim: ...}}, with no id member.",
+    },
     RemovedKey {
         pointer: "/recordTypes/*/changeControl",
         replacement: CHANGE_CONTROL_REPLACEMENT,

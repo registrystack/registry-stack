@@ -476,21 +476,19 @@ fn compiled_polygon_registry() -> registry_breg::CompiledRegistry {
         ],
         "geojson":{"geometryField":"boundary"}
       }],
-      "accessProfiles":[{
-          "id":"plot-reader","default":true,"principalClaim":"registry_principal","requiredScopes":["registry.read"],
+      "accessProfiles":{"plot-reader": {"default":true,"principalClaim":"registry_principal","requiredScopes":["registry.read"],
           "requiredPurposes":["case-management"],"permissions":{"records":[{
           "recordType":"plot","operations":["create","get","list","patch"],
           "readableFields":["jurisdiction","boundary"],"writableFields":["jurisdiction","boundary"],
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}],
           "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1.25,"maximumLatitudeSpanDegrees":1.25}}
           }]}
-        },{
-          "id":"no-bbox","principalClaim":"registry_principal","requiredScopes":["registry.read"],
+        },"no-bbox": {"principalClaim":"registry_principal","requiredScopes":["registry.read"],
           "requiredPurposes":["case-management"],"permissions":{"records":[{
           "recordType":"plot","operations":["list"],"readableFields":["boundary"],
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
           }]}
-      }]
+      }}
     }"#).expect("polygon project parses");
     compile_project(&project, &[], CompileProfile::Authoring).expect("polygon project compiles")
 }
@@ -2616,8 +2614,7 @@ fn spatial_registry_module_source() -> &'static str {
           "fields":[{"id":"region-label","type":"string","maximumLength":96,"classification":"internal"}]
         }],
         "geojson":{"geometryField":"location"},
-        "accessProfiles":[{
-          "id":"map-reader",
+        "accessProfiles":{"map-reader": {
           "default":true,
           "principalClaim":"registry_principal",
           "requiredScopes":["registry.read"],
@@ -2629,8 +2626,7 @@ fn spatial_registry_module_source() -> &'static str {
           "sortableFields":["map-label"],
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}],
           "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1.25,"maximumLatitudeSpanDegrees":1.25}}
-        },{
-          "id":"notes-reader",
+        },"notes-reader": {
           "principalClaim":"registry_principal",
           "requiredScopes":["registry.read"],
           "requiredPurposes":["case-management"],
@@ -2638,8 +2634,7 @@ fn spatial_registry_module_source() -> &'static str {
           "readableFields":["code","label","location","notes"],
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}],
           "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1.25,"maximumLatitudeSpanDegrees":1.25}}
-        },{
-          "id":"count-reader",
+        },"count-reader": {
           "principalClaim":"registry_principal",
           "requiredScopes":["registry.read"],
           "requiredPurposes":["case-management"],
@@ -2649,23 +2644,21 @@ fn spatial_registry_module_source() -> &'static str {
           "allowCount":true,
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}],
           "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1.25,"maximumLatitudeSpanDegrees":1.25}}
-        },{
-          "id":"no-bbox",
+        },"no-bbox": {
           "principalClaim":"registry_principal",
           "requiredScopes":["registry.read"],
           "requiredPurposes":["case-management"],
           "operations":["list"],
           "readableFields":["code","label","location"],
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
-        },{
-          "id":"get-only",
+        },"get-only": {
           "principalClaim":"registry_principal",
           "requiredScopes":["registry.read"],
           "requiredPurposes":["case-management"],
           "operations":["get"],
           "readableFields":["code","label","location"],
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
-        }]
+        }}
       },{
         "id":"service-zone",
         "primaryDataset":"test-dataset",
@@ -2676,8 +2669,7 @@ fn spatial_registry_module_source() -> &'static str {
           {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
           {"id":"zone-label","type":"string","required":true,"maximumLength":96,"classification":"internal"}
         ],
-        "accessProfiles":[{
-          "id":"map-reader",
+        "accessProfiles":{"map-reader": {
           "default":true,
           "principalClaim":"registry_principal",
           "requiredScopes":["registry.read"],
@@ -2686,7 +2678,7 @@ fn spatial_registry_module_source() -> &'static str {
           "readableFields":["jurisdiction","zone-label"],
           "writableFields":["jurisdiction","zone-label"],
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
-        }]
+        }}
       },{
         "id":"service-region",
         "primaryDataset":"test-dataset",
@@ -2699,8 +2691,7 @@ fn spatial_registry_module_source() -> &'static str {
           {"id":"region-location","type":"crs84-point","precision":6,"classification":"internal"}
         ],
         "geojson":{"geometryField":"region-location"},
-        "accessProfiles":[{
-          "id":"map-reader",
+        "accessProfiles":{"map-reader": {
           "default":true,
           "principalClaim":"registry_principal",
           "requiredScopes":["registry.read"],
@@ -2710,7 +2701,7 @@ fn spatial_registry_module_source() -> &'static str {
           "writableFields":["jurisdiction","region-label","region-location"],
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}],
           "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1.25,"maximumLatitudeSpanDegrees":1.25}}
-        }]
+        }}
       }]
     }"#
 }
@@ -2768,8 +2759,7 @@ fn plain_geojson_registry_source() -> &'static str {
         ],
         "geojson":{"geometryField":"location"}
       }],
-      "accessProfiles":[{
-        "id":"plain-reader",
+      "accessProfiles":{"plain-reader": {
         "default":true,
         "principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],
@@ -2780,7 +2770,7 @@ fn plain_geojson_registry_source() -> &'static str {
           "writableFields":["code","location"],
           "rowBoundaries": "unrestricted"
         }]}
-      }]
+      }}
     }"#
 }
 

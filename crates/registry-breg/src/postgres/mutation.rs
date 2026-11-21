@@ -2534,15 +2534,14 @@ mod ingestion_context_tests {
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
         "fields":[{"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}]
       }],
-      "accessProfiles":[{
-        "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+      "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["review"],
         "permissions":{"records":[{
           "recordType":"entry","operations":["get"],
           "readableFields":["tenant"],
           "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
         }]}
-      }]
+      }}
     }"#;
 
     fn fixture_claims() -> ClaimContext {

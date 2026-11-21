@@ -40,12 +40,11 @@ async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate()
               ]
             }]
           }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
               "recordType":"entry","operations":["get"],"readableFields":["code","status","ended-on"],
               "rowBoundaries": "unrestricted"
             }]}
-          }],
+          }},
           "vocabularies":[{"id":"status","values":["active","closed"]}]
         }"#,
     )

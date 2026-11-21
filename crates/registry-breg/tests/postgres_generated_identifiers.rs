@@ -50,14 +50,13 @@ fn registry_with_limits(
                "generate":{"type":"random","prefix":"R-","length":12}}
             ]
           }],
-          "accessProfiles":[{
-            "id":"writer","default":true,"principalClaim":"sub","requiredScopes":"unrestricted",
+          "accessProfiles":{"writer": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted",
             "permissions":{"records":[{
               "recordType":"entry","operations":["create","get"],
               "readableFields":["jurisdiction","issued-at","public-id","daily-id","receipt-code"],
               "writableFields":["jurisdiction","issued-at"],"rowBoundaries":"unrestricted"
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("generated identifier project is JSON");

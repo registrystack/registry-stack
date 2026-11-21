@@ -407,7 +407,7 @@ An empty list never states an open choice. Where a member can be open, you write
 
 ```text
 bregctl check refused the project.
-error[config.invalid-value] /private/tmp/agent-R5-work/my-registry/registry.yaml:72:21 /accessProfiles/0/requiredScopes
+error[config.invalid-value] /private/tmp/agent-R5-work/my-registry/registry.yaml:72:21 /accessProfiles/registrar/requiredScopes
   expected unrestricted, or a list of at least one scope
   next: List the scopes a token must carry, or write unrestricted to require none.
 ```
@@ -435,7 +435,7 @@ acceptances:
   - code: breg.access.target-unrestricted-rows
     scope:
       file: registry.yaml
-      path: /accessProfiles/@id=registrar/permissions/actions/@action=correct-facility/targets/@recordType=facility/rowBoundaries
+      path: /accessProfiles/registrar/permissions/actions/@action=correct-facility/targets/@recordType=facility/rowBoundaries
     reason: National registrars intentionally manage facilities across all districts.
 ```
 

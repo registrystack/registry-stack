@@ -19,8 +19,8 @@ fn source() -> Value {
                 {"id":"unbound","type":"string","maximumLength":64,"classification":"restricted"}],
             "plan":{"type":"function","function":"calculate","inputs":["label"],
                 "writes":[{"id":"item","target":{"recordType":"item"},"operation":"create","fields":["label"]}]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-            "permissions":{"actions":[{"action":"register-item","operations":["invoke"],"targets":[{"recordType":"item","rowBoundaries":"unrestricted"}],"results":["item"]}]}}]})
+        "accessProfiles":{"registrar": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+            "permissions":{"actions":[{"action":"register-item","operations":["invoke"],"targets":[{"recordType":"item","rowBoundaries":"unrestricted"}],"results":["item"]}]}}}})
 }
 fn compile(script: &str) -> Result<registry_breg::CompiledRegistry, registry_breg::CompileFailure> {
     compile_project_with_assets(

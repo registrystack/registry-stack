@@ -60,13 +60,12 @@
     {
       "id": "household-contact-actions-core",
       "version": "0.1.0",
-      "digest": "sha256:dfa12567336a4c605786617bf652203d71a4f306420f241925dbd57a8a05cd01"
+      "digest": "sha256:2034775dbdf5c3b610cf35557c92d6a2dc3c332aa63d46d96e2b8a368d5a24e7"
     }
   ],
   "recordTypes": [],
-  "accessProfiles": [
-    {
-      "id": "household-operator",
+  "accessProfiles": {
+    "household-operator": {
       "default": true,
       "principalClaim": "registry_principal",
       "requiredScopes": [
@@ -171,8 +170,7 @@
         ]
       }
     },
-    {
-      "id": "household-maintainer",
+    "household-maintainer": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "registry:household:maintain"
@@ -208,8 +206,7 @@
         ]
       }
     },
-    {
-      "id": "contact-registrar",
+    "contact-registrar": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "registry:contact:register"
@@ -275,7 +272,7 @@
         ]
       }
     }
-  ],
+  },
   "datasets": [
     {
       "id": "household-contact-actions"

@@ -2683,7 +2683,7 @@ mod tests {
         source["package"] = json!({"sourceRevision":"native-example-recovery"});
         // Recovery covers generated CRUD only; the canonical Actions stay out.
         source.as_object_mut().unwrap().remove("actions");
-        let editor = source["accessProfiles"][0]["permissions"]
+        let editor = source["accessProfiles"]["directory-editor"]["permissions"]
             .as_object_mut()
             .unwrap();
         editor.remove("actions");
@@ -2708,7 +2708,7 @@ mod tests {
                 {"id":"jurisdiction","type":"string","required":true,"minimumLength":1,"maximumLength":40,"classification":"internal"}
             ]
         }));
-        let grant = &mut source["accessProfiles"][0]["permissions"]["records"][0];
+        let grant = &mut source["accessProfiles"]["directory-editor"]["permissions"]["records"][0];
         grant["operations"]
             .as_array_mut()
             .unwrap()
@@ -2718,13 +2718,12 @@ mod tests {
             grant[key].as_array_mut().unwrap().push(json!("notes"));
         }
         let boundary = json!([{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]);
-        source["accessProfiles"][0]["permissions"]["records"].as_array_mut().unwrap().push(json!({
+        source["accessProfiles"]["directory-editor"]["permissions"]["records"].as_array_mut().unwrap().push(json!({
             "recordType":"contact-link","operations":["create","get","list","tombstone","revisions"],
             "readableFields":["from","to","jurisdiction"],"writableFields":["from","to","jurisdiction"],
             "rowBoundaries":boundary,"revisionAccess":true
         }));
-        source["accessProfiles"].as_array_mut().unwrap().push(json!({
-            "id":"directory-reader","principalClaim":"registry_principal",
+        source["accessProfiles"].as_object_mut().unwrap().insert("directory-reader".to_owned(), json!({"principalClaim":"registry_principal",
             "requiredScopes":["registry:directory:read"],"requiredPurposes":["directory-administration"],
             "permissions":{"records":[{
                 "recordType":"contact","operations":["get","list"],

@@ -59,30 +59,28 @@ fn source() -> Value {
             ],
             "temporal": {"startField":"valid-from","endField":"valid-to"}
         }],
-        "accessProfiles": [
-            {
-                "id":"analyst","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+        "accessProfiles": {
+            "analyst": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                     "recordType":"record","operations":["list"],
                     "readableFields":["active","category","event-date","valid-from","valid-to"],
                     "filterableFields":["active","category","event-date","valid-from","valid-to"],
                     "allowCount":true,"rowBoundaries":"unrestricted"
                 }], "datasets":[{"dataset":"records-by-category","operations":["read-live","read-releases"]}]}
             },
-            {
-                "id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+            "publisher": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                     "recordType":"record","operations":["list"],
                     "readableFields":["active","category","event-date","valid-from","valid-to"],
                     "filterableFields":["active","category","event-date","valid-from","valid-to"],
                     "allowCount":true,"rowBoundaries":"unrestricted"
                 }], "datasets":[{"dataset":"records-by-category","operations":["publish","read-releases"]}]}
             },
-            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "reader": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
                 "datasets":[
                     {"dataset":"records-by-category","operations":["read-releases"]}
                 ]
             }},
-            {"id":"other-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{}}
-        ],
+            "other-reader": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{}}
+        },
         "vocabularies": [{"id":"category","values":["a","b"]}],
         "statisticalDatasets": [{
             "id":"records-by-category",
@@ -96,14 +94,14 @@ fn source() -> Value {
     .expect("fixture is JSON")
 }
 
-const ANALYST: usize = 0;
-const PUBLISHER: usize = 1;
-const READER: usize = 2;
-const OTHER_READER: usize = 3;
+const ANALYST: &str = "analyst";
+const PUBLISHER: &str = "publisher";
+const READER: &str = "reader";
+const OTHER_READER: &str = "other-reader";
 
 /// Write the operations one profile holds on the dataset. No operation
 /// removes the profile's dataset permission.
-fn grant(value: &mut Value, profile: usize, operations: &[&str]) {
+fn grant(value: &mut Value, profile: &str, operations: &[&str]) {
     value["accessProfiles"][profile]["permissions"]["datasets"] = if operations.is_empty() {
         json!([])
     } else {
@@ -121,7 +119,7 @@ fn source_with_swappable_population_fields() -> Value {
             "classification":"internal"
         }));
     value["recordTypes"][0]["fields"][0]["apiName"] = json!("active");
-    for profile in [0_usize, 1] {
+    for profile in [ANALYST, PUBLISHER] {
         for member in ["readableFields", "filterableFields"] {
             value["accessProfiles"][profile]["permissions"]["records"][0][member]
                 .as_array_mut()
@@ -481,55 +479,55 @@ fn a_dataset_permission_names_a_declared_dataset() {
 
 #[test]
 fn a_dataset_permission_is_written_with_dataset_operations_and_nothing_else() {
-    let dataset_permission = "project.accessProfiles[0].permissions.datasets[0]";
+    let dataset_permission = "project.accessProfiles.analyst.permissions.datasets[0]";
     let cases: [(&str, Value, &str, String, &str); 7] = [
         (
-            "/accessProfiles/0/permissions/datasets/0/operations",
+            "/accessProfiles/analyst/permissions/datasets/0/operations",
             json!(["read-live", "list"]),
             "config.unknown-variant",
             format!("{dataset_permission}.operations[1]"),
             "`read-live`, `read-exact`, `publish`, `read-releases`",
         ),
         (
-            "/accessProfiles/0/permissions/datasets/0/operations",
+            "/accessProfiles/analyst/permissions/datasets/0/operations",
             json!([]),
             "config.invalid-value",
             format!("{dataset_permission}.operations"),
             "read-live, read-exact, publish, or read-releases",
         ),
         (
-            "/accessProfiles/0/permissions/datasets/0/readableFields",
+            "/accessProfiles/analyst/permissions/datasets/0/readableFields",
             json!(["active"]),
             "config.unknown-key",
             format!("{dataset_permission}.readableFields"),
             "`dataset`, `operations`",
         ),
         (
-            "/accessProfiles/0/permissions/datasets/0/rowBoundaries",
+            "/accessProfiles/analyst/permissions/datasets/0/rowBoundaries",
             json!("unrestricted"),
             "config.unknown-key",
             format!("{dataset_permission}.rowBoundaries"),
             "`dataset`, `operations`",
         ),
         (
-            "/accessProfiles/0/permissions/datasets/0/allowCount",
+            "/accessProfiles/analyst/permissions/datasets/0/allowCount",
             json!(true),
             "config.unknown-key",
             format!("{dataset_permission}.allowCount"),
             "`dataset`, `operations`",
         ),
         (
-            "/accessProfiles/0/permissions/datasets/0/entity",
+            "/accessProfiles/analyst/permissions/datasets/0/entity",
             json!("record"),
             "config.unknown-key",
             format!("{dataset_permission}.entity"),
             "`dataset`, `operations`",
         ),
         (
-            "/accessProfiles/0/permissions/records/0/operations",
+            "/accessProfiles/analyst/permissions/records/0/operations",
             json!(["list", "read-releases"]),
             "config.unknown-variant",
-            "project.accessProfiles[0].permissions.records[0].operations[1]".to_owned(),
+            "project.accessProfiles.analyst.permissions.records[0].operations[1]".to_owned(),
             "`get`, `lookup`, `list`",
         ),
     ];
@@ -569,7 +567,7 @@ fn an_unknown_permission_operation_is_refused_with_the_vocabulary_of_its_group()
         ),
     ] {
         let mut value = source();
-        value["accessProfiles"][0]["permissions"][group][0]["operations"] = json!(["read"]);
+        value["accessProfiles"]["analyst"]["permissions"][group][0]["operations"] = json!(["read"]);
         let refused = read_refusals(&value);
         let [(code, path, message)] = refused.as_slice() else {
             panic!("one diagnostic refuses the unknown operation: {refused:?}");
@@ -577,7 +575,7 @@ fn an_unknown_permission_operation_is_refused_with_the_vocabulary_of_its_group()
         assert_eq!(code, "config.unknown-variant");
         assert_eq!(
             path,
-            &format!("project.accessProfiles[0].permissions.{group}[0].operations[0]")
+            &format!("project.accessProfiles.analyst.permissions.{group}[0].operations[0]")
         );
         for operation in accepted {
             assert!(
@@ -740,31 +738,34 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
         ),
         (
             Box::new(|v| {
-                v["accessProfiles"][0]["permissions"]["records"][0]["allowCount"] = json!(false)
+                v["accessProfiles"]["analyst"]["permissions"]["records"][0]["allowCount"] =
+                    json!(false)
             }),
             "breg.statistical-dataset.count-grant-count-required",
         ),
         (
             Box::new(|v| {
-                v["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
+                v["accessProfiles"]["analyst"]["permissions"]["records"][0]["operations"] =
                     json!(["snapshot"])
             }),
             "breg.statistical-dataset.count-grant-list-required",
         ),
         (
             Box::new(|v| {
-                v["accessProfiles"][0]["permissions"]["records"][0]["filterableFields"] =
+                v["accessProfiles"]["analyst"]["permissions"]["records"][0]["filterableFields"] =
                     json!(["active", "category"])
             }),
             "breg.statistical-dataset.count-grant-field-not-filterable",
         ),
         (
-            Box::new(|v| v["accessProfiles"][1]["requiredPurposes"] = json!(["reporting"])),
+            Box::new(|v| {
+                v["accessProfiles"]["publisher"]["requiredPurposes"] = json!(["reporting"])
+            }),
             "breg.statistical-dataset.publisher-caller-dependent",
         ),
         (
             Box::new(|v| {
-                v["accessProfiles"][1]["permissions"]["records"][0]["rowBoundaries"] =
+                v["accessProfiles"]["publisher"]["permissions"]["records"][0]["rowBoundaries"] =
                     json!([{"field":"category","claim":"categories","operator":"in"}])
             }),
             "breg.statistical-dataset.publisher-caller-dependent",
@@ -831,8 +832,9 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
                     "accessRequirements":{"requiredScopes":["membership:use"]}
                 }),
             ]);
-            value["accessProfiles"][1]["requiredScopes"] = json!(["membership:use"]);
-            value["accessProfiles"][1]["permissions"]["records"][0]["membershipBoundaries"] = json!([{
+            value["accessProfiles"]["publisher"]["requiredScopes"] = json!(["membership:use"]);
+            value["accessProfiles"]["publisher"]["permissions"]["records"][0]
+                ["membershipBoundaries"] = json!([{
                 "field":"organization","membershipRecordType":"membership",
                 "membershipKeyField":"organization","principalField":"principal","activeField":"active"
             }]);
@@ -845,7 +847,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
             let boundary = json!({"field":"category","claim":"categories","operator":"in"});
             value["recordTypes"][0]["accessRequirements"] =
                 json!({"rowBoundaries":[boundary.clone()]});
-            for profile in [0_usize, 1] {
+            for profile in [ANALYST, PUBLISHER] {
                 value["accessProfiles"][profile]["permissions"]["records"][0]["rowBoundaries"] =
                     json!([boundary.clone()]);
             }
@@ -865,7 +867,7 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
                         "id":"secret","type":"string","maximumLength":80,"encrypted":true,
                         "classification":"restricted"
                 }));
-            for profile in [0_usize, 1] {
+            for profile in [ANALYST, PUBLISHER] {
                 value["accessProfiles"][profile]["permissions"]["records"][0]["readableFields"]
                     .as_array_mut()
                     .unwrap()
@@ -907,10 +909,10 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
                     "validity":{"from":"effective-at","until":"expires-at","maximumDurationDays":365}
                 }
             }));
-            value["accessProfiles"][1]["actorKind"] = json!("service");
-            value["accessProfiles"][1]["requesterClients"] = json!(["publisher-client"]);
-            value["accessProfiles"][1]["requiredPurposes"] = json!(["statistics"]);
-            value["accessProfiles"][1]["permissions"]["records"][0]["requireConsent"] =
+            value["accessProfiles"]["publisher"]["actorKind"] = json!("service");
+            value["accessProfiles"]["publisher"]["requesterClients"] = json!(["publisher-client"]);
+            value["accessProfiles"]["publisher"]["requiredPurposes"] = json!(["statistics"]);
+            value["accessProfiles"]["publisher"]["permissions"]["records"][0]["requireConsent"] =
                 json!([{"record":"consent-decision","on":"id"}])
         },
         "breg.statistical-dataset.count-grant-consent",
@@ -956,7 +958,7 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
                     "id":"category-two","type":"vocabulary-code","vocabulary":"category-two",
                     "required":true,"classification":"internal"
                 }));
-            for profile in [0_usize, 1] {
+            for profile in [ANALYST, PUBLISHER] {
                 for member in ["readableFields", "filterableFields"] {
                     value["accessProfiles"][profile]["permissions"]["records"][0][member]
                         .as_array_mut()
@@ -986,7 +988,7 @@ fn with_single_code_dimensions(value: &mut Value, count: usize) {
                 "id":id,"type":"vocabulary-code","vocabulary":id,
                 "required":true,"classification":"internal"
             }));
-        for profile in [0_usize, 1] {
+        for profile in [ANALYST, PUBLISHER] {
             for member in ["readableFields", "filterableFields"] {
                 value["accessProfiles"][profile]["permissions"]["records"][0][member]
                     .as_array_mut()
@@ -1021,7 +1023,7 @@ fn statistical_dimension_reserved_names_follow_emitted_logical_field_ids() {
             .push(json!({
                 "id":id,"type":"boolean","required":true,"classification":"internal"
             }));
-        for profile in [0_usize, 1] {
+        for profile in [ANALYST, PUBLISHER] {
             for member in ["readableFields", "filterableFields"] {
                 value["accessProfiles"][profile]["permissions"]["records"][0][member]
                     .as_array_mut()
@@ -1075,7 +1077,7 @@ fn statistical_dataset_refuses_release_documents_over_the_eight_mibibyte_cap() {
                         "id":field,"type":"vocabulary-code","vocabulary":field,
                         "required":true,"classification":"internal"
                     }));
-                for profile in [0_usize, 1] {
+                for profile in [ANALYST, PUBLISHER] {
                     for member in ["readableFields", "filterableFields"] {
                         value["accessProfiles"][profile]["permissions"]["records"][0][member]
                             .as_array_mut()
@@ -1326,7 +1328,7 @@ fn definition_digest_binds_referenced_stored_field_definitions() {
                 "classification":"internal"
             }),
         ]);
-    for profile in [0_usize, 1] {
+    for profile in [ANALYST, PUBLISHER] {
         for member in ["readableFields", "filterableFields"] {
             baseline_source["accessProfiles"][profile]["permissions"]["records"][0][member]
                 .as_array_mut()
@@ -1396,7 +1398,7 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
             "id":"score","type":"int64","classification":"internal"
         }]
     }]);
-    for profile in [0_usize, 1] {
+    for profile in [ANALYST, PUBLISHER] {
         for member in ["readableFields", "filterableFields"] {
             baseline_source["accessProfiles"][profile]["permissions"]["records"][0][member]
                 .as_array_mut()
@@ -1464,7 +1466,7 @@ fn population_uses_api_field_names_and_refuses_invalid_typed_predicates() {
         .push(json!({
             "id":"long-name","type":"boolean","required":true,"classification":"internal"
         }));
-    for profile in [0_usize, 1] {
+    for profile in [ANALYST, PUBLISHER] {
         for member in ["readableFields", "filterableFields"] {
             value["accessProfiles"][profile]["permissions"]["records"][0][member]
                 .as_array_mut()
@@ -1517,7 +1519,7 @@ fn population_text_functions_use_partial_query_terms_with_runtime_bounds() {
             "id":"label","type":"string","minimumLength":8,"maximumLength":12,
             "required":true,"classification":"internal"
         }));
-    for profile in [0_usize, 1] {
+    for profile in [ANALYST, PUBLISHER] {
         for member in ["readableFields", "filterableFields"] {
             bounded_string["accessProfiles"][profile]["permissions"]["records"][0][member]
                 .as_array_mut()
@@ -1755,7 +1757,7 @@ fn generated_artifacts_cover_the_effective_model_metadata_and_seven_routes() {
         .is_none());
 
     let mut with_default = source();
-    with_default["accessProfiles"][2]["default"] = json!(true);
+    with_default["accessProfiles"]["reader"]["default"] = json!(true);
     let compiled = compile(&with_default).expect("configured statistical default compiles");
     let openapi = artifact_json(&compiled, "generated/openapi.json");
     let release = &openapi["paths"]["/v1/statistics/records-by-category/releases"]["get"];
@@ -1915,7 +1917,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
         "id":"lookup","primaryDataset":"statistics-test","route":"lookups","mutationMode":"mutable",
         "fields":[{"id":"flag","type":"boolean","required":true,"classification":"internal"}]
     }));
-    for profile in [0_usize, 1] {
+    for profile in [ANALYST, PUBLISHER] {
         value["accessProfiles"][profile]["permissions"]["records"][0]["readableFields"]
             .as_array_mut()
             .unwrap()
@@ -1925,7 +1927,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
             .unwrap()
             .push(json!("evaluated-category"));
     }
-    value["accessProfiles"][1]["permissions"]["records"]
+    value["accessProfiles"]["publisher"]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -2009,7 +2011,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     }
 
     let mut missing_dependency_grant = value.clone();
-    missing_dependency_grant["accessProfiles"][1]["permissions"]["records"]
+    missing_dependency_grant["accessProfiles"]["publisher"]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
         .pop();
@@ -2027,7 +2029,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
         changed.statistical_datasets()["records-by-category"].definition_digest
     );
 
-    value["accessProfiles"][1]["requiredPurposes"] = json!(["caller-bound"]);
+    value["accessProfiles"]["publisher"]["requiredPurposes"] = json!(["caller-bound"]);
     let failure =
         compile_with_sql(&value, sql).expect_err("caller-dependent dependency is refused");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
@@ -2696,7 +2698,7 @@ fn the_definition_digest_differs_between_disclosure_methods() {
     );
 }
 
-const STATISTICIAN: usize = 4;
+const STATISTICIAN: &str = "statistician";
 
 /// A minimum-count dataset with a sum and a mean, no publisher, a profile
 /// that reads exact values and holds no record access, and the analyst as
@@ -2708,10 +2710,10 @@ fn exact_source() -> Value {
         {"id":"average","type":"mean","field":"amount","scale":1}
     ]));
     grant(&mut value, ANALYST, &[]);
-    value["accessProfiles"].as_array_mut().unwrap().push(json!({
-        "id":"statistician","principalClaim":"principal","requiredScopes":"unrestricted",
+    value["accessProfiles"]["statistician"] = json!({
+        "principalClaim":"principal","requiredScopes":"unrestricted",
         "permissions":{"datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]}
-    }));
+    });
     value["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"analyst"});
     value
 }
@@ -2888,11 +2890,11 @@ fn a_standing_agent_cannot_read_exact_or_anchor_exact_reads() {
 fn exact_source_with_unit_profile(profile: Value) -> (Value, Value) {
     let mut project = exact_source();
     project["modules"] = json!([{"id":"stats-module","version":"1"}]);
-    project["accessProfiles"].as_array_mut().unwrap().push(json!({
-        "id":"stats","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{}
-    }));
+    project["accessProfiles"]["stats"] = json!({
+        "principalClaim":"principal","requiredScopes":"unrestricted","permissions":{}
+    });
     let mut contributed = json!({
-        "id":"stats","principalClaim":"principal","requiredScopes":"unrestricted",
+        "principalClaim":"principal","requiredScopes":"unrestricted",
         "operations":["list"],
         "readableFields":["active","category","event-date","valid-from","valid-to","amount","quantity"],
         "filterableFields":["active","category","event-date","valid-from","valid-to"],
@@ -2905,7 +2907,7 @@ fn exact_source_with_unit_profile(profile: Value) -> (Value, Value) {
     let module = json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
         "kind":"BRegModule","id":"stats-module","version":"1",
-        "extendRecordTypes":[{"recordType":"record","accessProfiles":[contributed]}]
+        "extendRecordTypes":[{"recordType":"record","accessProfiles":{"stats":contributed}}]
     });
     (project, module)
 }
@@ -2927,7 +2929,10 @@ fn standing_agent_unit_profile() -> Value {
 #[test]
 fn exact_reads_resolve_a_profile_a_module_contributes_to_the_unit() {
     let (mut project, module) = exact_source_with_unit_profile(json!({}));
-    project["accessProfiles"].as_array_mut().unwrap().pop();
+    project["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .remove("stats");
     project["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"stats"});
     let compiled = compile_with_module(&project, &module)
         .expect("a unit profile a module contributes anchors exactReads");
@@ -2977,11 +2982,7 @@ fn an_agent_unit_profile_cannot_anchor_exact_reads() {
 #[test]
 fn read_exact_names_the_unit_profile_that_makes_it_a_standing_agent() {
     let (mut project, module) = exact_source_with_unit_profile(standing_agent_unit_profile());
-    project["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .last_mut()
-        .unwrap()["permissions"] = json!({
+    project["accessProfiles"]["stats"]["permissions"] = json!({
         "datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]
     });
     let failure = compile_with_module(&project, &module)
@@ -3186,10 +3187,10 @@ fn every_live_reader_publisher_and_exact_profile_must_read_a_distinct_count_fiel
     // The exactReads profile.
     let mut exact = distinct_source(distinct_measures());
     grant(&mut exact, ANALYST, &[]);
-    exact["accessProfiles"].as_array_mut().unwrap().push(json!({
-        "id":"statistician","principalClaim":"principal","requiredScopes":"unrestricted",
+    exact["accessProfiles"]["statistician"] = json!({
+        "principalClaim":"principal","requiredScopes":"unrestricted",
         "permissions":{"datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]}
-    }));
+    });
     exact["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"analyst"});
     compile(&exact).expect("the exactReads profile reads the field");
     exact["accessProfiles"][ANALYST]["permissions"]["records"][0]["readableFields"] = unreadable;

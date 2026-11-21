@@ -891,7 +891,7 @@ recordTypes:
     fields:
       - {id: owner-subject, type: string, maximumLength: 64, required: true, classification: internal}
 accessProfiles:
-  - id: self-service
+  self-service:
     principalClaim: sub
     actorKind: human
     requesterClients: [owner, other]
@@ -1010,12 +1010,12 @@ fn installed_dev_switches_one_clients_claims_and_recovers_import_seed() {
             entity["batch"] = json!({"maximumItems": 4, "maximumBytes": 16384});
         }
     }
-    for profile in definition["accessProfiles"].as_array_mut().unwrap() {
-        if matches!(profile["id"].as_str(), Some("operator" | "record-reader")) {
+    for (id, profile) in definition["accessProfiles"].as_object_mut().unwrap() {
+        if matches!(id.as_str(), "operator" | "record-reader") {
             profile["requesterClients"] = json!(["officer"]);
             profile["actorKind"] = json!("human");
         }
-        if profile["id"] == "operator" {
+        if id == "operator" {
             // No direct-create permission can satisfy either the journey's
             // reference setup or the served database's reference seed.
             profile["permissions"]["records"][0]["operations"] = json!(["import", "get", "list"]);

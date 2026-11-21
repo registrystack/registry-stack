@@ -843,15 +843,13 @@ fn event_record_registry() -> registry_breg::CompiledRegistry {
               "occurredAt":{"at":"noted-on"}
             }
           }],
-          "accessProfiles":[{
-            "id":"subject-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
+          "accessProfiles":{"subject-operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
             "permissions":{"records":[{
               "recordType":"subject","operations":["create","get","patch","tombstone"],
               "readableFields":["jurisdiction","name"],"writableFields":["jurisdiction","name"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          },{
-            "id":"recorder","principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
+          },"recorder": {"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
             "permissions":{"records":[{
               "recordType":"decision","operations":["create","get"],
               "readableFields":["jurisdiction","subject","corrects","occurred-on"],
@@ -863,7 +861,7 @@ fn event_record_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["jurisdiction","subject","noted-on"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("event record reference fixture parses");
@@ -1132,22 +1130,20 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"alternate","type":"reference","target":"target","onDelete":"restrict","classification":"internal"}
             ]
           }],
-          "accessProfiles":[{
-            "id":"target-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
+          "accessProfiles":{"target-operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
             "permissions":{"records":[{
               "recordType":"target","operations":["create","get","patch","tombstone"],
               "readableFields":["jurisdiction","name","related"],"writableFields":["jurisdiction","name","related"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          },{
-            "id":"linker","principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
+          },"linker": {"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
             "permissions":{"records":[{
               "recordType":"source","operations":["create","get","patch","tombstone","batch"],
               "readableFields":["jurisdiction","name","target","alternate"],
               "writableFields":["jurisdiction","name","target","alternate"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("reference-integrity fixture parses");

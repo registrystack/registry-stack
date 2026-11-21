@@ -77,27 +77,27 @@ fn registry_source(dimension: &str) -> Value {
                 "fields":[{"id":"evaluated-category","type":"vocabulary-code","vocabulary":"category","values":["a","b"],"classification":"internal"}]
             }]
         }],
-        "accessProfiles":[
-            {"id":"analyst","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+        "accessProfiles":{
+            "analyst": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["list"],
                 "readableFields":readable,
                 "filterableFields":["subject","active","category","event-date","evaluated-category"],"allowCount":true,
                 "rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":"records-by-category","operations":["read-live"]}]}},
-            {"id":"statistician","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "statistician": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
                 "datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]}},
-            {"id":"live-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+            "live-reader": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["list"],
                 "readableFields":readable,
                 "filterableFields":["subject","active","category","event-date","evaluated-category"],"allowCount":true,
                 "rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":"records-by-category","operations":["read-live"]}]}},
-            {"id":"seed","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+            "seed": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["create"],
                 "writableFields":["subject","active","category","event-date","amount","quantity"],
                 "rowBoundaries":"unrestricted"
             }]}}
-        ],
+        },
         "vocabularies":[{"id":"category","values":["a","b","c"]}],
         "statisticalDatasets":[{
             "id":"records-by-category","unit":"record","population":"active eq true",

@@ -90,13 +90,16 @@ fn capacity_project(profile_count: usize) -> Vec<u8> {
                     "readableFields": ["label"], "rowBoundaries": "unrestricted"
                 }]);
             }
-            json!({
-                "id": format!("reviewer-{profile}"), "default": profile == 0,
-                "principalClaim": "principal", "requiredScopes": [format!("review:{profile}")],
-                "permissions": permissions
-            })
+            (
+                format!("reviewer-{profile}"),
+                json!({
+                    "default": profile == 0,
+                    "principalClaim": "principal", "requiredScopes": [format!("review:{profile}")],
+                    "permissions": permissions
+                }),
+            )
         })
-        .collect::<Vec<_>>();
+        .collect::<serde_json::Map<_, _>>();
     serde_json::to_vec(&json!({
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",

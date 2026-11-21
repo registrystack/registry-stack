@@ -1297,11 +1297,10 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
         String::new()
     };
     let access_profiles = required_scope.map_or_else(
-        || r#""accessProfiles":[]"#.to_owned(),
+        || r#""accessProfiles":{}"#.to_owned(),
         |scope| {
             format!(
-                r#""accessProfiles":[{{
-                  "id":"contact-registrar",
+                r#""accessProfiles":{{"contact-registrar":{{
                   "default":true,
                   "principalClaim":"registry_principal",
                   "requiredScopes":["{scope}"],
@@ -1316,7 +1315,7 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
                     ],
                     "results":["person","membership","household"]
                   }}]}}
-                }}]"#
+                }}}}"#
             )
         },
     );

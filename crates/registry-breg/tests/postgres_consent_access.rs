@@ -1054,7 +1054,7 @@ async fn real_postgres_consent_matches_recipient_sets_purpose_and_scope_exactly(
 fn ungrouped_recipient_source() -> Value {
     let mut value = consent_fixture::source();
     value["recipients"]["organizations"][2]["clients"] = json!([BETA_CLIENT]);
-    value["accessProfiles"][1]["requesterClients"]
+    value["accessProfiles"]["recipient-feed"]["requesterClients"]
         .as_array_mut()
         .unwrap()
         .push(json!(BETA_CLIENT));
@@ -1071,10 +1071,9 @@ async fn real_postgres_consent_refusals_reach_no_recipient_through_an_authored_s
     selector["recordTypes"][consent_fixture::CONSENT_RECORD]["selectorProfiles"] =
         json!([{"id": "recipient", "fields": ["recipient"]}]);
     selector["accessProfiles"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(json!({
-            "id": "recipient-lookup", "principalClaim": "principal", "actorKind": "service",
+        .insert("recipient-lookup".to_owned(), json!({"principalClaim": "principal", "actorKind": "service",
             "requesterClients": [BETA_CLIENT], "requiredScopes": ["consent:read"],
             "permissions": {"records": [{
                 "recordType": "consent-decision", "operations": ["lookup"],
@@ -1446,12 +1445,12 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
             .unwrap()
             .remove("actions");
     }
-    gated["accessProfiles"][0]["permissions"]["records"]
+    gated["accessProfiles"]["food-targeting"]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
         .retain(|permission| permission["recordType"] != "household");
     let mut base = gated.clone();
-    for permission in base["accessProfiles"][0]["permissions"]["records"]
+    for permission in base["accessProfiles"]["food-targeting"]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
     {
@@ -1460,8 +1459,13 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
     // Ungating keeps the scope code: the profile takes a new id and its
     // former id is retired, since codes are append-only.
     let mut removed = gated.clone();
-    removed["accessProfiles"][0]["id"] = json!("food-targeting-open");
-    for permission in removed["accessProfiles"][0]["permissions"]["records"]
+    let renamed = removed["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .remove("food-targeting")
+        .unwrap();
+    removed["accessProfiles"]["food-targeting-open"] = renamed;
+    for permission in removed["accessProfiles"]["food-targeting-open"]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
     {

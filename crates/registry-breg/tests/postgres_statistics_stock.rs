@@ -607,8 +607,7 @@ fn last_day_registry() -> registry_breg::CompiledRegistry {
             ],
             "temporal":{"startField":"valid-from","lastDayField":"valid-through"}
         }],
-        "accessProfiles":[{
-            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+        "accessProfiles":{"facility-operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"permit","operations":["list"],
                 "readableFields":["valid-from","valid-through","administrative-boundary"],
                 "filterableFields":["valid-from","valid-through","administrative-boundary"],
@@ -618,7 +617,7 @@ fn last_day_registry() -> registry_breg::CompiledRegistry {
                 {"dataset":"permits-in-force-temporal","operations":["read-live"]},
                 {"dataset":"permits-in-force-fields","operations":["read-live"]}
             ]}
-        }],
+        }},
         "vocabularies":[
             {"id":"administrative-boundary","values":["north-district","south-district"]}
         ],
@@ -671,15 +670,14 @@ fn twelve_dimension_registry() -> registry_breg::CompiledRegistry {
             "id":"permit","primaryDataset":"facility","route":"permits","mutationMode":"mutable",
             "fields":fields
         }],
-        "accessProfiles":[{
-            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+        "accessProfiles":{"facility-operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"permit","operations":["list"],
                 "readableFields":readable,
                 "filterableFields":readable,
                 "allowCount":true,
                 "rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":"permits-by-twelve-dimensions","operations":["read-live"]}]}
-        }],
+        }},
         "vocabularies":vocabularies,
         "statisticalDatasets":[{
             "id":"permits-by-twelve-dimensions","unit":"permit","population":"validFrom ne null",
@@ -710,15 +708,14 @@ fn cube_registry() -> registry_breg::CompiledRegistry {
                 {"id":"region","type":"vocabulary-code","vocabulary":"region","required":false,"classification":"internal"}
             ]
         }],
-        "accessProfiles":[{
-            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+        "accessProfiles":{"facility-operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"permit","operations":["list"],
                 "readableFields":["permit-type","valid-from","region"],
                 "filterableFields":["permit-type","valid-from","region"],
                 "allowCount":true,
                 "rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":"permits-by-type-and-region","operations":["read-live"]}]}
-        }],
+        }},
         "vocabularies":[
             {"id":"permit-type","values":["air","water"]},
             {"id":"region","values":["north","south"]}
@@ -752,15 +749,14 @@ fn partial_text_registry() -> registry_breg::CompiledRegistry {
                 {"id":"administrative-boundary","type":"vocabulary-code","vocabulary":"administrative-boundary","required":true,"classification":"internal"}
             ]
         }],
-        "accessProfiles":[{
-            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+        "accessProfiles":{"facility-operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"permit","operations":["list"],
                 "readableFields":["permit-type","valid-from","administrative-boundary"],
                 "filterableFields":["permit-type","valid-from","administrative-boundary"],
                 "allowCount":true,
                 "rowBoundaries":[{"field":"administrative-boundary","claim":"administrative_boundaries","operator":"in"}]
             }],"datasets":[{"dataset":"monthly-air-permits","operations":["read-live"]}]}
-        }],
+        }},
         "vocabularies":[
             {"id":"permit-type","values":["air-emissions","water-discharge"]},
             {"id":"administrative-boundary","values":["north-district","south-district"]}

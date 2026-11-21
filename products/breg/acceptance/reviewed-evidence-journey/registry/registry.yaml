@@ -83,135 +83,135 @@ recordTypes:
   mutationPolicy:
     patch: proposal-required
 accessProfiles:
-- id: operator
-  default: true
-  principalClaim: registry_principal
-  requiredScopes:
-  - registry:generic:operate
-  requiredPurposes:
-  - registry-operations
-  permissions:
-    records:
-    - recordType: record
-      operations:
-      - create
-      - get
-      - patch
-      readableFields:
-      - code
-      - registration-number
-      - status
-      - label
-      writableFields:
-      - code
-      - registration-number
-      - status
-      - label
-      rowBoundaries: unrestricted
-    actions:
-    - action: correct-status
-      operations:
-      - start
-      targets:
+  operator:
+    default: true
+    principalClaim: registry_principal
+    requiredScopes:
+    - registry:generic:operate
+    requiredPurposes:
+    - registry-operations
+    permissions:
+      records:
       - recordType: record
+        operations:
+        - create
+        - get
+        - patch
+        readableFields:
+        - code
+        - registration-number
+        - status
+        - label
+        writableFields:
+        - code
+        - registration-number
+        - status
+        - label
         rowBoundaries: unrestricted
-    proposals:
-    - action: correct-status
-      operations:
-      - get
-      - submit
-      ownership: caller
-      readableInputs:
-      - record
-      - status
-      targets:
+      actions:
+      - action: correct-status
+        operations:
+        - start
+        targets:
+        - recordType: record
+          rowBoundaries: unrestricted
+      proposals:
+      - action: correct-status
+        operations:
+        - get
+        - submit
+        ownership: caller
+        readableInputs:
+        - record
+        - status
+        targets:
+        - recordType: record
+          rowBoundaries: unrestricted
+  evidence-source:
+    principalClaim: registry_principal
+    requiredScopes:
+    - registry:evidence:lookup
+    requiredPurposes:
+    - evidence-source-read
+    permissions:
+      records:
       - recordType: record
+        operations:
+        - lookup
+        readableFields:
+        - code
+        - registration-number
+        - status
+        lookups:
+        - selector: by-code
+          valueOrigin: request
+        - selector: by-registration-number
+          valueOrigin: request
         rowBoundaries: unrestricted
-- id: evidence-source
-  principalClaim: registry_principal
-  requiredScopes:
-  - registry:evidence:lookup
-  requiredPurposes:
-  - evidence-source-read
-  permissions:
-    records:
-    - recordType: record
-      operations:
-      - lookup
-      readableFields:
-      - code
-      - registration-number
-      - status
-      lookups:
-      - selector: by-code
-        valueOrigin: request
-      - selector: by-registration-number
-        valueOrigin: request
-      rowBoundaries: unrestricted
-- id: applier
-  actorKind: human
-  principalClaim: registry_principal
-  requiredScopes:
-  - registry:apply
-  requiredPurposes:
-  - registry-operations
-  permissions:
-    proposals:
-    - action: correct-status
-      operations:
-      - get
-      - apply
-      readableInputs:
-      - record
-      - status
-      targets:
+  applier:
+    actorKind: human
+    principalClaim: registry_principal
+    requiredScopes:
+    - registry:apply
+    requiredPurposes:
+    - registry-operations
+    permissions:
+      proposals:
+      - action: correct-status
+        operations:
+        - get
+        - apply
+        readableInputs:
+        - record
+        - status
+        targets:
+        - recordType: record
+          rowBoundaries: unrestricted
+    requesterClients:
+    - applier
+  reviewer:
+    actorKind: human
+    principalClaim: registry_principal
+    requiredScopes:
+    - registry:review
+    requiredPurposes:
+    - registry-operations
+    permissions:
+      records:
       - recordType: record
+        operations:
+        - get
+        readableFields:
+        - status
         rowBoundaries: unrestricted
-  requesterClients:
-  - applier
-- id: reviewer
-  actorKind: human
-  principalClaim: registry_principal
-  requiredScopes:
-  - registry:review
-  requiredPurposes:
-  - registry-operations
-  permissions:
-    records:
-    - recordType: record
-      operations:
-      - get
-      readableFields:
-      - status
-      rowBoundaries: unrestricted
-    proposals:
-    - action: correct-status
-      operations:
-      - get-review-context
-      readableContextFields:
-      - subjectId
-      - currentStatus
-      - proposedStatus
-      targets:
-      - recordType: record
-        rowBoundaries: unrestricted
-  requesterClients:
-  - staff
-- id: review-status
-  actorKind: service
-  principalClaim: registry_principal
-  requiredScopes:
-  - registry:review-status
-  requiredPurposes:
-  - registry-operations
-  permissions:
-    proposals:
-    - action: correct-status
-      operations:
-      - get-review-status
-      reviewAuthority: casework
-  requesterClients:
-  - context-status
+      proposals:
+      - action: correct-status
+        operations:
+        - get-review-context
+        readableContextFields:
+        - subjectId
+        - currentStatus
+        - proposedStatus
+        targets:
+        - recordType: record
+          rowBoundaries: unrestricted
+    requesterClients:
+    - staff
+  review-status:
+    actorKind: service
+    principalClaim: registry_principal
+    requiredScopes:
+    - registry:review-status
+    requiredPurposes:
+    - registry-operations
+    permissions:
+      proposals:
+      - action: correct-status
+        operations:
+        - get-review-status
+        reviewAuthority: casework
+    requesterClients:
+    - context-status
 vocabularies:
 - id: record-status
   values:

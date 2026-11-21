@@ -30,8 +30,9 @@ impl ReviewFixture {
             .push(json!({
                 "id":"label", "type":"string", "maximumLength":32, "classification":"internal"
             }));
-        module["recordTypes"][0]["accessProfiles"][0]["readableFields"] = json!(["code", "label"]);
-        module["recordTypes"][0]["accessProfiles"][0]["filterableFields"] = json!(["label"]);
+        module["recordTypes"][0]["accessProfiles"]["reader"]["readableFields"] =
+            json!(["code", "label"]);
+        module["recordTypes"][0]["accessProfiles"]["reader"]["filterableFields"] = json!(["label"]);
         let module_bytes = canonicalize_json(&module).unwrap();
         let module = parse_module_json(&module_bytes).unwrap();
         let project_bytes = package_project_bytes(&module_digest(&module));

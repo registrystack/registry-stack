@@ -17985,7 +17985,7 @@ recordTypes:
         maximumLength: 64
         classification: internal
 accessProfiles:
-  - id: operator
+  operator:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     requiredPurposes: [operations]

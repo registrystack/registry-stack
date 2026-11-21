@@ -430,8 +430,7 @@ impl Breg {
                     }
                 }
             ],
-            "accessProfiles": [{
-                "id": "writer",
+            "accessProfiles": {"writer": {
                 "default": true,
                 "principalClaim": "sub",
                 "requiredScopes": ["applications:read"],
@@ -469,7 +468,7 @@ impl Breg {
                         {"action": "register-household", "operations": ["get", "submit"], "ownership": "caller", "targets": [{"recordType": "household", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]}
                     ]
                 }
-            }]
+            }}
         });
         if let Some(qfield) = field_site_registry {
             for record_type in registry["recordTypes"]
@@ -485,7 +484,17 @@ impl Breg {
                 owner["minimumLength"] = json!(1);
                 owner["maximumLength"] = json!(128);
             }
-            for section in ["datasets", "recordTypes", "actions", "accessProfiles"] {
+            registry["accessProfiles"]
+                .as_object_mut()
+                .expect("the native access profiles are a map")
+                .extend(
+                    qfield["accessProfiles"]
+                        .as_object()
+                        .expect("the QField access profiles are a map")
+                        .iter()
+                        .map(|(id, profile)| (id.clone(), profile.clone())),
+                );
+            for section in ["datasets", "recordTypes", "actions"] {
                 registry[section]
                     .as_array_mut()
                     .expect("the native registry section is an array")

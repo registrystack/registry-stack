@@ -358,13 +358,13 @@ fn action_requirements_reject_unknown_fields_values_and_unbound_inputs() {
 #[test]
 fn action_requirements_keep_mandatory_scope_and_processing_boundaries() {
     let mut source = support::project();
-    source["accessProfiles"][0]["requiredScopes"] = json!(["registry:register"]);
+    source["accessProfiles"]["registrar"]["requiredScopes"] = json!(["registry:register"]);
     assert!(
         compile(source).is_err(),
         "link grants do not waive target processing requirements"
     );
     let mut source = support::project();
-    source["accessProfiles"][0]["permissions"]["actions"][0]["targets"] =
+    source["accessProfiles"]["registrar"]["permissions"]["actions"][0]["targets"] =
         json!([{"recordType": "child", "rowBoundaries": "unrestricted"}]);
     assert!(
         compile(source).is_err(),

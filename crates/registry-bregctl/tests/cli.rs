@@ -58,7 +58,7 @@ fn duplicate_profile_display_warns_once_and_deny_warnings_refuses_it() {
         .unwrap()
         .unwrap()
         .to_json_value();
-    source["accessProfiles"][0]["display"] = json!({"label":"Café"});
+    source["accessProfiles"]["directory-editor"]["display"] = json!({"label":"Café"});
     source["recordTypes"][0]["display"]["label"] = json!("Café");
     let baseline =
         TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
@@ -71,14 +71,10 @@ fn duplicate_profile_display_warns_once_and_deny_warnings_refuses_it() {
     ]);
     assert!(accepted.status.success(), "{accepted:?}");
 
-    let mut second = source["accessProfiles"][0].clone();
-    second["id"] = json!("directory-observer");
+    let mut second = source["accessProfiles"]["directory-editor"].clone();
     second["default"] = json!(false);
     second["display"]["label"] = json!("CA\u{200b}FE\u{301}");
-    source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(second);
+    source["accessProfiles"]["directory-observer"] = second;
     let project =
         TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
     let output = bregctl(&["--format", "json", "check", path(project.path())]);
@@ -90,10 +86,13 @@ fn duplicate_profile_display_warns_once_and_deny_warnings_refuses_it() {
     assert_eq!(warning["code"], "breg.access-profile.duplicate-label");
     assert_eq!(warning["severity"], "warning");
     assert_eq!(warning["rank"], "hygiene");
-    assert_eq!(warning["path"], "/accessProfiles/1/display/label");
+    assert_eq!(
+        warning["path"],
+        "/accessProfiles/directory-observer/display/label"
+    );
     assert_eq!(
         warning["related"][0]["path"],
-        "/accessProfiles/0/display/label"
+        "/accessProfiles/directory-editor/display/label"
     );
     let message = warning["message"].as_str().unwrap();
     assert!(message.contains("directory-editor"));
@@ -117,7 +116,7 @@ acceptances:
   - code: breg.access-profile.duplicate-label
     scope:
       file: registry.yaml
-      path: /accessProfiles/@id=directory-observer/display/label
+      path: /accessProfiles/directory-observer/display/label
     reason: These profiles intentionally share a label in this reviewed project.
 "#,
     )
@@ -138,7 +137,7 @@ acceptances:
         accepted_warning["scope"],
         json!({
             "file": "registry.yaml",
-            "path": "/accessProfiles/@id=directory-observer/display/label"
+            "path": "/accessProfiles/directory-observer/display/label"
         })
     );
     assert_eq!(
@@ -172,7 +171,7 @@ acceptances:
         explained_warning["scope"],
         json!({
             "file": "registry.yaml",
-            "path": "/accessProfiles/@id=directory-observer/display/label"
+            "path": "/accessProfiles/directory-observer/display/label"
         })
     );
 
@@ -192,16 +191,15 @@ fn cross_file_label_warnings_locate_the_second_extension_block() {
         .unwrap()
         .to_json_value();
     source["modules"] = json!([{"id":"extension","version":"0.1.0"}]);
-    source["accessProfiles"][0]["display"]["label"] = json!("Reader");
+    source["accessProfiles"]["directory-editor"]["display"]["label"] = json!("Reader");
     source["recordTypes"][0]["hooks"][0]["display"]["label"] = json!("Notice");
     let extension = |id: &str, profile_label: &str, hook_label: &str| {
         json!({
             "recordType":"entry",
-            "accessProfiles":[{
-                "id":format!("{id}-reader"),"display":{"label":profile_label},
+            "accessProfiles":{(format!("{id}-reader")): {"display":{"label":profile_label},
                 "principalClaim":"registry_principal","requiredScopes":["directory:read"],
                 "operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"
-            }],
+            }},
             "hooks":[{
                 "id":format!("{id}-notice"),"display":{"label":hook_label},
                 "phase":"after","trigger":"created","projection":["code"],
@@ -228,7 +226,7 @@ fn cross_file_label_warnings_locate_the_second_extension_block() {
     for (code, pointer) in [
         (
             "breg.access-profile.duplicate-label",
-            "/extendRecordTypes/1/accessProfiles/0/display/label",
+            "/extendRecordTypes/1/accessProfiles/second-reader/display/label",
         ),
         (
             "breg.hook.duplicate-label",
@@ -486,11 +484,11 @@ fn check_places_nested_compiler_diagnostics_at_the_exact_authored_members() {
         ),
         (
             "breg.access-profile.read-path-processing-wider-than-read",
-            "/accessProfiles/1/permissions/records/1/readPaths/0/filterableFields/0",
+            "/accessProfiles/facility-reader/permissions/records/1/readPaths/0/filterableFields/0",
         ),
         (
             "breg.access-profile.processing-wider-than-read",
-            "/accessProfiles/1/permissions/records/2/filterableFields/1",
+            "/accessProfiles/facility-reader/permissions/records/2/filterableFields/1",
         ),
     ] {
         let diagnostic = diagnostics
@@ -554,11 +552,11 @@ fn check_places_temporal_and_duplicate_api_name_errors_at_the_owning_record_and_
         .to_json_value();
     let mut temporal = baseline.clone();
     temporal["actions"] = json!([]);
-    temporal["accessProfiles"][0]["permissions"]
+    temporal["accessProfiles"]["directory-editor"]["permissions"]
         .as_object_mut()
         .unwrap()
         .remove("actions");
-    temporal["accessProfiles"][0]["permissions"]
+    temporal["accessProfiles"]["directory-editor"]["permissions"]
         .as_object_mut()
         .unwrap()
         .remove("proposals");
@@ -572,7 +570,7 @@ fn check_places_temporal_and_duplicate_api_name_errors_at_the_owning_record_and_
             json!({"id":"end-date","type":"date","required":false,"classification":"internal"}),
         ]);
     for member in ["readableFields", "writableFields"] {
-        temporal["accessProfiles"][0]["permissions"]["records"][0][member]
+        temporal["accessProfiles"]["directory-editor"]["permissions"]["records"][0][member]
             .as_array_mut()
             .unwrap()
             .extend([json!("start-date"), json!("end-date")]);
@@ -580,7 +578,8 @@ fn check_places_temporal_and_duplicate_api_name_errors_at_the_owning_record_and_
     let mut optional_start = temporal.clone();
     optional_start["recordTypes"][0]["fields"][3]["required"] = json!(false);
     let mut hidden_start = temporal;
-    hidden_start["accessProfiles"][0]["permissions"]["records"][0]["readableFields"]
+    hidden_start["accessProfiles"]["directory-editor"]["permissions"]["records"][0]
+        ["readableFields"]
         .as_array_mut()
         .unwrap()
         .retain(|field| field != "start-date");
@@ -604,7 +603,7 @@ fn check_places_temporal_and_duplicate_api_name_errors_at_the_owning_record_and_
         (
             hidden_start,
             "breg.query.temporal-field-not-readable",
-            "/accessProfiles/0/permissions/records/0/readableFields",
+            "/accessProfiles/directory-editor/permissions/records/0/readableFields",
             "readableFields",
         ),
         (
@@ -955,7 +954,7 @@ fn explain_access_states_consent_gates_recipients_and_the_ungated_client() {
     let aligned = human.split_whitespace().collect::<Vec<_>>().join(" ");
     for expected in [
         "warning[breg.access.consent-ungated-client]",
-        "/accessProfiles/2/permissions/records/0",
+        "/accessProfiles/steward/permissions/records/0",
         "consent required (all) [{\"on\":\"id\",\"record\":\"consent-decision\"}]",
         "Consent:",
         "permission food-targeting over person",
@@ -1365,7 +1364,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         "fixtures/retained-native/access-review/registry.yaml"
     ))
     .unwrap();
-    source["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"] =
+    source["accessProfiles"]["district-reader"]["permissions"]["records"][0]["rowBoundaries"] =
         serde_json::json!("unrestricted");
     fs::write(
         project.path().join("registry.yaml"),
@@ -1453,7 +1452,7 @@ actions:
           operation: patch
           set: {activates-at: {fromInput: at}, note: {fromInput: note}}
 accessProfiles:
-  - id: clerk
+  clerk:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
@@ -1748,7 +1747,7 @@ actions:
           set:
             contact-person: {fromEffect: person}
 accessProfiles:
-  - id: contact-registrar
+  contact-registrar:
     default: true
     principalClaim: private_claim_name
     requiredScopes: [registry:contact:register]
@@ -1762,7 +1761,7 @@ accessProfiles:
             - {recordType: person, rowBoundaries: unrestricted}
             - {recordType: group-membership, rowBoundaries: unrestricted}
           results: [person, membership, household]
-  - id: contact-auditor
+  contact-auditor:
     principalClaim: other_private_claim
     requiredScopes: [registry:contact:audit]
     requiredPurposes: [contact-audit]
@@ -1814,7 +1813,7 @@ actions:
           set:
             household-code: {fromInput: household-code}
 accessProfiles:
-  - id: household-reader
+  household-reader:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
@@ -1826,7 +1825,7 @@ accessProfiles:
           operations: [get, list]
           readableFields: [household-code]
           writableFields: []
-  - id: household-archiver
+  household-archiver:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     requiredPurposes: [household-archive]
@@ -2435,12 +2434,7 @@ fn facility_starter_checks_clean_with_warnings_denied() {
         .unwrap()
         .unwrap()
         .to_json_value();
-    let reader = registry["accessProfiles"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|profile| profile["id"] == "facility-reader")
-        .unwrap();
+    let reader = &registry["accessProfiles"]["facility-reader"];
     let records = reader["permissions"]["records"].as_array().unwrap();
     let facility = records
         .iter()
@@ -2471,12 +2465,7 @@ fn facility_starter_checks_clean_with_warnings_denied() {
         .unwrap()
         .is_empty());
 
-    let registrar = registry["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == "facility-registrar")
-        .unwrap();
+    let registrar = &mut registry["accessProfiles"]["facility-registrar"];
     let facility_target = registrar["permissions"]["actions"]
         .as_array_mut()
         .unwrap()
@@ -2960,8 +2949,8 @@ fn deny_warnings_refuses_on_the_warnings_that_refused_it() {
     // The default equality boundary itself has no warning.
     let registry = destination.join("registry.yaml");
     let mut source: Value = serde_norway::from_slice(&fs::read(&registry).unwrap()).unwrap();
-    source["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"][0]["operator"] =
-        json!("in");
+    source["accessProfiles"]["directory-editor"]["permissions"]["records"][0]["rowBoundaries"][0]
+        ["operator"] = json!("in");
     fs::write(&registry, serde_json::to_vec_pretty(&source).unwrap()).unwrap();
 
     let passed = bregctl(&["check", path(&destination)]);
@@ -3319,10 +3308,10 @@ fn minimal_project_limited_to_portal(scratch: &TestProject, include_record_permi
         .unwrap()
         .unwrap()
         .to_json_value();
-    registry["accessProfiles"][0]["actorKind"] = json!("service");
-    registry["accessProfiles"][0]["requesterClients"] = json!(["portal"]);
+    registry["accessProfiles"]["directory-editor"]["actorKind"] = json!("service");
+    registry["accessProfiles"]["directory-editor"]["requesterClients"] = json!(["portal"]);
     if !include_record_permissions {
-        registry["accessProfiles"][0]["permissions"]
+        registry["accessProfiles"]["directory-editor"]["permissions"]
             .as_object_mut()
             .unwrap()
             .remove("records");
@@ -3987,7 +3976,7 @@ recordTypes:
         maximumLength: 64
         classification: internal
 accessProfiles:
-  - id: reader
+  reader:
     principalClaim: "registry_principal\n  error  forged.code  forged"
     requiredScopes: unrestricted
     permissions:
@@ -5663,11 +5652,14 @@ fn explain_access_human_reports_profile_gates_permissions_and_target_row_reach()
         .unwrap()
         .unwrap()
         .to_json_value();
-    source["accessProfiles"][0]["actorKind"] = json!("agent");
-    source["accessProfiles"][0]["requesterClients"] = json!(["task-worker"]);
-    source["accessProfiles"][0]["taskGrant"] = json!({"sourceIssuer":"https://casework.example"});
-    source["accessProfiles"][0]["permissions"]["records"][0]["operations"] = json!(["get", "list"]);
-    source["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] = json!([]);
+    source["accessProfiles"]["directory-editor"]["actorKind"] = json!("agent");
+    source["accessProfiles"]["directory-editor"]["requesterClients"] = json!(["task-worker"]);
+    source["accessProfiles"]["directory-editor"]["taskGrant"] =
+        json!({"sourceIssuer":"https://casework.example"});
+    source["accessProfiles"]["directory-editor"]["permissions"]["records"][0]["operations"] =
+        json!(["get", "list"]);
+    source["accessProfiles"]["directory-editor"]["permissions"]["records"][0]["writableFields"] =
+        json!([]);
     let project =
         TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
 
@@ -5778,7 +5770,8 @@ fn explain_access_human_distinguishes_proposal_ownership_and_writable_inputs() {
     );
 
     let mut narrowed = source;
-    let permission = &mut narrowed["accessProfiles"][0]["permissions"]["proposals"][0];
+    let permission =
+        &mut narrowed["accessProfiles"]["directory-editor"]["permissions"]["proposals"][0];
     permission.as_object_mut().unwrap().remove("ownership");
     permission["writableInputs"] = json!(["email"]);
     let narrowed =
@@ -5830,8 +5823,8 @@ fn proposal_ownership_does_not_suppress_an_unrestricted_target_warning() {
         .unwrap()
         .unwrap()
         .to_json_value();
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["targets"][0]["rowBoundaries"] =
-        json!("unrestricted");
+    source["accessProfiles"]["directory-editor"]["permissions"]["proposals"][0]["targets"][0]
+        ["rowBoundaries"] = json!("unrestricted");
     let project =
         TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
 
@@ -5847,7 +5840,7 @@ fn proposal_ownership_does_not_suppress_an_unrestricted_target_warning() {
         .unwrap_or_else(|| panic!("missing unrestricted target diagnostic in {report:#}"));
     assert_eq!(
         finding["path"],
-        "/accessProfiles/0/permissions/proposals/0/targets/0/rowBoundaries"
+        "/accessProfiles/directory-editor/permissions/proposals/0/targets/0/rowBoundaries"
     );
     assert!(
         finding["message"]
@@ -6093,7 +6086,7 @@ actions:
           operation: create
           fields: [person-code, legal-name]
 accessProfiles:
-  - id: registrar
+  registrar:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
@@ -6212,7 +6205,7 @@ recordTypes:
         type: timestamp
         classification: internal
 accessProfiles:
-  - id: reader
+  reader:
     principalClaim: principal
     requiredScopes: unrestricted
     permissions:
@@ -6285,7 +6278,7 @@ recordTypes:
     fields:
       - {id: location, apiName: position, type: crs84-point, precision: 9, classification: internal}
 accessProfiles:
-  - id: map-reader
+  map-reader:
     default: true
     principalClaim: principal
     requiredScopes: unrestricted
@@ -6297,7 +6290,7 @@ accessProfiles:
           readableFields: [location]
           spatialQueries:
             bbox: {maximumLongitudeSpanDegrees: 0.5, maximumLatitudeSpanDegrees: 0.25}
-  - id: geometry-reader
+  geometry-reader:
     principalClaim: principal
     requiredScopes: unrestricted
     permissions:
@@ -6420,9 +6413,9 @@ recordTypes:
             maximumLength: 16
             classification: internal
     accessProfiles:
-      - requiredScopes: unrestricted
+      reader:
+        requiredScopes: unrestricted
         rowBoundaries: unrestricted
-        id: reader
         principalClaim: principal
         operations: [list]
         readableFields: [code, summary]
@@ -10107,9 +10100,9 @@ recordTypes:
         maximumLength: 16
         classification: internal
     accessProfiles:
-      - requiredScopes: unrestricted
+      reader:
+        requiredScopes: unrestricted
         rowBoundaries: unrestricted
-        id: reader
         principalClaim: principal
         operations: [get, list]
         readableFields: [code]
@@ -10132,9 +10125,9 @@ recordTypes:
         maximumLength: 16
         classification: internal
     accessProfiles:
-      - requiredScopes: unrestricted
+      reader:
+        requiredScopes: unrestricted
         rowBoundaries: unrestricted
-        id: reader
         principalClaim: principal
         operations: [get, list]
         readableFields: [code]
@@ -10142,17 +10135,17 @@ recordTypes:
 }
 
 fn package_module_bytes() -> Vec<u8> {
-    br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":16,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
+    br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":16,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}]}"#
         .to_vec()
 }
 
 fn encrypted_package_module_bytes() -> Vec<u8> {
-    br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":16,"classification":"restricted","encrypted":true}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
+    br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":16,"classification":"restricted","encrypted":true}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}]}"#
         .to_vec()
 }
 
 fn data_package_fixture() -> (TestProject, PathBuf) {
-    let module_bytes = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"record","primaryDataset":"data-registry","route":"records","mutationMode":"create-only","batch":{"maximumItems":2,"maximumBytes":400},"fields":[{"id":"code","type":"string","minimumLength":2,"maximumLength":16,"required":true,"classification":"internal"}],"accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","batch","list"],"readableFields":["code"],"writableFields":["code"],"allowDataExport":true, "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#.to_vec();
+    let module_bytes = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"record","primaryDataset":"data-registry","route":"records","mutationMode":"create-only","batch":{"maximumItems":2,"maximumBytes":400},"fields":[{"id":"code","type":"string","minimumLength":2,"maximumLength":16,"required":true,"classification":"internal"}],"accessProfiles":{"operator": {"principalClaim":"principal","operations":["create","batch","list"],"readableFields":["code"],"writableFields":["code"],"allowDataExport":true, "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}]}"#.to_vec();
     let module = parse_module_json(&module_bytes).expect("data module parses");
     let module_digest = module_digest(&module);
     let project = TestProject::from_registry_source(

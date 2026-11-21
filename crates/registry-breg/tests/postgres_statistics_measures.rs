@@ -386,7 +386,7 @@ fn a_profile_that_cannot_read_the_measure_field_is_refused_at_compile_time() {
         &["category"],
         json!([{"id":"amount-sum","type":"sum","field":"amount"}]),
     );
-    source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"] =
+    source["accessProfiles"]["analyst"]["permissions"]["records"][0]["readableFields"] =
         json!(["subject", "active", "category", "event-date", "quantity"]);
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("parses");
     let failure = compile_project(&project, &[], CompileProfile::Authoring)
@@ -423,7 +423,7 @@ fn public_register_source(measures: Value) -> Value {
             "datasets":[{"dataset":"records-by-category","operations":["read-releases"]}]
         }
     });
-    source["accessProfiles"][0]["permissions"]["datasets"][0]["operations"] =
+    source["accessProfiles"]["analyst"]["permissions"]["datasets"][0]["operations"] =
         json!(["read-live", "read-releases"]);
     source["accessProfiles"]
         .as_array_mut()
@@ -643,19 +643,19 @@ fn registry_source(dimensions: &[&str], measures: Value) -> Value {
                 {"id":"quantity","type":"int64","classification":"internal"}
             ]
         }],
-        "accessProfiles":[
-            {"id":"analyst","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+        "accessProfiles":{
+            "analyst": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","amount","quantity"],
                 "filterableFields":["subject","active","category","event-date"],"allowCount":true,
                 "rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":"records-by-category","operations":["read-live"]}]}},
-            {"id":"seed","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+            "seed": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["create"],
                 "writableFields":["subject","active","category","event-date","amount","quantity"],
                 "rowBoundaries":"unrestricted"
             }]}}
-        ],
+        },
         "vocabularies":[{"id":"category","values":["a","b","c"]}],
         "statisticalDatasets":[{
             "id":"records-by-category","unit":"record","population":"active eq true",
@@ -882,9 +882,11 @@ fn parcel_source(dimensions: &[&str], measures: Value) -> Value {
         "quantity",
         "owner"
     ]);
-    source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"] = readable.clone();
-    source["accessProfiles"].as_array_mut().unwrap().push(
-        json!({"id":"statistician","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+    source["accessProfiles"]["analyst"]["permissions"]["records"][0]["readableFields"] =
+        readable.clone();
+    source["accessProfiles"].as_object_mut().unwrap().insert(
+        "statistician".to_owned(),
+        json!({"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
             "datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]}}),
     );
     source["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"analyst"});
@@ -896,8 +898,8 @@ fn parcel_source(dimensions: &[&str], measures: Value) -> Value {
 fn released_parcel_source(dimensions: &[&str], measures: Value) -> Value {
     let mut source = parcel_source(dimensions, measures);
     let readable =
-        source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"].clone();
-    source["accessProfiles"][0]["permissions"]["datasets"][0]["operations"] =
+        source["accessProfiles"]["analyst"]["permissions"]["records"][0]["readableFields"].clone();
+    source["accessProfiles"]["analyst"]["permissions"]["datasets"][0]["operations"] =
         json!(["read-live", "read-releases"]);
     source["accessProfiles"].as_array_mut().unwrap().extend([
         json!({"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
@@ -1578,8 +1580,9 @@ async fn a_percentile_matches_the_definition_for_every_cell_size_and_fraction() 
 /// A public register with a statistician who reads exact values.
 fn exact_register_source(measures: Value) -> Value {
     let mut source = public_register_source(measures);
-    source["accessProfiles"].as_array_mut().unwrap().push(
-        json!({"id":"statistician","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+    source["accessProfiles"].as_object_mut().unwrap().insert(
+        "statistician".to_owned(),
+        json!({"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
             "datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]}}),
     );
     source["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"analyst"});

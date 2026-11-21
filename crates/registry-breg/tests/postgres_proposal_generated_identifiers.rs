@@ -115,8 +115,7 @@ fn registry() -> registry_breg::CompiledRegistry {
                 }]}
             }
         ],
-        "accessProfiles":[{
-            "id":"clerk","default":true,"principalClaim":"sub",
+        "accessProfiles":{"clerk": {"default":true,"principalClaim":"sub",
             "requiredScopes":["proposal:manage"],
             "requiredPurposes":["registry-administration"],
             "permissions":{
@@ -149,7 +148,7 @@ fn registry() -> registry_breg::CompiledRegistry {
                         }]}]}
                 ]
             }
-        }]
+        }}
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project(&project, &[], CompileProfile::Authoring)

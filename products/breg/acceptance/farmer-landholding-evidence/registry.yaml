@@ -262,9 +262,8 @@
       }
     }
   ],
-  "accessProfiles": [
-    {
-      "id": "landholding-registrar",
+  "accessProfiles": {
+    "landholding-registrar": {
       "default": true,
       "principalClaim": "registry_principal",
       "requiredScopes": [
@@ -308,8 +307,7 @@
         ]
       }
     },
-    {
-      "id": "landholding-reader",
+    "landholding-reader": {
       "default": true,
       "principalClaim": "registry_principal",
       "requiredScopes": [
@@ -345,7 +343,7 @@
         ]
       }
     }
-  ],
+  },
   "evidenceProviders": [
     {
       "id": "farmer-registry",

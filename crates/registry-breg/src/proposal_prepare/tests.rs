@@ -33,10 +33,10 @@ fn source(effects: Value) -> Value {
             {"id":"two","type":"reference","target":"target","classification":"internal"},
             {"id":"value","type":"string","maximumLength":64,"required":true,"classification":"internal"}
         ],"plan":{"type":"fixed","effects":effects}}],
-        "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{
+        "accessProfiles":{"submitter": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{
             "actions":[{"action":"change-target","operations":["start"],"targets":[{"recordType":"target","rowBoundaries":"unrestricted"}]}],
             "proposals":[{"action":"change-target","operations":["get","submit","apply"],"ownership":"caller","targets":[{"recordType":"target","rowBoundaries":"unrestricted"}]}]
-        }}]
+        }}}
     })
 }
 fn compile(source: Value, script: Option<&str>) -> CompiledRegistry {

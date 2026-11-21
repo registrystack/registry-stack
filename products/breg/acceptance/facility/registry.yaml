@@ -61,7 +61,7 @@
     {
       "id": "facility-core",
       "version": "0.1.0",
-      "digest": "sha256:cc7f02bd91270ae5f2b2b260c2910221c26eda0ac324738e13b2631a40a9a3f2"
+      "digest": "sha256:43595c7c4b6e039cd256ab87d89b099bf444ada6df59c5ec8a4de802c5503b86"
     }
   ],
   "recordTypes": [
@@ -418,9 +418,8 @@
       ]
     }
   ],
-  "accessProfiles": [
-    {
-      "id": "facility-operator",
+  "accessProfiles": {
+    "facility-operator": {
       "principalClaim": "registry_principal",
       "requiredScopes": "unrestricted",
       "requiredPurposes": [
@@ -616,8 +615,7 @@
         ]
       }
     },
-    {
-      "id": "statistics-publisher",
+    "statistics-publisher": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "registry:facility:statistics:publish"
@@ -693,8 +691,7 @@
         ]
       }
     },
-    {
-      "id": "statistics-reader",
+    "statistics-reader": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "registry:facility:statistics:read"
@@ -722,7 +719,7 @@
         ]
       }
     }
-  ],
+  },
   "statisticalDatasets": [
     {
       "id": "monthly-discharge-reports",

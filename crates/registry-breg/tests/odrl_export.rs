@@ -43,7 +43,7 @@ fn minimal_source() -> Value {
 
 fn supported_source() -> Value {
     let mut source = minimal_source();
-    let profile = &mut source["accessProfiles"][0];
+    let profile = &mut source["accessProfiles"]["directory-editor"];
     profile["actorKind"] = json!("human");
     profile["requesterClients"] = json!(["registry-console", "registry-review"]);
     profile["requiredScopes"] = json!(["registry:directory:read", "registry:records:read"]);
@@ -54,7 +54,7 @@ fn supported_source() -> Value {
 
 fn actor_profiles_source() -> Value {
     let mut source = supported_source();
-    let mut base = source["accessProfiles"][0].clone();
+    let mut base = source["accessProfiles"]["directory-editor"].clone();
     let mut read_grant = base["permissions"]["records"][0].clone();
     read_grant["operations"] = json!(["get", "list"]);
     read_grant.as_object_mut().unwrap().remove("writableFields");
@@ -68,7 +68,6 @@ fn actor_profiles_source() -> Value {
     .into_iter()
     .map(|(id, actor_kind)| {
         let mut profile = base.clone();
-        profile["id"] = json!(id);
         profile["default"] = json!(id == "unspecified-reader");
         if let Some(actor_kind) = actor_kind {
             profile["actorKind"] = json!(actor_kind);
@@ -76,10 +75,10 @@ fn actor_profiles_source() -> Value {
             profile.as_object_mut().unwrap().remove("actorKind");
             profile.as_object_mut().unwrap().remove("requesterClients");
         }
-        profile
+        (id.to_owned(), profile)
     })
     .collect();
-    source["accessProfiles"] = Value::Array(profiles);
+    source["accessProfiles"] = Value::Object(profiles);
     source.as_object_mut().unwrap().remove("actions");
     source
 }
@@ -379,10 +378,9 @@ fn row_membership_and_consent_restrictions_omit_the_complete_read_grant() {
 #[test]
 fn task_grant_mutant_is_not_broadened_and_profile_selection_is_exact() {
     let mut source = supported_source();
-    let mut other = source["accessProfiles"][0].clone();
-    other["id"] = json!("other-reader");
+    let mut other = source["accessProfiles"]["directory-editor"].clone();
     other["default"] = json!(false);
-    source["accessProfiles"].as_array_mut().unwrap().push(other);
+    source["accessProfiles"]["other-reader"] = other;
     let registry = compile_source(&source);
 
     let all = export_odrl(&registry, None).unwrap();
@@ -437,12 +435,17 @@ fn task_grant_mutant_is_not_broadened_and_profile_selection_is_exact() {
 #[test]
 fn exact_selection_of_known_action_only_profile_is_empty_and_valid() {
     let mut source = minimal_source();
-    source["accessProfiles"][0]["id"] = json!("action-only");
-    source["accessProfiles"][0]["permissions"]
+    let renamed = source["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .remove("directory-editor")
+        .unwrap();
+    source["accessProfiles"]["action-only"] = renamed;
+    source["accessProfiles"]["action-only"]["permissions"]
         .as_object_mut()
         .unwrap()
         .remove("records");
-    source["accessProfiles"][0]["permissions"]
+    source["accessProfiles"]["action-only"]["permissions"]
         .as_object_mut()
         .unwrap()
         .remove("proposals");
@@ -496,11 +499,13 @@ fn exact_selection_accepts_profiles_from_modules_and_extensions() {
         .unwrap(),
     )
     .unwrap();
-    let profile = |id| {
+    let profile = |id: &str| {
         json!({
-            "id":id, "principalClaim":"sub", "operations":["get"],
-            "readableFields":["code"], "requiredScopes":"unrestricted",
-            "rowBoundaries":"unrestricted"
+            id: {
+                "principalClaim":"sub", "operations":["get"],
+                "readableFields":["code"], "requiredScopes":"unrestricted",
+                "rowBoundaries":"unrestricted"
+            }
         })
     };
     let module = parse_module_json(
@@ -512,10 +517,10 @@ fn exact_selection_accepts_profiles_from_modules_and_extensions() {
                 "mutationMode":"mutable",
                 "fields":[{"id":"code", "type":"string", "maximumLength":32,
                            "classification":"internal"}],
-                "accessProfiles":[profile("module-reader")]
+                "accessProfiles":profile("module-reader")
             }],
             "extendRecordTypes":[{
-                "recordType":"case-file", "accessProfiles":[profile("extension-reader")]
+                "recordType":"case-file", "accessProfiles":profile("extension-reader")
             }]
         }))
         .unwrap(),

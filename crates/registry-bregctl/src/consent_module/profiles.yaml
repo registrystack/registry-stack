@@ -1,4 +1,4 @@
-- id: __SUBJECT__-consent-self
+__SUBJECT__-consent-self:
   principalClaim: __CLAIM__
   requiredScopes: ['consent:__SUBJECT__:self']
   permissions:
@@ -47,7 +47,7 @@
       - {recordType: __SUBJECT__-notice-clause, rowBoundaries: unrestricted}
       - {recordType: __SUBJECT__-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
-- id: __SUBJECT__-consent-assisted-capture
+__SUBJECT__-consent-assisted-capture:
   principalClaim: __CLAIM__
   requiredScopes: ['consent:__SUBJECT__:capture']
   permissions:
@@ -64,7 +64,7 @@
       - {recordType: __SUBJECT__-notice-clause, rowBoundaries: unrestricted}
       - {recordType: __SUBJECT__-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
-- id: __SUBJECT__-consent-steward
+__SUBJECT__-consent-steward:
   principalClaim: __CLAIM__
   requiredScopes: ['consent:__SUBJECT__:steward']
   permissions:
@@ -96,7 +96,7 @@
       - {recordType: __SUBJECT__, rowBoundaries: unrestricted}
       - {recordType: __SUBJECT__-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
-- id: __SUBJECT__-consent-link-steward
+__SUBJECT__-consent-link-steward:
   principalClaim: __CLAIM__
   requiredScopes: ['consent:__SUBJECT__:link']
   permissions:
@@ -106,7 +106,7 @@
       operations: [create, get, list, patch]
       readableFields: [subject, principal, active]
       writableFields: [subject, principal, active]
-- id: __SUBJECT__-consent-recipient
+__SUBJECT__-consent-recipient:
   principalClaim: __CLAIM__
   requiredScopes: ['consent:__SUBJECT__:read']
   permissions:

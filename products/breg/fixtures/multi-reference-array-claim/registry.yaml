@@ -75,7 +75,7 @@ actions:
             destination-authority: {fromInput: destination-authority}
             transfer-reference: {fromInput: transfer-reference}
 accessProfiles:
-  - id: reference-loader
+  reference-loader:
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry:authority:load]
@@ -91,7 +91,7 @@ accessProfiles:
           operations: [get, list]
           readableFields: [source-authority, destination-authority, transfer-reference]
           rowBoundaries: unrestricted
-  - id: transfer-clerk
+  transfer-clerk:
     principalClaim: registry_principal
     requiredScopes: [registry:permit:transfer]
     requiredPurposes: [permit-administration]

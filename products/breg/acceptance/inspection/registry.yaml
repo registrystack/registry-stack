@@ -60,7 +60,7 @@
     {
       "id": "inspection-core",
       "version": "0.1.0",
-      "digest": "sha256:70614bcc8c0667f0bd326a7166c3448337e77e9fa71e304859a37599efc951f4"
+      "digest": "sha256:2f05d0f766691cdf234f1e3a8b071575b7195f7851dd063619f1213127d4bca1"
     }
   ],
   "recordTypes": [
@@ -314,9 +314,8 @@
       ]
     }
   ],
-  "accessProfiles": [
-    {
-      "id": "inspection-inspector",
+  "accessProfiles": {
+    "inspection-inspector": {
       "principalClaim": "registry_principal",
       "requiredScopes": "unrestricted",
       "requiredPurposes": [
@@ -444,7 +443,7 @@
         ]
       }
     }
-  ],
+  },
   "vocabularies": [
     {
       "id": "inspection-domain",

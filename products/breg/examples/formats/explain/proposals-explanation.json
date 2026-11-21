@@ -48,6 +48,66 @@
           },
           "permissions": [
             {
+              "actorKind": "service",
+              "default": false,
+              "operations": [
+                "get-review-status"
+              ],
+              "ownership": null,
+              "principalClaim": "registry_principal",
+              "profileId": "casework-review-status",
+              "readableAttachments": [],
+              "readableContextFields": [],
+              "readableInputs": [],
+              "requesterClients": [
+                "casework-service"
+              ],
+              "requiredPurposes": [
+                "facility-review"
+              ],
+              "requiredScopes": [
+                "registry:proposal:review-status"
+              ],
+              "reviewAuthority": "casework",
+              "targets": [],
+              "writableAttachments": []
+            },
+            {
+              "actorKind": null,
+              "default": false,
+              "operations": [
+                "get",
+                "list",
+                "apply"
+              ],
+              "ownership": null,
+              "principalClaim": "registry_principal",
+              "profileId": "facility-correction-applier",
+              "readableAttachments": [],
+              "readableContextFields": [],
+              "readableInputs": [],
+              "requesterClients": [],
+              "requiredPurposes": [
+                "facility-administration"
+              ],
+              "requiredScopes": [
+                "registry:facility:correction:apply"
+              ],
+              "targets": [
+                {
+                  "recordType": "facility",
+                  "rowBoundaries": [
+                    {
+                      "claim": "jurisdiction",
+                      "field": "jurisdiction",
+                      "operator": "equals"
+                    }
+                  ]
+                }
+              ],
+              "writableAttachments": []
+            },
+            {
               "actorKind": null,
               "default": false,
               "operations": [
@@ -101,41 +161,6 @@
               "actorKind": null,
               "default": false,
               "operations": [
-                "get",
-                "list",
-                "apply"
-              ],
-              "ownership": null,
-              "principalClaim": "registry_principal",
-              "profileId": "facility-correction-applier",
-              "readableAttachments": [],
-              "readableContextFields": [],
-              "readableInputs": [],
-              "requesterClients": [],
-              "requiredPurposes": [
-                "facility-administration"
-              ],
-              "requiredScopes": [
-                "registry:facility:correction:apply"
-              ],
-              "targets": [
-                {
-                  "recordType": "facility",
-                  "rowBoundaries": [
-                    {
-                      "claim": "jurisdiction",
-                      "field": "jurisdiction",
-                      "operator": "equals"
-                    }
-                  ]
-                }
-              ],
-              "writableAttachments": []
-            },
-            {
-              "actorKind": null,
-              "default": false,
-              "operations": [
                 "get-review-context"
               ],
               "ownership": null,
@@ -168,31 +193,6 @@
                   ]
                 }
               ],
-              "writableAttachments": []
-            },
-            {
-              "actorKind": "service",
-              "default": false,
-              "operations": [
-                "get-review-status"
-              ],
-              "ownership": null,
-              "principalClaim": "registry_principal",
-              "profileId": "casework-review-status",
-              "readableAttachments": [],
-              "readableContextFields": [],
-              "readableInputs": [],
-              "requesterClients": [
-                "casework-service"
-              ],
-              "requiredPurposes": [
-                "facility-review"
-              ],
-              "requiredScopes": [
-                "registry:proposal:review-status"
-              ],
-              "reviewAuthority": "casework",
-              "targets": [],
               "writableAttachments": []
             }
           ],
@@ -338,7 +338,7 @@
           }
         }
       ],
-      "migrationReviewRevision": "sha256:bf6bf99b13e7fe02e0a71b79b86847509d0d7311bc1e52cda533b7815753a16b",
+      "migrationReviewRevision": "sha256:fdc2665cbe3d95e95b0ce1d02748f6781994ff29ad8ba7d33ef185b3be1c78e0",
       "permissions": [
         {
           "default": false,
@@ -502,6 +502,41 @@
               "operations": [
                 "get",
                 "list",
+                "apply"
+              ],
+              "ownership": null,
+              "principalClaim": "registry_principal",
+              "profileId": "facility-correction-applier",
+              "readableAttachments": [],
+              "readableContextFields": [],
+              "readableInputs": [],
+              "requesterClients": [],
+              "requiredPurposes": [
+                "facility-administration"
+              ],
+              "requiredScopes": [
+                "registry:facility:correction:apply"
+              ],
+              "targets": [
+                {
+                  "recordType": "facility",
+                  "rowBoundaries": [
+                    {
+                      "claim": "jurisdiction",
+                      "field": "jurisdiction",
+                      "operator": "equals"
+                    }
+                  ]
+                }
+              ],
+              "writableAttachments": []
+            },
+            {
+              "actorKind": null,
+              "default": false,
+              "operations": [
+                "get",
+                "list",
                 "edit",
                 "submit",
                 "revise",
@@ -524,41 +559,6 @@
               ],
               "requiredScopes": [
                 "registry:facility:correction:submit"
-              ],
-              "targets": [
-                {
-                  "recordType": "facility",
-                  "rowBoundaries": [
-                    {
-                      "claim": "jurisdiction",
-                      "field": "jurisdiction",
-                      "operator": "equals"
-                    }
-                  ]
-                }
-              ],
-              "writableAttachments": []
-            },
-            {
-              "actorKind": null,
-              "default": false,
-              "operations": [
-                "get",
-                "list",
-                "apply"
-              ],
-              "ownership": null,
-              "principalClaim": "registry_principal",
-              "profileId": "facility-correction-applier",
-              "readableAttachments": [],
-              "readableContextFields": [],
-              "readableInputs": [],
-              "requesterClients": [],
-              "requiredPurposes": [
-                "facility-administration"
-              ],
-              "requiredScopes": [
-                "registry:facility:correction:apply"
               ],
               "targets": [
                 {
@@ -602,7 +602,7 @@
           }
         }
       ],
-      "migrationReviewRevision": "sha256:f47a8179064b71687f210b7455d382fe6629c6e4a9a962bebfd201d761ae3cf0",
+      "migrationReviewRevision": "sha256:9357b712eb303f3e4472bdd8aa4328260f70c0a35c351b5bbbd76e93ca8089cc",
       "permissions": [
         {
           "default": false,

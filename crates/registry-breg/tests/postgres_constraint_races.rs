@@ -495,8 +495,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "startField":"valid-from","endField":"valid-to"
             }]
           }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
             "permissions":{"records":[{
               "recordType":"parent","operations":["create","get"],"readableFields":["name"],"writableFields":["name"],
               "rowBoundaries": "unrestricted"
@@ -512,7 +511,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["scope","valid-from","valid-to"],
               "rowBoundaries": "unrestricted"
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("constraint race fixture parses");

@@ -1507,7 +1507,7 @@ recordTypes:
       - {id: code, type: string, maximumLength: 32, classification: public, required: true}
       - {id: boundary, type: crs84-polygon, precision: 6, maximumPositions: 1000, classification: public}
 accessProfiles:
-  - id: map-reader
+  map-reader:
     default: true
     principalClaim: principal
     requiredScopes: [registry:sites:read]
@@ -1521,7 +1521,7 @@ accessProfiles:
             bbox:
               maximumLongitudeSpanDegrees: 2
               maximumLatitudeSpanDegrees: 2
-  - id: get-only
+  get-only:
     principalClaim: principal
     requiredScopes: unrestricted
     permissions:
@@ -1530,7 +1530,7 @@ accessProfiles:
           rowBoundaries: unrestricted
           operations: [get]
           readableFields: [code, label, location]
-  - id: no-bbox
+  no-bbox:
     principalClaim: principal
     requiredScopes: unrestricted
     permissions:
@@ -1539,7 +1539,7 @@ accessProfiles:
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [code, label, location]
-  - id: area-map-reader
+  area-map-reader:
     principalClaim: principal
     requiredScopes: [registry:areas:read]
     permissions:

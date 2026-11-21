@@ -35,7 +35,7 @@ recordTypes:
           - {type: field-equals, field: is-active, value: true}
 
 accessProfiles:
-  - id: directory-editor
+  directory-editor:
     default: true
     principalClaim: registry_principal
     requiredScopes: ["registry:directory:write"]

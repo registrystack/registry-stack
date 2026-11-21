@@ -45,7 +45,7 @@ actions:
             name: {fromInput: name}
             owner: {fromInput: owner}
 accessProfiles:
-  - id: operator
+  operator:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted

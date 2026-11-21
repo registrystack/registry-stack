@@ -220,10 +220,10 @@ formats:
       requiredText: /project/id
       optionalText: /project/display/description
       integer: /recordTypes/0/fields/0/maximumLength
-      boolean: /accessProfiles/0/default
+      boolean: /accessProfiles/directory-editor/default
       idList: /recordTypes
-      set: /accessProfiles/0/requiredPurposes
-      reference: /accessProfiles/0/permissions/records/0/recordType
+      set: /accessProfiles/directory-editor/requiredPurposes
+      reference: /accessProfiles/directory-editor/permissions/records/0/recordType
       operand: /recordTypes/0/constraints/0/when/0/value
     securityMembers:
       - pointer: /accessProfiles/*/requiredScopes

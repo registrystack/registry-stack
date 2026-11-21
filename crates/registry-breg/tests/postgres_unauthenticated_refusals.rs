@@ -59,7 +59,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: public
+  public:
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry.public]
@@ -71,7 +71,7 @@ accessProfiles:
           readableFields: [label]
           filterableFields: [label]
           sortableFields: [label]
-  - id: caseworker
+  caseworker:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]

@@ -712,9 +712,8 @@ fn compiled_action_registry() -> CompiledRegistry {
       }
     }
   ],
-  "accessProfiles": [
-    {
-      "id": "contact-registrar",
+  "accessProfiles": {
+    "contact-registrar": {
       "default": true,
       "principalClaim": "private_claim_name",
       "requiredScopes": [
@@ -753,8 +752,7 @@ fn compiled_action_registry() -> CompiledRegistry {
         ]
       }
     },
-    {
-      "id": "contact-auditor",
+    "contact-auditor": {
       "principalClaim": "other_private_claim",
       "requiredScopes": [
         "registry:contact:audit"
@@ -790,7 +788,7 @@ fn compiled_action_registry() -> CompiledRegistry {
         ]
       }
     }
-  ],
+  },
   "recordTypes": [
     {
       "id": "household",
@@ -931,9 +929,8 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
       }
     }
   ],
-  "accessProfiles": [
-    {
-      "id": "asset-registrar",
+  "accessProfiles": {
+    "asset-registrar": {
       "default": true,
       "principalClaim": "principal",
       "requiredScopes": [
@@ -963,7 +960,7 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
         ]
       }
     }
-  ],
+  },
   "recordTypes": [
     {
       "id": "asset",

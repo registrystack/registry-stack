@@ -177,14 +177,13 @@ fn source(prefix: Option<&str>) -> Source {
                 },
                 generated_field
             ],
-            "accessProfiles": [{
-                "id": "reader",
+            "accessProfiles": {"reader": {
                 "principalClaim": "registry_principal",
                 "requiredScopes": "unrestricted",
                 "operations": ["get", "list"],
                 "readableFields": ["jurisdiction", "registration-code"],
                 "rowBoundaries": "unrestricted"
-            }]
+            }}
         }]
     });
     let module = serde_json::to_vec(&module).expect("module serializes");
@@ -253,7 +252,8 @@ fn source_without_generated_field() -> Source {
         .as_array_mut()
         .expect("fields are an array")
         .retain(|field| field["id"] != "registration-code");
-    module["recordTypes"][0]["accessProfiles"][0]["readableFields"] = json!(["jurisdiction"]);
+    module["recordTypes"][0]["accessProfiles"]["reader"]["readableFields"] =
+        json!(["jurisdiction"]);
     source_with_module(source, module)
 }
 
@@ -271,7 +271,7 @@ fn source_without_generated_record_type() -> Source {
         "required": true,
         "classification": "internal"
     }]);
-    record["accessProfiles"][0]["readableFields"] = json!(["jurisdiction"]);
+    record["accessProfiles"]["reader"]["readableFields"] = json!(["jurisdiction"]);
     source_with_module(source, module)
 }
 

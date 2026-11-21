@@ -3616,13 +3616,12 @@ mod tests {
                 ],
                 "geojson":{"geometryField":"location"}
               }],
-              "accessProfiles":[{
-                "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "accessProfiles":{"map-reader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                   "recordType":"site","operations":["get","list"],"readableFields":["code","location"],
                   "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
                   "rowBoundaries": "unrestricted"
                 }]}
-              }]
+              }}
             }"#,
         )
         .expect("spatial source parses");
@@ -3689,8 +3688,7 @@ mod tests {
                 "inputs": inputs,
                 "plan": {"type": "fixed", "effects": effects}
             }],
-            "accessProfiles": [{
-                "id": "wide-runner",
+            "accessProfiles": {"wide-runner": {
                 "default": true,
                 "principalClaim": "principal",
                 "requiredScopes": ["registry:wide:patch"],
@@ -3710,7 +3708,7 @@ mod tests {
                         .map(|index| format!("patch-{index}"))
                         .collect::<Vec<_>>()
                 }]}
-            }]
+            }}
         });
         let bytes = serde_json::to_vec(&project).expect("wide action source serializes");
         let project = parse_project_json(&bytes).expect("wide action source parses");

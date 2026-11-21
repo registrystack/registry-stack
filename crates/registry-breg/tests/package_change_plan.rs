@@ -146,7 +146,7 @@ fn spatial_span_numbers_survive_canonical_package_reload_and_successor_rederive(
         let source = spatial_source("location", true);
         let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
         let entity = &mut module["recordTypes"][0];
-        let bbox = &mut entity["accessProfiles"][0]["spatialQueries"]["bbox"];
+        let bbox = &mut entity["accessProfiles"]["reader"]["spatialQueries"]["bbox"];
         bbox["maximumLongitudeSpanDegrees"] = span.clone();
         bbox["maximumLatitudeSpanDegrees"] = span;
         if add_field {
@@ -296,7 +296,7 @@ fn changing_bbox_grant_replaces_candidate_view_without_rewriting_point_storage()
     let previous = compile_source(&spatial_source("location", true));
     let source = spatial_source("location", true);
     let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
-    module["recordTypes"][0]["accessProfiles"][0]["spatialQueries"]["bbox"]
+    module["recordTypes"][0]["accessProfiles"]["reader"]["spatialQueries"]["bbox"]
         ["maximumLongitudeSpanDegrees"] = json!(0.25);
     let module_bytes = serde_json::to_vec(&module).unwrap();
     let parsed_module = parse_module_yaml(&module_bytes).unwrap();
@@ -337,7 +337,7 @@ fn reviewed_source_view_refresh_preserves_candidate_drop_and_recreation() {
             "id": "color", "type": "string", "maximumLength": 16,
             "classification": "internal"
         }));
-    module["recordTypes"][0]["accessProfiles"][0]["allowCount"] = json!(true);
+    module["recordTypes"][0]["accessProfiles"]["reader"]["allowCount"] = json!(true);
     let module_bytes = serde_json::to_vec(&module).unwrap();
     let parsed_module = parse_module_yaml(&module_bytes).unwrap();
     let source = SourceFixture {
@@ -846,10 +846,10 @@ fn metadata_only_access_or_disclosure_changes_create_empty_applicable_plans() {
 fn complete_extension_surface_modules_are_order_independent() {
     let field_module = parse_module_yaml(br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"field-extension","version":"1","extendRecordTypes":[{"recordType":"asset","fields":[{"id":"status","type":"string","maximumLength":16,"classification":"internal"}],"constraints":[{"type":"unique","id":"status-unique","fields":["status"]}],"indexes":[{"id":"status-idx","fields":["status"]}]}]}"#)
         .expect("field extension parses");
-    let event_module = parse_module_yaml(br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"event-extension","version":"1","extendRecordTypes":[{"recordType":"asset","accessProfiles":[{"id":"auditor","principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}],"hooks":[{"phase":"after","id":"asset-created","trigger":"created","projection":["code","status"],"handler":{"type":"url","destinationId":"package-change-events"}}]}],"recordTypes":[{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#)
+    let event_module = parse_module_yaml(br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"event-extension","version":"1","extendRecordTypes":[{"recordType":"asset","accessProfiles":{"auditor": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}},"hooks":[{"phase":"after","id":"asset-created","trigger":"created","projection":["code","status"],"handler":{"type":"url","destinationId":"package-change-events"}}]}],"recordTypes":[{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}]}"#)
         .expect("event extension parses");
     let project_bytes = format!(
-        r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"recordTypes":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}]}}],"accessProfiles":[{{"id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"records":[{{"rowBoundaries": "unrestricted", "recordType":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}}}],"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
+        r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"recordTypes":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}]}}],"accessProfiles":{{"reader":{{"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"records":[{{"rowBoundaries": "unrestricted", "recordType":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}}}}},"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
         module_digest(&field_module),
         module_digest(&event_module)
     );
@@ -2080,8 +2080,7 @@ fn vocabulary_registry(vocabulary: &str, values: &[&str]) -> CompiledRegistry {
                 }
             ]
         }],
-        "accessProfiles": [{
-            "id": "writer",
+        "accessProfiles": {"writer": {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
@@ -2092,7 +2091,7 @@ fn vocabulary_registry(vocabulary: &str, values: &[&str]) -> CompiledRegistry {
                 "writableFields": ["status"],
                 "rowBoundaries": "unrestricted"
             }]}
-        }]
+        }}
     });
     let bytes = serde_json::to_vec(&project).expect("fixture serializes");
     let project = parse_project_json(&bytes).expect("vocabulary fixture parses");
@@ -2150,8 +2149,7 @@ fn field_registry(field: serde_json::Value) -> CompiledRegistry {
             "mutationMode": "mutable",
             "fields": [field]
         }],
-        "accessProfiles": [{
-            "id": "writer",
+        "accessProfiles": {"writer": {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
@@ -2162,7 +2160,7 @@ fn field_registry(field: serde_json::Value) -> CompiledRegistry {
                 "writableFields": ["note"],
                 "rowBoundaries": "unrestricted"
             }]}
-        }]
+        }}
     });
     let bytes = serde_json::to_vec(&project).expect("fixture serializes");
     let project = parse_project_json(&bytes).expect("length fixture parses");
@@ -2260,9 +2258,9 @@ fn geojson_source(binding: Option<&str>) -> SourceFixture {
             "id": id, "type": "crs84-point", "precision": 9, "classification": "internal"
         }));
     }
-    entity["accessProfiles"][0]["operations"] = serde_json::json!(["get"]);
-    entity["accessProfiles"][0]["writableFields"] = serde_json::json!([]);
-    entity["accessProfiles"][0]["readableFields"] =
+    entity["accessProfiles"]["reader"]["operations"] = serde_json::json!(["get"]);
+    entity["accessProfiles"]["reader"]["writableFields"] = serde_json::json!([]);
+    entity["accessProfiles"]["reader"]["readableFields"] =
         serde_json::json!(["code", "location", "alternate"]);
     if let Some(binding) = binding {
         entity["geojson"] = serde_json::json!({"geometryField": binding});
@@ -2279,7 +2277,7 @@ fn geojson_source(binding: Option<&str>) -> SourceFixture {
 fn spatial_source(binding: &str, bbox: bool) -> SourceFixture {
     let source = geojson_source(Some(binding));
     let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
-    let profile = &mut module["recordTypes"][0]["accessProfiles"][0];
+    let profile = &mut module["recordTypes"][0]["accessProfiles"]["reader"];
     profile["operations"] = json!(["get", "list"]);
     if bbox {
         profile["spatialQueries"] = json!({"bbox": {
@@ -2303,7 +2301,7 @@ fn project_bytes(module_digest: &str) -> Vec<u8> {
 }
 
 fn derived_source_for_sql(sql: &[u8]) -> DerivedSourceFixture {
-    let module_bytes = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maximumLength":16,"classification":"internal"}]}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#.to_vec();
+    let module_bytes = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maximumLength":16,"classification":"internal"}]}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}]}"#.to_vec();
     let module = parse_module_yaml(&module_bytes).expect("derived module parses");
     let digest = module_digest_with_assets(
         &module,
@@ -2364,7 +2362,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::OptionalField => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"},{"id":"color","type":"string","maximumLength":16,"classification":"internal"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2372,7 +2370,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::RequiredField => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"},{"id":"batch","type":"string","maximumLength":16,"required":true,"classification":"internal"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2380,7 +2378,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::RequiredAndOptionalFields => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"},{"id":"batch","type":"string","maximumLength":16,"required":true,"classification":"internal"},{"id":"color","type":"string","maximumLength":16,"classification":"internal"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2388,7 +2386,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::ReferenceConstraintIndex => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"},{"id":"site","type":"reference","target":"site","classification":"internal"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             r#","constraints":[{"type":"unique","id":"code-unique","fields":["code"]}]"#,
             r#","indexes":[{"id":"code-idx","fields":["code"]}]"#,
             "",
@@ -2396,7 +2394,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::ReferenceConstraintIndexReordered => asset_entity(
             r#"{"id":"site","type":"reference","target":"site","classification":"internal"},{"id":"rank","type":"int64","classification":"internal"},{"id":"code","type":"string","maximumLength":8,"classification":"internal"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["list","get","create"],"writableFields":["code"],"readableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["list","get","create"],"writableFields":["code"],"readableFields":["code"]"#,
             r#","constraints":[{"fields":["code"],"id":"code-unique","type":"unique"}]"#,
             r#","indexes":[{"fields":["code"],"id":"code-idx"}]"#,
             "",
@@ -2404,7 +2402,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::FieldRemoved => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2412,7 +2410,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::TypeChanged => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"string","maximumLength":8,"classification":"internal"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2420,7 +2418,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::PlaintextSecret => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"secret","type":"string","maximumLength":64,"classification":"restricted"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2428,7 +2426,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::EncryptedStructuredSecret => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"secret","type":"structured","maximumBytes":1024,"schema":{"type":"object","additionalProperties":false},"classification":"restricted","encrypted":true}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2436,7 +2434,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::RouteChanged => asset_entity(
             base_asset_fields(),
             r#""route":"equipment""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2444,7 +2442,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::EntityClassificationChanged => asset_entity(
             base_asset_fields(),
             r#""route":"assets","classification":"restricted""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2452,7 +2450,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::ClassificationChanged => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"restricted"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2460,7 +2458,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::AuthorizationChanged => asset_entity(
             base_asset_fields(),
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"subject","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"subject","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2469,7 +2467,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
             base_asset_fields(),
             r#""route":"assets""#,
             "mutable",
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2477,7 +2475,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::TemporalChanged => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"required":true,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"},{"id":"valid-from","type":"date","required":true,"classification":"internal"},{"id":"valid-to","type":"date","classification":"internal"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
             r#","constraints":[{"type":"temporal-non-overlap","id":"code-time","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]"#,
             "",
             r#","temporal":{"startField":"valid-from","endField":"valid-to"}"#,
@@ -2485,7 +2483,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::TemporalRoleBase => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"},{"id":"valid-from","type":"date","required":true,"classification":"internal"},{"id":"valid-to","type":"date","classification":"internal"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
             "",
             "",
             "",
@@ -2493,7 +2491,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::TemporalRoleChanged => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"},{"id":"valid-from","type":"date","required":true,"classification":"internal","validTimeRole":"valid-from"},{"id":"valid-to","type":"date","classification":"internal"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
             "",
             "",
             "",
@@ -2501,7 +2499,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::RankRequired => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","required":true,"classification":"internal"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2509,7 +2507,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::ReferenceTargetBase => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"},{"id":"home-site","type":"reference","target":"site","classification":"internal"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2517,7 +2515,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::ReferenceTargetChanged => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"},{"id":"home-site","type":"reference","target":"location","classification":"internal"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2525,7 +2523,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::MetadataOnlyBase => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"},{"id":"valid-from","type":"date","required":true,"classification":"internal"},{"id":"valid-to","type":"date","classification":"internal"}"#,
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
             "",
             "",
             r#","hooks":[{"phase":"after","id":"asset-created","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"package-change-events"}}]"#,
@@ -2534,7 +2532,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"restricted"},{"id":"valid-from","type":"date","required":true,"classification":"internal","validTimeRole":"valid-from"},{"id":"valid-to","type":"date","classification":"internal"}"#,
             r#""route":"equipment","classification":"restricted","accessRequirements":{"requiredScopes":["asset:read"]}"#,
             "mutable",
-            r#""id":"reader","principalClaim":"subject","requiredScopes":["asset:read"],"operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
+            r#""principalClaim":"subject","requiredScopes":["asset:read"],"operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
             "",
             "",
             r#","hooks":[{"phase":"after","id":"asset-created","trigger":"created","projection":["code","rank"],"handler":{"type":"url","destinationId":"package-change-events"}}]"#,
@@ -2542,7 +2540,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::Base | Variant::NewEntity => asset_entity(
             base_asset_fields(),
             r#""route":"assets""#,
-            r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            r#""requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
             "",
             "",
@@ -2601,20 +2599,20 @@ fn asset_entity_with_mode(
     temporal: &str,
 ) -> String {
     format!(
-        r#"{{"id":"asset","primaryDataset":"neutral-registry",{route},"mutationMode":"{mutation_mode}","fields":[{fields}]{constraints}{indexes},"accessProfiles":[{{"rowBoundaries":"unrestricted",{access}}}]{temporal}}}"#
+        r#"{{"id":"asset","primaryDataset":"neutral-registry",{route},"mutationMode":"{mutation_mode}","fields":[{fields}]{constraints}{indexes},"accessProfiles":{{"reader":{{"rowBoundaries":"unrestricted",{access}}}}}{temporal}}}"#
     )
 }
 
 fn site_entity() -> &'static str {
-    r#"{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}"#
+    r#"{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}"#
 }
 
 fn location_entity() -> &'static str {
-    r#"{"id":"location","primaryDataset":"neutral-registry","route":"locations","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}"#
+    r#"{"id":"location","primaryDataset":"neutral-registry","route":"locations","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}"#
 }
 
 fn placement_entity() -> &'static str {
-    r#"{"id":"placement","primaryDataset":"neutral-registry","route":"placements","mutationMode":"create-only","fields":[{"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"},{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["asset","site"],"writableFields":["asset","site"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}"#
+    r#"{"id":"placement","primaryDataset":"neutral-registry","route":"placements","mutationMode":"create-only","fields":[{"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"},{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["create","get","list"],"readableFields":["asset","site"],"writableFields":["asset","site"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}"#
 }
 
 fn build_request(
@@ -3112,7 +3110,10 @@ fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
         .as_object_mut()
         .unwrap()
         .remove("selectorProfiles");
-    source["accessProfiles"].as_array_mut().unwrap().truncate(1);
+    source["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .retain(|id, _| id == "operator");
     let compile = |source: &serde_json::Value| {
         let project = parse_project_yaml(&serde_json::to_vec(source).unwrap()).unwrap();
         compile_project(&project, &[], CompileProfile::Production).unwrap()
@@ -3120,8 +3121,7 @@ fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
     let previous = compile(&source);
     source["recordTypes"][0]["selectorProfiles"] =
         serde_json::json!([{"id":"by-code","fields":["code"]}]);
-    source["accessProfiles"].as_array_mut().unwrap().push(serde_json::json!({
-        "id":"source","principalClaim":"registry_principal","requiredScopes":["registry:source:lookup"],
+    source["accessProfiles"].as_object_mut().unwrap().insert("source".to_owned(), serde_json::json!({"principalClaim":"registry_principal","requiredScopes":["registry:source:lookup"],
         "permissions":{"records":[{"recordType":"record","operations":["lookup"],"readableFields":["code","status"],
             "lookups":[{"selector":"by-code","valueOrigin":"request"}],"rowBoundaries":"unrestricted"}]}}));
     let candidate = compile(&source);
@@ -3134,7 +3134,7 @@ fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
         .iter()
         .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
     // Changing an existing query projection does not become a grant addition.
-    source["accessProfiles"][1]["permissions"]["records"][0]["readableFields"] =
+    source["accessProfiles"]["source"]["permissions"]["records"][0]["readableFields"] =
         serde_json::json!(["code", "status", "label"]);
     let widened = compile(&source);
     let changes = compiled_registry_change_set(&candidate, &widened, PRIOR_REVISION);
@@ -3145,7 +3145,10 @@ fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
 fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
     let fixture = include_bytes!("../../../products/breg/evidence/registry/registry.yaml");
     let mut source: serde_json::Value = serde_norway::from_slice(fixture).unwrap();
-    source["accessProfiles"].as_array_mut().unwrap().truncate(1);
+    source["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .retain(|id, _| id == "operator");
     source["recordTypes"][0]["readPaths"] = serde_json::json!([
         {"id":"children","through":"link","to":"child","route":"children"}
     ]);
@@ -3158,7 +3161,7 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
             "fields":[{"id":"record","type":"reference","target":"record","classification":"internal"},
                       {"id":"child","type":"reference","target":"child","classification":"internal"}]})
     ]);
-    source["accessProfiles"][0]["permissions"]["records"].as_array_mut().unwrap().extend([
+    source["accessProfiles"]["operator"]["permissions"]["records"].as_array_mut().unwrap().extend([
         serde_json::json!({"recordType":"child","operations":["get"],"readableFields":["code","label"],"rowBoundaries":"unrestricted"}),
         serde_json::json!({"recordType":"link","operations":["get"],"readableFields":["record","child"],"rowBoundaries":"unrestricted"})
     ]);
@@ -3167,7 +3170,7 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
         compile_project(&project, &[], CompileProfile::Production).unwrap()
     };
     let previous = compile(&source);
-    source["accessProfiles"][0]["permissions"]["records"][0]["readPaths"] =
+    source["accessProfiles"]["operator"]["permissions"]["records"][0]["readPaths"] =
         serde_json::json!([{"path":"children","readableFields":["code"]}]);
     let granted = compile(&source);
     let query = granted
@@ -3196,8 +3199,8 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
         .iter()
         .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
 
-    source["accessProfiles"][0]["permissions"]["records"][0]["readPaths"][0]["readableFields"] =
-        serde_json::json!(["code", "label"]);
+    source["accessProfiles"]["operator"]["permissions"]["records"][0]["readPaths"][0]
+        ["readableFields"] = serde_json::json!(["code", "label"]);
     let widened = compile(&source);
     let changes = compiled_registry_change_set(&granted, &widened, PRIOR_REVISION);
     assert!(
@@ -3205,7 +3208,8 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
         "an existing query projection change still requires review"
     );
 
-    source["accessProfiles"][0]["permissions"]["records"][0]["readPaths"] = serde_json::json!([]);
+    source["accessProfiles"]["operator"]["permissions"]["records"][0]["readPaths"] =
+        serde_json::json!([]);
     let removed = compile(&source);
     let changes = compiled_registry_change_set(&granted, &removed, PRIOR_REVISION);
     let plan = change_set_to_applicable_migration_plan(&changes)

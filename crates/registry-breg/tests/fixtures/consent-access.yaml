@@ -139,101 +139,101 @@ actions:
         effective-at: {fromInput: effective-at}
         expires-at: {fromInput: expires-at}
 accessProfiles:
-- id: food-targeting
-  default: true
-  principalClaim: principal
-  actorKind: service
-  requesterClients: [wfp-scope, ngo-alpha-portal]
-  requiredScopes: [records:read]
-  requiredPurposes: [food-assistance]
-  permissions:
-    records:
-    - recordType: person
-      rowBoundaries: unrestricted
-      operations: [get, list, lookup, snapshot, revisions]
-      readableFields: [given-name, district]
-      filterableFields: [district]
-      sortableFields: [given-name]
-      allowCount: true
-      revisionAccess: true
-      lookups:
-      - selector: given-name
-        valueOrigin: request
-      readPaths:
-      - path: households
+  food-targeting:
+    default: true
+    principalClaim: principal
+    actorKind: service
+    requesterClients: [wfp-scope, ngo-alpha-portal]
+    requiredScopes: [records:read]
+    requiredPurposes: [food-assistance]
+    permissions:
+      records:
+      - recordType: person
+        rowBoundaries: unrestricted
+        operations: [get, list, lookup, snapshot, revisions]
+        readableFields: [given-name, district]
+        filterableFields: [district]
+        sortableFields: [given-name]
+        allowCount: true
+        revisionAccess: true
+        lookups:
+        - selector: given-name
+          valueOrigin: request
+        readPaths:
+        - path: households
+          readableFields: [label]
+        requireConsent:
+        - {record: consent-decision, on: id}
+      - recordType: enrolment
+        rowBoundaries: unrestricted
+        operations: [get, list, lookup, snapshot, revisions]
+        readableFields: [person, programme]
+        allowCount: true
+        revisionAccess: true
+        lookups:
+        - selector: programme
+          valueOrigin: request
+        readPaths:
+        - path: households
+          readableFields: [label]
+        requireConsent:
+        - {record: consent-decision, on: person}
+      # The read path's target needs its own permission in the profile; without
+      # one the runtime answers the path with 503.
+      - recordType: household
+        rowBoundaries: unrestricted
+        operations: [get]
         readableFields: [label]
-      requireConsent:
-      - {record: consent-decision, on: id}
-    - recordType: enrolment
-      rowBoundaries: unrestricted
-      operations: [get, list, lookup, snapshot, revisions]
-      readableFields: [person, programme]
-      allowCount: true
-      revisionAccess: true
-      lookups:
-      - selector: programme
-        valueOrigin: request
-      readPaths:
-      - path: households
+  recipient-feed:
+    principalClaim: principal
+    actorKind: service
+    requesterClients: [wfp-scope, ngo-alpha-portal]
+    requiredScopes: [consent:read]
+    permissions:
+      records:
+      - recordType: consent-decision
+        operations: [get, list]
+        readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
+        rowBoundaries:
+        - {field: recipient, claim: 'registry:recipients', operator: in}
+  steward:
+    principalClaim: principal
+    requiredScopes: [records:manage]
+    permissions:
+      records:
+      - recordType: person
+        rowBoundaries: unrestricted
+        operations: [create, get, patch]
+        readableFields: [given-name, district]
+        writableFields: [given-name, district]
+      - recordType: household
+        rowBoundaries: unrestricted
+        operations: [create, get]
         readableFields: [label]
-      requireConsent:
-      - {record: consent-decision, on: person}
-    # The read path's target needs its own permission in the profile; without
-    # one the runtime answers the path with 503.
-    - recordType: household
-      rowBoundaries: unrestricted
-      operations: [get]
-      readableFields: [label]
-- id: recipient-feed
-  principalClaim: principal
-  actorKind: service
-  requesterClients: [wfp-scope, ngo-alpha-portal]
-  requiredScopes: [consent:read]
-  permissions:
-    records:
-    - recordType: consent-decision
-      operations: [get, list]
-      readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
-      rowBoundaries:
-      - {field: recipient, claim: 'registry:recipients', operator: in}
-- id: steward
-  principalClaim: principal
-  requiredScopes: [records:manage]
-  permissions:
-    records:
-    - recordType: person
-      rowBoundaries: unrestricted
-      operations: [create, get, patch]
-      readableFields: [given-name, district]
-      writableFields: [given-name, district]
-    - recordType: household
-      rowBoundaries: unrestricted
-      operations: [create, get]
-      readableFields: [label]
-      writableFields: [label]
-    - recordType: household-member
-      rowBoundaries: unrestricted
-      operations: [create, get]
-      readableFields: [person, household]
-      writableFields: [person, household]
-    - recordType: enrolment
-      rowBoundaries: unrestricted
-      operations: [create, get]
-      readableFields: [person, programme]
-      writableFields: [person, programme]
-    - recordType: consent-decision
-      rowBoundaries: unrestricted
-      operations: [get, list]
-      readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
-    - recordType: enrolment-household
-      rowBoundaries: unrestricted
-      operations: [create, get]
-      readableFields: [enrolment, household]
-      writableFields: [enrolment, household]
-    actions:
-    - action: record-consent
-      operations: [invoke]
-      targets:
-      - {recordType: person, rowBoundaries: unrestricted}
-      - {recordType: consent-decision, rowBoundaries: unrestricted}
-      results: [decision]
+        writableFields: [label]
+      - recordType: household-member
+        rowBoundaries: unrestricted
+        operations: [create, get]
+        readableFields: [person, household]
+        writableFields: [person, household]
+      - recordType: enrolment
+        rowBoundaries: unrestricted
+        operations: [create, get]
+        readableFields: [person, programme]
+        writableFields: [person, programme]
+      - recordType: consent-decision
+        rowBoundaries: unrestricted
+        operations: [get, list]
+        readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
+      - recordType: enrolment-household
+        rowBoundaries: unrestricted
+        operations: [create, get]
+        readableFields: [enrolment, household]
+        writableFields: [enrolment, household]
+      actions:
+      - action: record-consent
+        operations: [invoke]
+        targets:
+        - {recordType: person, rowBoundaries: unrestricted}
+        - {recordType: consent-decision, rowBoundaries: unrestricted}
+        results: [decision]

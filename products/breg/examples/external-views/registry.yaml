@@ -128,7 +128,7 @@ externalViews:
           fromField: person-key
 
 accessProfiles:
-  - id: officer
+  officer:
     actorKind: human
     requesterClients: [officer]
     principalClaim: registry_principal
@@ -168,7 +168,7 @@ accessProfiles:
               sortableFields: [share-count]
               allowCount: true
               labelFields: [given-name, family-name]
-  - id: local-facts
+  local-facts:
     actorKind: human
     requesterClients: [restricted]
     principalClaim: registry_principal
@@ -184,7 +184,7 @@ accessProfiles:
           operations: [get, list]
           readableFields: [licence-number, jurisdiction]
           rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
-  - id: projection-refresh
+  projection-refresh:
     actorKind: service
     requesterClients: [licensing-refresh]
     principalClaim: registry_principal
@@ -201,7 +201,7 @@ accessProfiles:
           readableFields: [business-key, jurisdiction]
           rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
       refreshExternalProjections: [person-indexed, holdings-indexed]
-  - id: staff-refresh
+  staff-refresh:
     actorKind: service
     requesterClients: [staff-app]
     principalClaim: registry_principal
@@ -218,7 +218,7 @@ accessProfiles:
           readableFields: [business-key, jurisdiction]
           rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
       refreshExternalProjections: [person-indexed, holdings-indexed]
-  - id: fixture-editor
+  fixture-editor:
     principalClaim: registry_principal
     requiredScopes: [registry:licensing:write]
     requiredPurposes: [licensing]

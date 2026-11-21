@@ -56,14 +56,14 @@ fn membership_reference_uses_one_positioned_spelling() {
     let wire = serde_json::to_value(&decoded.value).unwrap();
     assert_eq!(
         wire.pointer(
-            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/membershipRecordType"
+            "/accessProfiles/member/permissions/records/0/membershipBoundaries/0/membershipRecordType"
         ),
         Some(&json!("membership"))
     );
     for value in [json!("membership"), json!(""), serde_json::Value::Null] {
         let mut previous = source.clone();
         let boundary = previous
-            .pointer_mut("/accessProfiles/0/permissions/records/0/membershipBoundaries/0")
+            .pointer_mut("/accessProfiles/member/permissions/records/0/membershipBoundaries/0")
             .unwrap()
             .as_object_mut()
             .unwrap();
@@ -81,7 +81,7 @@ fn membership_reference_uses_one_positioned_spelling() {
             .expect("migration guidance is present");
         assert_eq!(
             diagnostic.path,
-            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/membershipEntity"
+            "/accessProfiles/member/permissions/records/0/membershipBoundaries/0/membershipEntity"
         );
         assert!(diagnostic.suggested_action.contains("membershipRecordType"));
         assert!(diagnostic.source.as_ref().unwrap().line.is_some());
@@ -92,32 +92,32 @@ fn membership_reference_uses_one_positioned_spelling() {
 fn membership_boundaries_refuse_unenforced_authority_paths() {
     for (path, value, code) in [
         (
-            "/accessProfiles/0/permissions/records/0/operations",
+            "/accessProfiles/member/permissions/records/0/operations",
             json!(["get", "patch"]),
             "breg.access.membership-read-only",
         ),
         (
-            "/accessProfiles/0/requiredScopes",
+            "/accessProfiles/member/requiredScopes",
             json!(["records:read"]),
             "breg.access.requirements-scope-missing",
         ),
         (
-            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/field",
+            "/accessProfiles/member/permissions/records/0/membershipBoundaries/0/field",
             json!("label"),
             "breg.access.membership-key-type",
         ),
         (
-            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/principalField",
+            "/accessProfiles/member/permissions/records/0/membershipBoundaries/0/principalField",
             json!("active"),
             "breg.access.membership-principal-type",
         ),
         (
-            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/activeField",
+            "/accessProfiles/member/permissions/records/0/membershipBoundaries/0/activeField",
             json!("principal"),
             "breg.access.membership-active-type",
         ),
         (
-            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/membershipRecordType",
+            "/accessProfiles/member/permissions/records/0/membershipBoundaries/0/membershipRecordType",
             json!("facility"),
             "breg.access.membership-source-recursive",
         ),
@@ -144,7 +144,7 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
     let mut value = source("facility");
     value["recordTypes"][0]["readPaths"] =
         json!([{"id":"facilities","through":"membership","to":"facility","route":"facilities"}]);
-    value["accessProfiles"][1]["permissions"]["records"][0]["readPaths"] =
+    value["accessProfiles"]["steward"]["permissions"]["records"][0]["readPaths"] =
         json!([{"path":"facilities","readableFields":["label"]}]);
     let failure =
         compile(&value).expect_err("read paths cannot ignore protected target membership");
@@ -154,8 +154,8 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
         .any(|diagnostic| diagnostic.code == "breg.access.membership-read-path-target"));
 
     let mut action = action_requirements::project();
-    action["accessProfiles"][0]["permissions"]["actions"][0]["membershipBoundaries"] =
-        source("facility")["accessProfiles"][0]["permissions"]["records"][0]
+    action["accessProfiles"]["registrar"]["permissions"]["actions"][0]["membershipBoundaries"] =
+        source("facility")["accessProfiles"]["member"]["permissions"]["records"][0]
             ["membershipBoundaries"]
             .clone();
     let failure = registry_breg::parse_project_yaml(&serde_json::to_vec(&action).unwrap())
@@ -169,7 +169,7 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
         refusals,
         [(
             "config.unknown-key",
-            "project.accessProfiles[0].permissions.actions[0].membershipBoundaries"
+            "project.accessProfiles.registrar.permissions.actions[0].membershipBoundaries"
         )]
     );
 }

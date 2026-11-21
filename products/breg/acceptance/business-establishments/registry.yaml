@@ -262,10 +262,9 @@
       }
     ]
   },
-  "modules": [{"id":"business-establishment-summary","version":"0.1.0","digest":"sha256:24977e2b7bb39d6902ead9d5ea0cc7377d2965e4b6e53f6fe5eaef87391e647f"},{"id":"business-establishments-core","version":"0.1.0","digest":"sha256:f7445a818b25c4d8c62ae02745eefebec4241a21f55274defc3ec54c49d5c1c0"}],
-  "accessProfiles": [
-    {
-      "id": "business-operator",
+  "modules": [{"id":"business-establishment-summary","version":"0.1.0","digest":"sha256:9c46c380ddf1aee49d3441da4f2c31ed5185b1d26bf352a942d3a68640ad871f"},{"id":"business-establishments-core","version":"0.1.0","digest":"sha256:463e75f14b0a7fbdb83151bbf7d773bdd460908f83c33506742c2a3a71c377bc"}],
+  "accessProfiles": {
+    "business-operator": {
       "default": true,
       "principalClaim": "registry_principal",
       "requiredScopes": [
@@ -428,8 +427,7 @@
         ]
       }
     },
-    {
-      "id": "business-viewer",
+    "business-viewer": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "registry:business:view"
@@ -472,7 +470,7 @@
         ]
       }
     }
-  ],
+  },
   "vocabularies": [
     {
       "id": "establishment-role",
