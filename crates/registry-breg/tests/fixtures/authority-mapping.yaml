@@ -17,7 +17,7 @@ recordTypes:
     constraints:
       - {type: unique, fields: [label]}
 actions:
-  - id: correction
+  correction:
     execution:
       mode: proposal
       proposal:

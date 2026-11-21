@@ -221,56 +221,56 @@ reviewAuthorities:
 - id: casework
   protocol: id.registrystack.org/protocols/review/v1
 actions:
-- id: correct-status
-  execution:
-    mode: proposal
-    proposal:
-      review:
-        type: required
-        authority: casework
-        source: registry
-        policy:
-          id: status-review
-      reviewContext:
-        id: status-context
-        fields:
-          subjectId:
-            type: input
-            input: record
-          currentStatus:
-            type: record
-            input: record
-            field: status
-          proposedStatus:
-            type: input
-            input: status
-      application:
-        mode: manual
-      retention:
-        mode: retain
-  inputs:
-  - id: record
-    apiName: subjectId
-    type: reference
-    target: record
-    required: true
-    classification: internal
-  - id: status
-    type: vocabulary-code
-    vocabulary: record-status
-    required: true
-    classification: internal
-  commitGuards:
-    targets:
-    - input: record
-      revision: unchanged
-  plan:
-    type: fixed
-    effects:
+  correct-status:
+    execution:
+      mode: proposal
+      proposal:
+        review:
+          type: required
+          authority: casework
+          source: registry
+          policy:
+            id: status-review
+        reviewContext:
+          id: status-context
+          fields:
+            subjectId:
+              type: input
+              input: record
+            currentStatus:
+              type: record
+              input: record
+              field: status
+            proposedStatus:
+              type: input
+              input: status
+        application:
+          mode: manual
+        retention:
+          mode: retain
+    inputs:
+    - id: record
+      apiName: subjectId
+      type: reference
+      target: record
+      required: true
+      classification: internal
     - id: status
-      target:
-        fromInput: record
-      operation: patch
-      set:
-        status:
-          fromInput: status
+      type: vocabulary-code
+      vocabulary: record-status
+      required: true
+      classification: internal
+    commitGuards:
+      targets:
+      - input: record
+        revision: unchanged
+    plan:
+      type: fixed
+      effects:
+      - id: status
+        target:
+          fromInput: record
+        operation: patch
+        set:
+          status:
+            fromInput: status

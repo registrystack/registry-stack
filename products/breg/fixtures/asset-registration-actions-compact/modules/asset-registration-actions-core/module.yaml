@@ -24,7 +24,7 @@ recordTypes:
       - {id: result, type: vocabulary-code, vocabulary: inspection-result, required: true, classification: internal}
       - {id: jurisdiction, type: string, required: true, maximumLength: 80, classification: internal}
 actions:
-  - id: register-asset-with-inspection
+  register-asset-with-inspection:
     execution: {mode: immediate}
     inputs:
       - {id: asset-code, apiName: assetCode, type: string, required: true, maximumLength: 64, classification: internal}

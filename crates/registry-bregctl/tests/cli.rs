@@ -553,7 +553,7 @@ fn check_places_temporal_and_duplicate_api_name_errors_at_the_owning_record_and_
         .unwrap()
         .to_json_value();
     let mut temporal = baseline.clone();
-    temporal["actions"] = json!([]);
+    temporal["actions"] = json!({});
     temporal["accessProfiles"]["directory-editor"]["permissions"]
         .as_object_mut()
         .unwrap()
@@ -1053,7 +1053,7 @@ fn missing_action_script_identifies_action_and_safe_relative_path() {
         .find(|diagnostic| diagnostic["code"] == "breg.source.planner-asset-missing")
         .unwrap_or_else(|| panic!("the missing planner asset is reported: {report}"));
     assert_eq!(diagnostic["code"], "breg.source.planner-asset-missing");
-    assert_eq!(diagnostic["path"], "/functions/0/source");
+    assert_eq!(diagnostic["path"], "/functions/register-person-plan/source");
     assert_eq!(
         diagnostic["source"]["file"],
         project.path().join("registry.yaml").display().to_string()
@@ -1126,7 +1126,10 @@ fn capture_failure_shares_the_registry_warning_budget() {
         .position(|diagnostic| diagnostic["code"] == "breg.source.planner-asset-missing")
         .expect("the capture failure remains inside the file budget");
     assert!(capture < 100, "{report}");
-    assert_eq!(diagnostics[capture]["path"], "/functions/0/source");
+    assert_eq!(
+        diagnostics[capture]["path"],
+        "/functions/register-person-plan/source"
+    );
     let stopped = report["diagnostics"]
         .as_array()
         .unwrap()
@@ -1426,7 +1429,7 @@ recordTypes:
 timerGrants:
   - {recordType: entry, timer: activate}
 actions:
-  - id: activate-entry
+  activate-entry:
     execution: {mode: immediate}
     inputs:
       - {id: entry, type: reference, target: entry, required: true, classification: internal}
@@ -1438,7 +1441,7 @@ actions:
           target: {fromInput: entry}
           operation: patch
           set: {active: {value: true}}
-  - id: schedule-entry
+  schedule-entry:
     execution: {mode: immediate}
     inputs:
       - {id: entry, type: reference, target: entry, required: true, classification: internal}
@@ -1720,7 +1723,7 @@ recordTypes:
       - {id: person, type: reference, target: person, required: true, classification: restricted}
       - {id: household, type: reference, target: household, required: true, classification: restricted}
 actions:
-  - id: register-household-contact
+  register-household-contact:
     inputs:
       - {id: household, apiName: householdId, type: reference, target: household, required: true, classification: restricted}
       - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
@@ -1799,7 +1802,7 @@ recordTypes:
     fields:
       - {id: household-code, apiName: householdCode, type: string, required: true, maximumLength: 64, classification: internal}
 actions:
-  - id: archive-household
+  archive-household:
     inputs:
       - {id: household, apiName: householdId, type: reference, target: household, required: true, classification: restricted}
       - {id: household-code, apiName: householdCode, type: string, required: true, maximumLength: 64, classification: internal}
@@ -6060,13 +6063,13 @@ recordTypes:
       - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
       - {id: legal-name, apiName: legalName, type: string, required: true, maximumLength: 160, classification: restricted}
 functions:
-  - id: register-person-plan
+  register-person-plan:
     runtime: wasm
     source: wasm/handler.wasm
     entrypoint: handle
     abi: registry.action-plan/v1
 actions:
-  - id: register-person
+  register-person:
     inputs:
       - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
       - {id: legal-name, apiName: legalName, type: string, required: true, maximumLength: 160, classification: restricted}

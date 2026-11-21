@@ -72,9 +72,8 @@ fn registry() -> registry_breg::CompiledRegistry {
                     "classification":"internal"}
             ]
         }},
-        "actions":[
-            {
-                "id":"register-target",
+        "actions":{
+            "register-target": {
                 "execution":{"mode":"proposal","proposal":{
                     "review":{"type":"none"},
                     "application":{"mode":"automatic","maximumAttempts":3},
@@ -92,8 +91,7 @@ fn registry() -> registry_breg::CompiledRegistry {
                         "jurisdiction":{"fromInput":"jurisdiction"}}
                 }]}
             },
-            {
-                "id":"register-target-with-document",
+            "register-target-with-document": {
                 "execution":{"mode":"proposal","proposal":{
                     "review":{"type":"none"},
                     "application":{"mode":"manual"},
@@ -113,7 +111,7 @@ fn registry() -> registry_breg::CompiledRegistry {
                         "jurisdiction":{"fromInput":"jurisdiction"}}
                 }]}
             }
-        ],
+        },
         "accessProfiles":{"clerk": {"default":true,"principalClaim":"sub",
             "requiredScopes":["proposal:manage"],
             "requiredPurposes":["registry-administration"],

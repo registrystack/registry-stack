@@ -56,9 +56,8 @@
     ],
     "distributions": []
   },
-  "actions": [
-    {
-      "id": "register-landholding",
+  "actions": {
+    "register-landholding": {
       "inputs": [
         {
           "id": "farmer-prefix",
@@ -160,8 +159,7 @@
         ]
       }
     },
-    {
-      "id": "check-procedure",
+    "check-procedure": {
       "inputs": [
         {
           "id": "farmer-prefix",
@@ -261,7 +259,7 @@
         ]
       }
     }
-  ],
+  },
   "accessProfiles": {
     "landholding-registrar": {
       "default": true,
@@ -405,9 +403,8 @@
       ]
     }
   },
-  "functions": [
-    {
-      "id": "register-landholding-plan",
+  "functions": {
+    "register-landholding-plan": {
       "runtime": "rhai",
       "source": "scripts/register-landholding.rhai",
       "entrypoint": "plan",
@@ -416,8 +413,7 @@
         "evidence"
       ]
     },
-    {
-      "id": "check-procedure-plan",
+    "check-procedure-plan": {
       "runtime": "rhai",
       "source": "scripts/check-procedure.rhai",
       "entrypoint": "plan",
@@ -426,7 +422,7 @@
         "evidence"
       ]
     }
-  ],
+  },
   "datasets": [
     {
       "id": "farmer-landholding-evidence"

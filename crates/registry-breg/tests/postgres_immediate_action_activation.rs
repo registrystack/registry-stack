@@ -1274,8 +1274,7 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
         Variant::NoAction => None,
     };
     let actions = if required_scope.is_some() {
-        r#""actions":[{
-            "id":"register-household-contact",
+        r#""actions":{"register-household-contact": {
             "execution":{"mode":"immediate"},
             "inputs":[
               {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
@@ -1291,7 +1290,7 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
               {"id":"household","target":{"fromInput":"household"},"operation":"patch",
                 "set":{"contact-person":{"fromEffect":"person"}}}
             ]}
-          }],"#
+          }},"#
             .to_owned()
     } else {
         String::new()

@@ -144,8 +144,7 @@ fn source(timer_at: Option<&str>, effect_value: bool) -> Value {
         "input":{"contact":{"fromRecordId":true}}
     }]);
     source["timerGrants"] = json!([{"recordType":"contact","timer":"activate"}]);
-    source["actions"] = json!([{
-        "id":"activate-contact", "execution":{"mode":"immediate"},
+    source["actions"] = json!({"activate-contact": {"execution":{"mode":"immediate"},
         "inputs":[{
             "id":"contact", "type":"reference", "target":"contact",
             "required":true, "classification":"internal"
@@ -154,7 +153,7 @@ fn source(timer_at: Option<&str>, effect_value: bool) -> Value {
             "id":"mark-processed", "target":{"fromInput":"contact"},
             "operation":"patch", "set":{"processed":{"value":effect_value}}
         }]}
-    }]);
+    }});
     source
 }
 
@@ -313,15 +312,15 @@ fn source_with_effect_input(timer_at: &str) -> Value {
         }));
     source["recordTypes"]["contact"]["timers"][0]["input"]["activation-revision"] =
         json!({"fromField":"activation-revision"});
-    source["actions"][0]["inputs"]
+    source["actions"]["activate-contact"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"activation-revision", "type":"uuid", "required":true,
             "classification":"internal"
         }));
-    source["actions"][0]["plan"]["effects"][0]["set"]["copied-activation-revision"] =
-        json!({"fromInput":"activation-revision"});
+    source["actions"]["activate-contact"]["plan"]["effects"][0]["set"]
+        ["copied-activation-revision"] = json!({"fromInput":"activation-revision"});
     source
 }
 
@@ -339,14 +338,14 @@ fn source_with_secondary_get() -> Value {
     );
     source["recordTypes"]["contact"]["timers"][0]["input"]["approval"] =
         json!({"value":"11111111-1111-4111-8111-111111111111"});
-    source["actions"][0]["inputs"]
+    source["actions"]["activate-contact"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"approval", "type":"reference", "target":"approval", "required":true,
             "classification":"internal"
         }));
-    source["actions"][0]["commitGuards"] = json!({"targets":[{
+    source["actions"]["activate-contact"]["commitGuards"] = json!({"targets":[{
         "input":"approval", "field":"status", "equals":"approved"
     }]});
     source

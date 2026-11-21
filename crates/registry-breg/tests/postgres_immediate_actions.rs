@@ -3200,9 +3200,8 @@ const ACTION_PROJECT: &[u8] = br#"{
       ]
     }
   },
-  "actions": [
-    {
-      "id": "register-household-contact",
+  "actions": {
+    "register-household-contact": {
       "inputs": [
         {
           "id": "household",
@@ -3294,8 +3293,7 @@ const ACTION_PROJECT: &[u8] = br#"{
         ]
       }
     },
-    {
-      "id": "rename-household-local",
+    "rename-household-local": {
       "inputs": [
         {
           "id": "household",
@@ -3355,8 +3353,7 @@ const ACTION_PROJECT: &[u8] = br#"{
         ]
       }
     },
-    {
-      "id": "link-household-member",
+    "link-household-member": {
       "inputs": [
         {
           "id": "household",
@@ -3436,8 +3433,7 @@ const ACTION_PROJECT: &[u8] = br#"{
         ]
       }
     },
-    {
-      "id": "create-silent-person",
+    "create-silent-person": {
       "inputs": [
         {
           "id": "person-code",
@@ -3491,8 +3487,7 @@ const ACTION_PROJECT: &[u8] = br#"{
         ]
       }
     },
-    {
-      "id": "create-local-person",
+    "create-local-person": {
       "inputs": [
         {
           "id": "person-code",
@@ -3546,7 +3541,7 @@ const ACTION_PROJECT: &[u8] = br#"{
         ]
       }
     }
-  ],
+  },
   "accessProfiles": {
     "contact-registrar": {
       "default": true,

@@ -18,11 +18,11 @@ recordTypes:
       - {id: expires-on, type: date, classification: internal}
       - {id: renewal-on, type: date, classification: internal}
 functions:
-  - {id: create-entry-plan, runtime: rhai, source: plans/create.rhai, entrypoint: plan, abi: registry.action-plan/v1}
-  - {id: invalid-copy-plan, runtime: rhai, source: plans/invalid-copy.rhai, entrypoint: plan, abi: registry.action-plan/v1}
-  - {id: create-dated-entry-plan, runtime: rhai, source: plans/create-dated-entry.rhai, entrypoint: plan, abi: registry.action-plan/v1}
+  create-entry-plan: {runtime: rhai, source: plans/create.rhai, entrypoint: plan, abi: registry.action-plan/v1}
+  invalid-copy-plan: {runtime: rhai, source: plans/invalid-copy.rhai, entrypoint: plan, abi: registry.action-plan/v1}
+  create-dated-entry-plan: {runtime: rhai, source: plans/create-dated-entry.rhai, entrypoint: plan, abi: registry.action-plan/v1}
 actions:
-  - id: create-entry
+  create-entry:
     execution: {mode: immediate}
     inputs:
       - {id: label, type: string, required: true, maximumLength: 64, classification: internal}
@@ -34,7 +34,7 @@ actions:
         - {id: entry, target: {recordType: entry}, operation: create, fields: [label]}
       refusals:
         - {code: blank-label, label: Supply a nonblank label.}
-  - id: invalid-copy
+  invalid-copy:
     execution: {mode: immediate}
     inputs:
       - {id: note, type: string, maximumLength: 64, classification: internal}
@@ -44,7 +44,7 @@ actions:
       inputs: [note]
       writes:
         - {id: entry, target: {recordType: entry}, operation: create, fields: [label]}
-  - id: create-dated-entry
+  create-dated-entry:
     execution: {mode: immediate}
     inputs:
       - {id: label, type: string, required: true, maximumLength: 64, classification: internal}

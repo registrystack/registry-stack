@@ -69,7 +69,7 @@ fn compact_source_compiles_fixed_plan_and_bounded_automatic_grant() {
         .unwrap()
         .unwrap()
         .to_json_value();
-    assert!(authored["actions"][0]["execution"]["proposal"]
+    assert!(authored["actions"]["correct-name"]["execution"]["proposal"]
         .get("application")
         .is_none());
     let registry = registry();

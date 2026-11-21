@@ -307,9 +307,8 @@
       }
     }
   },
-  "actions": [
-    {
-      "id": "give-tenure-right-consent",
+  "actions": {
+    "give-tenure-right-consent": {
       "consentIssuer": "self",
       "inputs": [
         {
@@ -463,8 +462,7 @@
         ]
       }
     },
-    {
-      "id": "refuse-tenure-right-consent",
+    "refuse-tenure-right-consent": {
       "consentIssuer": "self",
       "inputs": [
         {
@@ -610,8 +608,7 @@
         ]
       }
     },
-    {
-      "id": "withdraw-tenure-right-consent",
+    "withdraw-tenure-right-consent": {
       "consentIssuer": "self",
       "inputs": [
         {
@@ -757,8 +754,7 @@
         ]
       }
     },
-    {
-      "id": "record-tenure-right-consent-assisted",
+    "record-tenure-right-consent-assisted": {
       "consentIssuer": "steward",
       "inputs": [
         {
@@ -913,8 +909,7 @@
         ]
       }
     },
-    {
-      "id": "invalidate-tenure-right-consent",
+    "invalidate-tenure-right-consent": {
       "consentIssuer": "steward",
       "inputs": [
         {
@@ -1021,8 +1016,7 @@
         "mode": "immediate"
       }
     },
-    {
-      "id": "import-tenure-right-consent",
+    "import-tenure-right-consent": {
       "consentIssuer": "steward",
       "inputs": [
         {
@@ -1149,5 +1143,5 @@
         "mode": "immediate"
       }
     }
-  ]
+  }
 }

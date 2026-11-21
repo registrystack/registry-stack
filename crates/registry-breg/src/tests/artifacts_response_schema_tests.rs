@@ -631,9 +631,8 @@ fn compiled_action_registry() -> CompiledRegistry {
     "defaultLanguage": "en",
     "canonicalBaseIri": "https://action-openapi.example.test"
   },
-  "actions": [
-    {
-      "id": "register-household-contact",
+  "actions": {
+    "register-household-contact": {
       "inputs": [
         {
           "id": "household",
@@ -711,7 +710,7 @@ fn compiled_action_registry() -> CompiledRegistry {
         ]
       }
     }
-  ],
+  },
   "accessProfiles": {
     "contact-registrar": {
       "default": true,
@@ -879,9 +878,8 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
     "defaultLanguage": "en",
     "canonicalBaseIri": "https://asset-action-openapi.example.test"
   },
-  "actions": [
-    {
-      "id": "register-asset",
+  "actions": {
+    "register-asset": {
       "inputs": [
         {
           "id": "asset-code",
@@ -925,7 +923,7 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
         ]
       }
     }
-  ],
+  },
   "accessProfiles": {
     "asset-registrar": {
       "default": true,

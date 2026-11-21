@@ -22,14 +22,14 @@ pub fn project() -> Value {
              ],
              "hooks": [{"phase":"after","id": "child-created", "trigger": "created", "projection": ["label"]}]}
         },
-        "actions": [{"id": "register-child", "execution":{"mode":"immediate"},
+        "actions": {"register-child": { "execution":{"mode":"immediate"},
             "inputs": [
                 {"id": "parent", "apiName": "parentId", "type": "reference", "target": "parent", "required": true, "classification": "restricted"},
                 {"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "restricted"}
             ],
             "commitGuards": {"targets":[{"input": "parent", "field": "status", "equals": "active"}]},
             "plan":{"type":"fixed","effects": [{"id": "child", "target": {"recordType": "child"}, "operation": "create", "set": {"parent": {"fromInput": "parent"}, "label": {"fromInput": "label"}}}]}
-        }],
+        }},
         "accessProfiles": {"registrar": { "default": true, "principalClaim": "registry_principal", "requiredScopes": ["registry:register", "registry:parent:process"],
             "permissions": {"actions": [{"action": "register-child", "operations": ["invoke"], "targets": [
                 {"recordType": "parent", "rowBoundaries": [{"field": "zone", "claim": "zone", "operator": "equals"}]}, {"recordType": "child", "rowBoundaries": "unrestricted"}

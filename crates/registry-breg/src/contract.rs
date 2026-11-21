@@ -113,9 +113,30 @@ pub struct RegistryProject {
         schemars(schema_with = "local_id_map_schema::<ReusableValueTypeSchema>")
     )]
     pub value_types: BTreeMap<String, FieldTypeSource>,
-    #[serde(default)]
+    /// Written as a mapping from each function id to the rest of the function
+    /// (CFG-ID-5) and held sorted by id.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<FunctionSource>")
+    )]
     pub functions: Vec<FunctionSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Written as a mapping from each Action id to the rest of the Action
+    /// (CFG-ID-5) and held sorted by id.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<ActionSource>")
+    )]
     pub actions: Vec<ActionSource>,
     /// Root-owned enablement of autonomous Record timers. Modules may declare
     /// timers, but cannot contribute this authority.
@@ -771,7 +792,7 @@ fn resolve_local_value_types(value: &mut Value) -> Result<(), (String, &'static 
         } else {
             "inputs"
         };
-        // Record types and extensions are mappings keyed by id, Actions a list.
+        // Record types, extensions and Actions are mappings keyed by id.
         // A collection in any other shape is left for the reader to refuse.
         let items: Vec<(String, &mut Value)> = match value.get_mut(collection) {
             Some(Value::Object(items)) => items
@@ -1628,10 +1649,31 @@ pub struct RegistryModule {
         schemars(schema_with = "local_id_map_schema::<ReusableValueTypeSchema>")
     )]
     pub value_types: BTreeMap<String, FieldTypeSource>,
-    #[serde(default)]
+    /// Written as a mapping from each function id to the rest of the function
+    /// (CFG-ID-5) and held sorted by id.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<FunctionSource>")
+    )]
     pub functions: Vec<FunctionSource>,
     /// Named Actions introduced by this module.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Written as a mapping from each Action id to the rest of the Action
+    /// (CFG-ID-5) and held sorted by id.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<ActionSource>")
+    )]
     pub actions: Vec<ActionSource>,
 }
 
@@ -1664,6 +1706,18 @@ where
 {
     registry_platform_yaml::UniqueList::<T>::deserialize(deserializer)
         .map(|items| items.into_iter().collect())
+}
+
+impl registry_platform_yaml::Identified for FunctionSource {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl registry_platform_yaml::Identified for ActionSource {
+    fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 impl registry_platform_yaml::Identified for ModuleLockSource {
@@ -5604,6 +5658,14 @@ const PLAN_CAPABILITIES_REPLACEMENT: &str = "Remove `plan.capabilities`. Declare
 /// replaced it.
 const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
     RemovedKey {
+        pointer: "/actions/*/id",
+        replacement: "Write actions as a mapping from each id to the rest of its entry, actions: {ACTION_ID: {execution: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/functions/*/id",
+        replacement: "Write functions as a mapping from each id to the rest of its entry, functions: {FUNCTION_ID: {runtime: ...}}, with no id member.",
+    },
+    RemovedKey {
         pointer: "/recordTypes/*/id",
         replacement: "Write recordTypes as a mapping from each id to the rest of its entry, recordTypes: {RECORD_TYPE_ID: {route: ...}}, with no id member.",
     },
@@ -5771,6 +5833,14 @@ const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
 
 /// Members a module no longer accepts, each with the member that replaced it.
 const MODULE_REMOVED_KEYS: &[RemovedKey<'static>] = &[
+    RemovedKey {
+        pointer: "/actions/*/id",
+        replacement: "Write actions as a mapping from each id to the rest of its entry, actions: {ACTION_ID: {execution: ...}}, with no id member.",
+    },
+    RemovedKey {
+        pointer: "/functions/*/id",
+        replacement: "Write functions as a mapping from each id to the rest of its entry, functions: {FUNCTION_ID: {runtime: ...}}, with no id member.",
+    },
     RemovedKey {
         pointer: "/recordTypes/*/id",
         replacement: "Write recordTypes as a mapping from each id to the rest of its entry, recordTypes: {RECORD_TYPE_ID: {route: ...}}, with no id member.",
@@ -6129,7 +6199,7 @@ fn field_option_diagnostics(
         ("actions", "inputs"),
         ("extendRecordTypes", "fields"),
     ] {
-        // Record types and extensions are keyed by id, Actions are a list.
+        // Record types, extensions and Actions are keyed by id.
         let items: Vec<(String, &Value)> = match value.get(collection) {
             Some(Value::Object(items)) => items
                 .iter()

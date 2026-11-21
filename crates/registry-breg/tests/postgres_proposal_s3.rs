@@ -64,14 +64,14 @@ fn registry_source(automatic: bool) -> Value {
             "mutationPolicy":{"patch":"proposal-required"},
             "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}},
-        "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{
+        "actions":{"correct-name": {"execution":{"mode":"proposal","proposal":{
             "review":{"type":"none"},"application":if automatic{json!({"mode":"automatic","maximumAttempts":3})}else{json!({"mode":"manual"})},
             "retention":{"mode":"operator-erase"},"attachments":[{"id":"support","required":false,"maximumBytes":4096,
                 "contentTypes":["text/plain"],"classification":"restricted"}]}},
             "inputs":[{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
             "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
-            "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
+            "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}},
         "accessProfiles":{"clerk": {"default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
             "requiredPurposes":["registry-administration"],"permissions":{
                 "records":[{"recordType":"target","operations":["create","get","list"],"readableFields":["name","jurisdiction"],
@@ -720,7 +720,7 @@ async fn review_document_binding_refusals_precede_s3_and_revise_never_follows_su
     let verification = s3.config.activate_attachment_verification().unwrap();
     let configured_verification = verification.clone();
     let mut source = registry_source(false);
-    source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({"id":"review-document","fields":{
+    source["actions"]["correct-name"]["execution"]["proposal"]["reviewContext"] = json!({"id":"review-document","fields":{
         "document":{"type":"document","slot":"support"},"changes":{"type":"changes","recordType":"target","fields":["name"]}}});
     let mut reviewer = source["accessProfiles"]["clerk"].clone();
     reviewer.as_object_mut().unwrap().remove("default");
@@ -1118,7 +1118,7 @@ async fn native_verifier_worker_releases_only_exact_approved_bytes() {
     let verification = s3.config.activate_attachment_verification().unwrap();
     let configured_verification = verification.clone();
     let mut source = registry_source(false);
-    source["actions"][0]["execution"]["proposal"]["attachments"][0]["contentTypes"] =
+    source["actions"]["correct-name"]["execution"]["proposal"]["attachments"][0]["contentTypes"] =
         json!(["text/plain", "application/pdf"]);
     let fixture = client_http::ClientFixture::start_with_mutations(
         compile(source),

@@ -45,14 +45,14 @@ recordTypes:
       - {id: by-source-submission, fields: [source-submission-id]}
 
 functions:
-  - id: register-household-plan
+  register-household-plan:
     runtime: rhai
     source: scripts/register-household.rhai
     entrypoint: plan
     abi: registry.action-plan/v1
 
 actions:
-  - id: register-household
+  register-household:
     display: {label: Register household, description: Create one household from one ingested submission.}
     execution:
       mode: proposal

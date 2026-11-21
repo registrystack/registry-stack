@@ -90,7 +90,7 @@ valueTypes:
   postal-code: {type: string, minimumLength: 1, maximumLength: 24}
 
 functions:
-  - id: correct-address-plan
+  correct-address-plan:
     runtime: rhai
     source: plans/correct-address.rhai
     entrypoint: plan
@@ -99,7 +99,7 @@ functions:
     limits: {maximumOperations: 10000, maximumOutputBytes: 8192}
 
 actions:
-  - id: register-facility
+  register-facility:
     display:
       label: Register facility
       description: Create a facility and its initial operator assignment atomically.
@@ -137,7 +137,7 @@ actions:
             facility: {fromEffect: facility}
             operator: {fromInput: operator}
             jurisdiction: {fromInput: jurisdiction}
-  - id: correct-address
+  correct-address:
     display:
       label: Correct facility address
       description: Submit a frozen address correction for independent review and later application.
@@ -181,7 +181,7 @@ actions:
           fields: [address-line, city, postal-code]
       refusals:
         - {code: invalid-postal-code, label: Postal code is invalid}
-  - id: deactivate-facility
+  deactivate-facility:
     display:
       label: Deactivate facility
       description: Submit a durable deactivation that requires no external review.

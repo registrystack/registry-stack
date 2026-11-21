@@ -57,7 +57,7 @@
     },
     "distributions": []
   },
-  "modules": {"household-history-core":{"digest":"sha256:b83dd43f88496eedc301715d1bba09131c0aecbd9bef029411bbadf252156b56","version":"0.1.0"}},
+  "modules": {"household-history-core":{"digest":"sha256:79a03e41a13979fb462dba70c1966952fe0bd71eac3fb871ef0cf9acc19f47bb","version":"0.1.0"}},
   "accessProfiles": {
     "registry-operator": {
       "default": true,

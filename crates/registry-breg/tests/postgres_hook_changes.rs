@@ -162,9 +162,9 @@ fn hook_project_json(
             ],
             "hooks":{followup_hooks}
           }}}},
-          "functions":[{{"id":"open-followup-plan","runtime":"rhai","source":"scripts/open-followup.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}}],
-          "actions":[{{
-            "id":"open-followup","execution":{{"mode":"immediate"}},
+          "functions":{{"open-followup-plan":{{"runtime":"rhai","source":"scripts/open-followup.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}}}},
+          "actions":{{"open-followup":{{
+            "execution":{{"mode":"immediate"}},
             "inputs":[
               {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"}},
               {{"id":"origin","apiName":"origin","type":"string","maximumLength":64,"required":true,"classification":"internal"}}
@@ -173,7 +173,7 @@ fn hook_project_json(
               "type":"function","function":"open-followup-plan","inputs":["jurisdiction","origin"],
               "writes":[{{"id":"followup","target":{{"recordType":"followup"}},"operation":"create","fields":["jurisdiction","label","origin"]}}{extra_writes}]
             }}
-          }}],
+          }}}},
           "accessProfiles":{{"operator":{{
             "default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
@@ -460,19 +460,19 @@ fn tally_proposal_registry_with_commit_guards(commit_guards: Option<Value>) -> C
         "id": "tally-condition", "apiName": "tallyCondition", "type": "string",
         "maximumLength": 160, "classification": "internal"
     }));
-    project["actions"][0]["inputs"]
+    project["actions"]["open-followup"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id": "tally", "apiName": "tally", "type": "reference", "target": "tally",
             "required": true, "classification": "internal"
         }));
-    project["actions"][0]["plan"]["inputs"]
+    project["actions"]["open-followup"]["plan"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!("tally"));
     if let Some(commit_guards) = commit_guards {
-        project["actions"][0]["commitGuards"] = commit_guards;
+        project["actions"]["open-followup"]["commitGuards"] = commit_guards;
     }
     let operator = &mut project["accessProfiles"]["operator"]["permissions"]["records"];
     for field in ["tally", "tally-condition"] {

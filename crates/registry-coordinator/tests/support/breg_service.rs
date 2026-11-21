@@ -176,13 +176,13 @@ impl Breg {
                 "fields":[{"id":"owner", "type":"string", "required":true, "maximumLength":80, "classification":"internal"},
                     {"id":"label", "type":"string", "required":true, "minimumLength":1, "maximumLength":80, "classification":"internal"}]}},
             "datasets":[{"id":"synthetic-items"}],
-            "functions":[{"id":"update-item-plan","runtime":"rhai","source":"scripts/update-item.rhai","entrypoint":"plan","abi":"registry.action-plan/v1"}],
-            "actions":[{"id":"update-item", "execution":{"mode":"immediate"}, "inputs":[
+            "functions":{"update-item-plan": {"runtime":"rhai","source":"scripts/update-item.rhai","entrypoint":"plan","abi":"registry.action-plan/v1"}},
+            "actions":{"update-item": { "execution":{"mode":"immediate"}, "inputs":[
                 {"id":"target", "apiName":"targetId", "type":"reference", "target":"item", "required":true, "classification":"internal"},
                 {"id":"label", "type":"string", "required":true, "minimumLength":1, "maximumLength":80, "classification":"internal"}],
                 "plan":{"type":"function", "function":"update-item-plan", "inputs":["target","label"],
                     "refusals":[{"code":"label-not-eligible", "label":"The label is not eligible."}],
-                    "writes":[{"id":"item", "target":{"fromInput":"target"}, "operation":"patch", "fields":["label"]}]}}],
+                    "writes":[{"id":"item", "target":{"fromInput":"target"}, "operation":"patch", "fields":["label"]}]}}},
             "accessProfiles":{
                 "writer": {"default":true, "principalClaim":"sub", "requiredScopes":["applications:read"], "actorKind":"service", "requesterClients":["application-reader"],
                     "permissions":{"records":[{"recordType":"item", "operations":["create","get","list"], "readableFields":["owner","label"], "writableFields":["owner","label"],

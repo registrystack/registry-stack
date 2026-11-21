@@ -19,13 +19,13 @@ recordTypes:
       - {id: information-requested, apiName: informationRequested, type: boolean, required: true, classification: internal}
       - {id: reason, type: string, required: false, minimumLength: 1, maximumLength: 256, classification: internal}
 functions:
-  - id: request-information-plan
+  request-information-plan:
     runtime: rhai
     source: scripts/request-information.rhai
     entrypoint: plan
     abi: registry.action-plan/v1
 actions:
-  - id: request-information
+  request-information:
     execution: {mode: immediate}
     inputs:
       - {id: application, apiName: applicationId, type: reference, target: application, required: true, classification: internal}

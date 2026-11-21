@@ -210,4 +210,4 @@ accessProfiles:
 modules:
   "record-notes":
     version: "0.1.0"
-    digest: "sha256:ada5755f58684abcf915dca7ac58e0d812eb238b2feb8d13437c05c5e258e3ff"
+    digest: "sha256:3e7aecaa63626c7ad9f808b63d029b9b57b1c3fef79004d0ef41009a8deb7ca9"

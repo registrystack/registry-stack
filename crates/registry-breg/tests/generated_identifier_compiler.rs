@@ -394,9 +394,7 @@ fn generated_identifiers_cannot_be_caller_writable() {
 #[test]
 fn fixed_actions_cannot_supply_server_generated_identifiers() {
     let mut project = project_value();
-    project["actions"] = json!([{
-        "id": "create-record",
-        "execution": {"mode": "immediate"},
+    project["actions"] = json!({"create-record": {"execution": {"mode": "immediate"},
         "inputs": [],
         "plan": {"type": "fixed", "effects": [{
             "id": "record",
@@ -407,7 +405,7 @@ fn fixed_actions_cannot_supply_server_generated_identifiers() {
                 "registration-code": {"value": "REG-000001"}
             }
         }]}
-    }]);
+    }});
     project["accessProfiles"] = json!({"operator": {
         "default": true,
         "principalClaim": "registry_principal",
@@ -464,9 +462,7 @@ fn create_effect_bounds_include_server_generated_fields() {
         } else {
             json!({"mode": "immediate"})
         };
-        project["actions"] = json!([{
-            "id": "create-record",
-            "execution": execution,
+        project["actions"] = json!({"create-record": {"execution": execution,
             "inputs": [{
                 "id": "request-note",
                 "type": "string",
@@ -479,7 +475,7 @@ fn create_effect_bounds_include_server_generated_fields() {
                 "operation": "create",
                 "set": Value::Object(set)
             }]}
-        }]);
+        }});
         project["accessProfiles"] = json!({"operator": {
             "default": true,
             "principalClaim": "registry_principal",

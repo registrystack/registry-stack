@@ -33,7 +33,8 @@ fn action_requirements_compile_processing_without_read_or_condition_grants() {
 #[test]
 fn authored_guard_copy_keys_are_bounded_and_only_apply_to_field_guards() {
     let mut source = support::project();
-    source["actions"][0]["commitGuards"]["targets"][0]["reason"] = json!("parent-inactive");
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]["reason"] =
+        json!("parent-inactive");
     assert_eq!(
         compile(source.clone()).unwrap().actions().actions[0].requires[0]
             .reason
@@ -50,7 +51,7 @@ fn authored_guard_copy_keys_are_bounded_and_only_apply_to_field_guards() {
         .any(|diagnostic| diagnostic.code == "breg.identifier.invalid"
             && diagnostic.path.ends_with(".reason")));
     assert!(!format!("{failure:?}").contains("private-invalid-reason-canary"));
-    source["actions"][0]["commitGuards"]["targets"][0] =
+    source["actions"]["register-child"]["commitGuards"]["targets"][0] =
         json!({"input":"parent","revision":"unchanged","reason":"parent-inactive"});
     assert!(compile(source.clone())
         .unwrap_err()
@@ -58,7 +59,8 @@ fn authored_guard_copy_keys_are_bounded_and_only_apply_to_field_guards() {
         .iter()
         .any(|diagnostic| diagnostic.code == "breg.action.guard-revision-invalid"));
     for invalid in ["Uppercase".to_owned(), "a".repeat(65), "has.dot".to_owned()] {
-        source["actions"][0]["commitGuards"]["targets"][0]["reason"] = json!(invalid);
+        source["actions"]["register-child"]["commitGuards"]["targets"][0]["reason"] =
+            json!(invalid);
         assert!(parse_project_json(&serde_json::to_vec(&source).unwrap()).is_err());
     }
 }
@@ -66,18 +68,18 @@ fn authored_guard_copy_keys_are_bounded_and_only_apply_to_field_guards() {
 #[test]
 fn action_requirements_can_compare_a_target_field_to_a_typed_action_input() {
     let mut source = support::project();
-    source["actions"][0]["inputs"]
+    source["actions"]["register-child"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id": "expected-status", "type": "vocabulary-code", "vocabulary": "status",
             "values": ["active", "inactive"], "required": true, "classification": "restricted"
         }));
-    source["actions"][0]["commitGuards"]["targets"][0]
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]
         .as_object_mut()
         .unwrap()
         .remove("equals");
-    source["actions"][0]["commitGuards"]["targets"][0]["equalsFromInput"] =
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]["equalsFromInput"] =
         json!("expected-status");
     let registry = compile(source).unwrap();
     let requirement = &registry.actions().actions[0].requires[0];
@@ -85,11 +87,12 @@ fn action_requirements_can_compare_a_target_field_to_a_typed_action_input() {
     assert_eq!(requirement.equals_input.as_deref(), Some("expected-status"));
 
     let mut wrong_type = support::project();
-    wrong_type["actions"][0]["commitGuards"]["targets"][0]
+    wrong_type["actions"]["register-child"]["commitGuards"]["targets"][0]
         .as_object_mut()
         .unwrap()
         .remove("equals");
-    wrong_type["actions"][0]["commitGuards"]["targets"][0]["equalsFromInput"] = json!("label");
+    wrong_type["actions"]["register-child"]["commitGuards"]["targets"][0]["equalsFromInput"] =
+        json!("label");
     let report = format!("{:?}", compile(wrong_type).unwrap_err());
     assert!(
         report.contains("breg.action.commit_guards.targets-value-invalid"),
@@ -101,7 +104,7 @@ fn action_requirements_can_compare_a_target_field_to_a_typed_action_input() {
 fn current_date_offsets_are_bounded_and_bound_to_current_date() {
     let mut source = ordered_guard_project();
     source["project"]["timezone"] = json!("UTC");
-    source["actions"][0]["commitGuards"]["targets"] = json!([{
+    source["actions"]["register-child"]["commitGuards"]["targets"] = json!([{
         "input": "parent", "field": "opened-on", "currentDate": "on-or-after",
         "currentDateOffsetDays": -30
     }]);
@@ -109,9 +112,10 @@ fn current_date_offsets_are_bounded_and_bound_to_current_date() {
     let guard = &registry.actions().actions[0].requires[0];
     assert_eq!(guard.current_date_offset_days, -30);
 
-    source["actions"][0]["commitGuards"]["targets"][0]["currentDateOffsetDays"] = json!(0);
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]["currentDateOffsetDays"] =
+        json!(0);
     let explicit_zero = compile(source.clone()).expect("zero keeps the existing comparison");
-    source["actions"][0]["commitGuards"]["targets"][0]
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]
         .as_object_mut()
         .unwrap()
         .remove("currentDateOffsetDays");
@@ -121,18 +125,19 @@ fn current_date_offsets_are_bounded_and_bound_to_current_date() {
         absent.actions().actions[0].requires[0]
     );
 
-    source["actions"][0]["commitGuards"]["targets"][0]
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]
         .as_object_mut()
         .unwrap()
         .remove("currentDate");
-    source["actions"][0]["commitGuards"]["targets"][0]["currentDateOffsetDays"] = json!(1);
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]["currentDateOffsetDays"] =
+        json!(1);
     assert!(format!("{:?}", compile(source).unwrap_err())
         .contains("breg.action.commit_guards.current-date-offset-invalid"));
 
     for offset in [-365_001, 365_001] {
         let mut source = ordered_guard_project();
         source["project"]["timezone"] = json!("UTC");
-        source["actions"][0]["commitGuards"]["targets"] = json!([{
+        source["actions"]["register-child"]["commitGuards"]["targets"] = json!([{
             "input": "parent", "field": "opened-on", "currentDate": "on-or-after",
             "currentDateOffsetDays": offset
         }]);
@@ -155,18 +160,20 @@ fn ordered_guard_project() -> Value {
     ] {
         fields.push(json!({"id": id, "type": kind, "classification": "restricted"}));
     }
-    let inputs = source["actions"][0]["inputs"].as_array_mut().unwrap();
+    let inputs = source["actions"]["register-child"]["inputs"]
+        .as_array_mut()
+        .unwrap();
     for (id, kind) in [("on", "date"), ("at", "timestamp"), ("limit", "int64")] {
         inputs.push(
             json!({"id": id, "type": kind, "required": true, "classification": "restricted"}),
         );
     }
-    source["actions"][0]["commitGuards"]["targets"] = json!([]);
+    source["actions"]["register-child"]["commitGuards"]["targets"] = json!([]);
     source
 }
 
 fn ordered_guard(source: &mut Value, field: &str, key: &str, input: &str) {
-    source["actions"][0]["commitGuards"]["targets"] =
+    source["actions"]["register-child"]["commitGuards"]["targets"] =
         json!([{"input": "parent", "field": field, key: input}]);
 }
 
@@ -232,57 +239,59 @@ fn ordered_input_guards_refuse_mismatched_types_unordered_fields_and_unusable_in
 
         // An optional input may be absent, so a guard cannot rest on it.
         let mut source = ordered_guard_project();
-        source["actions"][0]["inputs"][2]["required"] = json!(false);
+        source["actions"]["register-child"]["inputs"][2]["required"] = json!(false);
         ordered_guard(&mut source, "opened-on", key, "on");
         assert!(format!("{:?}", compile(source).unwrap_err()).contains(invalid));
 
         // One comparison per guard.
         let mut source = ordered_guard_project();
         ordered_guard(&mut source, "opened-on", key, "on");
-        source["actions"][0]["commitGuards"]["targets"][0]["equalsFromInput"] = json!("on");
+        source["actions"]["register-child"]["commitGuards"]["targets"][0]["equalsFromInput"] =
+            json!("on");
         assert!(format!("{:?}", compile(source).unwrap_err()).contains(invalid));
         let mut source = ordered_guard_project();
         ordered_guard(&mut source, "opened-on", key, "on");
-        source["actions"][0]["commitGuards"]["targets"][0]["atLeast"] = json!(1);
+        source["actions"]["register-child"]["commitGuards"]["targets"][0]["atLeast"] = json!(1);
         assert!(format!("{:?}", compile(source).unwrap_err()).contains(invalid));
     }
     let mut source = ordered_guard_project();
     ordered_guard(&mut source, "opened-on", "atLeastFromInput", "on");
-    source["actions"][0]["commitGuards"]["targets"][0]["atMostFromInput"] = json!("on");
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]["atMostFromInput"] =
+        json!("on");
     assert!(format!("{:?}", compile(source).unwrap_err()).contains(invalid));
 }
 
 #[test]
 fn action_inputs_can_narrow_a_target_vocabulary_for_values_and_requirements() {
     let mut source = support::project();
-    source["actions"][0]["inputs"]
+    source["actions"]["register-child"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id": "expected-status", "type": "vocabulary-code", "vocabulary": "status",
             "values": ["active"], "required": true, "classification": "restricted"
         }));
-    source["actions"][0]["commitGuards"]["targets"][0]
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]
         .as_object_mut()
         .unwrap()
         .remove("equals");
-    source["actions"][0]["commitGuards"]["targets"][0]["equalsFromInput"] =
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]["equalsFromInput"] =
         json!("expected-status");
     compile(source).unwrap();
 
     let mut source = support::project();
-    source["actions"][0]["inputs"]
+    source["actions"]["register-child"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id": "expected-status", "type": "vocabulary-code", "vocabulary": "other-status",
             "values": ["active"], "required": true, "classification": "restricted"
         }));
-    source["actions"][0]["commitGuards"]["targets"][0]
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]
         .as_object_mut()
         .unwrap()
         .remove("equals");
-    source["actions"][0]["commitGuards"]["targets"][0]["equalsFromInput"] =
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]["equalsFromInput"] =
         json!("expected-status");
     assert!(format!("{:?}", compile(source).unwrap_err())
         .contains("breg.action.commit_guards.targets-value-invalid"));
@@ -313,7 +322,7 @@ fn action_requirements_reject_unknown_fields_values_and_unbound_inputs() {
         ),
     ] {
         let mut source = support::project();
-        source["actions"][0]["commitGuards"]["targets"][0][member] = value;
+        source["actions"]["register-child"]["commitGuards"]["targets"][0][member] = value;
         let failure = compile(source).unwrap_err();
         let report = format!("{failure:?}");
         assert!(report.contains(expected), "{report}");
@@ -326,7 +335,7 @@ fn action_requirements_reject_unknown_fields_values_and_unbound_inputs() {
     // comparisons.
     for keep_equals in [false, true] {
         let mut source = support::project();
-        let requirement = source["actions"][0]["commitGuards"]["targets"][0]
+        let requirement = source["actions"]["register-child"]["commitGuards"]["targets"][0]
             .as_object_mut()
             .unwrap();
         if !keep_equals {
@@ -337,13 +346,13 @@ fn action_requirements_reject_unknown_fields_values_and_unbound_inputs() {
             .contains("breg.action.commit_guards.targets-value-invalid"));
     }
     let mut source = support::project();
-    source["actions"][0]["commitGuards"]["targets"][0]["script"] = json!("true");
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]["script"] = json!("true");
     assert!(parse_project_json(&serde_json::to_vec(&source).unwrap()).is_err());
 
     // An equality literal is a record value (CFG-EMPTY-1): the reader refuses
     // a mapping where it is written, without echoing it.
     let mut source = support::project();
-    source["actions"][0]["commitGuards"]["targets"][0]["equals"] =
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]["equals"] =
         json!({"nested": "private-value-canary"});
     let failure = parse_project_yaml(&serde_json::to_vec(&source).unwrap()).unwrap_err();
     let [diagnostic] = failure.diagnostics() else {
@@ -352,7 +361,7 @@ fn action_requirements_reject_unknown_fields_values_and_unbound_inputs() {
     assert_eq!(diagnostic.code, "config.invalid-type");
     assert_eq!(
         diagnostic.path,
-        "project.actions[0].commitGuards.targets[0].equals"
+        "project.actions.register-child.commitGuards.targets[0].equals"
     );
     assert!(!format!("{failure:?}").contains("canary"));
 }
@@ -382,9 +391,12 @@ fn action_requirement_fingerprint_binds_predicate_and_related_field_contract() {
     for mutate in [0, 1, 2] {
         let mut source = support::project();
         match mutate {
-            0 => source["actions"][0]["commitGuards"]["targets"][0]["equals"] = json!("inactive"),
+            0 => {
+                source["actions"]["register-child"]["commitGuards"]["targets"][0]["equals"] =
+                    json!("inactive")
+            }
             1 => source["recordTypes"]["parent"]["fields"][0]["classification"] = json!("internal"),
-            _ => source["actions"][0]["commitGuards"]["targets"] = json!([]),
+            _ => source["actions"]["register-child"]["commitGuards"]["targets"] = json!([]),
         }
         assert_ne!(
             baseline,
@@ -392,12 +404,12 @@ fn action_requirement_fingerprint_binds_predicate_and_related_field_contract() {
         );
     }
     let mut source = support::project();
-    source["actions"][0]
+    source["actions"]["register-child"]
         .as_object_mut()
         .unwrap()
         .remove("commitGuards");
     let no_requires = compile(source.clone()).unwrap();
-    source["actions"][0]["commitGuards"]["targets"] = json!([]);
+    source["actions"]["register-child"]["commitGuards"]["targets"] = json!([]);
     let empty = compile(source).unwrap();
     assert_eq!(no_requires.actions(), empty.actions());
     assert!(serde_json::to_value(&empty.actions().actions[0])
@@ -409,15 +421,15 @@ fn action_requirement_fingerprint_binds_predicate_and_related_field_contract() {
 #[test]
 fn action_requirements_reject_duplicate_and_optional_reference_checks() {
     let mut source = support::project();
-    let requirement = source["actions"][0]["commitGuards"]["targets"][0].clone();
-    source["actions"][0]["commitGuards"]["targets"]
+    let requirement = source["actions"]["register-child"]["commitGuards"]["targets"][0].clone();
+    source["actions"]["register-child"]["commitGuards"]["targets"]
         .as_array_mut()
         .unwrap()
         .push(requirement);
     assert!(format!("{:?}", compile(source).unwrap_err())
         .contains("breg.action.commit_guards.targets-duplicate"));
     let mut source = support::project();
-    source["actions"][0]["inputs"][0]["required"] = json!(false);
+    source["actions"]["register-child"]["inputs"][0]["required"] = json!(false);
     assert!(format!("{:?}", compile(source).unwrap_err())
         .contains("breg.action.commit_guards.targets-reference-required"));
 }
@@ -426,10 +438,10 @@ fn action_requirements_reject_duplicate_and_optional_reference_checks() {
 fn action_requirements_do_not_bypass_reviewed_change_control() {
     let mut source = support::project();
     source["recordTypes"]["parent"]["mutationPolicy"] = json!({"patch":"proposal-required"});
-    source["actions"][0]["inputs"].as_array_mut().unwrap().push(json!({
+    source["actions"]["register-child"]["inputs"].as_array_mut().unwrap().push(json!({
         "id": "status", "type": "vocabulary-code", "vocabulary": "status", "values": ["active", "inactive"], "required": true, "classification": "restricted"
     }));
-    source["actions"][0]["plan"]["effects"].as_array_mut().unwrap().push(json!({
+    source["actions"]["register-child"]["plan"]["effects"].as_array_mut().unwrap().push(json!({
         "id": "update-parent", "target": {"fromInput": "parent"}, "operation": "patch", "set": {"status": {"fromInput": "status"}}
     }));
     let failure = compile(source).unwrap_err();
@@ -442,25 +454,25 @@ fn action_requirements_do_not_bypass_reviewed_change_control() {
 #[test]
 fn equality_inputs_must_be_required_and_an_unset_value_is_stated_explicitly() {
     let mut source = support::project();
-    source["actions"][0]["inputs"]
+    source["actions"]["register-child"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"expected-status", "type":"vocabulary-code", "vocabulary":"status",
             "values":["active","inactive"], "required":false, "classification":"restricted"
         }));
-    source["actions"][0]["commitGuards"]["targets"][0]
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]
         .as_object_mut()
         .unwrap()
         .remove("equals");
-    source["actions"][0]["commitGuards"]["targets"][0]["equalsFromInput"] =
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]["equalsFromInput"] =
         json!("expected-status");
     assert!(format!("{:?}", compile(source).unwrap_err())
         .contains("breg.action.commit_guards.targets-value-invalid"));
 
     let mut source = support::project();
     source["recordTypes"]["parent"]["fields"][0]["required"] = json!(false);
-    source["actions"][0]["commitGuards"]["targets"][0]["equals"] = Value::Null;
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]["equals"] = Value::Null;
     // `null` is never a comparison literal (CFG-EMPTY-1): the reader refuses it
     // where it is written, and `isNull` states the unset value.
     let bytes = serde_json::to_vec(&source).unwrap();
@@ -471,10 +483,10 @@ fn equality_inputs_must_be_required_and_an_unset_value_is_stated_explicitly() {
     assert_eq!(diagnostic.code, "config.null-value");
     assert_eq!(
         diagnostic.path,
-        "project.actions[0].commitGuards.targets[0].equals"
+        "project.actions.register-child.commitGuards.targets[0].equals"
     );
     assert!(parse_project_json(&bytes).is_err());
-    let requirement = source["actions"][0]["commitGuards"]["targets"][0]
+    let requirement = source["actions"]["register-child"]["commitGuards"]["targets"][0]
         .as_object_mut()
         .unwrap();
     requirement.remove("equals");
@@ -488,7 +500,7 @@ fn equality_inputs_must_be_required_and_an_unset_value_is_stated_explicitly() {
     let restored: registry_breg::model::CompiledCommitGuard =
         serde_json::from_value(serde_json::to_value(requirement).unwrap()).unwrap();
     assert_eq!(&restored, requirement);
-    source["actions"][0]["commitGuards"]["targets"][0]
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]
         .as_object_mut()
         .unwrap()
         .remove("isNull");

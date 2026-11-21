@@ -67,8 +67,7 @@ fn registry_source() -> Value {
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}
             ]
         }},
-        "actions":[{
-            "id":"correct-name",
+        "actions":{"correct-name": {
             "execution":{"mode":"proposal","proposal":{
                 "review":{"type":"none"},
                 "application":{"mode":"manual"},
@@ -85,7 +84,7 @@ fn registry_source() -> Value {
                 "operation":"patch",
                 "set":{"name":{"fromInput":"value"}}
             }]}
-        }],
+        }},
         "accessProfiles":{"clerk": {
             "default":true,
             "principalClaim":"sub",

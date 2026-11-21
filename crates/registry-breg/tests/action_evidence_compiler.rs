@@ -18,8 +18,8 @@ fn project() -> Value {
             {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
         ]}},
-        "functions":[{"id":"register-plan","runtime":"rhai","source":"handlers/register.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":["evidence"]}],
-        "actions":[{"id":"register-person","execution":{"mode":"immediate"},"inputs":[
+        "functions":{"register-plan": {"runtime":"rhai","source":"handlers/register.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":["evidence"]}},
+        "actions":{"register-person": {"execution":{"mode":"immediate"},"inputs":[
             {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"family-name","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
@@ -27,7 +27,7 @@ fn project() -> Value {
             {"id":"person","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"friend","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"existing","target":{"fromInput":"person"},"operation":"patch","fields":["name","friend"]}
-        ]}}],
+        ]}}},
         "accessProfiles":{"registrar": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}}
     })
 }
@@ -38,7 +38,7 @@ fn contracts() -> Value {
 fn configured() -> Value {
     let mut source = project();
     source["evidenceProviders"] = json!([{"id":"provider","contracts":"evidence/contracts.json","subjectResolution":"trusted-provider-exact-selector"}]);
-    source["actions"][0]["evidence"] = json!([{"id":"status","provider":"provider","requirement":"urn:example:client:requirement:status:v1","subjects":{"subject":{"profile":"record-lookup-v1"}},"outputs":["status-holds"],"maximumObservationAgeSeconds":60}]);
+    source["actions"]["register-person"]["evidence"] = json!([{"id":"status","provider":"provider","requirement":"urn:example:client:requirement:status:v1","subjects":{"subject":{"profile":"record-lookup-v1"}},"outputs":["status-holds"],"maximumObservationAgeSeconds":60}]);
     source
 }
 fn compile(
@@ -98,12 +98,12 @@ fn offline_contract_is_exact_and_fingerprinted() {
 #[test]
 fn commit_evidence_binds_typed_selectors_predicates_and_final_revision() {
     let mut source = configured();
-    source["actions"][0]
+    source["actions"]["register-person"]
         .as_object_mut()
         .unwrap()
         .remove("evidence");
-    source["actions"][0]["inputs"][0]["minimumLength"] = json!(1);
-    source["actions"][0]["commitGuards"] = json!({"evidence":[{
+    source["actions"]["register-person"]["inputs"][0]["minimumLength"] = json!(1);
+    source["actions"]["register-person"]["commitGuards"] = json!({"evidence":[{
         "id":"commit-status","provider":"provider","requirement":"urn:example:client:requirement:status:v1",
         "subjects":{"subject":{"profile":"record-lookup-v1","selectors":{"record_reference":{"type":"input","input":"given-name"}}}},
         "requires":[{"output":"status-holds","equals":true}],"maximumObservationAgeSeconds":60
@@ -126,10 +126,11 @@ fn commit_evidence_binds_typed_selectors_predicates_and_final_revision() {
             .definition_revision
     );
     let mut bad_selector = source.clone();
-    bad_selector["actions"][0]["commitGuards"]["evidence"][0]["subjects"]["subject"]["selectors"]
-        ["record_reference"]["input"] = json!("missing");
+    bad_selector["actions"]["register-person"]["commitGuards"]["evidence"][0]["subjects"]
+        ["subject"]["selectors"]["record_reference"]["input"] = json!("missing");
     assert!(compile(bad_selector, Some(reviewed.clone())).is_err());
-    source["actions"][0]["commitGuards"]["evidence"][0]["requires"][0]["equals"] = json!(1);
+    source["actions"]["register-person"]["commitGuards"]["evidence"][0]["requires"][0]["equals"] =
+        json!(1);
     assert!(compile(source, Some(reviewed)).is_err());
 }
 #[test]
@@ -152,10 +153,13 @@ fn refuses_origin_profile_output_ambiguity_and_budget_widening() {
                     json!("authenticated-context")
             }
             "profile" => {
-                source["actions"][0]["evidence"][0]["subjects"]["subject"]["profile"] =
-                    json!("wrong")
+                source["actions"]["register-person"]["evidence"][0]["subjects"]["subject"]
+                    ["profile"] = json!("wrong")
             }
-            "output" => source["actions"][0]["evidence"][0]["outputs"] = json!(["undeclared"]),
+            "output" => {
+                source["actions"]["register-person"]["evidence"][0]["outputs"] =
+                    json!(["undeclared"])
+            }
             "ambiguous" => {
                 let mut duplicate = contract["definitions"][0].clone();
                 duplicate["handle"] = json!("other");
@@ -165,10 +169,10 @@ fn refuses_origin_profile_output_ambiguity_and_budget_widening() {
                     .push(duplicate);
             }
             "budget" => {
-                let cap = source["actions"][0]["evidence"][0].clone();
-                source["actions"][0]["evidence"] = json!([cap, cap, cap]);
+                let cap = source["actions"]["register-person"]["evidence"][0].clone();
+                source["actions"]["register-person"]["evidence"] = json!([cap, cap, cap]);
             }
-            "abi" => source["functions"][0]["abi"] = json!("registry.action-plan/v2"),
+            "abi" => source["functions"]["register-plan"]["abi"] = json!("registry.action-plan/v2"),
             "schema" => contract["schema"] = json!("unknown"),
             "bounds" => {
                 contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["minimumBytes"] =
@@ -201,7 +205,7 @@ fn the_evidence_declaration_selects_the_capability_under_the_one_handler_abi() {
         .is_empty());
 
     let mut refused = configured();
-    refused["functions"][0]["capabilities"] = json!([]);
+    refused["functions"]["register-plan"]["capabilities"] = json!([]);
     let failure = compile(refused, Some(contracts()))
         .expect_err("the Function capability list is a ceiling on its Evidence Action");
     let diagnostic = failure
@@ -220,7 +224,7 @@ fn the_evidence_declaration_selects_the_capability_under_the_one_handler_abi() {
 #[test]
 fn plan_capabilities_are_not_an_authored_grant() {
     let mut source = project();
-    source["actions"][0]["plan"]["capabilities"] = json!(["evidence"]);
+    source["actions"]["register-person"]["plan"]["capabilities"] = json!(["evidence"]);
     let project_report = read_project_yaml("registry.json", &serde_json::to_vec(&source).unwrap())
         .expect_err("the project Action evidence declaration is the only authored grant");
     let module_report = read_module_yaml(
@@ -228,7 +232,7 @@ fn plan_capabilities_are_not_an_authored_grant() {
         &serde_json::to_vec(&json!({
             "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
             "kind":"BRegModule", "id":"actions", "version":"1",
-            "actions":[source["actions"][0].clone()]
+            "actions":{"register-person": source["actions"]["register-person"].clone()}
         }))
         .unwrap(),
     )
@@ -237,7 +241,7 @@ fn plan_capabilities_are_not_an_authored_grant() {
         let diagnostic = report
             .diagnostics()
             .iter()
-            .find(|diagnostic| diagnostic.path == "/actions/0/plan/capabilities")
+            .find(|diagnostic| diagnostic.path == "/actions/register-person/plan/capabilities")
             .unwrap_or_else(|| panic!("expected the removed plan member refusal: {report:?}"));
         assert_eq!(diagnostic.code, "config.removed-key");
         assert!(diagnostic.suggested_action.contains("Action's Evidence"));
@@ -250,13 +254,13 @@ fn plan_capabilities_are_not_an_authored_grant() {
 #[test]
 fn function_capabilities_are_a_closed_value_free_vocabulary() {
     let mut source = project();
-    source["functions"][0]["capabilities"] = json!(["private-capability-canary"]);
+    source["functions"]["register-plan"]["capabilities"] = json!(["private-capability-canary"]);
     let report = read_project_yaml("registry.json", &serde_json::to_vec(&source).unwrap())
         .expect_err("a Function capability outside the closed vocabulary is refused");
     let diagnostic = report
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.path == "/functions/0/capabilities/0")
+        .find(|diagnostic| diagnostic.path == "/functions/register-plan/capabilities/0")
         .unwrap_or_else(|| panic!("expected the Function capability refusal: {report:?}"));
     assert_eq!(diagnostic.code, "config.unknown-variant");
     assert!(diagnostic.message.contains("evidence"));
@@ -269,7 +273,7 @@ fn function_capabilities_are_a_closed_value_free_vocabulary() {
 fn the_retired_evidence_abi_is_refused_where_it_is_declared() {
     for (source, contract) in [(configured(), Some(contracts())), (project(), None)] {
         let mut source = source;
-        source["functions"][0]["abi"] = json!("registry.action-plan/v2");
+        source["functions"]["register-plan"]["abi"] = json!("registry.action-plan/v2");
         let failure = compile(source, contract).expect_err("one handler ABI is accepted");
         let diagnostic = failure
             .diagnostics()
@@ -397,11 +401,11 @@ fn evidence_identifiers_use_the_governed_action_grammar() {
         &"a".repeat(65),
     ] {
         let mut source = configured();
-        source["actions"][0]["evidence"][0]["id"] = json!(id);
+        source["actions"]["register-person"]["evidence"][0]["id"] = json!(id);
         assert_refused_where_read(&source, "alias");
         let mut source = configured();
         source["evidenceProviders"][0]["id"] = json!(id);
-        source["actions"][0]["evidence"][0]["provider"] = json!(id);
+        source["actions"]["register-person"]["evidence"][0]["provider"] = json!(id);
         assert_refused_where_read(&source, "provider");
     }
 }
@@ -420,12 +424,15 @@ fn evidence_calls_require_a_declared_capability_in_statements_expressions_and_ne
             // only the action's own Evidence declaration differs.
             let mut source = configured();
             if !declared {
-                source["actions"][0]
+                source["actions"]["register-person"]
                     .as_object_mut()
                     .unwrap()
                     .remove("evidence");
             }
-            assert_eq!(source["functions"][0]["abi"], "registry.action-plan/v1");
+            assert_eq!(
+                source["functions"]["register-plan"]["abi"],
+                "registry.action-plan/v1"
+            );
             let source = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
             let assets = vec![
                 ModuleAssetSource {
@@ -478,19 +485,21 @@ fn published_authoring_schema_accepts_evidence_action_and_rejects_every_other_ab
         "canonical Evidence Action validates"
     );
     let mut with_plan_capability = source.clone();
-    with_plan_capability["actions"][0]["plan"]["capabilities"] = json!(["evidence"]);
+    with_plan_capability["actions"]["register-person"]["plan"]["capabilities"] =
+        json!(["evidence"]);
     assert!(
         !validator.is_valid(&with_plan_capability),
         "the schema removes the redundant Action plan capability"
     );
     let mut with_unknown_capability = source.clone();
-    with_unknown_capability["functions"][0]["capabilities"] = json!(["private-capability"]);
+    with_unknown_capability["functions"]["register-plan"]["capabilities"] =
+        json!(["private-capability"]);
     assert!(
         !validator.is_valid(&with_unknown_capability),
         "the schema closes Function capabilities to evidence"
     );
     for other in ["registry.action-plan/v2", "registry.action-plan/v3"] {
-        source["functions"][0]["abi"] = json!(other);
+        source["functions"]["register-plan"]["abi"] = json!(other);
         assert!(!validator.is_valid(&source), "{other}");
     }
 }

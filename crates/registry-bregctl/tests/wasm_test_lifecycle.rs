@@ -309,13 +309,13 @@ recordTypes:
     fields:
       - {id: code, type: string, required: true, maximumLength: 32, classification: public}
 functions:
-  - id: fixed-output-plan
+  fixed-output-plan:
     runtime: wasm
     source: handlers/fixed-output.wasm
     entrypoint: handle
     abi: registry.action-plan/v1
 actions:
-  - id: create-fixed-record
+  create-fixed-record:
     execution: {mode: immediate}
     inputs:
       - {id: request, type: string, required: true, maximumLength: 32, classification: public}

@@ -54,7 +54,7 @@ effects. Open `registry.yaml` and find `actions`:
 
 ```yaml title="registry.yaml" test-excerpt="registry.yaml"
 actions:
-  - id: update-contact-email
+  update-contact-email:
     display: {label: Update contact email, description: Replace one contact's email address as soon as the Action is invoked.}
     execution: {mode: immediate}
     inputs:
@@ -76,7 +76,7 @@ actions:
 that invokes the Action.
 
 ```yaml title="registry.yaml" test-excerpt="registry.yaml"
-  - id: register-contact
+  register-contact:
     display: {label: Register contact, description: Create one contact through a Proposal that applies on submit without external review.}
     execution:
       mode: proposal
@@ -156,7 +156,7 @@ Add the `register-contact` scenario to the end of the file. It takes the Proposa
 steps as `editor`: start it, submit it, and read it until the registry has applied it.
 
 ```yaml title="dev/scenarios.yaml" test-append
-  - id: register-contact
+  register-contact:
     steps:
       - id: start
         product: breg

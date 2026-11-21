@@ -57,7 +57,7 @@
     },
     "distributions": []
   },
-  "modules": {"business-core":{"digest":"sha256:f4cfb0ed31b849925a4e2fffbe2ba0b7f58bed21f4043656ba81e8d507bd6724","version":"0.1.0"}},
+  "modules": {"business-core":{"digest":"sha256:f3d8637dffb8144f7bb9396db6ead529ae5e6ac8a76b855968987bcf9bae3ab2","version":"0.1.0"}},
   "recordTypes": {
     "legal-entity": {
       "primaryDataset": "business",

@@ -65,9 +65,7 @@ pub fn self_issued_project() -> Value {
             {"id": "active", "type": "boolean", "required": true, "classification": "internal"}
         ]
     }));
-    value["actions"].as_array_mut().unwrap().push(json!({
-        "id": "withdraw-consent",
-        "execution": {"mode":"immediate"},
+    value["actions"]["withdraw-consent"] = json!({"execution": {"mode":"immediate"},
         "consentIssuer": "self",
         "inputs": [
             {"id": "link", "type": "reference", "target": "consent-subject-link", "required": true, "classification": "internal"},
@@ -91,7 +89,7 @@ pub fn self_issued_project() -> Value {
                 "link": {"fromInput": "link"}
             }
         }]}
-    }));
+    });
     value["accessProfiles"].as_object_mut().unwrap().insert("consent-self".to_owned(), json!({"principalClaim": "principal", "requiredScopes": ["consent:self"],
         "permissions": {"actions": [{
             "action": "withdraw-consent", "operations": ["invoke"],

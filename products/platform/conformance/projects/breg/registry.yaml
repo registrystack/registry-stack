@@ -46,4 +46,4 @@ accessProfiles:
 modules:
   contact-notes:
     version: 0.1.0
-    digest: "sha256:fcea695cf74e67dcc3d03ffc907954feaa70d1ed80f1a54684082d55183c1319"
+    digest: "sha256:91e899b63dfb5aaca9b7cb05b2c84846e2e2919521eeeb75b62fe8dde46c0ac7"

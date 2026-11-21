@@ -3325,7 +3325,7 @@ async fn technical_fault_rolls_back_effects_and_exhausts_five_bounded_attempts()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn business_guard_refusal_is_terminal_and_consumes_one_attempt() {
     let mut source = timer_project_source();
-    source["actions"][0]["commitGuards"] = json!({"targets":[{
+    source["actions"]["activate-service"]["commitGuards"] = json!({"targets":[{
         "input":"service","field":"status","equals":"active"
     }]});
     let harness = timer_outcome_harness(
@@ -3369,7 +3369,7 @@ async fn mapped_required_input_refusal_is_terminal_and_consumes_one_attempt() {
     let mut source = timer_project_source();
     source["recordTypes"]["service"]["timers"][0]["input"]["required-revision"] =
         json!({"fromField":"activation-revision"});
-    source["actions"][0]["inputs"]
+    source["actions"]["activate-service"]["inputs"]
         .as_array_mut()
         .expect("Action inputs are an array")
         .push(json!({
@@ -7475,7 +7475,7 @@ fn compiled_timer_free_registry() -> registry_breg::CompiledRegistry {
         .expect("service fixture is an object")
         .remove("timers");
     source["timerGrants"] = json!([]);
-    source["actions"] = json!([]);
+    source["actions"] = json!({});
     compile_registry(source)
 }
 
@@ -7508,8 +7508,7 @@ fn timer_project_source() -> Value {
                 "when":{"type":"fields","afterEquals":{"status":"active"}}}]
         }},
         "timerGrants":[{"recordType":"service","timer":"activate"}],
-        "actions":[{
-            "id":"activate-service","execution":{"mode":"immediate"},
+        "actions":{"activate-service": {"execution":{"mode":"immediate"},
             "inputs":[
                 {"id":"service","type":"reference","target":"service","required":true,"classification":"internal"},
                 {"id":"planned-at","type":"timestamp","required":true,"classification":"internal"},
@@ -7518,7 +7517,7 @@ fn timer_project_source() -> Value {
             "plan":{"type":"fixed","effects":[{
                 "id":"activated","target":{"fromInput":"service"},"operation":"patch","set":{"status":{"value":"active"}}
             }]}
-        }],
+        }},
         "accessProfiles":{"service-editor": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["service-administration"],
             "permissions":{"records":[{
@@ -7561,11 +7560,11 @@ fn compiled_create_only_registry() -> registry_breg::CompiledRegistry {
         "planned-at":{"fromField":"activates-at"},
         "operation-id":{"fromTimer":"occurrence-id"}
     });
-    source["actions"][0]["inputs"] = json!([
+    source["actions"]["activate-service"]["inputs"] = json!([
         {"id":"planned-at","type":"timestamp","required":true,"classification":"internal"},
         {"id":"operation-id","type":"uuid","required":true,"classification":"internal"}
     ]);
-    source["actions"][0]["plan"] = json!({"type":"fixed","effects":[{
+    source["actions"]["activate-service"]["plan"] = json!({"type":"fixed","effects":[{
         "id":"activation-log","target":{"recordType":"activation-log"},"operation":"create",
         "set":{
             "planned-at":{"fromInput":"planned-at"},
@@ -7577,7 +7576,7 @@ fn compiled_create_only_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_two_anchor_patch_effects_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    source["actions"][0]["plan"]["effects"] = json!([
+    source["actions"]["activate-service"]["plan"]["effects"] = json!([
         {
             "id":"activate-status",
             "target":{"fromInput":"service"},
@@ -7641,14 +7640,14 @@ fn compiled_secondary_get_registry_for(mapping_field: &str) -> registry_breg::Co
         .as_array_mut()
         .unwrap()
         .push(json!("backup-approval"));
-    source["actions"][0]["inputs"]
+    source["actions"]["activate-service"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"approval","type":"reference","target":"approval","required":true,
             "classification":"internal"
         }));
-    source["actions"][0]["commitGuards"] = json!({
+    source["actions"]["activate-service"]["commitGuards"] = json!({
         "targets":[{"input":"approval","field":"status","equals":"approved"}]
     });
     source["accessProfiles"]["service-editor"]["permissions"]["records"]
@@ -7676,14 +7675,14 @@ fn compiled_missing_literal_secondary_get_registry() -> registry_breg::CompiledR
         }));
     source["recordTypes"]["service"]["timers"][0]["input"]["approval"] =
         json!({"value":"00000000-0000-0000-0000-000000000404"});
-    source["actions"][0]["inputs"]
+    source["actions"]["activate-service"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"approval","type":"reference","target":"approval","required":true,
             "classification":"internal"
         }));
-    source["actions"][0]["commitGuards"] = json!({
+    source["actions"]["activate-service"]["commitGuards"] = json!({
         "targets":[{"input":"approval","field":"status","equals":"approved"}]
     });
     source["accessProfiles"]["service-editor"]["permissions"]["records"]
@@ -7726,7 +7725,7 @@ fn compiled_existence_only_secondary_get_registry() -> registry_breg::CompiledRe
         .as_array_mut()
         .unwrap()
         .push(json!("approval"));
-    source["actions"][0]["inputs"]
+    source["actions"]["activate-service"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -7764,14 +7763,14 @@ fn compiled_same_type_get_registry() -> registry_breg::CompiledRegistry {
         .as_array_mut()
         .unwrap()
         .push(json!("related-service"));
-    source["actions"][0]["inputs"]
+    source["actions"]["activate-service"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"related-service","type":"reference","target":"service","required":true,
             "classification":"internal"
         }));
-    source["actions"][0]["commitGuards"] = json!({
+    source["actions"]["activate-service"]["commitGuards"] = json!({
         "targets":[{"input":"related-service","field":"status","equals":"approved"}]
     });
     compile_registry(source)
@@ -7793,14 +7792,14 @@ fn compiled_encrypted_current_registry() -> registry_breg::CompiledRegistry {
         }));
     source["recordTypes"]["service"]["timers"][0]["input"]["current-note"] =
         json!({"fromField":"note"});
-    source["actions"][0]["inputs"]
+    source["actions"]["activate-service"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"current-note","type":"string","maximumLength":128,"required":true,
             "classification":"internal"
         }));
-    source["actions"][0]["plan"]["effects"][0]["set"]["copied-note"] =
+    source["actions"]["activate-service"]["plan"]["effects"][0]["set"]["copied-note"] =
         json!({"fromInput":"current-note"});
     source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["readableFields"]
         .as_array_mut()
@@ -7825,7 +7824,7 @@ fn compiled_self_clearing_registry() -> registry_breg::CompiledRegistry {
         .as_object_mut()
         .expect("the activates-at field is an object")
         .remove("required");
-    source["actions"][0]["plan"] = json!({"type":"fixed","effects":[{
+    source["actions"]["activate-service"]["plan"] = json!({"type":"fixed","effects":[{
         "id":"activated","target":{"fromInput":"service"},"operation":"patch",
         "set":{"status":{"value":"active"}},"clear":["activates-at"]
     }]});
@@ -7834,7 +7833,7 @@ fn compiled_self_clearing_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_self_rearming_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    source["actions"][0]["plan"] = json!({"type":"fixed","effects":[{
+    source["actions"]["activate-service"]["plan"] = json!({"type":"fixed","effects":[{
         "id":"activated","target":{"fromInput":"service"},"operation":"patch",
         "set":{
             "status":{"value":"active"},
@@ -7852,7 +7851,7 @@ fn compiled_terminal_lifecycle_registry(
         .as_object_mut()
         .expect("the activates-at field is an object")
         .remove("required");
-    source["actions"][0]["commitGuards"] = json!({"targets":[{
+    source["actions"]["activate-service"]["commitGuards"] = json!({"targets":[{
         "input":"service","field":"note","equals":"allow"
     }]});
     if successor_predicate {
@@ -7902,7 +7901,7 @@ fn compiled_cross_timer_rearming_registry() -> registry_breg::CompiledRegistry {
         .as_array_mut()
         .expect("timer grants are an array")
         .push(json!({"recordType":"service","timer":"activate-followup"}));
-    source["actions"][0]["plan"]["effects"][0]["set"]["followup-at"] =
+    source["actions"]["activate-service"]["plan"]["effects"][0]["set"]["followup-at"] =
         json!({"fromInput":"planned-at"});
     compile_registry(source)
 }
@@ -7942,10 +7941,9 @@ fn compiled_created_record_timer_rearming_registry() -> registry_breg::CompiledR
         .expect("timer grants are an array")
         .push(json!({"recordType":"activation-task","timer":"dispatch"}));
     source["actions"]
-        .as_array_mut()
+        .as_object_mut()
         .expect("actions are an array")
-        .push(json!({
-            "id":"dispatch-task","execution":{"mode":"immediate"},
+        .insert("dispatch-task".to_owned(), json!({"execution":{"mode":"immediate"},
             "inputs":[
                 {"id":"task","type":"reference","target":"activation-task","required":true,"classification":"internal"},
                 {"id":"operation-id","type":"uuid","required":true,"classification":"internal"}
@@ -7955,7 +7953,7 @@ fn compiled_created_record_timer_rearming_registry() -> registry_breg::CompiledR
                 "set":{"status":{"value":"active"}}
             }]}
         }));
-    source["actions"][0]["plan"]["effects"] = json!([
+    source["actions"]["activate-service"]["plan"]["effects"] = json!([
         {
             "id":"activated","target":{"fromInput":"service"},"operation":"patch",
             "set":{"status":{"value":"active"}}

@@ -35,7 +35,7 @@ fn presentation_members_use_the_shared_display_text_reader() {
         "/accessProfiles/directory-editor/display",
         "/statisticalDatasets/0/display",
         "/recordTypes/entry/hooks/0/display",
-        "/actions/0/execution/proposal/hooks/0/display",
+        "/actions/register-entry/execution/proposal/hooks/0/display",
     ] {
         for member in ["label", "description"] {
             let mut source = authored_display();
@@ -56,7 +56,7 @@ fn presentation_duplicates_are_scoped_to_their_own_kind() {
         ),
         ("/recordTypes/entry/hooks", "breg.hook.duplicate-label"),
         (
-            "/actions/0/execution/proposal/hooks",
+            "/actions/register-entry/execution/proposal/hooks",
             "breg.proposal-hook.duplicate-label",
         ),
     ];
@@ -257,15 +257,34 @@ fn refusal(source: &Value, path: &str, code: &str) {
 
 #[test]
 fn locally_defined_ids_and_type_keys_are_refused_at_their_source() {
-    for path in [
-        "/datasets/0/id",
-        "/functions/0/id",
-        "/reviewAuthorities/0/id",
-        "/actions/1/execution/proposal/reviewContext/id",
-    ] {
+    for path in ["/datasets/0/id", "/reviewAuthorities/0/id"] {
         let mut source = facility();
         *source.pointer_mut(path).unwrap() = json!("Bad Local ID");
         refusal(&source, path, "config.invalid-value");
+    }
+    let mut source = facility();
+    *source
+        .pointer_mut("/actions/correct-address/execution/proposal/reviewContext/id")
+        .unwrap() = json!("Bad Local ID");
+    refusal(
+        &source,
+        "/actions/correct-address/execution/proposal/reviewContext/id",
+        "config.invalid-value",
+    );
+    for collection in ["functions", "actions"] {
+        let mut source = facility();
+        let entries = source[collection].as_object_mut().unwrap();
+        let (_, entry) = entries
+            .iter()
+            .next()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .unwrap();
+        entries.insert("Bad Local ID".to_owned(), entry);
+        refusal(
+            &source,
+            &format!("/{collection}/Bad Local ID"),
+            "config.invalid-value",
+        );
     }
     let mut source = facility();
     source["valueTypes"]["Bad Type"] = json!({"type":"string","maximumLength":10});
@@ -276,7 +295,7 @@ fn locally_defined_ids_and_type_keys_are_refused_at_their_source() {
 fn display_text_is_refused_at_each_breg_authoring_boundary() {
     for path in [
         "/recordTypes/facility/display/label",
-        "/actions/1/plan/refusals/0/label",
+        "/actions/correct-address/plan/refusals/0/label",
     ] {
         let mut source = facility();
         *source.pointer_mut(path).unwrap() = json!("safe\u{202e}text");
@@ -420,17 +439,17 @@ project:
     let cases = [
         (
             format!(
-                "{HEAD}actions:\n  - id: update-item\n    execution: {{mode: immediate}}\n    plan:\n      type: fixed\n      effects:\n        - target: {{fromInput: item}}\n          operation: patch\n          set: {{name: {{value: first}}}}\n        - id: effect_1\n          target: {{fromInput: item}}\n          operation: patch\n          set: {{name: {{value: second}}}}\n"
+                "{HEAD}actions:\n  update-item:\n    execution: {{mode: immediate}}\n    plan:\n      type: fixed\n      effects:\n        - target: {{fromInput: item}}\n          operation: patch\n          set: {{name: {{value: first}}}}\n        - id: effect_1\n          target: {{fromInput: item}}\n          operation: patch\n          set: {{name: {{value: second}}}}\n"
             ),
-            ("/actions/0/plan/effects/1/id", 17, 15),
-            ("/actions/0/plan/effects/0", 14, 11),
+            ("/actions/update-item/plan/effects/1/id", 17, 15),
+            ("/actions/update-item/plan/effects/0", 14, 11),
         ),
         (
             format!(
-                "{HEAD}actions:\n  - id: create-and-update\n    execution: {{mode: immediate}}\n    plan:\n      type: fixed\n      effects:\n        - id: effect_2\n          target: {{recordType: item}}\n          operation: create\n          set: {{name: {{value: created}}}}\n        - target: {{fromInput: item}}\n          operation: patch\n          set: {{name: {{value: updated}}}}\n"
+                "{HEAD}actions:\n  create-and-update:\n    execution: {{mode: immediate}}\n    plan:\n      type: fixed\n      effects:\n        - id: effect_2\n          target: {{recordType: item}}\n          operation: create\n          set: {{name: {{value: created}}}}\n        - target: {{fromInput: item}}\n          operation: patch\n          set: {{name: {{value: updated}}}}\n"
             ),
-            ("/actions/0/plan/effects/1", 18, 11),
-            ("/actions/0/plan/effects/0/id", 14, 15),
+            ("/actions/create-and-update/plan/effects/1", 18, 11),
+            ("/actions/create-and-update/plan/effects/0/id", 14, 15),
         ),
     ];
 
@@ -603,10 +622,9 @@ fn duplicate_authored_labels_warn_with_normalized_comparison_and_locations() {
 #[test]
 fn action_refusal_labels_are_scoped_to_their_action() {
     let mut source = facility();
-    let mut independent = source["actions"][1].clone();
-    independent["id"] = json!("independent-correction");
+    let mut independent = source["actions"]["correct-address"].clone();
     independent["display"]["label"] = json!("Independent correction");
-    source["actions"].as_array_mut().unwrap().push(independent);
+    source["actions"]["independent-correction"] = independent;
 
     let decoded = read_project_yaml("registry.yaml", &bytes(&source)).unwrap();
     assert!(decoded
@@ -616,8 +634,8 @@ fn action_refusal_labels_are_scoped_to_their_action() {
         .iter()
         .all(|warning| warning.code != "breg.action-refusal.duplicate-label"));
 
-    let refusal = source["actions"][1]["plan"]["refusals"][0].clone();
-    source["actions"][1]["plan"]["refusals"]
+    let refusal = source["actions"]["correct-address"]["plan"]["refusals"][0].clone();
+    source["actions"]["correct-address"]["plan"]["refusals"]
         .as_array_mut()
         .unwrap()
         .push(json!({"code":"same-action-peer","label":refusal["label"]}));
@@ -629,10 +647,13 @@ fn action_refusal_labels_are_scoped_to_their_action() {
         .filter(|warning| warning.code == "breg.action-refusal.duplicate-label")
         .collect::<Vec<_>>();
     assert_eq!(warnings.len(), 1);
-    assert_eq!(warnings[0].path, "/actions/1/plan/refusals/1/label");
+    assert_eq!(
+        warnings[0].path,
+        "/actions/correct-address/plan/refusals/1/label"
+    );
     assert_eq!(
         warnings[0].related[0].path,
-        "/actions/1/plan/refusals/0/label"
+        "/actions/correct-address/plan/refusals/0/label"
     );
 }
 
@@ -756,8 +777,8 @@ fn reader_refusals_sort_and_bound_warnings_with_integrity_errors_once() {
 fn duplicate_presentation_text_warns_in_each_breg_namespace() {
     let mut source = facility();
     source["project"]["defaultLanguage"] = json!("EN");
-    let refusal = source["actions"][1]["plan"]["refusals"][0].clone();
-    source["actions"][1]["plan"]["refusals"]
+    let refusal = source["actions"]["correct-address"]["plan"]["refusals"][0].clone();
+    source["actions"]["correct-address"]["plan"]["refusals"]
         .as_array_mut()
         .unwrap()
         .push(json!({"code":"another-refusal","label":refusal["label"]}));
@@ -814,7 +835,7 @@ fn duplicate_presentation_text_warns_in_each_breg_namespace() {
     for (code, path) in [
         (
             "breg.action-refusal.duplicate-label",
-            "/actions/1/plan/refusals/1/label",
+            "/actions/correct-address/plan/refusals/1/label",
         ),
         (
             "breg.recipient.duplicate-name",
@@ -970,8 +991,8 @@ fn compiler_refuses_lookalike_ids_across_project_and_module_files() {
 fn compiler_warns_for_duplicate_labels_across_modules_and_extensions() {
     let mut project_source = facility();
     project_source["modules"] = json!({"local-module": {"version":"0.1.0"}});
-    project_source["functions"] = json!([]);
-    project_source["actions"] = json!([]);
+    project_source["functions"] = json!({});
+    project_source["actions"] = json!({});
     {
         let profiles = project_source["accessProfiles"].as_object_mut().unwrap();
         let keep = ["operator-editor", "facility-reader", "directory-editor"];
@@ -1071,10 +1092,8 @@ fn compiler_scopes_refusal_labels_by_action_across_project_and_module() {
         .unwrap()
         .value;
 
-    let mut function = project_source["functions"][0].clone();
-    function["id"] = json!("module-address-plan");
-    let mut action = project_source["actions"][1].clone();
-    action["id"] = json!("module-correct-address");
+    let function = project_source["functions"]["correct-address-plan"].clone();
+    let mut action = project_source["actions"]["correct-address"].clone();
     action["plan"]["function"] = json!("module-address-plan");
     action["display"]["label"] = json!("Module address correction");
     let module_source = json!({
@@ -1083,8 +1102,8 @@ fn compiler_scopes_refusal_labels_by_action_across_project_and_module() {
         "id":"local-module",
         "version":"0.1.0",
         "valueTypes":project_source["valueTypes"].clone(),
-        "functions":[function],
-        "actions":[action]
+        "functions":{"module-address-plan": function},
+        "actions":{"module-correct-address": action}
     });
     let module = read_module_yaml("module.yaml", &bytes(&module_source))
         .unwrap()
@@ -1117,9 +1136,9 @@ fn compiler_scopes_refusal_labels_by_action_across_project_and_module() {
 
 #[test]
 fn function_capability_duplicates_are_not_collapsed() {
-    let path = "/functions/0/capabilities";
+    let path = "/functions/correct-address-plan/capabilities";
     let mut source = facility();
-    source["functions"][0]["capabilities"] = json!(["evidence", "evidence"]);
+    source["functions"]["correct-address-plan"]["capabilities"] = json!(["evidence", "evidence"]);
     refusal(&source, &format!("{path}/1"), "config.duplicate-item");
     let yaml = bytes(&source);
     let text = std::str::from_utf8(&yaml).unwrap();
@@ -1150,11 +1169,11 @@ fn function_capability_duplicates_are_not_collapsed() {
 #[test]
 fn nested_union_refusals_keep_the_member_path_line_and_column() {
     for path in [
-        "/functions/0",
-        "/actions/0/execution",
-        "/actions/1/plan",
-        "/actions/2/execution/proposal/review",
-        "/actions/2/execution/proposal/application",
+        "/functions/correct-address-plan",
+        "/actions/register-facility/execution",
+        "/actions/correct-address/plan",
+        "/actions/deactivate-facility/execution/proposal/review",
+        "/actions/deactivate-facility/execution/proposal/application",
     ] {
         let mut source = facility();
         source.pointer_mut(path).unwrap()["unexpectedMember"] = json!(true);
@@ -1198,26 +1217,26 @@ fn resource_bounds_and_signed_comparison_thresholds_have_distinct_semantics() {
     ] {
         for value in values {
             let mut source = facility();
-            source["functions"][0]["limits"] = json!({key:value});
+            source["functions"]["correct-address-plan"]["limits"] = json!({key:value});
             refusal(
                 &source,
-                &format!("/functions/0/limits/{key}"),
+                &format!("/functions/correct-address-plan/limits/{key}"),
                 "config.out-of-range",
             );
         }
     }
     for value in [0, 33] {
         let mut source = facility();
-        source["actions"][1]["execution"]["proposal"]["application"] =
+        source["actions"]["correct-address"]["execution"]["proposal"]["application"] =
             json!({"mode":"automatic","maximumAttempts":value});
         refusal(
             &source,
-            "/actions/1/execution/proposal/application/maximumAttempts",
+            "/actions/correct-address/execution/proposal/application/maximumAttempts",
             "config.out-of-range",
         );
     }
     let mut source = facility();
-    source["actions"][1]["commitGuards"]["targets"] = json!([
+    source["actions"]["correct-address"]["commitGuards"]["targets"] = json!([
         {"input":"facility","field":"signed-value","atLeast":i64::MIN},
         {"input":"facility","field":"signed-value","atMost":i64::MAX}
     ]);
@@ -1227,7 +1246,7 @@ fn resource_bounds_and_signed_comparison_thresholds_have_distinct_semantics() {
 #[test]
 fn review_policy_ids_are_external_and_keep_the_review_protocol_bound() {
     let mut source = facility();
-    source["actions"][1]["execution"]["proposal"]["review"]["policy"]["id"] =
+    source["actions"]["correct-address"]["execution"]["proposal"]["review"]["policy"]["id"] =
         json!("urn:example:Policy/Review@2");
     let read = read_project_yaml("registry.yaml", &bytes(&source))
         .unwrap()
@@ -1237,10 +1256,11 @@ fn review_policy_ids_are_external_and_keep_the_review_protocol_bound() {
         .to_string()
         .contains("urn:example:Policy/Review@2"));
     for id in [" ".to_owned(), "é".repeat(65)] {
-        source["actions"][1]["execution"]["proposal"]["review"]["policy"]["id"] = json!(id);
+        source["actions"]["correct-address"]["execution"]["proposal"]["review"]["policy"]["id"] =
+            json!(id);
         refusal(
             &source,
-            "/actions/1/execution/proposal/review/policy/id",
+            "/actions/correct-address/execution/proposal/review/policy/id",
             "config.invalid-value",
         );
     }
@@ -1264,24 +1284,24 @@ fn schema_and_reader_agree_on_bounds_native_tags_and_public_context_names() {
         ("maximumOutputBytes", 2_097_152),
     ] {
         for value in [1, maximum] {
-            source["functions"][0]["limits"] = json!({key:value});
+            source["functions"]["correct-address-plan"]["limits"] = json!({key:value});
             assert!(schema.is_valid(&source));
             read_project_yaml("registry.yaml", &bytes(&source)).unwrap();
         }
         for value in [0, maximum + 1] {
-            source["functions"][0]["limits"] = json!({key:value});
+            source["functions"]["correct-address-plan"]["limits"] = json!({key:value});
             assert!(!schema.is_valid(&source));
         }
     }
     source = facility();
-    source["actions"][1]["execution"]["proposal"]["reviewContext"]["fields"]["extraPublicName"] =
-        json!({"type":"input","input":"city"});
+    source["actions"]["correct-address"]["execution"]["proposal"]["reviewContext"]["fields"]
+        ["extraPublicName"] = json!({"type":"input","input":"city"});
     assert!(schema.is_valid(&source));
-    source["actions"][1]["execution"]["proposal"]["reviewContext"]["fields"]["bad-name"] =
-        json!({"type":"input","input":"city"});
+    source["actions"]["correct-address"]["execution"]["proposal"]["reviewContext"]["fields"]
+        ["bad-name"] = json!({"type":"input","input":"city"});
     assert!(!schema.is_valid(&source));
     source = facility();
-    source["actions"][1]["commitGuards"]["targets"] = json!([
+    source["actions"]["correct-address"]["commitGuards"]["targets"] = json!([
         {"input":"facility","field":"signed-value","atLeast":i64::MIN},
         {"input":"facility","field":"signed-value","atMost":i64::MAX}
     ]);
@@ -1306,7 +1326,7 @@ fn named_types_keep_record_attributes_and_reject_them_on_action_inputs() {
     });
     assert!(schema.is_valid(&source));
     read_project_yaml("registry.yaml", &bytes(&source)).unwrap();
-    source["actions"][1]["inputs"][2]["encrypted"] = json!(true);
+    source["actions"]["correct-address"]["inputs"][2]["encrypted"] = json!(true);
     assert!(!schema.is_valid(&source));
     assert!(read_project_yaml("registry.yaml", &bytes(&source)).is_err());
 }

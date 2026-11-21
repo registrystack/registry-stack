@@ -328,7 +328,7 @@ fn model_source_bindings_cover_module_records_actions_inputs_and_record_hooks() 
     let action_index = item_index(&model["actions"], "register-facility");
     assert_eq!(
         source_binding(&model, module_file, &format!("/actions/{action_index}"))["sourcePointer"],
-        "/actions/0"
+        "/actions/register-facility"
     );
     let input_index = item_index(&model["actions"][action_index]["inputs"], "facility-code");
     assert_eq!(
@@ -337,7 +337,7 @@ fn model_source_bindings_cover_module_records_actions_inputs_and_record_hooks() 
             module_file,
             &format!("/actions/{action_index}/inputs/{input_index}")
         )["sourcePointer"],
-        "/actions/0/inputs/0"
+        "/actions/register-facility/inputs/0"
     );
 }
 
@@ -362,7 +362,7 @@ fn model_source_bindings_cover_proposal_hooks_and_project_inventories() {
             "registry.yaml",
             &format!("/actions/{action_index}/execution/proposal/hooks/0")
         )["sourcePointer"],
-        "/actions/1/execution/proposal/hooks/0"
+        "/actions/register-contact/execution/proposal/hooks/0"
     );
     for collection in ["datasets", "accessProfiles"] {
         for index in 0..model[collection].as_array().unwrap().len() {

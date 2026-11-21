@@ -29,7 +29,7 @@ recordTypes:
       - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
 
 actions:
-  - id: correct-name
+  correct-name:
     display: {label: Correct contact name, description: Freeze one correction for independent review and automatic application.}
     execution:
       mode: proposal

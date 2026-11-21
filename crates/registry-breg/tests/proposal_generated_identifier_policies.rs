@@ -30,8 +30,7 @@ fn project() -> Value {
                 "generate": {"type": "sequence", "minimumDigits": 1}
             }]
         }},
-        "actions": [{
-            "id": "register",
+        "actions": {"register": {
             "inputs": [{
                 "id": "confirmed",
                 "type": "boolean",
@@ -52,7 +51,7 @@ fn project() -> Value {
                 "operation": "create",
                 "set": {}
             }]}
-        }],
+        }},
         "accessProfiles": {"operator": {
             "default": true,
             "principalClaim": "principal",
@@ -128,7 +127,7 @@ fn patch_only_proposal_does_not_gain_generated_identifier_insert_policy() {
             "maximumLength": 32,
             "classification": "internal"
         }));
-    project["actions"][0]["inputs"] = json!([
+    project["actions"]["register"]["inputs"] = json!([
         {
             "id": "registration",
             "type": "reference",
@@ -144,7 +143,7 @@ fn patch_only_proposal_does_not_gain_generated_identifier_insert_policy() {
             "classification": "internal"
         }
     ]);
-    project["actions"][0]["plan"]["effects"][0] = json!({
+    project["actions"]["register"]["plan"]["effects"][0] = json!({
         "id": "registration",
         "target": {"fromInput": "registration"},
         "operation": "patch",

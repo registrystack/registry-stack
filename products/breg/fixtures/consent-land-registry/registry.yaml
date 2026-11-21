@@ -65,7 +65,7 @@
     ],
     "distributions": []
   },
-  "modules": {"consent-land-registry-core":{"digest":"sha256:dbbd9279c938260e928f61899ad7d5d867da1c5aafd5e4e1c82e13942ef5379b","version":"0.1.0"},"consent-tenure-right":{"digest":"sha256:d58b09423e2e0953b414f8389563598c7dc7bf22c5df2b0fe8bfa5b0e22adf5f","version":"0.1.0"}},
+  "modules": {"consent-land-registry-core":{"digest":"sha256:3b04597b187b7085830952c5b76d14ee8f9d48c6395df0b88f7eeb865906c04f","version":"0.1.0"},"consent-tenure-right":{"digest":"sha256:957c95afa8b02dfb9b02e92e7ca23ad0ee59564ae1c36c4fbffafc9a09dfe1cc","version":"0.1.0"}},
   "recipients": {
     "organizations": [
       {

@@ -148,9 +148,8 @@
       ]
     }
   },
-  "actions": [
-    {
-      "id": "register-facility",
+  "actions": {
+    "register-facility": {
       "inputs": [
         {
           "id": "facility-code",
@@ -234,8 +233,7 @@
         ]
       }
     },
-    {
-      "id": "transfer-facility",
+    "transfer-facility": {
       "inputs": [
         {
           "id": "facility",
@@ -274,5 +272,5 @@
         "mode": "immediate"
       }
     }
-  ]
+  }
 }

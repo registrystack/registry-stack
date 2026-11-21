@@ -259,8 +259,7 @@ fn proposal_policy_sources(add_submitter: bool, add_optional_field: bool) -> (Ve
             "fields": [{"id": "label", "type": "string", "maximumLength": 40,
                 "required": true, "classification": "internal"}]
         }},
-        "actions": [{
-            "id": "correct-label",
+        "actions": {"correct-label": {
             "execution": {"mode": "proposal", "proposal": {
                 "review": {"type": "required", "authority": "casework-main",
                     "source": "neutral-registry", "policy": {"id": "request-review"}},
@@ -275,7 +274,7 @@ fn proposal_policy_sources(add_submitter: bool, add_optional_field: bool) -> (Ve
                 "target": {"fromInput": "asset"}, "operation": "patch",
                 "set": {"label": {"fromInput": "label"}}
             }]}
-        }]
+        }}
     });
     if add_optional_field {
         module["recordTypes"]["asset"]["fields"]

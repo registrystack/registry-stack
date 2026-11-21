@@ -56,7 +56,7 @@
     },
     "distributions": []
   },
-  "modules": {"inspection-core":{"digest":"sha256:3de273f129604a4b0039d7def4dbbabc8f7e26e25676bbe32f38bd31f0b5215d","version":"0.1.0"}},
+  "modules": {"inspection-core":{"digest":"sha256:a50c01b3cd9195c0ce8230418ce32387dc73e4e2ed97e9853b3e3a6edc098619","version":"0.1.0"}},
   "recordTypes": {
     "inspection": {
       "primaryDataset": "inspection",

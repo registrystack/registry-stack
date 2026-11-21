@@ -145,14 +145,14 @@ fn wasm_person_action(module_bytes: &[u8]) -> CompiledAction {
             {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
         ]}},
-        "functions":[{"id":"person-plan","runtime":"wasm","source":"handlers/guest.wasm","entrypoint":"handle","abi":"registry.action-plan/v1","capabilities":[]}],
-        "actions":[{"id":"register-person","execution":{"mode":"immediate"},"inputs":[
+        "functions":{"person-plan": {"runtime":"wasm","source":"handlers/guest.wasm","entrypoint":"handle","abi":"registry.action-plan/v1","capabilities":[]}},
+        "actions":{"register-person": {"execution":{"mode":"immediate"},"inputs":[
             {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"family-name","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
         ],"plan":{"type":"function","function":"person-plan","inputs":["given-name","family-name","person"],"refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
             {"id":"person","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]}
-        ]}}],
+        ]}}},
         "accessProfiles":{"registrar": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}}
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();

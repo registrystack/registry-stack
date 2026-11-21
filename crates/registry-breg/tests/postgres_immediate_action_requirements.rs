@@ -281,7 +281,7 @@ async fn set_parent_eligible_on(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn action_input_equality_is_authorized_atomic_and_replayed_from_the_receipt() {
     let mut source = support::project();
-    source["actions"][0]["inputs"]
+    source["actions"]["register-child"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -289,11 +289,11 @@ async fn action_input_equality_is_authorized_atomic_and_replayed_from_the_receip
             "vocabulary":"status", "values":["active","inactive"], "required":true,
             "classification":"restricted"
         }));
-    source["actions"][0]["commitGuards"]["targets"][0]
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]
         .as_object_mut()
         .unwrap()
         .remove("equals");
-    source["actions"][0]["commitGuards"]["targets"][0]["equalsFromInput"] =
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]["equalsFromInput"] =
         json!("expected-status");
     let (database, registry, identity) = setup_with_project(source).await;
     let app = app(&database, registry.clone(), identity, None);
@@ -334,7 +334,7 @@ async fn current_date_offset_is_enforced_at_immediate_commit() {
         .push(json!({
             "id":"eligible-on", "type":"date", "classification":"restricted"
         }));
-    source["actions"][0]["commitGuards"]["targets"]
+    source["actions"]["register-child"]["commitGuards"]["targets"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -379,7 +379,9 @@ async fn ordered_input_guards_compare_dates_and_instants_against_stored_fields()
     ] {
         fields.push(json!({"id": id, "type": kind, "classification": "restricted"}));
     }
-    let inputs = source["actions"][0]["inputs"].as_array_mut().unwrap();
+    let inputs = source["actions"]["register-child"]["inputs"]
+        .as_array_mut()
+        .unwrap();
     for (id, api_name, kind) in [
         ("assigned-on", "assignedOn", "date"),
         ("assigned-at", "assignedAt", "timestamp"),
@@ -389,7 +391,7 @@ async fn ordered_input_guards_compare_dates_and_instants_against_stored_fields()
             "classification": "restricted"
         }));
     }
-    source["actions"][0]["commitGuards"]["targets"] = json!([
+    source["actions"]["register-child"]["commitGuards"]["targets"] = json!([
         {"input": "parent", "field": "opened-on", "atMostFromInput": "assigned-on"},
         {"input": "parent", "field": "opened-at", "atMostFromInput": "assigned-at"},
         {"input": "parent", "field": "expires-on", "atLeastFromInput": "assigned-on"}
@@ -700,7 +702,7 @@ async fn immediate_action_availability_preserves_disclosure_and_commit_boundarie
     }
 
     let mut source = with_parent_get(support::project(), &["status", "zone"]);
-    source["actions"][0]["inputs"]
+    source["actions"]["register-child"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -708,11 +710,11 @@ async fn immediate_action_availability_preserves_disclosure_and_commit_boundarie
             "vocabulary":"status", "values":["active","inactive"], "required":true,
             "classification":"restricted"
         }));
-    source["actions"][0]["commitGuards"]["targets"][0]
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]
         .as_object_mut()
         .unwrap()
         .remove("equals");
-    source["actions"][0]["commitGuards"]["targets"][0]["equalsFromInput"] =
+    source["actions"]["register-child"]["commitGuards"]["targets"][0]["equalsFromInput"] =
         json!("expected-status");
     let (database, registry, identity) = setup_with_project(source).await;
     let equality_app = app(&database, registry.clone(), identity, None);
@@ -764,7 +766,7 @@ async fn immediate_action_availability_preserves_disclosure_and_commit_boundarie
     database.cleanup().await;
 
     let mut source = with_parent_get(support::project(), &["status", "zone"]);
-    source["actions"][0]["commitGuards"]["targets"] =
+    source["actions"]["register-child"]["commitGuards"]["targets"] =
         json!([{"input":"parent", "revision":"unchanged"}]);
     let (database, registry, identity) = setup_with_project(source).await;
     let revision_app = app(&database, registry.clone(), identity, None);
@@ -887,7 +889,7 @@ async fn immediate_action_availability_preserves_disclosure_and_commit_boundarie
         .all(|count| *count == 0));
     database.cleanup().await;
 
-    source["actions"][0]["commitGuards"]["targets"]
+    source["actions"]["register-child"]["commitGuards"]["targets"]
         .as_array_mut()
         .unwrap()
         .push(json!({"input":"other-parent", "revision":"unchanged"}));
@@ -948,9 +950,10 @@ async fn authored_guard_reason_requires_all_guard_and_boundary_facts_to_be_reada
     ] {
         let mut source = with_parent_get(support::project(), readable);
         source["recordTypes"]["parent"]["fields"].as_array_mut().unwrap().push(json!({"id":"secondary","type":"string","maximumLength":32,"classification":"restricted"}));
-        source["actions"][0]["commitGuards"]["targets"][0]["reason"] = json!("parent-inactive");
+        source["actions"]["register-child"]["commitGuards"]["targets"][0]["reason"] =
+            json!("parent-inactive");
         // A second unreadable guard must conceal even a readable failed guard.
-        source["actions"][0]["commitGuards"]["targets"].as_array_mut().unwrap().push(
+        source["actions"]["register-child"]["commitGuards"]["targets"].as_array_mut().unwrap().push(
             json!({"input":"parent","field":"secondary","equals":"ready","reason":"secondary-unready"})
         );
         let (database, registry, identity) = setup_with_project(source).await;
@@ -1007,7 +1010,7 @@ async fn authored_guard_reason_requires_all_guard_and_boundary_facts_to_be_reada
 /// Adds a second required reference to `parent`. It carries no field guard,
 /// so its own checks are reference visibility and any revision condition.
 fn with_other_parent(mut source: Value) -> Value {
-    source["actions"][0]["inputs"]
+    source["actions"]["register-child"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -1032,14 +1035,15 @@ async fn action_effect_fields_are_authorized_under_a_locale_collation() {
                 "id": field, "type": "string", "maximumLength": 32, "required": true,
                 "classification": "restricted"
             }));
-        source["actions"][0]["inputs"]
+        source["actions"]["register-child"]["inputs"]
             .as_array_mut()
             .unwrap()
             .push(json!({
                 "id": field, "apiName": api_name, "type": "string", "maximumLength": 32,
                 "required": true, "classification": "restricted"
             }));
-        source["actions"][0]["plan"]["effects"][0]["set"][field] = json!({"fromInput": field});
+        source["actions"]["register-child"]["plan"]["effects"][0]["set"][field] =
+            json!({"fromInput": field});
     }
     let database = TestDatabase::create_with_locale(8, "en_US.utf8").await;
     let locale_ordered = database

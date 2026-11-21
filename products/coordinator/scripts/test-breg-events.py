@@ -138,8 +138,8 @@ def write_source(journey, key_root, proxy_url, paths):
                        for trigger in ("created", "patched")]
     seed = project["accessProfiles"]["seeder"]
     seed["permissions"]["records"][0]["operations"].append("patch")
-    project["actions"].append({
-        "id": "update-email", "execution": {"mode": "immediate"},
+    project["actions"]["update-email"] = ({
+        "execution": {"mode": "immediate"},
         "inputs": [{"id": "application", "apiName": "applicationId", "type": "reference", "target": "application",
                     "required": True, "classification": "internal"},
                    {"id": "email", "type": "string", "required": True, "minimumLength": 1, "maximumLength": 254,

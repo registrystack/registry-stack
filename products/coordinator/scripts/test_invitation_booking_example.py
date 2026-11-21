@@ -84,7 +84,7 @@ class InvitationBookingExample(unittest.TestCase):
             },
             invitation["constraints"],
         )
-        actions = {action["id"]: action for action in registry["actions"]}
+        actions = registry["actions"]
         claim = actions["claim-invitation"]
         guards = claim["commitGuards"]["targets"]
         self.assertIn(

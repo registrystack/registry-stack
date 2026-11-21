@@ -98,9 +98,8 @@ fn wasm_project() -> Value {
               {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ]
           }},
-          "functions":[{"id":"person-plan","runtime":"wasm","source":"wasm/handler.wasm","entrypoint":"handle","abi":"registry.action-plan/v1"}],
-          "actions":[{
-            "id":"register-person","execution":{"mode":"immediate"},
+          "functions":{"person-plan": {"runtime":"wasm","source":"wasm/handler.wasm","entrypoint":"handle","abi":"registry.action-plan/v1"}},
+          "actions":{"register-person": {"execution":{"mode":"immediate"},
             "inputs":[
               {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
@@ -112,7 +111,7 @@ fn wasm_project() -> Value {
                 "fields":["person-code","legal-name"]
               }]
             }
-          }],
+          }},
           "accessProfiles":{"registrar": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"actions":[{
               "action":"register-person","operations":["invoke"],
@@ -224,7 +223,7 @@ fn generated_only_create_accepts_an_empty_wasm_write_slot() {
         "classification": "internal",
         "generate": {"type": "sequence", "minimumDigits": 1}
     }]);
-    project["actions"][0]["plan"]["writes"][0]["fields"] = json!([]);
+    project["actions"]["register-person"]["plan"]["writes"][0]["fields"] = json!([]);
 
     let registry = compile_with_module(project, "wasm/handler.wasm", binary(MINIMAL_ABI_WAT))
         .expect("a generated-only create write slot compiles for WASM");
@@ -391,7 +390,7 @@ fn wasm_handler_field_discipline_is_reported_per_backend() {
     // pairs the backend with its source reference, so the refusal arrives
     // while the project is read.
     let mut with_script = wasm_project();
-    with_script["functions"][0]["script"] = json!("scripts/handler.rhai");
+    with_script["functions"]["person-plan"]["script"] = json!("scripts/handler.rhai");
     let failure = parse_project_json(&serde_json::to_vec(&with_script).unwrap())
         .map(|_| ())
         .expect_err("a WASM handler cannot declare a Rhai script");
@@ -404,7 +403,7 @@ fn wasm_handler_field_discipline_is_reported_per_backend() {
 
     // A non-.wasm module path never reaches the asset lookup.
     let mut bad_path = wasm_project();
-    bad_path["functions"][0]["source"] = json!("wasm/handler.txt");
+    bad_path["functions"]["person-plan"]["source"] = json!("wasm/handler.txt");
     let failure = compile_with_module(bad_path, "wasm/handler.wasm", binary(MINIMAL_ABI_WAT))
         .map(|_| ())
         .expect_err("a non-wasm module path is refused");
@@ -422,7 +421,7 @@ fn an_evidence_declaration_stays_refused_for_wasm_handlers_under_the_feature() {
         "contracts": "evidence/farmer-contracts.json",
         "subjectResolution": "trusted-provider-exact-selector"
     }]);
-    project["actions"][0]["evidence"] = json!([{
+    project["actions"]["register-person"]["evidence"] = json!([{
         "id": "farmer-status",
         "provider": "farmer-registry",
         "requirement": "urn:example:farmer:status-v1",
@@ -430,7 +429,7 @@ fn an_evidence_declaration_stays_refused_for_wasm_handlers_under_the_feature() {
         "outputs": ["active"],
         "maximumObservationAgeSeconds": 60
     }]);
-    project["functions"][0]["capabilities"] = json!(["evidence"]);
+    project["functions"]["person-plan"]["capabilities"] = json!(["evidence"]);
     let contract = ModuleAssetSource {
         module: None,
         path: "evidence/farmer-contracts.json".to_owned(),
@@ -482,8 +481,8 @@ fn an_evidence_declaration_stays_refused_for_wasm_handlers_under_the_feature() {
     }));
 
     // The same declared capability is admitted by an input-bound Rhai plan.
-    project["functions"][0] = json!({
-        "id":"person-plan", "runtime":"rhai", "source":"handlers/register.rhai",
+    project["functions"]["person-plan"] = json!({
+        "runtime":"rhai", "source":"handlers/register.rhai",
         "entrypoint":"plan", "abi":ACTION_PLAN_ABI_V1,
         "capabilities":["evidence"]
     });
@@ -508,14 +507,14 @@ fn an_evidence_declaration_stays_refused_for_wasm_handlers_under_the_feature() {
 #[test]
 fn the_per_package_wasm_module_count_is_bounded() {
     let mut project = wasm_project();
-    let mut actions = Vec::new();
+    let mut actions = serde_json::Map::new();
     let mut permissions = Vec::new();
     for index in 0..=MAX_PACKAGE_WASM_MODULES {
         // Zero-padded so the compiler's lexicographic action order matches the
         // numeric order: the ceiling is hit by the 17th action.
         let id = format!("register-person-{index:02}");
-        actions.push(json!({
-            "id": id,"execution":{"mode":"immediate"},
+        actions.insert(id.clone(), json!({
+            "execution":{"mode":"immediate"},
             "inputs":[
               {"id":"person-code","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
@@ -531,7 +530,7 @@ fn the_per_package_wasm_module_count_is_bounded() {
             "results":["person"]
         }));
     }
-    project["actions"] = Value::Array(actions);
+    project["actions"] = Value::Object(actions);
     project["accessProfiles"]["registrar"]["permissions"] = json!({ "actions": permissions });
     let failure = compile_with_module(project, "wasm/handler.wasm", binary(MINIMAL_ABI_WAT))
         .map(|_| ())

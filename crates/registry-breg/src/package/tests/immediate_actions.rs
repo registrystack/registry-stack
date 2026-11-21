@@ -12,10 +12,10 @@ fn source() -> Value {
         "project":{"id":"action-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
         "datasets":[{"id":"test-dataset"}],"recordTypes":{"item": { "primaryDataset":"test-dataset", "route":"items", "mutationMode":"mutable",
             "fields":[{"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}]}},
-        "actions":[{"id":"rename-item", "execution":{"mode":"immediate"}, "inputs":[
+        "actions":{"rename-item": { "execution":{"mode":"immediate"}, "inputs":[
             {"id":"item", "apiName":"itemId", "type":"reference", "target":"item", "required":true, "classification":"internal"},
             {"id":"label", "apiName":"newLabel", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}
-        ], "plan":{"type":"fixed","effects":[{"id":"renamed", "target":{"fromInput":"item"}, "operation":"patch", "set":{"label":{"fromInput":"label"}}}]}}],
+        ], "plan":{"type":"fixed","effects":[{"id":"renamed", "target":{"fromInput":"item"}, "operation":"patch", "set":{"label":{"fromInput":"label"}}}]}}},
         "accessProfiles":{"operator": { "default":true, "principalClaim":"principal", "requiredScopes":["item.rename"],
             "permissions":{"actions":[{"action":"rename-item", "operations":["invoke"], "targets":[{"recordType":"item", "rowBoundaries":"unrestricted"}], "results":["renamed"]}]}}}
     })
@@ -33,7 +33,7 @@ fn compile_with_assets(value: &Value, assets: &[ModuleAssetSource]) -> CompiledR
 
 fn source_without_actions() -> Value {
     let mut value = source();
-    value["actions"] = json!([]);
+    value["actions"] = json!({});
     value["accessProfiles"] = json!({});
     value
 }
@@ -183,7 +183,7 @@ fn action_configuration_and_disclosure_changes_are_visible_in_package_diffs() {
     let value = source();
     let before = compile(&value);
     let mut renamed = value.clone();
-    renamed["actions"][0]["inputs"][0]["apiName"] = json!("selectedItem");
+    renamed["actions"]["rename-item"]["inputs"][0]["apiName"] = json!("selectedItem");
     let mut scoped = value.clone();
     scoped["accessProfiles"]["operator"]["requiredScopes"] = json!(["item.rename.restricted"]);
     let mut no_results = value;
@@ -488,11 +488,10 @@ fn reviewed_successor_does_not_duplicate_action_policies_for_new_entity() {
             "mutationMode":"mutable",
             "fields":[{"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}]
         }));
-    candidate["actions"] = json!([{
-        "id":"create-task", "execution":{"mode":"immediate"},
+    candidate["actions"] = json!({"create-task": {"execution":{"mode":"immediate"},
         "inputs":[{"id":"label", "apiName":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}],
         "plan":{"type":"fixed","effects":[{"id":"task", "target":{"recordType":"task"}, "operation":"create", "set":{"label":{"fromInput":"label"}}}]}
-    }]);
+    }});
     candidate["accessProfiles"] = json!({"task-operator": {
         "default":true,
         "principalClaim":"principal",
@@ -573,14 +572,15 @@ fn reviewed_successor_tracks_link_only_reference_policies() {
     let mut with_action = without_action.clone();
     with_action["actions"] = source()["actions"].clone();
     with_action["accessProfiles"] = source()["accessProfiles"].clone();
-    with_action["actions"][0]["inputs"]
+    with_action["actions"]["rename-item"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"group", "apiName":"groupId", "type":"reference", "target":"group",
             "required":true, "classification":"internal"
         }));
-    with_action["actions"][0]["plan"]["effects"][0]["set"]["group"] = json!({"fromInput":"group"});
+    with_action["actions"]["rename-item"]["plan"]["effects"][0]["set"]["group"] =
+        json!({"fromInput":"group"});
     with_action["accessProfiles"]["operator"]["permissions"]["actions"][0]["targets"]
         .as_array_mut()
         .unwrap()
@@ -650,7 +650,7 @@ fn reviewed_successor_does_not_drop_action_policies_for_absent_entity_table() {
 fn proposal_source(operations: &[&str], readable_inputs: &[&str]) -> Value {
     let mut value = source();
     value["recordTypes"]["item"]["mutationPolicy"] = json!({"patch":"proposal-required"});
-    value["actions"][0]["execution"] = json!({"mode":"proposal","proposal":{
+    value["actions"]["rename-item"]["execution"] = json!({"mode":"proposal","proposal":{
         "review":{"type":"none"}, "application":{"mode":"manual"}, "retention":{"mode":"retain"}
     }});
     value["accessProfiles"]["operator"]["permissions"]["actions"][0]["operations"] =
@@ -708,7 +708,7 @@ fn proposal_permission(registry: &CompiledRegistry) -> crate::model::CompiledPro
 #[test]
 fn proposal_task_context_requires_service_authority_and_a_declared_field_subset() {
     let mut value = proposal_source(&["get-task-grant-context"], &[]);
-    value["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({
+    value["actions"]["rename-item"]["execution"]["proposal"]["reviewContext"] = json!({
         "id":"booking-context",
         "fields":{"applicationId":{"type":"input","input":"label"}}
     });
@@ -839,21 +839,19 @@ fn proposal_handler_evidence_source() -> Value {
         &["get", "edit", "submit", "cancel", "apply"],
         &["item", "label"],
     );
-    value["functions"] = json!([{
-        "id": "rename-plan",
-        "runtime": "rhai",
+    value["functions"] = json!({"rename-plan": {"runtime": "rhai",
         "source": "handlers/rename.rhai",
         "entrypoint": "plan",
         "abi": "registry.action-plan/v1",
-    }]);
+    }});
     value["evidenceProviders"] = json!([{
         "id": "provider",
         "contracts": "evidence/contracts.json",
         "subjectResolution": "trusted-provider-exact-selector",
     }]);
     value["recordTypes"]["item"]["fields"][0]["minimumLength"] = json!(3);
-    value["actions"][0]["inputs"][1]["minimumLength"] = json!(3);
-    value["actions"][0]["commitGuards"] = json!({"evidence": [{
+    value["actions"]["rename-item"]["inputs"][1]["minimumLength"] = json!(3);
+    value["actions"]["rename-item"]["commitGuards"] = json!({"evidence": [{
         "id": "commit-status",
         "provider": "provider",
         "requirement": "urn:example:farmer:status-v1",
@@ -864,7 +862,7 @@ fn proposal_handler_evidence_source() -> Value {
         "requires": [{"output": "active", "equals": true}],
         "maximumObservationAgeSeconds": 60,
     }]});
-    value["actions"][0]["plan"] = json!({
+    value["actions"]["rename-item"]["plan"] = json!({
         "type": "function",
         "function": "rename-plan",
         "inputs": ["item", "label"],
@@ -887,8 +885,8 @@ fn commit_evidence_source() -> Value {
         "subjectResolution": "trusted-provider-exact-selector",
     }]);
     value["recordTypes"]["item"]["fields"][0]["minimumLength"] = json!(3);
-    value["actions"][0]["inputs"][1]["minimumLength"] = json!(3);
-    value["actions"][0]["commitGuards"] = json!({"evidence": [{
+    value["actions"]["rename-item"]["inputs"][1]["minimumLength"] = json!(3);
+    value["actions"]["rename-item"]["commitGuards"] = json!({"evidence": [{
         "id": "commit-status",
         "provider": "provider",
         "requirement": "urn:example:farmer:status-v1",

@@ -29,12 +29,12 @@ fn registry(automatic: bool) -> registry_breg::CompiledRegistry {
             "mutationPolicy":{"patch":"proposal-required"},"fields":[
                 {"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}},
-        "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{
+        "actions":{"correct-name": {"execution":{"mode":"proposal","proposal":{
             "review":{"type":"none"},"retention":{"mode":"operator-erase"},"application":if automatic {json!({"mode":"automatic","maximumAttempts":3})} else {json!({"mode":"manual"})}}},
             "inputs":[{"id":"contact","type":"reference","target":"contact","required":true,"classification":"internal"},
                 {"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
             "commitGuards":{"targets":[{"input":"contact","revision":"unchanged"}]},
-            "plan":{"type":"fixed","effects":[{"id":"correction","target":{"fromInput":"contact"},"operation":"patch","set":{"name":{"fromInput":"name"}}}]}}],
+            "plan":{"type":"fixed","effects":[{"id":"correction","target":{"fromInput":"contact"},"operation":"patch","set":{"name":{"fromInput":"name"}}}]}}},
         // Omitted actorKind must not convert these explicit recovery grants into
         // permission for a service to recover automatic work as a human.
         "accessProfiles":{"operator": {"default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],

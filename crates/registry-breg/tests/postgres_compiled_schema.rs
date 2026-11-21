@@ -2376,8 +2376,7 @@ fn compiled_action_registry() -> registry_breg::CompiledRegistry {
                 "classification": "internal"
             }]
         }},
-        "actions": [{
-            "id": "relabel-entry",
+        "actions": {"relabel-entry": {
             "execution": {"mode": "immediate"},
             "inputs": [
                 {
@@ -2404,7 +2403,7 @@ fn compiled_action_registry() -> registry_breg::CompiledRegistry {
                     "set": {"label": {"fromInput": "label"}}
                 }]
             }
-        }],
+        }},
         "accessProfiles": {"operator": {
             "default": true,
             "principalClaim": "registry_principal",

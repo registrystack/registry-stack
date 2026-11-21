@@ -39,11 +39,11 @@ fn project(first: Value, second: Value) -> Value {
             "case": {"route":"cases","primaryDataset":"test-dataset","mutationMode":"mutable","classification":"internal",
                 "batch":{"maximumItems":3,"maximumBytes":8192},"mutationPolicy":{"patch":"proposal-required"},
                 "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]}},
-        "actions":[
-            {"id":"correct-case","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"}}},"inputs":[
+        "actions":{
+            "correct-case": {"execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"}}},"inputs":[
                 {"id":"case-ref","type":"reference","target":"case","required":true,"classification":"internal"},
                 {"id":"new-label","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
-                "plan":{"type":"fixed","effects":[{"id":"corrected","target":{"fromInput":"case-ref"},"operation":"patch","set":{"label":{"fromInput":"new-label"}}}]}}],
+                "plan":{"type":"fixed","effects":[{"id":"corrected","target":{"fromInput":"case-ref"},"operation":"patch","set":{"label":{"fromInput":"new-label"}}}]}}},
         "accessProfiles":{"first": first, "second": second}
     })
 }

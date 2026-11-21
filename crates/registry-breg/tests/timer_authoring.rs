@@ -45,10 +45,9 @@ fn timer_project_value() -> Value {
 
     source["timerGrants"] = json!([{"recordType":"contact","timer":"activate"}]);
     source["actions"]
-        .as_array_mut()
+        .as_object_mut()
         .expect("actions are a list")
-        .push(json!({
-            "id":"activate-contact",
+        .insert("activate-contact".to_owned(), json!({
             "execution":{"mode":"immediate"},
             "inputs":[
                 {"id":"contact","type":"reference","target":"contact","required":true,"classification":"internal"},
@@ -387,12 +386,7 @@ fn encrypted_predicate_and_mapped_fields_are_in_the_exact_anchor_read_ceiling() 
     source["recordTypes"]["contact"]["timers"][0]["when"]["equals"]["secret"] = json!("ready");
     source["recordTypes"]["contact"]["timers"][0]["input"]["secret"] =
         json!({"fromField":"secret"});
-    let action = source["actions"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|action| action["id"] == "activate-contact")
-        .unwrap();
+    let action = &mut source["actions"]["activate-contact"];
     action["inputs"].as_array_mut().unwrap().push(json!({
         "id":"secret", "type":"string", "maximumLength":160,
         "required":true, "classification":"restricted"
@@ -694,7 +688,10 @@ fn timer_requires_exact_root_grant_and_complete_mapping() {
 
     let mut unknown_action = timer_project_value();
     unknown_action["recordTypes"]["contact"]["timers"][0]["invoke"] = json!("missing");
-    unknown_action["actions"].as_array_mut().unwrap().pop();
+    unknown_action["actions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("activate-contact");
     assert_refused(unknown_action, "breg.timer.action-unknown");
 
     let mut incomplete = timer_project_value();
@@ -723,7 +720,7 @@ fn timer_requires_exact_root_grant_and_complete_mapping() {
 #[test]
 fn timer_action_refuses_revision_unchanged_guard_without_a_caller_condition() {
     let mut source = timer_project_value();
-    source["actions"][2]["commitGuards"] = json!({"targets":[{
+    source["actions"]["activate-contact"]["commitGuards"] = json!({"targets":[{
         "input":"contact","revision":"unchanged"
     }]});
 
@@ -759,7 +756,7 @@ fn timer_control_predicate_and_mapping_types_are_closed() {
         .insert("other".to_owned(), json!({"route":"others","primaryDataset":"directory",
             "mutationMode":"mutable","fields":[{"id":"name","type":"string","maximumLength":32,"classification":"internal"}]
         }));
-    wrong_anchor["actions"][2]["inputs"]
+    wrong_anchor["actions"]["activate-contact"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -775,7 +772,7 @@ fn timer_control_predicate_and_mapping_types_are_closed() {
     assert_refused(unknown_field, "breg.timer.input-field-unknown");
 
     let mut due_at = timer_project_value();
-    due_at["actions"][2]["inputs"][2]["type"] = json!("timestamp");
+    due_at["actions"]["activate-contact"]["inputs"][2]["type"] = json!("timestamp");
     due_at["recordTypes"]["contact"]["timers"][0]["input"]["operation-id"] =
         json!({"fromTimer":"due-at"});
     compile_value(due_at).expect("the stored due instant maps to a timestamp input");
@@ -796,7 +793,8 @@ fn timer_control_predicate_and_mapping_types_are_closed() {
     assert_refused(wrong_literal, "breg.timer.input-type-mismatch");
 
     let mut non_canonical_integer_literal = timer_project_value();
-    non_canonical_integer_literal["actions"][2]["inputs"][2]["type"] = json!("int64");
+    non_canonical_integer_literal["actions"]["activate-contact"]["inputs"][2]["type"] =
+        json!("int64");
     non_canonical_integer_literal["recordTypes"]["contact"]["timers"][0]["input"]["operation-id"] =
         json!({"value":i64::MAX});
     assert_compiler_refused(
@@ -863,7 +861,7 @@ fn timer_refuses_public_invoke_and_non_immediate_actions() {
     assert_refused(public_invoke, "breg.timer.action-public-invoke");
 
     let mut proposal = timer_project_value();
-    proposal["actions"][2]["execution"] = json!({
+    proposal["actions"]["activate-contact"]["execution"] = json!({
         "mode":"proposal",
         "proposal":{"review":{"type":"none"},"retention":{"mode":"retain"}}
     });
@@ -873,11 +871,13 @@ fn timer_refuses_public_invoke_and_non_immediate_actions() {
 #[test]
 fn timer_refuses_remote_function_and_evidence_capabilities() {
     let mut remote = timer_project_value();
-    remote["functions"].as_array_mut().unwrap().push(json!({
-        "id":"timer-plan","runtime":"rhai","source":"plans/timer.rhai",
-        "entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":["evidence"]
-    }));
-    remote["actions"][2]["plan"] = json!({
+    remote["functions"].as_object_mut().unwrap().insert(
+        "timer-plan".to_owned(),
+        json!({"runtime":"rhai","source":"plans/timer.rhai",
+            "entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":["evidence"]
+        }),
+    );
+    remote["actions"]["activate-contact"]["plan"] = json!({
         "type":"function","function":"timer-plan",
         "inputs":["contact","planned-at","operation-id"],
         "refusals":[],
@@ -899,11 +899,10 @@ fn timer_refuses_remote_function_and_evidence_capabilities() {
         .all(|handler| handler.capabilities.is_empty()));
 
     let mut evidence = timer_project_value();
-    evidence["functions"] = json!([{
-        "id":"timer-plan","runtime":"rhai","source":"plans/timer.rhai",
+    evidence["functions"] = json!({"timer-plan": {"runtime":"rhai","source":"plans/timer.rhai",
         "entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":["evidence"]
-    }]);
-    evidence["actions"][2]["plan"] = json!({
+    }});
+    evidence["actions"]["activate-contact"]["plan"] = json!({
         "type":"function","function":"timer-plan",
         "inputs":["contact","planned-at","operation-id"],
         "refusals":[],
@@ -913,7 +912,7 @@ fn timer_refuses_remote_function_and_evidence_capabilities() {
         "id":"provider","contracts":"evidence/contracts.json",
         "subjectResolution":"trusted-provider-exact-selector"
     }]);
-    evidence["actions"][2]["evidence"] = json!([{
+    evidence["actions"]["activate-contact"]["evidence"] = json!([{
         "id":"status","provider":"provider",
         "requirement":"urn:example:client:requirement:status:v1",
         "subjects":{"subject":{"profile":"record-lookup-v1"}},
@@ -937,7 +936,7 @@ fn timer_refuses_remote_function_and_evidence_capabilities() {
         "id":"provider","contracts":"evidence/contracts.json",
         "subjectResolution":"trusted-provider-exact-selector"
     }]);
-    commit_evidence["actions"][2]["inputs"]
+    commit_evidence["actions"]["activate-contact"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -946,7 +945,7 @@ fn timer_refuses_remote_function_and_evidence_capabilities() {
         }));
     commit_evidence["recordTypes"]["contact"]["timers"][0]["input"]["evidence-key"] =
         json!({"value":"contact"});
-    commit_evidence["actions"][2]["commitGuards"] = json!({"evidence":[{
+    commit_evidence["actions"]["activate-contact"]["commitGuards"] = json!({"evidence":[{
         "id":"commit-status","provider":"provider",
         "requirement":"urn:example:client:requirement:status:v1",
         "subjects":{"subject":{"profile":"record-lookup-v1","selectors":{
@@ -987,12 +986,8 @@ fn timer_refuses_consent_issuance_capability() {
         .as_array_mut()
         .unwrap()
         .push(json!("activates-at"));
-    let mut consent_action = consent["actions"][0].clone();
-    consent_action["id"] = json!("timer-record-consent");
-    consent["actions"]
-        .as_array_mut()
-        .unwrap()
-        .push(consent_action);
+    let consent_action = consent["actions"]["record-consent"].clone();
+    consent["actions"]["timer-record-consent"] = consent_action;
     consent["timerGrants"] = json!([{"recordType":"person","timer":"record-consent"}]);
     assert_refused(consent, "breg.timer.action-capability-forbidden");
 }
@@ -1060,14 +1055,16 @@ fn timer_revision_covers_controls_gate_mapping_action_and_system_grant() {
 
     let baseline_timer = &baseline.entities()["contact"].timers["activate"];
     let mut action_semantics = source.clone();
-    action_semantics["actions"][2]["plan"]["effects"][0]["set"]["active"]["value"] = json!(false);
+    action_semantics["actions"]["activate-contact"]["plan"]["effects"][0]["set"]["active"]
+        ["value"] = json!(false);
     let action_changed = compile_value(action_semantics).expect("Action semantic change compiles");
     let action_timer = &action_changed.entities()["contact"].timers["activate"];
     assert_ne!(baseline_timer.action_revision, action_timer.action_revision);
     assert_ne!(timer_revision(&baseline), timer_revision(&action_changed));
 
     let mut authority = source;
-    authority["actions"][2]["plan"]["effects"][0]["set"]["jurisdiction"] = json!({"value":"timer"});
+    authority["actions"]["activate-contact"]["plan"]["effects"][0]["set"]["jurisdiction"] =
+        json!({"value":"timer"});
     let authority_changed = compile_value(authority).expect("authority expansion compiles");
     let authority_timer = &authority_changed.entities()["contact"].timers["activate"];
     assert_ne!(
@@ -1119,7 +1116,7 @@ fn timer_system_authority_is_anchor_and_create_bounded() {
                 {"id":"operation-id","type":"uuid","required":true,"classification":"internal"}
             ]
         }));
-    create_only["actions"][2]["plan"]["effects"] = json!([{
+    create_only["actions"]["activate-contact"]["plan"]["effects"] = json!([{
         "id":"activation-log","target":{"recordType":"activation-log"},"operation":"create",
         "set":{
             "contact":{"fromInput":"contact"},"planned-at":{"fromInput":"planned-at"},
@@ -1127,9 +1124,9 @@ fn timer_system_authority_is_anchor_and_create_bounded() {
         }
     }]);
     create_only["actions"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .retain(|action| action["id"] != "update-contact-email");
+        .remove("update-contact-email");
     create_only["accessProfiles"]["directory-editor"]["permissions"]["actions"]
         .as_array_mut()
         .unwrap()
@@ -1189,7 +1186,8 @@ fn timer_system_authority_is_anchor_and_create_bounded() {
         })
         .collect::<Vec<_>>();
     let mut exact_anchor_at_ceiling = create_only;
-    exact_anchor_at_ceiling["actions"][1]["plan"]["effects"] = json!(create_effects);
+    exact_anchor_at_ceiling["actions"]["activate-contact"]["plan"]["effects"] =
+        json!(create_effects);
     compile_value(exact_anchor_at_ceiling.clone())
         .expect("an existing exact anchor target counts once at the target ceiling");
 
@@ -1234,10 +1232,10 @@ fn timer_system_authority_is_anchor_and_create_bounded() {
                 "fields":[{"id":"active","type":"boolean","classification":"internal"}]
             }),
         );
-    other_existing["actions"][2]["inputs"].as_array_mut().unwrap().push(json!({
+    other_existing["actions"]["activate-contact"]["inputs"].as_array_mut().unwrap().push(json!({
         "id":"other","type":"reference","target":"other","required":true,"classification":"internal"
     }));
-    other_existing["actions"][2]["plan"]["effects"]
+    other_existing["actions"]["activate-contact"]["plan"]["effects"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -1260,7 +1258,7 @@ fn timer_system_authority_is_anchor_and_create_bounded() {
     );
 
     let mut tombstone_anchor = timer_project_value();
-    tombstone_anchor["actions"][2]["plan"]["effects"] = json!([{
+    tombstone_anchor["actions"]["activate-contact"]["plan"]["effects"] = json!([{
         "id":"remove-contact","target":{"fromInput":"contact"},"operation":"tombstone"
     }]);
     assert_refused(tombstone_anchor, "breg.action.effect-operation-unsupported");

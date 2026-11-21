@@ -38,7 +38,7 @@ manifestProjection:
 modules:
   "asset-registration-actions-core":
     version: "0.1.0"
-    digest: "sha256:0a70d65650cd36f45a4be6b50f2d5ee2a7e07a9d75ca90b9de82eb74c0e564e2"
+    digest: "sha256:17a32fe930dca039b3554dfb4f0f455fd016a20b293010147f44fc51b03f41c8"
 
 recordTypes: {}
 accessProfiles:

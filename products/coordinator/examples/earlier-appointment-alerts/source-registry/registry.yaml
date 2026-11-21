@@ -48,7 +48,7 @@ recordTypes:
     constraints:
       - {id: alert-condition-identity, type: unique, fields: [condition-id]}
 actions:
-  - id: create-alert-subscription
+  create-alert-subscription:
     execution: {mode: immediate}
     inputs:
       - {id: condition-id, apiName: conditionId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
@@ -99,7 +99,7 @@ actions:
             additional-offering: {fromInput: additional-offering}
             additional-resource: {fromInput: additional-resource}
             additional-units: {fromInput: additional-units}
-  - id: claim-alert
+  claim-alert:
     execution: {mode: immediate}
     inputs:
       - {id: subscription, apiName: subscriptionId, type: reference, target: alert-subscription, required: true, classification: internal}
@@ -117,7 +117,7 @@ actions:
           target: {fromInput: subscription}
           operation: patch
           set: {state: {value: claimed}}
-  - id: authorize-alert-dispatch
+  authorize-alert-dispatch:
     execution: {mode: immediate}
     inputs:
       - {id: subscription, apiName: subscriptionId, type: reference, target: alert-subscription, required: true, classification: internal}
@@ -135,7 +135,7 @@ actions:
           target: {fromInput: subscription}
           operation: patch
           set: {state: {value: dispatching}}
-  - id: record-alert-submission
+  record-alert-submission:
     execution: {mode: immediate}
     inputs:
       - {id: subscription, apiName: subscriptionId, type: reference, target: alert-subscription, required: true, classification: internal}
@@ -154,7 +154,7 @@ actions:
           set:
             state: {value: notified}
             message-id: {fromInput: message-id}
-  - id: withdraw-alert
+  withdraw-alert:
     execution: {mode: immediate}
     inputs:
       - {id: subscription, apiName: subscriptionId, type: reference, target: alert-subscription, required: true, classification: internal}

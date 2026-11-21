@@ -145,7 +145,7 @@ recordTypes:
       - {id: noted-on, type: date, required: true, classification: restricted}
       - {id: note, type: text, maximumLength: 2000, required: true, classification: restricted}
 actions:
-  - id: record-grant-pause
+  record-grant-pause:
     display: {label: Record grant pause, purpose: domain, group: Grants}
     execution: {mode: immediate}
     inputs:
@@ -162,7 +162,7 @@ actions:
             grant: {fromInput: grant-ref}
             decided-on: {fromInput: decided-on}
             effective-from: {fromInput: effective-from}
-  - id: seed-demonstration-entries
+  seed-demonstration-entries:
     display: {label: Seed demonstration entries, purpose: synthetic-seed, group: Demonstration data}
     execution: {mode: immediate}
     inputs:
@@ -176,7 +176,7 @@ actions:
           set:
             entry-number: {fromInput: entry-number}
             name: {value: Demonstration entry}
-  - id: correct-grant-number
+  correct-grant-number:
     display: {label: Correct grant number, purpose: processing, group: Grants}
     execution:
       mode: proposal

@@ -915,8 +915,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             }]
         }},
         "timerGrants":[{"recordType":"service","timer":"activate"}],
-        "actions":[{
-            "id":"activate-service",
+        "actions":{"activate-service": {
             "execution":{"mode":"immediate"},
             "inputs":[
                 {"id":"service","type":"reference","target":"service","required":true,"classification":"internal"},
@@ -929,7 +928,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "operation":"patch",
                 "set":{"status":{"value":"active"}}
             }]}
-        }],
+        }},
         "accessProfiles":{"service-editor": {
             "default":true,
             "principalClaim":"registry_principal",

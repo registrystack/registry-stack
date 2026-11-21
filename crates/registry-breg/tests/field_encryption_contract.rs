@@ -692,7 +692,7 @@ fn derived_sql_resolves_qualified_columns_to_their_source_relation() {
 fn proposal_project() -> Value {
     let mut source = encrypted_project();
     source["recordTypes"]["case"]["mutationPolicy"] = json!({"patch":"proposal-required"});
-    source["actions"] = json!([{"id":"correct-case","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"},"reviewContext":{"id":"case-context","fields":{"currentLabel":{"type":"record","input":"case","field":"label"}}}}},"inputs":[{"id":"case","type":"reference","target":"case","required":true,"classification":"restricted"},{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}],"plan":{"type":"fixed","effects":[{"id":"case","target":{"fromInput":"case"},"operation":"patch","set":{"label":{"fromInput":"label"}}}]}}]);
+    source["actions"] = json!({"correct-case": {"execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"},"reviewContext":{"id":"case-context","fields":{"currentLabel":{"type":"record","input":"case","field":"label"}}}}},"inputs":[{"id":"case","type":"reference","target":"case","required":true,"classification":"restricted"},{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}],"plan":{"type":"fixed","effects":[{"id":"case","target":{"fromInput":"case"},"operation":"patch","set":{"label":{"fromInput":"label"}}}]}}});
     let permissions = &mut source["accessProfiles"]["caseworker"]["permissions"];
     permissions["records"][0]["operations"] = json!(["get", "list"]);
     permissions["records"][0]
@@ -709,15 +709,15 @@ fn native_proposal_context_refuses_encrypted_record_fields() {
     let mut source = proposal_project();
     compile_value(&source)
         .expect("plaintext context can coexist with unchanged encrypted Record fields");
-    source["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"]["currentLabel"]
-        ["field"] = json!("secret");
+    source["actions"]["correct-case"]["execution"]["proposal"]["reviewContext"]["fields"]
+        ["currentLabel"]["field"] = json!("secret");
     expect_code(&source, "breg.proposal.context-mapping-invalid");
 }
 
 #[test]
 fn native_proposal_inputs_do_not_accept_persisted_record_encryption_members() {
     let mut source = proposal_project();
-    source["actions"][0]["inputs"][1]["encrypted"] = json!(true);
+    source["actions"]["correct-case"]["inputs"][1]["encrypted"] = json!(true);
     let failure = parse_project_json(&serde_json::to_vec(&source).unwrap())
         .expect_err("Proposal inputs are closed ephemeral Action inputs");
     assert!(
@@ -725,7 +725,7 @@ fn native_proposal_inputs_do_not_accept_persisted_record_encryption_members() {
             .diagnostics()
             .iter()
             .any(|diagnostic| diagnostic.code == "config.invalid-value"
-                && diagnostic.path == "project.actions[0].inputs[1]"
+                && diagnostic.path == "project.actions.correct-case.inputs[1]"
                 && diagnostic
                     .message
                     .contains("without validTimeRole, encrypted, lookup, or generate")),
@@ -749,7 +749,7 @@ fn action_requirements_cannot_name_encrypted_fields() {
     let mut source = action_requirements::project();
     source["recordTypes"]["parent"]["fields"][1]["encrypted"] = json!(true);
     source["recordTypes"]["parent"]["fields"][1]["lookup"] = json!({"normalization":["uppercase"]});
-    source["actions"][0]["commitGuards"]["targets"]
+    source["actions"]["register-child"]["commitGuards"]["targets"]
         .as_array_mut()
         .unwrap()
         .push(json!({

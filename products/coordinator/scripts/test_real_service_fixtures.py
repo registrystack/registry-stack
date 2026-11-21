@@ -96,7 +96,7 @@ class NativeFixtureContracts(unittest.TestCase):
         self.assertNotIn("entities", project)
         self.assertEqual(len(project["recordTypes"]), 1)
         self.assertEqual(project["recordTypes"]["application"]["mutationPolicy"], {"patch": "proposal-required"})
-        for action in project["actions"]:
+        for action in project["actions"].values():
             self.assertEqual(action["execution"]["mode"], "proposal")
             self.assertNotIn("application", action["execution"]["proposal"])
         for profile in project["accessProfiles"].values():

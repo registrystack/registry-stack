@@ -197,25 +197,22 @@
       ]
     }
   },
-  "functions": [
-    {
-      "id": "register-person-plan",
+  "functions": {
+    "register-person-plan": {
       "runtime": "rhai",
       "source": "scripts/register-person.rhai",
       "entrypoint": "plan",
       "abi": "registry.action-plan/v1"
     },
-    {
-      "id": "register-with-registration-plan",
+    "register-with-registration-plan": {
       "runtime": "rhai",
       "source": "scripts/register-person-with-registration.rhai",
       "entrypoint": "plan",
       "abi": "registry.action-plan/v1"
     }
-  ],
-  "actions": [
-    {
-      "id": "register-person",
+  },
+  "actions": {
+    "register-person": {
       "execution": {
         "mode": "immediate"
       },
@@ -273,8 +270,7 @@
         ]
       }
     },
-    {
-      "id": "register-person-with-registration",
+    "register-person-with-registration": {
       "execution": {
         "mode": "immediate"
       },
@@ -397,7 +393,7 @@
         ]
       }
     }
-  ],
+  },
   "accessProfiles": {
     "person-registrar": {
       "default": true,

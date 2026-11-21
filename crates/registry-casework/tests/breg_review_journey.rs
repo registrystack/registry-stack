@@ -708,12 +708,7 @@ async fn native_current_source_approval_pattern(pattern: ApprovalPattern, index:
     let project = approval_pattern_project(scratch.path(), &idp, &exported, pattern);
     let binding = project.compile_policy(pattern.id()).unwrap().binding();
     let mut source = canonical_source();
-    let correction = source["actions"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|action| action["id"] == "correct-address")
-        .unwrap();
+    let correction = &mut source["actions"]["correct-address"];
     correction["execution"]["proposal"]["review"]["policy"] =
         serde_json::to_value(&binding).unwrap();
     let registry = compile(&source);

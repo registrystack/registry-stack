@@ -1061,17 +1061,16 @@ async fn absent_optional_copy_has_the_same_safe_failure_at_invoke_and_submit() {
         .expect("the Action fixture uses the supported YAML subset")
         .expect("the Action fixture is nonempty")
         .to_json_value();
-    source["actions"][1]["inputs"].as_array_mut().unwrap().push(
+    source["actions"]["invalid-copy"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"private-data","type":"string","maximumLength":64,"classification":"internal"}),
     );
-    source["actions"][1]["plan"]["inputs"]
+    source["actions"]["invalid-copy"]["plan"]["inputs"]
         .as_array_mut()
         .unwrap()
         .push(json!("private-data"));
-    let mut proposal = source["actions"][1].clone();
-    proposal["id"] = json!("invalid-proposal");
+    let mut proposal = source["actions"]["invalid-copy"].clone();
     proposal["execution"] = json!({"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}});
-    source["actions"].as_array_mut().unwrap().push(proposal);
+    source["actions"]["invalid-proposal"] = proposal;
     source["accessProfiles"]["author"]["permissions"]["actions"].as_array_mut().unwrap().push(json!({"action":"invalid-proposal","operations":["start"],"targets":[{"recordType":"entry","rowBoundaries":"unrestricted"}]}));
     source["accessProfiles"]["author"]["permissions"]["proposals"] = json!([{"action":"invalid-proposal","operations":["get","edit","submit","cancel"],"ownership":"caller","readableInputs":["note","private-data"],"writableInputs":["note","private-data"],"targets":[{"recordType":"entry","rowBoundaries":"unrestricted"}]}]);
     let project =
@@ -1329,7 +1328,7 @@ async fn wasm_handler_declaration_fails_typed_and_statelessly_without_the_execut
     let _test_guard = HANDLER_TEST_LOCK.lock().await;
     let (database, registry, identity) = setup().await;
     let mut wire = serde_json::to_value(&*registry).unwrap();
-    let handler = &mut wire["actionInventory"]["actions"][0]["handler"];
+    let handler = &mut wire["actionInventory"]["actions"]["create-entry"]["handler"];
     assert_eq!(handler["kind"], "rhai");
     handler["kind"] = json!("wasm");
     handler["moduleSha256"] =

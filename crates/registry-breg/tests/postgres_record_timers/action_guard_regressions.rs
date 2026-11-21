@@ -97,10 +97,10 @@ fn create_only_guard_source(field: &str, expected: &str) -> Value {
             "hooks":[{"phase":"after","id":"activation-log-created","trigger":"created",
                 "projection":["operation-id"]}]
         }));
-    source["actions"][0]["commitGuards"] = json!({"targets":[{
+    source["actions"]["activate-service"]["commitGuards"] = json!({"targets":[{
         "input":"service","field":field,"equals":expected
     }]});
-    source["actions"][0]["plan"] = json!({"type":"fixed","effects":[{
+    source["actions"]["activate-service"]["plan"] = json!({"type":"fixed","effects":[{
         "id":"activation-log","target":{"recordType":"activation-log"},"operation":"create",
         "set":{
             "planned-at":{"fromInput":"planned-at"},

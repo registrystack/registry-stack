@@ -697,8 +697,7 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
                 "classification": "restricted"
             }]
         }},
-        "actions": [{
-            "id": "cross-link-lock-record",
+        "actions": {"cross-link-lock-record": {
             "execution":{"mode":"immediate"},
             "inputs": [{
                 "id": "target",
@@ -721,7 +720,7 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
                 "operation": "patch",
                 "set": {"linked-record": {"fromInput": "link"}}
             }]}
-        }],
+        }},
         "accessProfiles": {"lock-order-runner": {
             "default": true,
             "principalClaim": "registry_principal",
@@ -1082,12 +1081,11 @@ fn compiled_wide_action_registry() -> registry_breg::CompiledRegistry {
             "mutationMode": "mutable",
             "fields": entity_fields
         }},
-        "actions": [{
-            "id": "patch-wide-flags",
+        "actions": {"patch-wide-flags": {
             "execution":{"mode":"immediate"},
             "inputs": action_inputs,
             "plan":{"type":"fixed","effects":effects}
-        }],
+        }},
         "accessProfiles": {"wide-action-runner": {
             "default": true,
             "principalClaim": "registry_principal",
