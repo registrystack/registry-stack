@@ -72,7 +72,7 @@ fn compile_json_with_assets(
     compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring)
 }
 
-const MULTI_DATASET_PROJECT: &[u8] = br#"{"datasets":[{"id": "people"}, {"id": "residences"}],
+const MULTI_DATASET_PROJECT: &[u8] = br#"{"datasets":{"people": {}, "residences": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"multi-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test/multi"},
@@ -855,7 +855,7 @@ fn yaml_projection_refuses_a_repeated_authority_id_with_a_located_diagnostic() {
 
 fn cross_dataset_reference_project() -> Value {
     json!({
-      "datasets":[{"id":"sources"},{"id":"targets"}],
+      "datasets":{"sources": {}, "targets": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{
@@ -1115,7 +1115,7 @@ fn manifest_projection_warns_across_narrower_datasets_in_one_publication_context
 #[test]
 fn manifest_projection_excludes_every_protected_resource_from_public_bytes() {
     let mut project = parse_project_json(
-        br#"{"datasets":[{"id": "protected-records"}, {"id": "public-records"}],
+        br#"{"datasets":{"protected-records": {}, "public-records": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"classified-catalog","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://catalog.example.test"},
@@ -1502,7 +1502,7 @@ fn constraint_unions_refuse_at_the_member_inside_the_form() {
         ),
     ] {
         let source = format!(
-            r#"{{"datasets":[{{"id": "test-dataset"}}],
+            r#"{{"datasets":{{"test-dataset": {{}}}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"constraint-unions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -1528,7 +1528,7 @@ fn constraint_unions_refuse_at_the_member_inside_the_form() {
 
 #[test]
 fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories() {
-    let project = br#"{"datasets":[{"id": "test-dataset"}],
+    let project = br#"{"datasets":{"test-dataset": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"household-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -1711,7 +1711,7 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
 #[test]
 fn read_path_processing_diagnostic_names_the_profile_path_and_field() {
     let failure = compile_json(
-        br#"{"datasets":[{"id":"records"}],
+        br#"{"datasets":{"records": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"read-path-disclosure","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://read-paths.example.test"},
@@ -1753,7 +1753,7 @@ fn read_path_processing_diagnostic_names_the_profile_path_and_field() {
 #[test]
 fn canonical_id_row_boundary_targets_the_physical_record_id_column() {
     let compiled = compile_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"canonical-id-boundary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -1797,7 +1797,7 @@ fn canonical_id_row_boundary_targets_the_physical_record_id_column() {
 
 #[test]
 fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
-    let project = br#"{"datasets":[{"id": "test-dataset"}],
+    let project = br#"{"datasets":{"test-dataset": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"derived-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -1955,7 +1955,7 @@ fn derived_field_display_only_changes_module_digest_when_authored() {
 fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
     let source = |batch: &str, operations: &str| {
         format!(
-            r#"{{"datasets":[{{"id":"test-dataset"}}],
+            r#"{{"datasets":{{"test-dataset": {{}}}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"batch-contract","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -2400,7 +2400,7 @@ fn singular_manifest_projection_keys_are_refused_as_unknown_fields() {
             json!({"id":"api","title":"API","endpointUrl":"https://registry.example.test"}),
         ),
     ] {
-        let mut project = json!({"datasets":[{"id": "neutral"}],
+        let mut project = json!({"datasets":{"neutral": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -2453,7 +2453,7 @@ fn singular_manifest_projection_keys_are_refused_as_unknown_fields() {
 fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts() {
     let compiled = compile_project(
         &parse_project_json(
-            br#"{"datasets":[{"id": "test-dataset"}],
+            br#"{"datasets":{"test-dataset": {}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -2498,7 +2498,7 @@ fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts
 #[test]
 fn project_access_profiles_use_the_entity_access_vocabulary() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -2559,7 +2559,7 @@ fn project_access_profiles_use_the_entity_access_vocabulary() {
 #[test]
 fn root_project_entity_access_profiles_are_compile_time_errors() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -2592,7 +2592,7 @@ fn root_project_entity_access_profiles_are_compile_time_errors() {
 #[test]
 fn module_entity_access_profiles_remain_supported_for_module_composition() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"module-profile","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -2642,7 +2642,7 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
 #[test]
 fn hook_projection_diagnostics_name_the_record_hook_field_and_module_extension() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id":"records"}],
+        br#"{"datasets":{"records": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"hook-paths","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://hook-paths.example.test"},
@@ -2689,7 +2689,7 @@ fn hook_projection_diagnostics_name_the_record_hook_field_and_module_extension()
 #[test]
 fn module_extension_hook_diagnostics_keep_the_second_hook_and_member_paths() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id":"records"}],
+        br#"{"datasets":{"records": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"hook-member-paths","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://hook-member-paths.example.test"},
@@ -2765,7 +2765,7 @@ fn module_extension_hook_diagnostics_keep_the_second_hook_and_member_paths() {
 #[test]
 fn duplicate_hook_ids_do_not_claim_an_ambiguous_hook_selector() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id":"records"}],
+        br#"{"datasets":{"records": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"duplicate-hook-paths","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://duplicate-hook-paths.example.test"},
@@ -2804,7 +2804,7 @@ fn duplicate_hook_ids_do_not_claim_an_ambiguous_hook_selector() {
 #[test]
 fn directly_constructed_module_extension_display_text_keeps_authored_paths() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id":"records"}],
+        br#"{"datasets":{"records": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"extension-display","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -2865,7 +2865,7 @@ fn directly_constructed_module_extension_display_text_keeps_authored_paths() {
 #[test]
 fn project_access_profiles_reject_the_legacy_purpose_vocabulary() {
     let failure = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -2891,7 +2891,7 @@ fn project_access_profiles_reject_the_legacy_purpose_vocabulary() {
 /// written permissions.
 fn permission_refusals(permissions: &str) -> Vec<(String, String)> {
     let source = format!(
-        r#"{{"datasets":[{{"id": "test-dataset"}}],
+        r#"{{"datasets":{{"test-dataset": {{}}}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -2985,7 +2985,7 @@ fn project_access_grants_reject_mixed_entity_and_action_targets() {
 #[test]
 fn manifest_projection_unknown_nested_keys_are_rejected_without_values() {
     let failure = parse_project_json(
-        br#"{"datasets":[{"id": "neutral"}],
+        br#"{"datasets":{"neutral": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
@@ -3231,7 +3231,7 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
 #[test]
 fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "public-slice"}],
+        br#"{"datasets":{"public-slice": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"public-slice","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://public-slice.example.test"},
@@ -3307,7 +3307,7 @@ fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() 
 #[test]
 fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "public-slice"}],
+        br#"{"datasets":{"public-slice": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"public-slice","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://public-slice.example.test"},
@@ -3419,7 +3419,7 @@ fn manifest_projection_diagnostics_name_the_profile_and_identifier_rule() {
 #[test]
 fn an_early_compile_error_says_which_later_checks_did_not_run() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id":"records"}],
+        br#"{"datasets":{"records": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"staged-check","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://staged-check.example.test"},
@@ -3474,7 +3474,7 @@ fn an_early_compile_error_says_which_later_checks_did_not_run() {
 /// in full only by `authorization.archived-status`, which sits above the
 /// projection's classification ceiling.
 fn narrowed_vocabulary_project(concepts: Value) -> registry_breg::contract::RegistryProject {
-    let project = json!({"datasets":[{"id": "narrowed-codes"}],
+    let project = json!({"datasets":{"narrowed-codes": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"narrowed-codes","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://narrowed-codes.example.test"},
@@ -3488,7 +3488,7 @@ fn narrowed_vocabulary_project(concepts: Value) -> registry_breg::contract::Regi
         "dataServices":[{"id":"narrowed-codes-api","title":"Narrowed Codes API","endpointUrl":"https://narrowed-codes.example.test/v1","servesDatasets":["narrowed-codes"]}],
         "vocabularies":[{"id":"authorization-status","schemeIri":"https://narrowed-codes.example.test/vocab/authorization-status","concepts":concepts}]
       },
-      "vocabularies":[{"id":"authorization-status","values":["pending","active","suspended","cancelled","revoked"]}],
+      "vocabularies":{"authorization-status": {"values":["pending","active","suspended","cancelled","revoked"]}},
       "recordTypes":{
         "authorization": {"primaryDataset":"narrowed-codes","route":"authorizations","mutationMode":"create-only","classification":"public",
          "fields":[
@@ -3587,7 +3587,7 @@ fn manifest_projection_refuses_a_label_for_a_declared_code_no_visible_field_uses
 
 #[test]
 fn manifest_projection_codelists_carry_only_codes_the_publication_admits() {
-    let project = json!({"datasets":[{"id": "protected-cases"}, {"id": "public-cases"}],
+    let project = json!({"datasets":{"protected-cases": {}, "public-cases": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"shared-codes","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://shared-codes.example.test"},
@@ -3610,7 +3610,7 @@ fn manifest_projection_codelists_carry_only_codes_the_publication_admits() {
           {"code":"sealed-by-court","label":{"en":"Sealed by court order"}}
         ]}]
       },
-      "vocabularies":[{"id":"case-status","values":["open","sealed-by-court"]}],
+      "vocabularies":{"case-status": {"values":["open","sealed-by-court"]}},
       "recordTypes":{
         "public-case": {"primaryDataset":"public-cases","route":"public-cases","mutationMode":"create-only","classification":"public",
          "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"case-status","values":["open"],"classification":"public"}]},
@@ -3692,7 +3692,7 @@ fn manifest_projection_omits_physical_runtime_and_security_terms() {
 #[test]
 fn independent_additive_modules_are_order_independent() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -3745,7 +3745,7 @@ fn independent_additive_modules_are_order_independent() {
 #[test]
 fn project_access_profile_required_scopes_compile_into_each_grant() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"scope-bound-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -3834,7 +3834,7 @@ fn deferred_query_features_are_strictly_unknown_key_rejected() {
         ),
     ] {
         let source = format!(
-            r#"{{"datasets":[{{"id":"test-dataset"}}],
+            r#"{{"datasets":{{"test-dataset": {{}}}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"closed-query-grammar","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -4142,20 +4142,20 @@ fn integer_members_are_read_within_their_stated_bounds() {
         (
             "facility",
             Box::new(set(
-                "/statisticalDatasets/0/disclosure/minimumCount",
+                "/statisticalDatasets/monthly-discharge-reports/disclosure/minimumCount",
                 json!(1),
             )),
             "config.out-of-range",
-            "project.statisticalDatasets[0].disclosure.minimumCount",
+            "project.statisticalDatasets.monthly-discharge-reports.disclosure.minimumCount",
         ),
         (
             "facility",
             Box::new(set(
-                "/statisticalDatasets/0/disclosure/roundingBase",
+                "/statisticalDatasets/monthly-discharge-reports/disclosure/roundingBase",
                 json!(9_007_199_254_740_992_u64),
             )),
             "config.out-of-range",
-            "project.statisticalDatasets[0].disclosure.roundingBase",
+            "project.statisticalDatasets.monthly-discharge-reports.disclosure.roundingBase",
         ),
     ];
     for (project, mutate, code, path) in cases {
@@ -4405,7 +4405,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {{}}
 recordTypes:
   case:
 {record}  case:
@@ -4531,7 +4531,7 @@ recordTypes: do-not-echo
     assert!(!diagnostic.message.contains("do-not-echo"));
 
     let unknown_enum_value = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -4556,7 +4556,7 @@ recordTypes: do-not-echo
 #[test]
 fn generic_decimal_crs84_point_and_structured_fields_compile_to_deterministic_ddl_and_schema() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -4770,7 +4770,7 @@ extendRecordTypes:
 #[test]
 fn scalar_grammar_is_exactly_the_typed_allowlist_and_rejects_json_or_reference_lists() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"scalar-allowlist","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -4793,7 +4793,7 @@ fn scalar_grammar_is_exactly_the_typed_allowlist_and_rejects_json_or_reference_l
               ]
             }
           },
-          "vocabularies":[{"id":"status","values":["active","closed"]}]
+          "vocabularies":{"status": {"values":["active","closed"]}}
         }"#,
     )
     .expect("every approved scalar form parses");
@@ -4853,7 +4853,7 @@ fn scalar_grammar_is_exactly_the_typed_allowlist_and_rejects_json_or_reference_l
     ];
     for (field, canary) in refused {
         let source = format!(
-            r#"{{"datasets":[{{"id": "test-dataset"}}],
+            r#"{{"datasets":{{"test-dataset": {{}}}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"scalar-allowlist","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -4919,7 +4919,7 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
 
     for (field, code) in cases {
         let source = format!(
-            r#"{{"datasets":[{{"id": "test-dataset"}}],
+            r#"{{"datasets":{{"test-dataset": {{}}}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -5069,7 +5069,7 @@ fn action_decimal_bound_diagnostic_names_capacity_and_preserves_valid_bounds() {
             input["maximum"] = json!(maximum);
         }
         json!({
-            "datasets": [{"id": "test-dataset"}],
+            "datasets": {"test-dataset": {}},
             "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
             "kind": "BRegProject",
             "project": {
@@ -5153,7 +5153,7 @@ fn crs84_point_and_structured_fields_cannot_be_row_boundaries_until_equality_is_
             "payload"
         };
         let source = format!(
-            r#"{{"datasets":[{{"id": "test-dataset"}}],
+            r#"{{"datasets":{{"test-dataset": {{}}}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -5180,7 +5180,7 @@ fn crs84_point_and_structured_fields_cannot_be_row_boundaries_until_equality_is_
 #[test]
 fn geojson_and_bbox_compile_only_for_direct_current_lists() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"spatial-authoring","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -5255,7 +5255,7 @@ fn geojson_and_bbox_compile_only_for_direct_current_lists() {
     }
 
     let ordinary = compile_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"ordinary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -5341,7 +5341,7 @@ fn bbox_authoring_requires_declared_readable_primary_point_and_bounded_spans() {
 
     for (geojson, grant, code, path) in cases {
         let source = format!(
-            r#"{{"datasets":[{{"id":"test-dataset"}}],
+            r#"{{"datasets":{{"test-dataset": {{}}}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"spatial-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -5373,7 +5373,7 @@ fn bbox_authoring_requires_declared_readable_primary_point_and_bounded_spans() {
 #[test]
 fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
     let strict_failure = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"spatial-strict","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -5405,7 +5405,7 @@ fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
         ),
     ] {
         let source = format!(
-            r#"{{"datasets":[{{"id":"test-dataset"}}],
+            r#"{{"datasets":{{"test-dataset": {{}}}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"point-scalar-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -5433,7 +5433,7 @@ fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
 #[test]
 fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"module-spatial","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -5501,7 +5501,7 @@ fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
 #[test]
 fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape_hatches() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -5547,7 +5547,7 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
               ]
             }
           },
-          "vocabularies":[{"id":"status","values":["active","paused","closed"]}]
+          "vocabularies":{"status": {"values":["active","paused","closed"]}}
         }"#,
     )
     .expect("the closed typed constraint matrix parses");
@@ -5704,7 +5704,7 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
         ),
     ] {
         let source = format!(
-            r#"{{"datasets":[{{"id": "test-dataset"}}],
+            r#"{{"datasets":{{"test-dataset": {{}}}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -5735,7 +5735,7 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
     }
 
     let cascade = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -5756,7 +5756,7 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
 #[test]
 fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
     let unknown_member = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -5770,7 +5770,7 @@ fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
               "when":[{"type":"field-equals","field":"status","value":"active","sql":"record_lifecycle = 'active'"}]
             }]
           }},
-          "vocabularies":[{"id":"status","values":["active","closed"]}]
+          "vocabularies":{"status": {"values":["active","closed"]}}
         }"#,
     )
     .expect_err("predicate members are closed");
@@ -5780,7 +5780,7 @@ fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
         .contains("record_lifecycle"));
 
     let arbitrary_lifecycle = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -5802,7 +5802,7 @@ fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
 
 #[test]
 fn partial_unique_typed_literals_are_canonical_for_each_supported_field_type() {
-    let source = br#"{"datasets":[{"id": "test-dataset"}],
+    let source = br#"{"datasets":{"test-dataset": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -5830,7 +5830,7 @@ fn partial_unique_typed_literals_are_canonical_for_each_supported_field_type() {
           ]
         }]
       }},
-      "vocabularies":[{"id":"status","values":["active","closed"]}]
+      "vocabularies":{"status": {"values":["active","closed"]}}
     }"#;
     let compiled = compile_json(source).expect("canonical literals compile");
     let ddl = compiled.ddl().script();
@@ -5874,7 +5874,7 @@ fn partial_unique_rejects_invalid_literals_and_json_predicate_fields() {
 
     for (field, predicate, code) in cases {
         let source = format!(
-            r#"{{"datasets":[{{"id": "test-dataset"}}],
+            r#"{{"datasets":{{"test-dataset": {{}}}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -5923,7 +5923,7 @@ fn partial_unique_rejects_empty_unknown_duplicate_and_contradictory_when_predica
 
     for (when, code) in cases {
         let source = format!(
-            r#"{{"datasets":[{{"id": "test-dataset"}}],
+            r#"{{"datasets":{{"test-dataset": {{}}}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -5947,7 +5947,7 @@ fn partial_unique_rejects_empty_unknown_duplicate_and_contradictory_when_predica
 
 #[test]
 fn partial_unique_ddl_is_quoted_and_deterministic_across_predicate_order() {
-    let left = br#"{"datasets":[{"id": "test-dataset"}],
+    let left = br#"{"datasets":{"test-dataset": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -5967,7 +5967,7 @@ fn partial_unique_ddl_is_quoted_and_deterministic_across_predicate_order() {
         }]
       }}
     }"#;
-    let right = br#"{"datasets":[{"id": "test-dataset"}],
+    let right = br#"{"datasets":{"test-dataset": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -6024,7 +6024,7 @@ fn partial_unique_ddl_is_quoted_and_deterministic_across_predicate_order() {
 #[test]
 fn equivalent_partial_unique_extension_constraints_merge_deterministically() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "modules":{"a": {"version":"1"},"b": {"version":"1"}},
@@ -6060,7 +6060,7 @@ fn equivalent_partial_unique_extension_constraints_merge_deterministically() {
 
 #[test]
 fn authenticated_profiles_may_process_governed_non_public_constraint_fields() {
-    let source = br#"{"datasets":[{"id": "test-dataset"}],
+    let source = br#"{"datasets":{"test-dataset": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"constraint-processing","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -6093,7 +6093,7 @@ fn authenticated_profiles_may_process_governed_non_public_constraint_fields() {
           "rowBoundaries": "unrestricted"
         }]}
       }},
-      "vocabularies":[{"id":"status","values":["active","inactive"]}]
+      "vocabularies":{"status": {"values":["active","inactive"]}}
     }"#;
     let mut project =
         parse_project_json(source).expect("closed constraint processing fixture parses");
@@ -6122,7 +6122,7 @@ fn authenticated_profiles_may_process_governed_non_public_constraint_fields() {
 
 #[test]
 fn compiled_partial_unique_constraint_keeps_closed_predicates_in_the_model() {
-    let source = br#"{"datasets":[{"id": "test-dataset"}],
+    let source = br#"{"datasets":{"test-dataset": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -6141,7 +6141,7 @@ fn compiled_partial_unique_constraint_keeps_closed_predicates_in_the_model() {
           "rowBoundaries": "unrestricted"
         }]}
       }},
-      "vocabularies":[{"id":"status","values":["active","closed"]}]
+      "vocabularies":{"status": {"values":["active","closed"]}}
     }"#;
 
     let compiled = compile_json(source).expect("public partial unique compiles");
@@ -6404,7 +6404,7 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
 #[test]
 fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
     let compiled = compile_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"business-contract","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -6498,7 +6498,7 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
 #[test]
 fn entity_schema_uses_compiled_api_names_and_preserves_field_contracts() {
     let compiled = compile_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"logical-schema","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -6509,7 +6509,7 @@ fn entity_schema_uses_compiled_api_names_and_preserves_field_contracts() {
               {"id":"case-note","apiName":"caseNoteText","type":"text","maximumLength":200,"classification":"restricted"}
             ]
           }},
-          "vocabularies":[{"id":"household-kind","values":["single","extended"]}]
+          "vocabularies":{"household-kind": {"values":["single","extended"]}}
         }"#,
     )
     .expect("logical field names compile");
@@ -6638,7 +6638,7 @@ fn compiled_metadata_inventory_is_bijective_canonical_schema_bound_and_determini
 #[test]
 fn compiler_produces_both_revision_routes_when_explicitly_configured() {
     let compiled = compile_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"revision-surface","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -6728,7 +6728,7 @@ fn compiler_produces_both_revision_routes_when_explicitly_configured() {
 fn compiler_omits_revision_routes_when_not_configured_or_revision_access_is_false() {
     for (operations, revision_access) in [(r#"["get"]"#, "true"), (r#"["revisions"]"#, "false")] {
         let source = format!(
-            r#"{{"datasets":[{{"id": "test-dataset"}}],
+            r#"{{"datasets":{{"test-dataset": {{}}}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"revision-surface","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -6790,7 +6790,7 @@ fn unresolved_reference_is_value_free_and_fails_before_ddl() {
 #[test]
 fn additive_module_conflicts_fail_instead_of_using_input_precedence() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "modules":{"core": {"version":"1"},"a": {"version":"1"},"b": {"version":"1"}},
@@ -6822,7 +6822,7 @@ fn additive_module_conflicts_fail_instead_of_using_input_precedence() {
 #[test]
 fn operation_ids_preserve_distinct_valid_entity_ids_without_collisions() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "recordTypes":{
@@ -6860,7 +6860,7 @@ fn operation_ids_preserve_distinct_valid_entity_ids_without_collisions() {
 #[test]
 fn separator_equivalent_entity_ids_are_refused_while_reading() {
     let failure = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "recordTypes":{
@@ -7274,7 +7274,7 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
 #[test]
 fn temporal_validity_compiles_without_non_overlap_constraint() {
     let compiled = compile_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"temporal-open","version":"1","defaultLanguage":"en","timezone":"UTC","canonicalBaseIri":"https://authoring.example.test"},
@@ -7314,7 +7314,7 @@ fn temporal_validity_compiles_without_non_overlap_constraint() {
 #[test]
 fn temporal_scope_fields_predecessor_spelling_is_refused() {
     let failure = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"temporal-bridge","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -7347,7 +7347,7 @@ fn temporal_scope_fields_predecessor_spelling_is_refused() {
 
 #[test]
 fn snapshot_operation_is_authenticated_stored_field_history_contract() {
-    let project = br#"{"datasets":[{"id": "test-dataset"}],
+    let project = br#"{"datasets":{"test-dataset": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"snapshot-demo","version":"1","defaultLanguage":"en","timezone":"UTC","canonicalBaseIri":"https://authoring.example.test"},
@@ -7571,7 +7571,7 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
 #[test]
 fn snapshot_operation_rejects_unauthorized_provenance() {
     let provenance = compile_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"snapshot-provenance","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -7596,7 +7596,7 @@ fn snapshot_operation_rejects_unauthorized_provenance() {
 #[test]
 fn snapshot_valid_at_openapi_schema_matches_temporal_value_type() {
     let compiled = compile_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"snapshot-timestamp","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -7677,7 +7677,7 @@ fn query_inventory_rejects_unsupported_filter_and_sort_field_types() {
         ),
     ] {
         let source = format!(
-            r#"{{"datasets":[{{"id":"test-dataset"}}],
+            r#"{{"datasets":{{"test-dataset": {{}}}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -7757,7 +7757,7 @@ fn temporal_start_required_diagnostic_names_the_record_and_field() {
 #[test]
 fn duplicate_record_api_name_diagnostic_names_the_conflicting_record() {
     let failure = compile_json(
-        br#"{"datasets":[{"id":"records"}],
+        br#"{"datasets":{"records": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"api-names","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://api-names.example.test"},
@@ -7779,7 +7779,7 @@ fn duplicate_record_api_name_diagnostic_names_the_conflicting_record() {
 #[test]
 fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
     let left = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "recordTypes":{"entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
@@ -7798,7 +7798,7 @@ fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
     )
     .expect("left source parses");
     let right = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "recordTypes":{"entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
@@ -7832,7 +7832,7 @@ fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
 #[test]
 fn duplicate_routes_fail_before_artifact_generation() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "recordTypes":{
@@ -7881,7 +7881,7 @@ fn duplicate_routes_fail_before_artifact_generation() {
 #[test]
 fn production_refuses_a_digest_present_lock_without_module_source() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "package":{"sourceRevision":"revision-1"},
@@ -7910,7 +7910,7 @@ fn production_refuses_a_digest_present_lock_without_module_source() {
 
 #[test]
 fn verified_module_digest_changes_compiled_closure_artifact_and_revision() {
-    let project_source = br#"{"datasets":[{"id": "neutral"}],
+    let project_source = br#"{"datasets":{"neutral": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
       "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://neutral.example.test"},
       "package":{"sourceRevision":"revision-1"},
@@ -7965,7 +7965,7 @@ fn verified_module_digest_changes_compiled_closure_artifact_and_revision() {
 
 fn selector_project(fields: &str) -> Vec<u8> {
     format!(
-        r#"{{"datasets":[{{"id": "test-dataset"}}],
+        r#"{{"datasets":{{"test-dataset": {{}}}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{{"id":"selector-grammar","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
@@ -8042,7 +8042,7 @@ fn selector_profile_field_refusals_separate_unknown_names_from_cardinality() {
 #[test]
 fn entity_classification_defaults_while_field_classification_stays_explicit() {
     let compiled = compile_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"classification-defaults","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -8067,7 +8067,7 @@ fn entity_classification_defaults_while_field_classification_stays_explicit() {
     );
 
     let failure = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"classification-defaults","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -8110,7 +8110,7 @@ fn structured_root_arrays_preserve_schema_and_closed_nested_object_validation() 
         (json!({"type":"array"}), false),
         (json!({"type":"array","items":true}), false),
     ] {
-        let source = json!({"datasets":[{"id": "test-dataset"}],
+        let source = json!({"datasets":{"test-dataset": {}},
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
             "project":{"id":"array-schema","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
             "recordTypes":{"record": {"primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
@@ -8381,7 +8381,7 @@ fn bounded_field_project(
     maximum_bytes: &str,
 ) -> Vec<u8> {
     let (fields, derived, inputs) = bounded_fields(minimum_length, maximum_length, maximum_bytes);
-    serde_json::to_vec(&json!({"datasets":[{"id": "test-dataset"}],
+    serde_json::to_vec(&json!({"datasets":{"test-dataset": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"field-bounds","version":"1","defaultLanguage":"en",
@@ -8598,7 +8598,7 @@ fn tagged_handlers(tag: &str) -> Value {
 
 fn tagged_handler_project(tag: &str) -> Vec<u8> {
     let hooks = tagged_handlers(tag);
-    serde_json::to_vec(&json!({"datasets":[{"id": "test-dataset"}],
+    serde_json::to_vec(&json!({"datasets":{"test-dataset": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"handler-tags","version":"1","defaultLanguage":"en",
@@ -9220,7 +9220,7 @@ fn an_identifier_is_read_in_the_local_grammar_and_refused_outside_it() {
 #[test]
 fn entity_schema_marks_the_validity_interval_and_the_non_overlap_scopes() {
     let compiled = compile_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"temporal-schema","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},

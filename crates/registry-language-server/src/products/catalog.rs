@@ -31,17 +31,17 @@ const BREG_DECLARATIONS: &[N] = &[
     N::keyed("actions/*/plan/effects/*/id", "BReg action effect"),
     N::keyed("actions/*/plan/writes/*/id", "BReg action effect"),
     N::global("accessProfiles/$key", "BReg access profile"),
-    N::global("vocabularies/*/id", "BReg vocabulary"),
-    N::global("evidenceProviders/*/id", "BReg Evidence provider"),
+    N::global("vocabularies/$key", "BReg vocabulary"),
+    N::global("evidenceProviders/$key", "BReg Evidence provider"),
     N::global(
         "recipients/organizations/*/id",
         "BReg recipient organization",
     ),
     N::global("recipients/groups/*/id", "BReg recipient group"),
-    N::global("datasets/*/id", "BReg dataset"),
+    N::global("datasets/$key", "BReg dataset"),
     N::global("valueTypes/$key", "BReg value type"),
     N::global("functions/$key", "BReg function"),
-    N::global("reviewAuthorities/*/id", "BReg review authority"),
+    N::global("reviewAuthorities/$key", "BReg review authority"),
     N {
         scope: Scope::BregAction,
         ..N::global(

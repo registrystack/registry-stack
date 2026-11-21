@@ -215,9 +215,7 @@
       }
     }
   },
-  "datasets": [
-    {
-      "id": "test-dataset"
-    }
-  ]
+  "datasets": {
+    "test-dataset": {}
+  }
 }

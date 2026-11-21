@@ -14,7 +14,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://access-example.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 recordTypes:
   entry:
     primaryDataset: test-dataset

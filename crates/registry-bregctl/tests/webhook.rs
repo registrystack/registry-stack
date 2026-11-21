@@ -58,7 +58,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://hook-sample.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 recordTypes:
   record:
     primaryDataset: test-dataset

@@ -285,7 +285,7 @@ project:
 package:
   sourceRevision: wasm-schema-test-source
 datasets:
-  - id: wasm-schema-test
+  wasm-schema-test: {}
 manifestProjection:
   accessProfile: operator
   classificationCeiling: public

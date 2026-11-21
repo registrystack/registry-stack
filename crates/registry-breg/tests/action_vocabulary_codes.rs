@@ -234,7 +234,7 @@ fn an_unrelated_vocabulary_leaves_every_action_semantically_unchanged() {
     let project = replace_once(
         CONSENT_PROJECT,
         "vocabularies:\n",
-        "vocabularies:\n  - id: unrelated-status\n    values: [active, inactive]\n",
+        "vocabularies:\n  unrelated-status:\n    values: [active, inactive]\n",
     );
     let after = consent(&project, CONSENT_MODULE);
     let changes = compiled_registry_change_set(&before, &after, "prior-package");

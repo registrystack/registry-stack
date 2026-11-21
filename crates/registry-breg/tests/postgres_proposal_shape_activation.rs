@@ -40,7 +40,7 @@ fn map(value: Value) -> Map<String, Value> {
 fn registry_source(automatic: bool) -> Value {
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"proposal-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://proposal.example.test"},
-        "datasets":[{"id":"directory"}],
+        "datasets":{"directory": {}},
         "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable",
             "mutationPolicy":{"patch":"proposal-required"},
             "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
@@ -223,7 +223,7 @@ async fn shape_journey(change: Change) {
         .unwrap()
         .push(json!({"id":"note","type":"boolean","required":false,"classification":"internal"}));
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}", "b".repeat(64))});
     if matches!(&change, Change::EventRecordOnly) {

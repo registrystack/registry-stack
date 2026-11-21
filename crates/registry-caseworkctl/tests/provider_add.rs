@@ -41,12 +41,7 @@ fn read_yaml(path: &Path) -> Value {
 }
 
 fn bind_human_review_client(registry: &mut Value) {
-    let reviewer = registry["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == "proposal-reviewer")
-        .unwrap();
+    let reviewer = &mut registry["accessProfiles"]["proposal-reviewer"];
     reviewer["actorKind"] = json!("human");
     reviewer["requesterClients"] = json!(["review-ui"]);
 }
@@ -108,35 +103,31 @@ fn merge_object(target: &mut Value, patch: &Value) {
 fn apply_authoring_suggestions(registry: &mut Value, changes: &[Value]) {
     for change in changes {
         let yaml = &change["yaml"];
-        if let Some(actions) = yaml["actions"].as_array() {
-            for patch in actions {
-                let id = patch["id"].as_str().expect("suggested Action has an id");
-                let action = registry["actions"]
-                    .as_array_mut()
-                    .unwrap()
-                    .iter_mut()
-                    .find(|action| action["id"].as_str() == Some(id))
-                    .expect("suggested Action exists");
-                merge_object(action, patch);
-            }
-        }
-        for collection in ["reviewAuthorities", "accessProfiles"] {
-            if let Some(entries) = yaml[collection].as_array() {
+        for collection in ["actions", "reviewAuthorities", "accessProfiles"] {
+            if let Some(entries) = yaml[collection].as_object() {
                 let declared = registry[collection]
-                    .as_array_mut()
+                    .as_object_mut()
                     .expect("suggested top-level collection exists");
-                for patch in entries {
-                    if let Some(existing) =
-                        declared.iter_mut().find(|entry| entry["id"] == patch["id"])
-                    {
+                for (id, patch) in entries {
+                    if let Some(existing) = declared.get_mut(id) {
                         merge_object(existing, patch);
                     } else {
-                        declared.push(patch.clone());
+                        declared.insert(id.clone(), patch.clone());
                     }
                 }
             }
         }
     }
+}
+
+/// The access profiles printed across all changes, as `(id, profile)` pairs.
+fn printed_profiles(changes: &[Value]) -> impl Iterator<Item = (&String, &Value)> {
+    changes.iter().flat_map(|change| {
+        change["yaml"]["accessProfiles"]
+            .as_object()
+            .into_iter()
+            .flatten()
+    })
 }
 
 #[cfg(unix)]
@@ -369,18 +360,11 @@ fn unbound_reviewer_requires_a_human_client_binding() {
     assert!(!project.exists());
     assert_eq!(files(&source), before);
     let changes = report["changes"].as_array().unwrap();
-    let reviewer = changes
-        .iter()
-        .flat_map(|change| {
-            change["yaml"]["accessProfiles"]
-                .as_array()
-                .into_iter()
-                .flatten()
-        })
-        .find(|profile| profile["actorKind"] == "human")
+    let (reviewer_id, reviewer) = printed_profiles(changes)
+        .find(|(_, profile)| profile["actorKind"] == "human")
         .expect("the remedy binds a human review client");
     assert_ne!(
-        reviewer["id"], "proposal-reviewer",
+        reviewer_id, "proposal-reviewer",
         "existing broad profiles are not narrowed implicitly"
     );
     assert!(!reviewer["requesterClients"].as_array().unwrap().is_empty());
@@ -411,7 +395,7 @@ fn unbound_reviewer_requires_a_human_client_binding() {
         fs::write(
             &scenario,
             serde_json::to_vec(&json!({
-                "recordType":"facility", "accessProfile":reviewer["id"], "operation":"get",
+                "recordType":"facility", "accessProfile":reviewer_id, "operation":"get",
                 "claims":{
                     "actorKind":kind, "requesterClient":client,
                     "principalClaim":reviewer["principalClaim"], "principal":"synthetic-reviewer",
@@ -490,30 +474,25 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
     copy_tree(&facility, &incomplete);
     let registry_path = incomplete.join("registry.yaml");
     let mut registry = read_yaml(&registry_path);
-    registry["reviewAuthorities"] = json!([]);
+    registry["reviewAuthorities"] = json!({});
     registry["accessProfiles"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .retain(|profile| {
-            profile["id"] != "casework-review-status"
+        .retain(|id, _| {
+            id != "casework-review-status"
                 && (matches!(
                     variant,
                     "existing-reviewer"
                         | "record-reference"
                         | "reference-input-only"
                         | "unprojected-reference"
-                ) || profile["id"] != "proposal-reviewer")
+                ) || id != "proposal-reviewer")
         });
     if matches!(
         variant,
         "existing-reviewer" | "record-reference" | "reference-input-only" | "unprojected-reference"
     ) {
-        let reviewer = registry["accessProfiles"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|profile| profile["id"] == "proposal-reviewer")
-            .unwrap();
+        let reviewer = &mut registry["accessProfiles"]["proposal-reviewer"];
         reviewer["requiredScopes"] = json!("unrestricted");
         reviewer["actorKind"] = json!("human");
         reviewer["requesterClients"] = json!(["review-ui"]);
@@ -529,9 +508,9 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
     ) {
         for collection in ["actions", "proposals"] {
             for permission in registry["accessProfiles"]
-                .as_array_mut()
+                .as_object_mut()
                 .unwrap()
-                .iter_mut()
+                .values_mut()
                 .filter_map(|profile| {
                     profile
                         .get_mut("permissions")?
@@ -549,12 +528,7 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
         }
     }
     if variant == "encrypted-write" {
-        let field = registry["recordTypes"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|record| record["id"] == "facility")
-            .unwrap()["fields"]
+        let field = registry["recordTypes"]["facility"]["fields"]
             .as_array_mut()
             .unwrap()
             .iter_mut()
@@ -564,12 +538,7 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
         field["encrypted"] = json!(true);
     }
     if variant == "oversized-changes" {
-        let fields = registry["recordTypes"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|record| record["id"] == "facility")
-            .unwrap()["fields"]
+        let fields = registry["recordTypes"]["facility"]["fields"]
             .as_array_mut()
             .unwrap();
         for index in 0..62 {
@@ -580,24 +549,21 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
         }
     }
     if variant == "reviewer-name-collision" {
-        registry["accessProfiles"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({
-                "id":"correct-address-reviewer", "actorKind":"service",
-                "requesterClients":["existing-service"], "principalClaim":"registry_principal",
-                "requiredScopes":["registry:directory:read"],
-                "permissions":{"records":[{
-                    "recordType":"directory-entry", "operations":["get"],
-                    "readableFields":["name"], "rowBoundaries":"unrestricted"
-                }]}
-            }));
+        registry["accessProfiles"]["correct-address-reviewer"] = json!({
+            "actorKind":"service",
+            "requesterClients":["existing-service"], "principalClaim":"registry_principal",
+            "requiredScopes":["registry:directory:read"],
+            "permissions":{"records":[{
+                "recordType":"directory-entry", "operations":["get"],
+                "readableFields":["name"], "rowBoundaries":"unrestricted"
+            }]}
+        });
     }
     if variant == "unrestricted" {
         for permission in registry["accessProfiles"]
-            .as_array_mut()
+            .as_object_mut()
             .unwrap()
-            .iter_mut()
+            .values_mut()
             .filter_map(|profile| {
                 profile
                     .get_mut("permissions")?
@@ -612,12 +578,7 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
             }
         }
     }
-    let action = registry["actions"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|action| action["id"] == "correct-address")
-        .unwrap();
+    let action = &mut registry["actions"]["correct-address"];
     if variant == "requirement-input" {
         action["inputs"].as_array_mut().unwrap().push(json!({
             "id":"expected-address", "typeRef":"address-line",
@@ -728,12 +689,7 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
         assert_eq!(refusal["diagnostics"][0]["code"], expected, "{refusal}");
         assert_eq!(files(&incomplete), before);
         assert!(!casework.exists());
-        let action = registry["actions"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|action| action["id"] == "correct-address")
-            .unwrap();
+        let action = &mut registry["actions"]["correct-address"];
         action["execution"]["proposal"]["reviewContext"] = json!({
             "id":"explicit-address-context",
             "fields":{"addressLine":{"type":"input","input":"address-line"}}
@@ -758,7 +714,12 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
             .as_array()
             .unwrap()
             .iter()
-            .flat_map(|change| change["yaml"]["actions"].as_array().into_iter().flatten())
+            .flat_map(|change| {
+                change["yaml"]["actions"]
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|actions| actions.values())
+            })
             .find_map(|action| {
                 action["execution"]["proposal"]["reviewContext"]["fields"].as_object()
             })
@@ -769,8 +730,8 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
                 .any(|field| field["input"] == "expected-address"),
             "reviewers must see an input used only by a precondition comparison: {first}"
         );
-        let alternative = &first["inputsOnlyAlternative"]["yaml"]["actions"][0]["execution"]
-            ["proposal"]["reviewContext"]["fields"];
+        let alternative = &first["inputsOnlyAlternative"]["yaml"]["actions"]["correct-address"]
+            ["execution"]["proposal"]["reviewContext"]["fields"];
         assert!(alternative
             .as_object()
             .unwrap()
@@ -779,15 +740,8 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
     }
     if variant == "reviewer-name-collision" {
         assert!(
-            first["changes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .flat_map(|change| change["yaml"]["accessProfiles"]
-                    .as_array()
-                    .into_iter()
-                    .flatten())
-                .all(|profile| profile["id"] != "correct-address-reviewer"),
+            printed_profiles(first["changes"].as_array().unwrap())
+                .all(|(id, _)| id != "correct-address-reviewer"),
             "generated reviewer authority must not reuse an unrelated service profile"
         );
     }
@@ -795,17 +749,8 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
         variant,
         "record-reference" | "reference-input-only" | "unprojected-reference"
     ) {
-        let reviewer = first["changes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .flat_map(|change| {
-                change["yaml"]["accessProfiles"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-            })
-            .find(|profile| profile["id"] == "proposal-reviewer")
+        let (_, reviewer) = printed_profiles(first["changes"].as_array().unwrap())
+            .find(|(id, _)| *id == "proposal-reviewer")
             .expect("the existing reviewer receives the missing context authority");
         assert!(
             reviewer["permissions"]["proposals"][0]["targets"]
@@ -883,12 +828,7 @@ fn real_bregctl_preserves_broad_source_namespace_behind_local_bindings() {
     let registry_path = source.join("registry.yaml");
     let mut registry = read_yaml(&registry_path);
     bind_human_review_client(&mut registry);
-    let action = registry["actions"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|action| action["id"] == "correct-address")
-        .unwrap();
+    let action = &mut registry["actions"]["correct-address"];
     action["execution"]["proposal"]["review"]["source"] = json!("facility.registry:v1");
     fs::write(&registry_path, serde_norway::to_string(&registry).unwrap()).unwrap();
 
@@ -990,12 +930,8 @@ fn exact_policy_selection_matches_the_generated_and_existing_policy() {
         } else if variant == "wrong-digest" {
             selected["digest"] = json!(format!("sha256:{}", "0".repeat(64)));
         }
-        registry["actions"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|action| action["id"] == "correct-address")
-            .unwrap()["execution"]["proposal"]["review"]["policy"] = selected;
+        registry["actions"]["correct-address"]["execution"]["proposal"]["review"]["policy"] =
+            selected;
         fs::write(&registry_path, serde_norway::to_string(&registry).unwrap()).unwrap();
         let mut check = Command::new(&bregctl);
         check.args(["--format", "json", "check"]).arg(&source);
@@ -1087,12 +1023,7 @@ fn reruns_revalidate_required_runtime_scopes_without_rewriting_operator_bindings
     let created = compose();
     assert!(created.status.success(), "{}", json(&created));
     let before = files(&project);
-    let status = registry["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == "casework-review-status")
-        .unwrap();
+    let status = &mut registry["accessProfiles"]["casework-review-status"];
     status["requiredScopes"] =
         json!(["registry:proposal:review-status", "registry:status:updated"]);
     fs::write(&registry_path, serde_norway::to_string(&registry).unwrap()).unwrap();
@@ -1130,12 +1061,7 @@ fn reruns_revalidate_required_runtime_scopes_without_rewriting_operator_bindings
     assert_eq!(json(&agreed)["outcome"], "in-agreement");
     assert_eq!(files(&project), updated);
 
-    let status = registry["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == "casework-review-status")
-        .unwrap();
+    let status = &mut registry["accessProfiles"]["casework-review-status"];
     status["requiredScopes"] = json!("unrestricted");
     fs::write(&registry_path, serde_norway::to_string(&registry).unwrap()).unwrap();
     let agreed = compose();
@@ -1171,12 +1097,8 @@ fn external_policy_ids_receive_an_actionable_local_compatibility_refusal() {
     .into_iter()
     .enumerate()
     {
-        registry["actions"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|action| action["id"] == "correct-address")
-            .unwrap()["execution"]["proposal"]["review"]["policy"]["id"] = json!(policy_id);
+        registry["actions"]["correct-address"]["execution"]["proposal"]["review"]["policy"]["id"] =
+            json!(policy_id);
         fs::write(&registry_path, serde_norway::to_string(&registry).unwrap()).unwrap();
         let source_before = files(&source);
         let project = root.join(format!("review-{index}"));

@@ -229,7 +229,7 @@ fn source(generated: bool) -> Source {
             "canonicalBaseIri": "https://registry.example.test"
         },
         "package": {"sourceRevision": SOURCE_REVISION},
-        "datasets": [{"id": "records"}],
+        "datasets": {"records": {}},
         "manifestProjection": {
             "accessProfile": "reader",
             "classificationCeiling": "internal",

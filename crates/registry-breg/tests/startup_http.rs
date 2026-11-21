@@ -74,7 +74,7 @@ recordTypes:
     fields:
       - {id: label, type: string, required: true, maximumLength: 80, classification: public}
 datasets:
-  - {id: test-dataset}
+  test-dataset: {}
 
 accessProfiles:
   public:

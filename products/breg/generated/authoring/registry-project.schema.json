@@ -1610,22 +1610,6 @@
       ],
       "type": "object"
     },
-    "DatasetSource": {
-      "additionalProperties": false,
-      "properties": {
-        "display": {
-          "$ref": "#/$defs/DisplaySource",
-          "default": {}
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        }
-      },
-      "required": [
-        "id"
-      ],
-      "type": "object"
-    },
     "DateFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
@@ -2397,26 +2381,6 @@
       ],
       "type": "string"
     },
-    "EvidenceProviderSource": {
-      "additionalProperties": false,
-      "properties": {
-        "contracts": {
-          "type": "string"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "subjectResolution": {
-          "$ref": "#/$defs/EvidenceSubjectResolution"
-        }
-      },
-      "required": [
-        "id",
-        "contracts",
-        "subjectResolution"
-      ],
-      "type": "object"
-    },
     "EvidenceSubjectResolution": {
       "enum": [
         "trusted-provider-exact-selector"
@@ -2572,103 +2536,12 @@
       ],
       "type": "object"
     },
-    "ExternalProjectionDeclaration": {
-      "additionalProperties": false,
-      "description": "Authoring form of an external projection. `compile` fills the derived\nmembers of [`ExternalProjectionSource`].",
-      "properties": {
-        "cacheTtlSeconds": {
-          "format": "uint32",
-          "maximum": 31536000,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "cardinality": {
-          "$ref": "#/$defs/ExternalCardinality"
-        },
-        "fields": {
-          "items": {
-            "$ref": "#/$defs/LocalId"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "mode": {
-          "$ref": "#/$defs/ExternalProjectionMode"
-        },
-        "purpose": {
-          "$ref": "#/$defs/ExternalId"
-        },
-        "recordType": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "scope": {
-          "$ref": "#/$defs/ExternalId"
-        },
-        "selectorScheme": {
-          "$ref": "#/$defs/ExternalId",
-          "description": "Required for cardinality `many`; refused for `one`, which selects by\nthe record type's identifier scheme."
-        },
-        "sourceRoute": {
-          "$ref": "#/$defs/LocalId",
-          "description": "The source route the projection calls."
-        },
-        "sourceRouteVersion": {
-          "$ref": "#/$defs/ExternalId"
-        }
-      },
-      "required": [
-        "id",
-        "recordType",
-        "sourceRoute",
-        "sourceRouteVersion",
-        "purpose",
-        "scope",
-        "mode",
-        "cardinality",
-        "fields"
-      ],
-      "type": "object"
-    },
     "ExternalProjectionMode": {
       "enum": [
         "live",
         "indexed"
       ],
       "type": "string"
-    },
-    "ExternalRecordTypeSource": {
-      "additionalProperties": false,
-      "properties": {
-        "authority": {
-          "$ref": "#/$defs/ExternalId"
-        },
-        "display": {
-          "$ref": "#/$defs/DisplaySource",
-          "default": {}
-        },
-        "fields": {
-          "items": {
-            "$ref": "#/$defs/ExternalFieldSource"
-          },
-          "type": "array"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "identifierScheme": {
-          "$ref": "#/$defs/ExternalId"
-        }
-      },
-      "required": [
-        "id",
-        "authority",
-        "identifierScheme",
-        "fields"
-      ],
-      "type": "object"
     },
     "ExternalReferenceSource": {
       "additionalProperties": false,
@@ -2680,30 +2553,6 @@
       },
       "required": [
         "namespace"
-      ],
-      "type": "object"
-    },
-    "ExternalViewDeclaration": {
-      "additionalProperties": false,
-      "description": "Authoring form of an external view.",
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "links": {
-          "items": {
-            "$ref": "#/$defs/ExternalLinkDeclaration"
-          },
-          "type": "array"
-        },
-        "recordType": {
-          "$ref": "#/$defs/LocalId"
-        }
-      },
-      "required": [
-        "id",
-        "recordType",
-        "links"
       ],
       "type": "object"
     },
@@ -4783,26 +4632,6 @@
         }
       ]
     },
-    "ReviewAuthoritySource": {
-      "additionalProperties": false,
-      "properties": {
-        "display": {
-          "$ref": "#/$defs/DisplaySource",
-          "default": {}
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "protocol": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "protocol"
-      ],
-      "type": "object"
-    },
     "RowBoundaries": {
       "anyOf": [
         {
@@ -4958,63 +4787,6 @@
           "type": "object"
         }
       ]
-    },
-    "StatisticalDatasetSource": {
-      "additionalProperties": false,
-      "properties": {
-        "dimensions": {
-          "description": "Unit Record fields used to group every measure. Each field must be boolean or\nvocabulary-code, and each may appear once. `period`, `measure`, `value`,\nand `status` are reserved output columns and cannot be dimension field\nnames. At most 12 dimensions.",
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 12,
-          "type": "array"
-        },
-        "disclosure": {
-          "$ref": "#/$defs/StatisticalDisclosureSource"
-        },
-        "display": {
-          "$ref": "#/$defs/PresentationSource",
-          "description": "Authored presentation only; labels never establish identity or authority."
-        },
-        "exactReads": {
-          "$ref": "#/$defs/StatisticalExactReadsSource",
-          "description": "How `read-exact` reads compute. Required when a profile holds `read-exact` on the dataset, and refused otherwise."
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "measures": {
-          "default": [
-            {
-              "id": "count",
-              "type": "count"
-            }
-          ],
-          "description": "The values the dataset publishes, one cell per period, dimension\ncombination, and measure. Each id is unique, and at most one measure has\ntype `count`. Omitting the member publishes one `count` measure named\n`count`; an empty list is refused.",
-          "items": {
-            "$ref": "#/$defs/StatisticalMeasureSource"
-          },
-          "type": "array"
-        },
-        "period": {
-          "$ref": "#/$defs/StatisticalPeriodSource"
-        },
-        "population": {
-          "type": "string"
-        },
-        "unit": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "unit",
-        "population",
-        "period",
-        "dimensions"
-      ],
-      "type": "object"
     },
     "StatisticalDisclosureSource": {
       "description": "How a statistical release protects the values it states.",
@@ -5878,25 +5650,6 @@
         "vocabulary"
       ],
       "type": "object"
-    },
-    "VocabularySource": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "values": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "id",
-        "values"
-      ],
-      "type": "object"
     }
   },
   "$id": "https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json",
@@ -6030,35 +5783,165 @@
       "type": "string"
     },
     "datasets": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/DatasetSource"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "display": {
+            "$ref": "#/$defs/DisplaySource",
+            "default": {}
+          }
+        },
+        "required": [],
+        "type": "object"
       },
-      "type": "array"
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "evidenceProviders": {
-      "items": {
-        "$ref": "#/$defs/EvidenceProviderSource"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "contracts": {
+            "type": "string"
+          },
+          "subjectResolution": {
+            "$ref": "#/$defs/EvidenceSubjectResolution"
+          }
+        },
+        "required": [
+          "contracts",
+          "subjectResolution"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "externalProjections": {
-      "items": {
-        "$ref": "#/$defs/ExternalProjectionDeclaration"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "description": "Authoring form of an external projection. `compile` fills the derived\nmembers of [`ExternalProjectionSource`].",
+        "properties": {
+          "cacheTtlSeconds": {
+            "format": "uint32",
+            "maximum": 31536000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "cardinality": {
+            "$ref": "#/$defs/ExternalCardinality"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "mode": {
+            "$ref": "#/$defs/ExternalProjectionMode"
+          },
+          "purpose": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "recordType": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "scope": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "selectorScheme": {
+            "$ref": "#/$defs/ExternalId",
+            "description": "Required for cardinality `many`; refused for `one`, which selects by\nthe record type's identifier scheme."
+          },
+          "sourceRoute": {
+            "$ref": "#/$defs/LocalId",
+            "description": "The source route the projection calls."
+          },
+          "sourceRouteVersion": {
+            "$ref": "#/$defs/ExternalId"
+          }
+        },
+        "required": [
+          "recordType",
+          "sourceRoute",
+          "sourceRouteVersion",
+          "purpose",
+          "scope",
+          "mode",
+          "cardinality",
+          "fields"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "externalRecordTypes": {
-      "items": {
-        "$ref": "#/$defs/ExternalRecordTypeSource"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "authority": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "display": {
+            "$ref": "#/$defs/DisplaySource",
+            "default": {}
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/$defs/ExternalFieldSource"
+            },
+            "type": "array"
+          },
+          "identifierScheme": {
+            "$ref": "#/$defs/ExternalId"
+          }
+        },
+        "required": [
+          "authority",
+          "identifierScheme",
+          "fields"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "externalViews": {
-      "items": {
-        "$ref": "#/$defs/ExternalViewDeclaration"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "description": "Authoring form of an external view.",
+        "properties": {
+          "links": {
+            "items": {
+              "$ref": "#/$defs/ExternalLinkDeclaration"
+            },
+            "type": "array"
+          },
+          "recordType": {
+            "$ref": "#/$defs/LocalId"
+          }
+        },
+        "required": [
+          "recordType",
+          "links"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "functions": {
       "additionalProperties": {
@@ -6426,18 +6309,87 @@
       "type": "array"
     },
     "reviewAuthorities": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/ReviewAuthoritySource"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "display": {
+            "$ref": "#/$defs/DisplaySource",
+            "default": {}
+          },
+          "protocol": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "protocol"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "statisticalDatasets": {
-      "description": "Declared count tables computed from governed Registry records.",
-      "items": {
-        "$ref": "#/$defs/StatisticalDatasetSource"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "dimensions": {
+            "description": "Unit Record fields used to group every measure. Each field must be boolean or\nvocabulary-code, and each may appear once. `period`, `measure`, `value`,\nand `status` are reserved output columns and cannot be dimension field\nnames. At most 12 dimensions.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 12,
+            "type": "array"
+          },
+          "disclosure": {
+            "$ref": "#/$defs/StatisticalDisclosureSource"
+          },
+          "display": {
+            "$ref": "#/$defs/PresentationSource",
+            "description": "Authored presentation only; labels never establish identity or authority."
+          },
+          "exactReads": {
+            "$ref": "#/$defs/StatisticalExactReadsSource",
+            "description": "How `read-exact` reads compute. Required when a profile holds `read-exact` on the dataset, and refused otherwise."
+          },
+          "measures": {
+            "default": [
+              {
+                "id": "count",
+                "type": "count"
+              }
+            ],
+            "description": "The values the dataset publishes, one cell per period, dimension\ncombination, and measure. Each id is unique, and at most one measure has\ntype `count`. Omitting the member publishes one `count` measure named\n`count`; an empty list is refused.",
+            "items": {
+              "$ref": "#/$defs/StatisticalMeasureSource"
+            },
+            "type": "array"
+          },
+          "period": {
+            "$ref": "#/$defs/StatisticalPeriodSource"
+          },
+          "population": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "unit",
+          "population",
+          "period",
+          "dimensions"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "description": "Declared count tables computed from governed Registry records.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "timerGrants": {
       "description": "Root-owned enablement of autonomous Record timers. Modules may declare\ntimers, but cannot contribute this authority.",
@@ -6457,11 +6409,26 @@
       "type": "object"
     },
     "vocabularies": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/VocabularySource"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "values"
+        ],
+        "type": "object"
       },
-      "type": "array"
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     }
   },
   "required": [

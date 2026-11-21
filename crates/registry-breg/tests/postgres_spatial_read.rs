@@ -466,7 +466,7 @@ fn compiled_polygon_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(br#"{
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
       "project":{"id":"spatial-read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "datasets":[{"id":"test-dataset"}],
+      "datasets":{"test-dataset": {}},
       "recordTypes":{"plot": {"primaryDataset":"test-dataset","route":"plots","mutationMode":"mutable","classification":"internal",
         "fields":[
           {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
@@ -2567,7 +2567,7 @@ fn spatial_registry_project_source(module_digest: &str) -> String {
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{{"id":"spatial-read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-      "datasets":[{{"id":"test-dataset"}}],
+      "datasets":{{"test-dataset": {{}}}},
       "modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}
     }}"#
     )
@@ -2739,7 +2739,7 @@ fn spatial_region_label_sql() -> &'static str {
 }
 
 fn plain_geojson_registry_source() -> &'static str {
-    r#"{"datasets":[{"id": "test-dataset"}],
+    r#"{"datasets":{"test-dataset": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"plain-geojson-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},

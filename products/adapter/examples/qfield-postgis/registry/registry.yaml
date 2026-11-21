@@ -14,7 +14,7 @@ package:
   sourceRevision: qfield-field-sites-0.1.0
 
 datasets:
-  - id: field-sites
+  field-sites:
     display:
       label: Field sites
       description: Synthetic sites registered from finalized field submissions.

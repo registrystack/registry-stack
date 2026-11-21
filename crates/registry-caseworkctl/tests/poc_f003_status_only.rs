@@ -152,9 +152,9 @@ exit 1
             let changes = report["changes"].as_array().unwrap();
             assert!(
                 changes.iter().any(|change| {
-                    change["path"] == "accessProfiles[id=correct-address-review-status]"
-                        && change["yaml"]["accessProfiles"][0]["permissions"]["proposals"][0]
-                            ["operations"]
+                    change["path"] == "accessProfiles/correct-address-review-status"
+                        && change["yaml"]["accessProfiles"]["correct-address-review-status"]
+                            ["permissions"]["proposals"][0]["operations"]
                             == json!(["get-review-status"])
                 }),
                 "the remedy must propose a purpose-specific status profile: {report}"

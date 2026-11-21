@@ -14,11 +14,11 @@ package:
   sourceRevision: record-timer-native-0.1.0
 
 datasets:
-  - id: services
+  services:
     display: {label: Services, description: Synthetic future-effective service records.}
 
 vocabularies:
-  - id: service-status
+  service-status:
     values: [scheduled, active, cancelled]
 
 recordTypes:

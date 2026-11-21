@@ -56,11 +56,9 @@
     ],
     "distributions": []
   },
-  "datasets": [
-    {
-      "id": "person-registration-rhai"
-    }
-  ],
+  "datasets": {
+    "person-registration-rhai": {}
+  },
   "recordTypes": {
     "person": {
       "primaryDataset": "person-registration-rhai",

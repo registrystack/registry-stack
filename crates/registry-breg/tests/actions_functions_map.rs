@@ -15,7 +15,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://action-example.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 ";
 
 const MODULE_HEAD: &str = "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1

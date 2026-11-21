@@ -2129,7 +2129,7 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
         }));
     }
     let writable_fields = vec!["alpha", "omega"];
-    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
+    let project = serde_json::json!({"datasets":{"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -2166,7 +2166,7 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
 /// vocabulary varies, so a migration that touched `kind` would show.
 /// One required `text` field with a pattern, bounded by `max_length`.
 fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
-    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
+    let project = serde_json::json!({"datasets":{"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -2203,7 +2203,7 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
 }
 
 fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledRegistry {
-    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
+    let project = serde_json::json!({"datasets":{"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -2248,7 +2248,7 @@ fn vocabulary_catalog_registry_with_constraints(
     status_values: &[&str],
     constraints: serde_json::Value,
 ) -> registry_breg::CompiledRegistry {
-    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
+    let project = serde_json::json!({"datasets":{"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -2256,10 +2256,7 @@ fn vocabulary_catalog_registry_with_constraints(
             "version": "1",
             "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
         },
-        "vocabularies": [
-            {"id": "status", "values": status_values},
-            {"id": "kind", "values": ["minor", "major"]}
-        ],
+        "vocabularies": {"status": {"values": status_values}, "kind": {"values": ["minor", "major"]}},
         "recordTypes": {"entry": {
             "primaryDataset": "test-dataset",
             "route": "entries",
@@ -2293,7 +2290,7 @@ fn vocabulary_catalog_registry_with_constraints(
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"compiled-postgres","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -2363,7 +2360,7 @@ fn compiled_action_registry() -> registry_breg::CompiledRegistry {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://authoring.example.test"
         },
-        "datasets": [{"id": "test-dataset"}],
+        "datasets": {"test-dataset": {}},
         "recordTypes": {"entry": {
             "primaryDataset": "test-dataset",
             "route": "entries",
@@ -2426,7 +2423,7 @@ fn compiled_action_registry() -> registry_breg::CompiledRegistry {
 
 fn derived_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"derived-postgres","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test","timezone":"UTC"},

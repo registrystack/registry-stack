@@ -82,7 +82,7 @@ fn project_source(definition: Value, use_site: &str) -> Value {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://authoring.example.test/value-type-consistency"
         },
-        "datasets": [{"id": "records"}],
+        "datasets": {"records": {}},
         "valueTypes": {"shared-value": definition},
         "recordTypes": {"entry": {
             "primaryDataset": "records",
@@ -332,7 +332,7 @@ fn module_host(with_action_permission: bool) -> RegistryProject {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://authoring.example.test/module-host"
         },
-        "datasets": [{"id": "records"}],
+        "datasets": {"records": {}},
         "modules": {"definitions": { "version": "1"}}
     });
     if with_action_permission {

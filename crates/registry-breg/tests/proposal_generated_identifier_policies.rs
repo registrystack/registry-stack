@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 fn project() -> Value {
     json!({
-        "datasets": [{"id": "test-dataset"}],
+        "datasets": {"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {

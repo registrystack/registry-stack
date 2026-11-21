@@ -326,7 +326,7 @@ fn read_context(registry: &registry_breg::CompiledRegistry) -> ClaimContext {
 }
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(br#"{"datasets":[{"id": "test-dataset"}],
+    let project = parse_project_json(br#"{"datasets":{"test-dataset": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"derived-values","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},

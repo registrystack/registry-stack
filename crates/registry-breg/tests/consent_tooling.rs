@@ -466,7 +466,7 @@ fn a_column_that_gains_a_code_rewrites_its_check_under_a_lock() {
 #[test]
 fn a_changed_revoke_set_says_it_rebuilds_the_consent_indexes() {
     let mut changed = source();
-    changed["vocabularies"][1]["values"] =
+    changed["vocabularies"]["consent-decision"]["values"] =
         json!(["given", "refused", "withdrawn", "invalidated", "lapsed"]);
     changed["recordTypes"][CONSENT_RECORD]["consentRecord"]["decision"]["revokes"] =
         json!(["refused", "withdrawn", "invalidated", "lapsed"]);

@@ -1090,18 +1090,16 @@
           "/package",
           "/package/sourceRevision",
           "/datasets",
-          "/datasets/0",
-          "/datasets/0/id",
-          "/datasets/0/display",
-          "/datasets/0/display/label",
-          "/datasets/0/display/description",
+          "/datasets/facility-registry",
+          "/datasets/facility-registry/display",
+          "/datasets/facility-registry/display/label",
+          "/datasets/facility-registry/display/description",
           "/reviewAuthorities",
-          "/reviewAuthorities/0",
-          "/reviewAuthorities/0/id",
-          "/reviewAuthorities/0/protocol",
-          "/reviewAuthorities/0/display",
-          "/reviewAuthorities/0/display/label",
-          "/reviewAuthorities/0/display/description",
+          "/reviewAuthorities/casework",
+          "/reviewAuthorities/casework/protocol",
+          "/reviewAuthorities/casework/display",
+          "/reviewAuthorities/casework/display/label",
+          "/reviewAuthorities/casework/display/description",
           "/recordTypes",
           "/recordTypes/directory-entry",
           "/recordTypes/directory-entry/route",
@@ -1863,16 +1861,14 @@
           "/accessProfiles/casework-review-status/permissions/proposals/0/operations/0",
           "/accessProfiles/casework-review-status/permissions/proposals/0/reviewAuthority",
           "/vocabularies",
-          "/vocabularies/0",
-          "/vocabularies/0/id",
-          "/vocabularies/0/values",
-          "/vocabularies/0/values/0",
-          "/vocabularies/0/values/1",
-          "/vocabularies/1",
-          "/vocabularies/1/id",
-          "/vocabularies/1/values",
-          "/vocabularies/1/values/0",
-          "/vocabularies/1/values/1"
+          "/vocabularies/operator-status",
+          "/vocabularies/operator-status/values",
+          "/vocabularies/operator-status/values/0",
+          "/vocabularies/operator-status/values/1",
+          "/vocabularies/facility-status",
+          "/vocabularies/facility-status/values",
+          "/vocabularies/facility-status/values/0",
+          "/vocabularies/facility-status/values/1"
         ],
         "bindings": [
           {
@@ -1881,7 +1877,7 @@
           },
           {
             "explanationPointer": "/datasets/0",
-            "sourcePointer": "/datasets/0"
+            "sourcePointer": "/datasets/facility-registry"
           },
           {
             "explanationPointer": "/accessProfiles/0",
@@ -1917,7 +1913,7 @@
           },
           {
             "explanationPointer": "/reviewAuthorities/0",
-            "sourcePointer": "/reviewAuthorities/0"
+            "sourcePointer": "/reviewAuthorities/casework"
           },
           {
             "explanationPointer": "/recordTypes/0",

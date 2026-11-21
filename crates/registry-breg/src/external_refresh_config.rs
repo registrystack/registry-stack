@@ -688,7 +688,7 @@ pub(crate) mod tests {
                     "defaultLanguage":"en",
                     "canonicalBaseIri":"https://refresh.example.test"
                 },
-                "datasets":[{"id":"registry"}],
+                "datasets":{"registry": {}},
                 "recordTypes":{"record": {
                     "primaryDataset":"registry",
                     "route":"records",

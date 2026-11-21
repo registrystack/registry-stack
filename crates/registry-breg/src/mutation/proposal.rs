@@ -4494,7 +4494,7 @@ mod input_write_tests {
     fn action() -> CompiledAction {
         let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
             "project":{"id":"input-write-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://proposal.example.test"},
-            "datasets":[{"id":"directory"}],
+            "datasets":{"directory": {}},
             "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable",
                 "mutationPolicy":{"patch":"proposal-required"},
                 "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}},
@@ -4563,7 +4563,7 @@ mod commit_guard_date_tests {
         let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
             "project":{"id":"guard-date-test","version":"1","defaultLanguage":"en",
                 "canonicalBaseIri":"https://proposal.example.test","timezone":"Asia/Colombo"},
-            "datasets":[{"id":"directory"}],
+            "datasets":{"directory": {}},
             "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable",
                 "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}}});
         let project =

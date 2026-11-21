@@ -188,25 +188,25 @@ impl ProviderAddFailure {
             ),
             Self::EncryptedReviewContext { action_id } => (
                 "casework.provider-add.encrypted-review-context",
-                format!("actions[id={action_id}].execution.proposal.reviewContext"),
+                format!("actions/{action_id}/execution/proposal/reviewContext"),
                 "this Action writes encrypted fields that BReg cannot disclose as before/after review context",
                 "Author a supported reviewContext explicitly, choosing an inputs-only context if appropriate, then run provider add again. The default before/after context cannot be generated without changing what reviewers see.",
             ),
             Self::ReviewContextBounds { action_id } => (
                 "casework.provider-add.review-context-bounds",
-                format!("actions[id={action_id}].execution.proposal.reviewContext"),
+                format!("actions/{action_id}/execution/proposal/reviewContext"),
                 "the default review context exceeds BReg's 64-field context or changes-projection limit",
                 "Author a minimized reviewContext with at most 64 context fields and at most 64 selected fields in each changes projection, then run provider add again. No fields are silently omitted.",
             ),
             Self::PolicyBindingMismatch { action_id } => (
                 "casework.provider-add.policy-binding-mismatch",
-                format!("actions[id={action_id}].execution.proposal.review.policy"),
+                format!("actions/{action_id}/execution/proposal/review/policy"),
                 "the BReg policy selection does not match the compiled Casework approval policy",
                 "Inspect the intended Casework policy binding with caseworkctl explain. Select that exact version and digest in BReg, or deliberately use an ID-only selection, then run provider add again.",
             ),
             Self::PolicyIdUnsupported { action_id } => (
                 "casework.provider-add.policy-id-unsupported",
-                format!("actions[id={action_id}].execution.proposal.review.policy.id"),
+                format!("actions/{action_id}/execution/proposal/review/policy/id"),
                 "the BReg review policy identifier cannot be represented by a Casework project",
                 "Choose a review policy ID with 1 to 64 lowercase letters, digits, underscores, or hyphens, starting with a letter, then run provider add again. The policy identity is never normalized or aliased.",
             ),
@@ -216,7 +216,7 @@ impl ProviderAddFailure {
             } => (
                 "casework.provider-add.ambiguous-reviewer-boundaries",
                 format!(
-                    "actions[id={action_id}].permissions.targets[recordType={record_type}].rowBoundaries"
+                    "actions/{action_id}/permissions/targets/{record_type}/rowBoundaries"
                 ),
                 "the Action's alternative profiles have different row boundary sets, so an explicit reviewer grant is required",
                 "Author the reviewer's Proposal context and records.get permissions with the intended row boundaries, then run provider add again.",
@@ -1274,16 +1274,16 @@ fn plan(
     let mut changes = Vec::new();
     if review["type"].as_str() != Some("required") {
         changes.push(ProviderAddChange {
-            path: format!("actions[id={action_id}].execution.proposal.review"),
+            path: format!("actions/{action_id}/execution/proposal/review"),
             explanation: "Requires the selected Casework policy before this Action may be applied; it grants no source write authority.".into(),
-            yaml: json!({"actions":[{"id":action_id,"execution":{"mode":"proposal","proposal":{"review":{"type":"required","authority":authority_id,"source":source_namespace,"policy":{"id":policy_id}}}}}]}),
+            yaml: json!({"actions":{(action_id):{"execution":{"mode":"proposal","proposal":{"review":{"type":"required","authority":authority_id,"source":source_namespace,"policy":{"id":policy_id}}}}}}}),
         });
     }
     if existing_context.is_none() {
         changes.push(ProviderAddChange {
-            path: format!("actions[id={action_id}].execution.proposal.reviewContext"),
+            path: format!("actions/{action_id}/execution/proposal/reviewContext"),
             explanation: "Discloses only plan-used inputs and the before/after values of fields this plan writes.".into(),
-            yaml: json!({"actions":[{"id":action_id,"execution":{"mode":"proposal","proposal":{"reviewContext":{"id":local_id(action_id,"review-context"),"fields":context}}}}]}),
+            yaml: json!({"actions":{(action_id):{"execution":{"mode":"proposal","proposal":{"reviewContext":{"id":local_id(action_id,"review-context"),"fields":context}}}}}}),
         });
     }
     let declared_authority = actions["reviewAuthorities"]
@@ -1297,9 +1297,9 @@ fn plan(
         });
     if !declared_authority {
         changes.push(ProviderAddChange {
-            path: format!("reviewAuthorities[id={authority_id}]"),
+            path: format!("reviewAuthorities/{authority_id}"),
             explanation: "Declares the logical Review provider protocol; its endpoint and credential remain deployment configuration.".into(),
-            yaml: json!({"reviewAuthorities":[{"id":authority_id,"protocol":"id.registrystack.org/protocols/review/v1"}]}),
+            yaml: json!({"reviewAuthorities":{(authority_id.clone()): {"protocol":"id.registrystack.org/protocols/review/v1"}}}),
         });
     }
     if complete_human_permission.is_none() {
@@ -1343,7 +1343,7 @@ fn plan(
         if !records.is_empty() {
             permissions["records"] = Value::Array(records);
         }
-        let mut profile = json!({"id":human_profile,
+        let mut profile = json!({
             "actorKind":"human", "requesterClients":human_clients,
             "principalClaim":human_permission.and_then(|permission|permission["principalClaim"].as_str()).unwrap_or("registry_principal"),
             "requiredScopes":required_scopes,
@@ -1353,17 +1353,17 @@ fn plan(
             profile["requiredPurposes"] = required_purposes;
         }
         changes.push(ProviderAddChange {
-            path: format!("accessProfiles[id={human_profile}]"),
+            path: format!("accessProfiles/{human_profile}"),
             explanation: "Lets a human using the explicitly bound review client read only the named review-context fields and any required current Record fields under the Action's target row boundaries. Bind requesterClients to the intended reviewer UI clients before applying this fragment.".into(),
-            yaml: json!({"accessProfiles":[profile]}),
+            yaml: json!({"accessProfiles":{(human_profile.clone()):profile}}),
         });
     }
     let service_ready = service_permission.is_some();
     if !service_ready {
         changes.push(ProviderAddChange {
-            path: format!("accessProfiles[id={service_profile}]"),
+            path: format!("accessProfiles/{service_profile}"),
             explanation: "Lets one purpose-specific service client read Review status only for this Review authority.".into(),
-            yaml: json!({"accessProfiles":[{"id":service_profile,"actorKind":"service","principalClaim":"registry_principal","requesterClients":service_clients.clone(),"requiredScopes":["registry:proposal:review-status"],"requiredPurposes":["registry-review"],"permissions":{"proposals":[{"action":action_id,"operations":["get-review-status"],"reviewAuthority":authority_id}]}}]}),
+            yaml: json!({"accessProfiles":{(service_profile.clone()):{"actorKind":"service","principalClaim":"registry_principal","requesterClients":service_clients.clone(),"requiredScopes":["registry:proposal:review-status"],"requiredPurposes":["registry-review"],"permissions":{"proposals":[{"action":action_id,"operations":["get-review-status"],"reviewAuthority":authority_id}]}}}}),
         });
     }
     let deployment = vec![
@@ -1390,7 +1390,7 @@ fn plan(
             .collect::<Vec<_>>();
         ProviderAddNotice {
             explanation: "Each record or changes projection requires a real records.get grant, limited to the selected fields and the Action's row boundaries; this grant exposes current source data to the reviewer.".into(),
-            yaml: json!({"accessProfiles":[{"id":human_profile,"permissions":{"records":records}}]}),
+            yaml: json!({"accessProfiles":{(human_profile.clone()):{"permissions":{"records":records}}}}),
         }
     });
     let input_only = effective_context
@@ -1406,7 +1406,7 @@ fn plan(
         .map_or_else(|| local_id(action_id, "review-context"), str::to_owned);
     let inputs_only_alternative = (!required_reads.is_empty()).then(|| ProviderAddNotice {
         explanation: "Use this inputs-only context instead when reviewers do not need current Record values; it needs no records.get grant.".into(),
-        yaml: json!({"actions":[{"id":action_id,"execution":{"mode":"proposal","proposal":{"reviewContext":{"id":effective_context_id,"fields":input_only}}}}]}),
+        yaml: json!({"actions":{(action_id):{"execution":{"mode":"proposal","proposal":{"reviewContext":{"id":effective_context_id,"fields":input_only}}}}}}),
     });
     Ok(AddPlan {
         action: action.clone(),
@@ -2493,6 +2493,67 @@ exit 1
     }
 
     #[test]
+    fn printed_review_fragments_are_accepted_by_the_breg_project_reader() {
+        let proposed = action(Value::Null, Value::Null, json!([]));
+        let (proposals, actions, access) = explanations(proposed, json!([]));
+        let planned = plan(
+            "correct-address",
+            "single-reviewer-approval",
+            &proposals,
+            &actions,
+            &access,
+        )
+        .unwrap();
+        let mut project = json!({
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {
+                "id": "facility-registry",
+                "version": "1",
+                "defaultLanguage": "en",
+                "canonicalBaseIri": "https://facility.example.test"
+            }
+        });
+        let mut pasted = Vec::new();
+        for change in &planned.changes {
+            for (collection, entries) in change.yaml.as_object().unwrap() {
+                if collection != "accessProfiles" && collection != "reviewAuthorities" {
+                    continue;
+                }
+                pasted.push(change.path.clone());
+                assert!(
+                    entries.is_object(),
+                    "{collection} is printed as a mapping from each id: {}",
+                    change.yaml
+                );
+                let slot = project
+                    .as_object_mut()
+                    .unwrap()
+                    .entry(collection.clone())
+                    .or_insert_with(|| json!({}));
+                for (id, entry) in entries.as_object().unwrap() {
+                    assert!(slot
+                        .as_object_mut()
+                        .unwrap()
+                        .insert(id.clone(), entry.clone())
+                        .is_none());
+                }
+            }
+        }
+        assert_eq!(pasted.len(), 3, "{pasted:?}");
+        assert!(
+            pasted.iter().all(|path| !path.contains("[id=")),
+            "change paths name the id as a mapping key: {pasted:?}"
+        );
+        let parsed = registry_breg::contract::parse_project_yaml(
+            serde_json::to_string(&project).unwrap().as_bytes(),
+        )
+        .unwrap_or_else(|failure| panic!("the printed fragments are refused: {failure:?}"));
+        assert_eq!(parsed.access_profiles.len(), 2);
+        assert_eq!(parsed.review_authorities.len(), 1);
+    }
+
+    #[test]
     fn reviewer_boundary_inference_accepts_equal_reordered_sets_once() {
         let jurisdiction =
             json!({"field":"jurisdiction","claim":"jurisdiction","operator":"equals"});
@@ -2515,21 +2576,34 @@ exit 1
         let reviewer = planned
             .changes
             .iter()
-            .find(|change| change.path.starts_with("accessProfiles[id="))
+            .find(|change| change.path.starts_with("accessProfiles/"))
             .unwrap();
         let expected = json!([jurisdiction, owner]);
         assert_eq!(
-            reviewer.yaml["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"],
+            reviewer.yaml["accessProfiles"]
+                .as_object()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()["permissions"]["records"][0]["rowBoundaries"],
             expected
         );
         assert_eq!(
-            reviewer.yaml["accessProfiles"][0]["permissions"]["proposals"][0]["targets"][0]
-                ["rowBoundaries"],
+            reviewer.yaml["accessProfiles"]
+                .as_object()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()["permissions"]["proposals"][0]["targets"][0]["rowBoundaries"],
             expected
         );
         assert_eq!(
-            planned.read_grant.as_ref().unwrap().yaml["accessProfiles"][0]["permissions"]
-                ["records"][0]["rowBoundaries"],
+            planned.read_grant.as_ref().unwrap().yaml["accessProfiles"]
+                .as_object()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()["permissions"]["records"][0]["rowBoundaries"],
             expected
         );
     }
@@ -2553,20 +2627,33 @@ exit 1
         let reviewer = planned
             .changes
             .iter()
-            .find(|change| change.path.starts_with("accessProfiles[id="))
+            .find(|change| change.path.starts_with("accessProfiles/"))
             .unwrap();
         assert_eq!(
-            reviewer.yaml["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"],
+            reviewer.yaml["accessProfiles"]
+                .as_object()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()["permissions"]["records"][0]["rowBoundaries"],
             "unrestricted"
         );
         assert_eq!(
-            reviewer.yaml["accessProfiles"][0]["permissions"]["proposals"][0]["targets"][0]
-                ["rowBoundaries"],
+            reviewer.yaml["accessProfiles"]
+                .as_object()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()["permissions"]["proposals"][0]["targets"][0]["rowBoundaries"],
             "unrestricted"
         );
         assert_eq!(
-            planned.read_grant.as_ref().unwrap().yaml["accessProfiles"][0]["permissions"]
-                ["records"][0]["rowBoundaries"],
+            planned.read_grant.as_ref().unwrap().yaml["accessProfiles"]
+                .as_object()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()["permissions"]["records"][0]["rowBoundaries"],
             "unrestricted"
         );
     }
@@ -2628,9 +2715,14 @@ exit 1
         let reviewer = &planned
             .changes
             .iter()
-            .find(|change| change.path == "accessProfiles[id=human-reviewer]")
+            .find(|change| change.path == "accessProfiles/human-reviewer")
             .unwrap()
-            .yaml["accessProfiles"][0];
+            .yaml["accessProfiles"]
+            .as_object()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap();
         assert_eq!(reviewer["requiredScopes"], "unrestricted");
         assert_eq!(reviewer["actorKind"], "human");
         assert_eq!(reviewer["principalClaim"], "human_subject");
@@ -2672,9 +2764,14 @@ exit 1
         let reviewer = &planned
             .changes
             .iter()
-            .find(|change| change.path == "accessProfiles[id=human-reviewer]")
+            .find(|change| change.path == "accessProfiles/human-reviewer")
             .unwrap()
-            .yaml["accessProfiles"][0];
+            .yaml["accessProfiles"]
+            .as_object()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap();
         assert!(
             reviewer["permissions"].get("records").is_none(),
             "{reviewer}"
@@ -2704,8 +2801,8 @@ exit 1
             .iter()
             .map(|change| change.path.as_str())
             .collect::<Vec<_>>();
-        assert!(paths.iter().any(|path| path.ends_with(".review")));
-        assert!(paths.iter().any(|path| path.ends_with(".reviewContext")));
+        assert!(paths.iter().any(|path| path.ends_with("/review")));
+        assert!(paths.iter().any(|path| path.ends_with("/reviewContext")));
         assert!(paths
             .iter()
             .any(|path| path.starts_with("reviewAuthorities")));
@@ -2724,16 +2821,24 @@ exit 1
         let reviewer = planned
             .changes
             .iter()
-            .find(|change| change.path.starts_with("accessProfiles[id="))
+            .find(|change| change.path.starts_with("accessProfiles/"))
             .unwrap();
         assert_eq!(
-            reviewer.yaml["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"][0]
-                ["field"],
+            reviewer.yaml["accessProfiles"]
+                .as_object()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()["permissions"]["records"][0]["rowBoundaries"][0]["field"],
             "jurisdiction"
         );
         assert_eq!(
-            reviewer.yaml["accessProfiles"][0]["permissions"]["proposals"][0]["targets"][0]
-                ["rowBoundaries"][0]["field"],
+            reviewer.yaml["accessProfiles"]
+                .as_object()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()["permissions"]["proposals"][0]["targets"][0]["rowBoundaries"][0]["field"],
             "jurisdiction"
         );
         let rendered = serde_json::to_string(&planned.changes).unwrap();
@@ -2769,13 +2874,14 @@ exit 1
                 .iter()
                 .flat_map(|change| {
                     change.yaml["accessProfiles"]
-                        .as_array()
+                        .as_object()
                         .into_iter()
-                        .flatten()
+                        .flat_map(|profiles| profiles.iter())
                 })
-                .find(|profile| profile["actorKind"] == "human")
+                .find(|(_, profile)| profile["actorKind"] == "human")
                 .unwrap();
-            assert_ne!(reviewer["id"], "existing-reader");
+            assert_ne!(reviewer.0, "existing-reader");
+            let reviewer = reviewer.1;
             assert_eq!(
                 reviewer["requesterClients"],
                 json!(["correct-address-review-ui"])
@@ -2783,7 +2889,7 @@ exit 1
             assert!(planned
                 .changes
                 .iter()
-                .all(|change| change.path != "accessProfiles[id=existing-reader]"));
+                .all(|change| change.path != "accessProfiles/existing-reader"));
         }
     }
 
@@ -2827,7 +2933,7 @@ exit 1
             assert!(planned
                 .changes
                 .iter()
-                .all(|change| !change.path.ends_with(".reviewContext")));
+                .all(|change| !change.path.ends_with("/reviewContext")));
             assert!(planned.read_grant.is_none());
         }
     }
@@ -2917,7 +3023,7 @@ exit 1
             split
                 .changes
                 .iter()
-                .any(|change| change.path == "accessProfiles[id=context-only]"),
+                .any(|change| change.path == "accessProfiles/context-only"),
             "{:#?}",
             split.changes
         );
@@ -2966,8 +3072,13 @@ exit 1
         .unwrap();
         assert_eq!(planned.service_profile, "correct-address-review-status");
         assert!(planned.changes.iter().any(|change| {
-            change.path == "accessProfiles[id=correct-address-review-status]"
-                && change.yaml["accessProfiles"][0]["requesterClients"]
+            change.path == "accessProfiles/correct-address-review-status"
+                && change.yaml["accessProfiles"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .next()
+                    .unwrap()["requesterClients"]
                     == json!(["correct-address-review-status"])
         }));
 
@@ -3101,16 +3212,20 @@ exit 1
             let reviewer = planned
                 .changes
                 .iter()
-                .find(|change| change.path == "accessProfiles[id=correct-address-reviewer-2]")
+                .find(|change| change.path == "accessProfiles/correct-address-reviewer-2")
                 .unwrap_or_else(|| panic!("{source} profile ID must remain reserved"));
             assert_eq!(
-                reviewer.yaml["accessProfiles"][0]["id"],
-                "correct-address-reviewer-2"
+                reviewer.yaml["accessProfiles"]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .collect::<Vec<_>>(),
+                ["correct-address-reviewer-2"]
             );
             assert!(!planned
                 .changes
                 .iter()
-                .any(|change| change.path == "accessProfiles[id=correct-address-reviewer]"));
+                .any(|change| change.path == "accessProfiles/correct-address-reviewer"));
         }
     }
 
@@ -3146,10 +3261,15 @@ exit 1
         let status_change = planned
             .changes
             .iter()
-            .find(|change| change.path == "accessProfiles[id=correct-address-review-status-2]")
+            .find(|change| change.path == "accessProfiles/correct-address-review-status-2")
             .unwrap();
         assert_eq!(
-            status_change.yaml["accessProfiles"][0]["requesterClients"],
+            status_change.yaml["accessProfiles"]
+                .as_object()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()["requesterClients"],
             json!(["correct-address-review-status-2"])
         );
     }
@@ -3183,7 +3303,7 @@ exit 1
         assert!(planned
             .changes
             .iter()
-            .any(|change| change.path == "accessProfiles[id=correct-address-reviewer]"));
+            .any(|change| change.path == "accessProfiles/correct-address-reviewer"));
     }
 
     #[test]
@@ -3210,7 +3330,7 @@ exit 1
             ));
             assert_eq!(
                 failure.diagnostic().1,
-                "actions[id=correct-address].execution.proposal.review.policy.id"
+                "actions/correct-address/execution/proposal/review/policy/id"
             );
         }
 
@@ -3736,10 +3856,15 @@ exit 1
         let status_change = planned
             .changes
             .iter()
-            .find(|change| change.path == "accessProfiles[id=correct-address-review-status]")
+            .find(|change| change.path == "accessProfiles/correct-address-review-status")
             .unwrap();
         assert_eq!(
-            status_change.yaml["accessProfiles"][0]["requiredScopes"],
+            status_change.yaml["accessProfiles"]
+                .as_object()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()["requiredScopes"],
             json!(["registry:proposal:review-status"])
         );
     }

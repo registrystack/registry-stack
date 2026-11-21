@@ -432,7 +432,8 @@ fn public_register_source(measures: Value) -> Value {
         .as_array_mut()
         .unwrap()
         .extend([publisher, reader]);
-    source["statisticalDatasets"][0]["disclosure"] = json!({"type":"exact-public-values"});
+    source["statisticalDatasets"]["records-by-category"]["disclosure"] =
+        json!({"type":"exact-public-values"});
     source
 }
 
@@ -630,7 +631,7 @@ fn cell(document: &Value, period: &str, category: Option<&str>, measure: &str) -
 }
 
 fn registry_source(dimensions: &[&str], measures: Value) -> Value {
-    json!({"datasets":[{"id": "statistics-measures"}],
+    json!({"datasets":{"statistics-measures": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":PACKAGE_ID,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test","timezone":"UTC"},
@@ -658,13 +659,12 @@ fn registry_source(dimensions: &[&str], measures: Value) -> Value {
                 "rowBoundaries":"unrestricted"
             }]}}
         },
-        "vocabularies":[{"id":"category","values":["a","b","c"]}],
-        "statisticalDatasets":[{
-            "id":"records-by-category","unit":"record","population":"active eq true",
+        "vocabularies":{"category": {"values":["a","b","c"]}},
+        "statisticalDatasets":{"records-by-category": {"unit":"record","population":"active eq true",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":dimensions,"measures":measures,
             "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}
-        }]
+        }}
     })
 }
 
@@ -893,7 +893,8 @@ fn parcel_source(dimensions: &[&str], measures: Value) -> Value {
         json!({"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
             "datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]}}),
     );
-    source["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"analyst"});
+    source["statisticalDatasets"]["records-by-category"]["exactReads"] =
+        json!({"accessProfile":"analyst"});
     source
 }
 
@@ -1204,7 +1205,7 @@ async fn a_distinct_count_is_read_live_exact_and_released_with_rounding_on_its_o
 /// `registry_source` over the categories `codes`.
 fn source_with_categories(dimensions: &[&str], measures: Value, codes: &[&str]) -> Value {
     let mut source = registry_source(dimensions, measures);
-    source["vocabularies"][0]["values"] = json!(codes);
+    source["vocabularies"]["category"]["values"] = json!(codes);
     source
 }
 
@@ -1589,7 +1590,8 @@ fn exact_register_source(measures: Value) -> Value {
         json!({"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
             "datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]}}),
     );
-    source["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"analyst"});
+    source["statisticalDatasets"]["records-by-category"]["exactReads"] =
+        json!({"accessProfile":"analyst"});
     source
 }
 

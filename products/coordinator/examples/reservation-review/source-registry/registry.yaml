@@ -8,19 +8,19 @@ project:
 package:
   sourceRevision: reservation-request-source-v1
 datasets:
-  - {id: reservation-requests}
+  reservation-requests: {}
 vocabularies:
-  - id: capacity-policy
+  capacity-policy:
     values: [request-only, temporary-commitment]
-  - id: request-state
+  request-state:
     values: [received, withdrawn]
-  - id: review-state
+  review-state:
     values: [pending, approved, rejected]
-  - id: agreement-state
+  agreement-state:
     values: [not-required, not-started, pending, completed, failed, withdrawn]
-  - id: capacity-state
+  capacity-state:
     values: [uncommitted, held, released, expired, confirmed]
-  - id: reservation-outcome
+  reservation-outcome:
     values: [pending, confirmed, capacity-conflict, rejected, agreement-failed, withdrawn, hold-expired]
 recordTypes:
   reservation-request:

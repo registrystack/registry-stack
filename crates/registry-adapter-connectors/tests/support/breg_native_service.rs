@@ -355,7 +355,7 @@ impl Breg {
                         {"id": "by-source-submission", "fields": ["source-submission-id"]}
                     ]
                 }},
-            "datasets": [{"id": "synthetic-items"}],
+            "datasets": {"synthetic-items": {}},
             "functions": {
                 "update-item-plan": {
                     "runtime": "rhai",

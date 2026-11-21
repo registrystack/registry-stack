@@ -393,7 +393,7 @@ fn quote_identifier(value: &str) -> String {
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "statistics-catalog"}],
+        br#"{"datasets":{"statistics-catalog": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"statistics-catalog","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test"},

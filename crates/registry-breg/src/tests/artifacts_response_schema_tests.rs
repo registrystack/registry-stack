@@ -856,11 +856,7 @@ fn compiled_action_registry() -> CompiledRegistry {
       ]
     }
   },
-  "datasets": [
-    {
-      "id": "test-dataset"
-    }
-  ]
+  "datasets": {"test-dataset": {}}
 }"#,
     )
     .expect("fixture parses");
@@ -987,11 +983,7 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
       ]
     }
   },
-  "datasets": [
-    {
-      "id": "test-dataset"
-    }
-  ]
+  "datasets": {"test-dataset": {}}
 }"#,
     )
     .expect("fixture parses");

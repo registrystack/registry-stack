@@ -59,7 +59,7 @@ fn registry(automatic: bool, reviewed: bool) -> registry_breg::CompiledRegistry 
             "defaultLanguage":"en",
             "canonicalBaseIri":"https://proposal-task-authority.example.test"
         },
-        "datasets":[{"id":"directory"}],
+        "datasets":{"directory": {}},
         "reviewAuthorities":if reviewed {
             json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}])
         } else {

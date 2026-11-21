@@ -570,7 +570,7 @@ fn local_principal_source(claim: &str) -> Value {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"generic-local","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://synthetic.example.test"},
         "package":{"sourceRevision":"synthetic-1"},
-        "datasets":[{"id":"test-dataset"}],"recordTypes":{"record": {"primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
+        "datasets":{"test-dataset": {}},"recordTypes":{"record": {"primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maximumLength":64,"required":true,"classification":"internal"}]}},
         "accessProfiles":{"operator": {"principalClaim":claim,"requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"record","operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"}]}}}
     })

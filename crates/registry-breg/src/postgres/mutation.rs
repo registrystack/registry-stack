@@ -2530,7 +2530,7 @@ mod ingestion_context_tests {
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"run-context-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "datasets":[{"id":"test-dataset"}],"recordTypes":{"entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
+      "datasets":{"test-dataset": {}},"recordTypes":{"entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
         "fields":[{"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}]
       }},
       "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",

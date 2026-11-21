@@ -20,7 +20,7 @@ const DATABASE_ID: &str = "partial-unique-database";
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -44,7 +44,7 @@ async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate()
               "rowBoundaries": "unrestricted"
             }]}
           }},
-          "vocabularies":[{"id":"status","values":["active","closed"]}]
+          "vocabularies":{"status": {"values":["active","closed"]}}
         }"#,
     )
     .expect("partial unique source parses");

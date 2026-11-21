@@ -120,7 +120,7 @@ fn source(timer_at: Option<&str>, effect_value: bool) -> Value {
             "id":"timer-package", "version":"1", "defaultLanguage":"en",
             "canonicalBaseIri":"https://timer-package.example.test"
         },
-        "datasets":[{"id":"test-dataset"}],
+        "datasets":{"test-dataset": {}},
         "recordTypes":{"contact": { "primaryDataset":"test-dataset", "route":"contacts",
             "mutationMode":"mutable",
             "fields":[

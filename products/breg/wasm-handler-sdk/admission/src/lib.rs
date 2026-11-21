@@ -102,7 +102,7 @@ pub fn phone_project() -> Value {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"wasm-template-proof","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "datasets":[{"id":"proof-dataset"}],
+          "datasets":{"proof-dataset": {}},
           "recordTypes":[{
             "id":"person","primaryDataset":"proof-dataset","route":"people","mutationMode":"mutable",
             "fields":[

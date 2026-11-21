@@ -5,7 +5,7 @@ use super::*;
 async fn changed_approved_result_id_has_a_specific_412_and_never_applies() {
     let mut source = registry_source(false);
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
     source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});

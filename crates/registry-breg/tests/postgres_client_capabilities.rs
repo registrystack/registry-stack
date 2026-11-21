@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn registry() -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(br#"{"datasets":[{"id": "test-dataset"}],
+    let project = parse_project_json(br#"{"datasets":{"test-dataset": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
       "project":{"id":"client-capabilities","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test","timezone":"UTC"},
       "recordTypes":{"entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","tombstone":true,"classification":"internal",

@@ -12,7 +12,7 @@ use registry_breg::model::CompiledEntity;
 
 fn provenance_project() -> registry_breg::contract::RegistryProject {
     parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"module-provenance","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://module-provenance.example.test"},
           "modules":{"declarer": {"version":"1"},"extender": {"version":"1"}},
@@ -184,7 +184,7 @@ fn extension_attributes_appended_ids_to_the_extending_module_only() {
 #[test]
 fn module_free_project_omits_source_module_and_module_origins() {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"module-free","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://module-free.example.test"},
           "recordTypes":{"case": {"primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable",

@@ -31,4 +31,4 @@ accessProfiles:
           rowBoundaries:
             - {field: district, claim: districts, operator: equals}
 datasets:
-  - id: records
+  records: {}

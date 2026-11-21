@@ -5264,7 +5264,7 @@ const FIXTURE_HEAD: &str = r#"{
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
   "project":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-  "datasets":[{"id":"test-dataset"}],
+  "datasets":{"test-dataset": {}},
   "recordTypes":{"widget": {"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
     "batch":{"maximumItems":3,"maximumBytes":8192},
     "constraints":[{"type":"unique","fields":["label"]}],
@@ -5367,7 +5367,7 @@ fn encrypted_widget_registry() -> Arc<registry_breg::CompiledRegistry> {
 /// permissions on create-only entities, so the immutable entity grants
 /// create and batch and the announced patch is unexecutable either way.
 fn patch_only_registry() -> Arc<registry_breg::CompiledRegistry> {
-    let project = r#"{"datasets":[{"id": "test-dataset"}],
+    let project = r#"{"datasets":{"test-dataset": {}},
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},

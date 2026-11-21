@@ -9,7 +9,7 @@ project:
   display: {label: Labelled directory}
 
 datasets:
-  - id: directory
+  directory:
     display: {label: Directory records, description: Entries maintained in the directory.}
 
 recordTypes:
@@ -36,7 +36,7 @@ recordTypes:
         handler: {type: url, destinationId: entry-events}
 
 statisticalDatasets:
-  - id: entry-counts
+  entry-counts:
     display: {label: Monthly entry counts, description: Counts active entries by recording month.}
     unit: entry
     population: active eq true

@@ -96,15 +96,13 @@
       }
     ]
   },
-  "vocabularies": [
-    {
-      "id": "data-use-purpose",
+  "vocabularies": {
+    "data-use-purpose": {
       "values": [
         "credit-assessment"
       ]
     },
-    {
-      "id": "consent-decision",
+    "consent-decision": {
       "values": [
         "given",
         "refused",
@@ -112,8 +110,7 @@
         "invalidated"
       ]
     },
-    {
-      "id": "consent-channel",
+    "consent-channel": {
       "values": [
         "self-service",
         "assisted",
@@ -121,8 +118,7 @@
         "import"
       ]
     },
-    {
-      "id": "consent-invalidation-reason",
+    "consent-invalidation-reason": {
       "values": [
         "captured-in-error",
         "identity-mismatch",
@@ -130,7 +126,7 @@
         "controller-decision"
       ]
     }
-  ],
+  },
   "recordTypes": {},
   "accessProfiles": {
     "land-registry-operator": {
@@ -678,12 +674,8 @@
       }
     }
   },
-  "datasets": [
-    {
-      "id": "consent-land-registry"
-    },
-    {
-      "id": "consent"
-    }
-  ]
+  "datasets": {
+    "consent-land-registry": {},
+    "consent": {}
+  }
 }

@@ -471,9 +471,8 @@
       }
     }
   },
-  "vocabularies": [
-    {
-      "id": "establishment-role",
+  "vocabularies": {
+    "establishment-role": {
       "values": [
         "head-office",
         "regional-office",
@@ -482,45 +481,37 @@
         "other"
       ]
     },
-    {
-      "id": "business-type",
+    "business-type": {
       "values": [
         "private",
         "cooperative",
         "public-enterprise"
       ]
     },
-    {
-      "id": "operating-status",
+    "operating-status": {
       "values": [
         "operating",
         "suspended",
         "closed"
       ]
     },
-    {
-      "id": "preferred-language",
+    "preferred-language": {
       "values": [
         "en",
         "es",
         "fr"
       ]
     },
-    {
-      "id": "establishment-kind",
+    "establishment-kind": {
       "values": [
         "production",
         "warehouse",
         "office"
       ]
     }
-  ],
-  "datasets": [
-    {
-      "id": "business-registry"
-    },
-    {
-      "id": "registered-businesses"
-    }
-  ]
+  },
+  "datasets": {
+    "business-registry": {},
+    "registered-businesses": {}
+  }
 }

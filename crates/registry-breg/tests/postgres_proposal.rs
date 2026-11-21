@@ -73,7 +73,7 @@ async fn application_queue_age(fixture: &client_http::ClientFixture) -> f64 {
 fn registry_source(automatic: bool) -> Value {
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"proposal-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://proposal.example.test"},
-        "datasets":[{"id":"directory"}],
+        "datasets":{"directory": {}},
         "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable",
             "mutationPolicy":{"patch":"proposal-required"},
             "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
@@ -365,7 +365,7 @@ async fn required_inputs_are_completed_at_submit_and_supplied_draft_values_stay_
 async fn pending_manual_application_filter_precedes_pagination_and_keeps_authority() {
     let mut source = registry_source(false);
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     let unreviewed = source["actions"]["correct-name"].clone();
     source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":{"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))}});
     for (id, automatic) in [("unreviewed-name", false), ("automatic-name", true)] {
@@ -972,7 +972,7 @@ async fn coherent_observation_waits_for_automatic_application() {
 async fn coherent_observation_fences_review_approval_and_job_creation() {
     let mut source = registry_source(true);
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}", "b".repeat(64))});
     source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
@@ -3532,7 +3532,7 @@ async fn ordinary_get_excludes_review_result_and_job_publication_until_observati
 
     let mut source = registry_source(true);
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
     source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
@@ -3763,7 +3763,7 @@ async fn ordinary_get_excludes_review_result_and_job_publication_until_observati
 async fn reviewed_apply_requires_fresh_exact_approval_and_receipt_recovery_is_local() {
     let mut source = registry_source(false);
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
     source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
@@ -3900,7 +3900,7 @@ async fn review_outcomes_read_as_apply_availability_not_application_status() {
     for automatic in [false, true] {
         let mut source = registry_source(automatic);
         source["reviewAuthorities"] =
-            json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+            json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
         let policy = json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
         source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
         let review = std::sync::Arc::new(LocalReview {
@@ -4218,7 +4218,7 @@ async fn review_rejection_is_terminal_and_changes_requested_returns_to_the_party
     ] {
         let mut source = registry_source(false);
         source["reviewAuthorities"] =
-            json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+            json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
         let policy = json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
         source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
         // The inputs are readable so the test can send a well-formed Edit or
@@ -4475,7 +4475,7 @@ async fn review_rejection_is_terminal_and_changes_requested_returns_to_the_party
 async fn submission_read_reports_each_version_separately_and_is_gone_after_its_windows() {
     let mut source = registry_source(false);
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
     source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
@@ -4851,7 +4851,7 @@ async fn required_review_automatic_requires_fresh_exact_approval_even_with_a_cac
     for mode in [1, 2, 3, 0] {
         let mut source = registry_source(true);
         source["reviewAuthorities"] =
-            json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+            json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
         let policy = json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
         source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
         let review = std::sync::Arc::new(LocalReview {
@@ -5072,7 +5072,7 @@ async fn replaced_automatic_worker_resumes_without_changing_successor_or_effects
     use std::time::Duration;
     let mut source = registry_source(true);
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
     source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
@@ -5587,7 +5587,7 @@ async fn reference_only_targets_are_locked_and_readmitted_at_submit_and_apply() 
 async fn missing_review_binding_preserves_unrelated_builtin_work_and_fails_review_closed() {
     let mut source = registry_source(true);
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     let mut reviewed = source["actions"]["correct-name"].clone();
     reviewed["execution"]["proposal"]["application"] = json!({"mode":"manual"});
     reviewed["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test",
@@ -6735,7 +6735,7 @@ async fn retained_attachment_download_survives_tighter_current_upload_policy() {
 async fn review_pin_only_verified_activation_blocks_apply_but_preserves_inspection_and_cancel() {
     let mut source = registry_source(false);
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test",
         "policy":{"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))}});
     let review = std::sync::Arc::new(LocalReview {
@@ -7010,7 +7010,7 @@ async fn compatible_legacy_review_closure_survives_status_apply_successors_and_r
     };
     let mut source = registry_source(true);
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     let old_policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
     let review_source = "shared.facility.registry:v1";
@@ -7380,7 +7380,7 @@ async fn compatibility_inventory_refuses_rebound_frozen_review_subject_context_a
     use sha2::{Digest, Sha256};
     let mut source = registry_source(true);
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     let old_policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
     source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":old_policy});
@@ -7632,7 +7632,7 @@ async fn every_activation_preserves_a_refused_apply_block_until_rebase() {
     source["recordTypes"]["target"]["constraints"] =
         json!([{"id":"unique-name","type":"unique","fields":["name"]}]);
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
     source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
@@ -7826,7 +7826,7 @@ async fn incompatible_or_expired_inventory_cannot_activate_or_change_proposals_a
     for expired in [false, true] {
         let mut source = registry_source(true);
         source["reviewAuthorities"] =
-            json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+            json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
         let old_policy = json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
         source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":old_policy});
         let authority = proposal_review_authority::LocalAuthority::start(
@@ -8685,7 +8685,7 @@ async fn writable_inputs_bound_start_edit_revise_and_rebase_to_the_named_inputs(
 async fn standing_officer_grant_revises_only_named_inputs_and_withdraws_exact_review() {
     let mut source = writable_inputs_source();
     source["reviewAuthorities"] =
-        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
     source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":{"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))}});
     source["accessProfiles"]["officer"]["requiredScopes"] = json!(["proposal:officer"]);
     let grant = &mut source["accessProfiles"]["officer"]["permissions"]["proposals"][0];

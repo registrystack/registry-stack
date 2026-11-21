@@ -2534,12 +2534,18 @@ pub(crate) mod postgres_tests {
     /// granted view link.
     pub(crate) fn two_projection_project() -> Value {
         let mut project = super::super::external_view_query::tests::project();
-        project["externalProjections"].as_array_mut().unwrap().push(json!({
-            "id":"other","recordType":"external-record","sourceRoute":"batch","sourceRouteVersion":"1",
-            "purpose":"consultation","scope":"eligible",
-            "mode":"indexed","cardinality":"one","cacheTtlSeconds":120,"fields":["label"]
-        }));
-        project["externalViews"][0]["links"]
+        project["externalProjections"]
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "other".to_owned(),
+                json!({
+                    "recordType":"external-record","sourceRoute":"batch","sourceRouteVersion":"1",
+                    "purpose":"consultation","scope":"eligible",
+                    "mode":"indexed","cardinality":"one","cacheTtlSeconds":120,"fields":["label"]
+                }),
+            );
+        project["externalViews"]["view"]["links"]
             .as_array_mut()
             .unwrap()
             .push(json!({"id":"other-link","projection":"other","fromField":"subject-key"}));
@@ -2914,7 +2920,7 @@ pub(crate) mod postgres_tests {
         let mut edited = project;
         edited["accessProfiles"]["reader"]["permissions"]["externalViews"][0]["links"][0]
             ["allowCount"] = json!(false);
-        edited["externalProjections"][1]["cacheTtlSeconds"] = json!(90);
+        edited["externalProjections"]["other"]["cacheTtlSeconds"] = json!(90);
         let edited = super::super::external_view_query::tests::compile_project(&edited);
         assert_eq!(
             scope_contract_digest(&registry, "projection").unwrap(),

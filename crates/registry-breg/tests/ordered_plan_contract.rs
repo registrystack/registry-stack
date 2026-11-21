@@ -10,7 +10,7 @@ fn project() -> Value {
     json!({
      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
      "project":{"id":"ordered-proof","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-     "datasets":[{"id":"records"}],
+     "datasets":{"records": {}},
      "recordTypes":{"entry": {"route":"entries","primaryDataset":"records","mutationMode":"mutable","fields":[
      {"id":"name","type":"string","maximumLength":32,"required":true,"classification":"internal"},
      {"id":"parent","type":"reference","target":"entry","classification":"internal"}]}},

@@ -52,7 +52,7 @@ fn compiled() -> CompiledRegistry {
     let permission = json!({"recordType":"entry", "operations":["get","list","lookup"],
         "readableFields":["label"], "lookups":[{"selector":"by-subject","valueOrigin":"request"}],
         "rowBoundaries":"unrestricted"});
-    let source = json!({"datasets":[{"id": "records"}],
+    let source = json!({"datasets":{"records": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
         "recordTypes":{"entry": {"primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
@@ -75,7 +75,7 @@ fn compiled() -> CompiledRegistry {
 }
 
 fn compiled_relationships() -> CompiledRegistry {
-    let source = json!({"datasets":[{"id": "records"}],
+    let source = json!({"datasets":{"records": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
         "recordTypes":{
@@ -910,7 +910,7 @@ async fn a_retention_tick_without_failure_records_its_last_success() {
 }
 
 fn compiled_with_history() -> CompiledRegistry {
-    let source = json!({"datasets":[{"id": "records"}],
+    let source = json!({"datasets":{"records": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
         "recordTypes":{"entry": {"primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",

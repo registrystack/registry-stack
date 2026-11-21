@@ -131,7 +131,7 @@ fn capacity_project(profile_count: usize) -> Vec<u8> {
             }],
             "distributions": []
         },
-        "datasets": [{"id": "cases"}],
+        "datasets": {"cases": {}},
         "recordTypes": record_types,
         "actions": actions,
         "accessProfiles": access_profiles

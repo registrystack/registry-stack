@@ -768,11 +768,8 @@ mod tests {
               ]}
             ]
           },
-          "vocabularies":[
-            {"id":"case-status","values":["open","sealed-by-court"]},
-            {"id":"sealing-reason","values":["witness-protection"]}
-          ],
-          "datasets":[{"id":"protected-cases"},{"id":"public-cases"}],"recordTypes":{
+          "vocabularies":{"case-status": {"values":["open","sealed-by-court"]}, "sealing-reason": {"values":["witness-protection"]}},
+          "datasets":{"protected-cases": {}, "public-cases": {}},"recordTypes":{
             "public-case": {"primaryDataset":"public-cases","route":"public-cases","mutationMode":"create-only","classification":"public",
              "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"case-status","values":["open"],"classification":"public"}]},
             "protected-case": {"primaryDataset":"protected-cases","route":"protected-cases","mutationMode":"create-only","classification":"restricted",

@@ -15,10 +15,10 @@ pub const PROJECT: &str = r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: event-record-examples-registry, version: "1", defaultLanguage: en, canonicalBaseIri: https://event-record-examples.example.test}
-datasets: [{id: test-dataset}]
+datasets: {test-dataset: {}}
 vocabularies:
-  - {id: grant-status, values: [active, paused]}
-  - {id: custody-status, values: [held, released]}
+  grant-status: {values: [active, paused]}
+  custody-status: {values: [held, released]}
 recordTypes:
   grant:
     primaryDataset: test-dataset

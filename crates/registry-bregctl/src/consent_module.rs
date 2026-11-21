@@ -270,7 +270,7 @@ fn plan(source: &CapturedProjectSource, subject: &str) -> Result<Plan, FailureRe
             reused_vocabularies.push(id);
         } else {
             added_vocabularies.push(id);
-            vocabulary_items.push_str(&format!("- id: {id}\n  values: [{}]\n", values.join(", ")));
+            vocabulary_items.push_str(&format!("{id}:\n  values: [{}]\n", values.join(", ")));
         }
     }
     let profile_items = PROFILES_TEMPLATE
@@ -324,7 +324,7 @@ fn plan(source: &CapturedProjectSource, subject: &str) -> Result<Plan, FailureRe
         {
             String::new()
         } else {
-            format!("- id: {CONSENT_DATASET_ID}\n  display: {{label: Consent records}}\n")
+            format!("{CONSENT_DATASET_ID}:\n  display: {{label: Consent records}}\n")
         },
         dataset_addition,
         dataset_conflict_index,
@@ -486,11 +486,9 @@ fn render_registry(source: &CapturedProjectSource, plan: &Plan) -> Result<Vec<u8
         if items.is_empty() {
             continue;
         }
-        let mapping = key == "accessProfiles";
-        edited = append_top_level_items(&edited, key, items, mapping).ok_or_else(|| {
-            let shape = if mapping { "mapping" } else { "list" };
+        edited = append_top_level_items(&edited, key, items, true).ok_or_else(|| {
             render_failure(&format!(
-                "the top-level {key} {shape} is not a block {shape} this command can extend; write it as a block {shape} and run the command again"
+                "the top-level {key} mapping is not a block mapping this command can extend; write it as a block mapping and run the command again"
             ))
         })?;
     }
@@ -554,15 +552,6 @@ fn renders_exactly(
         };
         let slot = document.entry(key.to_owned()).or_insert(Value::Null);
         match planned {
-            Value::Array(items) => {
-                if slot.is_null() {
-                    *slot = Value::Array(Vec::new());
-                }
-                let Some(list) = slot.as_array_mut() else {
-                    return false;
-                };
-                list.extend(items);
-            }
             Value::Object(entries) => {
                 if slot.is_null() {
                     *slot = Value::Object(serde_json::Map::new());
@@ -1095,7 +1084,7 @@ mod tests {
     fn no_manifest_projection_or_a_populated_flow_list_is_refused() {
         assert!(append_manifest_projection_dataset("a: 1\n", DATASET_ITEM).is_none());
         assert!(append_manifest_projection_dataset(
-            "manifestProjection:\n  datasets: [{id: x}]\n",
+            "manifestProjection:\n  datasets: {x: {}}\n",
             DATASET_ITEM
         )
         .is_none());

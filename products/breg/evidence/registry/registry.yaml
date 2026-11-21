@@ -35,7 +35,7 @@ manifestProjection:
     servesDatasets:
     - registry
   distributions: []
-datasets: [{id: registry}]
+datasets: {registry: {}}
 recordTypes:
   record:
     primaryDataset: registry
@@ -127,7 +127,7 @@ accessProfiles:
           valueOrigin: request
         rowBoundaries: unrestricted
 vocabularies:
-- id: record-status
-  values:
-  - active
-  - retired
+  record-status:
+    values:
+    - active
+    - retired

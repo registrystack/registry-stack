@@ -734,7 +734,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://extension-diagnostic-fixture.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 modules:
   core:
     version: "1"
@@ -826,7 +826,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://hook-diagnostic-fixture.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 modules:
   hooks:
     version: "1"
@@ -1178,7 +1178,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://fallback-project-warning.example.test
 datasets:
-  - id: records
+  records: {}
 modules:
   core:
     version: "1"
@@ -1407,7 +1407,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://timer-explanation.example.test
 datasets:
-  - id: records
+  records: {}
 recordTypes:
   entry:
     primaryDataset: records
@@ -1676,7 +1676,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://cli-authoring-fixture.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 recordTypes:
   record:
     primaryDataset: test-dataset
@@ -1699,7 +1699,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://action-fixture.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 recordTypes:
   household:
     primaryDataset: test-dataset
@@ -1793,7 +1793,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://mixed-route-fixture.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 recordTypes:
   household:
     primaryDataset: test-dataset
@@ -2659,7 +2659,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://modular-lock-fixture.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 modules:
   # The core module owns the record entity.
   core:
@@ -2784,7 +2784,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://modular-lock-fixture.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 modules:
   extra:
     version: "1"
@@ -2915,7 +2915,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://modular-lock-missing.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {{}}
 modules:
   {MODULE_CANARY}:
     version: "1"
@@ -3967,7 +3967,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://forged-line-fixture.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 recordTypes:
   record:
     primaryDataset: test-dataset
@@ -5988,7 +5988,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://hook-asset-fixture.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {{}}
 modules:
   hook-module:
     version: "1"
@@ -6053,7 +6053,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://wasm-explain-fixture.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 recordTypes:
   person:
     primaryDataset: test-dataset
@@ -6179,7 +6179,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://typed-query-examples.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 recordTypes:
   typed-record:
     primaryDataset: test-dataset
@@ -6266,7 +6266,7 @@ fn explain_spatial_queries_maps_the_exact_profile_and_api_geometry() {
 kind: BRegProject
 project: {id: map-explanation, version: "1", defaultLanguage: en, canonicalBaseIri: https://map-explanation.example.test}
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 recordTypes:
   service-site:
     primaryDataset: test-dataset
@@ -6338,7 +6338,7 @@ fn explain_model_reports_polygon_type_and_position_bound() {
 kind: BRegProject
 project: {id: polygon-explanation, version: "1", defaultLanguage: en, canonicalBaseIri: https://polygon-explanation.example.test}
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 recordTypes:
   service-area:
     primaryDataset: test-dataset
@@ -6377,7 +6377,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://derived-diagnostic-fixture.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 modules:
   core:
     version: "1"
@@ -6463,7 +6463,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://collision-fixture.example.test
 datasets:
-  - id: collision-fixture
+  collision-fixture: {}
 modules:
   core:
     version: "1"
@@ -6573,7 +6573,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://collision-budget-fixture.example.test
 datasets:
-  - id: records
+  records: {}
 modules:
   core:
     version: "1"
@@ -6654,7 +6654,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://extension-display.example.test
 datasets:
-  - id: records
+  records: {}
 modules:
   core:
     version: "1"
@@ -6726,7 +6726,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://collision-fixture.example.test
 datasets:
-  - id: records
+  records: {}
 modules:
   core:
     version: "1"
@@ -6834,7 +6834,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://constraint-collisions.example.test
 datasets:
-  - id: records
+  records: {}
 recordTypes:
   item:
     primaryDataset: records
@@ -6868,7 +6868,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://constraint-collisions.example.test
 datasets:
-  - id: records
+  records: {}
 modules:
   core:
     version: "1"
@@ -6948,7 +6948,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://duplicate-label-fixture.example.test
 datasets:
-  - id: duplicate-label-fixture
+  duplicate-label-fixture: {}
 modules:
   core:
     version: "1"
@@ -7041,7 +7041,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://event-explain-outbox.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 recordTypes:
   case:
     primaryDataset: test-dataset
@@ -7078,7 +7078,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://event-explain-webhook.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 recordTypes:
   case:
     primaryDataset: test-dataset
@@ -10138,7 +10138,7 @@ fn generation_refuses_a_broken_symlink_destination_without_publishing_output() {
 
 fn package_project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"verify-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{PACKAGE_SOURCE_REVISION}"}},"datasets":[{{"id":"verify-registry"}}],"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Verify Registry Catalog","publisher":{{"id":"verify-registry-authority","name":"Verify Publisher"}}}},"authorities":[{{"id":"verify-registry-authority","name":"Verify Publisher"}}],"publicService":{{"id":"verify-registry-service","title":"Verify Registry Catalog","competentAuthority":"verify-registry-authority"}},"datasets":[{{"id":"verify-registry","title":"Verify Registry Dataset","owner":"Verify Publisher","status":"active"}}],"dataServices":[{{"id":"verify-registry-data-service","title":"Verify Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["verify-registry"]}}]}},"modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"verify-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{PACKAGE_SOURCE_REVISION}"}},"datasets":{{"verify-registry": {{}}}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Verify Registry Catalog","publisher":{{"id":"verify-registry-authority","name":"Verify Publisher"}}}},"authorities":[{{"id":"verify-registry-authority","name":"Verify Publisher"}}],"publicService":{{"id":"verify-registry-service","title":"Verify Registry Catalog","competentAuthority":"verify-registry-authority"}},"datasets":[{{"id":"verify-registry","title":"Verify Registry Dataset","owner":"Verify Publisher","status":"active"}}],"dataServices":[{{"id":"verify-registry-data-service","title":"Verify Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["verify-registry"]}}]}},"modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}}}"#
     )
     .into_bytes()
 }
@@ -10152,7 +10152,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://modular-lock-fixture.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 "#
 }
 
@@ -10222,7 +10222,7 @@ fn data_package_fixture() -> (TestProject, PathBuf) {
     let module_digest = module_digest(&module);
     let project = TestProject::from_registry_source(
         format!(
-            r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"data-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://data.example.test"}},"package":{{"sourceRevision":"data-source"}},"datasets":[{{"id":"data-registry"}}],"manifestProjection":{{"accessProfile":"operator","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://data.example.test","title":"Data Registry Catalog","publisher":{{"id":"data-registry-authority","name":"Data Publisher"}}}},"authorities":[{{"id":"data-registry-authority","name":"Data Publisher"}}],"publicService":{{"id":"data-registry-service","title":"Data Registry Catalog","competentAuthority":"data-registry-authority"}},"datasets":[{{"id":"data-registry","title":"Data Registry Dataset","owner":"Data Publisher","status":"active"}}],"dataServices":[{{"id":"data-registry-data-service","title":"Data Registry Catalog","endpointUrl":"https://data.example.test","servesDatasets":["data-registry"]}}]}},"modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}}}"#
+            r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"data-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://data.example.test"}},"package":{{"sourceRevision":"data-source"}},"datasets":{{"data-registry": {{}}}},"manifestProjection":{{"accessProfile":"operator","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://data.example.test","title":"Data Registry Catalog","publisher":{{"id":"data-registry-authority","name":"Data Publisher"}}}},"authorities":[{{"id":"data-registry-authority","name":"Data Publisher"}}],"publicService":{{"id":"data-registry-service","title":"Data Registry Catalog","competentAuthority":"data-registry-authority"}},"datasets":[{{"id":"data-registry","title":"Data Registry Dataset","owner":"Data Publisher","status":"active"}}],"dataServices":[{{"id":"data-registry-data-service","title":"Data Registry Catalog","endpointUrl":"https://data.example.test","servesDatasets":["data-registry"]}}]}},"modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}}}"#
         )
         .as_bytes(),
     );

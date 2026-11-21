@@ -710,9 +710,8 @@
       }
     }
   },
-  "statisticalDatasets": [
-    {
-      "id": "monthly-discharge-reports",
+  "statisticalDatasets": {
+    "monthly-discharge-reports": {
       "unit": "discharge-report",
       "population": "substanceCode ne null",
       "period": {
@@ -731,8 +730,7 @@
         "roundingBase": 5
       }
     },
-    {
-      "id": "monthly-valid-permits-temporal",
+    "monthly-valid-permits-temporal": {
       "unit": "permit",
       "population": "permitType ne null",
       "period": {
@@ -751,8 +749,7 @@
         "roundingBase": 5
       }
     },
-    {
-      "id": "monthly-valid-permits-fields",
+    "monthly-valid-permits-fields": {
       "unit": "permit",
       "population": "permitType ne null",
       "period": {
@@ -774,51 +771,44 @@
         "roundingBase": 5
       }
     }
-  ],
-  "vocabularies": [
-    {
-      "id": "administrative-boundary",
+  },
+  "vocabularies": {
+    "administrative-boundary": {
       "values": [
         "north-district",
         "south-district",
         "central-district"
       ]
     },
-    {
-      "id": "permit-type",
+    "permit-type": {
       "values": [
         "water-discharge",
         "air-emissions",
         "waste-treatment"
       ]
     },
-    {
-      "id": "area-unit",
+    "area-unit": {
       "values": [
         "hectare",
         "square-meter"
       ]
     },
-    {
-      "id": "substance-code",
+    "substance-code": {
       "values": [
         "nitrogen",
         "phosphorus",
         "solids"
       ]
     },
-    {
-      "id": "quantity-unit",
+    "quantity-unit": {
       "values": [
         "kilogram",
         "litre",
         "headcount"
       ]
     }
-  ],
-  "datasets": [
-    {
-      "id": "facility"
-    }
-  ]
+  },
+  "datasets": {
+    "facility": {}
+  }
 }

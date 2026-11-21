@@ -15,7 +15,7 @@ fn project(start_type: &str, last_day_type: &str) -> Value {
         "kind": "BRegProject",
         "project": {"id": "licences", "version": "1", "defaultLanguage": "en",
             "canonicalBaseIri": "https://licences.example.test", "timezone": "UTC"},
-        "datasets": [{"id": "licences"}],
+        "datasets": {"licences": {}},
         "recordTypes": {"licence": { "primaryDataset": "licences", "route": "licences", "mutationMode": "mutable",
             "fields": [
                 {"id": "holder", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"},

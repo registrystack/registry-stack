@@ -22,7 +22,7 @@ project:
   version: \"1\"
   defaultLanguage: en
   canonicalBaseIri: https://access-example.example.test
-datasets: [{id: test-dataset}]
+datasets: {test-dataset: {}}
 recordTypes:
   entry:
     primaryDataset: test-dataset
@@ -98,9 +98,10 @@ fn refusal(written: &str) -> Refusal {
 /// project carrying `written`.
 fn position(written: &str, needle: &str) -> (usize, usize) {
     let document = document(written);
-    let offset = document
-        .find(needle)
-        .unwrap_or_else(|| panic!("{needle} is written"));
+    let offset = PROJECT.len()
+        + written
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} is written"));
     let before = &document[..offset];
     let line = before.matches('\n').count() + 1;
     let column = offset - before.rfind('\n').map_or(0, |newline| newline + 1) + 1;

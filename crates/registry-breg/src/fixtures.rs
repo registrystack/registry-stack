@@ -7231,7 +7231,7 @@ journeys:
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
             "project":{"id":"planner-fixture","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
             "package":{"sourceRevision":"fixture-project-source"},
-            "datasets":[{"id":"people"}],
+            "datasets":{"people": {}},
             "recordTypes":{"person": {"primaryDataset":"people","route":"people","mutationMode":"mutable",
                 "fields":[{"id":"name","type":"string","maximumLength":80,"required":true,"classification":"internal"}]}},
             "functions":{"person-plan": {"runtime":"rhai","source":"scripts/person-name-change.rhai","entrypoint":"plan","abi":"registry.action-plan/v1"}},

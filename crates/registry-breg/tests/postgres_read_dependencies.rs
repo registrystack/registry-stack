@@ -396,7 +396,7 @@ fn compiled_registry(
     active_expression: &str,
     combined_dependencies: bool,
 ) -> registry_breg::CompiledRegistry {
-    let mut project = parse_project_json(br#"{"datasets":[{"id": "test-dataset"}],
+    let mut project = parse_project_json(br#"{"datasets":{"test-dataset": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"read-dependencies","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},

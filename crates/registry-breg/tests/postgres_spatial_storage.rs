@@ -129,7 +129,7 @@ fn bbox_grant_derives_postgis_projection_policy_and_inventory() {
 fn compiled_spatial_registry() -> registry_breg::CompiledRegistry {
     compile_project(
         &parse_project_json(
-            br#"{"datasets":[{"id": "test-dataset"}],
+            br#"{"datasets":{"test-dataset": {}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"spatial-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -158,7 +158,7 @@ fn compiled_spatial_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_spatial_derived_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"spatial-derived-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -201,7 +201,7 @@ fn compiled_spatial_derived_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_spatial_cross_entity_derived_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"spatial-cross-derived-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -357,7 +357,7 @@ fn bbox_cross_entity_derived_dependency_keeps_ordinary_view_inventory() {
 fn crs84_point_without_bbox_keeps_non_gis_ddl_and_inventory_stable() {
     let registry = compile_project(
         &parse_project_json(
-            br#"{"datasets":[{"id": "test-dataset"}],
+            br#"{"datasets":{"test-dataset": {}},
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"ordinary-point","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},

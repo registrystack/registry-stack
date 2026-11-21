@@ -668,7 +668,7 @@ fn compiled_registry(source_revision: &str) -> CompiledRegistry {
 
 fn project_bytes(source_revision: &str) -> Vec<u8> {
     let project = format!(
-        r#"{{"datasets":[{{"id": "test-dataset"}}],
+        r#"{{"datasets":{{"test-dataset": {{}}}},
   "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
   "kind": "BRegProject",
   "project": {{"id": "rehearsal-registry", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"}},

@@ -7484,7 +7484,7 @@ fn timer_project_source() -> Value {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":PACKAGE_ID,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://timers.example.test"},
-        "datasets":[{"id":"services"}],
+        "datasets":{"services": {}},
         "recordTypes":{"service": {"primaryDataset":"services","route":"services","mutationMode":"mutable",
             "fields":[
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
@@ -7540,9 +7540,9 @@ fn compile_registry(source: Value) -> registry_breg::CompiledRegistry {
 fn compiled_create_only_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
     source["datasets"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(json!({"id":"activation-logs"}));
+        .insert("activation-logs".to_owned(), json!({}));
     source["recordTypes"]
         .as_object_mut()
         .unwrap()
@@ -7909,9 +7909,9 @@ fn compiled_cross_timer_rearming_registry() -> registry_breg::CompiledRegistry {
 fn compiled_created_record_timer_rearming_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
     source["datasets"]
-        .as_array_mut()
-        .expect("datasets are an array")
-        .push(json!({"id":"activation-tasks"}));
+        .as_object_mut()
+        .expect("datasets are a mapping")
+        .insert("activation-tasks".to_owned(), json!({}));
     source["recordTypes"]
         .as_object_mut()
         .expect("record types are an array")

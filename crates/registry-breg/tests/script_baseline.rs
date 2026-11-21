@@ -21,7 +21,7 @@ fn action(script: &str) -> CompiledAction {
     let source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"script-baseline","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "datasets":[{"id":"baseline"}],
+        "datasets":{"baseline": {}},
         "functions":{"baseline": {"runtime":"rhai","source":"handlers/baseline.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}},
         "recordTypes":{"record": {"primaryDataset":"baseline","route":"records","mutationMode":"mutable","fields":[
             {"id":"label","type":"string","maximumLength":160,"required":true,"classification":"restricted"},

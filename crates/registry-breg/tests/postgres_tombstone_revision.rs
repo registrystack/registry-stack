@@ -589,7 +589,7 @@ fn compiled_registry(tombstone: bool) -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{{"id":"tombstone-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-          "datasets":[{{"id":"test-dataset"}}],
+          "datasets":{{"test-dataset": {{}}}},
           "recordTypes":{{"widget":{{"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable"{tombstone_fragment},"classification":"public",
             "fields":[
               {{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"}},

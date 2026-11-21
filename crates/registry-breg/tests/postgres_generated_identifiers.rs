@@ -36,7 +36,7 @@ fn registry_with_limits(
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"generated-identifiers","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://identifiers.example.test"},
-          "datasets":[{"id":"records"}],
+          "datasets":{"records": {}},
           "recordTypes":{"entry": {"primaryDataset":"records","route":"entries","mutationMode":"mutable",
             "fields":[
               {"id":"jurisdiction","type":"string","minimumLength":1,"maximumLength":16,"required":true,"classification":"internal"},

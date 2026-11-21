@@ -63,7 +63,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://lock-refusal-fixture.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 modules:
   core:
     version: "1"

@@ -13,10 +13,10 @@ project:
 package:
   sourceRevision: conformance-registry-0.1.0
 datasets:
-  - id: records
+  records:
     display: {label: Records, description: Conformance records.}
 reviewAuthorities:
-  - id: local-review
+  local-review:
     protocol: id.registrystack.org/protocols/review/v1
     display: {label: Local review, description: Review authority used by development-plan checks.}
 recordTypes:

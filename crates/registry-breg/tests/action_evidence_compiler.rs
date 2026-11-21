@@ -13,7 +13,7 @@ fn project() -> Value {
     json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"action-handler-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "datasets":[{"id":"test-dataset"}],
+        "datasets":{"test-dataset": {}},
         "recordTypes":{"person": {"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","fields":[
             {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
@@ -37,7 +37,7 @@ fn contracts() -> Value {
 }
 fn configured() -> Value {
     let mut source = project();
-    source["evidenceProviders"] = json!([{"id":"provider","contracts":"evidence/contracts.json","subjectResolution":"trusted-provider-exact-selector"}]);
+    source["evidenceProviders"] = json!({"provider": {"contracts":"evidence/contracts.json","subjectResolution":"trusted-provider-exact-selector"}});
     source["actions"]["register-person"]["evidence"] = json!([{"id":"status","provider":"provider","requirement":"urn:example:client:requirement:status:v1","subjects":{"subject":{"profile":"record-lookup-v1"}},"outputs":["status-holds"],"maximumObservationAgeSeconds":60}]);
     source
 }
@@ -404,7 +404,8 @@ fn evidence_identifiers_use_the_governed_action_grammar() {
         source["actions"]["register-person"]["evidence"][0]["id"] = json!(id);
         assert_refused_where_read(&source, "alias");
         let mut source = configured();
-        source["evidenceProviders"][0]["id"] = json!(id);
+        let provider = source["evidenceProviders"]["provider"].take();
+        source["evidenceProviders"] = json!({ (id): provider });
         source["actions"]["register-person"]["evidence"][0]["provider"] = json!(id);
         assert_refused_where_read(&source, "provider");
     }

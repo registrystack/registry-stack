@@ -14,7 +14,7 @@ package:
   sourceRevision: local-directory-0.1.0
 
 datasets:
-  - id: directory
+  directory:
     display: {label: Directory, description: Institutional contact records.}
 
 recordTypes:

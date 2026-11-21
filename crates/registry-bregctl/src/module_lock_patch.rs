@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn flow_module_locks_preserve_json_and_unicode_surroundings() {
         let prefix = "\u{feff}{\"apiVersion\":\"id.registrystack.org/formats/breg/project/v1alpha1\",\"kind\":\"BRegProject\",\"project\":{\"id\":\"flow-lock\",\"canonicalBaseIri\":\"https://example.test/é\",\"version\":\"1\",\"defaultLanguage\":\"en\"},\"modules\":";
-        let suffix = ",\"datasets\":[{\"id\":\"records\"}]}\n";
+        let suffix = ",\"datasets\":{\"records\":{}}}\n";
         let source = format!("{prefix}{{\"core\":{{\"version\":\"1\"}}}}{suffix}");
         let locks = [lock("core")];
         let rendered =
@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn flow_module_locks_preserve_yaml_surroundings_and_refresh_inventory() {
         let prefix = "# retained project comment\napiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: flow-lock\n  canonicalBaseIri: https://example.test\n  version: \"1\"\n  defaultLanguage: en\nmodules: ";
-        let suffix = " # retained lock comment with ] and [\ndatasets: [{id: records}]\n";
+        let suffix = " # retained lock comment with ] and [\ndatasets: {records: {}}\n";
         let source = format!("{prefix}{{retired: {{version: \"1\"}}}}{suffix}");
         let locks = [lock("core"), lock("extra")];
         let rendered = patch_flow_module_locks(source.as_bytes(), &locks)
@@ -318,7 +318,7 @@ mod tests {
     fn flow_module_locks_preserve_cr_and_crlf_surroundings() {
         for newline in ["\r", "\r\n"] {
             let prefix = "# retained project comment\napiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: flow-lock\n  canonicalBaseIri: https://example.test\n  version: \"1\"\n  defaultLanguage: en\nmodules: ".replace('\n', newline);
-            let suffix = " # retained lock comment with ] and [\ndatasets: [{id: records}]\n"
+            let suffix = " # retained lock comment with ] and [\ndatasets: {records: {}}\n"
                 .replace('\n', newline);
             let source =
                 format!("{prefix}{{{newline}  core: {{version: \"1\"}}{newline}}}{suffix}");

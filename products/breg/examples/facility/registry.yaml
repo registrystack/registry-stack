@@ -13,13 +13,13 @@ package:
   sourceRevision: facility-registry-0.1.0
 
 datasets:
-  - id: facility-registry
+  facility-registry:
     display:
       label: Facility Registry
       description: Authoritative facility, operator, assignment, and directory records.
 
 reviewAuthorities:
-  - id: casework
+  casework:
     protocol: id.registrystack.org/protocols/review/v1
     display:
       label: Casework review authority
@@ -363,7 +363,7 @@ accessProfiles:
           reviewAuthority: casework
 
 vocabularies:
-  - id: operator-status
+  operator-status:
     values: [active, inactive]
-  - id: facility-status
+  facility-status:
     values: [active, inactive]

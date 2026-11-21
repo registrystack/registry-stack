@@ -887,7 +887,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "defaultLanguage":"en",
             "canonicalBaseIri":"https://timer-clock.example.test"
         },
-        "datasets":[{"id":"services"}],
+        "datasets":{"services": {}},
         "recordTypes":{"service": {
             "primaryDataset":"services",
             "route":"services",

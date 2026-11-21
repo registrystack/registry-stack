@@ -32,12 +32,12 @@ use zeroize::Zeroizing;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn moving_first_period_forward_hides_old_releases_without_changing_the_definition() {
-    let mut source = json!({"datasets":[{"id": "load"}],
+    let mut source = json!({"datasets":{"load": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"statistics-load","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://load.example.test","timezone":"UTC"},
         "recordTypes":{"unit": {"route":"units","primaryDataset":"load","mutationMode":"mutable","fields":[{"id":"active","type":"boolean","required":true,"classification":"internal"},{"id":"event-date","type":"date","required":true,"classification":"internal"}]}},
         "accessProfiles":{"publisher": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"unit","operations":["list"],"allowCount":true,"rowBoundaries":"unrestricted","readableFields":["active","event-date"],"filterableFields":["active","event-date"]}],"datasets":[{"dataset":"units-by-category","operations":["read-live","publish","read-releases"]}]}},"reader": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"datasets":[{"dataset":"units-by-category","operations":["read-releases"]}]}}},
-        "statisticalDatasets":[{"id":"units-by-category","unit":"unit","population":"active ne null","period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},"dimensions":["active"],"disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}}]
+        "statisticalDatasets":{"units-by-category": {"unit":"unit","population":"active ne null","period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},"dimensions":["active"],"disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}}}
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let compiled = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
@@ -181,7 +181,7 @@ async fn moving_first_period_forward_hides_old_releases_without_changing_the_def
         assert_eq!(body["code"], "request.timeout");
     }
     database.admin.batch_execute("ROLLBACK").await.unwrap();
-    source["statisticalDatasets"][0]["period"]["firstPeriod"] = json!("2025-06");
+    source["statisticalDatasets"]["units-by-category"]["period"]["firstPeriod"] = json!("2025-06");
     let successor_project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let successor =
         Arc::new(compile_project(&successor_project, &[], CompileProfile::Authoring).unwrap());

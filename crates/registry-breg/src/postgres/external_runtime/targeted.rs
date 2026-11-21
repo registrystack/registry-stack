@@ -345,14 +345,14 @@ mod postgres_tests {
             "apiVersion": crate::compiler::AUTHORING_API_VERSION,
             "kind": "BRegProject",
             "project": {"id":"targeted-lookup","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
-            "datasets": [{"id":"records"}],
+            "datasets": {"records": {}},
             "recordTypes": {"local-record": {"primaryDataset":"records","route":"records","mutationMode":"mutable","classification":"internal","fields":[
                 {"id":"subject-key","type":"string","maximumLength":64,"classification":"internal"},
                 {"id":"tenant","type":"string","maximumLength":32,"classification":"internal"}
             ]}},
-            "externalRecordTypes": [{"id":"subject","authority":"urn:test:source","identifierScheme":"urn:test:subject","fields":[{"id":"name","type":"string","classification":"internal"}]}],
-            "externalProjections": [{"id":"subjects","recordType":"subject","sourceRoute":"subjects","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["name"]}],
-            "externalViews": [{"id":"view","recordType":"local-record","links":[{"id":"subject","projection":"subjects","fromField":"subject-key"}]}],
+            "externalRecordTypes": {"subject": {"authority":"urn:test:source","identifierScheme":"urn:test:subject","fields":[{"id":"name","type":"string","classification":"internal"}]}},
+            "externalProjections": {"subjects": {"recordType":"subject","sourceRoute":"subjects","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["name"]}},
+            "externalViews": {"view": {"recordType":"local-record","links":[{"id":"subject","projection":"subjects","fromField":"subject-key"}]}},
             "accessProfiles": {"refresh": {"principalClaim":"registry_principal","actorKind":"service","requesterClients":["worker"],"requiredScopes":["registry.refresh"],"requiredPurposes":["consultation"],"permissions":{
                 "records":[{"recordType":"local-record","operations":["list"],"rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}],
                 "refreshExternalProjections":["subjects"]

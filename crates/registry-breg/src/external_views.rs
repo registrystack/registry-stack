@@ -25,6 +25,12 @@ pub struct ExternalRecordTypeSource {
     pub fields: Vec<ExternalFieldSource>,
 }
 
+impl registry_platform_yaml::Identified for ExternalRecordTypeSource {
+    fn id(&self) -> &str {
+        self.id.as_str()
+    }
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -93,6 +99,12 @@ pub struct ExternalProjectionDeclaration {
     pub cache_ttl_seconds: Option<BoundedU32<1, MAXIMUM_CACHE_TTL_SECONDS>>,
 }
 
+impl registry_platform_yaml::Identified for ExternalProjectionDeclaration {
+    fn id(&self) -> &str {
+        self.id.as_str()
+    }
+}
+
 /// Authoring form of an external view.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -101,6 +113,12 @@ pub struct ExternalViewDeclaration {
     pub id: LocalId,
     pub record_type: LocalId,
     pub links: Vec<ExternalLinkDeclaration>,
+}
+
+impl registry_platform_yaml::Identified for ExternalViewDeclaration {
+    fn id(&self) -> &str {
+        self.id.as_str()
+    }
 }
 
 /// Authoring form of a view link. The identifier scheme and fields come from
@@ -355,8 +373,8 @@ pub(crate) fn compile(
     );
     let mut projections = BTreeMap::new();
 
-    for (index, record_type) in project.external_record_types.iter().enumerate() {
-        let path = format!("/externalRecordTypes/{index}");
+    for record_type in &project.external_record_types {
+        let path = keyed_path("/externalRecordTypes", record_type.id.as_str());
         validate_uri(
             &record_type.authority,
             &format!("{path}/authority"),
@@ -380,8 +398,8 @@ pub(crate) fn compile(
         }
     }
 
-    for (index, projection) in project.external_projections.iter().enumerate() {
-        let path = format!("/externalProjections/{index}");
+    for projection in &project.external_projections {
+        let path = keyed_path("/externalProjections", projection.id.as_str());
         if let Some(scheme) = &projection.selector_scheme {
             validate_uri(scheme, &format!("{path}/selectorScheme"), &mut diagnostics);
         }
@@ -471,8 +489,8 @@ pub(crate) fn compile(
 
     let mut views = BTreeMap::new();
     let mut local_schemes = BTreeMap::new();
-    for (index, view) in project.external_views.iter().enumerate() {
-        let path = format!("/externalViews/{index}");
+    for view in &project.external_views {
+        let path = keyed_path("/externalViews", view.id.as_str());
         let Some(root) = entities.get(view.record_type.as_str()) else {
             error(
                 &mut diagnostics,
@@ -847,6 +865,14 @@ fn validate_uri(value: &ExternalId, path: &str, diagnostics: &mut Vec<Diagnostic
     }
 }
 
+/// The pointer of the declaration an id-keyed mapping holds under `id`.
+fn keyed_path(base: &str, id: &str) -> String {
+    format!(
+        "{base}/{}",
+        registry_platform_yaml::escape_pointer_segment(id)
+    )
+}
+
 fn index<T: Clone>(
     items: &[T],
     id: impl Fn(&T) -> &LocalId,
@@ -854,7 +880,7 @@ fn index<T: Clone>(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> BTreeMap<String, T> {
     let mut by_id = BTreeMap::new();
-    for (index, item) in items.iter().enumerate() {
+    for item in items {
         if by_id
             .insert(id(item).as_str().to_owned(), item.clone())
             .is_some()
@@ -862,7 +888,7 @@ fn index<T: Clone>(
             error(
                 diagnostics,
                 "duplicate-id",
-                format!("{path}/{index}/id"),
+                keyed_path(path, id(item).as_str()),
                 "Give each declaration in this group a distinct identifier.",
             );
         }

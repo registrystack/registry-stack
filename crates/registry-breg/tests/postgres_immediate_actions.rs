@@ -3788,11 +3788,7 @@ const ACTION_PROJECT: &[u8] = br#"{
       }
     }
   },
-  "datasets": [
-    {
-      "id": "test-dataset"
-    }
-  ]
+  "datasets": {"test-dataset": {}}
 }"#;
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {

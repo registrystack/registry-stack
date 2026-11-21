@@ -1324,7 +1324,7 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
           "kind":"BRegProject",
           "project":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "package":{{"sourceRevision":"{SOURCE_REVISION}"}},
-          "datasets":[{{"id":"test-dataset"}}],
+          "datasets":{{"test-dataset": {{}}}},
           "recordTypes":{{"person":{{"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "constraints":[{{"type":"unique","fields":["person-code"]}}],
             "fields":[

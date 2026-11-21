@@ -5654,7 +5654,7 @@ mod spatial_projection_migration_tests {
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"spatial-projection-migration","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial.example.test"}},
-              "datasets":[{{"id":"registry"}}],
+              "datasets":{{"registry": {{}}}},
               "recordTypes":{{"area":{{"primaryDataset":"registry","route":"areas","mutationMode":"mutable",
                 "fields":[{fields}],
                 "geojson":{{"geometryField":"geometry"}}

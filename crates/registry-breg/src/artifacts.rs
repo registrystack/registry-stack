@@ -4853,7 +4853,7 @@ mod spatial_tests {
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
             "kind":"BRegProject",
             "project":{"id":"spatial-artifacts","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-artifacts.example.test"},
-            "datasets":[{"id":"test-dataset"}],"recordTypes":{"site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
+            "datasets":{"test-dataset": {}},"recordTypes":{"site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
                 "geojson":{"geometryField":"location"},
                 "fields":[
                     {"id":"code","type":"string","maximumLength":32,"classification":"internal"},

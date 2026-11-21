@@ -735,7 +735,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://wasm-action-test-fixture.example.test
 datasets:
-  - id: test-dataset
+  test-dataset: {}
 recordTypes:
   person:
     primaryDataset: test-dataset

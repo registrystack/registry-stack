@@ -91,7 +91,7 @@ fn wasm_project() -> Value {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"wasm-admission","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "datasets":[{"id":"test-dataset"}],
+          "datasets":{"test-dataset": {}},
           "recordTypes":{"person": {"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "fields":[
               {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
@@ -416,11 +416,9 @@ fn an_evidence_declaration_stays_refused_for_wasm_handlers_under_the_feature() {
     // A complete Evidence declaration: a declared provider, its reviewed
     // contract in the project assets, and one capability the contract defines.
     let mut project = wasm_project();
-    project["evidenceProviders"] = json!([{
-        "id": "farmer-registry",
-        "contracts": "evidence/farmer-contracts.json",
+    project["evidenceProviders"] = json!({"farmer-registry": {"contracts": "evidence/farmer-contracts.json",
         "subjectResolution": "trusted-provider-exact-selector"
-    }]);
+    }});
     project["actions"]["register-person"]["evidence"] = json!([{
         "id": "farmer-status",
         "provider": "farmer-registry",

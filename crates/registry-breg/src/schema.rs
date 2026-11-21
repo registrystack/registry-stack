@@ -892,7 +892,7 @@ mod tests {
             ),
         ] {
             let mut instance = facility.clone();
-            instance["statisticalDatasets"][0][member] = written;
+            instance["statisticalDatasets"]["monthly-discharge-reports"][member] = written;
             assert!(
                 !schema.is_valid(&instance),
                 "a dataset that still writes {member}"

@@ -641,7 +641,7 @@ mod tests {
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
             "project":{"id":"example", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://example.test"},
             "package":{"sourceRevision":"test"},
-            "datasets":[{"id":"test-dataset","display":{"label":"Test dataset"}}],
+            "datasets":{"test-dataset": {"display":{"label":"Test dataset"}}},
             "recordTypes":{"record": { "primaryDataset":"test-dataset", "route":"records", "mutationMode":"mutable",
                 "fields":[field],
                 "hooks":[{"phase":"after","id":"record-created-v1", "trigger":trigger, "projection":["label"], "handler":{"type":"url","destinationId":"local-hook"}}]

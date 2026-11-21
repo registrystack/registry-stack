@@ -13,7 +13,7 @@ const UNINDEXED_FILTER: &str = "breg.record-type.list-unindexed-filter";
 const UNINDEXED_SORT: &str = "breg.record-type.list-unindexed-sort";
 
 fn source() -> Value {
-    json!({"datasets":[{"id": "test-dataset"}],
+    json!({"datasets":{"test-dataset": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"reference-index-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://reference-index.example.test"},
         "recordTypes":{

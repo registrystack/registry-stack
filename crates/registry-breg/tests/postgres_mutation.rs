@@ -1772,11 +1772,11 @@ async fn real_postgres_row_local_constraint_problems_name_only_readable_declarat
     let database = TestDatabase::create(8).await;
     let (migration, migration_task) = database.connect_migration().await;
     let project = parse_project_json(
-        br#"{"datasets":[{"id":"test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"constraint-problem-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "vocabularies":[{"id":"status-codes","values":["open","closed","held"]}],
+          "vocabularies":{"status-codes": {"values":["open","closed","held"]}},
           "recordTypes":{"window": {"primaryDataset":"test-dataset","route":"windows","mutationMode":"mutable","classification":"public",
             "batch":{"maximumItems":4,"maximumBytes":16384},
             "constraints":[
@@ -3821,7 +3821,7 @@ fn assert_fixed_problem_members(body: &Value) {
 
 fn row_boundary_batch_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"row-boundary-batch-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -3852,7 +3852,7 @@ fn row_boundary_batch_registry() -> registry_breg::CompiledRegistry {
 
 fn located_refusal_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"located-refusal-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -4700,7 +4700,7 @@ fn api_claims_with_principal_and_scopes(
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"mutation-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -5954,7 +5954,7 @@ async fn real_postgres_receipt_sweep_clears_the_raw_caller_of_every_expired_spen
 
 fn linked_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id":"local-records"}],
+        br#"{"datasets":{"local-records": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"mutation-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -5964,19 +5964,16 @@ fn linked_registry() -> registry_breg::CompiledRegistry {
               {"id":"localtitle","type":"string","maximumLength":120,"classification":"internal"}
             ]
           }},
-          "externalRecordTypes":[{
-            "id":"external-subject","authority":"urn:example:source","identifierScheme":"urn:example:subject-key",
+          "externalRecordTypes":{"external-subject": {"authority":"urn:example:source","identifierScheme":"urn:example:subject-key",
             "fields":[{"id":"label","type":"string","classification":"internal"}]
-          }],
-          "externalProjections":[{
-            "id":"approved-subjects","recordType":"external-subject","sourceRoute":"subjects-by-key","sourceRouteVersion":"1",
+          }},
+          "externalProjections":{"approved-subjects": {"recordType":"external-subject","sourceRoute":"subjects-by-key","sourceRouteVersion":"1",
             "purpose":"local-consultation","scope":"approved-subjects",
             "mode":"indexed","cardinality":"one","cacheTtlSeconds":600,"fields":["label"]
-          }],
-          "externalViews":[{
-            "id":"local-with-subject","recordType":"local-record",
+          }},
+          "externalViews":{"local-with-subject": {"recordType":"local-record",
             "links":[{"id":"subject","projection":"approved-subjects","fromField":"subjectkey"}]
-          }],
+          }},
           "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["local-consultation"],
             "permissions":{"records":[{

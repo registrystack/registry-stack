@@ -295,7 +295,7 @@ fn compile(source: &str, label: &str) -> registry_breg::CompiledRegistry {
         .unwrap_or_else(|error| panic!("{label} compiles: {error:?}"))
 }
 
-const UNGRANTED_TARGET_PROJECT: &str = r#"{"datasets":[{"id": "test-dataset"}],
+const UNGRANTED_TARGET_PROJECT: &str = r#"{"datasets":{"test-dataset": {}},
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
   "project":{"id":"ungranted-read-path-target","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
@@ -385,7 +385,7 @@ fn claims() -> VerifiedRequestClaims {
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"client-relationships","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},

@@ -265,7 +265,7 @@ async fn real_postgres_temporal_correction_batches_validate_only_completed_inter
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"temporal-corrections","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -299,7 +299,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries": "unrestricted"
             }]}
           }},
-          "vocabularies":[{"id":"membership-group","values":["A","B"]}]
+          "vocabularies":{"membership-group": {"values":["A","B"]}}
         }"#,
     )
     .expect("temporal correction fixture parses");
@@ -931,7 +931,7 @@ async fn real_postgres_last_day_interval_is_in_force_through_its_last_day() {
 
 fn last_day_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+        br#"{"datasets":{"test-dataset": {}},
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"temporal-last-day","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test","timezone":"UTC"},

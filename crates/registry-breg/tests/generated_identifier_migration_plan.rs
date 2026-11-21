@@ -197,7 +197,7 @@ fn source(prefix: Option<&str>) -> Source {
             "canonicalBaseIri": "https://registry.example.test"
         },
         "package": {"sourceRevision": "compiler-source-revision"},
-        "datasets": [{"id": "records"}],
+        "datasets": {"records": {}},
         "manifestProjection": {
             "accessProfile": "reader",
             "classificationCeiling": "internal",

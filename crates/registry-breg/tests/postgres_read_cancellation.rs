@@ -433,7 +433,7 @@ fn claims() -> VerifiedRequestClaims {
 }
 
 fn compiled_registry() -> CompiledRegistry {
-    let source = json!({"datasets":[{"id": "records"}],
+    let source = json!({"datasets":{"records": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
         "recordTypes":{"entry": {"primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",

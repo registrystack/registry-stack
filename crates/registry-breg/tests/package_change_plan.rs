@@ -849,7 +849,7 @@ fn complete_extension_surface_modules_are_order_independent() {
     let event_module = parse_module_yaml(br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"event-extension","version":"1","extendRecordTypes":{"asset": {"accessProfiles":{"auditor": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}},"hooks":[{"phase":"after","id":"asset-created","trigger":"created","projection":["code","status"],"handler":{"type":"url","destinationId":"package-change-events"}}]}},"recordTypes":{"site": {"primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}}}"#)
         .expect("event extension parses");
     let project_bytes = format!(
-        r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"recordTypes":{{"asset":{{"primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}]}}}},"accessProfiles":{{"reader":{{"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"records":[{{"rowBoundaries": "unrestricted", "recordType":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}}}}},"modules":{{"field-extension":{{"version":"1","digest":"{}"}},"event-extension":{{"version":"1","digest":"{}"}}}}}}"#,
+        r#"{{"datasets":{{"neutral-registry": {{}}}},"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"recordTypes":{{"asset":{{"primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}]}}}},"accessProfiles":{{"reader":{{"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"records":[{{"rowBoundaries": "unrestricted", "recordType":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}}}}},"modules":{{"field-extension":{{"version":"1","digest":"{}"}},"event-extension":{{"version":"1","digest":"{}"}}}}}}"#,
         module_digest(&field_module),
         module_digest(&event_module)
     );
@@ -2042,7 +2042,7 @@ fn tampered_package_never_returns_a_migration_summary_or_canary() {
 /// project's `status` vocabulary holds `values`; its `state` vocabulary always
 /// holds open, closed, and archived.
 fn vocabulary_registry(vocabulary: &str, values: &[&str]) -> CompiledRegistry {
-    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
+    let project = serde_json::json!({"datasets":{"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -2051,10 +2051,7 @@ fn vocabulary_registry(vocabulary: &str, values: &[&str]) -> CompiledRegistry {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://authoring.example.test"
         },
-        "vocabularies": [
-            {"id": "status", "values": values},
-            {"id": "state", "values": ["open", "closed", "archived"]}
-        ],
+        "vocabularies": {"status": {"values": values}, "state": {"values": ["open", "closed", "archived"]}},
         "recordTypes": {"entry": {
             "primaryDataset": "test-dataset",
             "route": "entries",
@@ -2122,7 +2119,7 @@ fn string_length_registry(
 }
 
 fn field_registry(field: serde_json::Value) -> CompiledRegistry {
-    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
+    let project = serde_json::json!({"datasets":{"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -2283,7 +2280,7 @@ fn spatial_source(binding: &str, bbox: bool) -> SourceFixture {
 
 fn project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test","timezone":"UTC"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}}}"#
+        r#"{{"datasets":{{"neutral-registry": {{}}}},"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test","timezone":"UTC"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}}}"#
     )
     .into_bytes()
 }

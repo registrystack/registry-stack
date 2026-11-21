@@ -207,7 +207,7 @@ fn model_retains_authored_display_without_inventing_input_labels() {
         json!({"label":"Operating organisation"});
     let registry = compile(&source);
     let model = inspect_registry(&registry);
-    assert_eq!(model["datasets"], source["datasets"]);
+    assert_eq!(model["datasets"], as_list(&source["datasets"]));
     assert_eq!(
         definition(&model["accessProfiles"], "facility-reader")["display"],
         source["accessProfiles"]["facility-reader"]["display"]
@@ -265,11 +265,10 @@ fn omitted_and_empty_profile_display_have_identical_compiled_meaning() {
 #[test]
 fn profile_dataset_and_hook_displays_refuse_record_title_selection() {
     let mut source = source();
-    source["statisticalDatasets"] = json!([{
-        "id":"counts", "unit":"facility", "population":"active eq true",
+    source["statisticalDatasets"] = json!({"counts": {"unit":"facility", "population":"active eq true",
         "period":{"type":"flow", "field":"date", "granularity":"month", "firstPeriod":"2025-01"},
         "dimensions":["active"]
-    }]);
+    }});
     source["recordTypes"]["directory-entry"]["hooks"] = json!([{
         "id":"record-observer", "phase":"after", "trigger":"patched", "projection":["name"],
         "handler":{"type":"url", "destinationId":"record-events"}
@@ -292,7 +291,7 @@ fn profile_dataset_and_hook_displays_refuse_record_title_selection() {
         .unwrap();
     for pointer in [
         "/accessProfiles/directory-editor".to_owned(),
-        "/statisticalDatasets/0".to_owned(),
+        "/statisticalDatasets/counts".to_owned(),
         "/recordTypes/directory-entry/hooks/0".to_owned(),
         format!("/actions/{proposal_index}/execution/proposal/hooks/0"),
     ] {
@@ -487,9 +486,9 @@ fn dataset_inventory_includes_dataset_only_profile_authentication() {
             json!({"id":"event-date", "type":"date", "required":true, "classification":"internal"}),
         ]);
     source["project"]["timezone"] = json!("UTC");
-    source["statisticalDatasets"] = json!([{"id":"directory-counts", "display":{"label":"Directory counts"}, "unit":"directory-entry", "population":"active eq true",
+    source["statisticalDatasets"] = json!({"directory-counts": {"display":{"label":"Directory counts"}, "unit":"directory-entry", "population":"active eq true",
         "period":{"type":"flow", "field":"event-date", "granularity":"month", "firstPeriod":"2025-01"},
-        "dimensions":["active"], "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5, "roundingBase":5}}]);
+        "dimensions":["active"], "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5, "roundingBase":5}}});
     source["accessProfiles"].as_object_mut().unwrap().extend([
         ("statistics-publisher".to_owned(), json!({"principalClaim":"registry_principal", "requiredScopes":["statistics:publish"],
             "permissions":{"records":[{"recordType":"directory-entry", "operations":["list"], "readableFields":["active","event-date"],
@@ -682,7 +681,10 @@ fn project_display_and_review_authorities_are_retained_and_revision_bound() {
     let original = compile(&source);
     let inspection = inspect_registry(&original);
     assert_eq!(inspection["display"], source["project"]["display"]);
-    assert_eq!(inspection["reviewAuthorities"], source["reviewAuthorities"]);
+    assert_eq!(
+        inspection["reviewAuthorities"],
+        as_list(&source["reviewAuthorities"])
+    );
     assert_eq!(
         inspection["reviewAuthorities"][0]["protocol"],
         "id.registrystack.org/protocols/review/v1"
@@ -709,7 +711,7 @@ fn project_display_and_review_authorities_are_retained_and_revision_bound() {
 
     for pointer in [
         "/project/display/label",
-        "/reviewAuthorities/0/display/description",
+        "/reviewAuthorities/casework/display/description",
     ] {
         let mut changed = source.clone();
         *changed.pointer_mut(pointer).unwrap() = json!("Changed author display");
@@ -820,4 +822,21 @@ fn model_retains_event_record_descriptor_and_display_grouping() {
         inspect_action(grouped).get("grouping").is_none(),
         "grouping is added around inspect_action, not inside it"
     );
+}
+
+/// The compiled inventory lists keyed project collections as id-tagged entries
+/// ordered by id.
+fn as_list(keyed: &Value) -> Value {
+    let mut entries = keyed
+        .as_object()
+        .expect("a keyed collection is a mapping")
+        .iter()
+        .map(|(id, entry)| {
+            let mut entry = entry.clone();
+            entry["id"] = json!(id);
+            entry
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    Value::Array(entries)
 }

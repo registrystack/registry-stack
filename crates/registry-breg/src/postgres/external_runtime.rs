@@ -3481,21 +3481,27 @@ mod postgres_tests {
     fn live_and_indexed_project() -> Value {
         let mut project = two_projection_project();
         project["externalRecordTypes"]
-            .as_array_mut()
+            .as_object_mut()
             .unwrap()
-            .push(json!({
-                "id":"person","authority":"urn:test:authority","identifierScheme":"urn:test:keys",
-                "fields":[{"id":"family-name","type":"string","classification":"internal"}]
-            }));
+            .insert(
+                "person".to_owned(),
+                json!({
+                    "authority":"urn:test:authority","identifierScheme":"urn:test:keys",
+                    "fields":[{"id":"family-name","type":"string","classification":"internal"}]
+                }),
+            );
         project["externalProjections"]
-            .as_array_mut()
+            .as_object_mut()
             .unwrap()
-            .push(json!({
-                "id":"holder","recordType":"person","sourceRoute":"person-exact","sourceRouteVersion":"1",
-                "purpose":"consultation","scope":"eligible",
-                "mode":"live","cardinality":"one","fields":["family-name"]
-            }));
-        project["externalViews"][0]["links"]
+            .insert(
+                "holder".to_owned(),
+                json!({
+                    "recordType":"person","sourceRoute":"person-exact","sourceRouteVersion":"1",
+                    "purpose":"consultation","scope":"eligible",
+                    "mode":"live","cardinality":"one","fields":["family-name"]
+                }),
+            );
+        project["externalViews"]["view"]["links"]
             .as_array_mut()
             .unwrap()
             .push(json!({"id":"holder-link","projection":"holder","fromField":"subject-key"}));
@@ -4129,21 +4135,24 @@ mod postgres_tests {
         let mut project = two_projection_project();
         project["recordTypes"]["local-record"]["fields"][0]["maximumLength"] = json!(512);
         project["externalRecordTypes"]
-            .as_array_mut()
+            .as_object_mut()
             .unwrap()
-            .push(json!({
-                "id":"person","authority":"urn:test:authority","identifierScheme":"urn:test:keys",
-                "fields":[{"id":"family-name","type":"string","classification":"internal"}]
-            }));
+            .insert(
+                "person".to_owned(),
+                json!({
+                    "authority":"urn:test:authority","identifierScheme":"urn:test:keys",
+                    "fields":[{"id":"family-name","type":"string","classification":"internal"}]
+                }),
+            );
         project["externalProjections"]
-            .as_array_mut()
+            .as_object_mut()
             .unwrap()
-            .push(json!({
-                "id":"people","recordType":"person","sourceRoute":"person-batch","sourceRouteVersion":"1",
+            .insert("people".to_owned(), json!({
+                "recordType":"person","sourceRoute":"person-batch","sourceRouteVersion":"1",
                 "purpose":"consultation","scope":"eligible",
                 "mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["family-name"]
             }));
-        project["externalViews"][0]["links"]
+        project["externalViews"]["view"]["links"]
             .as_array_mut()
             .unwrap()
             .push(json!({"id":"people-link","projection":"people","fromField":"subject-key"}));
@@ -5347,21 +5356,24 @@ mod postgres_tests {
     fn labelled_members_project() -> Value {
         let mut project = indexed_person_project();
         project["externalRecordTypes"]
-            .as_array_mut()
+            .as_object_mut()
             .unwrap()
-            .push(json!({
-                "id":"member","authority":"urn:test:authority","identifierScheme":"urn:test:members",
+            .insert("member".to_owned(), json!({
+                "authority":"urn:test:authority","identifierScheme":"urn:test:members",
                 "fields":[{"id":"holder","type":"string","classification":"internal","nullable":true}]
             }));
         project["externalProjections"]
-            .as_array_mut()
+            .as_object_mut()
             .unwrap()
-            .push(json!({
-                "id":"members","recordType":"member","sourceRoute":"members","sourceRouteVersion":"1",
-                "purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys",
-                "mode":"indexed","cardinality":"many","cacheTtlSeconds":60,"fields":["holder"]
-            }));
-        project["externalViews"][0]["links"]
+            .insert(
+                "members".to_owned(),
+                json!({
+                    "recordType":"member","sourceRoute":"members","sourceRouteVersion":"1",
+                    "purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys",
+                    "mode":"indexed","cardinality":"many","cacheTtlSeconds":60,"fields":["holder"]
+                }),
+            );
+        project["externalViews"]["view"]["links"]
             .as_array_mut()
             .unwrap()
             .push(json!({

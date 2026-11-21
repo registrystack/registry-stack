@@ -28,7 +28,7 @@ const PROJECT: &[u8] = br#"{
     "canonicalBaseIri":"https://manifest-omission.example.test"
   },
   "package":{"sourceRevision":"manifest-omission-test"},
-  "datasets":[{"id":"sources"},{"id":"targets"}],
+  "datasets":{"sources": {}, "targets": {}},
   "manifestProjection":{
     "accessProfile":"reader",
     "classificationCeiling":"public",

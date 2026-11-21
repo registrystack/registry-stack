@@ -591,7 +591,7 @@ async fn a_stock_counts_a_record_on_its_last_day_whichever_way_the_validity_is_n
 /// counted once through the temporal declaration and once by naming the
 /// same fields.
 fn last_day_registry() -> registry_breg::CompiledRegistry {
-    let source = json!({"datasets":[{"id": "facility"}],
+    let source = json!({"datasets":{"facility": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{
@@ -617,24 +617,17 @@ fn last_day_registry() -> registry_breg::CompiledRegistry {
                 {"dataset":"permits-in-force-fields","operations":["read-live"]}
             ]}
         }},
-        "vocabularies":[
-            {"id":"administrative-boundary","values":["north-district","south-district"]}
-        ],
-        "statisticalDatasets":[
-            {
-                "id":"permits-in-force-temporal","unit":"permit","population":"validFrom ne null",
+        "vocabularies":{"administrative-boundary": {"values":["north-district","south-district"]}},
+        "statisticalDatasets":{"permits-in-force-temporal": {"unit":"permit","population":"validFrom ne null",
                 "period":{"type":"stock","granularity":"month","firstPeriod":"2025-01","validity":"temporal"},
                 "dimensions":["administrative-boundary"],
                 "disclosure":{"type":"minimum-count-and-rounding","minimumCount":2,"roundingBase":2}
-            },
-            {
-                "id":"permits-in-force-fields","unit":"permit","population":"validFrom ne null",
+            }, "permits-in-force-fields": {"unit":"permit","population":"validFrom ne null",
                 "period":{"type":"stock","granularity":"month","firstPeriod":"2025-01",
                     "validity":{"from":"valid-from","until":"valid-through"}},
                 "dimensions":["administrative-boundary"],
                 "disclosure":{"type":"minimum-count-and-rounding","minimumCount":2,"roundingBase":2}
-            }
-        ]
+            }}
     });
     let bytes = serde_json::to_vec(&source).expect("last-day fixture serializes");
     let project = parse_project_json(&bytes).expect("last-day fixture parses");
@@ -658,7 +651,7 @@ fn twelve_dimension_registry() -> registry_breg::CompiledRegistry {
     }
     let mut readable = vec!["valid-from".to_owned()];
     readable.extend(dimension_ids.iter().cloned());
-    let source = json!({"datasets":[{"id": "facility"}],
+    let source = json!({"datasets":{"facility": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{
@@ -677,12 +670,11 @@ fn twelve_dimension_registry() -> registry_breg::CompiledRegistry {
             }],"datasets":[{"dataset":"permits-by-twelve-dimensions","operations":["read-live"]}]}
         }},
         "vocabularies":vocabularies,
-        "statisticalDatasets":[{
-            "id":"permits-by-twelve-dimensions","unit":"permit","population":"validFrom ne null",
+        "statisticalDatasets":{"permits-by-twelve-dimensions": {"unit":"permit","population":"validFrom ne null",
             "period":{"type":"flow","field":"valid-from","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":dimension_ids,
             "disclosure":{"type":"minimum-count-and-rounding","minimumCount":2,"roundingBase":2}
-        }]
+        }}
     });
     let bytes = serde_json::to_vec(&source).expect("twelve-dimension fixture serializes");
     let project = parse_project_json(&bytes).expect("twelve-dimension fixture parses");
@@ -691,7 +683,7 @@ fn twelve_dimension_registry() -> registry_breg::CompiledRegistry {
 }
 
 fn cube_registry() -> registry_breg::CompiledRegistry {
-    let source = json!({"datasets":[{"id": "facility"}],
+    let source = json!({"datasets":{"facility": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{
@@ -713,16 +705,12 @@ fn cube_registry() -> registry_breg::CompiledRegistry {
                 "rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":"permits-by-type-and-region","operations":["read-live"]}]}
         }},
-        "vocabularies":[
-            {"id":"permit-type","values":["air","water"]},
-            {"id":"region","values":["north","south"]}
-        ],
-        "statisticalDatasets":[{
-            "id":"permits-by-type-and-region","unit":"permit","population":"validFrom ne null",
+        "vocabularies":{"permit-type": {"values":["air","water"]}, "region": {"values":["north","south"]}},
+        "statisticalDatasets":{"permits-by-type-and-region": {"unit":"permit","population":"validFrom ne null",
             "period":{"type":"flow","field":"valid-from","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["permit-type","region"],
             "disclosure":{"type":"minimum-count-and-rounding","minimumCount":2,"roundingBase":2}
-        }]
+        }}
     });
     let bytes = serde_json::to_vec(&source).expect("cube fixture serializes");
     let project = parse_project_json(&bytes).expect("cube fixture parses");
@@ -731,7 +719,7 @@ fn cube_registry() -> registry_breg::CompiledRegistry {
 }
 
 fn partial_text_registry() -> registry_breg::CompiledRegistry {
-    let source = json!({"datasets":[{"id": "facility"}],
+    let source = json!({"datasets":{"facility": {}},
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{
@@ -753,16 +741,12 @@ fn partial_text_registry() -> registry_breg::CompiledRegistry {
                 "rowBoundaries":[{"field":"administrative-boundary","claim":"administrative_boundaries","operator":"in"}]
             }],"datasets":[{"dataset":"monthly-air-permits","operations":["read-live"]}]}
         }},
-        "vocabularies":[
-            {"id":"permit-type","values":["air-emissions","water-discharge"]},
-            {"id":"administrative-boundary","values":["north-district","south-district"]}
-        ],
-        "statisticalDatasets":[{
-            "id":"monthly-air-permits","unit":"permit","population":"startswith(permitType,'a')",
+        "vocabularies":{"permit-type": {"values":["air-emissions","water-discharge"]}, "administrative-boundary": {"values":["north-district","south-district"]}},
+        "statisticalDatasets":{"monthly-air-permits": {"unit":"permit","population":"startswith(permitType,'a')",
             "period":{"type":"flow","field":"valid-from","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["administrative-boundary"],
             "disclosure":{"type":"minimum-count-and-rounding","minimumCount":2,"roundingBase":2}
-        }]
+        }}
     });
     let bytes = serde_json::to_vec(&source).expect("partial-text fixture serializes");
     let project = parse_project_json(&bytes).expect("partial-text fixture parses");

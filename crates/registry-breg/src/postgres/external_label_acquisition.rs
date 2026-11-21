@@ -440,17 +440,13 @@ mod tests {
         let project = json!({
             "apiVersion":crate::compiler::AUTHORING_API_VERSION,"kind":"BRegProject",
             "project":{"id":"label-acquisition","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
-            "datasets":[{"id":"records"}],
+            "datasets":{"records": {}},
             "recordTypes":{"local-record": {"primaryDataset":"records","route":"records","mutationMode":"mutable","classification":"internal","fields":[
                 {"id":"subject-key","type":"string","maximumLength":64,"classification":"internal"},
                 {"id":"tenant","type":"string","maximumLength":32,"classification":"internal"}]}},
-            "externalRecordTypes":[
-                {"id":"member","authority":"urn:test:source","identifierScheme":"urn:test:member","fields":[{"id":"holder","type":"string","classification":"restricted","nullable":true}]},
-                {"id":"label-record","authority":"urn:test:source","identifierScheme":"urn:test:person","fields":[{"id":"name","type":"string","classification":"internal"}]}],
-            "externalProjections":[
-                {"id":"parent","recordType":"member","sourceRoute":"members","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys","mode":"indexed","cardinality":"many","cacheTtlSeconds":60,"fields":["holder"]},
-                {"id":"label","recordType":"label-record","sourceRoute":"batch","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["name"]}],
-            "externalViews":[{"id":"view","recordType":"local-record","links":[{"id":"members","projection":"parent","fromField":"subject-key","label":{"projection":"label","fromField":"holder"}}]}],
+            "externalRecordTypes":{"member": {"authority":"urn:test:source","identifierScheme":"urn:test:member","fields":[{"id":"holder","type":"string","classification":"restricted","nullable":true}]}, "label-record": {"authority":"urn:test:source","identifierScheme":"urn:test:person","fields":[{"id":"name","type":"string","classification":"internal"}]}},
+            "externalProjections":{"parent": {"recordType":"member","sourceRoute":"members","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys","mode":"indexed","cardinality":"many","cacheTtlSeconds":60,"fields":["holder"]}, "label": {"recordType":"label-record","sourceRoute":"batch","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["name"]}},
+            "externalViews":{"view": {"recordType":"local-record","links":[{"id":"members","projection":"parent","fromField":"subject-key","label":{"projection":"label","fromField":"holder"}}]}},
             "accessProfiles":{"refresh": {"principalClaim":"registry_principal","actorKind":"service","requesterClients":["worker"],"requiredScopes":["registry.refresh"],"requiredPurposes":["consultation"],"permissions":{
                 "records":[{"recordType":"local-record","operations":["list"],"rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}],
                 "refreshExternalProjections":["parent","label"]}}}

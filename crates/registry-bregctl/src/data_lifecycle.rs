@@ -1848,7 +1848,7 @@ mod tests {
             "kind": "BRegProject",
             "project": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
                          "canonicalBaseIri": "https://ctl-data.example.test"},
-            "datasets": [{"id":"test-dataset"}],
+            "datasets": {"test-dataset": {}},
             "recordTypes": {ENTITY: {
                 "primaryDataset": "test-dataset",
                 "route": "records",
@@ -2024,7 +2024,7 @@ mod tests {
                 }],
                 "distributions": []
             },
-            "datasets": [{"id": "cases"}],
+            "datasets": {"cases": {}},
             "recordTypes": record_types,
             "actions": actions,
             "accessProfiles": access_profiles
@@ -2686,7 +2686,7 @@ mod tests {
             "kind": "BRegProject",
             "project": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
                          "canonicalBaseIri": "https://ctl-data.example.test"},
-            "datasets": [{"id":"test-dataset"}],
+            "datasets": {"test-dataset": {}},
             "recordTypes": {ENTITY: {
                 "primaryDataset": "test-dataset",
                 "route": "records",

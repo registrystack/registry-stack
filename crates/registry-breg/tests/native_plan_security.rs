@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 fn source() -> Value {
     json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"native-plan-security","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://plans.example.test"},
-        "datasets":[{"id":"test"}],
+        "datasets":{"test": {}},
         "recordTypes":{"item": {"primaryDataset":"test","route":"items","mutationMode":"mutable",
             "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}]}},
         "functions":{"calculate": {"runtime":"rhai","source":"plans/calculate.rhai","entrypoint":"calculate","abi":"registry.action-plan/v1"}},

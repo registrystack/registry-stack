@@ -698,10 +698,7 @@ pub(crate) mod tests {
             root.remove("externalRecordTypes");
             root.remove("externalProjections");
             root.remove("externalViews");
-            root.get_mut("accessProfiles")
-                .unwrap()
-                .as_array_mut()
-                .unwrap()[0]["permissions"]
+            root["accessProfiles"]["reader"]["permissions"]
                 .as_object_mut()
                 .unwrap()
                 .remove("externalViews");
@@ -714,17 +711,17 @@ pub(crate) mod tests {
         json!({
             "apiVersion":crate::compiler::AUTHORING_API_VERSION,"kind":"BRegProject",
             "project":{"id":"external-query-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
-            "datasets":[{"id":"records"}],
+            "datasets":{"records": {}},
             "recordTypes":{"local-record": {"primaryDataset":"records","route":"records","mutationMode":"mutable","classification":"internal","fields":[
                 {"id":"subject-key","type":"string","maximumLength":64,"classification":"internal"},
                 {"id":"tenant","type":"string","maximumLength":32,"classification":"internal"}
             ]}},
-            "externalRecordTypes":[{"id":"external-record","authority":"urn:test:authority","identifierScheme":"urn:test:keys","fields":[
+            "externalRecordTypes":{"external-record": {"authority":"urn:test:authority","identifierScheme":"urn:test:keys","fields":[
                 {"id":"label","type":"string","classification":"internal"},
                 {"id":"hidden","type":"string","classification":"restricted"}
-            ]}],
-            "externalProjections":[{"id":"projection","recordType":"external-record","sourceRoute":"batch","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["label","hidden"]}],
-            "externalViews":[{"id":"view","recordType":"local-record","links":[{"id":"link","projection":"projection","fromField":"subject-key"}]}],
+            ]}},
+            "externalProjections":{"projection": {"recordType":"external-record","sourceRoute":"batch","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["label","hidden"]}},
+            "externalViews":{"view": {"recordType":"local-record","links":[{"id":"link","projection":"projection","fromField":"subject-key"}]}},
             "accessProfiles":{"reader": {"principalClaim":"registry_principal","requiredScopes":["registry.read"],"requiredPurposes":["consultation"],"permissions":{
                 "records":[{"recordType":"local-record","operations":["get","list"],"allowCount":true,"rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}],
                 "externalViews":[{"view":"view","links":[{"link":"link","readableFields":["label"],"filterableFields":["label"],"sortableFields":["label"],"allowCount":true}]}]
@@ -1337,12 +1334,12 @@ mod postgres_tests {
         let database = harness::TestDatabase::create(2).await;
         let (migration, migration_task) = database.connect_migration().await;
         let mut project = super::tests::project();
-        project["externalRecordTypes"][0]["fields"]
+        project["externalRecordTypes"]["external-record"]["fields"]
             .as_array_mut()
             .unwrap()
             .push(serde_json::json!({"id":"issued","type":"date","classification":"internal"}));
         for path in [
-            "/externalProjections/0/fields",
+            "/externalProjections/projection/fields",
             "/accessProfiles/reader/permissions/externalViews/0/links/0/readableFields",
             "/accessProfiles/reader/permissions/externalViews/0/links/0/sortableFields",
         ] {
@@ -1427,8 +1424,9 @@ mod postgres_tests {
         let database = harness::TestDatabase::create(2).await;
         let (migration, migration_task) = database.connect_migration().await;
         let mut project = super::tests::project();
-        project["externalProjections"][0]["cardinality"] = Value::from("many");
-        project["externalProjections"][0]["selectorScheme"] = Value::from("urn:test:keys");
+        project["externalProjections"]["projection"]["cardinality"] = Value::from("many");
+        project["externalProjections"]["projection"]["selectorScheme"] =
+            Value::from("urn:test:keys");
         let registry = super::tests::compile_project(&project);
         super::super::install_compiled_schema(&migration, &registry, &database.runtime_role)
             .await
