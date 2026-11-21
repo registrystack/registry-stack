@@ -90,7 +90,11 @@ pub fn id_keyed_schema<T: schemars::JsonSchema + crate::Identified>(
 /// entries: [`id_keyed_schema`] with `minProperties` (omitted when `MIN` is
 /// zero) and `maxProperties`.
 #[cfg(feature = "schema")]
-pub fn id_keyed_schema_bounded<T: schemars::JsonSchema, const MIN: u64, const MAX: u64>(
+pub fn id_keyed_schema_bounded<
+    T: schemars::JsonSchema + crate::Identified,
+    const MIN: u64,
+    const MAX: u64,
+>(
     generator: &mut schemars::SchemaGenerator,
 ) -> schemars::Schema {
     let mut schema = id_keyed_schema::<T>(generator);
