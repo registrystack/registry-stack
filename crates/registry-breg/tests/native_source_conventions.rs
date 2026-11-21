@@ -1330,6 +1330,22 @@ fn module_schema_includes_the_readers_named_type_alternative() {
     assert!(schema.is_valid(&source));
 }
 
+/// A pointer to a use site escapes the keys it names, so a key holding `/`
+/// still resolves to the authored value.
+#[test]
+fn an_undeclared_value_type_reference_is_reported_at_the_escaped_pointer() {
+    let source = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
+        "id":"local-module","version":"0.1.0","valueTypes":{"short-label":{"type":"string","maximumLength":40}},
+        "recordTypes":{"a/b": {"route":"entries","primaryDataset":"directory","mutationMode":"mutable",
+            "fields":[{"id":"label","typeRef":"missing","classification":"internal"}]}}});
+
+    let report = read_module_yaml("module.yaml", &bytes(&source)).expect_err("typeRef is undeclared");
+
+    let diagnostic = &report.diagnostics()[0];
+    assert_eq!(diagnostic.code, "breg.value-type.reference-invalid");
+    assert_eq!(diagnostic.path, "/recordTypes/a~1b/fields/0/typeRef");
+}
+
 fn module_with_profiles(owner: &str, second_id: &str) -> String {
     let (list, member) = if owner == "extend" {
         ("extendRecordTypes", "")
