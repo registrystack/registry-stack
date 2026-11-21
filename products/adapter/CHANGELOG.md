@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.47.0 - 2026-11-20
+## 0.47.0 - 2026-11-21
 
 - Accept an optional `project.label` and `project.description` in the project
   block, as the shared project block does. They are display text for

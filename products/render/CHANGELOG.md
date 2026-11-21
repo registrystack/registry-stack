@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.47.0 - 2026-11-20
+## 0.47.0 - 2026-11-21
 
 - BREAKING: the render route and `compile --format json` send only the
   labelled digests, as a pre-1.0 cleanup. The deprecated bare hex members and
