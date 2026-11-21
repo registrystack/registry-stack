@@ -890,8 +890,14 @@ class EvidencePackageTest(unittest.TestCase):
                       + " is already active for this package as sequence 1; "
                       "nothing needs activating\n")
 
-    def upgrade_with_activation(self, returncode: int, stdout: str, stderr: str) -> unittest.mock.Mock:
-        """Run `Evidence.upgrade` over a stub side whose activation exits as given."""
+    CURRENT_PROJECT = {"kind": "EvidenceProject", "project": {"id": "local-evidence", "version": "1"},
+                       "functions": {"derive-record-status": {"source": "functions/derive.rhai"}},
+                       "sources": {"record-status": {"connection": "starter-source"}}}
+
+    def upgrade_with_activation(self, returncode: int, stdout: str, stderr: str,
+                                project: dict[str, Any] | None = None) -> unittest.mock.Mock:
+        """Run `Evidence.upgrade` over a stub side whose activation exits as given.
+        The stub's `packaged` attribute holds the project file evidencectl read."""
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
@@ -902,20 +908,44 @@ class EvidencePackageTest(unittest.TestCase):
         evidence.installed = root / "installed"
         evidence.runtime = root / "runtime.yaml"
         candidate = root / "candidate-upgraded"
+        evidence.project.mkdir()
+        dump_json(evidence.project / "evidence.yaml", project or self.CURRENT_PROJECT)
+        side = unittest.mock.Mock()
 
         def run(binary: str, *_args: str, **_kwargs: Any) -> Any:
             if binary == "evidencectl":
+                side.packaged = MODULE.load_yaml(evidence.project / "evidence.yaml")
                 (candidate / "bundle").mkdir(parents=True)
                 dump_json(candidate / "runtime.yaml", {"package": {}})
                 (candidate / "compiled-authority.yaml").write_text("complete authority")
                 return unittest.mock.Mock(returncode=0, stdout="", stderr="")
             return MODULE.subprocess.CompletedProcess([binary], returncode, stdout, stderr)
 
-        side = unittest.mock.Mock()
         side.run.side_effect = run
         side.path.side_effect = lambda binary: str(root / "bin" / binary)
         evidence.upgrade(side)
         return side
+
+    def test_the_upgrade_moves_a_previous_release_project_to_the_current_shape(self) -> None:
+        # The edit the Evidence CHANGELOG asks of an operator before upgrading
+        # a project `evidencectl init` wrote at 0.47.0 or earlier.
+        earlier = {"kind": "EvidenceProject", "id": "local-evidence",
+                   "functions": [{"id": "derive-record-status",
+                                  "source": "functions/derive.rhai"}],
+                   "sources": {"record-status": {"connection": "starter-source"}}}
+        side = self.upgrade_with_activation(0, "ACTIVATED sha256:a sha256:b sequence=2\n", "",
+                                            project=earlier)
+        self.assertEqual(side.packaged, self.CURRENT_PROJECT)
+
+    def test_the_upgrade_leaves_a_current_project_as_written(self) -> None:
+        side = self.upgrade_with_activation(0, "ACTIVATED sha256:a sha256:b sequence=2\n", "")
+        self.assertEqual(side.packaged, self.CURRENT_PROJECT)
+
+    def test_a_previous_release_function_list_entry_without_an_id_is_refused(self) -> None:
+        earlier = {"kind": "EvidenceProject", "id": "local-evidence",
+                   "functions": [{"source": "functions/derive.rhai"}]}
+        with self.assertRaisesRegex(Error, "Function entry 1 .* has no `id`"):
+            self.upgrade_with_activation(0, "", "", project=earlier)
 
     def test_the_upgrade_continues_past_an_already_active_package(self) -> None:
         side = self.upgrade_with_activation(1, "", self.ALREADY_ACTIVE)
