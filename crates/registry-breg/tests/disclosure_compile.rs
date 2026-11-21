@@ -468,7 +468,7 @@ fn a_uniqueness_constraint_on_a_withheld_field_is_a_finding() {
     for fields in [json!(["phone"]), json!(["district", "phone"])] {
         let mut value = source();
         value["recordTypes"][0]["constraints"] = json!([{"type": "unique", "fields": fields}]);
-        assert_eq!(probe_findings(&value), [path.clone()]);
+        assert_eq!(probe_findings(&value), [path.as_str()]);
     }
     let mut unrelated = source();
     unrelated["recordTypes"][0]["constraints"] =
