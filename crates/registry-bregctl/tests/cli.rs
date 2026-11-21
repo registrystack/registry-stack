@@ -677,7 +677,7 @@ fn check_refuses_invalid_required_filters_with_a_next_step() {
         (
             with_required(json!(["jurisdiction"]), json!([{"fields": []}])),
             "breg.access-profile.required-filters-empty",
-            "at least one",
+            "remove the empty alternative",
         ),
         (
             with_required(json!(["jurisdiction"]), json!([])),
