@@ -1338,7 +1338,7 @@ async fn real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic()
     assert_eq!(refused_create["code"], "write.outside-boundary");
     assert_eq!(
         refused_create["detail"],
-        "The resulting record falls outside the selected access profile's row boundary."
+        "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition."
     );
     assert_fixed_problem_members(&refused_create);
     assert!(!refused_create.to_string().contains("zone-b"));
@@ -1399,7 +1399,7 @@ async fn real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic()
     assert_eq!(refused_patch["code"], "write.outside-boundary");
     assert_eq!(
         refused_patch["detail"],
-        "The resulting record falls outside the selected access profile's row boundary."
+        "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition."
     );
     assert_fixed_problem_members(&refused_patch);
     assert!(!refused_patch.to_string().contains("zone-b"));
@@ -1601,7 +1601,7 @@ async fn real_postgres_row_boundary_refusals_reveal_no_hidden_row_and_batches_wr
     assert_eq!(refused_batch_body["code"], "write.outside-boundary");
     assert_eq!(
         refused_batch_body["detail"],
-        "The resulting record falls outside the selected access profile's row boundary."
+        "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition."
     );
     assert_fixed_problem_members(&refused_batch_body);
     let refused_batch_text = String::from_utf8(refused_batch.1.clone()).unwrap();

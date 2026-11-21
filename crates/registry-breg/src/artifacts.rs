@@ -21,7 +21,7 @@ use crate::model::{
     CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
     CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics, CompiledQueryTemporalValueKind,
     CompiledRecipients, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
-    CompiledStatisticalDataset, HttpMethod,
+    CompiledStatisticalDataset, DisclosureWithhold, HttpMethod,
 };
 use crate::physical_names::{hex_prefix, PhysicalNameInventory};
 use crate::record_profile::{link_header_value, CONTEXT_IDENTIFIER, PROFILE_IDENTIFIER};
@@ -3303,7 +3303,7 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
     };
     let mut responses = Map::from_iter([(success_status.to_owned(), success)]);
     for (status, problems) in
-        problem_responses(spec.route.operation, operation_has_row_boundaries(spec))
+        problem_responses(spec.route.operation, operation_may_refuse_write(spec))
     {
         let examples = problems
             .iter()
@@ -3959,26 +3959,42 @@ struct ProblemExample {
     detail: &'static str,
 }
 
-fn operation_has_row_boundaries(spec: OpenApiOperationSpec<'_>) -> bool {
-    let profile_has_boundaries = |profile_id: &str| {
-        spec.entity
+/// Whether a write by a profile the document describes may be refused as
+/// outside what the profile may write: the profile has a row boundary, or a
+/// disclosure condition binds it. A bound Patch or Batch item is refused when
+/// it would lift a mark or overwrite a withheld field, and a bound Create only
+/// when a `record` condition would withhold the resulting record.
+fn operation_may_refuse_write(spec: OpenApiOperationSpec<'_>) -> bool {
+    let profile_may_be_refused = |profile_id: &str| {
+        let has_boundaries = spec
+            .entity
             .access_profiles
             .get(profile_id)
-            .is_some_and(|profile| !profile.row_boundaries.is_empty())
+            .is_some_and(|profile| !profile.row_boundaries.is_empty());
+        let disclosure = crate::disclosure::plan(spec.entity, profile_id);
+        let disclosure_refuses = if spec.route.operation == Operation::Create {
+            disclosure
+                .conditions()
+                .iter()
+                .any(|condition| matches!(condition.withhold, DisclosureWithhold::Record))
+        } else {
+            !disclosure.is_empty()
+        };
+        has_boundaries || disclosure_refuses
     };
     match spec.access_profiles {
         OpenApiAccessProfiles::All => spec
             .route
             .access_profiles
             .iter()
-            .any(|profile_id| profile_has_boundaries(profile_id)),
-        OpenApiAccessProfiles::Selected(profile_id) => profile_has_boundaries(profile_id),
+            .any(|profile_id| profile_may_be_refused(profile_id)),
+        OpenApiAccessProfiles::Selected(profile_id) => profile_may_be_refused(profile_id),
     }
 }
 
 fn problem_responses(
     operation: Operation,
-    has_row_boundaries: bool,
+    may_refuse_write: bool,
 ) -> BTreeMap<&'static str, Vec<ProblemExample>> {
     let mut responses = BTreeMap::from([
         (
@@ -4093,17 +4109,17 @@ fn problem_responses(
     if matches!(
         operation,
         Operation::Create | Operation::Patch | Operation::Batch
-    ) && has_row_boundaries
+    ) && may_refuse_write
     {
         responses.insert(
             "403",
             vec![ProblemExample {
                 code: "write.outside-boundary",
-                detail: "The resulting record falls outside the selected access profile's row boundary.",
+                detail: "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition.",
             }],
         );
     }
-    if operation == Operation::Batch && has_row_boundaries {
+    if operation == Operation::Batch && may_refuse_write {
         responses.insert(
             "412",
             vec![ProblemExample {

@@ -11,8 +11,8 @@ use registry_breg::odrl_export::export_odrl;
 use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
 use serde_json::{json, Value};
 
-fn compiled() -> CompiledRegistry {
-    let source = json!({"datasets":[{"id": "test-dataset"}],
+fn source() -> Value {
+    json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"exposure","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://exposure.example.test"},
         "recordTypes":[{"id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"internal",
@@ -31,13 +31,20 @@ fn compiled() -> CompiledRegistry {
           {"id":"officer","principalClaim":"registry_principal","requiredScopes":["registry.officer"],
            "permissions":{"records":[{"recordType":"person","operations":["get","list"],"rowBoundaries":"unrestricted",
              "readableFields":["family-name","protected","phone"]}]}}]
-    });
+    })
+}
+
+fn compile(source: &Value) -> CompiledRegistry {
     compile_project(
-        &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
+        &parse_project_json(&serde_json::to_vec(source).unwrap()).unwrap(),
         &[],
         CompileProfile::Authoring,
     )
     .expect("the project compiles")
+}
+
+fn compiled() -> CompiledRegistry {
+    compile(&source())
 }
 
 fn person(explanation: &Value) -> &Value {
@@ -107,4 +114,75 @@ fn the_odrl_export_omits_a_grant_a_condition_binds() {
         (json!("omitted"), json!(["disclosure-condition"]))
     );
     assert_eq!(reasons("officer"), (json!("exported"), json!([])));
+}
+
+/// The fixture with a `registrar` that may create, patch and batch `person`
+/// under no row boundary. `bound_by` names the one condition that binds it.
+fn writable(bound_by: Option<&str>) -> Value {
+    let mut value = source();
+    value["recordTypes"][0]["batch"] = json!({"maximumItems": 4, "maximumBytes": 8192});
+    for condition in value["recordTypes"][0]["disclosureConditions"]
+        .as_array_mut()
+        .unwrap()
+    {
+        if Some(condition["id"].as_str().unwrap()) != bound_by {
+            condition["exemptProfiles"] = json!(["officer", "registrar"]);
+        }
+    }
+    value["accessProfiles"].as_array_mut().unwrap().push(json!(
+        {"id":"registrar","principalClaim":"registry_principal","requiredScopes":["registry.registrar"],
+         "permissions":{"records":[{"recordType":"person","operations":["create","get","list","patch","batch"],
+           "rowBoundaries":"unrestricted","readableFields":["family-name","protected","phone"],
+           "writableFields":["family-name","protected","phone"],"sortableFields":["family-name"]}]}}
+    ));
+    value
+}
+
+/// Whether the generated OpenAPI declares the `write.outside-boundary` 403 on
+/// the person create, patch and batch operations, in that order.
+fn declared_write_refusals(registry: &CompiledRegistry) -> [bool; 3] {
+    let openapi: Value = serde_json::from_slice(
+        &registry
+            .artifacts()
+            .get("generated/openapi.json")
+            .expect("OpenAPI is generated")
+            .bytes,
+    )
+    .unwrap();
+    let declares = |path: &str, method: &str| {
+        let refusal = &openapi["paths"][path][method]["responses"]["403"];
+        assert!(
+            !openapi["paths"][path][method].is_null(),
+            "the fixture has no {method} {path}"
+        );
+        !refusal.is_null()
+            && refusal["content"]["application/problem+json"]["examples"]
+                .get("write.outside-boundary")
+                .is_some()
+    };
+    [
+        declares("/v1/records/people", "post"),
+        declares("/v1/records/people/{record_id}", "patch"),
+        declares("/v1/records/people:batch", "post"),
+    ]
+}
+
+/// A bound writer's Patch or Batch item is refused when it would lift a mark
+/// or overwrite a withheld field, and its Create is refused when the result is
+/// a record a `record` condition withholds from it. An exempt writer meets
+/// neither refusal, even when a read-only profile is bound.
+#[test]
+fn the_openapi_declares_the_write_refusal_a_binding_condition_can_give() {
+    assert_eq!(
+        declared_write_refusals(&compile(&writable(Some("hide-phone")))),
+        [false, true, true]
+    );
+    assert_eq!(
+        declared_write_refusals(&compile(&writable(Some("hide-protected")))),
+        [true, true, true]
+    );
+    assert_eq!(
+        declared_write_refusals(&compile(&writable(None))),
+        [false, false, false]
+    );
 }

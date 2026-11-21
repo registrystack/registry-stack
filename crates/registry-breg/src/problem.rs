@@ -318,7 +318,7 @@ impl ProblemCode {
             }
             Self::UnsupportedMediaType => "The request media type is not supported.",
             Self::WriteOutsideBoundary => {
-                "The resulting record falls outside the selected access profile's row boundary."
+                "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition."
             }
         }
     }
