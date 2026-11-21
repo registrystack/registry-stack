@@ -61,8 +61,7 @@ fn registry_source(dimension: &str) -> Value {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":PACKAGE_ID,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test","timezone":"UTC"},
-        "recordTypes":[{
-            "id":"record","primaryDataset":"statistics-exact","route":"records","mutationMode":"mutable",
+        "recordTypes":{"record": {"primaryDataset":"statistics-exact","route":"records","mutationMode":"mutable",
             "accessLog":{"subjectField":"subject"},
             "fields":[
                 {"id":"subject","type":"string","maximumLength":128,"required":true,"classification":"internal"},
@@ -76,7 +75,7 @@ fn registry_source(dimension: &str) -> Value {
                 "id":"statistics","sql":"sql/statistics.sql","key":"id",
                 "fields":[{"id":"evaluated-category","type":"vocabulary-code","vocabulary":"category","values":["a","b"],"classification":"internal"}]
             }]
-        }],
+        }},
         "accessProfiles":{
             "analyst": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["list"],

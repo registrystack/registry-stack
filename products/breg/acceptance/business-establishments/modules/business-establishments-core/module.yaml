@@ -3,9 +3,8 @@
   "kind": "BRegModule",
   "id": "business-establishments-core",
   "version": "0.1.0",
-  "recordTypes": [
-    {
-      "id": "establishment",
+  "recordTypes": {
+    "establishment": {
       "primaryDataset": "business-registry",
       "route": "establishments",
       "mutationMode": "mutable",
@@ -80,8 +79,7 @@
         }
       ]
     },
-    {
-      "id": "business",
+    "business": {
       "primaryDataset": "registered-businesses",
       "route": "businesses",
       "mutationMode": "mutable",
@@ -185,8 +183,7 @@
         }
       ]
     },
-    {
-      "id": "operator-assignment",
+    "operator-assignment": {
       "primaryDataset": "business-registry",
       "route": "operator-assignments",
       "mutationMode": "mutable",
@@ -267,5 +264,5 @@
         }
       ]
     }
-  ]
+  }
 }

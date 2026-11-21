@@ -346,10 +346,10 @@ mod postgres_tests {
             "kind": "BRegProject",
             "project": {"id":"targeted-lookup","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
             "datasets": [{"id":"records"}],
-            "recordTypes": [{"id":"local-record","primaryDataset":"records","route":"records","mutationMode":"mutable","classification":"internal","fields":[
+            "recordTypes": {"local-record": {"primaryDataset":"records","route":"records","mutationMode":"mutable","classification":"internal","fields":[
                 {"id":"subject-key","type":"string","maximumLength":64,"classification":"internal"},
                 {"id":"tenant","type":"string","maximumLength":32,"classification":"internal"}
-            ]}],
+            ]}},
             "externalRecordTypes": [{"id":"subject","authority":"urn:test:source","identifierScheme":"urn:test:subject","fields":[{"id":"name","type":"string","classification":"internal"}]}],
             "externalProjections": [{"id":"subjects","recordType":"subject","sourceRoute":"subjects","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["name"]}],
             "externalViews": [{"id":"view","recordType":"local-record","links":[{"id":"subject","projection":"subjects","fromField":"subject-key"}]}],

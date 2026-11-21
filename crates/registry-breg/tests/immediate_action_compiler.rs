@@ -48,7 +48,7 @@ fn invoke_schema_requires_fixed_patch_targets_even_when_the_input_is_optional() 
     source["actions"][0]["inputs"][0]["required"] = serde_json::json!(false);
     // This input also supplies a membership link. Keep that link nullable so
     // the fixture reaches patch-target admission rather than value typing.
-    source["recordTypes"][2]["fields"][1]["required"] = serde_json::json!(false);
+    source["recordTypes"]["group-membership"]["fields"][1]["required"] = serde_json::json!(false);
     let compiled = compile_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let schema: serde_json::Value = serde_json::from_slice(
         &compiled
@@ -241,25 +241,22 @@ fn household_contact_project(extra: &str) -> String {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"immediate-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
+          "recordTypes":{"person": {"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "fields":[
               {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ]
-          },{
-            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
+          },"household": {"primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {"id":"household-code","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"}
             ]
-          },{
-            "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"mutable",
+          },"group-membership": {"primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"mutable",
             "fields":[
               {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"},
               {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}
             ]
-          }],
+          }},
           "actions":[{"execution":{"mode":"immediate"},
             "id":"register-household-contact",
             "inputs":[
@@ -529,8 +526,7 @@ fn create_effects_may_rely_entirely_on_server_generated_fields() {
                 "defaultLanguage": "en",
                 "canonicalBaseIri": "https://authoring.example.test"
             },
-            "recordTypes": [{
-                "id": "registration",
+            "recordTypes": {"registration": {
                 "primaryDataset": "test-dataset",
                 "route": "registrations",
                 "mutationMode": "mutable",
@@ -543,7 +539,7 @@ fn create_effects_may_rely_entirely_on_server_generated_fields() {
                     "classification": "internal",
                     "generate": {"type": "sequence", "minimumDigits": 1}
                 }]
-            }],
+            }},
             "actions": [{
                 "id": "register",
                 "inputs": [{
@@ -636,10 +632,9 @@ fn action_grants_refuse_unused_target_locks() {
     let mut source: serde_json::Value =
         serde_json::from_str(&household_contact_project("")).unwrap();
     source["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(serde_json::json!({
-            "id":"unused-record", "primaryDataset":"test-dataset",
+        .insert("unused-record".to_owned(), serde_json::json!({"primaryDataset":"test-dataset",
             "route":"unused-records", "mutationMode":"mutable",
             "fields":[{"id":"label", "type":"string", "maximumLength":32, "classification":"internal"}]
         }));
@@ -659,8 +654,8 @@ fn action_grants_refuse_unused_target_locks() {
 #[test]
 fn immediate_actions_preserve_proposal_required_target_policy() {
     let controlled = household_contact_project("").replace(
-        r#""id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","#,
-        r#""id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","mutationPolicy":{"patch":"proposal-required"},"#,
+        r#""household": {"primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","#,
+        r#""household": {"primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","mutationPolicy":{"patch":"proposal-required"},"#,
     );
     let failure =
         compile_json(controlled.as_bytes()).expect_err("controlled target patches are refused");
@@ -701,19 +696,17 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"action-cycle","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "recordTypes":[{
-        "id":"alpha","primaryDataset":"test-dataset","route":"alphas","mutationMode":"mutable",
+      "recordTypes":{"alpha": {"primaryDataset":"test-dataset","route":"alphas","mutationMode":"mutable",
         "fields":[
           {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"},
           {"id":"beta","type":"reference","target":"beta","classification":"internal"}
         ]
-      },{
-        "id":"beta","primaryDataset":"test-dataset","route":"betas","mutationMode":"mutable",
+      },"beta": {"primaryDataset":"test-dataset","route":"betas","mutationMode":"mutable",
         "fields":[
           {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"},
           {"id":"alpha","type":"reference","target":"alpha","classification":"internal"}
         ]
-      }],
+      }},
       "actions":[{"execution":{"mode":"immediate"},
         "id":"make-cycle",
         "inputs":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
@@ -750,10 +743,9 @@ fn action_inputs_resolve_project_vocabulary_values_for_type_compatibility() {
           "kind":"BRegProject",
           "project":{"id":"action-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "vocabularies":[{"id":"asset-type","values":["bridge","road"]}],
-          "recordTypes":[{
-            "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
+          "recordTypes":{"asset": {"primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
             "fields":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}]
-          }],
+          }},
           "actions":[{"execution":{"mode":"immediate"},
             "id":"create-asset",
             "inputs":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}],
@@ -783,10 +775,9 @@ fn action_inputs_reject_unknown_project_vocabulary_references() {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"action-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
+          "recordTypes":{"asset": {"primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
             "fields":[{"id":"kind","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
-          }],
+          }},
           "actions":[{"execution":{"mode":"immediate"},
             "id":"create-asset",
             "inputs":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}],
@@ -830,8 +821,8 @@ fn action_bounds_apply_before_runtime_target_work() {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{{"id":"action-bounds","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-          "recordTypes":[{{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
-            "fields":[{{"id":"label","type":"string","maximumLength":32,"classification":"internal"}}]}}],
+          "recordTypes":{{"record":{{"primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
+            "fields":[{{"id":"label","type":"string","maximumLength":32,"classification":"internal"}}]}}}},
           "actions":[{{"execution":{{"mode":"immediate"}},"id":"bulk-fix","inputs":[{}],"plan":{{"type":"fixed","effects":[{}]}}}}],
           "accessProfiles":{{"operator":{{"default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
             "permissions":{{"actions":[{{"action":"bulk-fix","operations":["invoke"],"targets":[{}]}}]}}}}}}
@@ -885,10 +876,9 @@ fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
             "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
             "kind": "BRegProject",
             "project": {"id": "action-size-bounds", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
-            "recordTypes": [{
-                "id": "bounded-record", "primaryDataset": "test-dataset", "route": "bounded-records", "mutationMode": "mutable",
+            "recordTypes": {"bounded-record": { "primaryDataset": "test-dataset", "route": "bounded-records", "mutationMode": "mutable",
                 "fields": fields
-            }],
+            }},
             "actions": [{"execution":{"mode":"immediate"},
                 "id": "create-bounded-record", "inputs": [input],
                 "plan": {"type":"fixed","effects":[{
@@ -957,13 +947,12 @@ fn generated_create_fields_count_toward_the_proposal_snapshot_ceiling() {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://authoring.example.test"
         },
-        "recordTypes": [{
-            "id": "bounded-record",
+        "recordTypes": {"bounded-record": {
             "primaryDataset": "test-dataset",
             "route": "bounded-records",
             "mutationMode": "mutable",
             "fields": fields
-        }],
+        }},
         "actions": [{
             "execution": {
                 "mode": "proposal",

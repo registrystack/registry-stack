@@ -18,7 +18,7 @@ reviewAuthorities:
     display: {label: Directory review, description: External review authority bound by deployment configuration.}
 
 recordTypes:
-  - id: contact
+  contact:
     route: contacts
     primaryDataset: directory
     mutationMode: mutable

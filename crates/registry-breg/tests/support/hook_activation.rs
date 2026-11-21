@@ -211,7 +211,7 @@ async fn successor(
     project: &mut Value,
     assets: &[ModuleAssetSource],
 ) -> VerifiedPackage {
-    project["recordTypes"][0]["fields"]
+    project["recordTypes"]["case"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -734,7 +734,7 @@ async fn classified_proposal_across_activation(
     let receiver = HttpsReceiver::start().await;
     let (mut project, assets) = project(false);
     if matches!(kind, CompletionKind::DeadLettered) {
-        assert!(project["recordTypes"][0]["hooks"][0]
+        assert!(project["recordTypes"]["case"]["hooks"][0]
             .as_object_mut()
             .unwrap()
             .remove("principal")
@@ -895,7 +895,7 @@ async fn classified_proposal_across_activation(
 async fn local_drain_limits_attempts_and_leaves_url_work_and_live_leases_untouched() {
     let receiver = HttpsReceiver::start().await;
     let (mut project, assets) = project(true);
-    project["recordTypes"][0]["hooks"]
+    project["recordTypes"]["case"]["hooks"]
         .as_array_mut()
         .unwrap()
         .push(
@@ -1097,7 +1097,7 @@ async fn local_drain_executes_wasm_with_the_captured_active_authority() {
     // own hook runtime from the runtime configuration.
     let receiver = HttpsReceiver::start().await;
     let (mut project, mut assets) = project(true);
-    project["recordTypes"][0]["hooks"][0]["handler"] =
+    project["recordTypes"]["case"]["hooks"][0]["handler"] =
         json!({"type":"wasm", "module":"hooks/propose.wasm", "abi":"registry.hook-handler/v1"});
     assets[1] = ModuleAssetSource {
         module: None,

@@ -6148,7 +6148,9 @@ fn capture_rehearsal_baseline(
     };
     let (predecessor, registry) =
         inspect_baseline_rehearsal(baseline_package).map_err(|error| match error {
-            error @ PackageError::PredecessorSources(_) => baseline_package_failure(command, error),
+            error @ PackageError::PreviousReleaseSources(_) => {
+                baseline_package_failure(command, error)
+            }
             _ => unavailable(),
         })?;
     if predecessor.package_digest() != package_digest {
@@ -7055,6 +7057,14 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 )],
             };
         }
+        ApplyLifecycleError::TargetPackage(error @ PackageError::EngineFeatureUpgradeRequired)
+        | ApplyLifecycleError::TargetPackage(error @ PackageError::PreviousReleaseSources(_)) => {
+            return previous_release_package_failure(command, "package", &error);
+        }
+        ApplyLifecycleError::CurrentPackage(error @ PackageError::EngineFeatureUpgradeRequired)
+        | ApplyLifecycleError::CurrentPackage(error @ PackageError::PreviousReleaseSources(_)) => {
+            return previous_release_package_failure(command, "package.root", &error);
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -7085,13 +7095,6 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             "apply.package.build-mismatch",
             "package",
             PACKAGE_BUILD_MISMATCH,
-            DiagnosticArtifact::VerifiedPackage,
-            SuggestedAction::CorrectPackageBuild,
-        ),
-        ApplyLifecycleError::TargetPackage(PackageError::EngineFeatureUpgradeRequired) => (
-            "apply.package.engine-upgrade-required",
-            "package",
-            PACKAGE_ENGINE_UPGRADE_REQUIRED,
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::CorrectPackageBuild,
         ),
@@ -7992,21 +7995,40 @@ fn inspection_failure(
 
 const PACKAGE_BUILD_MISMATCH: &str = "the package cannot be reproduced by this compiler: a different compiler build or changed packaged content can cause this mismatch. Nothing was changed. Verify the reviewed sources, then rebuild with matching bregctl and breg executables: run `bregctl test`, then `bregctl package`; keep the exact pinned package for any activation already in maintenance";
 
-const PACKAGE_ENGINE_UPGRADE_REQUIRED: &str = "the package predates the engine-owned Record timer store. Nothing was changed. Keep this exact package as the active baseline, build a successor with this release using `bregctl test --baseline-package <active package directory>` and `bregctl package --baseline-package <active package directory>`, then run `bregctl plan --package <successor>` and `bregctl apply --package <successor>` before restarting the runtime";
-
 fn package_refusal_message(
     error: &PackageError,
     fallback: &'static str,
 ) -> std::borrow::Cow<'static, str> {
     match error {
         PackageError::Derivation => PACKAGE_BUILD_MISMATCH.into(),
-        PackageError::EngineFeatureUpgradeRequired => PACKAGE_ENGINE_UPGRADE_REQUIRED.into(),
-        PackageError::EntityIdMember => error.to_string().into(),
-        PackageError::PredecessorSources(_) => format!(
-            "{error}. A package built before this release cannot be a baseline for an upgrade in place: recreate the database and apply a package built by this release"
-        )
-        .into(),
+        PackageError::EngineFeatureUpgradeRequired
+        | PackageError::EntityIdMember
+        | PackageError::PreviousReleaseSources(_) => error.to_string().into(),
         _ => fallback.into(),
+    }
+}
+
+/// A package built before this release, refused where `apply` or `plan` read
+/// it. The message is the package error's own: the reader's first diagnostics
+/// where it carries them, then the fresh-database path.
+fn previous_release_package_failure(
+    command: &'static str,
+    path: &str,
+    error: &PackageError,
+) -> FailureReport {
+    let (suffix, action) = package_refusal(error);
+    FailureReport {
+        ok: false,
+        command,
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(
+                &format!("apply.package.{suffix}"),
+                path,
+                &format!("{error}. Nothing was changed"),
+            ),
+            DiagnosticArtifact::VerifiedPackage,
+            action,
+        )],
     }
 }
 
@@ -8038,7 +8060,7 @@ fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
         }
         PackageError::Derivation => ("build-mismatch", SuggestedAction::CorrectPackageBuild),
         PackageError::EntityIdMember => ("entity-id-refused", SuggestedAction::CorrectPackageBuild),
-        PackageError::PredecessorSources(_) => (
+        PackageError::PreviousReleaseSources(_) => (
             "predecessor-sources-refused",
             SuggestedAction::CorrectPackageBuild,
         ),
@@ -10525,13 +10547,13 @@ fn init_media_type(path: &str) -> &'static str {
 
 /// Writes `locks` into the authored project source.
 ///
-/// When the authored lock entries already name the same module ids in the same order, only the
+/// When the authored lock entries already name the same module ids, only the
 /// locked values move, so the version and digest lines are patched where they stand and every
 /// comment an author wrote inside the `modules` block survives. A project that gained or lost a
 /// module, or whose `modules` block is not the ordinary block list the in-place patch understands,
 /// has the whole block rewritten instead: that normalizes the entries a lock refresh has to
 /// reorder, at the cost of the comments between them. An existing flow-style `modules`
-/// sequence is replaced within its shared-reader span, preserving the enclosing mapping.
+/// mapping is replaced within its shared-reader span, preserving the enclosing mapping.
 fn render_project_module_locks(
     original: &[u8],
     authored: &[ModuleLockSource],
@@ -10626,12 +10648,18 @@ fn top_level_key(line: &str) -> Option<&str> {
     Some(key)
 }
 
+/// The `modules` mapping, one entry per module id in id order.
 fn module_locks_yaml(locks: &[ModuleLockSource]) -> String {
+    if locks.is_empty() {
+        return String::from("modules: {}\n");
+    }
+    let mut sorted = locks.iter().collect::<Vec<_>>();
+    sorted.sort_by(|left, right| left.id.cmp(&right.id));
     let mut rendered = String::from("modules:\n");
-    for lock in locks {
-        rendered.push_str("  - id: ");
+    for lock in sorted {
+        rendered.push_str("  ");
         rendered.push_str(&yaml_string(&lock.id));
-        rendered.push_str("\n    version: ");
+        rendered.push_str(":\n    version: ");
         rendered.push_str(&yaml_string(&lock.version));
         if let Some(digest) = &lock.digest {
             rendered.push_str("\n    digest: ");
@@ -17990,7 +18018,7 @@ project:
 datasets:
   - id: test-dataset
 recordTypes:
-  - id: record
+  record:
     primaryDataset: test-dataset
     route: records
     mutationMode: mutable
@@ -18216,7 +18244,7 @@ kind: BRegModule
 id: persons
 version: 0.1.0
 extendRecordTypes:
-  - recordType: person
+  person:
     derived:
       - id: person-summary
         sql: sql/summary.sql
@@ -18941,17 +18969,48 @@ fn package_derivation_refuses_with_build_guidance_and_preserves_integrity_refusa
         diagnostic.suggested_action,
         SuggestedAction::CorrectPackageBuild
     );
-    for fragment in [
-        "active baseline",
-        "bregctl test --baseline-package",
-        "bregctl package --baseline-package",
-        "bregctl plan --package",
-        "bregctl apply --package",
-        "before restarting",
+    assert!(
+        diagnostic
+            .message
+            .contains(registry_breg::package::FRESH_DATABASE_PATH),
+        "{}",
+        diagnostic.message
+    );
+    assert!(
+        !diagnostic.message.contains("--baseline-package"),
+        "{}",
+        diagnostic.message
+    );
+    for (error, path) in [
+        (
+            ApplyLifecycleError::TargetPackage(PackageError::EngineFeatureUpgradeRequired),
+            "package",
+        ),
+        (
+            ApplyLifecycleError::CurrentPackage(PackageError::EngineFeatureUpgradeRequired),
+            "package.root",
+        ),
+        (
+            ApplyLifecycleError::TargetPackage(PackageError::PreviousReleaseSources(
+                "first diagnostic".into(),
+            )),
+            "package",
+        ),
+        (
+            ApplyLifecycleError::CurrentPackage(PackageError::PreviousReleaseSources(
+                "first diagnostic".into(),
+            )),
+            "package.root",
+        ),
     ] {
+        let report = lifecycle_failure("plan", error);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.path, path);
         assert!(
-            diagnostic.message.contains(fragment),
-            "{fragment}: {}",
+            diagnostic
+                .message
+                .contains(registry_breg::package::FRESH_DATABASE_PATH),
+            "{}",
             diagnostic.message
         );
     }

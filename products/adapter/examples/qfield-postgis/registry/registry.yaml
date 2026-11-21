@@ -20,7 +20,7 @@ datasets:
       description: Synthetic sites registered from finalized field submissions.
 
 recordTypes:
-  - id: field-site
+  field-site:
     route: field-sites
     primaryDataset: field-sites
     mutationMode: create-only

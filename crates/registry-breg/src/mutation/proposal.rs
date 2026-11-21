@@ -4495,9 +4495,9 @@ mod input_write_tests {
         let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
             "project":{"id":"input-write-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://proposal.example.test"},
             "datasets":[{"id":"directory"}],
-            "recordTypes":[{"id":"target","primaryDataset":"directory","route":"targets","mutationMode":"mutable",
+            "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable",
                 "mutationPolicy":{"patch":"proposal-required"},
-                "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}],
+                "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}},
             "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{
                 "review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"}}},
                 "inputs":[{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
@@ -4564,8 +4564,8 @@ mod commit_guard_date_tests {
             "project":{"id":"guard-date-test","version":"1","defaultLanguage":"en",
                 "canonicalBaseIri":"https://proposal.example.test","timezone":"Asia/Colombo"},
             "datasets":[{"id":"directory"}],
-            "recordTypes":[{"id":"target","primaryDataset":"directory","route":"targets","mutationMode":"mutable",
-                "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}]});
+            "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable",
+                "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}}});
         let project =
             crate::contract::parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         let registry = crate::compiler::compile_project(

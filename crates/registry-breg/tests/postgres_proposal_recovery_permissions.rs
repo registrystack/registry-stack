@@ -57,8 +57,7 @@ fn registry_source() -> Value {
             "canonicalBaseIri":"https://proposal-recovery.example.test"
         },
         "datasets":[{"id":"directory"}],
-        "recordTypes":[{
-            "id":"target",
+        "recordTypes":{"target": {
             "primaryDataset":"directory",
             "route":"targets",
             "mutationMode":"mutable",
@@ -67,7 +66,7 @@ fn registry_source() -> Value {
                 {"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}
             ]
-        }],
+        }},
         "actions":[{
             "id":"correct-name",
             "execution":{"mode":"proposal","proposal":{

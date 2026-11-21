@@ -230,7 +230,9 @@ class GeneratedGateTests(unittest.TestCase):
             if name == "registry-project.schema.json":
                 permissions = schema["$defs"]["ProposalPermissionSource"]["properties"]
                 self.assertTrue({"action", "reviewAuthority", "readableInputs", "readableContextFields", "readableAttachments", "writableAttachments"} <= permissions.keys())
-            self.assertNotIn("changeRequest", schema["$defs"]["EntitySource"]["properties"])
+            record_type = properties["recordTypes"]["additionalProperties"]
+            self.assertNotIn("id", record_type["properties"])
+            self.assertNotIn("changeRequest", record_type["properties"])
 
     def test_example_workflows_publish_unsigned_packages(self) -> None:
         product = SCRIPT_DIR.parent
@@ -276,13 +278,13 @@ class GeneratedGateTests(unittest.TestCase):
                     model["project"]["canonicalBaseIri"],
                 )
                 self.assertNotIn("entities", model)
-                records = {item["id"]: item for item in model["recordTypes"]}
+                records = model["recordTypes"]
                 self.assertEqual({"record", "record-group"}, records.keys())
                 if script == "test-promotion.sh":
                     self.assertIn("legacy-note", {item["id"] for item in records["record"]["fields"]})
                     self.assertIn('model["recordTypes"]["record"]', source)
                 else:
-                    grants = next(item for item in model["accessProfiles"] if item["id"] == "loader")["permissions"]["records"]
+                    grants = model["accessProfiles"]["loader"]["permissions"]["records"]
                     self.assertEqual("record-group", grants[0]["recordType"])
                     self.assertEqual(["import"], grants[0]["operations"])
                     self.assertEqual(10, records["record-group"]["batch"]["maximumItems"])

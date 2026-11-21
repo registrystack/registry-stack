@@ -23,12 +23,11 @@ fn project(loader_operations: &[&str]) -> Value {
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
       "project":{"id":"import-admission","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "datasets":[{"id":"test-dataset"}],
-      "recordTypes":[{
-        "id":"enrollment","primaryDataset":"test-dataset","route":"enrollments","mutationMode":"mutable",
+      "recordTypes":{"enrollment": {"primaryDataset":"test-dataset","route":"enrollments","mutationMode":"mutable",
         "batch":{"maximumItems":2,"maximumBytes":4096},
         "mutationPolicy":{"patch":"proposal-required"},
         "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
-      }],
+      }},
       "accessProfiles":{"loader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
         "permissions":{"records":[{
           "recordType":"enrollment","operations":loader_operations,"readableFields":["label"],"writableFields":["label"],
@@ -120,14 +119,10 @@ fn an_import_plan_is_refused_on_the_direct_batch_path() {
 #[test]
 fn a_batch_plan_is_not_an_import_plan() {
     let mut source = project(&["create", "batch"]);
-    source["recordTypes"][0]
+    source["recordTypes"]["enrollment"]
         .as_object_mut()
         .expect("entity")
         .remove("mutationPolicy");
-    source["recordTypes"]
-        .as_array_mut()
-        .expect("entities")
-        .truncate(1);
     source["accessProfiles"]["loader"]["default"] = json!(true);
     let registry = compile(&source);
     let plan = DataImportPlan::from_jsonl(

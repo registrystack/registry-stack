@@ -6,8 +6,8 @@
   "dependencies": [
     "business-establishments-core"
   ],
-  "extendRecordTypes": [
-    {
+  "extendRecordTypes": {
+    "establishment": {
       "fields": [
         {
           "id": "operating-status",
@@ -23,10 +23,9 @@
           "required": false,
           "classification": "restricted"
         }
-      ],
-      "recordType": "establishment"
+      ]
     },
-    {
+    "business": {
       "derived": [
         {
           "id": "establishment-summary",
@@ -66,8 +65,7 @@
             }
           ]
         }
-      ],
-      "recordType": "business"
+      ]
     }
-  ]
+  }
 }

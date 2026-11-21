@@ -11,9 +11,9 @@ fn project() -> Value {
      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
      "project":{"id":"ordered-proof","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
      "datasets":[{"id":"records"}],
-     "recordTypes":[{"id":"entry","route":"entries","primaryDataset":"records","mutationMode":"mutable","fields":[
+     "recordTypes":{"entry": {"route":"entries","primaryDataset":"records","mutationMode":"mutable","fields":[
      {"id":"name","type":"string","maximumLength":32,"required":true,"classification":"internal"},
-     {"id":"parent","type":"reference","target":"entry","classification":"internal"}]}],
+     {"id":"parent","type":"reference","target":"entry","classification":"internal"}]}},
      "actions":[{"id":"create-pair","execution":{"mode":"immediate"},"inputs":[{"id":"name","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
      "plan":{"type":"fixed","effects":[{"id":"z-result","target":{"recordType":"entry"},"operation":"create","set":{"name":{"fromInput":"name"}}},{"id":"a-result","target":{"recordType":"entry"},"operation":"create","set":{"name":{"fromInput":"name"}}}]}}],
      "accessProfiles":{"creator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"create-pair","operations":["invoke"],"targets":[{"recordType":"entry","rowBoundaries":"unrestricted"}],"results":["z-result","a-result"]}]}}}
@@ -103,8 +103,8 @@ fn production_function_evaluator_preserves_order_and_refuses_forward_refs() {
 #[test]
 fn modules_share_native_record_types_value_types_and_function_asset_provenance() {
     let mut value = project();
-    value["recordTypes"] = json!([]);
-    value["modules"] = json!([{"id":"records","version":"1"},{"id":"extensions","version":"1"}]);
+    value["recordTypes"] = json!({});
+    value["modules"] = json!({"records": {"version":"1"}, "extensions": {"version":"1"}});
     value["actions"][0]["plan"] = json!({"type":"function","function":"module-plan","inputs":["name"],"writes":[
         {"id":"z-result","target":{"recordType":"entry"},"operation":"create","fields":["name"]},
         {"id":"a-result","target":{"recordType":"entry"},"operation":"create","fields":["name"]}
@@ -121,13 +121,13 @@ fn modules_share_native_record_types_value_types_and_function_asset_provenance()
     let records = parse_module_json(&serde_json::to_vec(&json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"records","version":"1",
         "valueTypes":{"name":{"type":"string","maximumLength":32}},
-        "recordTypes":[{"id":"entry","route":"entries","primaryDataset":"records","mutationMode":"mutable","fields":[{"id":"name","typeRef":"name","required":true,"classification":"internal"}]}],
+        "recordTypes":{"entry": {"route":"entries","primaryDataset":"records","mutationMode":"mutable","fields":[{"id":"name","typeRef":"name","required":true,"classification":"internal"}]}},
         "functions":[{"id":"module-plan","runtime":"rhai","source":"plans/plan.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":["evidence"]}]
     })).unwrap()).unwrap();
     let extensions = parse_module_json(&serde_json::to_vec(&json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"extensions","version":"1","dependencies":["records"],
         "valueTypes":{"note":{"type":"string","maximumLength":64}},
-        "extendRecordTypes":[{"recordType":"entry","fields":[{"id":"note","typeRef":"note","classification":"internal"}]}]
+        "extendRecordTypes":{"entry": {"fields":[{"id":"note","typeRef":"note","classification":"internal"}]}}
     })).unwrap()).unwrap();
     let source = parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap();
     let model = compile_project_with_assets(

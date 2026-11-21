@@ -45,12 +45,12 @@ async fn million_unit_three_dimension_statistics_measurement() {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"statistics-load","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://load.example.test","timezone":"UTC"},
-        "recordTypes":[{"id":"unit","route":"units","primaryDataset":"load","mutationMode":"mutable",
+        "recordTypes":{"unit": {"route":"units","primaryDataset":"load","mutationMode":"mutable",
             "fields":[
                 {"id":"active","type":"boolean","required":true,"classification":"internal"},
                 {"id":"category","type":"vocabulary-code","vocabulary":"category","required":true,"classification":"internal"},
                 {"id":"region","type":"vocabulary-code","vocabulary":"region","required":true,"classification":"internal"},
-                {"id":"event-date","type":"date","required":true,"classification":"internal"}]}],
+                {"id":"event-date","type":"date","required":true,"classification":"internal"}]}},
         "vocabularies":[{"id":"category","values":["a","b","c","d"]},
             {"id":"region","values":["north","south","east","west"]}],
         "accessProfiles":{"publisher": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{

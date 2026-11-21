@@ -562,14 +562,12 @@ fn source() -> Value {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":PACKAGE_ID,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test","timezone":"UTC"},
-        "recordTypes":[
-            {
-                "id":"owner","primaryDataset":"protected-sums","route":"owners","mutationMode":"mutable",
+        "recordTypes":{
+            "owner": {"primaryDataset":"protected-sums","route":"owners","mutationMode":"mutable",
                 "classification":"public",
                 "fields":[{"id":"name","type":"string","maximumLength":80,"classification":"public"}]
             },
-            {
-                "id":"record","primaryDataset":"protected-sums","route":"records","mutationMode":"mutable",
+            "record": {"primaryDataset":"protected-sums","route":"records","mutationMode":"mutable",
                 "classification":"public",
                 "fields":[
                     {"id":"subject","type":"string","maximumLength":128,"required":true,"classification":"public"},
@@ -582,7 +580,7 @@ fn source() -> Value {
                     {"id":"owner","type":"reference","target":"owner","classification":"public"}
                 ]
             }
-        ],
+        },
         "accessProfiles":{
             "analyst": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["list"],

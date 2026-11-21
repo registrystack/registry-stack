@@ -36,82 +36,82 @@ vocabularies:
 datasets:
 - id: consent-dataset
 recordTypes:
-- id: person
-  primaryDataset: consent-dataset
-  route: persons
-  mutationMode: mutable
-  classification: restricted
-  fields:
-  - {id: given-name, type: string, maximumLength: 80, required: true, classification: restricted}
-  - {id: district, type: string, maximumLength: 80, required: true, classification: internal}
-  selectorProfiles:
-  - id: given-name
-    fields: [given-name]
-  readPaths:
-  - {id: households, through: household-member, to: household, route: households}
-- id: household
-  primaryDataset: consent-dataset
-  route: households
-  mutationMode: mutable
-  classification: internal
-  fields:
-  - {id: label, type: string, maximumLength: 80, required: true, classification: internal}
-- id: household-member
-  primaryDataset: consent-dataset
-  route: household-members
-  mutationMode: mutable
-  classification: internal
-  fields:
-  - {id: person, type: reference, target: person, required: true, classification: restricted}
-  - {id: household, type: reference, target: household, required: true, classification: internal}
-- id: enrolment
-  primaryDataset: consent-dataset
-  route: enrolments
-  mutationMode: mutable
-  classification: restricted
-  fields:
-  - {id: person, type: reference, target: person, required: true, classification: restricted}
-  - {id: programme, type: string, maximumLength: 80, required: true, classification: internal}
-  selectorProfiles:
-  - id: programme
-    fields: [programme]
-  readPaths:
-  - {id: households, through: enrolment-household, to: household, route: households}
-- id: consent-decision
-  primaryDataset: consent-dataset
-  route: consent-decisions
-  mutationMode: create-only
-  classification: restricted
-  fields:
-  - {id: subject, type: reference, target: person, required: true, classification: restricted}
-  - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
-  - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
-  - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
-  - {id: decision, type: vocabulary-code, vocabulary: consent-decision, required: true, classification: internal}
-  - {id: effective-at, type: timestamp, required: true, classification: internal}
-  - {id: expires-at, type: timestamp, classification: internal}
-  consentRecord:
-    subject: subject
-    recipient: recipient
-    purpose: purpose
-    scope: scope
-    decision:
-      field: decision
-      gives: [given]
-      revokes: [refused, withdrawn, invalidated]
-      refusals: [refused]
-    validity:
-      from: effective-at
-      until: expires-at
-      maximumDurationDays: 365
-- id: enrolment-household
-  primaryDataset: consent-dataset
-  route: enrolment-households
-  mutationMode: mutable
-  classification: internal
-  fields:
-  - {id: enrolment, type: reference, target: enrolment, required: true, classification: restricted}
-  - {id: household, type: reference, target: household, required: true, classification: internal}
+  person:
+    primaryDataset: consent-dataset
+    route: persons
+    mutationMode: mutable
+    classification: restricted
+    fields:
+    - {id: given-name, type: string, maximumLength: 80, required: true, classification: restricted}
+    - {id: district, type: string, maximumLength: 80, required: true, classification: internal}
+    selectorProfiles:
+    - id: given-name
+      fields: [given-name]
+    readPaths:
+    - {id: households, through: household-member, to: household, route: households}
+  household:
+    primaryDataset: consent-dataset
+    route: households
+    mutationMode: mutable
+    classification: internal
+    fields:
+    - {id: label, type: string, maximumLength: 80, required: true, classification: internal}
+  household-member:
+    primaryDataset: consent-dataset
+    route: household-members
+    mutationMode: mutable
+    classification: internal
+    fields:
+    - {id: person, type: reference, target: person, required: true, classification: restricted}
+    - {id: household, type: reference, target: household, required: true, classification: internal}
+  enrolment:
+    primaryDataset: consent-dataset
+    route: enrolments
+    mutationMode: mutable
+    classification: restricted
+    fields:
+    - {id: person, type: reference, target: person, required: true, classification: restricted}
+    - {id: programme, type: string, maximumLength: 80, required: true, classification: internal}
+    selectorProfiles:
+    - id: programme
+      fields: [programme]
+    readPaths:
+    - {id: households, through: enrolment-household, to: household, route: households}
+  consent-decision:
+    primaryDataset: consent-dataset
+    route: consent-decisions
+    mutationMode: create-only
+    classification: restricted
+    fields:
+    - {id: subject, type: reference, target: person, required: true, classification: restricted}
+    - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
+    - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
+    - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
+    - {id: decision, type: vocabulary-code, vocabulary: consent-decision, required: true, classification: internal}
+    - {id: effective-at, type: timestamp, required: true, classification: internal}
+    - {id: expires-at, type: timestamp, classification: internal}
+    consentRecord:
+      subject: subject
+      recipient: recipient
+      purpose: purpose
+      scope: scope
+      decision:
+        field: decision
+        gives: [given]
+        revokes: [refused, withdrawn, invalidated]
+        refusals: [refused]
+      validity:
+        from: effective-at
+        until: expires-at
+        maximumDurationDays: 365
+  enrolment-household:
+    primaryDataset: consent-dataset
+    route: enrolment-households
+    mutationMode: mutable
+    classification: internal
+    fields:
+    - {id: enrolment, type: reference, target: enrolment, required: true, classification: restricted}
+    - {id: household, type: reference, target: household, required: true, classification: internal}
 actions:
 - id: record-consent
   execution: {mode: immediate}

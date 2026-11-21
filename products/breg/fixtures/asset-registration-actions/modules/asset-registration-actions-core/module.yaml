@@ -3,9 +3,8 @@
   "kind": "BRegModule",
   "id": "asset-registration-actions-core",
   "version": "0.1.0",
-  "recordTypes": [
-    {
-      "id": "asset",
+  "recordTypes": {
+    "asset": {
       "primaryDataset": "asset-registration-actions",
       "route": "assets",
       "mutationMode": "mutable",
@@ -50,8 +49,7 @@
         }
       ]
     },
-    {
-      "id": "asset-inspection",
+    "asset-inspection": {
       "primaryDataset": "asset-registration-actions",
       "route": "inspections",
       "mutationMode": "create-only",
@@ -86,7 +84,7 @@
         }
       ]
     }
-  ],
+  },
   "actions": [
     {
       "id": "register-asset-with-inspection",

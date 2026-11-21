@@ -578,12 +578,8 @@ fn renders_exactly(
     }
     document.insert(
         "modules".to_owned(),
-        Value::Array(
-            locks
-                .iter()
-                .map(|lock| serde_json::to_value(lock).expect("module locks serialize"))
-                .collect(),
-        ),
+        serde_json::to_value(crate::module_lock_patch::module_locks_json(locks))
+            .expect("module locks serialize"),
     );
     expected == actual
 }

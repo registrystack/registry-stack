@@ -133,14 +133,13 @@ fn compiled_spatial_registry() -> registry_breg::CompiledRegistry {
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"spatial-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-              "recordTypes":[{
-                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","tombstone":true,"classification":"internal",
+              "recordTypes":{"site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","tombstone":true,"classification":"internal",
                 "fields":[
                   {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
                   {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
                 ],
                 "geojson":{"geometryField":"location"}
-              }],
+              }},
               "accessProfiles":{"map-reader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                   "recordType":"site","operations":["create","get","list","patch","tombstone"],
                   "readableFields":["code","location"],"writableFields":["code","location"],
@@ -163,8 +162,7 @@ fn compiled_spatial_derived_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"spatial-derived-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
+          "recordTypes":{"site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
@@ -174,7 +172,7 @@ fn compiled_spatial_derived_registry() -> registry_breg::CompiledRegistry {
               "id":"labels","sql":"sql/site-labels.sql","key":"id","execution":"live",
               "fields":[{"id":"map-label","type":"string","maximumLength":64,"classification":"internal"}]
             }]
-          }],
+          }},
           "accessProfiles":{"map-reader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
               "recordType":"site","operations":["create","get","list","patch"],
               "readableFields":["code","location","map-label"],
@@ -207,14 +205,12 @@ fn compiled_spatial_cross_entity_derived_registry() -> registry_breg::CompiledRe
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"spatial-cross-derived-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"zone","primaryDataset":"test-dataset","route":"zones","mutationMode":"mutable","classification":"internal",
+          "recordTypes":{"zone": {"primaryDataset":"test-dataset","route":"zones","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}
             ]
-          },{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
+          },"site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"zone","type":"reference","target":"zone","required":true,"classification":"internal"},
@@ -225,7 +221,7 @@ fn compiled_spatial_cross_entity_derived_registry() -> registry_breg::CompiledRe
               "id":"labels","sql":"sql/site-zone-labels.sql","key":"id","execution":"live",
               "fields":[{"id":"map-label","type":"string","maximumLength":96,"classification":"internal"}]
             }]
-          }],
+          }},
           "accessProfiles":{"map-reader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
               "recordType":"zone","operations":["create","get","list"],
               "readableFields":["code","label"],"writableFields":["code","label"],
@@ -365,14 +361,13 @@ fn crs84_point_without_bbox_keeps_non_gis_ddl_and_inventory_stable() {
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{"id":"ordinary-point","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-              "recordTypes":[{
-                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
+              "recordTypes":{"site": {"primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
                 "fields":[
                   {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
                   {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
                 ],
                 "geojson":{"geometryField":"location"}
-              }],
+              }},
               "accessProfiles":{"reader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                   "recordType":"site","operations":["get","list"],"readableFields":["code","location"],
                   "rowBoundaries": "unrestricted"

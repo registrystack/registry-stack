@@ -25,7 +25,7 @@ manifestProjection:
       servesDatasets: [access-review]
   distributions: []
 recordTypes:
-  - id: record
+  record:
     primaryDataset: access-review
     route: records
     mutationMode: mutable

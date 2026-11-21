@@ -3,7 +3,7 @@ kind: BRegModule
 id: asset-registration-actions-core
 version: 0.1.0
 recordTypes:
-  - id: asset
+  asset:
     primaryDataset: asset-registration-actions
     route: assets
     mutationMode: mutable
@@ -14,7 +14,7 @@ recordTypes:
       - {id: jurisdiction, type: string, required: true, maximumLength: 80, classification: internal}
     constraints:
       - {type: unique, fields: [asset-code]}
-  - id: asset-inspection
+  asset-inspection:
     primaryDataset: asset-registration-actions
     route: inspections
     mutationMode: create-only

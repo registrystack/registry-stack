@@ -3,7 +3,7 @@ kind: BRegModule
 id: consent-person-registry-core
 version: 0.1.0
 recordTypes:
-  - id: person
+  person:
     primaryDataset: consent-person-registry
     route: persons
     mutationMode: mutable

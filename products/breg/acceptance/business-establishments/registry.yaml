@@ -262,7 +262,7 @@
       }
     ]
   },
-  "modules": [{"id":"business-establishment-summary","version":"0.1.0","digest":"sha256:9c46c380ddf1aee49d3441da4f2c31ed5185b1d26bf352a942d3a68640ad871f"},{"id":"business-establishments-core","version":"0.1.0","digest":"sha256:463e75f14b0a7fbdb83151bbf7d773bdd460908f83c33506742c2a3a71c377bc"}],
+  "modules": {"business-establishment-summary":{"digest":"sha256:df9582383b1569a050f138e3bc5e9ac11c94253cafea94df1fbebfdafa2f6aac","version":"0.1.0"},"business-establishments-core":{"digest":"sha256:506474d2c931993e0fcbd8fb4339f5d84c65d7e1d471e738514500a7c273f434","version":"0.1.0"}},
   "accessProfiles": {
     "business-operator": {
       "default": true,

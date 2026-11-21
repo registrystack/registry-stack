@@ -566,13 +566,16 @@ fn a_package_sealed_with_the_retired_project_header_is_refused() {
     let context = PackageLoadContext {
         database_initialization_environment: ENVIRONMENT,
     };
-    assert!(matches!(
-        load_package(package.path(), &context),
-        Err(PackageError::Derivation)
-    ));
+    // The stored sources do not read with this release, so the refusal names
+    // the fresh-database path for a package built before it.
+    let Err(PackageError::PreviousReleaseSources(detail)) = load_package(package.path(), &context)
+    else {
+        panic!("a package sealed over the retired header is a previous-release package");
+    };
+    assert!(detail.contains("retired"), "{detail}");
     assert!(matches!(
         inspect_package_integrity(package.path()),
-        Err(PackageError::Derivation)
+        Err(PackageError::PreviousReleaseSources(_))
     ));
 }
 

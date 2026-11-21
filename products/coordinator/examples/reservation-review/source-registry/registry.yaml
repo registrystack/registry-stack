@@ -23,7 +23,7 @@ vocabularies:
   - id: reservation-outcome
     values: [pending, confirmed, capacity-conflict, rejected, agreement-failed, withdrawn, hold-expired]
 recordTypes:
-  - id: reservation-request
+  reservation-request:
     primaryDataset: reservation-requests
     route: reservation-requests
     mutationMode: mutable

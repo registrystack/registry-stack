@@ -7,9 +7,8 @@
     "defaultLanguage": "en",
     "canonicalBaseIri": "https://membership.example.test"
   },
-  "recordTypes": [
-    {
-      "id": "organization",
+  "recordTypes": {
+    "organization": {
       "primaryDataset": "test-dataset",
       "route": "organizations",
       "mutationMode": "mutable",
@@ -23,8 +22,7 @@
         }
       ]
     },
-    {
-      "id": "membership",
+    "membership": {
       "primaryDataset": "test-dataset",
       "route": "memberships",
       "mutationMode": "mutable",
@@ -73,8 +71,7 @@
         ]
       }
     },
-    {
-      "id": "facility",
+    "facility": {
       "primaryDataset": "test-dataset",
       "route": "facilities",
       "mutationMode": "mutable",
@@ -104,7 +101,7 @@
         }
       ]
     }
-  ],
+  },
   "accessProfiles": {
     "member": {
       "default": true,

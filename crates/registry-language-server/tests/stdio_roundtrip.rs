@@ -11,7 +11,7 @@ const SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/breg/project/v1
 kind: BRegProject
 project: {id: subprocess}
 recordTypes:
-  - id: person
+  person:
     fields:
       - {id: name, type: string}
 actions:
@@ -109,7 +109,7 @@ fn native_lsp_binary_serves_navigation_and_changed_diagnostics_over_stdio() {
     assert_eq!(locations[0]["uri"], document_uri);
     assert_eq!(
         locations[0]["range"]["start"],
-        position(SOURCE, "id: person", "person")
+        position(SOURCE, "  person:", "person")
     );
 
     let changed = SOURCE.replace("target: person", "target: missing");

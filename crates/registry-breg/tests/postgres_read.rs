@@ -1866,7 +1866,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_registry_with_composite_lookup() -> registry_breg::CompiledRegistry {
     let mut source: Value = serde_json::from_str(&registry_source()).expect("read fixture is JSON");
-    source["recordTypes"][0]["selectorProfiles"]
+    source["recordTypes"]["widget"]["selectorProfiles"]
         .as_array_mut()
         .expect("widget has selector profiles")
         .push(json!({"id": "by-amount-and-label", "fields": ["amount", "label"]}));
@@ -1915,8 +1915,7 @@ fn registry_source() -> String {
 	          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
 	          "kind":"BRegProject",
 	          "project":{"id":"read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"widget",
+          "recordTypes":{"widget": {
             "primaryDataset":"test-dataset",
             "route":"widgets",
             "mutationMode":"mutable",
@@ -1932,8 +1931,7 @@ fn registry_source() -> String {
               {"id":"rank","type":"int64","required":false,"classification":"internal"},
               {"id":"internal-code","apiName":"publicCode","type":"string","required":false,"maximumLength":32,"classification":"internal"}
             ]
-          },{
-            "id":"assignment",
+          },"assignment": {
             "primaryDataset":"test-dataset",
             "route":"assignments",
             "mutationMode":"mutable",
@@ -1955,7 +1953,7 @@ fn registry_source() -> String {
               "startField":"valid-from",
               "endField":"valid-to"
             }]
-	          }],
+	          }},
           "accessProfiles":{"operator": {
             "default":true,
             "principalClaim":"registry_principal",

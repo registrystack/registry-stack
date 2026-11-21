@@ -18,7 +18,7 @@ datasets:
     display: {label: Directory, description: Institutional contact records.}
 
 recordTypes:
-  - id: contact
+  contact:
     route: contacts
     primaryDataset: directory
     mutationMode: mutable

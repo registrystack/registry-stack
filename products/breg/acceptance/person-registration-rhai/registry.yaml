@@ -61,9 +61,8 @@
       "id": "person-registration-rhai"
     }
   ],
-  "recordTypes": [
-    {
-      "id": "person",
+  "recordTypes": {
+    "person": {
       "primaryDataset": "person-registration-rhai",
       "route": "people",
       "mutationMode": "mutable",
@@ -109,8 +108,7 @@
         }
       ]
     },
-    {
-      "id": "registration",
+    "registration": {
       "primaryDataset": "person-registration-rhai",
       "route": "registrations",
       "mutationMode": "create-only",
@@ -161,8 +159,7 @@
         }
       ]
     },
-    {
-      "id": "register",
+    "register": {
       "primaryDataset": "person-registration-rhai",
       "route": "registers",
       "mutationMode": "mutable",
@@ -199,7 +196,7 @@
         }
       ]
     }
-  ],
+  },
   "functions": [
     {
       "id": "register-person-plan",

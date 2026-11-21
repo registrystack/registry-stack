@@ -58,12 +58,12 @@ fn registry_with_current_date_offset(
     let mut source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"guard-failure-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://guard.example.test"},
         "datasets":[{"id":"directory"}],
-        "recordTypes":[{"id":"target","primaryDataset":"directory","route":"targets","mutationMode":"mutable",
+        "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable",
             "mutationPolicy":{"patch":"proposal-required"},
             "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
                 {"id":"status","type":"string","required":true,"maximumLength":16,"classification":"internal"},
                 {"id":"capacity","type":"int64","required":true,"classification":"internal"},
-                {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}],
+                {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}},
         "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{
             "review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}},
             "inputs":[{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
@@ -86,7 +86,7 @@ fn registry_with_current_date_offset(
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}}});
     if let Some(offset_days) = offset_days {
         source["project"]["timezone"] = json!("UTC");
-        source["recordTypes"][0]["fields"]
+        source["recordTypes"]["target"]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({

@@ -53,12 +53,7 @@ fn definition<'a>(definitions: &'a Value, id: &str) -> &'a Value {
 }
 
 fn record_mut<'a>(source: &'a mut Value, id: &str) -> &'a mut Value {
-    source["recordTypes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|value| value["id"] == id)
-        .unwrap()
+    &mut source["recordTypes"][id]
 }
 
 fn action_mut<'a>(source: &'a mut Value, id: &str) -> &'a mut Value {
@@ -226,12 +221,12 @@ fn model_retains_authored_display_without_inventing_input_labels() {
         "Awaiting permission"
     );
     let record = definition(&model["recordTypes"], "facility");
-    let field_id = source["recordTypes"][2]["fields"][1]["id"]
+    let field_id = source["recordTypes"]["facility"]["fields"][1]["id"]
         .as_str()
         .unwrap();
     assert_eq!(
         definition(&record["fields"], field_id)["display"],
-        source["recordTypes"][2]["fields"][1]["display"]
+        source["recordTypes"]["facility"]["fields"][1]["display"]
     );
     let action = &source["actions"][0];
     // Action inventory order is an implementation detail; locate the Action by id.
@@ -279,7 +274,7 @@ fn profile_dataset_and_hook_displays_refuse_record_title_selection() {
         "period":{"type":"flow", "field":"date", "granularity":"month", "firstPeriod":"2025-01"},
         "dimensions":["active"]
     }]);
-    source["recordTypes"][0]["hooks"] = json!([{
+    source["recordTypes"]["directory-entry"]["hooks"] = json!([{
         "id":"record-observer", "phase":"after", "trigger":"patched", "projection":["name"],
         "handler":{"type":"url", "destinationId":"record-events"}
     }]);
@@ -301,7 +296,7 @@ fn profile_dataset_and_hook_displays_refuse_record_title_selection() {
     for pointer in [
         "/accessProfiles/directory-editor".to_owned(),
         "/statisticalDatasets/0".to_owned(),
-        "/recordTypes/0/hooks/0".to_owned(),
+        "/recordTypes/directory-entry/hooks/0".to_owned(),
         format!("/actions/{proposal_index}/execution/proposal/hooks/0"),
     ] {
         let mut changed = source.clone();
@@ -465,7 +460,7 @@ fn function_inspection_retains_relative_asset_and_module_identity() {
         path: "plans/correct-address.rhai".into(),
         bytes: script(),
     }];
-    source["modules"] = json!([{"id":"address-functions", "version":"1", "digest":module_digest_with_assets(&module, &assets)}]);
+    source["modules"] = json!({"address-functions": {"version":"1", "digest":module_digest_with_assets(&module, &assets)}});
     let registry = compile_project_with_assets(
         &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
         &[module],

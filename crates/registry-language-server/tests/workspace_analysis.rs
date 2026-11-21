@@ -389,8 +389,8 @@ fn mapped_breg_native_yaml_uses_the_rust_product_reference_provider() {
     input["files"] = json!([{
         "path": "native/module.yaml",
         "state": "native",
-        "sha256": "a665b1d0a242207e71422780c31766027b61b283d5806a601c380597b8ba5d39",
-        "bytesBase64": "a2luZDogQlJlZ01vZHVsZQppZDogZXh0cmEKZXh0ZW5kUmVjb3JkVHlwZXM6CiAgLSByZWNvcmRUeXBlOiBwZXJzb24K"
+        "sha256": "97413b779c489799f9e666f791bded3d15b450f0cf8a4bad80ad8c4afd89c2a2",
+        "bytesBase64": "a2luZDogQlJlZ01vZHVsZQppZDogZXh0cmEKZXh0ZW5kUmVjb3JkVHlwZXM6CiAgcGVyc29uOiB7fQo="
     }]);
     input["facts"]["definitions"] = json!([definition("records", "person", "native/module.yaml")]);
     input["facts"]["nativeParts"] = json!(["native/module.yaml"]);

@@ -789,9 +789,8 @@ fn compiled_action_registry() -> CompiledRegistry {
       }
     }
   },
-  "recordTypes": [
-    {
-      "id": "household",
+  "recordTypes": {
+    "household": {
       "primaryDataset": "test-dataset",
       "route": "households",
       "mutationMode": "mutable",
@@ -813,8 +812,7 @@ fn compiled_action_registry() -> CompiledRegistry {
         }
       ]
     },
-    {
-      "id": "person",
+    "person": {
       "primaryDataset": "test-dataset",
       "route": "people",
       "mutationMode": "mutable",
@@ -837,8 +835,7 @@ fn compiled_action_registry() -> CompiledRegistry {
         }
       ]
     },
-    {
-      "id": "group-membership",
+    "group-membership": {
       "primaryDataset": "test-dataset",
       "route": "group-memberships",
       "mutationMode": "create-only",
@@ -859,7 +856,7 @@ fn compiled_action_registry() -> CompiledRegistry {
         }
       ]
     }
-  ],
+  },
   "datasets": [
     {
       "id": "test-dataset"
@@ -961,9 +958,8 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
       }
     }
   },
-  "recordTypes": [
-    {
-      "id": "asset",
+  "recordTypes": {
+    "asset": {
       "primaryDataset": "test-dataset",
       "route": "assets",
       "mutationMode": "create-only",
@@ -978,8 +974,7 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
         }
       ]
     },
-    {
-      "id": "inspection",
+    "inspection": {
       "primaryDataset": "test-dataset",
       "route": "inspections",
       "mutationMode": "create-only",
@@ -993,7 +988,7 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
         }
       ]
     }
-  ],
+  },
   "datasets": [
     {
       "id": "test-dataset"

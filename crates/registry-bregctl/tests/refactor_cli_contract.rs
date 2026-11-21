@@ -57,7 +57,7 @@ package:
 datasets:
   - id: directory
 recordTypes:
-  - id: entry
+  entry:
     route: entries
     primaryDataset: directory
     mutationMode: mutable
@@ -440,7 +440,7 @@ fn statistical_route_inspection_matches_generated_client_contract() {
         .unwrap();
     editor.remove("actions");
     editor.remove("proposals");
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["contact"]["fields"]
         .as_array_mut()
         .unwrap()
         .extend([

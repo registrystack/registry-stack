@@ -400,8 +400,7 @@ fn compiled_registry(
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"read-dependencies","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "recordTypes":[{
-            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
+        "recordTypes":{"entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
                 {"id":"code","type":"string","required":true,"maximumLength":32,"classification":"internal"},
                 {"id":"tenant","type":"string","required":true,"maximumLength":32,"classification":"internal"},
@@ -412,7 +411,7 @@ fn compiled_registry(
                 {"id":"status","sql":"status.sql","key":"id","execution":"live","fields":[{"id":"active","type":"boolean","classification":"internal"}]},
                 {"id":"population","sql":"population.sql","key":"id","execution":"live","fields":[{"id":"population","type":"int64","classification":"internal"}]}
             ]
-        }],
+        }},
         "accessProfiles":{"reader": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"records":[{
                 "recordType":"entry","operations":["create","get","list","lookup"],

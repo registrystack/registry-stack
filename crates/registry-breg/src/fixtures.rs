@@ -7232,8 +7232,8 @@ journeys:
             "project":{"id":"planner-fixture","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
             "package":{"sourceRevision":"fixture-project-source"},
             "datasets":[{"id":"people"}],
-            "recordTypes":[{"id":"person","primaryDataset":"people","route":"people","mutationMode":"mutable",
-                "fields":[{"id":"name","type":"string","maximumLength":80,"required":true,"classification":"internal"}]}],
+            "recordTypes":{"person": {"primaryDataset":"people","route":"people","mutationMode":"mutable",
+                "fields":[{"id":"name","type":"string","maximumLength":80,"required":true,"classification":"internal"}]}},
             "functions":[{"id":"person-plan","runtime":"rhai","source":"scripts/person-name-change.rhai","entrypoint":"plan","abi":"registry.action-plan/v1"}],
             "actions":[{"id":"rename-person","execution":{"mode":"immediate"},
                 "inputs":[{"id":"person","type":"reference","target":"person","required":true,"classification":"internal"},
@@ -7491,11 +7491,9 @@ journeys:
             bytes: script.clone(),
         };
         let digest = module_digest_with_assets(&module, &[compiler_asset]);
-        project_value["modules"] = json!([{
-            "id": "person-module",
-            "version": "0.1.0",
+        project_value["modules"] = json!({"person-module": {"version": "0.1.0",
             "digest": digest,
-        }]);
+        }});
         let project = serde_json::to_vec(&project_value).expect("shell project serializes");
         let prepared = prepare_package(PackageBuildRequest {
             from_package_digest: None,

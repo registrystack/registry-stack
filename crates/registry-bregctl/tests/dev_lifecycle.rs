@@ -518,12 +518,7 @@ fn installed_dev_receives_retries_replays_and_retains_authored_events() {
     operator_project(&session);
     let mut registry: Value =
         serde_norway::from_slice(&fs::read(project.join("registry.yaml")).unwrap()).unwrap();
-    let record = registry["recordTypes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|entity| entity["id"] == "record")
-        .unwrap();
+    let record = &mut registry["recordTypes"]["record"];
     record["hooks"] = json!([
         {"phase":"after","id":"record-created-a", "trigger":"created", "projection":["status"],
          "handler":{"type":"url","destinationId":"receiver-a"}},
@@ -884,7 +879,7 @@ project: {id: subject-bound-registry, version: "1", defaultLanguage: en, canonic
 package: {sourceRevision: synthetic-1}
 datasets: [{id: test-dataset}]
 recordTypes:
-  - id: record
+  record:
     primaryDataset: test-dataset
     route: records
     mutationMode: mutable
@@ -1005,11 +1000,8 @@ fn installed_dev_switches_one_clients_claims_and_recovers_import_seed() {
     let project_file = project.join("registry.yaml");
     let mut definition: Value =
         serde_norway::from_slice(&fs::read(&project_file).unwrap()).unwrap();
-    for entity in definition["recordTypes"].as_array_mut().unwrap() {
-        if entity["id"] == "record-group" {
-            entity["batch"] = json!({"maximumItems": 4, "maximumBytes": 16384});
-        }
-    }
+    definition["recordTypes"]["record-group"]["batch"] =
+        json!({"maximumItems": 4, "maximumBytes": 16384});
     for (id, profile) in definition["accessProfiles"].as_object_mut().unwrap() {
         if matches!(id.as_str(), "operator" | "record-reader") {
             profile["requesterClients"] = json!(["officer"]);

@@ -172,9 +172,9 @@ impl Breg {
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
             "project":{"id":"coordinator-action-proof", "canonicalBaseIri":"https://synthetic.example.test/action-proof", "version":"1", "defaultLanguage":"en"},
             "package":{"sourceRevision":"coordinator-native-action-proof"},
-            "recordTypes":[{"id":"item", "primaryDataset":"synthetic-items", "route":"items", "mutationMode":"mutable", "classification":"internal",
+            "recordTypes":{"item":{"primaryDataset":"synthetic-items", "route":"items", "mutationMode":"mutable", "classification":"internal",
                 "fields":[{"id":"owner", "type":"string", "required":true, "maximumLength":80, "classification":"internal"},
-                    {"id":"label", "type":"string", "required":true, "minimumLength":1, "maximumLength":80, "classification":"internal"}]}],
+                    {"id":"label", "type":"string", "required":true, "minimumLength":1, "maximumLength":80, "classification":"internal"}]}},
             "datasets":[{"id":"synthetic-items"}],
             "functions":[{"id":"update-item-plan","runtime":"rhai","source":"scripts/update-item.rhai","entrypoint":"plan","abi":"registry.action-plan/v1"}],
             "actions":[{"id":"update-item", "execution":{"mode":"immediate"}, "inputs":[

@@ -642,11 +642,10 @@ mod tests {
             "project":{"id":"example", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://example.test"},
             "package":{"sourceRevision":"test"},
             "datasets":[{"id":"test-dataset","display":{"label":"Test dataset"}}],
-            "recordTypes":[{
-                "id":"record", "primaryDataset":"test-dataset", "route":"records", "mutationMode":"mutable",
+            "recordTypes":{"record": { "primaryDataset":"test-dataset", "route":"records", "mutationMode":"mutable",
                 "fields":[field],
                 "hooks":[{"phase":"after","id":"record-created-v1", "trigger":trigger, "projection":["label"], "handler":{"type":"url","destinationId":"local-hook"}}]
-            }]
+            }}
         });
         let project = parse_project_json(&serde_json::to_vec(&project).unwrap()).unwrap();
         let compiled = compile_project(&project, &[], CompileProfile::Authoring).unwrap();

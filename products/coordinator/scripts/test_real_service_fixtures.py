@@ -95,7 +95,7 @@ class NativeFixtureContracts(unittest.TestCase):
             project = json.loads((root / "registry.yaml").read_text())
         self.assertNotIn("entities", project)
         self.assertEqual(len(project["recordTypes"]), 1)
-        self.assertEqual(project["recordTypes"][0]["mutationPolicy"], {"patch": "proposal-required"})
+        self.assertEqual(project["recordTypes"]["application"]["mutationPolicy"], {"patch": "proposal-required"})
         for action in project["actions"]:
             self.assertEqual(action["execution"]["mode"], "proposal")
             self.assertNotIn("application", action["execution"]["proposal"])

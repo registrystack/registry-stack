@@ -2137,13 +2137,12 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
             "version": "1",
             "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
         },
-        "recordTypes": [{
-            "id": "entry",
+        "recordTypes": {"entry": {
             "primaryDataset": "test-dataset",
             "route": "entries",
             "mutationMode": "mutable",
             "fields": fields
-        }],
+        }},
         "accessProfiles": {"writer": {
             "default": true,
             "principalClaim": "registry_principal",
@@ -2175,8 +2174,7 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
             "version": "1",
             "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
         },
-        "recordTypes": [{
-            "id": "entry",
+        "recordTypes": {"entry": {
             "primaryDataset": "test-dataset",
             "route": "entries",
             "mutationMode": "mutable",
@@ -2184,7 +2182,7 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
                 {"id": "note", "type": "text", "maximumLength": max_length, "pattern": "^[a-z ]*$",
                  "required": true, "classification": "internal"}
             ]
-        }],
+        }},
         "accessProfiles": {"writer": {
             "default": true,
             "principalClaim": "registry_principal",
@@ -2213,8 +2211,7 @@ fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledReg
             "version": "1",
             "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
         },
-        "recordTypes": [{
-            "id": "entry",
+        "recordTypes": {"entry": {
             "primaryDataset": "test-dataset",
             "route": "entries",
             "mutationMode": "mutable",
@@ -2222,7 +2219,7 @@ fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledReg
                 {"id": "note", "type": "string", "minimumLength": min_length, "maximumLength": 16,
                  "pattern": "^[a-z ]*$", "required": true, "classification": "internal"}
             ]
-        }],
+        }},
         "accessProfiles": {"writer": {
             "default": true,
             "principalClaim": "registry_principal",
@@ -2263,8 +2260,7 @@ fn vocabulary_catalog_registry_with_constraints(
             {"id": "status", "values": status_values},
             {"id": "kind", "values": ["minor", "major"]}
         ],
-        "recordTypes": [{
-            "id": "entry",
+        "recordTypes": {"entry": {
             "primaryDataset": "test-dataset",
             "route": "entries",
             "mutationMode": "mutable",
@@ -2275,7 +2271,7 @@ fn vocabulary_catalog_registry_with_constraints(
                  "required": true, "classification": "internal"}
             ],
             "constraints": constraints
-        }],
+        }},
         "accessProfiles": {"writer": {
             "default": true,
             "principalClaim": "registry_principal",
@@ -2301,9 +2297,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"compiled-postgres","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[
-            {
-              "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
+          "recordTypes":{
+            "entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
               "fields":[
                 {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"region","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
@@ -2311,13 +2306,12 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               ],
               "constraints":[{"type":"unique","fields":["tenant","region","label"]}]
             },
-            {
-              "id":"event","primaryDataset":"test-dataset","route":"events","mutationMode":"create-only",
+            "event": {"primaryDataset":"test-dataset","route":"events","mutationMode":"create-only",
               "fields":[
                 {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}
               ]
             }
-          ],
+          },
           "accessProfiles":{
             "writer": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "requiredPurposes":["operations"],
@@ -2370,8 +2364,7 @@ fn compiled_action_registry() -> registry_breg::CompiledRegistry {
             "canonicalBaseIri": "https://authoring.example.test"
         },
         "datasets": [{"id": "test-dataset"}],
-        "recordTypes": [{
-            "id": "entry",
+        "recordTypes": {"entry": {
             "primaryDataset": "test-dataset",
             "route": "entries",
             "mutationMode": "mutable",
@@ -2382,7 +2375,7 @@ fn compiled_action_registry() -> registry_breg::CompiledRegistry {
                 "required": true,
                 "classification": "internal"
             }]
-        }],
+        }},
         "actions": [{
             "id": "relabel-entry",
             "execution": {"mode": "immediate"},
@@ -2438,8 +2431,7 @@ fn derived_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"derived-postgres","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test","timezone":"UTC"},
-          "recordTypes":[{
-            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
+          "recordTypes":{"household": {"primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
               {"id":"size","type":"int64","required":true,"classification":"internal"}
@@ -2451,7 +2443,7 @@ fn derived_registry() -> registry_breg::CompiledRegistry {
                 {"id":"observed-on","type":"date","classification":"internal"}
               ]
             }]
-          }],
+          }},
           "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"records":[{
               "recordType":"household","operations":["create","get","list"],
               "readableFields":["tenant","size","child-count","observed-on"],

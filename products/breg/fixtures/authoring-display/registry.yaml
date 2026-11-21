@@ -13,7 +13,7 @@ datasets:
     display: {label: Directory records, description: Entries maintained in the directory.}
 
 recordTypes:
-  - id: entry
+  entry:
     primaryDataset: directory
     route: entries
     mutationMode: create-only

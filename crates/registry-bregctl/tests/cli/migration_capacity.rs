@@ -6,17 +6,20 @@ use registry_breg::package::MAX_MIGRATION_STATEMENTS;
 fn capacity_project(profile_count: usize) -> Vec<u8> {
     let record_types = (0..3)
         .map(|target| {
-            json!({
-                "id": format!("case-{target}"), "primaryDataset": "cases",
-                "route": format!("cases-{target}"), "mutationMode": "mutable",
-                "mutationPolicy": {"patch": "proposal-required"},
-                "fields": [{
-                    "id": "label", "type": "string", "required": true,
-                    "maximumLength": 80, "classification": "internal"
-                }]
-            })
+            (
+                format!("case-{target}"),
+                json!({
+                    "primaryDataset": "cases",
+                    "route": format!("cases-{target}"), "mutationMode": "mutable",
+                    "mutationPolicy": {"patch": "proposal-required"},
+                    "fields": [{
+                        "id": "label", "type": "string", "required": true,
+                        "maximumLength": 80, "classification": "internal"
+                    }]
+                }),
+            )
         })
-        .collect::<Vec<_>>();
+        .collect::<serde_json::Map<_, _>>();
     let targets = (0..3)
         .map(|target| {
             json!({"recordType": format!("case-{target}"), "rowBoundaries": "unrestricted"})

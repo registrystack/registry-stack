@@ -5,48 +5,27 @@ use super::spec::{DocumentRules, FileRule, NameRule as N, ProductKind, ProductSp
 
 const BREG_DECLARATIONS: &[N] = &[
     N::global("project/id", "BReg registry"),
-    N::global("recordTypes/*/id", "BReg record type"),
-    N::scoped("recordTypes/*/fields/*/id", "BReg field", 1, "id"),
-    N::scoped("recordTypes/*/derived/*/fields/*/id", "BReg field", 3, "id"),
-    N::scoped(
-        "extendRecordTypes/*/derived/*/fields/*/id",
-        "BReg field",
-        0,
-        "recordType",
-    ),
-    N::scoped(
+    N::global("recordTypes/$key", "BReg record type"),
+    N::rooted("recordTypes/*/fields/*/id", "BReg field"),
+    N::rooted("recordTypes/*/derived/*/fields/*/id", "BReg field"),
+    N::rooted("extendRecordTypes/*/derived/*/fields/*/id", "BReg field"),
+    N::rooted(
         "recordTypes/*/selectorProfiles/*/id",
         "BReg selector profile",
-        1,
-        "id",
     ),
-    N::scoped("recordTypes/*/readPaths/*/id", "BReg read path", 1, "id"),
-    N::scoped(
+    N::rooted("recordTypes/*/readPaths/*/id", "BReg read path"),
+    N::rooted(
         "recordTypes/*/accessProfiles/$key",
         "BReg record type access profile",
-        1,
-        "id",
     ),
-    N::scoped("recordTypes/*/indexes/*/id", "BReg index", 1, "id"),
-    N::scoped("recordTypes/*/derived/*/id", "BReg derivation", 1, "id"),
-    N::scoped(
-        "extendRecordTypes/*/fields/*/id",
-        "BReg field",
-        0,
-        "recordType",
-    ),
-    N::scoped(
+    N::rooted("recordTypes/*/indexes/*/id", "BReg index"),
+    N::rooted("recordTypes/*/derived/*/id", "BReg derivation"),
+    N::rooted("extendRecordTypes/*/fields/*/id", "BReg field"),
+    N::rooted(
         "extendRecordTypes/*/selectorProfiles/*/id",
         "BReg selector profile",
-        0,
-        "recordType",
     ),
-    N::scoped(
-        "extendRecordTypes/*/readPaths/*/id",
-        "BReg read path",
-        0,
-        "recordType",
-    ),
+    N::rooted("extendRecordTypes/*/readPaths/*/id", "BReg read path"),
     N::global("actions/*/id", "BReg action"),
     N::scoped("actions/*/inputs/*/id", "BReg action input", 1, "id"),
     N::scoped("actions/*/plan/effects/*/id", "BReg action effect", 1, "id"),
@@ -243,27 +222,20 @@ const BREG_REFERENCES: &[N] = &[
         scope: Scope::BregTarget,
         ..N::global("actions/*/plan/effects/*/clear/*", "BReg field")
     },
-    N::scoped("recordTypes/*/display/titleField", "BReg field", 0, "id"),
+    N::rooted("recordTypes/*/display/titleField", "BReg field"),
     N::global(
         "actions/*/commitGuards/evidence/*/provider",
         "BReg Evidence provider",
     ),
-    N::global("modules/*/id", "BReg module"),
+    N::global("modules/$key", "BReg module"),
     N::global("dependencies/*", "BReg module"),
-    N::global("extendRecordTypes/*/recordType", "BReg record type"),
+    N::global("extendRecordTypes/$key", "BReg record type"),
     N::global("recordTypes/*/fields/*/target", "BReg record type"),
     N::global("recordTypes/*/fields/*/vocabulary", "BReg vocabulary"),
-    N::scoped(
-        "recordTypes/*/fields/*/generate/scope/*",
-        "BReg field",
-        3,
-        "id",
-    ),
-    N::scoped(
+    N::rooted("recordTypes/*/fields/*/generate/scope/*", "BReg field"),
+    N::rooted(
         "extendRecordTypes/*/fields/*/generate/scope/*",
         "BReg field",
-        3,
-        "recordType",
     ),
     N::global("extendRecordTypes/*/fields/*/target", "BReg record type"),
     N::global("extendRecordTypes/*/fields/*/vocabulary", "BReg vocabulary"),
@@ -271,86 +243,41 @@ const BREG_REFERENCES: &[N] = &[
         reports_unresolved: false,
         ..N::global("recordTypes/*/primaryDataset", "BReg dataset")
     },
-    N::scoped(
-        "recordTypes/*/selectorProfiles/*/fields/*",
-        "BReg field",
-        2,
-        "id",
-    ),
-    N::scoped(
-        "recordTypes/*/constraints/*/fields/*",
-        "BReg field",
-        2,
-        "id",
-    ),
-    N::scoped("recordTypes/*/constraints/*/left", "BReg field", 1, "id"),
-    N::scoped("recordTypes/*/constraints/*/right", "BReg field", 1, "id"),
-    N::scoped("recordTypes/*/constraints/*/field", "BReg field", 1, "id"),
-    N::scoped(
-        "recordTypes/*/constraints/*/startField",
-        "BReg field",
-        1,
-        "id",
-    ),
-    N::scoped(
-        "recordTypes/*/constraints/*/endField",
-        "BReg field",
-        1,
-        "id",
-    ),
-    N::scoped(
-        "recordTypes/*/constraints/*/scopeFields/*",
-        "BReg field",
-        2,
-        "id",
-    ),
-    N::scoped(
-        "recordTypes/*/constraints/*/when/*/field",
-        "BReg field",
-        3,
-        "id",
-    ),
-    N::scoped("recordTypes/*/indexes/*/fields/*", "BReg field", 2, "id"),
+    N::rooted("recordTypes/*/selectorProfiles/*/fields/*", "BReg field"),
+    N::rooted("recordTypes/*/constraints/*/fields/*", "BReg field"),
+    N::rooted("recordTypes/*/constraints/*/left", "BReg field"),
+    N::rooted("recordTypes/*/constraints/*/right", "BReg field"),
+    N::rooted("recordTypes/*/constraints/*/field", "BReg field"),
+    N::rooted("recordTypes/*/constraints/*/startField", "BReg field"),
+    N::rooted("recordTypes/*/constraints/*/endField", "BReg field"),
+    N::rooted("recordTypes/*/constraints/*/scopeFields/*", "BReg field"),
+    N::rooted("recordTypes/*/constraints/*/when/*/field", "BReg field"),
+    N::rooted("recordTypes/*/indexes/*/fields/*", "BReg field"),
     N::global("recordTypes/*/readPaths/*/through", "BReg record type"),
     N::global("recordTypes/*/readPaths/*/to", "BReg record type"),
-    N::scoped("recordTypes/*/geojson/geometryField", "BReg field", 0, "id"),
-    N::scoped("recordTypes/*/temporal/startField", "BReg field", 0, "id"),
-    N::scoped("recordTypes/*/temporal/endField", "BReg field", 0, "id"),
-    N::scoped(
-        "recordTypes/*/temporal/scopeFields/*",
-        "BReg field",
-        0,
-        "id",
-    ),
-    N::scoped(
+    N::rooted("recordTypes/*/geojson/geometryField", "BReg field"),
+    N::rooted("recordTypes/*/temporal/startField", "BReg field"),
+    N::rooted("recordTypes/*/temporal/endField", "BReg field"),
+    N::rooted("recordTypes/*/temporal/scopeFields/*", "BReg field"),
+    N::rooted(
         "recordTypes/*/accessProfiles/*/readableFields/*",
         "BReg field",
-        2,
-        "id",
     ),
-    N::scoped(
+    N::rooted(
         "recordTypes/*/accessProfiles/*/writableFields/*",
         "BReg field",
-        2,
-        "id",
     ),
-    N::scoped(
+    N::rooted(
         "recordTypes/*/accessProfiles/*/filterableFields/*",
         "BReg field",
-        2,
-        "id",
     ),
-    N::scoped(
+    N::rooted(
         "recordTypes/*/accessProfiles/*/sortableFields/*",
         "BReg field",
-        2,
-        "id",
     ),
-    N::scoped(
+    N::rooted(
         "recordTypes/*/accessProfiles/*/rowBoundaries/*/field",
         "BReg field",
-        3,
-        "id",
     ),
     N::global(
         "accessProfiles/*/permissions/records/*/recordType",
@@ -456,7 +383,7 @@ const BREG_REFERENCES: &[N] = &[
 
 const BREG_FILES: &[FileRule] = &[
     FileRule {
-        path: "modules/*/id",
+        path: "modules/$key",
         prefix: "modules/",
         suffix: "/module.yaml",
         relative_to_document: false,

@@ -1777,8 +1777,7 @@ async fn real_postgres_row_local_constraint_problems_name_only_readable_declarat
           "kind":"BRegProject",
           "project":{"id":"constraint-problem-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "vocabularies":[{"id":"status-codes","values":["open","closed","held"]}],
-          "recordTypes":[{
-            "id":"window","primaryDataset":"test-dataset","route":"windows","mutationMode":"mutable","classification":"public",
+          "recordTypes":{"window": {"primaryDataset":"test-dataset","route":"windows","mutationMode":"mutable","classification":"public",
             "batch":{"maximumItems":4,"maximumBytes":16384},
             "constraints":[
               {"id":"chronological","type":"compare","left":"valid-from","operator":"less-than-or-equal","right":"valid-to"},
@@ -1794,8 +1793,7 @@ async fn real_postgres_row_local_constraint_problems_name_only_readable_declarat
               {"id":"score","type":"int64","required":true,"classification":"public"},
               {"id":"status","type":"vocabulary-code","vocabulary":"status-codes","required":true,"classification":"public"}
             ]
-          },{
-            "id":"period","primaryDataset":"test-dataset","route":"periods","mutationMode":"mutable","classification":"public",
+          },"period": {"primaryDataset":"test-dataset","route":"periods","mutationMode":"mutable","classification":"public",
             "temporal":{"startField":"valid-from","endField":"valid-to"},
             "constraints":[{
               "id":"no-overlap","type":"temporal-non-overlap","scopeFields":["scope"],
@@ -1807,7 +1805,7 @@ async fn real_postgres_row_local_constraint_problems_name_only_readable_declarat
               {"id":"valid-from","type":"date","validTimeRole":"valid-from","required":true,"classification":"public"},
               {"id":"valid-to","type":"date","validTimeRole":"valid-to","classification":"public"}
             ]
-          }],
+          }},
           "accessProfiles":{"writer": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"window","operations":["create","get","patch","batch"],
@@ -3827,8 +3825,7 @@ fn row_boundary_batch_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"row-boundary-batch-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
+          "recordTypes":{"widget": {"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
             "batch":{"maximumItems":4,"maximumBytes":16384},
             "constraints":[{"type":"unique","fields":["label"]}],
             "fields":[
@@ -3836,7 +3833,7 @@ fn row_boundary_batch_registry() -> registry_breg::CompiledRegistry {
               {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"},
               {"id":"quantity","type":"int64","required":true,"classification":"public"}
             ]
-          }],
+          }},
           "accessProfiles":{"writer": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{"records":[{
@@ -3859,8 +3856,7 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"located-refusal-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
+          "recordTypes":{"widget": {"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
             "batch":{"maximumItems":4,"maximumBytes":16384},
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
@@ -3869,7 +3865,7 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
               {"id":"is-flagged","type":"boolean","required":false,"classification":"public"},
               {"id":"secret","type":"string","maximumLength":128,"required":false,"classification":"public"}
             ]
-          }],
+          }},
           "accessProfiles":{"writer": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{"records":[{
@@ -4347,8 +4343,7 @@ fn timer_write_registry() -> registry_breg::CompiledRegistry {
         .expect("public timer example is valid YAML")
         .expect("public timer example is nonempty")
         .to_json_value();
-    source["recordTypes"].as_array_mut().unwrap().push(json!({
-        "id":"note",
+    source["recordTypes"].as_object_mut().unwrap().insert("note".to_owned(), json!({
         "route":"notes",
         "primaryDataset":"services",
         "mutationMode":"mutable",
@@ -4709,8 +4704,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"mutation-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","tombstone":true,"classification":"public",
+          "recordTypes":{"widget": {"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","tombstone":true,"classification":"public",
             "constraints":[{"type":"unique","fields":["label"]}],
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
@@ -4723,19 +4717,17 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"phase":"after","id":"widget-patched","trigger":"patched","projection":["label","quantity"]},
               {"phase":"after","id":"widget-tombstoned","trigger":"tombstoned","projection":["label","quantity"]}
             ]
-          },{
-            "id":"log","primaryDataset":"test-dataset","route":"logs","mutationMode":"create-only","classification":"public",
+          },"log": {"primaryDataset":"test-dataset","route":"logs","mutationMode":"create-only","classification":"public",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
               {"id":"message","type":"string","maximumLength":128,"required":true,"classification":"public"}
             ]
-          },{
-            "id":"archive","primaryDataset":"test-dataset","route":"archives","mutationMode":"mutable","classification":"public",
+          },"archive": {"primaryDataset":"test-dataset","route":"archives","mutationMode":"mutable","classification":"public",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
               {"id":"name","type":"string","maximumLength":128,"required":true,"classification":"public"}
             ]
-          }],
+          }},
           "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management","case-review"],
             "permissions":{"records":[{
@@ -5966,13 +5958,12 @@ fn linked_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"mutation-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"local-record","primaryDataset":"local-records","route":"local-records","mutationMode":"mutable","classification":"internal",
+          "recordTypes":{"local-record": {"primaryDataset":"local-records","route":"local-records","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"subjectkey","type":"string","maximumLength":32,"classification":"internal"},
               {"id":"localtitle","type":"string","maximumLength":120,"classification":"internal"}
             ]
-          }],
+          }},
           "externalRecordTypes":[{
             "id":"external-subject","authority":"urn:example:source","identifierScheme":"urn:example:subject-key",
             "fields":[{"id":"label","type":"string","classification":"internal"}]

@@ -693,8 +693,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"history-store-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test","timezone":"UTC"},
-          "recordTypes":[{
-            "id":"membership",
+          "recordTypes":{"membership": {
             "primaryDataset":"test-dataset",
             "route":"memberships",
             "mutationMode":"mutable",
@@ -707,7 +706,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"valid-to","type":"date","required":false,"classification":"internal"}
             ],
             "temporal":{"startField":"valid-from","endField":"valid-to"}
-          }],
+          }},
           "accessProfiles":{"writer": {
             "default":true,
             "principalClaim":"registry_principal",

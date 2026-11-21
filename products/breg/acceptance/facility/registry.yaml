@@ -57,16 +57,9 @@
     },
     "distributions": []
   },
-  "modules": [
-    {
-      "id": "facility-core",
-      "version": "0.1.0",
-      "digest": "sha256:43595c7c4b6e039cd256ab87d89b099bf444ada6df59c5ec8a4de802c5503b86"
-    }
-  ],
-  "recordTypes": [
-    {
-      "id": "facility",
+  "modules": {"facility-core":{"digest":"sha256:94d868c5cdf284b08e98610068ef6677fcdd2d55e975b483c3e969bb4db2af1c","version":"0.1.0"}},
+  "recordTypes": {
+    "facility": {
       "primaryDataset": "facility",
       "route": "facilities",
       "mutationMode": "mutable",
@@ -122,8 +115,7 @@
         }
       ]
     },
-    {
-      "id": "permit",
+    "permit": {
       "primaryDataset": "facility",
       "route": "permits",
       "mutationMode": "mutable",
@@ -226,8 +218,7 @@
         }
       ]
     },
-    {
-      "id": "installation",
+    "installation": {
       "primaryDataset": "facility",
       "route": "installations",
       "mutationMode": "mutable",
@@ -325,8 +316,7 @@
         }
       ]
     },
-    {
-      "id": "discharge-report",
+    "discharge-report": {
       "primaryDataset": "facility",
       "route": "discharge-reports",
       "mutationMode": "mutable",
@@ -417,7 +407,7 @@
         }
       ]
     }
-  ],
+  },
   "accessProfiles": {
     "facility-operator": {
       "principalClaim": "registry_principal",

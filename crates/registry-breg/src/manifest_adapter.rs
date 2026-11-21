@@ -772,15 +772,15 @@ mod tests {
             {"id":"case-status","values":["open","sealed-by-court"]},
             {"id":"sealing-reason","values":["witness-protection"]}
           ],
-          "datasets":[{"id":"protected-cases"},{"id":"public-cases"}],"recordTypes":[
-            {"id":"public-case","primaryDataset":"public-cases","route":"public-cases","mutationMode":"create-only","classification":"public",
+          "datasets":[{"id":"protected-cases"},{"id":"public-cases"}],"recordTypes":{
+            "public-case": {"primaryDataset":"public-cases","route":"public-cases","mutationMode":"create-only","classification":"public",
              "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"case-status","values":["open"],"classification":"public"}]},
-            {"id":"protected-case","primaryDataset":"protected-cases","route":"protected-cases","mutationMode":"create-only","classification":"restricted",
+            "protected-case": {"primaryDataset":"protected-cases","route":"protected-cases","mutationMode":"create-only","classification":"restricted",
              "fields":[
                {"id":"status","type":"vocabulary-code","vocabulary":"case-status","classification":"restricted"},
                {"id":"sealing-reason","type":"vocabulary-code","vocabulary":"sealing-reason","classification":"restricted"}
              ]}
-          ],
+          },
           "accessProfiles":{
             "public-reader": {"principalClaim":"sub","requiredScopes":["public.read"],"permissions":{"records":[{"recordType":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]}},
             "protected-reader": {"principalClaim":"sub","requiredScopes":["protected.read"],"permissions":{"records":[{"recordType":"protected-case","operations":["get"],"readableFields":["status","sealing-reason"],"rowBoundaries":"unrestricted"}]}}

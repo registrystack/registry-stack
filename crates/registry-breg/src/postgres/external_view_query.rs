@@ -715,10 +715,10 @@ pub(crate) mod tests {
             "apiVersion":crate::compiler::AUTHORING_API_VERSION,"kind":"BRegProject",
             "project":{"id":"external-query-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
             "datasets":[{"id":"records"}],
-            "recordTypes":[{"id":"local-record","primaryDataset":"records","route":"records","mutationMode":"mutable","classification":"internal","fields":[
+            "recordTypes":{"local-record": {"primaryDataset":"records","route":"records","mutationMode":"mutable","classification":"internal","fields":[
                 {"id":"subject-key","type":"string","maximumLength":64,"classification":"internal"},
                 {"id":"tenant","type":"string","maximumLength":32,"classification":"internal"}
-            ]}],
+            ]}},
             "externalRecordTypes":[{"id":"external-record","authority":"urn:test:authority","identifierScheme":"urn:test:keys","fields":[
                 {"id":"label","type":"string","classification":"internal"},
                 {"id":"hidden","type":"string","classification":"restricted"}

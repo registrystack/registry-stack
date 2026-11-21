@@ -756,6 +756,10 @@ impl VerifiedPackage {
     }
 }
 
+/// The one path forward for a package built before this release. Every entry
+/// point that refuses such a package says it.
+pub const FRESH_DATABASE_PATH: &str = "create a fresh database, rebuild the package with this release's `bregctl test` and `bregctl package`, and run `bregctl apply --package DIR --initial`";
+
 /// Value-free failures. Paths, source values, SQL, key material, signatures,
 /// and deployment bindings are deliberately absent from both Display and Debug.
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
@@ -789,12 +793,17 @@ pub enum PackageError {
         "the package names a Record type `entityId`, as v0.41.0 and earlier wrote it, where this release writes `recordType`. It cannot be upgraded in place: recreate the database"
     )]
     EntityIdMember,
-    /// A predecessor package whose stored sources this release's reader
-    /// refuses. The diagnostics are the reader's own value-free messages.
-    #[error("the baseline package's stored sources do not compile with this bregctl: {0}")]
-    PredecessorSources(String),
+    /// A package built before this release, whose stored sources this
+    /// release's reader refuses. The detail is the reader's own value-free
+    /// diagnostics.
     #[error(
-        "the package predates the required Record timer store; build and apply a successor with this release"
+        "the package's stored sources do not compile with this bregctl: {0}. A package built before this release cannot be upgraded in place: {path}",
+        path = FRESH_DATABASE_PATH
+    )]
+    PreviousReleaseSources(String),
+    #[error(
+        "the package was built before this release and predates the required Record timer store. It cannot be upgraded in place: {path}",
+        path = FRESH_DATABASE_PATH
     )]
     EngineFeatureUpgradeRequired,
     #[error("the package carries a local-only deployment identity")]
@@ -4284,8 +4293,7 @@ pub fn load_predecessor_rehearsal_baseline_with_verified_envelope(
     shared: &SharedVerifiedPackage,
 ) -> Result<(VerifiedPredecessorPackage, CompiledRegistry)> {
     let (package, loaded) = load_predecessor_closure(root, context, shared)?;
-    let registry =
-        compile_package_sources(&package.manifest, &loaded, PackageSourceOrigin::Predecessor)?;
+    let registry = compile_package_sources(&package.manifest, &loaded)?;
     Ok((package, registry))
 }
 
@@ -4797,45 +4805,22 @@ fn load_closure(
     Ok(loaded)
 }
 
-/// Whose stored sources a package closure holds.
-#[derive(Clone, Copy)]
-enum PackageSourceOrigin {
-    /// A package built by this release, so its sources are read as authored.
-    Current,
-    /// A predecessor package, whose sources an earlier release stored.
-    #[cfg_attr(
-        not(feature = "tooling"),
-        allow(
-            dead_code,
-            reason = "only the tooling rehearsal loader reads predecessor sources"
-        )
-    )]
-    Predecessor,
-}
-
-impl PackageSourceOrigin {
-    /// The refusal for stored sources that do not parse. A predecessor's
-    /// sources were written by an earlier release, so the refusal carries the
-    /// reader's diagnostics for the operator to act on.
-    fn source_refusal(self, failure: &CompileFailure) -> PackageError {
-        match self {
-            Self::Current => PackageError::Derivation,
-            Self::Predecessor => {
-                const SHOWN: usize = 3;
-                let diagnostics = failure.diagnostics();
-                let mut detail = diagnostics
-                    .iter()
-                    .take(SHOWN)
-                    .map(|diagnostic| format!("{}: {}", diagnostic.path, diagnostic.message))
-                    .collect::<Vec<_>>()
-                    .join(". ");
-                if diagnostics.len() > SHOWN {
-                    detail.push_str(&format!(" ({} more)", diagnostics.len() - SHOWN));
-                }
-                PackageError::PredecessorSources(detail)
-            }
-        }
+/// The refusal for stored sources that do not parse. A package closure holds
+/// sources an earlier release may have written, so the refusal carries the
+/// reader's diagnostics for the operator to act on.
+fn source_refusal(failure: &CompileFailure) -> PackageError {
+    const SHOWN: usize = 3;
+    let diagnostics = failure.diagnostics();
+    let mut detail = diagnostics
+        .iter()
+        .take(SHOWN)
+        .map(|diagnostic| format!("{}: {}", diagnostic.path, diagnostic.message))
+        .collect::<Vec<_>>()
+        .join(". ");
+    if diagnostics.len() > SHOWN {
+        detail.push_str(&format!(" ({} more)", diagnostics.len() - SHOWN));
     }
+    PackageError::PreviousReleaseSources(detail)
 }
 
 /// Compile the sources of one verified package closure. The caller
@@ -4843,7 +4828,6 @@ impl PackageSourceOrigin {
 fn compile_package_sources(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
-    origin: PackageSourceOrigin,
 ) -> Result<CompiledRegistry> {
     validate_source_inventory(manifest)?;
     let fixture_journeys = loaded
@@ -4856,8 +4840,7 @@ fn compile_package_sources(
     let project_bytes = loaded
         .get(&manifest.sources.project)
         .ok_or(PackageError::Derivation)?;
-    let project =
-        parse_project_yaml(project_bytes).map_err(|failure| origin.source_refusal(&failure))?;
+    let project = parse_project_yaml(project_bytes).map_err(|failure| source_refusal(&failure))?;
     let modules = manifest
         .sources
         .modules
@@ -4867,7 +4850,7 @@ fn compile_package_sources(
                 .get(&source.path)
                 .ok_or(PackageError::Derivation)
                 .and_then(|bytes| {
-                    parse_module_yaml(bytes).map_err(|failure| origin.source_refusal(&failure))
+                    parse_module_yaml(bytes).map_err(|failure| source_refusal(&failure))
                 })
         })
         .collect::<Result<Vec<RegistryModule>>>()?;
@@ -4918,7 +4901,7 @@ fn rederive(
     loaded: &BTreeMap<String, Vec<u8>>,
 ) -> Result<(CompiledRegistry, Option<ValidatedReviewedMigrationPlan>)> {
     validate_engine_features(manifest)?;
-    let compiled = compile_package_sources(manifest, loaded, PackageSourceOrigin::Current)?;
+    let compiled = compile_package_sources(manifest, loaded)?;
     let expected_artifacts = expected_artifact_bytes(manifest, &compiled)?;
     let packaged_artifacts = manifest
         .files
@@ -5666,11 +5649,10 @@ mod spatial_projection_migration_tests {
               "kind":"BRegProject",
               "project":{{"id":"spatial-projection-migration","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial.example.test"}},
               "datasets":[{{"id":"registry"}}],
-              "recordTypes":[{{
-                "id":"area","primaryDataset":"registry","route":"areas","mutationMode":"mutable",
+              "recordTypes":{{"area":{{"primaryDataset":"registry","route":"areas","mutationMode":"mutable",
                 "fields":[{fields}],
                 "geojson":{{"geometryField":"geometry"}}
-              }}],
+              }}}},
               "accessProfiles":{{"map-reader":{{"principalClaim":"principal","requiredScopes":"unrestricted",
                 "permissions":{{"records":[{{
                   "recordType":"area","operations":["get","list"],

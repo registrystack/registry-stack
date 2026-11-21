@@ -269,8 +269,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"temporal-corrections","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
+          "recordTypes":{"membership": {"primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
             "batch":{"maximumItems":4,"maximumBytes":16384},
             "fields":[
               {"id":"subject","type":"string","maximumLength":96,"required":true,"classification":"internal"},
@@ -290,7 +289,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"phase":"after","id":"membership-created","trigger":"created","projection":["subject","group","valid-from","valid-to"]},
               {"phase":"after","id":"membership-patched","trigger":"patched","projection":["subject","group","valid-from","valid-to"]}
             ]
-          }],
+          }},
           "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal",
             "requiredPurposes":["history-maintenance"],"requiredScopes":["history-maintain"],
             "permissions":{"records":[{
@@ -936,8 +935,7 @@ fn last_day_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"temporal-last-day","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test","timezone":"UTC"},
-          "recordTypes":[{
-            "id":"licence","primaryDataset":"test-dataset","route":"licences","mutationMode":"mutable","classification":"internal",
+          "recordTypes":{"licence": {"primaryDataset":"test-dataset","route":"licences","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"holder","type":"string","maximumLength":96,"required":true,"classification":"internal"},
               {"id":"valid-from","type":"date","required":true,"classification":"internal"},
@@ -950,7 +948,7 @@ fn last_day_registry() -> registry_breg::CompiledRegistry {
               "startField":"valid-from",
               "lastDayField":"valid-through"
             }]
-          }],
+          }},
           "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal",
             "requiredPurposes":["history-maintenance"],"requiredScopes":["history-maintain"],
             "permissions":{"records":[{

@@ -5549,13 +5549,12 @@ mod held_body_encryption_tests {
         let source = json!({
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
             "project":{"id":"held-encryption","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://held.example.test"},
-            "datasets":[{"id":"test-dataset"}],"recordTypes":[{
-                "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable",
+            "datasets":[{"id":"test-dataset"}],"recordTypes":{"case": {"primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable",
                 "fields":[
                     {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"},
                     secret
                 ]
-            }],
+            }},
             "accessProfiles":{"caseworker": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"case","rowBoundaries":"unrestricted","operations":["get","list","create","patch"],
                 "readableFields":["label","secret"],"writableFields":["label","secret"]
@@ -5923,15 +5922,14 @@ mod temporal_instant_tests {
             "project": {"id": "licences", "version": "1", "defaultLanguage": "en",
                 "canonicalBaseIri": "https://licences.example.test", "timezone": "Asia/Colombo"},
             "datasets": [{"id": "licences"}],
-            "recordTypes": [{
-                "id": "licence", "primaryDataset": "licences", "route": "licences", "mutationMode": "mutable",
+            "recordTypes": {"licence": { "primaryDataset": "licences", "route": "licences", "mutationMode": "mutable",
                 "fields": [
                     {"id": "holder", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"},
                     {"id": "valid-from", "type": boundary_type, "required": true, "classification": "internal"},
                     {"id": "valid-to", "type": boundary_type, "classification": "internal"}
                 ],
                 "temporal": {"startField": "valid-from", "endField": "valid-to"}
-            }],
+            }},
             "accessProfiles": {"reader": { "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
                 "permissions": {"records": [{
                     "recordType": "licence", "operations": ["list"],

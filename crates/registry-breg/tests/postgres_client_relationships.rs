@@ -299,24 +299,21 @@ const UNGRANTED_TARGET_PROJECT: &str = r#"{"datasets":[{"id": "test-dataset"}],
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
   "project":{"id":"ungranted-read-path-target","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
-  "recordTypes":[
-    {
-      "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"restricted",
+  "recordTypes":{
+    "household": {"primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"restricted",
       "fields":[{"id":"household-code","type":"string","required":true,"maximumLength":64,"classification":"restricted"}],
       "readPaths":[{"id":"people","through":"membership","to":"person","route":"people"}]
     },
-    {
-      "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"restricted",
+    "membership": {"primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"restricted",
       "fields":[
         {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"},
         {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
       ]
     },
-    {
-      "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"restricted",
+    "person": {"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"restricted",
       "fields":[{"id":"person-code","type":"string","required":true,"maximumLength":64,"classification":"restricted"}]
     }
-  ],
+  },
   "accessProfiles":{
     "operator": {"default":true,"principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
@@ -392,27 +389,24 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"client-relationships","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
-          "recordTypes":[
-            {
-              "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"restricted",
+          "recordTypes":{
+            "household": {"primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"restricted",
               "fields":[{"id":"household-code","type":"string","required":true,"maximumLength":64,"classification":"restricted"}],
               "readPaths":[{"id":"people","through":"membership","to":"person","route":"people"}]
             },
-            {
-              "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"restricted",
+            "membership": {"primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"restricted",
               "fields":[
                 {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"},
                 {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
               ]
             },
-            {
-              "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"restricted",
+            "person": {"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"restricted",
               "fields":[
                 {"id":"person-code","type":"string","required":true,"maximumLength":64,"classification":"restricted"},
                 {"id":"sensitive-note","type":"string","required":true,"maximumLength":64,"classification":"restricted"}
               ]
             }
-          ],
+          },
           "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
             "permissions":{

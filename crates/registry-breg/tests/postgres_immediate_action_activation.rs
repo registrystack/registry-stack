@@ -1326,29 +1326,26 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
           "project":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "package":{{"sourceRevision":"{SOURCE_REVISION}"}},
           "datasets":[{{"id":"test-dataset"}}],
-          "recordTypes":[{{
-            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
+          "recordTypes":{{"person":{{"primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "constraints":[{{"type":"unique","fields":["person-code"]}}],
             "fields":[
               {{"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"}},
               {{"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}},
               {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}}
             ]
-          }},{{
-            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
+          }},"household":{{"primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {{"id":"household-code","type":"string","maximumLength":64,"required":true,"classification":"restricted"}},
               {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}},
               {{"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"}}
             ]
-          }},{{
-            "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"mutable",
+          }},"group-membership":{{"primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"mutable",
             "fields":[
               {{"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}},
               {{"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}},
               {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}}
             ]
-          }}],
+          }}}},
           {actions}
           {access_profiles}
         }}"#

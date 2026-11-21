@@ -69,7 +69,7 @@ recordTypes:
   # Reference data the records point at. It is classified `public` because a
   # list of group codes discloses nothing on its own; the records themselves
   # stay `internal`.
-  - id: record-group
+  record-group:
     primaryDataset: generic-registry
     route: record-groups
     mutationMode: mutable
@@ -93,7 +93,7 @@ recordTypes:
   # destination its URL handlers name. A `rstack dev` run binds none, so a
   # project with URL hooks cannot run there; operated deployments bind their
   # own.
-  - id: record
+  record:
     primaryDataset: generic-registry
     route: records
     mutationMode: mutable
@@ -208,6 +208,6 @@ accessProfiles:
 # a stale digest is a compile error, which keeps a reviewed project pinned to the
 # module content it was reviewed with. Re-run `project lock` after every module edit.
 modules:
-  - id: "record-notes"
+  "record-notes":
     version: "0.1.0"
-    digest: "sha256:e81adbfb704b393426a5ac9cf5bf1767ad2d4c180139b7f722e726fd5a765893"
+    digest: "sha256:ada5755f58684abcf915dca7ac58e0d812eb238b2feb8d13437c05c5e258e3ff"

@@ -145,7 +145,9 @@ fn current_date_offsets_are_bounded_and_bound_to_current_date() {
 /// action takes a required input of each kind.
 fn ordered_guard_project() -> Value {
     let mut source = support::project();
-    let fields = source["recordTypes"][0]["fields"].as_array_mut().unwrap();
+    let fields = source["recordTypes"]["parent"]["fields"]
+        .as_array_mut()
+        .unwrap();
     for (id, kind) in [
         ("opened-on", "date"),
         ("opened-at", "timestamp"),
@@ -381,7 +383,7 @@ fn action_requirement_fingerprint_binds_predicate_and_related_field_contract() {
         let mut source = support::project();
         match mutate {
             0 => source["actions"][0]["commitGuards"]["targets"][0]["equals"] = json!("inactive"),
-            1 => source["recordTypes"][0]["fields"][0]["classification"] = json!("internal"),
+            1 => source["recordTypes"]["parent"]["fields"][0]["classification"] = json!("internal"),
             _ => source["actions"][0]["commitGuards"]["targets"] = json!([]),
         }
         assert_ne!(
@@ -423,7 +425,7 @@ fn action_requirements_reject_duplicate_and_optional_reference_checks() {
 #[test]
 fn action_requirements_do_not_bypass_reviewed_change_control() {
     let mut source = support::project();
-    source["recordTypes"][0]["mutationPolicy"] = json!({"patch":"proposal-required"});
+    source["recordTypes"]["parent"]["mutationPolicy"] = json!({"patch":"proposal-required"});
     source["actions"][0]["inputs"].as_array_mut().unwrap().push(json!({
         "id": "status", "type": "vocabulary-code", "vocabulary": "status", "values": ["active", "inactive"], "required": true, "classification": "restricted"
     }));
@@ -457,7 +459,7 @@ fn equality_inputs_must_be_required_and_an_unset_value_is_stated_explicitly() {
         .contains("breg.action.commit_guards.targets-value-invalid"));
 
     let mut source = support::project();
-    source["recordTypes"][0]["fields"][0]["required"] = json!(false);
+    source["recordTypes"]["parent"]["fields"][0]["required"] = json!(false);
     source["actions"][0]["commitGuards"]["targets"][0]["equals"] = Value::Null;
     // `null` is never a comparison literal (CFG-EMPTY-1): the reader refuses it
     // where it is written, and `isNull` states the unset value.

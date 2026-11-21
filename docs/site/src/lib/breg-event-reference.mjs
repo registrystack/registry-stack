@@ -10,7 +10,7 @@ export function eventConfiguration(reference) {
     return { ...contract, id, title, field_count: fields.length, fields };
   };
   return [
-    select('module', 'recordTypes[].hooks[].', 'record-event', 'Record type hooks[]'),
+    select('module', 'recordTypes.*.hooks[].', 'record-event', 'Record type hooks[]'),
     select('project', 'actions[].execution.proposal.hooks[].', 'proposal-event', 'Proposal hooks[]'),
   ];
 }

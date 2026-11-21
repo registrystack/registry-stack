@@ -810,14 +810,12 @@ fn event_record_registry() -> registry_breg::CompiledRegistry {
           "kind":"BRegProject",
           "project":{"id":"reference-integrity-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "datasets":[{"id":"records"}],
-          "recordTypes":[{
-            "id":"subject","primaryDataset":"records","route":"subjects","mutationMode":"mutable","tombstone":true,"classification":"internal",
+          "recordTypes":{"subject": {"primaryDataset":"records","route":"subjects","mutationMode":"mutable","tombstone":true,"classification":"internal",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"name","type":"string","maximumLength":64,"required":true,"classification":"internal"}
             ]
-          },{
-            "id":"decision","primaryDataset":"records","route":"decisions","mutationMode":"create-only","classification":"internal",
+          },"decision": {"primaryDataset":"records","route":"decisions","mutationMode":"create-only","classification":"internal",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"subject","type":"reference","target":"subject","onDelete":"restrict","required":true,"classification":"internal"},
@@ -830,8 +828,7 @@ fn event_record_registry() -> registry_breg::CompiledRegistry {
               "occurredAt":{"at":"occurred-on"},
               "correction":{"field":"corrects","relation":"corrects"}
             }
-          },{
-            "id":"journal","primaryDataset":"records","route":"journals","mutationMode":"mutable","tombstone":true,"classification":"internal",
+          },"journal": {"primaryDataset":"records","route":"journals","mutationMode":"mutable","tombstone":true,"classification":"internal",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"subject","type":"reference","target":"subject","onDelete":"restrict","required":true,"classification":"internal"},
@@ -842,7 +839,7 @@ fn event_record_registry() -> registry_breg::CompiledRegistry {
               "subjects":[{"role":"subject","field":"subject","label":"Subject","target":"subject"}],
               "occurredAt":{"at":"noted-on"}
             }
-          }],
+          }},
           "accessProfiles":{"subject-operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
             "permissions":{"records":[{
               "recordType":"subject","operations":["create","get","patch","tombstone"],
@@ -1113,15 +1110,13 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "kind":"BRegProject",
           "project":{"id":"reference-integrity-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "datasets":[{"id":"records"}],
-          "recordTypes":[{
-            "id":"target","primaryDataset":"records","route":"targets","mutationMode":"mutable","tombstone":true,"classification":"internal",
+          "recordTypes":{"target": {"primaryDataset":"records","route":"targets","mutationMode":"mutable","tombstone":true,"classification":"internal",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"name","type":"string","maximumLength":64,"required":true,"classification":"internal"},
               {"id":"related","type":"reference","target":"target","onDelete":"restrict","classification":"internal"}
             ]
-          },{
-            "id":"source","primaryDataset":"records","route":"sources","mutationMode":"mutable","tombstone":true,"classification":"internal",
+          },"source": {"primaryDataset":"records","route":"sources","mutationMode":"mutable","tombstone":true,"classification":"internal",
             "batch":{"maximumItems":3,"maximumBytes":8192},
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -1129,7 +1124,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"target","type":"reference","target":"target","onDelete":"restrict","required":true,"classification":"internal"},
               {"id":"alternate","type":"reference","target":"target","onDelete":"restrict","classification":"internal"}
             ]
-          }],
+          }},
           "accessProfiles":{"target-operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
             "permissions":{"records":[{
               "recordType":"target","operations":["create","get","patch","tombstone"],

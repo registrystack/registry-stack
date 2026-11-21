@@ -17,8 +17,7 @@ fn project_value() -> Value {
             "canonicalBaseIri": "https://registry.example.test"
         },
         "datasets": [{"id": "records"}],
-        "recordTypes": [{
-            "id": "record",
+        "recordTypes": {"record": {
             "primaryDataset": "records",
             "route": "records",
             "mutationMode": "mutable",
@@ -60,7 +59,7 @@ fn project_value() -> Value {
                     }
                 }
             ]
-        }],
+        }},
         "accessProfiles": {"editor": {
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
@@ -196,7 +195,7 @@ fn generated_identifier_semantics_are_strictly_validated() {
     ];
     for (expected, generated, companion) in cases {
         let mut project = project_value();
-        project["recordTypes"][0]["fields"] = json!([companion, generated]);
+        project["recordTypes"]["record"]["fields"] = json!([companion, generated]);
         project["accessProfiles"] = json!({});
         let failure = compile(&project).expect_err(expected);
         assert!(
@@ -213,10 +212,10 @@ fn generated_identifier_semantics_are_strictly_validated() {
 #[test]
 fn generated_identifier_and_scope_have_an_index_safe_size_bound() {
     let mut project = project_value();
-    project["recordTypes"][0]["fields"][0]["maximumLength"] = json!(232);
+    project["recordTypes"]["record"]["fields"][0]["maximumLength"] = json!(232);
     compile(&project).expect("the combined field and scope fit the index budget");
 
-    project["recordTypes"][0]["fields"][0]["maximumLength"] = json!(233);
+    project["recordTypes"]["record"]["fields"][0]["maximumLength"] = json!(233);
     let failure = compile(&project).expect_err("an oversized scope is refused at compilation");
     assert!(failure
         .diagnostics()
@@ -224,8 +223,8 @@ fn generated_identifier_and_scope_have_an_index_safe_size_bound() {
         .any(|diagnostic| { diagnostic.code == "breg.field.generate-index-key-too-large" }));
 
     let mut project = project_value();
-    project["recordTypes"][0]["fields"][1]["generate"]["scope"] = json!([]);
-    project["recordTypes"][0]["fields"][1]["maximumLength"] = json!(257);
+    project["recordTypes"]["record"]["fields"][1]["generate"]["scope"] = json!([]);
+    project["recordTypes"]["record"]["fields"][1]["maximumLength"] = json!(257);
     let failure = compile(&project).expect_err("an oversized retained identifier field is refused");
     assert!(failure
         .diagnostics()
@@ -233,15 +232,15 @@ fn generated_identifier_and_scope_have_an_index_safe_size_bound() {
         .any(|diagnostic| { diagnostic.code == "breg.field.generate-index-key-too-large" }));
 
     let mut project = project_value();
-    project["recordTypes"][0]["fields"][0]["maximumLength"] = json!(116);
-    project["recordTypes"][0]["fields"]
+    project["recordTypes"]["record"]["fields"][0]["maximumLength"] = json!(116);
+    project["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id": "district", "type": "text", "maximumLength": 117,
             "required": true, "classification": "internal"
         }));
-    project["recordTypes"][0]["fields"][1]["generate"]["scope"] =
+    project["recordTypes"]["record"]["fields"][1]["generate"]["scope"] =
         json!(["jurisdiction", "district"]);
     let failure = compile(&project).expect_err("aggregate scope size is bounded");
     assert!(failure
@@ -253,7 +252,7 @@ fn generated_identifier_and_scope_have_an_index_safe_size_bound() {
 #[test]
 fn generated_identifier_reader_refuses_unknown_and_duplicate_members() {
     let mut unknown = project_value();
-    unknown["recordTypes"][0]["fields"][1]["generate"]["minimumLength"] = json!(6);
+    unknown["recordTypes"]["record"]["fields"][1]["generate"]["minimumLength"] = json!(6);
     let failure = compile(&unknown).expect_err("unknown generation member is refused");
     assert!(failure
         .diagnostics()
@@ -280,7 +279,7 @@ fn random_generation_takes_no_alphabet_or_scope() {
         ("scope", json!(["jurisdiction"])),
     ] {
         let mut project = project_value();
-        project["recordTypes"][0]["fields"][2]["generate"][member] = value;
+        project["recordTypes"]["record"]["fields"][2]["generate"][member] = value;
         let failure = compile(&project).expect_err(member);
         assert!(
             failure
@@ -297,10 +296,10 @@ fn random_generation_takes_no_alphabet_or_scope() {
 fn length_diagnostics_state_the_field_bounds_each_strategy_needs() {
     // "REG-" plus max(6, 19) digits needs 23 characters; "T-" plus 8 is 10.
     let mut sequence = project_value();
-    sequence["recordTypes"][0]["fields"][1]["maximumLength"] = json!(12);
+    sequence["recordTypes"]["record"]["fields"][1]["maximumLength"] = json!(12);
     let mut random = project_value();
-    random["recordTypes"][0]["fields"][2]["minimumLength"] = json!(9);
-    random["recordTypes"][0]["fields"][2]["maximumLength"] = json!(9);
+    random["recordTypes"]["record"]["fields"][2]["minimumLength"] = json!(9);
+    random["recordTypes"]["record"]["fields"][2]["maximumLength"] = json!(9);
     for (case, project, expected) in [
         (
             "sequence",
@@ -333,9 +332,9 @@ fn length_diagnostics_state_the_field_bounds_each_strategy_needs() {
 fn sequence_scope_fields_cannot_hold_restricted_values_or_references() {
     // The reservation ledger keeps scope values after record erasure.
     let mut restricted = project_value();
-    restricted["recordTypes"][0]["fields"][0]["classification"] = json!("restricted");
+    restricted["recordTypes"]["record"]["fields"][0]["classification"] = json!("restricted");
     let mut reference = project_value();
-    reference["recordTypes"][0]["fields"][0] = json!({
+    reference["recordTypes"]["record"]["fields"][0] = json!({
         "id": "jurisdiction", "type": "reference", "target": "record",
         "required": true, "classification": "internal"
     });
@@ -352,7 +351,7 @@ fn sequence_scope_fields_cannot_hold_restricted_values_or_references() {
     }
 
     let mut public = project_value();
-    public["recordTypes"][0]["fields"][0]["classification"] = json!("public");
+    public["recordTypes"]["record"]["fields"][0]["classification"] = json!("public");
     compile(&public).expect("a public scope field compiles");
 }
 
@@ -362,7 +361,8 @@ fn generated_fields_cannot_be_classified_above_internal() {
     // which keeps them after record erasure.
     for (case, field) in [(0usize, "registration-code"), (1, "public-token")] {
         let mut project = project_value();
-        project["recordTypes"][0]["fields"][case + 1]["classification"] = json!("restricted");
+        project["recordTypes"]["record"]["fields"][case + 1]["classification"] =
+            json!("restricted");
         let failure = compile(&project).expect_err(field);
         assert!(
             failure
@@ -375,7 +375,7 @@ fn generated_fields_cannot_be_classified_above_internal() {
     }
 
     let mut internal = project_value();
-    internal["recordTypes"][0]["fields"][1]["classification"] = json!("internal");
+    internal["recordTypes"]["record"]["fields"][1]["classification"] = json!("internal");
     compile(&internal).expect("an internal generated field compiles");
 }
 
@@ -450,7 +450,7 @@ fn create_effect_bounds_include_server_generated_fields() {
             "classification": "internal",
             "generate": {"type": "sequence", "minimumDigits": 1}
         }));
-        project["recordTypes"][0]["fields"] = Value::Array(fields);
+        project["recordTypes"]["record"]["fields"] = Value::Array(fields);
 
         let execution = if mode == "proposal" {
             json!({

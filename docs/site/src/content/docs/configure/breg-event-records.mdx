@@ -32,7 +32,7 @@ Every `field` value is the id of a stored field of the same Record type (not a d
 
 ```yaml
 recordTypes:
-  - id: entry-registration
+  entry-registration:
     mutationMode: create-only
     fields:
       - id: entry
@@ -380,7 +380,7 @@ A missing declaration gives an ungrouped list with no purpose claim; purpose is 
 
 ```yaml
 recordTypes:
-  - id: entry
+  entry:
     display:
       label: Entry
       purpose: domain

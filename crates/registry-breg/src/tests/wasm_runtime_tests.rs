@@ -141,10 +141,10 @@ fn wasm_person_action(module_bytes: &[u8]) -> CompiledAction {
     let source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"wasm-runtime","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "datasets":[{"id":"parity"}],"recordTypes":[{"id":"person","primaryDataset":"parity","route":"people","mutationMode":"mutable","fields":[
+        "datasets":[{"id":"parity"}],"recordTypes":{"person": {"primaryDataset":"parity","route":"people","mutationMode":"mutable","fields":[
             {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
-        ]}],
+        ]}},
         "functions":[{"id":"person-plan","runtime":"wasm","source":"handlers/guest.wasm","entrypoint":"handle","abi":"registry.action-plan/v1","capabilities":[]}],
         "actions":[{"id":"register-person","execution":{"mode":"immediate"},"inputs":[
             {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},

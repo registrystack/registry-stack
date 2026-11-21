@@ -16,7 +16,7 @@ project:
 datasets:
   - id: test-dataset
 recordTypes:
-  - id: entry
+  entry:
     primaryDataset: test-dataset
     route: entries
     mutationMode: mutable
@@ -294,17 +294,14 @@ fn an_id_member_inside_a_module_profile_is_refused_like_the_project_level() {
         .split(" (line")
         .next()
         .unwrap();
-    for (list, member) in [
-        ("recordTypes", "id: entry"),
-        ("extendRecordTypes", "recordType: entry"),
-    ] {
+    for list in ["recordTypes", "extendRecordTypes"] {
         let module = format!(
             "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
 kind: BRegModule
 id: extension
 version: 0.1.0
 {list}:
-  - {member}
+  entry:
     accessProfiles:
       reader:
         id: reader

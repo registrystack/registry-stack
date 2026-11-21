@@ -102,13 +102,7 @@
     },
     "distributions": []
   },
-  "modules": [
-    {
-      "id": "spatial-service-sites-core",
-      "version": "0.1.0",
-      "digest": "sha256:01ef6b5f372a224fab7a7cb73ddfb1bb29dbbcea7ad2a90fa43bdf77e404d09a"
-    }
-  ],
+  "modules": {"spatial-service-sites-core":{"digest":"sha256:e594049ed979db9a82e6a5cc1a84c6f6bde6de9f27f128f1d709ff1512eba304","version":"0.1.0"}},
   "accessProfiles": {
     "service-site-admin": {
       "default": true,
@@ -459,9 +453,8 @@
       ]
     }
   ],
-  "recordTypes": [
-    {
-      "id": "service-area",
+  "recordTypes": {
+    "service-area": {
       "primaryDataset": "spatial-service-sites",
       "route": "service-areas",
       "mutationMode": "mutable",
@@ -528,8 +521,7 @@
         }
       ]
     },
-    {
-      "id": "service-site",
+    "service-site": {
       "primaryDataset": "spatial-service-sites",
       "route": "service-sites",
       "mutationMode": "mutable",
@@ -632,7 +624,7 @@
         }
       ]
     }
-  ],
+  },
   "datasets": [
     {
       "id": "spatial-service-sites"

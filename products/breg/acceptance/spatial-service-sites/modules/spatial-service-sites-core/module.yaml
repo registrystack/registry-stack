@@ -3,8 +3,8 @@
   "kind": "BRegModule",
   "id": "spatial-service-sites-core",
   "version": "0.1.0",
-  "extendRecordTypes": [
-    {
+  "extendRecordTypes": {
+    "service-site": {
       "derived": [
         {
           "id": "map-labels",
@@ -20,8 +20,7 @@
             }
           ]
         }
-      ],
-      "recordType": "service-site"
+      ]
     }
-  ]
+  }
 }

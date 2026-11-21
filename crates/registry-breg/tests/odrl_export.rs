@@ -488,13 +488,12 @@ fn exact_selection_accepts_profiles_from_modules_and_extensions() {
             "project": {"id":"module-profile", "version":"1", "defaultLanguage":"en",
                         "canonicalBaseIri":"https://authoring.example.test"},
             "datasets": [{"id":"records"}],
-            "recordTypes": [{
-                "id":"case-file", "primaryDataset":"records", "route":"case-files",
+            "recordTypes": {"case-file": { "primaryDataset":"records", "route":"case-files",
                 "mutationMode":"mutable",
                 "fields":[{"id":"code", "type":"string", "maximumLength":32,
                            "classification":"internal"}]
-            }],
-            "modules": [{"id":"core", "version":"1"}]
+            }},
+            "modules": {"core": { "version":"1"}}
         }))
         .unwrap(),
     )
@@ -512,16 +511,14 @@ fn exact_selection_accepts_profiles_from_modules_and_extensions() {
         &serde_json::to_vec(&json!({
             "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
             "kind":"BRegModule", "id":"core", "version":"1",
-            "recordTypes":[{
-                "id":"module-record", "primaryDataset":"records", "route":"module-records",
+            "recordTypes":{"module-record": { "primaryDataset":"records", "route":"module-records",
                 "mutationMode":"mutable",
                 "fields":[{"id":"code", "type":"string", "maximumLength":32,
                            "classification":"internal"}],
                 "accessProfiles":profile("module-reader")
-            }],
-            "extendRecordTypes":[{
-                "recordType":"case-file", "accessProfiles":profile("extension-reader")
-            }]
+            }},
+            "extendRecordTypes":{"case-file": { "accessProfiles":profile("extension-reader")
+            }}
         }))
         .unwrap(),
     )

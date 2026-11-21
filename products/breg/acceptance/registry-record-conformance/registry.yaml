@@ -183,9 +183,8 @@
       }
     }
   },
-  "recordTypes": [
-    {
-      "id": "public-unit",
+  "recordTypes": {
+    "public-unit": {
       "primaryDataset": "public-units",
       "route": "public-units",
       "mutationMode": "mutable",
@@ -200,8 +199,7 @@
         }
       ]
     },
-    {
-      "id": "protected-unit",
+    "protected-unit": {
       "primaryDataset": "protected-units",
       "route": "protected-units",
       "mutationMode": "mutable",
@@ -216,7 +214,7 @@
         }
       ]
     }
-  ],
+  },
   "datasets": [
     {
       "id": "public-units"

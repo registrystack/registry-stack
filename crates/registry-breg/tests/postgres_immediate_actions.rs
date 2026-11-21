@@ -3063,9 +3063,8 @@ const ACTION_PROJECT: &[u8] = br#"{
     "defaultLanguage": "en",
     "canonicalBaseIri": "https://authoring.example.test"
   },
-  "recordTypes": [
-    {
-      "id": "person",
+  "recordTypes": {
+    "person": {
       "primaryDataset": "test-dataset",
       "route": "people",
       "mutationMode": "mutable",
@@ -3114,8 +3113,7 @@ const ACTION_PROJECT: &[u8] = br#"{
         }
       ]
     },
-    {
-      "id": "household",
+    "household": {
       "primaryDataset": "test-dataset",
       "route": "households",
       "mutationMode": "mutable",
@@ -3161,8 +3159,7 @@ const ACTION_PROJECT: &[u8] = br#"{
         }
       ]
     },
-    {
-      "id": "group-membership",
+    "group-membership": {
       "primaryDataset": "test-dataset",
       "route": "group-memberships",
       "mutationMode": "mutable",
@@ -3202,7 +3199,7 @@ const ACTION_PROJECT: &[u8] = br#"{
         }
       ]
     }
-  ],
+  },
   "actions": [
     {
       "id": "register-household-contact",

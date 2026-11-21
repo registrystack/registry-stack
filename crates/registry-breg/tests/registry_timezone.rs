@@ -44,15 +44,14 @@ fn date_interval_project(start_type: &str) -> Value {
         "kind": "BRegProject",
         "project": {"id": "licences", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://licences.example.test"},
         "datasets": [{"id": "licences"}],
-        "recordTypes": [{
-            "id": "licence", "primaryDataset": "licences", "route": "licences", "mutationMode": "mutable",
+        "recordTypes": {"licence": { "primaryDataset": "licences", "route": "licences", "mutationMode": "mutable",
             "fields": [
                 {"id": "holder", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"},
                 {"id": "valid-from", "type": start_type, "required": true, "classification": "internal"},
                 {"id": "valid-to", "type": start_type, "classification": "internal"}
             ],
             "temporal": {"startField": "valid-from", "endField": "valid-to"}
-        }],
+        }},
         "accessProfiles": {"reader": { "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
             "permissions": {"records": [{
                 "recordType": "licence", "operations": ["list"],
@@ -102,7 +101,7 @@ fn a_timestamp_interval_answers_now_without_a_timezone() {
 #[test]
 fn a_project_that_never_answers_today_needs_no_timezone() {
     let mut source = date_interval_project("date");
-    source["recordTypes"][0]
+    source["recordTypes"]["licence"]
         .as_object_mut()
         .unwrap()
         .remove("temporal");
@@ -130,7 +129,7 @@ fn a_name_that_is_not_an_iana_zone_is_refused() {
 #[test]
 fn a_current_date_requirement_requires_a_timezone() {
     let mut source = action_support::project();
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["parent"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({"id": "expires-on", "type": "date", "required": true, "classification": "restricted"}));
@@ -262,11 +261,11 @@ fn plan(ctx) {
 #[test]
 fn a_live_derived_field_reading_the_evaluation_date_requires_a_timezone() {
     let mut source = date_interval_project("date");
-    source["recordTypes"][0]
+    source["recordTypes"]["licence"]
         .as_object_mut()
         .unwrap()
         .remove("temporal");
-    source["recordTypes"][0]["derived"] = json!([{
+    source["recordTypes"]["licence"]["derived"] = json!([{
         "id": "age", "sql": "sql/age.sql", "key": "id", "execution": "live",
         "fields": [{"id": "observed-on", "type": "date", "classification": "internal"}]
     }]);

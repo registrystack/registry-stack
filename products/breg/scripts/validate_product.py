@@ -780,7 +780,11 @@ def validate_fixture(errors: list[str]) -> None:
     }
     if package != expected_package:
         errors.append("asset fixture.package: must equal the committed acceptance package identity")
-    entities = as_list(document.get("recordTypes"), "asset fixture.recordTypes", errors)
+    entities = [
+        {"id": key, **value}
+        for key, value in as_mapping(document.get("recordTypes"), "asset fixture.recordTypes", errors).items()
+        if isinstance(value, dict)
+    ]
     entity_ids = {item.get("id") for item in entities if isinstance(item, dict)}
     required_entities = {"asset-item", "asset-site", "asset-placement", "inspection-event"}
     if entity_ids != required_entities:
@@ -825,8 +829,8 @@ def validate_fixture(errors: list[str]) -> None:
         )
     ):
         errors.append("asset fixture: placement must declare scoped valid-time")
-    profiles = as_list(document.get("accessProfiles"), "asset fixture.accessProfiles", errors)
-    if [profile.get("id") for profile in profiles if isinstance(profile, dict)] != [
+    profiles = as_mapping(document.get("accessProfiles"), "asset fixture.accessProfiles", errors)
+    if list(profiles) != [
         "asset-operator",
         "site-planner",
     ]:

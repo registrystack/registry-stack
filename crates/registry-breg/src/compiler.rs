@@ -1572,10 +1572,9 @@ fn validate_cross_file_local_id_collisions(
     let mut module_ids = project
         .modules
         .iter()
-        .enumerate()
-        .map(|(index, module)| SourcedLocalId {
+        .map(|module| SourcedLocalId {
             id: module.id.clone(),
-            path: format!("project.modules[{index}].id"),
+            path: format!("project.modules[{}]", module.id),
             source: None,
         })
         .collect::<Vec<_>>();
@@ -2074,8 +2073,11 @@ fn validate_authored_display_text(
                 errors,
             );
         }
-        for (index, extension) in module.extend_entities.iter().enumerate() {
-            let path = format!("modules[id={}].extendRecordTypes[{index}]", module.id);
+        for extension in &module.extend_entities {
+            let path = format!(
+                "modules[id={}].extendRecordTypes[recordType={}]",
+                module.id, extension.entity
+            );
             for field in &extension.fields {
                 validate_display_source(
                     &field.display,
@@ -9296,11 +9298,10 @@ mod polygon_compiler_tests {
                     "kind":"BRegProject",
                     "project":{{"id":"polygon-compiler","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://polygon.example.test"}},
                     "datasets":[{{"id":"test-dataset"}}],
-                    "recordTypes":[{{
-                        "id":"area","primaryDataset":"test-dataset","route":"areas","mutationMode":"mutable",
+                    "recordTypes":{{"area":{{"primaryDataset":"test-dataset","route":"areas","mutationMode":"mutable",
                         "geojson":{{"geometryField":"geometry"}},
                         "fields":[{field}]
-                    }}]
+                    }}}}
                 }}"#
             )
             .as_bytes(),

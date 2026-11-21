@@ -37,48 +37,48 @@ manifestProjection:
   distributions: []
 datasets: [{id: registry}]
 recordTypes:
-- id: record
-  primaryDataset: registry
-  route: records
-  mutationMode: mutable
-  classification: internal
-  fields:
-  - id: code
-    type: string
-    required: true
-    minimumLength: 1
-    maximumLength: 64
+  record:
+    primaryDataset: registry
+    route: records
+    mutationMode: mutable
     classification: internal
-  - id: registration-number
-    apiName: registrationNumber
-    type: string
-    required: true
-    minimumLength: 1
-    maximumLength: 64
-    classification: internal
-  - id: status
-    type: vocabulary-code
-    vocabulary: record-status
-    classification: internal
-  - id: label
-    type: string
-    required: true
-    maximumLength: 100
-    classification: internal
-  constraints:
-  - type: unique
     fields:
-    - code
-  - type: unique
-    fields:
-    - registration-number
-  selectorProfiles:
-  - id: by-code
-    fields:
-    - code
-  - id: by-registration-number
-    fields:
-    - registration-number
+    - id: code
+      type: string
+      required: true
+      minimumLength: 1
+      maximumLength: 64
+      classification: internal
+    - id: registration-number
+      apiName: registrationNumber
+      type: string
+      required: true
+      minimumLength: 1
+      maximumLength: 64
+      classification: internal
+    - id: status
+      type: vocabulary-code
+      vocabulary: record-status
+      classification: internal
+    - id: label
+      type: string
+      required: true
+      maximumLength: 100
+      classification: internal
+    constraints:
+    - type: unique
+      fields:
+      - code
+    - type: unique
+      fields:
+      - registration-number
+    selectorProfiles:
+    - id: by-code
+      fields:
+      - code
+    - id: by-registration-number
+      fields:
+      - registration-number
 accessProfiles:
   operator:
     default: true

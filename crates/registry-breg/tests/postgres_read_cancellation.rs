@@ -436,10 +436,10 @@ fn compiled_registry() -> CompiledRegistry {
     let source = json!({"datasets":[{"id": "records"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "recordTypes":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
+        "recordTypes":{"entry": {"primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
             "fields":[{"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
                 {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
-            "accessLog":{"subjectField":"subject"}}],
+            "accessLog":{"subjectField":"subject"}}},
         "accessProfiles":{
             "reader": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
                 "records":[

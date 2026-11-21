@@ -41,10 +41,10 @@ fn registry_source(automatic: bool) -> Value {
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"proposal-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://proposal.example.test"},
         "datasets":[{"id":"directory"}],
-        "recordTypes":[{"id":"target","primaryDataset":"directory","route":"targets","mutationMode":"mutable",
+        "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable",
             "mutationPolicy":{"patch":"proposal-required"},
             "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
-                {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}],
+                {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}},
         "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{
             "review":{"type":"none"},"application":if automatic{json!({"mode":"automatic","maximumAttempts":3})}else{json!({"mode":"manual"})},
             "retention":{"mode":"operator-erase"},"attachments":[{"id":"support","required":false,"maximumBytes":4096,
@@ -216,9 +216,9 @@ async fn shape_journey(change: Change) {
     let mut source = registry_source(false);
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
         json!(["target", "value"]);
-    source["recordTypes"][0]["fields"][0]["required"] = json!(false);
-    source["recordTypes"][0]["fields"][0]["pattern"] = json!("^.*$");
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["target"]["fields"][0]["required"] = json!(false);
+    source["recordTypes"]["target"]["fields"][0]["pattern"] = json!("^.*$");
+    source["recordTypes"]["target"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({"id":"note","type":"boolean","required":false,"classification":"internal"}));
@@ -229,7 +229,9 @@ async fn shape_journey(change: Change) {
     if matches!(&change, Change::EventRecordOnly) {
         // The fields an event record descriptor maps exist before the descriptor
         // is declared, so the successor differs only by the descriptor.
-        let fields = source["recordTypes"][0]["fields"].as_array_mut().unwrap();
+        let fields = source["recordTypes"]["target"]["fields"]
+            .as_array_mut()
+            .unwrap();
         fields.push(json!({"id":"parent","type":"reference","target":"target","required":false,"classification":"internal"}));
         fields.push(
             json!({"id":"noted-on","type":"date","required":false,"classification":"internal"}),
@@ -316,29 +318,32 @@ async fn shape_journey(change: Change) {
             json!(format!("sha256:{}", "c".repeat(64)));
     }
     match change {
-        Change::OptionalField => source["recordTypes"][0]["fields"]
+        Change::OptionalField => source["recordTypes"]["target"]["fields"]
             .as_array_mut()
             .unwrap()
             .push(
                 json!({"id":"extra","type":"boolean","required":false,"classification":"internal"}),
             ),
-        Change::Pattern => source["recordTypes"][0]["fields"][0]["pattern"] = json!("^[AB].*$"),
-        Change::Type => source["recordTypes"][0]["fields"][2]["type"] = json!("int64"),
-        Change::Classification => {
-            source["recordTypes"][0]["fields"][2]["classification"] = json!("restricted")
+        Change::Pattern => {
+            source["recordTypes"]["target"]["fields"][0]["pattern"] = json!("^[AB].*$")
         }
-        Change::Required => source["recordTypes"][0]["fields"][0]["required"] = json!(true),
+        Change::Type => source["recordTypes"]["target"]["fields"][2]["type"] = json!("int64"),
+        Change::Classification => {
+            source["recordTypes"]["target"]["fields"][2]["classification"] = json!("restricted")
+        }
+        Change::Required => source["recordTypes"]["target"]["fields"][0]["required"] = json!(true),
         Change::PolicyOnly => {}
         Change::DisplayOnly => {
             source["actions"][0]["display"] = json!({"label":"A display-only update"})
         }
         Change::EventRecordOnly => {
-            source["recordTypes"][0]["eventRecord"] = json!({
+            source["recordTypes"]["target"]["eventRecord"] = json!({
                 "label":"Target noted",
                 "subjects":[{"role":"parent","field":"parent","label":"Parent","target":"target"}],
                 "occurredAt":{"at":"noted-on"}
             });
-            source["recordTypes"][0]["display"] = json!({"purpose":"domain","group":"Directory"});
+            source["recordTypes"]["target"]["display"] =
+                json!({"purpose":"domain","group":"Directory"});
         }
     }
     let candidate = shape_package::candidate(&fixture, &source).await;

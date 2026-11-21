@@ -28,15 +28,15 @@ fn project() -> Value {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"standing-agent-ceiling","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://standing-agent.example.test"},
         "datasets":[{"id":"test-dataset"}],
-        "recordTypes":[
-            {"id":"case","route":"cases","primaryDataset":"test-dataset","mutationMode":"mutable","classification":"internal",
+        "recordTypes":{
+            "case": {"route":"cases","primaryDataset":"test-dataset","mutationMode":"mutable","classification":"internal",
                 "batch":{"maximumItems":3,"maximumBytes":8192},"mutationPolicy":{"patch":"proposal-required"},
                 "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]},
-            {"id":"note","route":"notes","primaryDataset":"test-dataset","mutationMode":"mutable","tombstone":true,"classification":"internal",
+            "note": {"route":"notes","primaryDataset":"test-dataset","mutationMode":"mutable","tombstone":true,"classification":"internal",
                 "batch":{"maximumItems":3,"maximumBytes":8192},"fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]},
-            {"id":"memo","route":"memos","primaryDataset":"test-dataset","mutationMode":"mutable","classification":"internal",
+            "memo": {"route":"memos","primaryDataset":"test-dataset","mutationMode":"mutable","classification":"internal",
                 "batch":{"maximumItems":3,"maximumBytes":8192},"fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]}
-        ],
+        },
         "actions":[
             {"id":"relabel-note","execution":{"mode":"immediate"},"inputs":[
                 {"id":"note-ref","apiName":"noteId","type":"reference","target":"note","required":true,"classification":"internal"},
@@ -221,7 +221,7 @@ fn imported_proposal_action_uses_the_global_requester_client_binding() {
         .as_array_mut()
         .expect("actions array")
         .remove(1);
-    value["modules"] = json!([{"id": "proposal-actions", "version": "1"}]);
+    value["modules"] = json!({"proposal-actions": {"version": "1"}});
     let project = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
         .expect("project parses");
     let module = parse_module_json(
@@ -341,7 +341,7 @@ fn standing_agent_cannot_hold_a_direct_target_mutation() {
 #[test]
 fn standing_agent_cannot_batch_record_writes() {
     let mut value = with_assistant_operation(1, "batch");
-    value["recordTypes"][2]["batch"] = json!({"maximumItems": 3, "maximumBytes": 8192});
+    value["recordTypes"]["memo"]["batch"] = json!({"maximumItems": 3, "maximumBytes": 8192});
     let failure = refused(
         compile(&value),
         "batch does not create Proposal draft authority",
@@ -409,7 +409,7 @@ fn human_profiles_keep_immediate_actions() {
 /// confirm.
 fn with_dataset(clerk: &[&str], assistant: &[&str]) -> Value {
     let mut value = project();
-    value["recordTypes"][1]["fields"]
+    value["recordTypes"]["note"]["fields"]
         .as_array_mut()
         .expect("fields array")
         .extend([
@@ -454,7 +454,7 @@ fn compile_with_module_unit_profile(
     actor_kind: &str,
 ) -> Result<registry_breg::CompiledRegistry, CompileFailure> {
     let mut value = with_dataset(&[], &[]);
-    value["modules"] = json!([{"id": "assistant-extension", "version": "1"}]);
+    value["modules"] = json!({"assistant-extension": {"version": "1"}});
     value["accessProfiles"]["statistician"] = json!({
         "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
         "permissions": {"datasets": [{"dataset": "notes-by-status", "operations": ["publish", "read-releases"]}]}
@@ -465,15 +465,14 @@ fn compile_with_module_unit_profile(
         &serde_json::to_vec(&json!({
             "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
             "id": "assistant-extension", "version": "1",
-            "extendRecordTypes": [{
-                "recordType": "note",
+            "extendRecordTypes": {"note": {
                 "accessProfiles": {"statistician": { "principalClaim": "registry_principal",
                     "actorKind": actor_kind, "requesterClients": ["assistant-client"],
                     "operations": ["list"], "allowCount": true,
                     "readableFields": ["label", "open", "filed"], "filterableFields": ["open", "filed"],
                     "requiredScopes": "unrestricted", "rowBoundaries": "unrestricted"
                 }}
-            }]
+            }}
         }))
         .expect("module serializes"),
     )
@@ -605,7 +604,7 @@ fn task_grant_profile_cannot_be_a_dataset_publisher() {
 #[test]
 fn module_contributed_standing_agent_profiles_meet_the_same_ceiling() {
     let mut value = project();
-    value["modules"] = json!([{"id": "assistant-extension", "version": "1"}]);
+    value["modules"] = json!({"assistant-extension": {"version": "1"}});
     let project = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
         .expect("project parses");
     for (entity, operation, code) in [
@@ -617,15 +616,14 @@ fn module_contributed_standing_agent_profiles_meet_the_same_ceiling() {
             &serde_json::to_vec(&json!({
                 "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
                 "id": "assistant-extension", "version": "1",
-                "extendRecordTypes": [{
-                    "recordType": entity,
+                "extendRecordTypes": {entity: {
                     "accessProfiles": {"module-assistant": { "principalClaim": "registry_principal",
                         "actorKind": "agent", "requesterClients": ["assistant-client"],
                         "operations": ["get", operation],
                         "readableFields": ["label"], "writableFields": ["label"],
                         "requiredScopes": "unrestricted", "rowBoundaries": "unrestricted"
                     }}
-                }]
+                }}
             }))
             .expect("module serializes"),
         )
@@ -699,7 +697,7 @@ fn module_contributed_profiles_cannot_declare_a_task_grant() {
     // ceiling is checked. A module profile declaring one would otherwise
     // escape the standing-agent ceiling and meet no task-grant ceiling.
     let mut value = project();
-    value["modules"] = json!([{"id": "assistant-extension", "version": "1"}]);
+    value["modules"] = json!({"assistant-extension": {"version": "1"}});
     let project = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
         .expect("project parses");
     let delegated_profile = json!({
@@ -714,17 +712,16 @@ fn module_contributed_profiles_cannot_declare_a_task_grant() {
         json!({
             "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
             "id": "assistant-extension", "version": "1",
-            "extendRecordTypes": [{"recordType": "note", "accessProfiles": {"module-assistant": delegated_profile.clone()}}]
+            "extendRecordTypes": {"note": { "accessProfiles": {"module-assistant": delegated_profile.clone()}}}
         }),
         json!({
             "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
             "id": "assistant-extension", "version": "1",
-            "recordTypes": [{
-                "id": "archive", "primaryDataset": "test-dataset", "route": "archives",
+            "recordTypes": {"archive": { "primaryDataset": "test-dataset", "route": "archives",
                 "mutationMode": "mutable", "classification": "internal",
                 "fields": [{"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}],
                 "accessProfiles": {"module-assistant": delegated_profile.clone()}
-            }]
+            }}
         }),
     ] {
         let module = parse_module_json(&serde_json::to_vec(&module).expect("module serializes"))

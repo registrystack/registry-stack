@@ -691,8 +691,7 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": "runtime-event-destinations", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
-        "recordTypes": [{
-            "id": "case",
+        "recordTypes": {"case": {
             "primaryDataset": "test-dataset",
             "route": "cases",
             "mutationMode": "mutable",
@@ -703,7 +702,7 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
                 {"id": "eligibility", "type": "string", "maximumLength": 32, "classification": "restricted"}
             ],
             "hooks": events
-        }]
+        }}
     });
     let parsed = parse_project_json(&serde_json::to_vec(&project).expect("project serializes"))
         .expect("project parses");

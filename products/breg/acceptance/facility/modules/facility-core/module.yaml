@@ -3,8 +3,8 @@
   "kind": "BRegModule",
   "id": "facility-core",
   "version": "0.1.0",
-  "extendRecordTypes": [
-    {
+  "extendRecordTypes": {
+    "permit": {
       "derived": [
         {
           "id": "permit-statistics",
@@ -18,10 +18,9 @@
             }
           ]
         }
-      ],
-      "recordType": "permit"
+      ]
     },
-    {
+    "discharge-report": {
       "derived": [
         {
           "id": "discharge-statistics",
@@ -35,8 +34,7 @@
             }
           ]
         }
-      ],
-      "recordType": "discharge-report"
+      ]
     }
-  ]
+  }
 }

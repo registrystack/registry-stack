@@ -249,7 +249,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
     shutil.copytree(registry, logged_registry)
     logged_model_path = logged_registry / "registry.yaml"
     logged_model = read(logged_model_path)
-    logged_model["recordTypes"][0]["accessLog"] = {
+    logged_model["recordTypes"]["record"]["accessLog"] = {
         "subjectField": "code",
         "retentionDays": 90,
         "trustedIntermediaries": ["evidence-service"],
@@ -282,7 +282,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
     # An unrelated Registry field changes provenance only, never assertion meaning.
     model_path = registry / "registry.yaml"
     model = read(model_path)
-    fields = model["recordTypes"][0]["fields"]
+    fields = model["recordTypes"]["record"]["fields"]
     fields.append({"id": "operator-note", "type": "string", "maximumLength": 32,
                    "classification": "internal"})
     write(model_path, model)

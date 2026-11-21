@@ -40,9 +40,9 @@ fn acceptance_action() -> CompiledAction {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"acceptance-benchmark","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "datasets":[{"id":"records"}],
-        "recordTypes":[{"id":"person","route":"people","primaryDataset":"records","mutationMode":"mutable","fields":[
+        "recordTypes":{"person": {"route":"people","primaryDataset":"records","mutationMode":"mutable","fields":[
             {"id":"identifier","type":"string","required":true,"maximumLength":13,"classification":"internal"},
-            {"id":"display-name","type":"string","required":true,"minimumLength":1,"maximumLength":200,"classification":"internal"}]}],
+            {"id":"display-name","type":"string","required":true,"minimumLength":1,"maximumLength":200,"classification":"internal"}]}},
         "functions":[{"id":"register-plan","runtime":"rhai","source":"scripts/register-person.rhai","entrypoint":"plan","abi":"registry.action-plan/v1"}],
         "actions":[{"id":"register-person","execution":{"mode":"immediate"},"inputs":[
             {"id":"identifier","type":"string","required":true,"maximumLength":13,"classification":"internal"},
@@ -90,11 +90,11 @@ fn characterization_action(script: &str) -> CompiledAction {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"script-baseline","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "datasets":[{"id":"baseline"}],
-        "recordTypes":[{"id":"record","primaryDataset":"baseline","route":"records","mutationMode":"mutable","fields":[
+        "recordTypes":{"record": {"primaryDataset":"baseline","route":"records","mutationMode":"mutable","fields":[
             {"id":"label","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"classification":"restricted"}
-        ]}],
+        ]}},
         "functions":[{"id":"baseline-plan","runtime":"rhai","source":"handlers/baseline.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}],
         "actions":[{"id":"register-record","execution":{"mode":"immediate"},"inputs":[
             {"id":"label","apiName":"displayLabel","type":"string","maximumLength":80,"required":true,"classification":"restricted"},

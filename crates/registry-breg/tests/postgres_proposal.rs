@@ -74,10 +74,10 @@ fn registry_source(automatic: bool) -> Value {
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"proposal-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://proposal.example.test"},
         "datasets":[{"id":"directory"}],
-        "recordTypes":[{"id":"target","primaryDataset":"directory","route":"targets","mutationMode":"mutable",
+        "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable",
             "mutationPolicy":{"patch":"proposal-required"},
             "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
-                {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}],
+                {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}},
         "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{
             "review":{"type":"none"},"application":if automatic{json!({"mode":"automatic","maximumAttempts":3})}else{json!({"mode":"manual"})},
             "retention":{"mode":"operator-erase"},"attachments":[{"id":"support","required":false,"maximumBytes":4096,
@@ -109,11 +109,11 @@ fn registry(automatic: bool) -> registry_breg::CompiledRegistry {
 async fn holder_identity_is_a_draft_value_but_submit_authority_remains_server_owned() {
     let mut source = registry_source(false);
     source["accessProfiles"]["clerk"]["default"] = json!(false);
-    source["recordTypes"][0]
+    source["recordTypes"]["target"]
         .as_object_mut()
         .unwrap()
         .remove("mutationPolicy");
-    source["recordTypes"][0]["fields"][1]["id"] = json!("applicant");
+    source["recordTypes"]["target"]["fields"][1]["id"] = json!("applicant");
     source["actions"][0]["inputs"][0] = json!({"id":"applicant","type":"string","maximumLength":64,"required":true,"classification":"internal"});
     source["actions"][0]["commitGuards"] = json!({});
     source["actions"][0]["plan"] = json!({"type":"fixed","effects":[{"id":"application","operation":"create","target":{"recordType":"target"},"set":{"name":{"fromInput":"value"},"applicant":{"fromInput":"applicant"}}}]});
@@ -1554,7 +1554,7 @@ async fn proposal_list_pages_valid_large_inputs_without_losing_later_proposals()
 #[tokio::test]
 async fn manual_apply_unique_conflict_blocks_apply_while_stale_revision_stays_rebasable() {
     let mut source = registry_source(false);
-    source["recordTypes"][0]["constraints"] =
+    source["recordTypes"]["target"]["constraints"] =
         json!([{"id":"unique-name","type":"unique","fields":["name"]}]);
     let fixture =
         client_http::ClientFixture::start(compile(source.clone()), claims("author", "zone-a"))
@@ -2904,7 +2904,7 @@ async fn timer_proposal_apply_takes_control_before_the_proposal_parent_lock() {
 
 fn timer_proposal_registry() -> registry_breg::CompiledRegistry {
     let mut source = registry_source(false);
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["target"]["fields"]
         .as_array_mut()
         .unwrap()
         .extend([
@@ -2912,12 +2912,12 @@ fn timer_proposal_registry() -> registry_breg::CompiledRegistry {
             json!({"id":"activation-not-after","type":"timestamp","classification":"internal"}),
             json!({"id":"activation-revision","type":"uuid","classification":"internal"}),
         ]);
-    source["recordTypes"][0]["timers"] = json!([{
+    source["recordTypes"]["target"]["timers"] = json!([{
         "id":"activate","at":"activates-at","notAfter":"activation-not-after",
         "rearmOn":"activation-revision","invoke":"activate-target",
         "input":{"target":{"fromRecordId":true}}
     }]);
-    source["recordTypes"][0]
+    source["recordTypes"]["target"]
         .as_object_mut()
         .unwrap()
         .remove("mutationPolicy");
@@ -7633,7 +7633,7 @@ async fn compatibility_inventory_refuses_rebound_frozen_review_subject_context_a
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn every_activation_preserves_a_refused_apply_block_until_rebase() {
     let mut source = registry_source(false);
-    source["recordTypes"][0]["constraints"] =
+    source["recordTypes"]["target"]["constraints"] =
         json!([{"id":"unique-name","type":"unique","fields":["name"]}]);
     source["reviewAuthorities"] =
         json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);

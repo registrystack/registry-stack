@@ -93,8 +93,7 @@ async fn setup_with_options(
         parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
     let mut document: serde_json::Value =
         serde_json::from_slice(&source_bytes::source_bytes(&project)).unwrap();
-    document["recordTypes"].as_array_mut().unwrap().push(json!({
-        "id":"local-register", "route":"local-registers", "primaryDataset":"farmer-landholding-evidence", "mutationMode":"mutable",
+    document["recordTypes"].as_object_mut().unwrap().insert("local-register".to_owned(), json!({"route":"local-registers", "primaryDataset":"farmer-landholding-evidence", "mutationMode":"mutable",
         "fields":[
             {"id":"zone", "type":"string", "maximumLength":32,"required":true,"classification":"restricted"},
             {"id":"active", "type":"boolean", "required":true,"classification":"restricted"},

@@ -112,15 +112,14 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "kind":"BRegProject",
           "project":{"id":"generated-identifier-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://identifiers.example.test"},
           "datasets":[{"id":"applications"}],
-          "recordTypes":[{
-            "id":"application","primaryDataset":"applications","route":"applications","mutationMode":"mutable",
+          "recordTypes":{"application": {"primaryDataset":"applications","route":"applications","mutationMode":"mutable",
             "fields":[
               {"id":"jurisdiction","type":"string","minimumLength":1,"maximumLength":40,"required":true,"classification":"internal"},
               {"id":"applicant","type":"string","minimumLength":1,"maximumLength":120,"required":true,"classification":"internal"},
               {"id":"number","type":"string","minimumLength":8,"maximumLength":32,"required":true,"classification":"internal",
                "generate":{"type":"sequence","prefix":"APP-","minimumDigits":4,"scope":["jurisdiction"]}}
             ]
-          }],
+          }},
           "actions":[{
             "id":"register-application",
             "inputs":[

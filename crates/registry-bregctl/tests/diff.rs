@@ -478,10 +478,10 @@ fn a_runtime_bound_baseline_stored_with_list_form_access_profiles_is_refused() {
         "{message}"
     );
     assert!(
-        message.contains("recreate the database and apply a package built by this release"),
+        message.contains(registry_breg::package::FRESH_DATABASE_PATH),
         "{message}"
     );
-    assert!(!message.contains("rebuild"), "{message}");
+    assert!(!message.contains("--baseline-package"), "{message}");
 }
 
 #[test]
@@ -780,14 +780,14 @@ fn write_project_with_module(parent: &Path, name: &str, module: Vec<u8>) -> Path
 
 fn project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"datasets":[{{"id":"neutral-registry"}}],"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"datasets":[{{"id":"neutral-registry"}}],"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}}}"#
     )
     .into_bytes()
 }
 
 fn module_bytes(classification: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":16,"classification":"{classification}"}}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}}}}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":{{"record":{{"primaryDataset":"neutral-registry","route":"records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":16,"classification":"{classification}"}}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}}}}}}}}}"#
     )
     .into_bytes()
 }

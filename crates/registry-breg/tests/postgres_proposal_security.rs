@@ -42,18 +42,18 @@ fn source(membership: bool) -> Value {
     }
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"proposal-security","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://proposal.example.test"},
-        "datasets":[{"id":"directory"}],"recordTypes":[
-            {"id":"organization","primaryDataset":"directory","route":"organizations","mutationMode":"mutable",
+        "datasets":[{"id":"directory"}],"recordTypes":{
+            "organization": {"primaryDataset":"directory","route":"organizations","mutationMode":"mutable",
                 "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"}]},
-            {"id":"membership","primaryDataset":"directory","route":"memberships","mutationMode":"mutable","fields":[
+            "membership": {"primaryDataset":"directory","route":"memberships","mutationMode":"mutable","fields":[
                 {"id":"organization","type":"reference","target":"organization","required":true,"classification":"internal"},
                 {"id":"principal","type":"string","required":true,"maximumLength":64,"classification":"restricted"},
                 {"id":"active","type":"boolean","required":true,"classification":"internal"}]},
-            {"id":"target","primaryDataset":"directory","route":"targets","mutationMode":"mutable",
+            "target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable",
                 "mutationPolicy":{"patch":"proposal-required"},"fields":[
                     {"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
                     {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"},
-                    {"id":"organization","type":"reference","target":"organization","required":true,"classification":"internal"}]}],
+                    {"id":"organization","type":"reference","target":"organization","required":true,"classification":"internal"}]}},
         "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},
             "reviewContext":{"id":"review-name","fields":{"currentName":{"type":"record","input":"target","field":"name"},"proposedName":{"type":"input","input":"value"}}},
             "application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}},
@@ -913,19 +913,13 @@ async fn review_context_requires_record_grant_and_current_membership() {
 async fn saved_review_document_requires_current_subject_consent() {
     let mut project = source(false);
     let consent = consent_fixture::source();
-    let mut decision = consent["recordTypes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|record| record["id"] == "consent-decision")
-        .unwrap()
-        .clone();
+    let mut decision = consent["recordTypes"]["consent-decision"].clone();
     decision["primaryDataset"] = json!("directory");
     decision["fields"][0]["target"] = json!("target");
     project["recordTypes"]
-        .as_array_mut()
+        .as_object_mut()
         .unwrap()
-        .push(decision);
+        .insert("consent-decision".to_owned(), decision);
     let mut record_consent = consent["actions"][0].clone();
     record_consent["inputs"][0]["target"] = json!("target");
     project["actions"]
@@ -2438,8 +2432,7 @@ async fn frozen_changes_inspection_covers_patch_and_create_without_applying_or_r
         .as_array_mut()
         .unwrap()
         .truncate(1);
-    project["recordTypes"].as_array_mut().unwrap().push(json!({
-        "id":"notice","primaryDataset":"directory","route":"notices","mutationMode":"mutable",
+    project["recordTypes"].as_object_mut().unwrap().insert("notice".to_owned(), json!({"primaryDataset":"directory","route":"notices","mutationMode":"mutable",
         "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
             {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]
     }));

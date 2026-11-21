@@ -24,7 +24,7 @@ project:
   canonicalBaseIri: https://access-example.example.test
 datasets: [{id: test-dataset}]
 recordTypes:
-  - id: entry
+  entry:
     primaryDataset: test-dataset
     route: entries
     mutationMode: mutable

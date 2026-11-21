@@ -147,23 +147,21 @@ fn hook_project_json(
           "kind":"BRegProject",
           "project":{{"id":"hook-proposal-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "datasets":[{{"id":"test-dataset"}}],
-          "recordTypes":[{{
-            "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"create-only","classification":"restricted",
+          "recordTypes":{{"case":{{"primaryDataset":"test-dataset","route":"cases","mutationMode":"create-only","classification":"restricted",
             "fields":[
               {{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"}},
               {{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}},
               {{"id":"restricted_note","type":"string","maximumLength":64,"required":true,"classification":"restricted"}}
             ],
             "hooks":{case_hooks}
-          }},{{
-            "id":"followup","primaryDataset":"test-dataset","route":"followups","mutationMode":"create-only","classification":"internal",
+          }},"followup":{{"primaryDataset":"test-dataset","route":"followups","mutationMode":"create-only","classification":"internal",
             "fields":[
               {{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"}},
               {{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}},
               {{"id":"origin","type":"string","maximumLength":64,"required":true,"classification":"internal"}}
             ],
             "hooks":{followup_hooks}
-          }}],
+          }}}},
           "functions":[{{"id":"open-followup-plan","runtime":"rhai","source":"scripts/open-followup.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}}],
           "actions":[{{
             "id":"open-followup","execution":{{"mode":"immediate"}},
@@ -280,9 +278,9 @@ fn encrypted_proposal_registry() -> CompiledRegistry {
         "",
     ))
     .expect("hook proposal fixture is JSON");
-    project_json["recordTypes"][1]["classification"] = json!("restricted");
-    project_json["recordTypes"][1]["fields"][2]["classification"] = json!("restricted");
-    project_json["recordTypes"][1]["fields"][2]["encrypted"] = json!(true);
+    project_json["recordTypes"]["followup"]["classification"] = json!("restricted");
+    project_json["recordTypes"]["followup"]["fields"][2]["classification"] = json!("restricted");
+    project_json["recordTypes"]["followup"]["fields"][2]["encrypted"] = json!(true);
     let project = parse_project_json(
         &serde_json::to_vec(&project_json).expect("hook proposal fixture serializes"),
     )
@@ -443,8 +441,7 @@ fn tally_proposal_registry_with_commit_guards(commit_guards: Option<Value>) -> C
         ),
     ))
     .expect("hook proposal fixture is JSON");
-    project["recordTypes"].as_array_mut().unwrap().push(json!({
-        "id": "tally", "primaryDataset": "test-dataset", "route": "tallies",
+    project["recordTypes"].as_object_mut().unwrap().insert("tally".to_owned(), json!({"primaryDataset": "test-dataset", "route": "tallies",
         "mutationMode": "mutable", "classification": "internal",
         "fields": [
             {"id": "jurisdiction", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"},
@@ -452,7 +449,9 @@ fn tally_proposal_registry_with_commit_guards(commit_guards: Option<Value>) -> C
         ],
         "hooks": []
     }));
-    let case_fields = project["recordTypes"][0]["fields"].as_array_mut().unwrap();
+    let case_fields = project["recordTypes"]["case"]["fields"]
+        .as_array_mut()
+        .unwrap();
     case_fields.push(json!({
         "id": "tally", "apiName": "tally", "type": "reference", "target": "tally",
         "classification": "internal"

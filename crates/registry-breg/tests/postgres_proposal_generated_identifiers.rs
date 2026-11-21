@@ -54,8 +54,7 @@ fn registry() -> registry_breg::CompiledRegistry {
         },
         "package":{"sourceRevision":"proposal-generated-identifiers-test"},
         "datasets":[{"id":"directory"}],
-        "recordTypes":[{
-            "id":"target",
+        "recordTypes":{"target": {
             "primaryDataset":"directory",
             "route":"targets",
             "mutationMode":"mutable",
@@ -72,7 +71,7 @@ fn registry() -> registry_breg::CompiledRegistry {
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,
                     "classification":"internal"}
             ]
-        }],
+        }},
         "actions":[
             {
                 "id":"register-target",

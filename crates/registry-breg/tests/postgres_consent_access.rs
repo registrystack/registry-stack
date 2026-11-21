@@ -1473,12 +1473,7 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
     }
     removed["retiredConsentScopes"] = json!(["food-targeting-2025", "food-targeting"]);
     let mut changed = gated.clone();
-    let record = changed["recordTypes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|entity| entity["id"] == "consent-decision")
-        .unwrap();
+    let record = &mut changed["recordTypes"]["consent-decision"];
     record["consentRecord"]["validity"]["maximumDurationDays"] = json!(30);
     record["consentRecord"]["decision"]["revokes"] = json!(["refused", "withdrawn"]);
     let mut previous = consent_fixture::compile(&base).unwrap();

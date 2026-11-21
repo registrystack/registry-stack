@@ -397,11 +397,10 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"statistics-catalog","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test"},
-          "recordTypes":[{
-            "id":"entry","primaryDataset":"statistics-catalog","route":"entries",
+          "recordTypes":{"entry": {"primaryDataset":"statistics-catalog","route":"entries",
             "mutationMode":"mutable","classification":"internal",
             "fields":[{"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
-          }],
+          }},
           "accessProfiles":{"reader": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"records":[{
               "recordType":"entry","operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"

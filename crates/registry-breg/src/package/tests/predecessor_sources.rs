@@ -66,3 +66,36 @@ fn predecessor_naming_entity_id_is_refused() {
     assert!(message.contains("entityId"), "{message}");
     assert!(message.contains("recreate the database"), "{message}");
 }
+
+/// A package built before this release, read as a current package, is refused
+/// with the reader's diagnostics and the one path forward: a fresh database.
+#[test]
+fn list_form_sources_read_as_a_current_package_name_the_fresh_database_path() {
+    let root = list_form_package();
+    let shared = verify_shared_package(&root).expect("the historical envelope verifies");
+    let (manifest, loaded) =
+        load_verified_closure(&root, &shared, false).expect("the historical closure verifies");
+
+    let Err(refusal) = compile_package_sources(&manifest, &loaded) else {
+        panic!("list-form access profiles are not read from a current package");
+    };
+
+    let PackageError::PreviousReleaseSources(detail) = &refusal else {
+        panic!("expected the previous-release refusal, got {refusal:?}");
+    };
+    assert!(
+        detail.contains("Write accessProfiles as a mapping"),
+        "{detail}"
+    );
+    let message = refusal.to_string();
+    assert!(message.contains(FRESH_DATABASE_PATH), "{message}");
+    assert!(!message.contains("--baseline-package"), "{message}");
+}
+
+/// A package that predates the Record timer store gets the same path forward.
+#[test]
+fn legacy_engine_feature_refusal_names_the_fresh_database_path() {
+    let message = PackageError::EngineFeatureUpgradeRequired.to_string();
+    assert!(message.contains(FRESH_DATABASE_PATH), "{message}");
+    assert!(!message.contains("successor"), "{message}");
+}

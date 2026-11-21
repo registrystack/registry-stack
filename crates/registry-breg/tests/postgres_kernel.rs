@@ -778,7 +778,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         "project":{"id":"catalog-proof","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://catalog-proof.example.test","timezone":"UTC"},
         "datasets":[{"id":"entries"}],
-        "recordTypes":[{"id":"entry","primaryDataset":"entries","route":"entries",
+        "recordTypes":{"entry": {"primaryDataset":"entries","route":"entries",
             "mutationMode":"mutable","classification":"internal",
             "fields":[
                 {"id":"authority","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
@@ -788,7 +788,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             ],
             "temporal":{"startField":"valid-from","endField":"valid-to"},
             "constraints":[{"type":"temporal-non-overlap","scopeFields":["authority"]}]
-        }],
+        }},
         "accessProfiles":{"operator": {"default":true,"principalClaim":"principal",
             "requiredScopes":"unrestricted","requiredPurposes":["registry-administration"],
             "permissions":{"records":[{"recordType":"entry","operations":["create","get","list","patch"],

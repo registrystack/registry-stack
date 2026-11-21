@@ -15,11 +15,10 @@ fn provenance_project() -> registry_breg::contract::RegistryProject {
         br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"module-provenance","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://module-provenance.example.test"},
-          "modules":[{"id":"declarer","version":"1"},{"id":"extender","version":"1"}],
-          "recordTypes":[{
-            "id":"root-case","primaryDataset":"test-dataset","route":"root-cases","mutationMode":"mutable",
+          "modules":{"declarer": {"version":"1"},"extender": {"version":"1"}},
+          "recordTypes":{"root-case": {"primaryDataset":"test-dataset","route":"root-cases","mutationMode":"mutable",
             "fields":[{"id":"root-field","type":"string","maximumLength":8,"classification":"internal"}]
-          }],
+          }},
           "accessProfiles":{"reader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
               "records":[
                 {"recordType":"root-case","operations":["get"],"readableFields":["root-field"],"rowBoundaries":"unrestricted"},
@@ -34,24 +33,22 @@ fn provenance_project() -> registry_breg::contract::RegistryProject {
 
 fn declarer_module() -> RegistryModule {
     parse_module_json(
-        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"declarer","version":"1","recordTypes":[{
-          "id":"module-case","primaryDataset":"test-dataset","route":"module-cases","mutationMode":"mutable",
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"declarer","version":"1","recordTypes":{"module-case": {"primaryDataset":"test-dataset","route":"module-cases","mutationMode":"mutable",
           "fields":[{"id":"base-field","type":"string","maximumLength":8,"classification":"internal"}],
           "hooks":[{"id":"module-case-created","phase":"after","trigger":"created","projection":["base-field"]}],
           "constraints":[{"type":"unique","fields":["base-field"]}]
-        }]}"#,
+        }}}"#,
     )
     .expect("module parses")
 }
 
 fn extender_module() -> RegistryModule {
     parse_module_json(
-        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"extender","version":"1","extendRecordTypes":[{
-          "recordType":"module-case",
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"extender","version":"1","extendRecordTypes":{"module-case": {
           "fields":[{"id":"extra-field","type":"string","maximumLength":8,"classification":"internal"}],
           "hooks":[{"id":"module-case-extended","phase":"after","trigger":"created","projection":["extra-field"]}],
           "constraints":[{"type":"unique","fields":["extra-field"]}]
-        }]}"#,
+        }}}"#,
     )
     .expect("module parses")
 }
@@ -190,12 +187,11 @@ fn module_free_project_omits_source_module_and_module_origins() {
         br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"module-free","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://module-free.example.test"},
-          "recordTypes":[{
-            "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable",
+          "recordTypes":{"case": {"primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable",
             "fields":[{"id":"label","type":"string","maximumLength":8,"classification":"internal"}],
             "hooks":[{"id":"case-created","phase":"after","trigger":"created","projection":["label"]}],
             "constraints":[{"type":"unique","fields":["label"]}]
-          }],
+          }},
           "accessProfiles":{"reader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
               "records":[
                 {"recordType":"case","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}

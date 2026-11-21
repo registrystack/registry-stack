@@ -935,7 +935,7 @@ async fn wait_until_database_time(database: &TestDatabase, instant: chrono::Date
 
 fn compiled_control_remap_registry(control: Option<&str>) -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    source["recordTypes"][0]["fields"]
+    source["recordTypes"]["service"]["fields"]
         .as_array_mut()
         .expect("service fields are an array")
         .extend([
@@ -961,15 +961,16 @@ fn compiled_control_remap_registry(control: Option<&str>) -> registry_breg::Comp
     }
     match control {
         Some("at") => {
-            source["recordTypes"][0]["timers"][0]["at"] = json!("successor-at");
-            source["recordTypes"][0]["timers"][0]["input"]["planned-at"] =
+            source["recordTypes"]["service"]["timers"][0]["at"] = json!("successor-at");
+            source["recordTypes"]["service"]["timers"][0]["input"]["planned-at"] =
                 json!({"fromField":"successor-at"});
         }
         Some("notAfter") => {
-            source["recordTypes"][0]["timers"][0]["notAfter"] = json!("successor-window-end");
+            source["recordTypes"]["service"]["timers"][0]["notAfter"] =
+                json!("successor-window-end");
         }
         Some("rearmOn") => {
-            source["recordTypes"][0]["timers"][0]["rearmOn"] = json!("successor-revision");
+            source["recordTypes"]["service"]["timers"][0]["rearmOn"] = json!("successor-revision");
         }
         Some(other) => panic!("unsupported timer control remap {other}"),
         None => {}
@@ -979,7 +980,7 @@ fn compiled_control_remap_registry(control: Option<&str>) -> registry_breg::Comp
 
 fn compiled_tombstone_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
-    source["recordTypes"][0]["tombstone"] = json!(true);
+    source["recordTypes"]["service"]["tombstone"] = json!(true);
     source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["operations"]
         .as_array_mut()
         .expect("service operations are an array")

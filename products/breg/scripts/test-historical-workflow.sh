@@ -932,7 +932,7 @@ import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 source = json.loads(path.read_text(encoding="utf-8"))
-record_type = next(item for item in source["recordTypes"] if item["id"] == "membership-record")
+record_type = source["recordTypes"]["membership-record"]
 if any(field["id"] == "review-note" for field in record_type["fields"]):
     raise SystemExit("membership successor field already exists")
 record_type["fields"].append({
@@ -994,7 +994,7 @@ import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 source = json.loads(path.read_text(encoding="utf-8"))
-profile = next(item for item in source["accessProfiles"] if item["id"] == "eligibility-consumer")
+profile = source["accessProfiles"]["eligibility-consumer"]
 permission = next(item for item in profile["permissions"]["records"] if item["recordType"] == "membership-record")
 if permission["operations"] != ["list", "snapshot"]:
     raise SystemExit("consumer snapshot grant was not the expected predecessor")

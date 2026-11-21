@@ -465,25 +465,21 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"constraint-race-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"parent","primaryDataset":"test-dataset","route":"parents","mutationMode":"create-only","classification":"public",
+          "recordTypes":{"parent": {"primaryDataset":"test-dataset","route":"parents","mutationMode":"create-only","classification":"public",
             "fields":[{"id":"name","type":"string","maximumLength":64,"required":true,"classification":"public"}]
-          },{
-            "id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"create-only","classification":"public",
+          },"child": {"primaryDataset":"test-dataset","route":"children","mutationMode":"create-only","classification":"public",
             "fields":[
               {"id":"parent","type":"reference","target":"parent","onDelete":"restrict","required":true,"classification":"public"},
               {"id":"alternate-parent","type":"reference","target":"parent","onDelete":"restrict","classification":"public"},
               {"id":"name","type":"string","maximumLength":64,"required":true,"classification":"public"}
             ]
-          },{
-            "id":"unique-entry","primaryDataset":"test-dataset","route":"unique-entries","mutationMode":"create-only","classification":"public",
+          },"unique-entry": {"primaryDataset":"test-dataset","route":"unique-entries","mutationMode":"create-only","classification":"public",
             "fields":[
               {"id":"scope","type":"string","maximumLength":64,"required":true,"classification":"public"},
               {"id":"code","type":"string","maximumLength":64,"required":true,"classification":"public"}
             ],
             "constraints":[{"type":"unique","fields":["scope","code"]}]
-          },{
-            "id":"period","primaryDataset":"test-dataset","route":"periods","mutationMode":"create-only","classification":"public",
+          },"period": {"primaryDataset":"test-dataset","route":"periods","mutationMode":"create-only","classification":"public",
             "fields":[
               {"id":"scope","type":"string","maximumLength":64,"required":true,"classification":"public"},
               {"id":"valid-from","type":"timestamp","required":true,"classification":"public"},
@@ -494,7 +490,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "type":"temporal-non-overlap","scopeFields":["scope"],
               "startField":"valid-from","endField":"valid-to"
             }]
-          }],
+          }},
           "accessProfiles":{"operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
             "permissions":{"records":[{
               "recordType":"parent","operations":["create","get"],"readableFields":["name"],"writableFields":["name"],

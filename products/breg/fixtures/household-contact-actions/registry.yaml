@@ -56,14 +56,8 @@
     ],
     "distributions": []
   },
-  "modules": [
-    {
-      "id": "household-contact-actions-core",
-      "version": "0.1.0",
-      "digest": "sha256:2034775dbdf5c3b610cf35557c92d6a2dc3c332aa63d46d96e2b8a368d5a24e7"
-    }
-  ],
-  "recordTypes": [],
+  "modules": {"household-contact-actions-core":{"digest":"sha256:110d3414912de8288d86f78da202d780dfb489ad370075a29bd5ada43725f4e4","version":"0.1.0"}},
+  "recordTypes": {},
   "accessProfiles": {
     "household-operator": {
       "default": true,

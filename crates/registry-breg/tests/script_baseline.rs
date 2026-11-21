@@ -23,11 +23,11 @@ fn action(script: &str) -> CompiledAction {
         "project":{"id":"script-baseline","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "datasets":[{"id":"baseline"}],
         "functions":[{"id":"baseline","runtime":"rhai","source":"handlers/baseline.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}],
-        "recordTypes":[{"id":"record","primaryDataset":"baseline","route":"records","mutationMode":"mutable","fields":[
+        "recordTypes":{"record": {"primaryDataset":"baseline","route":"records","mutationMode":"mutable","fields":[
             {"id":"label","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"classification":"restricted"}
-        ]}],
+        ]}},
         "actions":[{"id":"register-record","execution":{"mode":"immediate"},"inputs":[
             {"id":"label","apiName":"displayLabel","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","required":true,"classification":"restricted"},

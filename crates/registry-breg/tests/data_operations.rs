@@ -33,8 +33,7 @@ fn compiled(allow_data_export: bool) -> registry_breg::CompiledRegistry {
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": "data-contract", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
-        "recordTypes": [{
-            "id": ENTITY,
+        "recordTypes": {ENTITY: {
             "primaryDataset": "test-dataset",
             "route": "records",
             "mutationMode": "mutable",
@@ -48,7 +47,7 @@ fn compiled(allow_data_export: bool) -> registry_breg::CompiledRegistry {
                 {"id": "hidden", "type": "string", "maximumLength": 16,
                  "classification": "restricted"}
             ]
-        }],
+        }},
         "accessProfiles": {PROFILE: {
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
@@ -99,8 +98,7 @@ fn wide_export_registry() -> registry_breg::CompiledRegistry {
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": WIDE_REGISTRY, "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
-        "recordTypes": [{
-            "id": WIDE_ENTITY,
+        "recordTypes": {WIDE_ENTITY: {
             "primaryDataset": WIDE_DATASET,
             "route": "wide-records",
             "mutationMode": "mutable",
@@ -108,7 +106,7 @@ fn wide_export_registry() -> registry_breg::CompiledRegistry {
                 {"id": "payload", "type": "text", "maximumLength": 1000000,
                  "classification": "internal"}
             ]
-        }],
+        }},
         "accessProfiles": {PROFILE: {
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
@@ -173,11 +171,10 @@ fn data_export_requires_explicit_profile_permission() {
             "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
             "kind": "BRegProject",
             "project": {"id": "export-contract", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
-            "recordTypes": [{
-                "id": ENTITY, "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create-only",
+            "recordTypes": {ENTITY: { "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create-only",
                 "fields": [{"id": "code", "type": "string", "maximumLength": 16,
                             "classification": "internal"}]
-            }],
+            }},
             "accessProfiles": {PROFILE: { "principalClaim": "principal", "requiredScopes": "unrestricted",
                 "permissions": {"records": [{
                     "rowBoundaries": "unrestricted", "recordType": ENTITY,
@@ -212,11 +209,10 @@ fn data_export_requires_explicit_profile_permission() {
             "permissions": {"records": [{"recordType": ENTITY, "operations": ["list"],
                         "readableFields": ["code"], "allowDataExport": true, "rowBoundaries": "unrestricted"}]}
         }},
-        "recordTypes": [{
-            "id": ENTITY, "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create-only",
+        "recordTypes": {ENTITY: { "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create-only",
             "fields": [{"id": "code", "type": "string", "maximumLength": 16,
                         "classification": "internal"}]
-        }]
+        }}
     });
     let project_compiled = compile_source(project_profile).unwrap();
     assert!(
@@ -336,10 +332,10 @@ fn data_validate_and_chunk_plan_reuse_runtime_rules_and_compiled_batch_bounds() 
         let source = json!({"datasets":[{"id": "test-dataset"}],
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
             "project":{"id":"oversize", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-            "recordTypes":[{"id":ENTITY,"primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
+            "recordTypes":{ENTITY: {"primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
                 "batch":{"maximumItems":2,"maximumBytes":100},
                 "fields":[{"id":"code","type":"text","maximumLength":1000,"required":true,
-                           "classification":"internal"}]}],
+                           "classification":"internal"}]}},
             "accessProfiles":{PROFILE: {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                     "recordType":ENTITY,
                     "operations":["create","batch"],"readableFields":["code"],
@@ -372,8 +368,7 @@ fn data_lifecycle_uses_exact_compiled_api_names() {
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": "data-logical-names", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
-        "recordTypes": [{
-            "id": ENTITY,
+        "recordTypes": {ENTITY: {
             "primaryDataset": "test-dataset",
             "route": "records",
             "mutationMode": "mutable",
@@ -387,7 +382,7 @@ fn data_lifecycle_uses_exact_compiled_api_names() {
                 "required": true,
                 "classification": "internal"
             }]
-        }],
+        }},
         "accessProfiles": {PROFILE: {
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",

@@ -2920,8 +2920,8 @@ fn timer_ingestion_registry_with_operations(
         .expect("public timer example is valid YAML")
         .expect("public timer example is nonempty")
         .to_json_value();
-    source["recordTypes"][0]["batch"] = json!({"maximumItems":3,"maximumBytes":8192});
-    source["recordTypes"][0]["hooks"]
+    source["recordTypes"]["widget"]["batch"] = json!({"maximumItems":3,"maximumBytes":8192});
+    source["recordTypes"]["widget"]["hooks"]
         .as_array_mut()
         .expect("timer fixture hooks are an array")
         .push(json!({
@@ -5265,8 +5265,7 @@ const FIXTURE_HEAD: &str = r#"{
   "kind":"BRegProject",
   "project":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
   "datasets":[{"id":"test-dataset"}],
-  "recordTypes":[{
-    "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
+  "recordTypes":{"widget": {"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
     "batch":{"maximumItems":3,"maximumBytes":8192},
     "constraints":[{"type":"unique","fields":["label"]}],
     "fields":[
@@ -5278,13 +5277,12 @@ const FIXTURE_HEAD: &str = r#"{
       {"phase":"after","id":"widget-created","trigger":"created","projection":["label"]},
       {"phase":"after","id":"widget-patched","trigger":"patched","projection":["label","quantity"]}
     ]
-  },{
-    "id":"ledger","primaryDataset":"test-dataset","route":"ledgers","mutationMode":"create-only","classification":"public",
+  },"ledger": {"primaryDataset":"test-dataset","route":"ledgers","mutationMode":"create-only","classification":"public",
     "fields":[
       {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
       {"id":"memo","type":"string","maximumLength":128,"required":true,"classification":"public"}
     ]
-  }],"#;
+  }},"#;
 
 const FIXTURE_TAIL: &str = r#"
   "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
@@ -5373,22 +5371,20 @@ fn patch_only_registry() -> Arc<registry_breg::CompiledRegistry> {
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "recordTypes":[{
-        "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
+      "recordTypes":{"widget": {"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
         "batch":{"maximumItems":3,"maximumBytes":8192},
         "fields":[
           {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
           {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"},
           {"id":"quantity","type":"int64","required":true,"classification":"public"}
         ]
-      },{
-        "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"create-only","classification":"public",
+      },"asset": {"primaryDataset":"test-dataset","route":"assets","mutationMode":"create-only","classification":"public",
         "batch":{"maximumItems":3,"maximumBytes":8192},
         "fields":[
           {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
           {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"}
         ]
-      }],
+      }},
       "accessProfiles":{"patcher": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["case-management"],
         "permissions":{

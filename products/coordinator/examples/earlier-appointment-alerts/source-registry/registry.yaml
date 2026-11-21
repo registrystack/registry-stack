@@ -16,7 +16,7 @@ vocabularies:
   - id: alert-state
     values: [active, claimed, dispatching, notified, withdrawn]
 recordTypes:
-  - id: alert-subscription
+  alert-subscription:
     primaryDataset: alert-subscriptions
     route: alert-subscriptions
     mutationMode: mutable

@@ -598,15 +598,14 @@ fn last_day_registry() -> registry_breg::CompiledRegistry {
             "id":"statistics-last-day-registry","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://statistics-last-day.example.test","timezone":"UTC"
         },
-        "recordTypes":[{
-            "id":"permit","primaryDataset":"facility","route":"permits","mutationMode":"mutable",
+        "recordTypes":{"permit": {"primaryDataset":"facility","route":"permits","mutationMode":"mutable",
             "fields":[
                 {"id":"valid-from","type":"date","required":true,"classification":"internal"},
                 {"id":"valid-through","type":"date","classification":"internal"},
                 {"id":"administrative-boundary","type":"vocabulary-code","vocabulary":"administrative-boundary","required":true,"classification":"internal"}
             ],
             "temporal":{"startField":"valid-from","lastDayField":"valid-through"}
-        }],
+        }},
         "accessProfiles":{"facility-operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"permit","operations":["list"],
                 "readableFields":["valid-from","valid-through","administrative-boundary"],
@@ -666,10 +665,9 @@ fn twelve_dimension_registry() -> registry_breg::CompiledRegistry {
             "id":"statistics-twelve-registry","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://statistics-twelve.example.test","timezone":"UTC"
         },
-        "recordTypes":[{
-            "id":"permit","primaryDataset":"facility","route":"permits","mutationMode":"mutable",
+        "recordTypes":{"permit": {"primaryDataset":"facility","route":"permits","mutationMode":"mutable",
             "fields":fields
-        }],
+        }},
         "accessProfiles":{"facility-operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"permit","operations":["list"],
                 "readableFields":readable,
@@ -700,14 +698,13 @@ fn cube_registry() -> registry_breg::CompiledRegistry {
             "id":"statistics-cube-registry","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://statistics-cube.example.test","timezone":"UTC"
         },
-        "recordTypes":[{
-            "id":"permit","primaryDataset":"facility","route":"permits","mutationMode":"mutable",
+        "recordTypes":{"permit": {"primaryDataset":"facility","route":"permits","mutationMode":"mutable",
             "fields":[
                 {"id":"permit-type","type":"vocabulary-code","vocabulary":"permit-type","required":true,"classification":"internal"},
                 {"id":"valid-from","type":"date","required":true,"classification":"internal"},
                 {"id":"region","type":"vocabulary-code","vocabulary":"region","required":false,"classification":"internal"}
             ]
-        }],
+        }},
         "accessProfiles":{"facility-operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"permit","operations":["list"],
                 "readableFields":["permit-type","valid-from","region"],
@@ -741,14 +738,13 @@ fn partial_text_registry() -> registry_breg::CompiledRegistry {
             "id":"statistics-partial-text-registry","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://statistics-partial-text.example.test","timezone":"UTC"
         },
-        "recordTypes":[{
-            "id":"permit","primaryDataset":"facility","route":"permits","mutationMode":"mutable",
+        "recordTypes":{"permit": {"primaryDataset":"facility","route":"permits","mutationMode":"mutable",
             "fields":[
                 {"id":"permit-type","type":"vocabulary-code","vocabulary":"permit-type","required":true,"classification":"internal"},
                 {"id":"valid-from","type":"date","required":true,"classification":"internal"},
                 {"id":"administrative-boundary","type":"vocabulary-code","vocabulary":"administrative-boundary","required":true,"classification":"internal"}
             ]
-        }],
+        }},
         "accessProfiles":{"facility-operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"permit","operations":["list"],
                 "readableFields":["permit-type","valid-from","administrative-boundary"],

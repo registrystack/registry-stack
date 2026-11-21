@@ -16,8 +16,7 @@ fn project(start_type: &str, last_day_type: &str) -> Value {
         "project": {"id": "licences", "version": "1", "defaultLanguage": "en",
             "canonicalBaseIri": "https://licences.example.test", "timezone": "UTC"},
         "datasets": [{"id": "licences"}],
-        "recordTypes": [{
-            "id": "licence", "primaryDataset": "licences", "route": "licences", "mutationMode": "mutable",
+        "recordTypes": {"licence": { "primaryDataset": "licences", "route": "licences", "mutationMode": "mutable",
             "fields": [
                 {"id": "holder", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"},
                 {"id": "valid-from", "type": start_type, "required": true, "classification": "internal"},
@@ -29,7 +28,7 @@ fn project(start_type: &str, last_day_type: &str) -> Value {
                 "type": "temporal-non-overlap", "scopeFields": ["holder"],
                 "startField": "valid-from", "lastDayField": "valid-through"
             }]
-        }],
+        }},
         "accessProfiles": {"reader": { "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
             "permissions": {"records": [{
                 "recordType": "licence", "operations": ["list"],
@@ -77,9 +76,9 @@ fn physical(registry: &CompiledRegistry, field: &str) -> String {
 #[test]
 fn an_interval_declares_exactly_one_of_an_end_and_a_last_day() {
     let mut both = project("date", "date");
-    both["recordTypes"][0]["temporal"]["endField"] = json!("valid-to");
+    both["recordTypes"]["licence"]["temporal"]["endField"] = json!("valid-to");
     let mut neither = project("date", "date");
-    neither["recordTypes"][0]["temporal"]
+    neither["recordTypes"]["licence"]["temporal"]
         .as_object_mut()
         .unwrap()
         .remove("lastDayField");
@@ -104,7 +103,7 @@ fn a_last_day_is_a_date_on_a_date_interval() {
     ] {
         let mut source = project(start_type, last_day_type);
         if last_day_type == "string" {
-            source["recordTypes"][0]["fields"][3]["maximumLength"] = json!(10);
+            source["recordTypes"]["licence"]["fields"][3]["maximumLength"] = json!(10);
         }
         let failure = compile(&source).expect_err(label);
         assert!(
@@ -140,11 +139,11 @@ fn a_last_day_interval_is_in_force_through_its_last_day() {
 #[test]
 fn a_non_overlap_constraint_names_the_last_day_in_place_of_the_end() {
     let mut source = project("date", "date");
-    source["recordTypes"][0]["constraints"][0]
+    source["recordTypes"]["licence"]["constraints"][0]
         .as_object_mut()
         .unwrap()
         .remove("lastDayField");
-    source["recordTypes"][0]["constraints"][0]["endField"] = json!("valid-through");
+    source["recordTypes"]["licence"]["constraints"][0]["endField"] = json!("valid-through");
     let failure = compile(&source).expect_err("an endField on a last-day interval is refused");
     assert!(
         failure

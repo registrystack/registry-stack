@@ -712,8 +712,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"webhook-outbox-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
-            "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"restricted",
+          "recordTypes":{"case": {"primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
               {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"},
@@ -738,7 +737,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               },
               "handler":{"type":"url","destinationId":"case-operations"}
             }]
-          }],
+          }},
           "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{"records":[{

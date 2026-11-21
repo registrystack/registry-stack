@@ -7,11 +7,11 @@ fn source() -> Value {
     json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"access-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://access-example.example.test"},
-        "recordTypes":[{"id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
+        "recordTypes":{"entry": {"primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
           "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"},
                     {"id":"district","type":"string","maximumLength":32,"classification":"internal"}],
           "accessRequirements":{"requiredScopes":["entry:read"],"allowedPurposes":["administration"],
-            "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}}],
+            "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}}},
         "accessProfiles":{"reader": {"principalClaim":"registry_principal","requiredScopes":["entry:read"],
           "requiredPurposes":["administration"],"permissions":{"records":[{"recordType":"entry","operations":["get","list"],
             "readableFields":["code","district"],"filterableFields":["district"],
@@ -110,7 +110,7 @@ fn requirements_are_mandatory_not_grants_and_cannot_be_weakened_by_profiles() {
         .remove("requiredPurposes");
     assert_refused(&unnarrowed, "breg.access.requirements-purpose-widened");
     let mut stricter = source();
-    stricter["recordTypes"][0]["accessRequirements"]["allowedPurposes"] =
+    stricter["recordTypes"]["entry"]["accessRequirements"]["allowedPurposes"] =
         json!(["administration", "review"]);
     stricter["accessProfiles"]["reader"]["requiredScopes"] = json!(["entry:read", "entry:review"]);
     stricter["accessProfiles"]["reader"]["permissions"]["records"][0]["rowBoundaries"]
@@ -141,7 +141,7 @@ fn requirements_validate_even_without_profiles() {
         ),
     ] {
         let mut value = source();
-        value["recordTypes"][0]["accessRequirements"] = requirements;
+        value["recordTypes"]["entry"]["accessRequirements"] = requirements;
         value["accessProfiles"] = json!({});
         assert_refused(&value, code);
     }
@@ -185,14 +185,14 @@ fn an_anonymous_member_on_a_module_profile_is_refused_when_the_module_is_read() 
     let profile = json!({"reader":{"anonymous":true,"operations":["get"],"rowBoundaries":[]}});
     for (module, path) in [
         (
-            json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","recordTypes":[{"id":"place","primaryDataset":"test-dataset",
-              "route":"places","mutationMode":"mutable","accessProfiles":profile.clone()}]}),
-            "module.recordTypes[0].accessProfiles.reader.anonymous",
+            json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","recordTypes":{"place": {"primaryDataset":"test-dataset",
+              "route":"places","mutationMode":"mutable","accessProfiles":profile.clone()}}}),
+            "module.recordTypes.place.accessProfiles.reader.anonymous",
         ),
         (
-            json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","extendRecordTypes":[{"recordType":"entry",
-              "accessProfiles":profile.clone()}]}),
-            "module.extendRecordTypes[0].accessProfiles.reader.anonymous",
+            json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","extendRecordTypes":{"entry": {
+              "accessProfiles":profile.clone()}}}),
+            "module.extendRecordTypes.entry.accessProfiles.reader.anonymous",
         ),
     ] {
         let failure = parse_module_yaml(&serde_json::to_vec(&module).unwrap())
@@ -233,14 +233,14 @@ fn a_module_profile_that_names_no_principal_claim_is_refused_when_the_module_is_
     let module = |profile: &Value| {
         [
             (
-                json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","recordTypes":[{"id":"place","primaryDataset":"test-dataset",
-                  "route":"places","mutationMode":"mutable","accessProfiles":profile.clone()}]}),
-                "module.recordTypes[0].accessProfiles.reader",
+                json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","recordTypes":{"place": {"primaryDataset":"test-dataset",
+                  "route":"places","mutationMode":"mutable","accessProfiles":profile.clone()}}}),
+                "module.recordTypes.place.accessProfiles.reader",
             ),
             (
-                json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","extendRecordTypes":[{"recordType":"entry",
-                  "accessProfiles":profile.clone()}]}),
-                "module.extendRecordTypes[0].accessProfiles.reader",
+                json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","extendRecordTypes":{"entry": {
+                  "accessProfiles":profile.clone()}}}),
+                "module.extendRecordTypes.entry.accessProfiles.reader",
             ),
         ]
     };
@@ -289,11 +289,10 @@ fn additional_profile_cannot_omit_entity_requirements() {
 fn module_extensions_may_add_but_never_replace_requirements() {
     use registry_breg::contract::parse_module_json;
     let mut value = source();
-    value["modules"] = json!([{"id":"extra","version":"1"}]);
+    value["modules"] = json!({"extra": {"version":"1"}});
     let module = parse_module_json(
-        &serde_json::to_vec(&json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","extendRecordTypes":[{
-            "recordType":"entry","accessRequirements":{"requiredScopes":["entry:read"]}
-        }]}))
+        &serde_json::to_vec(&json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","extendRecordTypes":{"entry": {"accessRequirements":{"requiredScopes":["entry:read"]}
+        }}}))
         .unwrap(),
     )
     .unwrap();
@@ -308,7 +307,7 @@ fn module_extensions_may_add_but_never_replace_requirements() {
         .diagnostics()
         .iter()
         .any(|d| d.code == "breg.extension.access-requirements-replace-forbidden"));
-    value["recordTypes"][0]
+    value["recordTypes"]["entry"]
         .as_object_mut()
         .unwrap()
         .remove("accessRequirements");
@@ -325,13 +324,13 @@ fn module_extensions_may_add_but_never_replace_requirements() {
 #[test]
 fn relationship_grants_cannot_bypass_target_or_join_requirements() {
     let mut value = source();
-    value["recordTypes"][0]["readPaths"] =
+    value["recordTypes"]["entry"]["readPaths"] =
         json!([{"id":"children","through":"link","to":"child","route":"children"}]);
     value["accessProfiles"]["reader"]["permissions"]["records"][0]["readPaths"] =
         json!([{"path":"children","readableFields":["code"]}]);
-    value["recordTypes"].as_array_mut().unwrap().extend([
-        json!({"id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]}),
-        json!({"id":"link","primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","fields":[{"id":"entry","type":"reference","target":"entry","classification":"internal"},{"id":"child","type":"reference","target":"child","classification":"internal"}]})
+    value["recordTypes"].as_object_mut().unwrap().extend([
+        ("child".to_owned(), json!({"primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]})),
+        ("link".to_owned(), json!({"primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","fields":[{"id":"entry","type":"reference","target":"entry","classification":"internal"},{"id":"child","type":"reference","target":"child","classification":"internal"}]}))
     ]);
     let baseline = compile(&value).unwrap();
     let warning = baseline
@@ -395,11 +394,11 @@ fn relationship_grants_cannot_bypass_target_or_join_requirements() {
             && reach["profile"] == "reader"
             && reach["sourcePath"]
                 == "recordTypes[id=entry].accessProfiles[id=reader].readPaths[path=children]"));
-    for index in [1, 2] {
-        value["recordTypes"][index]["accessRequirements"] =
+    for record_type in ["child", "link"] {
+        value["recordTypes"][record_type]["accessRequirements"] =
             json!({"requiredScopes":["entry:read"]});
         compile(&value).unwrap();
-        value["recordTypes"][index]["accessRequirements"] =
+        value["recordTypes"][record_type]["accessRequirements"] =
             json!({"requiredScopes":["separate:read"]});
         let failure = compile(&value).unwrap_err();
         assert!(
@@ -410,13 +409,13 @@ fn relationship_grants_cannot_bypass_target_or_join_requirements() {
                     && d.path.contains("readPaths[path=children]")),
             "{failure:?}"
         );
-        value["recordTypes"][index]["accessRequirements"] =
+        value["recordTypes"][record_type]["accessRequirements"] =
             json!({"rowBoundaries":[{"field":"id","claim":"record_id","operator":"equals"}]});
         assert_refused(
             &value,
             "breg.access.requirements-read-path-row-boundary-unsupported",
         );
-        value["recordTypes"][index]
+        value["recordTypes"][record_type]
             .as_object_mut()
             .unwrap()
             .remove("accessRequirements");
@@ -426,7 +425,7 @@ fn relationship_grants_cannot_bypass_target_or_join_requirements() {
 #[test]
 fn spatial_query_grants_do_not_satisfy_or_weaken_access_requirements() {
     let mut value = source();
-    value["recordTypes"][0]["fields"]
+    value["recordTypes"]["entry"]["fields"]
         .as_array_mut()
         .expect("fields are an array")
         .push(json!({
@@ -435,7 +434,7 @@ fn spatial_query_grants_do_not_satisfy_or_weaken_access_requirements() {
             "precision":6,
             "classification":"internal"
         }));
-    value["recordTypes"][0]["geojson"] = json!({"geometryField":"location"});
+    value["recordTypes"]["entry"]["geojson"] = json!({"geometryField":"location"});
     value["accessProfiles"]["reader"]["permissions"]["records"][0]["readableFields"]
         .as_array_mut()
         .expect("readable fields are an array")
@@ -455,7 +454,7 @@ fn spatial_query_grants_do_not_satisfy_or_weaken_access_requirements() {
 #[test]
 fn footgun_findings_are_actionable_deterministic_and_do_not_change_authority() {
     let mut value = source();
-    value["recordTypes"][0]
+    value["recordTypes"]["entry"]
         .as_object_mut()
         .unwrap()
         .remove("accessRequirements");
@@ -491,7 +490,7 @@ fn footgun_findings_are_actionable_deterministic_and_do_not_change_authority() {
 #[test]
 fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
     let mut value = source();
-    value["recordTypes"][0]
+    value["recordTypes"]["entry"]
         .as_object_mut()
         .unwrap()
         .remove("accessRequirements");
@@ -499,7 +498,7 @@ fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
         .as_object_mut()
         .unwrap()
         .remove("requiredPurposes");
-    value["recordTypes"][0]["fields"][0]["classification"] = json!("restricted");
+    value["recordTypes"]["entry"]["fields"][0]["classification"] = json!("restricted");
     let grant = &mut value["accessProfiles"]["reader"]["permissions"]["records"][0];
     grant["operations"] = json!(["get", "list", "patch", "revisions"]);
     grant["revisionAccess"] = json!(true);
@@ -533,7 +532,7 @@ fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
 #[test]
 fn token_requirements_do_not_clear_a_higher_classification() {
     let mut value = source();
-    value["recordTypes"][0]["fields"][0]["classification"] = json!("restricted");
+    value["recordTypes"]["entry"]["fields"][0]["classification"] = json!("restricted");
 
     let compiled = compile(&value).expect("the project compiles with advisory findings");
     let findings = compiled
@@ -595,7 +594,7 @@ fn create_grants_keep_the_row_boundary_field_writable() {
         .all(|d| d.code != "breg.access.profile-writable-row-boundary"));
 
     let mut equality = value.clone();
-    equality["recordTypes"][0]["accessRequirements"]["rowBoundaries"][0]["operator"] =
+    equality["recordTypes"]["entry"]["accessRequirements"]["rowBoundaries"][0]["operator"] =
         json!("equals");
     equality["accessProfiles"]["reader"]["permissions"]["records"][0]["rowBoundaries"][0]
         ["operator"] = json!("equals");
@@ -716,7 +715,7 @@ fn synthetic_preview_uses_http_admission_and_never_renders_claim_values() {
 fn access_diffs_show_each_changed_dimension_without_guessing_mixed_authority() {
     let baseline = compile(&source()).unwrap();
     let mut value = source();
-    value["recordTypes"][0]
+    value["recordTypes"]["entry"]
         .as_object_mut()
         .unwrap()
         .remove("accessRequirements");
@@ -768,7 +767,7 @@ fn access_diffs_show_each_changed_dimension_without_guessing_mixed_authority() {
     }
 
     let mut only_requirements = source();
-    only_requirements["recordTypes"][0]
+    only_requirements["recordTypes"]["entry"]
         .as_object_mut()
         .unwrap()
         .remove("accessRequirements");
@@ -789,7 +788,7 @@ fn access_diffs_show_each_changed_dimension_without_guessing_mixed_authority() {
 
     let mut reordered = source();
     let binding = json!({"field":"code","claim":"assigned_code","operator":"equals"});
-    reordered["recordTypes"][0]["accessRequirements"]["rowBoundaries"]
+    reordered["recordTypes"]["entry"]["accessRequirements"]["rowBoundaries"]
         .as_array_mut()
         .unwrap()
         .push(binding.clone());
@@ -798,7 +797,7 @@ fn access_diffs_show_each_changed_dimension_without_guessing_mixed_authority() {
         .unwrap()
         .push(binding);
     let before = compile(&reordered).unwrap();
-    reordered["recordTypes"][0]["accessRequirements"]["rowBoundaries"]
+    reordered["recordTypes"]["entry"]["accessRequirements"]["rowBoundaries"]
         .as_array_mut()
         .unwrap()
         .reverse();
@@ -918,8 +917,8 @@ fn write_grants_without_writable_fields_are_reported() {
 #[test]
 fn create_grants_report_each_required_field_the_profile_cannot_write() {
     let mut value = source();
-    value["recordTypes"][0]["fields"][0]["required"] = json!(true);
-    value["recordTypes"][0]["fields"][1]["required"] = json!(true);
+    value["recordTypes"]["entry"]["fields"][0]["required"] = json!(true);
+    value["recordTypes"]["entry"]["fields"][1]["required"] = json!(true);
     let grant = &mut value["accessProfiles"]["reader"]["permissions"]["records"][0];
     grant["operations"] = json!(["create", "get", "list", "patch"]);
     grant["writableFields"] = json!([]);
@@ -995,9 +994,9 @@ fn create_grants_report_each_required_field_the_profile_cannot_write() {
 #[test]
 fn import_grants_report_each_required_field_the_profile_cannot_write() {
     let mut value = source();
-    value["recordTypes"][0]["fields"][0]["required"] = json!(true);
-    value["recordTypes"][0]["fields"][1]["required"] = json!(true);
-    value["recordTypes"][0]["batch"] = json!({
+    value["recordTypes"]["entry"]["fields"][0]["required"] = json!(true);
+    value["recordTypes"]["entry"]["fields"][1]["required"] = json!(true);
+    value["recordTypes"]["entry"]["batch"] = json!({
         "maximumItems": 100,
         "maximumBytes": 1_048_576
     });
@@ -1071,7 +1070,7 @@ fn import_grants_report_each_required_field_the_profile_cannot_write() {
 #[test]
 fn unresolved_access_profile_fields_have_one_concrete_path_per_reference() {
     let mut value = source();
-    value["recordTypes"][0]
+    value["recordTypes"]["entry"]
         .as_object_mut()
         .unwrap()
         .remove("accessRequirements");
@@ -1130,7 +1129,7 @@ fn processing_wider_than_read_names_each_access_profile_field() {
 #[test]
 fn unresolved_read_path_fields_have_one_concrete_path_per_reference() {
     let mut value = source();
-    value["recordTypes"][0]["readPaths"] =
+    value["recordTypes"]["entry"]["readPaths"] =
         json!([{"id":"children","through":"link","to":"child","route":"children"}]);
     value["accessProfiles"]["reader"]["permissions"]["records"][0]["readPaths"] = json!([{
         "path":"children",
@@ -1138,9 +1137,9 @@ fn unresolved_read_path_fields_have_one_concrete_path_per_reference() {
         "filterableFields":["missing-filterable"],
         "sortableFields":["missing-sortable"]
     }]);
-    value["recordTypes"].as_array_mut().unwrap().extend([
-        json!({"id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]}),
-        json!({"id":"link","primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","fields":[{"id":"entry","type":"reference","target":"entry","classification":"internal"},{"id":"child","type":"reference","target":"child","classification":"internal"}]})
+    value["recordTypes"].as_object_mut().unwrap().extend([
+        ("child".to_owned(), json!({"primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]})),
+        ("link".to_owned(), json!({"primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","fields":[{"id":"entry","type":"reference","target":"entry","classification":"internal"},{"id":"child","type":"reference","target":"child","classification":"internal"}]}))
     ]);
 
     let failure = compile(&value).expect_err("unresolved read-path fields fail compilation");
@@ -1169,7 +1168,7 @@ fn unresolved_read_path_fields_have_one_concrete_path_per_reference() {
 #[test]
 fn read_path_processing_wider_than_read_names_each_target_field() {
     let mut value = source();
-    value["recordTypes"][0]["readPaths"] =
+    value["recordTypes"]["entry"]["readPaths"] =
         json!([{"id":"children","through":"link","to":"child","route":"children"}]);
     value["accessProfiles"]["reader"]["permissions"]["records"][0]["readPaths"] = json!([{
         "path":"children",
@@ -1177,9 +1176,9 @@ fn read_path_processing_wider_than_read_names_each_target_field() {
         "filterableFields":["code"],
         "sortableFields":["code"]
     }]);
-    value["recordTypes"].as_array_mut().unwrap().extend([
-        json!({"id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]}),
-        json!({"id":"link","primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","fields":[{"id":"entry","type":"reference","target":"entry","classification":"internal"},{"id":"child","type":"reference","target":"child","classification":"internal"}]})
+    value["recordTypes"].as_object_mut().unwrap().extend([
+        ("child".to_owned(), json!({"primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]})),
+        ("link".to_owned(), json!({"primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","fields":[{"id":"entry","type":"reference","target":"entry","classification":"internal"},{"id":"child","type":"reference","target":"child","classification":"internal"}]}))
     ]);
 
     let failure = compile(&value).expect_err("read-path processing of an unreadable field fails");
@@ -1203,7 +1202,7 @@ fn read_path_processing_wider_than_read_names_each_target_field() {
 #[test]
 fn unresolved_constraint_fields_name_the_entity_constraint_and_field() {
     let mut value = source();
-    value["recordTypes"][0]["constraints"] = json!([
+    value["recordTypes"]["entry"]["constraints"] = json!([
         {"type":"unique","id":"unknowns","fields":["missing-first","missing-second"]},
         {"type":"int-range","id":"range","field":"missing-range","minimum":0},
         {"type":"unique","id":"empty","fields":[]},
@@ -1271,7 +1270,7 @@ fn sole_profile_is_implicit_default_and_action_routes_may_require_explicit_selec
 /// A profile with no row or membership boundary, listing a non-public record type.
 fn unbounded_listing_source() -> Value {
     let mut value = source();
-    value["recordTypes"][0]
+    value["recordTypes"]["entry"]
         .as_object_mut()
         .unwrap()
         .remove("accessRequirements");

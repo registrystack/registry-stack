@@ -313,9 +313,9 @@ async fn stock_to_keycloak_preserves_native_proposal_issuer_isolation() {
     // A native governed Action replaces the retired Request-as-Record approval fixture.
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"issuer-proposal","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://issuer-proposal.example.test"},
-        "datasets":[{"id":"records"}],"recordTypes":[{"id":"record","primaryDataset":"records","route":"records","mutationMode":"mutable",
+        "datasets":[{"id":"records"}],"recordTypes":{"record": {"primaryDataset":"records","route":"records","mutationMode":"mutable",
         "fields":[{"id":"label","type":"string","required":true,"maximumLength":100,"classification":"internal"},
-        {"id":"district","type":"string","required":true,"maximumLength":100,"classification":"internal"}]}],
+        {"id":"district","type":"string","required":true,"maximumLength":100,"classification":"internal"}]}},
         "actions":[{"id":"correct-label","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}},
         "inputs":[{"id":"target","type":"reference","target":"record","required":true,"classification":"internal"},
         {"id":"value","type":"string","required":true,"maximumLength":100,"classification":"internal"}],

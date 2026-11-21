@@ -1000,8 +1000,7 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::Co
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"history-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "recordTypes":[{
-        "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
+      "recordTypes":{"membership": {"primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
         "fields":[
           {"id":"household-code","type":"string","minimumLength":2,"maximumLength":32,"required":true,"classification":"internal"},
           {"id":"jurisdiction","type":"vocabulary-code","vocabulary":"jurisdiction","values":["zone-a","zone-b"],"required":true,"classification":"internal"},
@@ -1014,7 +1013,7 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::Co
           "id":"membership-rollup","sql":"sql/membership-rollup.sql","key":"id","execution":"live",
           "fields":[{"id":"member-count","type":"int64","classification":"restricted"}]
         }]
-      }],
+      }},
       "accessProfiles":{"historian": {"default":true,"principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
         "permissions":{"records":[{

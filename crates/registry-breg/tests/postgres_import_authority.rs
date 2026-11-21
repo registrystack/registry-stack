@@ -63,8 +63,7 @@ const FIXTURE: &str = r#"{
   "kind":"BRegProject",
   "project":{"id":"import-authority-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
   "datasets":[{"id":"test-dataset"}],
-          "recordTypes":[{
-    "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
+          "recordTypes":{"widget": {"primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
     "mutationPolicy":{"create":"proposal-required"},
     "batch":{"maximumItems":3,"maximumBytes":8192},
     "constraints":[{"type":"unique","fields":["label"]}],
@@ -72,21 +71,19 @@ const FIXTURE: &str = r#"{
       {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
       {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"}
     ]
-  },{
-    "id":"gadget","primaryDataset":"test-dataset","route":"gadgets","mutationMode":"mutable","classification":"public",
+  },"gadget": {"primaryDataset":"test-dataset","route":"gadgets","mutationMode":"mutable","classification":"public",
     "batch":{"maximumItems":3,"maximumBytes":8192},
     "fields":[
       {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
       {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"}
     ]
-  },{
-    "id":"ledger","primaryDataset":"test-dataset","route":"ledgers","mutationMode":"mutable","classification":"public",
+  },"ledger": {"primaryDataset":"test-dataset","route":"ledgers","mutationMode":"mutable","classification":"public",
     "batch":{"maximumItems":3,"maximumBytes":8192},
     "fields":[
       {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
       {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"}
     ]
-  }],
+  }},
   "accessProfiles":{"loader": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "permissions":{"records":[{
       "recordType":"widget","operations":["import"],
@@ -121,7 +118,7 @@ async fn activation_packages() -> (VerifiedPackage, VerifiedPackage) {
     let initial = activation_package(&initial_source, None).await;
 
     let mut successor_source = initial_source;
-    successor_source["recordTypes"][0]["fields"]
+    successor_source["recordTypes"]["widget"]["fields"]
         .as_array_mut()
         .expect("widget fields are an array")
         .push(json!({

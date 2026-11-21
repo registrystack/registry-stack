@@ -14,7 +14,7 @@ vocabularies:
   - id: invitation-state
     values: [issued, accepting, booked, no-capacity, expired, revoked]
 recordTypes:
-  - id: invitation
+  invitation:
     primaryDataset: invitations
     route: invitations
     mutationMode: mutable

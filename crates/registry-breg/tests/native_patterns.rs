@@ -17,12 +17,12 @@ fn project(pattern: Option<&str>) -> registry_breg::contract::RegistryProject {
             "datasets":[{"id":"records","title":"Records"}],
             "dataServices":[{"id":"api","title":"API","endpointUrl":"https://patterns.example.test/v1","servesDatasets":["records"]}]
         },
-        "recordTypes":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"internal",
-            "fields":[{"id":"identifier","type":"string","maximumLength":100,"classification":"internal"}]}],
+        "recordTypes":{"entry": {"primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"internal",
+            "fields":[{"id":"identifier","type":"string","maximumLength":100,"classification":"internal"}]}},
         "accessProfiles":{"reader": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"entry","operations":["get","list"],"readableFields":["identifier"],"rowBoundaries":"unrestricted"}]}}}
     });
     if let Some(pattern) = pattern {
-        value["recordTypes"][0]["fields"][0]["pattern"] = json!(pattern);
+        value["recordTypes"]["entry"]["fields"][0]["pattern"] = json!(pattern);
     }
     parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap()
 }
@@ -73,7 +73,7 @@ fn native_pattern_is_persisted_bounded_and_not_a_portable_schema_pattern() {
         assert!(!format!("{error:?}").contains(&invalid));
     }
     let mut source = serde_json::to_value(project(None)).unwrap();
-    source["recordTypes"][0]["fields"][0]["pattern"] = json!("a\0b");
+    source["recordTypes"]["entry"]["fields"][0]["pattern"] = json!("a\0b");
     let failure = parse_project_json(&serde_json::to_vec(&source).unwrap())
         .expect_err("control characters are refused by the authored source reader");
     assert!(failure

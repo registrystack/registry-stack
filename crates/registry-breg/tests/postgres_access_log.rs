@@ -55,12 +55,12 @@ fn compiled() -> CompiledRegistry {
     let source = json!({"datasets":[{"id": "records"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "recordTypes":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
+        "recordTypes":{"entry": {"primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
             "fields":[{"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
                 {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
             "selectorProfiles":[{"id":"by-subject","fields":["subject"]}],
             "accessLog":{"subjectField":"subject","trustedIntermediaries":["evidence-service"],
-                "exemptions":{"investigator":{"reason":"investigation-policy-canary","delayDays":7}}}}],
+                "exemptions":{"investigator":{"reason":"investigation-policy-canary","delayDays":7}}}}},
         "accessProfiles":{
             "reader": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{"records":[permission.clone()]}},
             "investigator": {"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{"records":[permission]}}
@@ -78,22 +78,22 @@ fn compiled_relationships() -> CompiledRegistry {
     let source = json!({"datasets":[{"id": "records"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "recordTypes":[
-            {"id":"case","primaryDataset":"records","route":"cases","mutationMode":"mutable","classification":"restricted",
+        "recordTypes":{
+            "case": {"primaryDataset":"records","route":"cases","mutationMode":"mutable","classification":"restricted",
                 "fields":[{"id":"case-code","type":"string","maximumLength":64,"required":true,"classification":"restricted"}],
                 "readPaths":[{"id":"people","through":"case-person","to":"person","route":"people"}]},
-            {"id":"case-person","primaryDataset":"records","route":"case-people","mutationMode":"mutable","classification":"restricted",
+            "case-person": {"primaryDataset":"records","route":"case-people","mutationMode":"mutable","classification":"restricted",
                 "fields":[
                     {"id":"case","type":"reference","target":"case","required":true,"classification":"restricted"},
                     {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}]},
-            {"id":"person","primaryDataset":"records","route":"people","mutationMode":"mutable","classification":"restricted",
+            "person": {"primaryDataset":"records","route":"people","mutationMode":"mutable","classification":"restricted",
                 "fields":[
                     {"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
                     {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
                 "accessLog":{"subjectField":"subject","exemptions":{
                     "investigator":{"reason":"target-local-policy-canary","delayDays":7},
                     "relationship-investigator":{"sourceRecordType":"case","reason":"relationship-policy-canary","delayDays":7}}}}
-        ],
+        },
         "accessProfiles":{
             "reader": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
                 "records":[
@@ -913,10 +913,10 @@ fn compiled_with_history() -> CompiledRegistry {
     let source = json!({"datasets":[{"id": "records"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "recordTypes":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
+        "recordTypes":{"entry": {"primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
             "fields":[{"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
                 {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
-            "accessLog":{"subjectField":"subject"}}],
+            "accessLog":{"subjectField":"subject"}}},
         "accessProfiles":{
             "reader": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
                 "records":[

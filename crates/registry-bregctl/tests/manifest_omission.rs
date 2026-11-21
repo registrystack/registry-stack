@@ -50,9 +50,8 @@ const PROJECT: &[u8] = br#"{
       "servesDatasets":["sources","targets"]
     }]
   },
-  "recordTypes":[
-    {
-      "id":"source",
+  "recordTypes":{
+    "source": {
       "primaryDataset":"sources",
       "route":"sources",
       "mutationMode":"create-only",
@@ -77,8 +76,7 @@ const PROJECT: &[u8] = br#"{
       "constraints":[{"type":"unique","fields":["code"]}],
       "selectorProfiles":[{"id":"by-code","fields":["code"]}]
     },
-    {
-      "id":"target",
+    "target": {
       "primaryDataset":"targets",
       "route":"targets",
       "mutationMode":"create-only",
@@ -90,7 +88,7 @@ const PROJECT: &[u8] = br#"{
         "classification":"public"
       }]
     }
-  ],
+  },
   "accessProfiles":{"reader": {
     "principalClaim":"sub",
     "requiredScopes":["registry.read"],
@@ -117,15 +115,14 @@ const MODULE: &[u8] = br#"{
   "kind":"BRegModule",
   "id":"links",
   "version":"1",
-  "extendRecordTypes":[{
-    "recordType":"source",
+  "extendRecordTypes":{"source": {
     "fields":[{
       "id":"target",
       "type":"reference",
       "target":"target",
       "classification":"public"
     }]
-  }]
+  }}
 }"#;
 
 const JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
@@ -141,11 +138,9 @@ fn project_commands_report_the_same_positioned_manifest_omission_finding() {
     fs::create_dir(&project).expect("project directory is created");
     let module = parse_module_json(MODULE).expect("module parses");
     let mut project_source: Value = serde_json::from_slice(PROJECT).expect("project parses");
-    project_source["modules"] = json!([{
-      "id":"links",
-      "version":"1",
+    project_source["modules"] = json!({"links": {"version":"1",
       "digest":module_digest(&module)
-    }]);
+    }});
     let project_bytes =
         serde_json::to_vec_pretty(&project_source).expect("project source serializes");
     fs::write(project.join("registry.yaml"), &project_bytes).expect("project source is written");
@@ -243,7 +238,7 @@ fn project_commands_report_the_same_positioned_manifest_omission_finding() {
         evidence_source_finding,
     ] {
         assert_eq!(finding["code"], FINDING_CODE);
-        assert_eq!(finding["path"], "/extendRecordTypes/0/fields/0");
+        assert_eq!(finding["path"], "/extendRecordTypes/source/fields/0");
         assert_eq!(finding["source"]["file"], path(&module_file));
         assert!(finding["source"]["line"]
             .as_u64()

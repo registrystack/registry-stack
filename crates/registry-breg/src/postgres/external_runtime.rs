@@ -4127,7 +4127,7 @@ mod postgres_tests {
     /// admits 512 characters, which can exceed the store's byte bound.
     fn indexed_person_project() -> Value {
         let mut project = two_projection_project();
-        project["recordTypes"][0]["fields"][0]["maximumLength"] = json!(512);
+        project["recordTypes"]["local-record"]["fields"][0]["maximumLength"] = json!(512);
         project["externalRecordTypes"]
             .as_array_mut()
             .unwrap()

@@ -3455,14 +3455,14 @@ impl Drop for TempRoot {
 
 fn project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test","timezone":"UTC"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test","timezone":"UTC"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}}}"#
     )
     .into_bytes()
 }
 
 fn project_bytes_without_manifest(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test","timezone":"UTC"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test","timezone":"UTC"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}}}"#
     )
     .into_bytes()
 }
@@ -3546,8 +3546,7 @@ fn timer_preview_project_bytes(at_field: &str) -> Vec<u8> {
         },
         "package":{"sourceRevision":SOURCE_REVISION},
         "datasets":[{"id":"timer-preview"}],
-        "recordTypes":[{
-            "id":"contact", "primaryDataset":"timer-preview", "route":"contacts",
+        "recordTypes":{"contact": { "primaryDataset":"timer-preview", "route":"contacts",
             "mutationMode":"mutable",
             "fields":[
                 {"id":"active","type":"boolean","classification":"internal"},
@@ -3564,7 +3563,7 @@ fn timer_preview_project_bytes(at_field: &str) -> Vec<u8> {
                 "invoke":"activate-contact",
                 "input":{"contact":{"fromRecordId":true}}
             }]
-        }],
+        }},
         "timerGrants":[{"recordType":"contact","timer":"activate"}],
         "actions":[{
             "id":"activate-contact", "execution":{"mode":"immediate"},
@@ -3622,7 +3621,7 @@ fn temporal_policy_module_bytes_with(
         r#""get","list""#
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}}}}},{{"id":"membership","primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"person","type":"string","maximumLength":32,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_membership_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","type":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":[{operations}],"readableFields":["person","valid-from","valid-to"],"filterableFields":["person","valid-from"]{reader_profile_extra}}}}}}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":{{"neutral-record":{{"primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}}}}},"membership":{{"primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"person","type":"string","maximumLength":32,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_membership_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","type":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":[{operations}],"readableFields":["person","valid-from","valid-to"],"filterableFields":["person","valid-from"]{reader_profile_extra}}}}}}}}}}}"#
     )
     .into_bytes()
 }
@@ -3651,19 +3650,19 @@ fn publish_temporal_policy_package(
 
 fn module_bytes(plan: PlanChoice) -> Vec<u8> {
     if matches!(plan, PlanChoice::TemporalSchema) {
-        return br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}},{"id":"membership","primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{"id":"person","type":"string","maximumLength":32,"required":true,"classification":"internal"},{"id":"valid-from","type":"date","required":true,"classification":"internal"},{"id":"valid-to","type":"date","classification":"internal"}],"temporal":{"startField":"valid-from","endField":"valid-to"},"constraints":[{"id":"membership-window","type":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["person","valid-from","valid-to"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}]}"#
+        return br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":{"neutral-record": {"primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}},"membership": {"primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{"id":"person","type":"string","maximumLength":32,"required":true,"classification":"internal"},{"id":"valid-from","type":"date","required":true,"classification":"internal"},{"id":"valid-to","type":"date","classification":"internal"}],"temporal":{"startField":"valid-from","endField":"valid-to"},"constraints":[{"id":"membership-window","type":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["person","valid-from","valid-to"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}}}"#
             .to_vec();
     }
     let second = if matches!(
         plan,
         PlanChoice::SecondTable | PlanChoice::ThirdTable | PlanChoice::HookSecondTable
     ) {
-        r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"writer": {"principalClaim":"principal","operations":["get","create"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}"#
+        r#","second-record":{"primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"writer": {"principalClaim":"principal","operations":["get","create"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}"#
     } else {
         ""
     };
     let third = if matches!(plan, PlanChoice::ThirdTable) {
-        r#",{"id":"third-record","primaryDataset":"neutral-registry","route":"third-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}]}"#
+        r#","third-record":{"primaryDataset":"neutral-registry","route":"third-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}]}"#
     } else {
         ""
     };
@@ -3673,13 +3672,13 @@ fn module_bytes(plan: PlanChoice) -> Vec<u8> {
         ""
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}}}{events}}}{second}{third}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":{{"neutral-record":{{"primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}}}{events}}}{second}{third}}}}}"#
     )
     .into_bytes()
 }
 
 fn derived_module_bytes() -> Vec<u8> {
-    br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maximumLength":64,"classification":"internal"}]}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}]}"#.to_vec()
+    br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":{"neutral-record": {"primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maximumLength":64,"classification":"internal"}]}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}}}"#.to_vec()
 }
 
 fn derived_asset_request(sql: &[u8]) -> PackageBuildRequest {

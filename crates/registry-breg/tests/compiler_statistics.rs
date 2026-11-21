@@ -45,8 +45,7 @@ fn source() -> Value {
             "canonicalBaseIri": "https://statistics.example.test",
             "timezone": "UTC"
         },
-        "recordTypes": [{
-            "id": "record",
+        "recordTypes": {"record": {
             "primaryDataset": "statistics-test",
             "route": "records",
             "mutationMode": "mutable",
@@ -58,7 +57,7 @@ fn source() -> Value {
                 {"id":"valid-to","type":"date","classification":"internal"}
             ],
             "temporal": {"startField":"valid-from","endField":"valid-to"}
-        }],
+        }},
         "accessProfiles": {
             "analyst": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                     "recordType":"record","operations":["list"],
@@ -111,14 +110,14 @@ fn grant(value: &mut Value, profile: &str, operations: &[&str]) {
 
 fn source_with_swappable_population_fields() -> Value {
     let mut value = source();
-    value["recordTypes"][0]["fields"]
+    value["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id":"archived","apiName":"archived","type":"boolean","required":true,
             "classification":"internal"
         }));
-    value["recordTypes"][0]["fields"][0]["apiName"] = json!("active");
+    value["recordTypes"]["record"]["fields"][0]["apiName"] = json!("active");
     for profile in [ANALYST, PUBLISHER] {
         for member in ["readableFields", "filterableFields"] {
             value["accessProfiles"][profile]["permissions"]["records"][0][member]
@@ -132,8 +131,8 @@ fn source_with_swappable_population_fields() -> Value {
 }
 
 fn swap_population_api_names(value: &mut Value) {
-    value["recordTypes"][0]["fields"][0]["apiName"] = json!("archived");
-    value["recordTypes"][0]["fields"][5]["apiName"] = json!("active");
+    value["recordTypes"]["record"]["fields"][0]["apiName"] = json!("archived");
+    value["recordTypes"]["record"]["fields"][5]["apiName"] = json!("active");
 }
 
 fn compile(
@@ -806,22 +805,20 @@ fn statistical_disclosure_bounds_are_refused_when_the_project_is_read() {
 fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
     assert_refused(
         |value| {
-            value["recordTypes"][0]["fields"]
+            value["recordTypes"]["record"]["fields"]
                 .as_array_mut()
                 .unwrap()
                 .push(json!({
                     "id":"organization","type":"reference","target":"organization",
                     "required":true,"classification":"internal"
                 }));
-            value["recordTypes"].as_array_mut().unwrap().extend([
-                json!({
-                    "id":"organization","primaryDataset":"statistics-test","route":"organizations",
+            value["recordTypes"].as_object_mut().unwrap().extend([
+                ("organization".to_owned(), json!({"primaryDataset":"statistics-test","route":"organizations",
                     "mutationMode":"mutable","fields":[
                         {"id":"name","type":"string","maximumLength":80,"classification":"internal"}
                     ]
-                }),
-                json!({
-                    "id":"membership","primaryDataset":"statistics-test","route":"memberships",
+                })),
+                ("membership".to_owned(), json!({"primaryDataset":"statistics-test","route":"memberships",
                     "mutationMode":"mutable","classification":"restricted",
                     "fields":[
                         {"id":"organization","type":"reference","target":"organization","required":true,"classification":"internal"},
@@ -830,7 +827,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
                     ],
                     "indexes":[{"id":"membership-principal-key","fields":["principal","organization","active"]}],
                     "accessRequirements":{"requiredScopes":["membership:use"]}
-                }),
+                }))
             ]);
             value["accessProfiles"]["publisher"]["requiredScopes"] = json!(["membership:use"]);
             value["accessProfiles"]["publisher"]["permissions"]["records"][0]
@@ -845,7 +842,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
     assert_refused(
         |value| {
             let boundary = json!({"field":"category","claim":"categories","operator":"in"});
-            value["recordTypes"][0]["accessRequirements"] =
+            value["recordTypes"]["record"]["accessRequirements"] =
                 json!({"rowBoundaries":[boundary.clone()]});
             for profile in [ANALYST, PUBLISHER] {
                 value["accessProfiles"][profile]["permissions"]["records"][0]["rowBoundaries"] =
@@ -860,7 +857,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
 fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_count_grants() {
     assert_refused(
         |value| {
-            value["recordTypes"][0]["fields"]
+            value["recordTypes"]["record"]["fields"]
                 .as_array_mut()
                 .unwrap()
                 .push(json!({
@@ -891,8 +888,7 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
                 json!({"id":"data-use-purpose","values":["statistics"]}),
                 json!({"id":"consent-decision","values":["given","refused","withdrawn"]}),
             ]);
-            value["recordTypes"].as_array_mut().unwrap().push(json!({
-                "id":"consent-decision","primaryDataset":"statistics-test",
+            value["recordTypes"].as_object_mut().unwrap().insert("consent-decision".to_owned(), json!({"primaryDataset":"statistics-test",
                 "route":"consent-decisions","mutationMode":"create-only","classification":"restricted",
                 "fields":[
                     {"id":"subject","type":"reference","target":"record","required":true,"classification":"restricted"},
@@ -929,7 +925,7 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
     for id in ["period", "value", "status", "measure"] {
         assert_refused(
             |value| {
-                value["recordTypes"][0]["fields"]
+                value["recordTypes"]["record"]["fields"]
                     .as_array_mut()
                     .unwrap()
                     .push(json!({
@@ -951,7 +947,7 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
                 .as_array_mut()
                 .unwrap()
                 .push(json!({"id":"category-two","values":codes}));
-            value["recordTypes"][0]["fields"]
+            value["recordTypes"]["record"]["fields"]
                 .as_array_mut()
                 .unwrap()
                 .push(json!({
@@ -981,7 +977,7 @@ fn with_single_code_dimensions(value: &mut Value, count: usize) {
             .as_array_mut()
             .unwrap()
             .push(json!({"id":id,"values":["only"]}));
-        value["recordTypes"][0]["fields"]
+        value["recordTypes"]["record"]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({
@@ -1017,7 +1013,7 @@ fn a_dataset_declares_at_most_twelve_dimensions() {
 fn statistical_dimension_reserved_names_follow_emitted_logical_field_ids() {
     let mut value = source();
     for id in ["period-start", "period-end"] {
-        value["recordTypes"][0]["fields"]
+        value["recordTypes"]["record"]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({
@@ -1045,7 +1041,7 @@ fn statistical_dimension_reserved_names_follow_emitted_logical_field_ids() {
 
     assert_refused(
         |value| {
-            value["recordTypes"][0]["fields"]
+            value["recordTypes"]["record"]["fields"]
                 .as_array_mut()
                 .unwrap()
                 .push(json!({
@@ -1070,7 +1066,7 @@ fn statistical_dataset_refuses_release_documents_over_the_eight_mibibyte_cap() {
                     .as_array_mut()
                     .unwrap()
                     .push(json!({"id":field,"values":[code]}));
-                value["recordTypes"][0]["fields"]
+                value["recordTypes"]["record"]["fields"]
                     .as_array_mut()
                     .unwrap()
                     .push(json!({
@@ -1210,7 +1206,7 @@ fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
         compile(&value).expect("stock validity compiles");
     }
     assert_refused(
-        |value| value["recordTypes"][0]["fields"][2]["type"] = json!("timestamp"),
+        |value| value["recordTypes"]["record"]["fields"][2]["type"] = json!("timestamp"),
         "breg.statistical-dataset.period-field-type",
     );
     assert_refused(
@@ -1252,7 +1248,7 @@ fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
             value["statisticalDatasets"][0]["period"] = json!({
                 "type":"stock","granularity":"month","firstPeriod":"2025-01","validity":"temporal"
             });
-            value["recordTypes"][0]
+            value["recordTypes"]["record"]
                 .as_object_mut()
                 .unwrap()
                 .remove("temporal");
@@ -1316,7 +1312,7 @@ fn definition_digest_binds_population_api_names_to_logical_fields() {
 #[test]
 fn definition_digest_binds_referenced_stored_field_definitions() {
     let mut baseline_source = source();
-    baseline_source["recordTypes"][0]["fields"]
+    baseline_source["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .unwrap()
         .extend([
@@ -1341,7 +1337,7 @@ fn definition_digest_binds_referenced_stored_field_definitions() {
     let baseline_digest = &baseline.statistical_datasets()["records-by-category"].definition_digest;
 
     let mut changed_type_source = baseline_source.clone();
-    changed_type_source["recordTypes"][0]["fields"][5] = json!({
+    changed_type_source["recordTypes"]["record"]["fields"][5] = json!({
         "id":"score","type":"text","maximumLength":20,"required":true,
         "classification":"internal"
     });
@@ -1364,7 +1360,7 @@ fn definition_digest_binds_referenced_stored_field_definitions() {
     );
 
     let mut unrelated_type_source = baseline_source;
-    unrelated_type_source["recordTypes"][0]["fields"][6] = json!({
+    unrelated_type_source["recordTypes"]["record"]["fields"][6] = json!({
         "id":"unused-score","type":"decimal","precision":10,"scale":2,"required":true,
         "classification":"internal"
     });
@@ -1380,7 +1376,7 @@ fn definition_digest_binds_referenced_stored_field_definitions() {
 #[test]
 fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
     let mut baseline_source = source();
-    baseline_source["recordTypes"][0]["fields"]
+    baseline_source["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .unwrap()
         .extend([
@@ -1392,7 +1388,7 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
                 "classification":"internal"
             }),
         ]);
-    baseline_source["recordTypes"][0]["derived"] = json!([{
+    baseline_source["recordTypes"]["record"]["derived"] = json!([{
         "id":"statistics-score","sql":"sql/statistics.sql","key":"id",
         "fields":[{
             "id":"score","type":"int64","classification":"internal"
@@ -1414,7 +1410,7 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
     let baseline_relation = &baseline.entities()["record"].derived_relations["statistics-score"];
 
     let mut changed_output_source = baseline_source.clone();
-    changed_output_source["recordTypes"][0]["derived"][0]["fields"][0] = json!({
+    changed_output_source["recordTypes"]["record"]["derived"][0]["fields"][0] = json!({
         "id":"score","type":"text","maximumLength":20,
         "classification":"internal"
     });
@@ -1431,7 +1427,7 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
     );
 
     let mut changed_source_type = baseline_source.clone();
-    changed_source_type["recordTypes"][0]["fields"][5] = json!({
+    changed_source_type["recordTypes"]["record"]["fields"][5] = json!({
         "id":"amount","type":"decimal","precision":10,"scale":2,"required":true,
         "classification":"internal"
     });
@@ -1444,7 +1440,7 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
     );
 
     let mut unrelated_source_type = baseline_source;
-    unrelated_source_type["recordTypes"][0]["fields"][6] = json!({
+    unrelated_source_type["recordTypes"]["record"]["fields"][6] = json!({
         "id":"unused-amount","type":"decimal","precision":10,"scale":2,"required":true,
         "classification":"internal"
     });
@@ -1460,7 +1456,7 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
 #[test]
 fn population_uses_api_field_names_and_refuses_invalid_typed_predicates() {
     let mut value = source();
-    value["recordTypes"][0]["fields"]
+    value["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -1512,7 +1508,7 @@ fn population_text_functions_use_partial_query_terms_with_runtime_bounds() {
     compile(&vocabulary).expect("a partial vocabulary-code prefix compiles");
 
     let mut bounded_string = source();
-    bounded_string["recordTypes"][0]["fields"]
+    bounded_string["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -1909,14 +1905,16 @@ fn tooling_classifies_statistical_grant_direction_and_definition_review() {
 #[test]
 fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     let mut value = source();
-    value["recordTypes"][0]["derived"] = json!([{
+    value["recordTypes"]["record"]["derived"] = json!([{
         "id":"statistics","sql":"sql/statistics.sql","key":"id",
         "fields":[{"id":"evaluated-category","type":"vocabulary-code","vocabulary":"category","values":["a","b"],"classification":"internal"}]
     }]);
-    value["recordTypes"].as_array_mut().unwrap().push(json!({
-        "id":"lookup","primaryDataset":"statistics-test","route":"lookups","mutationMode":"mutable",
-        "fields":[{"id":"flag","type":"boolean","required":true,"classification":"internal"}]
-    }));
+    value["recordTypes"].as_object_mut().unwrap().insert(
+        "lookup".to_owned(),
+        json!({"primaryDataset":"statistics-test","route":"lookups","mutationMode":"mutable",
+            "fields":[{"id":"flag","type":"boolean","required":true,"classification":"internal"}]
+        }),
+    );
     for profile in [ANALYST, PUBLISHER] {
         value["accessProfiles"][profile]["permissions"]["records"][0]["readableFields"]
             .as_array_mut()
@@ -1963,7 +1961,8 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     );
 
     let mut batch_select = value.clone();
-    batch_select["recordTypes"][1]["batch"] = json!({"maximumItems": 10, "maximumBytes": 4096});
+    batch_select["recordTypes"]["lookup"]["batch"] =
+        json!({"maximumItems": 10, "maximumBytes": 4096});
     batch_select["accessProfiles"][PUBLISHER]["permissions"]["records"][1] = json!({
         "recordType":"lookup","operations":["patch","batch"],"writableFields":["flag"],
         "rowBoundaries":"unrestricted"
@@ -2038,8 +2037,13 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     }));
 
     let long_entity = "l".repeat(64);
-    value["recordTypes"][1]["id"] = json!(long_entity.clone());
-    value["recordTypes"][1]["route"] = json!("long-lookups");
+    let lookup = value["recordTypes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("lookup")
+        .unwrap();
+    value["recordTypes"][&long_entity] = lookup;
+    value["recordTypes"][&long_entity]["route"] = json!("long-lookups");
     value["accessProfiles"][PUBLISHER]["permissions"]["records"][1]["recordType"] =
         json!(long_entity.clone());
     let long_sql = sql.replace(
@@ -2060,7 +2064,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
 fn a_statistics_dataset_requires_the_registry_timezone_for_its_current_period() {
     let mut value = source();
     value["project"].as_object_mut().unwrap().remove("timezone");
-    value["recordTypes"][0]
+    value["recordTypes"]["record"]
         .as_object_mut()
         .unwrap()
         .remove("temporal");
@@ -2179,7 +2183,7 @@ fn definition_digest_covers_the_measures_including_the_defaulted_one() {
 /// analyst reads but cannot filter on.
 fn live_measure_source(measures: Value) -> Value {
     let mut value = source();
-    value["recordTypes"][0]["fields"]
+    value["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .unwrap()
         .extend([
@@ -2248,7 +2252,7 @@ fn a_measure_field_is_checked_like_any_field_the_dataset_reads() {
     assert_refused(
         |value| {
             *value = live_measure_source(json!([{"id":"total","type":"sum","field":"secret"}]));
-            value["recordTypes"][0]["fields"]
+            value["recordTypes"]["record"]["fields"]
                 .as_array_mut()
                 .unwrap()
                 .push(json!({
@@ -2417,7 +2421,7 @@ fn a_measure_field_type_change_changes_the_definition_digest() {
     let measures = json!([{"id":"m","type":"sum","field":"amount"}]);
     let baseline = live_measure_digest(measures.clone());
     let mut changed = live_measure_source(measures);
-    changed["recordTypes"][0]["fields"][5]["scale"] = json!(3);
+    changed["recordTypes"]["record"]["fields"][5]["scale"] = json!(3);
     let digest = compile(&changed).unwrap().statistical_datasets()["records-by-category"]
         .definition_digest
         .clone();
@@ -2430,8 +2434,10 @@ const EXACT_NOT_PUBLIC: &str = "breg.statistical-dataset.exact-release-not-publi
 /// analyst and published by the publisher with exact values.
 fn public_register_source(measures: Value) -> Value {
     let mut value = source();
-    value["recordTypes"][0]["classification"] = json!("public");
-    let fields = value["recordTypes"][0]["fields"].as_array_mut().unwrap();
+    value["recordTypes"]["record"]["classification"] = json!("public");
+    let fields = value["recordTypes"]["record"]["fields"]
+        .as_array_mut()
+        .unwrap();
     fields.extend([
         json!({"id":"amount","type":"decimal","precision":10,"scale":2,"classification":"internal"}),
         json!({"id":"quantity","type":"int64","classification":"internal"}),
@@ -2508,14 +2514,17 @@ fn exact_values_are_refused_per_item_that_is_not_classified_public() {
         value
     };
     let field = |value: &mut Value, id: &str, classification: &str| {
-        for candidate in value["recordTypes"][0]["fields"].as_array_mut().unwrap() {
+        for candidate in value["recordTypes"]["record"]["fields"]
+            .as_array_mut()
+            .unwrap()
+        {
             if candidate["id"] == id {
                 candidate["classification"] = json!(classification);
             }
         }
     };
     assert_exact_refusal_names(
-        &one(&|value| value["recordTypes"][0]["classification"] = json!("internal")),
+        &one(&|value| value["recordTypes"]["record"]["classification"] = json!("internal")),
         "record",
         "internal",
     );
@@ -2576,15 +2585,17 @@ fn exact_values_over_an_internal_register_name_every_item_to_reclassify() {
 #[test]
 fn a_derived_dimension_over_a_non_public_source_entity_is_refused() {
     let mut value = public_register_source(json!([{"id":"facilities","type":"count"}]));
-    value["recordTypes"][0]["derived"] = json!([{
+    value["recordTypes"]["record"]["derived"] = json!([{
         "id":"statistics","sql":"sql/statistics.sql","key":"id",
         "fields":[{"id":"evaluated-category","type":"vocabulary-code","vocabulary":"category","values":["a","b"],"classification":"public"}]
     }]);
-    value["recordTypes"].as_array_mut().unwrap().push(json!({
-        "id":"lookup","primaryDataset":"statistics-test","route":"lookups","mutationMode":"mutable",
-        "classification":"internal",
-        "fields":[{"id":"flag","type":"boolean","required":true,"classification":"public"}]
-    }));
+    value["recordTypes"].as_object_mut().unwrap().insert(
+        "lookup".to_owned(),
+        json!({"primaryDataset":"statistics-test","route":"lookups","mutationMode":"mutable",
+            "classification":"internal",
+            "fields":[{"id":"flag","type":"boolean","required":true,"classification":"public"}]
+        }),
+    );
     for profile in [ANALYST, PUBLISHER] {
         for member in ["readableFields", "filterableFields"] {
             value["accessProfiles"][profile]["permissions"]["records"][0][member]
@@ -2611,7 +2622,7 @@ fn a_derived_dimension_over_a_non_public_source_entity_is_refused() {
         refusals[0].message
     );
 
-    value["recordTypes"][1]["classification"] = json!("public");
+    value["recordTypes"]["lookup"]["classification"] = json!("public");
     compile_with_sql(&value, sql).expect("a public source entity is admitted");
 }
 
@@ -2889,7 +2900,7 @@ fn a_standing_agent_cannot_read_exact_or_anchor_exact_reads() {
 /// same id. `profile` is merged into the module's profile.
 fn exact_source_with_unit_profile(profile: Value) -> (Value, Value) {
     let mut project = exact_source();
-    project["modules"] = json!([{"id":"stats-module","version":"1"}]);
+    project["modules"] = json!({"stats-module": {"version":"1"}});
     project["accessProfiles"]["stats"] = json!({
         "principalClaim":"principal","requiredScopes":"unrestricted","permissions":{}
     });
@@ -2907,7 +2918,7 @@ fn exact_source_with_unit_profile(profile: Value) -> (Value, Value) {
     let module = json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
         "kind":"BRegModule","id":"stats-module","version":"1",
-        "extendRecordTypes":[{"recordType":"record","accessProfiles":{"stats":contributed}}]
+        "extendRecordTypes":{"record": {"accessProfiles":{"stats":contributed}}}
     });
     (project, module)
 }
@@ -3001,11 +3012,13 @@ fn read_exact_names_the_unit_profile_that_makes_it_a_standing_agent() {
 /// analyst reads but cannot filter on, to a second record type.
 fn distinct_source(measures: Value) -> Value {
     let mut value = live_measure_source(measures);
-    value["recordTypes"].as_array_mut().unwrap().push(json!({
-        "id":"owner","primaryDataset":"statistics-test","route":"owners","mutationMode":"mutable",
-        "fields":[{"id":"name","type":"string","maximumLength":80,"classification":"internal"}]
-    }));
-    value["recordTypes"][0]["fields"]
+    value["recordTypes"].as_object_mut().unwrap().insert(
+        "owner".to_owned(),
+        json!({"primaryDataset":"statistics-test","route":"owners","mutationMode":"mutable",
+            "fields":[{"id":"name","type":"string","maximumLength":80,"classification":"internal"}]
+        }),
+    );
+    value["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(
@@ -3093,7 +3106,7 @@ fn two_distinct_counts_over_one_field_are_refused_and_over_two_fields_are_not() 
         "breg.statistical-dataset.measure-distinct-count-duplicate",
         "measures[1].field",
     );
-    value["recordTypes"][0]["fields"]
+    value["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(
@@ -3114,7 +3127,9 @@ fn two_distinct_counts_over_one_field_are_refused_and_over_two_fields_are_not() 
 fn a_distinct_count_limits_the_dataset_to_four_dimensions() {
     let with_dimensions = |measures: Value, count: usize| {
         let mut value = distinct_source(measures);
-        let fields = value["recordTypes"][0]["fields"].as_array_mut().unwrap();
+        let fields = value["recordTypes"]["record"]["fields"]
+            .as_array_mut()
+            .unwrap();
         let mut names = vec![json!("category")];
         for index in 1..count {
             let id = format!("flag-{index}");
@@ -3167,8 +3182,8 @@ fn every_live_reader_publisher_and_exact_profile_must_read_a_distinct_count_fiel
     }));
     // The publisher of an exact release.
     let mut published = distinct_source(distinct_measures());
-    published["recordTypes"][0]["classification"] = json!("public");
-    for field in published["recordTypes"][0]["fields"]
+    published["recordTypes"]["record"]["classification"] = json!("public");
+    for field in published["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .unwrap()
     {
@@ -3251,12 +3266,14 @@ fn exact_values_name_a_distinct_count_field_that_is_not_public() {
         {"id":"facilities","type":"count"},
         {"id":"owners","type":"distinct-count","field":"owner"}
     ]));
-    value["recordTypes"].as_array_mut().unwrap().push(json!({
-        "id":"owner","classification":"public","primaryDataset":"statistics-test",
-        "route":"owners","mutationMode":"mutable",
-        "fields":[{"id":"name","type":"string","maximumLength":80,"classification":"public"}]
-    }));
-    value["recordTypes"][0]["fields"]
+    value["recordTypes"].as_object_mut().unwrap().insert(
+        "owner".to_owned(),
+        json!({"classification":"public","primaryDataset":"statistics-test",
+            "route":"owners","mutationMode":"mutable",
+            "fields":[{"id":"name","type":"string","maximumLength":80,"classification":"public"}]
+        }),
+    );
+    value["recordTypes"]["record"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({"id":"owner","type":"reference","target":"owner","classification":"public"}));
@@ -3267,8 +3284,12 @@ fn exact_values_name_a_distinct_count_field_that_is_not_public() {
             .push(json!("owner"));
     }
     compile(&value).expect("a public reference field is released exactly");
-    let owner = value["recordTypes"][0]["fields"].as_array().unwrap().len() - 1;
-    value["recordTypes"][0]["fields"][owner]["classification"] = json!("internal");
+    let owner = value["recordTypes"]["record"]["fields"]
+        .as_array()
+        .unwrap()
+        .len()
+        - 1;
+    value["recordTypes"]["record"]["fields"][owner]["classification"] = json!("internal");
     assert_exact_refusal_names(&value, "owner", "internal");
 }
 
@@ -3484,7 +3505,9 @@ fn every_reader_of_a_percentile_must_read_its_field() {
 fn a_percentile_limits_the_dataset_to_four_dimensions_and_a_ratio_does_not() {
     let with_dimensions = |measures: Value, count: usize| {
         let mut value = live_measure_source(measures);
-        let fields = value["recordTypes"][0]["fields"].as_array_mut().unwrap();
+        let fields = value["recordTypes"]["record"]["fields"]
+            .as_array_mut()
+            .unwrap();
         let mut names = vec![json!("category")];
         for index in 1..count {
             let id = format!("flag-{index}");
@@ -3590,13 +3613,13 @@ fn exact_values_name_a_percentile_field_that_is_not_public() {
         {"id":"median","type":"percentile","field":"amount","percentile":50,"scale":2}
     ]));
     compile(&value).expect("a public field is released exactly");
-    let amount = value["recordTypes"][0]["fields"]
+    let amount = value["recordTypes"]["record"]["fields"]
         .as_array()
         .unwrap()
         .iter()
         .position(|field| field["id"] == "amount")
         .unwrap();
-    value["recordTypes"][0]["fields"][amount]["classification"] = json!("internal");
+    value["recordTypes"]["record"]["fields"][amount]["classification"] = json!("internal");
     assert_exact_refusal_names(&value, "amount", "internal");
 }
 
@@ -3650,7 +3673,10 @@ fn sum_release_source() -> Value {
         {"id":"total-amount","type":"sum","field":"amount"},
         {"id":"total-units","type":"sum","field":"quantity"}
     ]));
-    for field in value["recordTypes"][0]["fields"].as_array_mut().unwrap() {
+    for field in value["recordTypes"]["record"]["fields"]
+        .as_array_mut()
+        .unwrap()
+    {
         if field["id"] == "amount" {
             field["minimum"] = json!("0.00");
         }
@@ -3874,7 +3900,10 @@ fn the_contributor_field_must_exist_be_a_reference_and_be_readable_by_the_publis
 fn a_summed_decimal_field_must_declare_a_non_negative_minimum() {
     let amount_minimum = |minimum: Option<&str>| {
         let mut value = sum_release_source();
-        for field in value["recordTypes"][0]["fields"].as_array_mut().unwrap() {
+        for field in value["recordTypes"]["record"]["fields"]
+            .as_array_mut()
+            .unwrap()
+        {
             if field["id"] == "amount" {
                 match minimum {
                     Some(minimum) => field["minimum"] = json!(minimum),
@@ -3930,7 +3959,9 @@ fn a_day_period_is_refused_for_a_sum_release() {
 fn a_released_sum_limits_the_dataset_to_four_dimensions_and_names_the_three_causes() {
     let with_dimensions = |count: usize| {
         let mut value = sum_release_source();
-        let fields = value["recordTypes"][0]["fields"].as_array_mut().unwrap();
+        let fields = value["recordTypes"]["record"]["fields"]
+            .as_array_mut()
+            .unwrap();
         let mut names = vec![json!("category")];
         for index in 1..count {
             let id = format!("flag-{index}");
@@ -3999,7 +4030,7 @@ fn released_twice_refusals(value: &Value) -> Vec<Diagnostic> {
 #[test]
 fn a_summed_field_released_by_two_datasets_over_one_unit_is_refused_at_the_second() {
     let flag = |value: &mut Value| {
-        value["recordTypes"][0]["fields"]
+        value["recordTypes"]["record"]["fields"]
             .as_array_mut()
             .unwrap()
             .push(
@@ -4058,13 +4089,9 @@ fn a_summed_field_released_by_two_datasets_over_one_unit_is_refused_at_the_secon
 #[test]
 fn a_summed_field_released_over_two_units_is_not_refused() {
     let mut value = two_sum_releases(|second| second["unit"] = json!("record-two"));
-    let mut second_type = value["recordTypes"][0].clone();
-    second_type["id"] = json!("record-two");
+    let mut second_type = value["recordTypes"]["record"].clone();
     second_type["route"] = json!("records-two");
-    value["recordTypes"]
-        .as_array_mut()
-        .unwrap()
-        .push(second_type);
+    value["recordTypes"]["record-two"] = second_type;
     for profile in [ANALYST, PUBLISHER] {
         let mut records = value["accessProfiles"][profile]["permissions"]["records"][0].clone();
         records["recordType"] = json!("record-two");

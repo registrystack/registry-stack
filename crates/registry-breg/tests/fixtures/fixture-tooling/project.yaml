@@ -29,11 +29,11 @@ manifestProjection:
   distributions: []
 datasets: [{id: fixture-registry}]
 modules:
-  - id: fixture-core
+  fixture-core:
     version: 1.0.0
     digest: MODULE_DIGEST
 recordTypes:
-  - id: widget
+  widget:
     primaryDataset: fixture-registry
     route: widgets
     mutationMode: mutable

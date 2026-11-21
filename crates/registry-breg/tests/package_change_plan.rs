@@ -145,7 +145,7 @@ fn spatial_span_numbers_survive_canonical_package_reload_and_successor_rederive(
     let source_with_span = |span: serde_json::Value, add_field| {
         let source = spatial_source("location", true);
         let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
-        let entity = &mut module["recordTypes"][0];
+        let entity = &mut module["recordTypes"]["asset"];
         let bbox = &mut entity["accessProfiles"]["reader"]["spatialQueries"]["bbox"];
         bbox["maximumLongitudeSpanDegrees"] = span.clone();
         bbox["maximumLatitudeSpanDegrees"] = span;
@@ -296,7 +296,7 @@ fn changing_bbox_grant_replaces_candidate_view_without_rewriting_point_storage()
     let previous = compile_source(&spatial_source("location", true));
     let source = spatial_source("location", true);
     let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
-    module["recordTypes"][0]["accessProfiles"]["reader"]["spatialQueries"]["bbox"]
+    module["recordTypes"]["asset"]["accessProfiles"]["reader"]["spatialQueries"]["bbox"]
         ["maximumLongitudeSpanDegrees"] = json!(0.25);
     let module_bytes = serde_json::to_vec(&module).unwrap();
     let parsed_module = parse_module_yaml(&module_bytes).unwrap();
@@ -330,14 +330,14 @@ fn reviewed_source_view_refresh_preserves_candidate_drop_and_recreation() {
     let previous = compile_source(&spatial_source("location", true));
     let source = spatial_source("location", true);
     let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
-    module["recordTypes"][0]["fields"]
+    module["recordTypes"]["asset"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id": "color", "type": "string", "maximumLength": 16,
             "classification": "internal"
         }));
-    module["recordTypes"][0]["accessProfiles"]["reader"]["allowCount"] = json!(true);
+    module["recordTypes"]["asset"]["accessProfiles"]["reader"]["allowCount"] = json!(true);
     let module_bytes = serde_json::to_vec(&module).unwrap();
     let parsed_module = parse_module_yaml(&module_bytes).unwrap();
     let source = SourceFixture {
@@ -844,12 +844,12 @@ fn metadata_only_access_or_disclosure_changes_create_empty_applicable_plans() {
 
 #[test]
 fn complete_extension_surface_modules_are_order_independent() {
-    let field_module = parse_module_yaml(br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"field-extension","version":"1","extendRecordTypes":[{"recordType":"asset","fields":[{"id":"status","type":"string","maximumLength":16,"classification":"internal"}],"constraints":[{"type":"unique","id":"status-unique","fields":["status"]}],"indexes":[{"id":"status-idx","fields":["status"]}]}]}"#)
+    let field_module = parse_module_yaml(br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"field-extension","version":"1","extendRecordTypes":{"asset": {"fields":[{"id":"status","type":"string","maximumLength":16,"classification":"internal"}],"constraints":[{"type":"unique","id":"status-unique","fields":["status"]}],"indexes":[{"id":"status-idx","fields":["status"]}]}}}"#)
         .expect("field extension parses");
-    let event_module = parse_module_yaml(br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"event-extension","version":"1","extendRecordTypes":[{"recordType":"asset","accessProfiles":{"auditor": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}},"hooks":[{"phase":"after","id":"asset-created","trigger":"created","projection":["code","status"],"handler":{"type":"url","destinationId":"package-change-events"}}]}],"recordTypes":[{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}]}"#)
+    let event_module = parse_module_yaml(br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"event-extension","version":"1","extendRecordTypes":{"asset": {"accessProfiles":{"auditor": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}},"hooks":[{"phase":"after","id":"asset-created","trigger":"created","projection":["code","status"],"handler":{"type":"url","destinationId":"package-change-events"}}]}},"recordTypes":{"site": {"primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}}}"#)
         .expect("event extension parses");
     let project_bytes = format!(
-        r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"recordTypes":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}]}}],"accessProfiles":{{"reader":{{"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"records":[{{"rowBoundaries": "unrestricted", "recordType":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}}}}},"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
+        r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"recordTypes":{{"asset":{{"primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}]}}}},"accessProfiles":{{"reader":{{"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"records":[{{"rowBoundaries": "unrestricted", "recordType":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}}}}},"modules":{{"field-extension":{{"version":"1","digest":"{}"}},"event-extension":{{"version":"1","digest":"{}"}}}}}}"#,
         module_digest(&field_module),
         module_digest(&event_module)
     );
@@ -1262,12 +1262,7 @@ fn model_change_over_a_baseline_without_the_generated_ddl_digest_carries_the_ref
     // One optional field more on `site`; `asset` and its indexes are untouched.
     let mut module: serde_json::Value =
         serde_json::from_slice(&previous_source.module_bytes).expect("fixture module is JSON");
-    let site = module["recordTypes"]
-        .as_array_mut()
-        .expect("module lists entities")
-        .iter_mut()
-        .find(|entity| entity["id"] == "site")
-        .expect("fixture declares site");
+    let site = &mut module["recordTypes"]["site"];
     site["fields"]
         .as_array_mut()
         .expect("site lists fields")
@@ -1342,12 +1337,7 @@ fn reviewed_change_over_a_baseline_without_the_generated_ddl_digest_carries_the_
     // A route change needs review and owes the database no statement.
     let mut module: serde_json::Value =
         serde_json::from_slice(&previous_source.module_bytes).expect("fixture module is JSON");
-    let asset = module["recordTypes"]
-        .as_array_mut()
-        .expect("module lists entities")
-        .iter_mut()
-        .find(|entity| entity["id"] == "asset")
-        .expect("fixture declares asset");
+    let asset = &mut module["recordTypes"]["asset"];
     asset["route"] = json!("equipment");
     let module_bytes = serde_json::to_vec(&module).expect("module serializes");
     let parsed = parse_module_yaml(&module_bytes).expect("changed module parses");
@@ -1685,7 +1675,7 @@ fn unrelated_reviewed_change_rebuilds_every_view_around_a_retained_derived_relat
     let previous = compile_derived_source(&previous_source);
     let mut module: serde_json::Value =
         serde_json::from_slice(&previous_source.module_bytes).expect("derived module parses");
-    module["recordTypes"][0]["route"] = json!("equipment");
+    module["recordTypes"]["asset"]["route"] = json!("equipment");
     let module_bytes = serde_json::to_vec(&module).expect("derived module serializes");
     let parsed_module = parse_module_yaml(&module_bytes).expect("derived module reparses");
     let candidate_source = DerivedSourceFixture {
@@ -2065,8 +2055,7 @@ fn vocabulary_registry(vocabulary: &str, values: &[&str]) -> CompiledRegistry {
             {"id": "status", "values": values},
             {"id": "state", "values": ["open", "closed", "archived"]}
         ],
-        "recordTypes": [{
-            "id": "entry",
+        "recordTypes": {"entry": {
             "primaryDataset": "test-dataset",
             "route": "entries",
             "mutationMode": "mutable",
@@ -2079,7 +2068,7 @@ fn vocabulary_registry(vocabulary: &str, values: &[&str]) -> CompiledRegistry {
                     "classification": "internal"
                 }
             ]
-        }],
+        }},
         "accessProfiles": {"writer": {
             "default": true,
             "principalClaim": "registry_principal",
@@ -2142,13 +2131,12 @@ fn field_registry(field: serde_json::Value) -> CompiledRegistry {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://authoring.example.test"
         },
-        "recordTypes": [{
-            "id": "entry",
+        "recordTypes": {"entry": {
             "primaryDataset": "test-dataset",
             "route": "entries",
             "mutationMode": "mutable",
             "fields": [field]
-        }],
+        }},
         "accessProfiles": {"writer": {
             "default": true,
             "principalClaim": "registry_principal",
@@ -2251,7 +2239,7 @@ fn compile_source(source: &SourceFixture) -> CompiledRegistry {
 fn geojson_source(binding: Option<&str>) -> SourceFixture {
     let mut module: serde_json::Value =
         serde_json::from_slice(&module_bytes(Variant::Base)).unwrap();
-    let entity = &mut module["recordTypes"][0];
+    let entity = &mut module["recordTypes"]["asset"];
     let fields = entity["fields"].as_array_mut().unwrap();
     for id in ["location", "alternate"] {
         fields.push(serde_json::json!({
@@ -2277,7 +2265,7 @@ fn geojson_source(binding: Option<&str>) -> SourceFixture {
 fn spatial_source(binding: &str, bbox: bool) -> SourceFixture {
     let source = geojson_source(Some(binding));
     let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
-    let profile = &mut module["recordTypes"][0]["accessProfiles"]["reader"];
+    let profile = &mut module["recordTypes"]["asset"]["accessProfiles"]["reader"];
     profile["operations"] = json!(["get", "list"]);
     if bbox {
         profile["spatialQueries"] = json!({"bbox": {
@@ -2295,13 +2283,13 @@ fn spatial_source(binding: &str, bbox: bool) -> SourceFixture {
 
 fn project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test","timezone":"UTC"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test","timezone":"UTC"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"authorities":[{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}],"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog","competentAuthority":"neutral-registry-authority"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}}}"#
     )
     .into_bytes()
 }
 
 fn derived_source_for_sql(sql: &[u8]) -> DerivedSourceFixture {
-    let module_bytes = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maximumLength":16,"classification":"internal"}]}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}]}"#.to_vec();
+    let module_bytes = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":{"asset": {"primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maximumLength":16,"classification":"internal"}]}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}}}"#.to_vec();
     let module = parse_module_yaml(&module_bytes).expect("derived module parses");
     let digest = module_digest_with_assets(
         &module,
@@ -2560,7 +2548,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         String::new()
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{asset},{site}{location}{placement}]}}"#,
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":{{{asset},{site}{location}{placement}}}}}"#,
         site = site_entity()
     )
     .into_bytes()
@@ -2599,20 +2587,20 @@ fn asset_entity_with_mode(
     temporal: &str,
 ) -> String {
     format!(
-        r#"{{"id":"asset","primaryDataset":"neutral-registry",{route},"mutationMode":"{mutation_mode}","fields":[{fields}]{constraints}{indexes},"accessProfiles":{{"reader":{{"rowBoundaries":"unrestricted",{access}}}}}{temporal}}}"#
+        r#""asset":{{"primaryDataset":"neutral-registry",{route},"mutationMode":"{mutation_mode}","fields":[{fields}]{constraints}{indexes},"accessProfiles":{{"reader":{{"rowBoundaries":"unrestricted",{access}}}}}{temporal}}}"#
     )
 }
 
 fn site_entity() -> &'static str {
-    r#"{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}"#
+    r#""site":{"primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}"#
 }
 
 fn location_entity() -> &'static str {
-    r#"{"id":"location","primaryDataset":"neutral-registry","route":"locations","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}"#
+    r#""location":{"primaryDataset":"neutral-registry","route":"locations","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}"#
 }
 
 fn placement_entity() -> &'static str {
-    r#"{"id":"placement","primaryDataset":"neutral-registry","route":"placements","mutationMode":"create-only","fields":[{"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"},{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["create","get","list"],"readableFields":["asset","site"],"writableFields":["asset","site"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}"#
+    r#""placement":{"primaryDataset":"neutral-registry","route":"placements","mutationMode":"create-only","fields":[{"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"},{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["create","get","list"],"readableFields":["asset","site"],"writableFields":["asset","site"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}"#
 }
 
 fn build_request(
@@ -3106,7 +3094,7 @@ fn a_changed_registry_version_is_named_and_explained_in_the_change_set() {
 fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
     let fixture = include_bytes!("../../../products/breg/evidence/registry/registry.yaml");
     let mut source: serde_json::Value = serde_norway::from_slice(fixture).unwrap();
-    source["recordTypes"][0]
+    source["recordTypes"]["record"]
         .as_object_mut()
         .unwrap()
         .remove("selectorProfiles");
@@ -3119,7 +3107,7 @@ fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
         compile_project(&project, &[], CompileProfile::Production).unwrap()
     };
     let previous = compile(&source);
-    source["recordTypes"][0]["selectorProfiles"] =
+    source["recordTypes"]["record"]["selectorProfiles"] =
         serde_json::json!([{"id":"by-code","fields":["code"]}]);
     source["accessProfiles"].as_object_mut().unwrap().insert("source".to_owned(), serde_json::json!({"principalClaim":"registry_principal","requiredScopes":["registry:source:lookup"],
         "permissions":{"records":[{"recordType":"record","operations":["lookup"],"readableFields":["code","status"],
@@ -3149,17 +3137,17 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
         .as_object_mut()
         .unwrap()
         .retain(|id, _| id == "operator");
-    source["recordTypes"][0]["readPaths"] = serde_json::json!([
+    source["recordTypes"]["record"]["readPaths"] = serde_json::json!([
         {"id":"children","through":"link","to":"child","route":"children"}
     ]);
-    let dataset = source["recordTypes"][0]["primaryDataset"].clone();
-    source["recordTypes"].as_array_mut().unwrap().extend([
-        serde_json::json!({"id":"child","primaryDataset":dataset,"route":"children","mutationMode":"mutable",
+    let dataset = source["recordTypes"]["record"]["primaryDataset"].clone();
+    source["recordTypes"].as_object_mut().unwrap().extend([
+        ("child".to_owned(), serde_json::json!({"primaryDataset":dataset,"route":"children","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maximumLength":64,"classification":"internal"},
-                      {"id":"label","type":"string","maximumLength":100,"classification":"internal"}]}),
-        serde_json::json!({"id":"link","primaryDataset":dataset,"route":"links","mutationMode":"mutable",
+                      {"id":"label","type":"string","maximumLength":100,"classification":"internal"}]})),
+        ("link".to_owned(), serde_json::json!({"primaryDataset":dataset,"route":"links","mutationMode":"mutable",
             "fields":[{"id":"record","type":"reference","target":"record","classification":"internal"},
-                      {"id":"child","type":"reference","target":"child","classification":"internal"}]})
+                      {"id":"child","type":"reference","target":"child","classification":"internal"}]}))
     ]);
     source["accessProfiles"]["operator"]["permissions"]["records"].as_array_mut().unwrap().extend([
         serde_json::json!({"recordType":"child","operations":["get"],"readableFields":["code","label"],"rowBoundaries":"unrestricted"}),

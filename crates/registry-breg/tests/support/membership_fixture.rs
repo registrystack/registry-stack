@@ -8,8 +8,13 @@ pub fn source(root: &str) -> Value {
         "../../../../products/breg/fixtures/organization-membership-access/registry.yaml"
     ))
     .unwrap();
-    value["recordTypes"][2]["id"] = json!(root);
-    value["recordTypes"][2]["route"] = json!(if root == "facility" {
+    let facility = value["recordTypes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("facility")
+        .unwrap();
+    value["recordTypes"][root] = facility;
+    value["recordTypes"][root]["route"] = json!(if root == "facility" {
         "facilities".to_owned()
     } else {
         format!("{root}s")

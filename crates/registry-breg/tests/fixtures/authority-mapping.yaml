@@ -3,7 +3,7 @@ kind: BRegProject
 project: {id: authority-mapping, version: "1", defaultLanguage: en, canonicalBaseIri: https://authority.example.test}
 datasets: [{id: test-dataset}]
 recordTypes:
-  - id: asset
+  asset:
     primaryDataset: test-dataset
     route: assets
     mutationMode: mutable

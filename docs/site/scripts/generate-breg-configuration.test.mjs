@@ -35,19 +35,19 @@ test('BReg reference includes module extensions, hook conditions, and runtime de
   const project = fields('project');
   const module = fields('module');
   const runtime = fields('runtime');
-  assert.ok(project.has('accessProfiles[].permissions.records[].recordType'));
-  assert.deepEqual(module.get('recordTypes[].hooks[].trigger').values, ['created', 'patched', 'tombstoned']);
-  assert.deepEqual(module.get('recordTypes[].hooks[].phase').values, ['after', 'before']);
-  assert.ok(project.has('accessProfiles[].permissions.proposals[].targets[].recordType'));
+  assert.ok(project.has('accessProfiles.*.permissions.records[].recordType'));
+  assert.deepEqual(module.get('recordTypes.*.hooks[].trigger').values, ['created', 'patched', 'tombstoned']);
+  assert.deepEqual(module.get('recordTypes.*.hooks[].phase').values, ['after', 'before']);
+  assert.ok(project.has('accessProfiles.*.permissions.proposals[].targets[].recordType'));
   assert.deepEqual(project.get('actions[].execution.proposal.hooks[].transitions[]').values,
     ['applied', 'cancelled', 'edited', 'rebased', 'rejected', 'retried', 'review-returned', 'revised', 'started',
       'submitted']);
   for (const path of ['changed[]', 'beforeEquals.*', 'afterEquals.*']) {
-    assert.ok(module.has(`recordTypes[].hooks[].when.${path}`), path);
+    assert.ok(module.has(`recordTypes.*.hooks[].when.${path}`), path);
   }
-  assert.deepEqual(module.get('recordTypes[].hooks[].handler.type').values, ['rhai', 'url', 'wasm']);
-  assert.ok(module.has('recordTypes[].hooks[].handler.destinationId'));
-  assert.ok(!module.has('recordTypes[].hooks[].handler.origin'));
+  assert.deepEqual(module.get('recordTypes.*.hooks[].handler.type').values, ['rhai', 'url', 'wasm']);
+  assert.ok(module.has('recordTypes.*.hooks[].handler.destinationId'));
+  assert.ok(!module.has('recordTypes.*.hooks[].handler.origin'));
   assert.ok(runtime.has('destinations.hooks.*.hmacSha256KeyRef'));
   assert.ok(runtime.has('destinations.hooks.*.tls.clientIdentityRef'));
   assert.ok(runtime.has('destinations.hooks.*.deliveryCeilings.maximumAttempts'));

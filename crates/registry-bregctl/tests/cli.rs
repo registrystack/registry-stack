@@ -59,7 +59,7 @@ fn duplicate_profile_display_warns_once_and_deny_warnings_refuses_it() {
         .unwrap()
         .to_json_value();
     source["accessProfiles"]["directory-editor"]["display"] = json!({"label":"Café"});
-    source["recordTypes"][0]["display"]["label"] = json!("Café");
+    source["recordTypes"]["contact"]["display"]["label"] = json!("Café");
     let baseline =
         TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
     let accepted = bregctl(&[
@@ -182,7 +182,7 @@ acceptances:
 }
 
 #[test]
-fn cross_file_label_warnings_locate_the_second_extension_block() {
+fn cross_file_label_warnings_locate_the_second_extension_member() {
     let mut source = registry_platform_yaml::Reader::new("registry.yaml")
         .scan(include_bytes!(
             "../../../products/breg/fixtures/authoring-display/registry.yaml"
@@ -190,30 +190,35 @@ fn cross_file_label_warnings_locate_the_second_extension_block() {
         .unwrap()
         .unwrap()
         .to_json_value();
-    source["modules"] = json!([{"id":"extension","version":"0.1.0"}]);
+    source["modules"] = json!({"extension": {"version":"0.1.0"}});
     source["accessProfiles"]["directory-editor"]["display"]["label"] = json!("Reader");
-    source["recordTypes"][0]["hooks"][0]["display"]["label"] = json!("Notice");
-    let extension = |id: &str, profile_label: &str, hook_label: &str| {
+    source["recordTypes"]["entry"]["hooks"][0]["display"]["label"] = json!("Notice");
+    let profile = |profile_label: &str| {
+        json!({"display":{"label":profile_label},
+            "principalClaim":"registry_principal","requiredScopes":["directory:read"],
+            "operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"
+        })
+    };
+    let hook = |id: &str, hook_label: &str| {
         json!({
-            "recordType":"entry",
-            "accessProfiles":{(format!("{id}-reader")): {"display":{"label":profile_label},
-                "principalClaim":"registry_principal","requiredScopes":["directory:read"],
-                "operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"
-            }},
-            "hooks":[{
-                "id":format!("{id}-notice"),"display":{"label":hook_label},
-                "phase":"after","trigger":"created","projection":["code"],
-                "handler":{"type":"url","destinationId":"entry-events"}
-            }]
+            "id":format!("{id}-notice"),"display":{"label":hook_label},
+            "phase":"after","trigger":"created","projection":["code"],
+            "handler":{"type":"url","destinationId":"entry-events"}
         })
     };
     let module = json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
         "kind":"BRegModule","id":"extension","version":"0.1.0",
-        "extendRecordTypes":[
-            extension("first", "Different profile", "Different hook"),
-            extension("second", "RE\u{200b}ADER", "NO\u{200b}TICE")
-        ]
+        "extendRecordTypes":{"entry":{
+            "accessProfiles":{
+                "first-reader": profile("Different profile"),
+                "second-reader": profile("RE\u{200b}ADER")
+            },
+            "hooks":[
+                hook("first", "Different hook"),
+                hook("second", "NO\u{200b}TICE")
+            ]
+        }}
     });
     let project =
         TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
@@ -226,11 +231,11 @@ fn cross_file_label_warnings_locate_the_second_extension_block() {
     for (code, pointer) in [
         (
             "breg.access-profile.duplicate-label",
-            "/extendRecordTypes/1/accessProfiles/second-reader/display/label",
+            "/extendRecordTypes/entry/accessProfiles/second-reader/display/label",
         ),
         (
             "breg.hook.duplicate-label",
-            "/extendRecordTypes/1/hooks/0/display/label",
+            "/extendRecordTypes/entry/hooks/1/display/label",
         ),
     ] {
         let findings = report["diagnostics"]
@@ -263,7 +268,7 @@ fn hook_labels_are_scoped_to_their_record_type_across_authored_files() {
         .unwrap()
         .unwrap()
         .to_json_value();
-    source["recordTypes"][0]["hooks"] = json!([{
+    source["recordTypes"]["contact"]["hooks"] = json!([{
         "id":"contact-notice","display":{"label":"Notice"},
         "phase":"after","trigger":"created","projection":["name"]
     }]);
@@ -283,30 +288,27 @@ fn hook_labels_are_scoped_to_their_record_type_across_authored_files() {
             "Different notice",
         ),
     ] {
-        let mut record = source["recordTypes"][0].clone();
-        record["id"] = json!(id);
+        let mut record = source["recordTypes"]["contact"].clone();
         record["route"] = json!(route);
         record["display"]["label"] = json!(record_label);
         record["hooks"][0]["id"] = json!(hook_id);
         record["hooks"][0]["display"]["label"] = json!(hook_label);
-        source["recordTypes"].as_array_mut().unwrap().push(record);
+        source["recordTypes"][id] = record;
     }
     let module = json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
         "kind":"BRegModule","id":"extension","version":"0.1.0",
-        "extendRecordTypes":[{
-            "recordType":"ledger",
+        "extendRecordTypes":{"ledger": {
             "hooks":[{
                 "id":"ledger-notice","display":{"label":"Notice"},
                 "phase":"after","trigger":"created","projection":["name"]
             }]
-        }]
+        }}
     });
     let module_bytes = serde_norway::to_string(&module).unwrap();
     let module_model = parse_module_yaml(module_bytes.as_bytes()).unwrap();
-    source["modules"] = json!([{
-        "id":"extension","version":"0.1.0","digest":module_digest(&module_model)
-    }]);
+    source["modules"] = json!({"extension": {"version":"0.1.0","digest":module_digest(&module_model)
+    }});
     let project =
         TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
     let module_path = project.path().join("modules/extension/module.yaml");
@@ -480,7 +482,7 @@ fn check_places_nested_compiler_diagnostics_at_the_exact_authored_members() {
     for (code, pointer) in [
         (
             "breg.index.fields-invalid",
-            "/recordTypes/3/indexes/1/fields",
+            "/recordTypes/facility-assignment/indexes/1/fields",
         ),
         (
             "breg.access-profile.read-path-processing-wider-than-read",
@@ -560,9 +562,9 @@ fn check_places_temporal_and_duplicate_api_name_errors_at_the_owning_record_and_
         .as_object_mut()
         .unwrap()
         .remove("proposals");
-    temporal["recordTypes"][0]["temporal"] =
+    temporal["recordTypes"]["contact"]["temporal"] =
         json!({"startField":"start-date","endField":"end-date"});
-    temporal["recordTypes"][0]["fields"]
+    temporal["recordTypes"]["contact"]["fields"]
         .as_array_mut()
         .unwrap()
         .extend([
@@ -576,7 +578,7 @@ fn check_places_temporal_and_duplicate_api_name_errors_at_the_owning_record_and_
             .extend([json!("start-date"), json!("end-date")]);
     }
     let mut optional_start = temporal.clone();
-    optional_start["recordTypes"][0]["fields"][3]["required"] = json!(false);
+    optional_start["recordTypes"]["contact"]["fields"][3]["required"] = json!(false);
     let mut hidden_start = temporal;
     hidden_start["accessProfiles"]["directory-editor"]["permissions"]["records"][0]
         ["readableFields"]
@@ -584,20 +586,16 @@ fn check_places_temporal_and_duplicate_api_name_errors_at_the_owning_record_and_
         .unwrap()
         .retain(|field| field != "start-date");
     let mut duplicate_name = baseline;
-    let mut second = duplicate_name["recordTypes"][0].clone();
-    second["id"] = json!("contact-details");
+    let mut second = duplicate_name["recordTypes"]["contact"].clone();
     second["route"] = json!("contact-details");
     second["apiName"] = json!("Contact");
-    duplicate_name["recordTypes"]
-        .as_array_mut()
-        .unwrap()
-        .push(second);
+    duplicate_name["recordTypes"]["contact-details"] = second;
 
     for (source, code, pointer, setting) in [
         (
             optional_start,
             "breg.field.valid-time-start-required",
-            "/recordTypes/0/fields/3/required",
+            "/recordTypes/contact/fields/3/required",
             "required: true",
         ),
         (
@@ -609,7 +607,7 @@ fn check_places_temporal_and_duplicate_api_name_errors_at_the_owning_record_and_
         (
             duplicate_name,
             "breg.record-type.api-name-invalid",
-            "/recordTypes/1/apiName",
+            "/recordTypes/contact-details/apiName",
             "apiName",
         ),
     ] {
@@ -659,19 +657,19 @@ fn hook_projection_errors_point_to_the_second_hook_in_each_owning_file() {
             "handler":{"type":"url","destinationId":"events"}
         })
     };
-    source["recordTypes"][0]["hooks"] = json!([
+    source["recordTypes"]["contact"]["hooks"] = json!([
         hook("root-first", "name"),
         hook("root-second", "no-such-field")
     ]);
     let module = json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
         "kind":"BRegModule","id":"events","version":"1",
-        "extendRecordTypes":[{"recordType":"contact","hooks":[
+        "extendRecordTypes":{"contact": {"hooks":[
             hook("module-first", "name"),hook("module-second", "no-such-field")
-        ]}]
+        ]}}
     });
     let module_bytes = serde_json::to_vec_pretty(&module).unwrap();
-    source["modules"] = json!([{"id":"events","version":"1","digest":module_digest(&parse_module_json(&module_bytes).unwrap())}]);
+    source["modules"] = json!({"events": {"version":"1","digest":module_digest(&parse_module_json(&module_bytes).unwrap())}});
     let root_bytes = serde_json::to_vec_pretty(&source).unwrap();
     let project = TestProject::from_registry_source(&root_bytes);
     let module_directory = project.path().join("modules/events");
@@ -693,12 +691,12 @@ fn hook_projection_errors_point_to_the_second_hook_in_each_owning_file() {
         (
             project.path().join("registry.yaml"),
             root_bytes,
-            "/recordTypes/0/hooks/1/projection/0",
+            "/recordTypes/contact/hooks/1/projection/0",
         ),
         (
             module_directory.join("module.yaml"),
             module_bytes,
-            "/extendRecordTypes/0/hooks/1/projection/0",
+            "/extendRecordTypes/contact/hooks/1/projection/0",
         ),
     ] {
         let diagnostic = diagnostics
@@ -738,7 +736,7 @@ project:
 datasets:
   - id: test-dataset
 modules:
-  - id: core
+  core:
     version: "1"
 "#,
     );
@@ -751,7 +749,7 @@ kind: BRegModule
 id: core
 version: "1"
 recordTypes:
-  - id: record
+  record:
     primaryDataset: test-dataset
     route: records
     mutationMode: create-only
@@ -761,11 +759,10 @@ recordTypes:
         maximumLength: 64
         classification: internal
 extendRecordTypes:
-  - recordType: record
+  record:
     indexes:
       - id: by-missing
         fields: [missing]
-  - recordType: record
     readPaths:
       - id: missing-link
         route: missing-link
@@ -785,14 +782,14 @@ extendRecordTypes:
     for (code, pointer, line, column) in [
         (
             "breg.index.fields-invalid",
-            "/extendRecordTypes/0/indexes/0/fields",
+            "/extendRecordTypes/record/indexes/0/fields",
             19,
             17,
         ),
         (
             "breg.read-path.through-unknown",
-            "/extendRecordTypes/1/readPaths/0/through",
-            24,
+            "/extendRecordTypes/record/readPaths/0/through",
+            23,
             18,
         ),
     ] {
@@ -831,7 +828,7 @@ project:
 datasets:
   - id: test-dataset
 modules:
-  - id: hooks
+  hooks:
     version: "1"
 "#,
     );
@@ -844,7 +841,7 @@ kind: BRegModule
 id: hooks
 version: "1"
 recordTypes:
-  - id: first
+  first:
     primaryDataset: test-dataset
     route: first
     mutationMode: create-only
@@ -856,7 +853,7 @@ recordTypes:
         trigger: created
         projection: [code]
         handler: {type: url, destinationId: audit}
-  - id: second
+  second:
     primaryDataset: test-dataset
     route: second
     mutationMode: create-only
@@ -889,7 +886,10 @@ recordTypes:
         .iter()
         .find(|diagnostic| diagnostic["code"] == "breg.hook.handler-parse")
         .unwrap_or_else(|| panic!("hook parse diagnostic is reported: {report:#?}"));
-    assert_eq!(diagnostic["path"], "/recordTypes/1/hooks/0/handler/script");
+    assert_eq!(
+        diagnostic["path"],
+        "/recordTypes/second/hooks/0/handler/script"
+    );
     assert_eq!(
         diagnostic["source"]["file"],
         module_directory.join("module.yaml").display().to_string()
@@ -1177,9 +1177,9 @@ project:
 datasets:
   - id: records
 modules:
-  - id: core
+  core:
     version: "1"
-recordTypes: []
+recordTypes: {}
 recipients:
   organizations:
     - {id: first, name: Review, contact: first@example.test, clients: []}
@@ -1234,7 +1234,7 @@ project:
   defaultLanguage: en
   canonicalBaseIri: https://fallback-module-warning.example.test
 datasets: []
-modules: []
+modules: {}
 recordTypes: invalid
 "#,
     );
@@ -1247,13 +1247,13 @@ kind: BRegModule
 id: core
 version: "1"
 recordTypes:
-  - id: first
+  first:
     display: {label: Review}
     primaryDataset: records
     route: first
     mutationMode: mutable
     fields: []
-  - id: second
+  second:
     display: {label: review}
     primaryDataset: records
     route: second
@@ -1378,7 +1378,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         .unwrap()
         .iter()
         .any(|d| d["code"] == "breg.access.requirements-row-boundary-missing"));
-    source["recordTypes"][0]
+    source["recordTypes"]["record"]
         .as_object_mut()
         .unwrap()
         .remove("accessRequirements");
@@ -1406,7 +1406,7 @@ project:
 datasets:
   - id: records
 recordTypes:
-  - id: entry
+  entry:
     primaryDataset: records
     route: entries
     mutationMode: mutable
@@ -1675,7 +1675,7 @@ project:
 datasets:
   - id: test-dataset
 recordTypes:
-  - id: record
+  record:
     primaryDataset: test-dataset
     route: records
     mutationMode: create-only
@@ -1698,21 +1698,21 @@ project:
 datasets:
   - id: test-dataset
 recordTypes:
-  - id: household
+  household:
     primaryDataset: test-dataset
     route: households
     mutationMode: mutable
     fields:
       - {id: household-code, apiName: householdCode, type: string, required: true, maximumLength: 64, classification: internal}
       - {id: contact-person, apiName: contactPerson, type: reference, target: person, required: false, classification: restricted}
-  - id: person
+  person:
     primaryDataset: test-dataset
     route: people
     mutationMode: mutable
     fields:
       - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
       - {id: legal-name, apiName: legalName, type: string, required: true, maximumLength: 160, classification: restricted}
-  - id: group-membership
+  group-membership:
     primaryDataset: test-dataset
     route: group-memberships
     mutationMode: create-only
@@ -1792,7 +1792,7 @@ project:
 datasets:
   - id: test-dataset
 recordTypes:
-  - id: household
+  household:
     primaryDataset: test-dataset
     route: households
     mutationMode: mutable
@@ -2659,7 +2659,7 @@ datasets:
   - id: test-dataset
 modules:
   # The core module owns the record entity.
-  - id: core
+  core:
     version: "1"
     # Refreshed by project lock after every module edit.
     digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
@@ -2783,10 +2783,10 @@ project:
 datasets:
   - id: test-dataset
 modules:
-  - id: extra
+  extra:
     version: "1"
     digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
-  - id: core
+  core:
     version: "1"
     digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
 "#,
@@ -2914,7 +2914,7 @@ project:
 datasets:
   - id: test-dataset
 modules:
-  - id: {MODULE_CANARY}
+  {MODULE_CANARY}:
     version: "1"
     digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
 "#
@@ -3966,7 +3966,7 @@ project:
 datasets:
   - id: test-dataset
 recordTypes:
-  - id: record
+  record:
     primaryDataset: test-dataset
     route: records
     mutationMode: create-only
@@ -4373,12 +4373,7 @@ recordTypes:
             json!(["quantity_value", "unit_code", "unit_scheme"]),
         ),
     ] {
-        let entity = source["recordTypes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entity| entity["id"] == entity_id)
-            .unwrap();
+        let entity = &source["recordTypes"][entity_id];
         let field = entity["fields"]
             .as_array()
             .unwrap()
@@ -5963,7 +5958,7 @@ kind: BRegModule
 id: hook-module
 version: "1"
 extendRecordTypes:
-  - recordType: record
+  record:
     hooks:
       - id: record-patched-local
         phase: after
@@ -5992,11 +5987,11 @@ project:
 datasets:
   - id: test-dataset
 modules:
-  - id: hook-module
+  hook-module:
     version: "1"
     digest: {}
 recordTypes:
-  - id: record
+  record:
     primaryDataset: test-dataset
     route: records
     mutationMode: mutable
@@ -6057,7 +6052,7 @@ project:
 datasets:
   - id: test-dataset
 recordTypes:
-  - id: person
+  person:
     primaryDataset: test-dataset
     route: people
     mutationMode: mutable
@@ -6183,7 +6178,7 @@ project:
 datasets:
   - id: test-dataset
 recordTypes:
-  - id: typed-record
+  typed-record:
     primaryDataset: test-dataset
     route: typed-records
     mutationMode: create-only
@@ -6270,7 +6265,7 @@ project: {id: map-explanation, version: "1", defaultLanguage: en, canonicalBaseI
 datasets:
   - id: test-dataset
 recordTypes:
-  - id: service-site
+  service-site:
     primaryDataset: test-dataset
     route: service-sites
     mutationMode: create-only
@@ -6342,7 +6337,7 @@ project: {id: polygon-explanation, version: "1", defaultLanguage: en, canonicalB
 datasets:
   - id: test-dataset
 recordTypes:
-  - id: service-area
+  service-area:
     primaryDataset: test-dataset
     route: service-areas
     mutationMode: create-only
@@ -6381,7 +6376,7 @@ project:
 datasets:
   - id: test-dataset
 modules:
-  - id: core
+  core:
     version: "1"
 "#,
     );
@@ -6394,7 +6389,7 @@ kind: BRegModule
 id: core
 version: "1"
 recordTypes:
-  - id: record
+  record:
     primaryDataset: test-dataset
     route: records
     mutationMode: create-only
@@ -6441,7 +6436,7 @@ recordTypes:
         .iter()
         .find(|diagnostic| diagnostic["code"] == "breg.derived.sql-invalid")
         .unwrap_or_else(|| panic!("missing derived SQL diagnostic: {report}"));
-    assert_eq!(diagnostic["path"], "/recordTypes/0/derived/0/sql");
+    assert_eq!(diagnostic["path"], "/recordTypes/record/derived/0/sql");
     assert_eq!(
         diagnostic["source"]["file"],
         project
@@ -6467,10 +6462,10 @@ project:
 datasets:
   - id: collision-fixture
 modules:
-  - id: core
+  core:
     version: "1"
 recordTypes:
-  - id: case-file
+  case-file:
     display:
       label: Review
     primaryDataset: collision-fixture
@@ -6489,7 +6484,7 @@ kind: BRegModule
 id: core
 version: "1"
 recordTypes:
-  - id: case_file
+  case_file:
     display:
       label: "R{}eview"
     primaryDataset: collision-fixture
@@ -6512,22 +6507,22 @@ recordTypes:
         .iter()
         .find(|diagnostic| diagnostic["code"] == "breg.record-type.id-collision")
         .unwrap_or_else(|| panic!("missing cross-file collision: {report}"));
-    assert_eq!(diagnostic["path"], "/recordTypes/0/id");
+    assert_eq!(diagnostic["path"], "/recordTypes/case_file");
     assert_eq!(
         diagnostic["source"]["file"],
         module_directory.join("module.yaml").display().to_string()
     );
-    assert_eq!(diagnostic["source"]["line"], 6);
-    assert_eq!(diagnostic["source"]["column"], 9);
+    assert_eq!(diagnostic["source"]["line"], 7);
+    assert_eq!(diagnostic["source"]["column"], 5);
     assert_eq!(diagnostic["related"].as_array().unwrap().len(), 1);
     let related = &diagnostic["related"][0];
-    assert_eq!(related["path"], "/recordTypes/0/id");
+    assert_eq!(related["path"], "/recordTypes/case-file");
     assert_eq!(
         related["file"],
         project.path().join("registry.yaml").display().to_string()
     );
-    assert_eq!(related["line"], 14);
-    assert_eq!(related["column"], 9);
+    assert_eq!(related["line"], 15);
+    assert_eq!(related["column"], 5);
     assert_eq!(related["message"], "the first identifier is defined here");
     assert_check_diagnostic(diagnostic, Some("BRegModule"));
 
@@ -6538,7 +6533,7 @@ recordTypes:
         .find(|diagnostic| diagnostic["code"] == "breg.record-type.duplicate-label")
         .unwrap_or_else(|| panic!("missing warning beside cross-file collision: {report}"));
     assert_eq!(warning["severity"], "warning");
-    assert_eq!(warning["path"], "/recordTypes/0/display/label");
+    assert_eq!(warning["path"], "/recordTypes/case_file/display/label");
     assert_eq!(
         warning["source"]["file"],
         module_directory.join("module.yaml").display().to_string()
@@ -6547,7 +6542,10 @@ recordTypes:
     assert_eq!(warning["source"]["column"], 14);
     assert_eq!(warning["related"].as_array().unwrap().len(), 1);
     let warning_related = &warning["related"][0];
-    assert_eq!(warning_related["path"], "/recordTypes/0/display/label");
+    assert_eq!(
+        warning_related["path"],
+        "/recordTypes/case-file/display/label"
+    );
     assert_eq!(
         warning_related["file"],
         project.path().join("registry.yaml").display().to_string()
@@ -6574,7 +6572,7 @@ project:
 datasets:
   - id: records
 modules:
-  - id: core
+  core:
     version: "1"
 recordTypes:
 "#,
@@ -6589,10 +6587,10 @@ recordTypes:
     );
     for index in 0..101 {
         registry.push_str(&format!(
-            "  - id: record-{index}\n    primaryDataset: records\n    route: project-record-{index}\n    mutationMode: mutable\n    fields: []\n"
+            "  record-{index}:\n    primaryDataset: records\n    route: project-record-{index}\n    mutationMode: mutable\n    fields: []\n"
         ));
         module.push_str(&format!(
-            "  - id: record_{index}\n    display:\n      label: Review\n    primaryDataset: records\n    route: module-record-{index}\n    mutationMode: mutable\n    fields: []\n"
+            "  record_{index}:\n    display:\n      label: Review\n    primaryDataset: records\n    route: module-record-{index}\n    mutationMode: mutable\n    fields: []\n"
         ));
     }
 
@@ -6655,10 +6653,10 @@ project:
 datasets:
   - id: records
 modules:
-  - id: core
+  core:
     version: "1"
 recordTypes:
-  - id: entry
+  entry:
     primaryDataset: records
     route: entries
     mutationMode: mutable
@@ -6676,14 +6674,12 @@ kind: BRegModule
 id: core
 version: "1"
 extendRecordTypes:
-  - recordType: entry
+  entry:
     fields:
       - id: first-note
         type: text
         maximumLength: 128
         classification: internal
-  - recordType: entry
-    fields:
       - id: note
         type: text
         maximumLength: 128
@@ -6705,13 +6701,13 @@ extendRecordTypes:
         .unwrap_or_else(|| panic!("missing unsafe display-text refusal: {report}"));
     assert_eq!(
         diagnostic["path"],
-        "/extendRecordTypes/1/fields/0/display/label"
+        "/extendRecordTypes/entry/fields/1/display/label"
     );
     assert_eq!(
         diagnostic["source"]["file"],
         module_directory.join("module.yaml").display().to_string()
     );
-    assert_eq!(diagnostic["source"]["line"], 19);
+    assert_eq!(diagnostic["source"]["line"], 17);
     assert_eq!(diagnostic["source"]["column"], 18);
     assert_check_diagnostic(diagnostic, Some("BRegModule"));
 }
@@ -6729,10 +6725,10 @@ project:
 datasets:
   - id: records
 modules:
-  - id: core
+  core:
     version: "1"
 recordTypes:
-  - id: case-file
+  case-file:
     primaryDataset: records
     route: case-files
     mutationMode: mutable
@@ -6748,7 +6744,7 @@ kind: BRegModule
 id: core
 version: "1"
 recordTypes:
-  - id: case_file
+  case_file:
     primaryDataset: records
     route: archived-case-files
     mutationMode: mutable
@@ -6775,22 +6771,22 @@ recordTypes:
         .iter()
         .find(|diagnostic| diagnostic["code"] == "breg.record-type.id-collision")
         .unwrap_or_else(|| panic!("missing compiler collision: {report}"));
-    assert_eq!(diagnostic["path"], "/recordTypes/0/id");
+    assert_eq!(diagnostic["path"], "/recordTypes/case_file");
     assert_eq!(
         diagnostic["source"],
         json!({
             "file": module_directory.join("module.yaml").display().to_string(),
-            "line": 6,
-            "column": 9
+            "line": 7,
+            "column": 5
         })
     );
     assert_eq!(
         diagnostic["related"],
         json!([{
             "file": project.path().join("registry.yaml").display().to_string(),
-            "line": 14,
-            "column": 9,
-            "path": "/recordTypes/0/id",
+            "line": 15,
+            "column": 5,
+            "path": "/recordTypes/case-file",
             "message": "the first identifier is defined here"
         }])
     );
@@ -6806,14 +6802,14 @@ recordTypes:
     let rendered = String::from_utf8_lossy(&human.stderr);
     assert!(
         rendered.contains(&format!(
-            "{}:6:9 /recordTypes/0/id",
+            "{}:7:5 /recordTypes/case_file",
             module_directory.join("module.yaml").display()
         )),
         "{rendered}"
     );
     assert!(
         rendered.contains(&format!(
-            "note:  {}:14:9 /recordTypes/0/id",
+            "note:  {}:15:5 /recordTypes/case-file",
             project.path().join("registry.yaml").display()
         )),
         "{rendered}"
@@ -6837,7 +6833,7 @@ project:
 datasets:
   - id: records
 recordTypes:
-  - id: item
+  item:
     primaryDataset: records
     route: items
     mutationMode: mutable
@@ -6871,10 +6867,10 @@ project:
 datasets:
   - id: records
 modules:
-  - id: core
+  core:
     version: "1"
 recordTypes:
-  - id: item
+  item:
     primaryDataset: records
     route: items
     mutationMode: mutable
@@ -6898,7 +6894,7 @@ kind: BRegModule
 id: core
 version: "1"
 extendRecordTypes:
-  - recordType: item
+  item:
     constraints:
       - id: {explicit}
         type: unique
@@ -6917,7 +6913,10 @@ extendRecordTypes:
         .iter()
         .find(|diagnostic| diagnostic["code"] == "breg.constraint.id-collision")
         .unwrap_or_else(|| panic!("missing constraint collision: {report}"));
-    assert_eq!(diagnostic["path"], "/extendRecordTypes/0/constraints/0/id");
+    assert_eq!(
+        diagnostic["path"],
+        "/extendRecordTypes/item/constraints/0/id"
+    );
     assert_eq!(
         diagnostic["source"]["file"],
         module_directory.join("module.yaml").display().to_string()
@@ -6925,7 +6924,7 @@ extendRecordTypes:
     assert_eq!(diagnostic["source"]["line"], 8);
     assert_eq!(diagnostic["source"]["column"], 13);
     let related = &diagnostic["related"][0];
-    assert_eq!(related["path"], "/recordTypes/0/constraints/0");
+    assert_eq!(related["path"], "/recordTypes/item/constraints/0");
     assert_eq!(
         related["file"],
         project.path().join("registry.yaml").display().to_string()
@@ -6948,10 +6947,10 @@ project:
 datasets:
   - id: duplicate-label-fixture
 modules:
-  - id: core
+  core:
     version: "1"
 recordTypes:
-  - id: project-entry
+  project-entry:
     display:
       label: Review
     primaryDataset: duplicate-label-fixture
@@ -6970,7 +6969,7 @@ kind: BRegModule
 id: core
 version: "1"
 recordTypes:
-  - id: module-entry
+  module-entry:
     display:
       label: R{}eview
     primaryDataset: duplicate-label-fixture
@@ -6993,7 +6992,10 @@ recordTypes:
         .iter()
         .find(|diagnostic| diagnostic["code"] == "breg.record-type.duplicate-label")
         .unwrap_or_else(|| panic!("missing cross-file duplicate-label warning: {report}"));
-    assert_eq!(diagnostic["path"], "/recordTypes/0/display/label");
+    assert_eq!(
+        diagnostic["path"],
+        "/recordTypes/module-entry/display/label"
+    );
     assert_eq!(diagnostic["severity"], "warning");
     assert_eq!(
         diagnostic["source"]["file"],
@@ -7003,7 +7005,7 @@ recordTypes:
     assert_eq!(diagnostic["source"]["column"], 14);
     assert_eq!(diagnostic["related"].as_array().unwrap().len(), 1);
     let related = &diagnostic["related"][0];
-    assert_eq!(related["path"], "/recordTypes/0/display/label");
+    assert_eq!(related["path"], "/recordTypes/project-entry/display/label");
     assert_eq!(
         related["file"],
         project.path().join("registry.yaml").display().to_string()
@@ -7038,7 +7040,7 @@ project:
 datasets:
   - id: test-dataset
 recordTypes:
-  - id: case
+  case:
     primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
@@ -7075,7 +7077,7 @@ project:
 datasets:
   - id: test-dataset
 recordTypes:
-  - id: case
+  case:
     primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
@@ -10066,7 +10068,7 @@ fn generation_refuses_a_broken_symlink_destination_without_publishing_output() {
 
 fn package_project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"verify-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{PACKAGE_SOURCE_REVISION}"}},"datasets":[{{"id":"verify-registry"}}],"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Verify Registry Catalog","publisher":{{"id":"verify-registry-authority","name":"Verify Publisher"}}}},"authorities":[{{"id":"verify-registry-authority","name":"Verify Publisher"}}],"publicService":{{"id":"verify-registry-service","title":"Verify Registry Catalog","competentAuthority":"verify-registry-authority"}},"datasets":[{{"id":"verify-registry","title":"Verify Registry Dataset","owner":"Verify Publisher","status":"active"}}],"dataServices":[{{"id":"verify-registry-data-service","title":"Verify Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["verify-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"verify-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{PACKAGE_SOURCE_REVISION}"}},"datasets":[{{"id":"verify-registry"}}],"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Verify Registry Catalog","publisher":{{"id":"verify-registry-authority","name":"Verify Publisher"}}}},"authorities":[{{"id":"verify-registry-authority","name":"Verify Publisher"}}],"publicService":{{"id":"verify-registry-service","title":"Verify Registry Catalog","competentAuthority":"verify-registry-authority"}},"datasets":[{{"id":"verify-registry","title":"Verify Registry Dataset","owner":"Verify Publisher","status":"active"}}],"dataServices":[{{"id":"verify-registry-data-service","title":"Verify Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["verify-registry"]}}]}},"modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}}}"#
     )
     .into_bytes()
 }
@@ -10090,7 +10092,7 @@ kind: BRegModule
 id: extra
 version: "1"
 recordTypes:
-  - id: extra-record
+  extra-record:
     primaryDataset: test-dataset
     route: extra-records
     mutationMode: create-only
@@ -10115,7 +10117,7 @@ kind: BRegModule
 id: core
 version: "1"
 recordTypes:
-  - id: record
+  record:
     primaryDataset: test-dataset
     route: records
     mutationMode: create-only
@@ -10135,22 +10137,22 @@ recordTypes:
 }
 
 fn package_module_bytes() -> Vec<u8> {
-    br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":16,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}]}"#
+    br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":{"record": {"primaryDataset":"verify-registry","route":"records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":16,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}}}"#
         .to_vec()
 }
 
 fn encrypted_package_module_bytes() -> Vec<u8> {
-    br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":16,"classification":"restricted","encrypted":true}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}]}"#
+    br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":{"record": {"primaryDataset":"verify-registry","route":"records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":16,"classification":"restricted","encrypted":true}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}}}"#
         .to_vec()
 }
 
 fn data_package_fixture() -> (TestProject, PathBuf) {
-    let module_bytes = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"record","primaryDataset":"data-registry","route":"records","mutationMode":"create-only","batch":{"maximumItems":2,"maximumBytes":400},"fields":[{"id":"code","type":"string","minimumLength":2,"maximumLength":16,"required":true,"classification":"internal"}],"accessProfiles":{"operator": {"principalClaim":"principal","operations":["create","batch","list"],"readableFields":["code"],"writableFields":["code"],"allowDataExport":true, "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}]}"#.to_vec();
+    let module_bytes = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":{"record": {"primaryDataset":"data-registry","route":"records","mutationMode":"create-only","batch":{"maximumItems":2,"maximumBytes":400},"fields":[{"id":"code","type":"string","minimumLength":2,"maximumLength":16,"required":true,"classification":"internal"}],"accessProfiles":{"operator": {"principalClaim":"principal","operations":["create","batch","list"],"readableFields":["code"],"writableFields":["code"],"allowDataExport":true, "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}}}"#.to_vec();
     let module = parse_module_json(&module_bytes).expect("data module parses");
     let module_digest = module_digest(&module);
     let project = TestProject::from_registry_source(
         format!(
-            r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"data-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://data.example.test"}},"package":{{"sourceRevision":"data-source"}},"datasets":[{{"id":"data-registry"}}],"manifestProjection":{{"accessProfile":"operator","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://data.example.test","title":"Data Registry Catalog","publisher":{{"id":"data-registry-authority","name":"Data Publisher"}}}},"authorities":[{{"id":"data-registry-authority","name":"Data Publisher"}}],"publicService":{{"id":"data-registry-service","title":"Data Registry Catalog","competentAuthority":"data-registry-authority"}},"datasets":[{{"id":"data-registry","title":"Data Registry Dataset","owner":"Data Publisher","status":"active"}}],"dataServices":[{{"id":"data-registry-data-service","title":"Data Registry Catalog","endpointUrl":"https://data.example.test","servesDatasets":["data-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+            r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"data-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://data.example.test"}},"package":{{"sourceRevision":"data-source"}},"datasets":[{{"id":"data-registry"}}],"manifestProjection":{{"accessProfile":"operator","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://data.example.test","title":"Data Registry Catalog","publisher":{{"id":"data-registry-authority","name":"Data Publisher"}}}},"authorities":[{{"id":"data-registry-authority","name":"Data Publisher"}}],"publicService":{{"id":"data-registry-service","title":"Data Registry Catalog","competentAuthority":"data-registry-authority"}},"datasets":[{{"id":"data-registry","title":"Data Registry Dataset","owner":"Data Publisher","status":"active"}}],"dataServices":[{{"id":"data-registry-data-service","title":"Data Registry Catalog","endpointUrl":"https://data.example.test","servesDatasets":["data-registry"]}}]}},"modules":{{"core":{{"version":"1","digest":"{module_digest}"}}}}}}"#
         )
         .as_bytes(),
     );

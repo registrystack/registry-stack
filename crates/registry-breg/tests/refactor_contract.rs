@@ -58,7 +58,7 @@ fn unfillable_paths(project: &RegistryProject) -> Vec<String> {
 #[test]
 fn optional_stored_fields_warn_only_when_no_supported_writer_can_fill_them() {
     let mut value = project_source();
-    value["recordTypes"][3]["fields"]
+    value["recordTypes"]["facility-assignment"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(serde_json::json!({
@@ -85,7 +85,7 @@ fn optional_stored_fields_warn_only_when_no_supported_writer_can_fill_them() {
         serde_json::json!(["get", "list", "import"]);
     value["accessProfiles"]["facility-reader"]["permissions"]["records"][2]["writableFields"] =
         serde_json::json!(["facility", "operator", "jurisdiction", "note"]);
-    value["recordTypes"][3]["batch"] =
+    value["recordTypes"]["facility-assignment"]["batch"] =
         serde_json::json!({"maximumItems": 100, "maximumBytes": 1048576});
     assert!(unfillable_paths(&parse_project(value.clone())).is_empty());
 
@@ -95,7 +95,7 @@ fn optional_stored_fields_warn_only_when_no_supported_writer_can_fill_them() {
         .as_object_mut()
         .unwrap()
         .remove("writableFields");
-    value["recordTypes"][0]["derived"] = serde_json::json!([{
+    value["recordTypes"]["directory-entry"]["derived"] = serde_json::json!([{
         "id": "display",
         "sql": "derived/directory-entry.sql",
         "key": "id",
@@ -114,7 +114,7 @@ fn optional_stored_fields_warn_only_when_no_supported_writer_can_fill_them() {
 
     value["actions"][1]["plan"]["writes"][0]["fields"] =
         serde_json::json!(["address-line", "city", "postal-code", "note"]);
-    value["recordTypes"][2]["fields"]
+    value["recordTypes"]["facility"]["fields"]
         .as_array_mut()
         .unwrap()
         .push(serde_json::json!({
@@ -687,12 +687,7 @@ fn relationships_use_enforced_cardinality_and_reject_cross_type_name_collisions(
         model.entities()["facility"].relationships["assignments"].cardinality,
         RelationshipCardinality::Many
     );
-    let assignment = value["recordTypes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|record| record["id"] == "facility-assignment")
-        .unwrap();
+    let assignment = &mut value["recordTypes"]["facility-assignment"];
     assignment["constraints"] = json!([{"type":"unique","fields":["facility"]}]);
     let model =
         compile(&parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap()).unwrap();
@@ -700,12 +695,7 @@ fn relationships_use_enforced_cardinality_and_reject_cross_type_name_collisions(
         model.entities()["facility"].relationships["assignments"].cardinality,
         RelationshipCardinality::OptionalOne
     );
-    let assignment = value["recordTypes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|record| record["id"] == "facility-assignment")
-        .unwrap();
+    let assignment = &mut value["recordTypes"]["facility-assignment"];
     assignment["fields"][0]["relationship"]["inverseName"] = json!("name");
     assert!(compile(&parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap()).is_err());
 }
@@ -764,12 +754,7 @@ fn review_context_schema_has_exact_bytes_and_no_policy_digest_cycle() {
     assert_eq!(schema.digest, same_schema.digest);
     assert_eq!(schema.bytes, same_schema.bytes);
     let mut changed_disclosure = value.clone();
-    let record = changed_disclosure["recordTypes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|record| record["id"] == "facility")
-        .unwrap();
+    let record = &mut changed_disclosure["recordTypes"]["facility"];
     let address = record["fields"]
         .as_array_mut()
         .unwrap()
@@ -1046,12 +1031,7 @@ fn untouched_target_schema_is_part_of_a_patch_snapshot_revision() {
     use serde_json::json;
     let before = compile(&parse_project_yaml(PROJECT).unwrap()).unwrap();
     let mut source: serde_json::Value = project_source();
-    let facility = source["recordTypes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|record| record["id"] == "facility")
-        .unwrap();
+    let facility = &mut source["recordTypes"]["facility"];
     facility["fields"].as_array_mut().unwrap().push(json!({"id":"retained-note","type":"string","maximumLength":50,"classification":"internal"}));
     let after =
         compile(&parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap()).unwrap();
@@ -1146,8 +1126,8 @@ fn retired_request_authority_keys_are_rejected_in_record_and_module_profiles() {
             parse_project_json(&serde_json::to_vec(&project).unwrap()).is_err(),
             "retired record permission {key}"
         );
-        let mut module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"records","version":"1","recordTypes":[{"id":"record","primaryDataset":"records","route":"records","mutationMode":"mutable","fields":[{"id":"name","type":"string","maximumLength":32,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"sub","requiredScopes":"unrestricted","operations":["get"],"readableFields":["name"],"rowBoundaries":"unrestricted"}}}]});
-        module["recordTypes"][0]["accessProfiles"]["reader"][key] = retired;
+        let mut module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"records","version":"1","recordTypes":{"record": {"primaryDataset":"records","route":"records","mutationMode":"mutable","fields":[{"id":"name","type":"string","maximumLength":32,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"sub","requiredScopes":"unrestricted","operations":["get"],"readableFields":["name"],"rowBoundaries":"unrestricted"}}}}});
+        module["recordTypes"]["record"]["accessProfiles"]["reader"][key] = retired;
         assert!(
             parse_module_json(&serde_json::to_vec(&module).unwrap()).is_err(),
             "retired module profile {key}"
@@ -1329,12 +1309,7 @@ fn input_and_refusal_labels_are_presentation_not_frozen_meaning() {
         "an Action refusal code change remains operational"
     );
 
-    let facility = value["recordTypes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|record| record["id"] == "facility")
-        .unwrap();
+    let facility = &mut value["recordTypes"]["facility"];
     facility["fields"]
         .as_array_mut()
         .unwrap()
@@ -1842,19 +1817,25 @@ fn retired_authoring_keys_point_to_governed_replacements() {
         "plan": {"type": "fixed", "effects": [{"set": {"reason": {"fromField": "reason"}}}]}
     }]);
     let mut project = project_source();
-    project["recordTypes"][0] = retired.clone();
+    project["recordTypes"]["directory-entry"] = retired.clone();
     project["actions"] = actions.clone();
     let report =
         read_project_yaml("registry.json", &serde_json::to_vec(&project).unwrap()).unwrap_err();
     for (path, replacement) in [
-        ("/recordTypes/0/changeControl", "mutationPolicy"),
-        ("/recordTypes/0/changeRequest", "execution.proposal"),
         (
-            "/recordTypes/0/accessProfiles/reader/requestVisibility",
+            "/recordTypes/directory-entry/changeControl",
+            "mutationPolicy",
+        ),
+        (
+            "/recordTypes/directory-entry/changeRequest",
+            "execution.proposal",
+        ),
+        (
+            "/recordTypes/directory-entry/accessProfiles/reader/requestVisibility",
             "ownership: caller",
         ),
         (
-            "/recordTypes/0/accessProfiles/reader/readableRequestFields",
+            "/recordTypes/directory-entry/accessProfiles/reader/readableRequestFields",
             "readableInputs",
         ),
         (
@@ -1879,7 +1860,7 @@ fn retired_authoring_keys_point_to_governed_replacements() {
         );
     }
     let module = json!({"apiVersion": "id.registrystack.org/formats/breg/module/v1alpha1",
-        "kind": "BRegModule", "recordTypes": [retired.clone()], "extendRecordTypes": [retired], "actions": actions});
+        "kind": "BRegModule", "recordTypes": {"record": retired.clone()}, "extendRecordTypes": {"record": retired}, "actions": actions});
     let report =
         read_module_yaml("module.json", &serde_json::to_vec(&module).unwrap()).unwrap_err();
     assert!(
@@ -1893,7 +1874,7 @@ fn retired_authoring_keys_point_to_governed_replacements() {
     assert!(report
         .diagnostics()
         .iter()
-        .any(|d| d.path == "/extendRecordTypes/0/changeControl"
+        .any(|d| d.path == "/extendRecordTypes/record/changeControl"
             && d.suggested_action.contains("mutationPolicy")));
 }
 
@@ -1902,7 +1883,7 @@ fn retired_request_hook_points_to_proposal_observers() {
     use registry_breg::contract::read_project_yaml;
     use serde_json::json;
     let mut project = project_source();
-    project["recordTypes"][0]["hooks"] = json!([{
+    project["recordTypes"]["directory-entry"]["hooks"] = json!([{
         "id": "observe-lifecycle", "phase": "after", "trigger": "request-lifecycle", "projection": []
     }]);
     let report =
@@ -1910,7 +1891,7 @@ fn retired_request_hook_points_to_proposal_observers() {
     let diagnostic = report
         .diagnostics()
         .iter()
-        .find(|d| d.path == "/recordTypes/0/hooks/0/trigger")
+        .find(|d| d.path == "/recordTypes/directory-entry/hooks/0/trigger")
         .unwrap();
     assert!(
         diagnostic
@@ -1921,6 +1902,6 @@ fn retired_request_hook_points_to_proposal_observers() {
     );
     assert!(diagnostic.suggested_action.contains("transitions"));
     // The same authored hook still accepts its committed Record trigger.
-    project["recordTypes"][0]["hooks"][0]["trigger"] = json!("created");
+    project["recordTypes"]["directory-entry"]["hooks"][0]["trigger"] = json!("created");
     read_project_yaml("registry.json", &serde_json::to_vec(&project).unwrap()).unwrap();
 }

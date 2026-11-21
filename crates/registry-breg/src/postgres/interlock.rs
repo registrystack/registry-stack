@@ -5115,13 +5115,12 @@ mod tests {
                     "defaultLanguage": "en",
                     "canonicalBaseIri": "https://scan-keys.example.test"
                 },
-                "datasets":[{"id":"test-dataset"}],"recordTypes":[{
-                    "id": "case",
+                "datasets":[{"id":"test-dataset"}],"recordTypes":{"case": {
                     "primaryDataset": "test-dataset",
                     "route": "cases",
                     "mutationMode": "mutable",
                     "fields": [secret]
-                }],
+                }},
                 "accessProfiles": {"caseworker": {
                     "default": true,
                     "principalClaim": "principal",

@@ -56,16 +56,9 @@
     },
     "distributions": []
   },
-  "modules": [
-    {
-      "id": "inspection-core",
-      "version": "0.1.0",
-      "digest": "sha256:2f05d0f766691cdf234f1e3a8b071575b7195f7851dd063619f1213127d4bca1"
-    }
-  ],
-  "recordTypes": [
-    {
-      "id": "inspection",
+  "modules": {"inspection-core":{"digest":"sha256:3de273f129604a4b0039d7def4dbbabc8f7e26e25676bbe32f38bd31f0b5215d","version":"0.1.0"}},
+  "recordTypes": {
+    "inspection": {
       "primaryDataset": "inspection",
       "route": "inspections",
       "mutationMode": "mutable",
@@ -122,8 +115,7 @@
         }
       ]
     },
-    {
-      "id": "inspection-observation",
+    "inspection-observation": {
       "primaryDataset": "inspection",
       "route": "inspection-observations",
       "mutationMode": "create-only",
@@ -214,8 +206,7 @@
         }
       ]
     },
-    {
-      "id": "permit",
+    "permit": {
       "primaryDataset": "inspection",
       "route": "permits",
       "mutationMode": "create-only",
@@ -313,7 +304,7 @@
         }
       ]
     }
-  ],
+  },
   "accessProfiles": {
     "inspection-inspector": {
       "principalClaim": "registry_principal",
