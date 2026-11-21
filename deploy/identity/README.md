@@ -266,7 +266,7 @@ node deploy/identity/browser-login.mjs
 When the stable hostnames are not in DNS, start a scoped SOCKS proxy to the
 cluster and set `APPKIT_PROXY_SERVER`, `APPKIT_HOST_RESOLVER_RULES`, and
 `APPKIT_TLS_SPKI`. The SPKI value is the base64 SHA-256 digest of the exact
-qualification leaf public key. Chromium then accepts only that pinned private
+test leaf certificate's public key. Chromium then accepts only that pinned private
 certificate, rather than disabling certificate validation globally. The
 driver first proves an anonymous `/api/model` request is refused with 401,
 then proves the authenticated session and model read are allowed. It performs
