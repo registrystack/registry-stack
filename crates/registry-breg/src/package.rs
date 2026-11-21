@@ -783,6 +783,12 @@ pub enum PackageError {
     Binding,
     #[error("the package compiler derivation failed")]
     Derivation,
+    /// A package whose generated files name a Record type `entityId`, as
+    /// releases up to v0.41.0 wrote them.
+    #[error(
+        "the package names a Record type `entityId`, as v0.41.0 and earlier wrote it, where this release writes `recordType`. It cannot be upgraded in place: recreate the database"
+    )]
+    EntityIdMember,
     /// A predecessor package whose stored sources this release's reader
     /// refuses. The diagnostics are the reader's own value-free messages.
     #[error("the baseline package's stored sources do not compile with this bregctl: {0}")]
@@ -4548,7 +4554,7 @@ fn package_predecessor_governed_model(
         .cloned()
         .ok_or(PackageError::Derivation)?;
     let entities: BTreeMap<String, CompiledEntity> =
-        serde_json::from_value(entities).map_err(|_| PackageError::Derivation)?;
+        serde_json::from_value(entities).map_err(|error| generated_member_refusal(&error))?;
     let statistical_datasets: BTreeMap<String, CompiledStatisticalDataset> = value
         .get("statisticalDatasets")
         .cloned()
@@ -4576,7 +4582,7 @@ fn package_predecessor_governed_model(
             .cloned()
             .ok_or(PackageError::Derivation)?,
     )
-    .map_err(|_| PackageError::Derivation)?;
+    .map_err(|error| generated_member_refusal(&error))?;
     let effective_actions: CompiledActionInventory = value
         .get("actionInventory")
         .cloned()
@@ -4645,7 +4651,17 @@ fn packaged_manifest_json<T: for<'de> Deserialize<'de>>(
     role: PackageFileRole,
 ) -> Result<T> {
     let value = packaged_manifest_value(manifest, loaded, role)?;
-    serde_json::from_value(value).map_err(|_| PackageError::Derivation)
+    serde_json::from_value(value).map_err(|error| generated_member_refusal(&error))
+}
+
+/// The refusal for a generated file this release cannot deserialize. A
+/// package that still names a Record type `entityId` gets its own refusal.
+fn generated_member_refusal(error: &serde_json::Error) -> PackageError {
+    if error.to_string().contains("`entityId`") {
+        PackageError::EntityIdMember
+    } else {
+        PackageError::Derivation
+    }
 }
 
 fn packaged_manifest_value(

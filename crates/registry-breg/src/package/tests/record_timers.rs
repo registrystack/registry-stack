@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::model::{CompiledAccessEntry, CompiledRoute, CompiledSourceRelation};
 #[cfg(feature = "tooling")]
 use crate::tooling::{classify_registry_diff, DiffClassification};
 use crate::{compile_project, parse_project_json, CompileProfile};
@@ -108,33 +107,6 @@ fn pre_timer_store_package_is_predecessor_only_and_unknown_features_refuse() {
         Some(PackageError::CanonicalJson),
         "unknown engine features do not become supported legacy input"
     );
-}
-
-#[test]
-fn historical_entity_id_aliases_are_deserialize_only_and_duplicate_members_refuse() {
-    let root = native_minimal_package();
-    let effective: Value = serde_json::from_slice(
-        &fs::read(root.join("effective-model.json")).expect("effective model reads"),
-    )
-    .expect("effective model parses");
-    assert_entity_id_alias::<CompiledSourceRelation>(
-        effective["recordTypes"]["contact"]["sourceRelation"].clone(),
-    );
-    assert_entity_id_alias::<CompiledQueryOperation>(
-        effective["queryInventory"]["operations"][0].clone(),
-    );
-
-    let routes: Value = serde_json::from_slice(
-        &fs::read(root.join("inventories/routes.json")).expect("route inventory reads"),
-    )
-    .expect("route inventory parses");
-    assert_entity_id_alias::<CompiledRoute>(routes["routes"][0].clone());
-
-    let access: Value = serde_json::from_slice(
-        &fs::read(root.join("inventories/access.json")).expect("access inventory reads"),
-    )
-    .expect("access inventory parses");
-    assert_entity_id_alias::<CompiledAccessEntry>(access["entries"][0].clone());
 }
 
 #[test]
@@ -393,28 +365,6 @@ fn local_package_context() -> PackageLoadContext<'static> {
     PackageLoadContext {
         database_initialization_environment: "local",
     }
-}
-
-fn assert_entity_id_alias<T>(mut historical: Value)
-where
-    T: serde::de::DeserializeOwned + serde::Serialize,
-{
-    assert!(historical.get("entityId").is_some());
-    assert!(historical.get("recordType").is_none());
-    let decoded: T = serde_json::from_value(historical.clone())
-        .expect("the exact historical generated member remains readable");
-    let current = serde_json::to_value(decoded).expect("the current shape serializes");
-    assert!(current.get("recordType").is_some());
-    assert!(current.get("entityId").is_none());
-
-    historical
-        .as_object_mut()
-        .expect("compiled value is an object")
-        .insert("recordType".to_owned(), Value::String("contact".to_owned()));
-    assert!(
-        serde_json::from_value::<T>(historical).is_err(),
-        "old and current members together are duplicate authority"
-    );
 }
 
 fn source(timer_at: Option<&str>, effect_value: bool) -> Value {
