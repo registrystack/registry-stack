@@ -156,7 +156,7 @@ Add the `register-contact` scenario to the end of the file. It takes the Proposa
 steps as `editor`: start it, submit it, and read it until the registry has applied it.
 
 ```yaml title="dev/scenarios.yaml" test-append
-  register-contact:
+  - id: register-contact
     steps:
       - id: start
         product: breg
