@@ -32,23 +32,18 @@ fn writes_source() -> Value {
     let plan = json!({"type": "fixed", "effects": [
         {"id": "contact", "target": {"fromInput": "person"}, "operation": "patch",
          "set": {"email-address": {"fromInput": "email"}}}]});
-    let proposal = |application: Value| {
-        json!({"mode": "proposal", "proposal": {"review": {"type": "none"},
-            "application": application, "retention": {"mode": "operator-erase"}}})
-    };
     let guards = json!({"targets": [{"input": "person", "revision": "unchanged"}]});
     source["actions"].as_array_mut().unwrap().extend([
         json!({"id": "set-person-email", "inputs": inputs, "plan": plan,
             "execution": {"mode": "immediate"}}),
         json!({"id": "propose-person-email", "inputs": inputs, "plan": plan,
-            "commitGuards": guards, "execution": proposal(json!({"mode": "manual"}))}),
+            "commitGuards": guards, "execution": proposal_execution(json!({"mode": "manual"}))}),
         json!({"id": "correct-person-email", "inputs": inputs, "plan": plan,
             "commitGuards": guards,
-            "execution": proposal(json!({"mode": "automatic", "maximumAttempts": 1}))}),
+            "execution": proposal_execution(json!({"mode": "automatic", "maximumAttempts": 1}))}),
     ]);
     let targets = json!([{"recordType": "person", "rowBoundaries": "unrestricted"}]);
-    let lifecycle =
-        json!(["get", "list", "edit", "submit", "revise", "rebase", "retry", "cancel", "apply"]);
+    let lifecycle = proposal_lifecycle();
     for profile in source["accessProfiles"].as_array_mut().unwrap() {
         let writer = profile["id"] == WRITER;
         let permissions = &mut profile["permissions"];
@@ -90,6 +85,17 @@ fn writes_source() -> Value {
         ]);
     }
     source
+}
+
+/// A Proposal execution with no review, applied as `application` says.
+fn proposal_execution(application: Value) -> Value {
+    json!({"mode": "proposal", "proposal": {"review": {"type": "none"},
+        "application": application, "retention": {"mode": "operator-erase"}}})
+}
+
+/// Every Proposal lifecycle operation a caller holds on its own Proposals.
+fn proposal_lifecycle() -> Value {
+    json!(["get", "list", "edit", "submit", "revise", "rebase", "retry", "cancel", "apply"])
 }
 
 /// The write fixture, with person constraints that tie fields the contacts
@@ -158,21 +164,35 @@ fn person(id: &str) -> String {
     format!("/v1/records/people/{id}")
 }
 
+fn residence(id: &str) -> String {
+    format!("/v1/records/residences/{id}")
+}
+
 /// The entity tag `profile` reads for a person.
 async fn etag_as(history: &History, profile: &str, id: &str) -> String {
-    let current = history.get(&person(id), profile).await;
+    etag_at(history, profile, &person(id)).await
+}
+
+/// The entity tag `profile` reads for the record at `record`.
+async fn etag_at(history: &History, profile: &str, record: &str) -> String {
+    let current = history.get(record, profile).await;
     assert_eq!(current.status, 200, "{}", current.text());
     current.etag.expect("a read carries an entity tag")
 }
 
 /// PATCH a person as `profile` against the entity tag it reads.
 async fn patch_as(history: &History, profile: &str, id: &str, operations: Value) -> Reply {
-    let etag = etag_as(history, profile, id).await;
+    patch_at(history, profile, &person(id), operations).await
+}
+
+/// PATCH the record at `record` as `profile` against the entity tag it reads.
+async fn patch_at(history: &History, profile: &str, record: &str, operations: Value) -> Reply {
+    let etag = etag_at(history, profile, record).await;
     let key = history.key();
     history
         .send(
             Method::PATCH,
-            &person(id),
+            record,
             profile,
             &[("idempotency-key", &key), ("if-match", &etag)],
             Some((
@@ -208,15 +228,34 @@ async fn batch_as(history: &History, profile: &str, items: &[(&str, Value)]) -> 
 
 /// Invoke the immediate Action that sets a person's email, as `profile`.
 async fn set_email_as(history: &History, profile: &str, id: &str, email: &str) -> Reply {
+    invoke_as(
+        history,
+        profile,
+        "set-person-email",
+        json!({"personId": id}),
+        json!({"personId": id, "email": email}),
+    )
+    .await
+}
+
+/// Invoke the immediate Action `action` with `input`, as `profile`, against
+/// the target conditions it reads for the references in `targets`.
+async fn invoke_as(
+    history: &History,
+    profile: &str,
+    action: &str,
+    targets: Value,
+    input: Value,
+) -> Reply {
     let conditions = history
         .send(
             Method::POST,
-            "/v1/actions/set-person-email/target-conditions",
+            &format!("/v1/actions/{action}/target-conditions"),
             profile,
             &[],
             Some((
                 "application/json",
-                serde_json::to_vec(&json!({"input": {"personId": id}})).unwrap(),
+                serde_json::to_vec(&json!({ "input": targets })).unwrap(),
             )),
         )
         .await;
@@ -225,13 +264,13 @@ async fn set_email_as(history: &History, profile: &str, id: &str, email: &str) -
     history
         .send(
             Method::POST,
-            "/v1/actions/set-person-email",
+            &format!("/v1/actions/{action}"),
             profile,
             &[("idempotency-key", &key)],
             Some((
                 "application/json",
                 serde_json::to_vec(&json!({
-                    "input": {"personId": id, "email": email},
+                    "input": input,
                     "preconditions": conditions.body["preconditions"].clone()
                 }))
                 .unwrap(),
@@ -240,7 +279,8 @@ async fn set_email_as(history: &History, profile: &str, id: &str, email: &str) -
         .await
 }
 
-/// Start and submit a Proposal of `action` as `profile`.
+/// Start and submit a Proposal of `action` that sets a person's email, as
+/// `profile`.
 async fn submit_as(
     history: &History,
     profile: &str,
@@ -248,11 +288,27 @@ async fn submit_as(
     id: &str,
     email: &str,
 ) -> registry_breg_client::BRegProposal {
+    submit_input_as(
+        history,
+        profile,
+        action,
+        json!({"personId": id, "email": email}),
+    )
+    .await
+}
+
+/// Start and submit a Proposal of `action` with `input`, as `profile`.
+async fn submit_input_as(
+    history: &History,
+    profile: &str,
+    action: &str,
+    input: Value,
+) -> registry_breg_client::BRegProposal {
     let client = &history.fixture.http.client;
     let metadata = client.registry_contract(Some(profile)).await.unwrap();
     let action = metadata.value.select_action(action, profile).unwrap();
-    let Value::Object(input) = json!({"personId": id, "email": email}) else {
-        unreachable!()
+    let Value::Object(input) = input else {
+        panic!("a Proposal input is an object")
     };
     let request = BRegActionInvocationRequest::new(&action, input, None).unwrap();
     let start_key = BRegIdempotencyKey::parse(history.key()).unwrap();
@@ -848,5 +904,205 @@ async fn a_bound_patch_cannot_change_a_field_a_constraint_ties_to_a_withheld_fie
         assert_eq!(reply.status, 200, "officer {what}: {}", reply.text());
         assert_eq!(stored(&history, &marked).await[*member], *value, "{what}");
     }
+    history.fixture.finish().await;
+}
+
+const RESIDENCE_ADDRESS: &str = "1 Open Street";
+
+/// The write fixture, with residence protection-level patches for every
+/// profile and three Actions that set a residence's protection level: an
+/// immediate one, a Proposal one applied by hand and a Proposal one applied
+/// automatically with a second attempt for an outage. Setting `protected`
+/// sets the mark of the residence's `record` condition, which hides the
+/// residence from a profile it binds.
+fn residence_source() -> Value {
+    let mut source = writes_source();
+    let inputs = json!([
+        {"id": "residence", "apiName": "residenceId", "type": "reference", "target": "residence",
+         "required": true, "classification": "internal"},
+        {"id": "level", "apiName": "level", "type": "string", "maximumLength": 32,
+         "required": true, "classification": "internal"}]);
+    let plan = json!({"type": "fixed", "effects": [
+        {"id": "protect", "target": {"fromInput": "residence"}, "operation": "patch",
+         "set": {"protection-level": {"fromInput": "level"}}}]});
+    let guards = json!({"targets": [{"input": "residence", "revision": "unchanged"}]});
+    source["actions"].as_array_mut().unwrap().extend([
+        json!({"id": "protect-residence", "inputs": inputs, "plan": plan,
+            "execution": {"mode": "immediate"}}),
+        json!({"id": "propose-residence-protection", "inputs": inputs, "plan": plan,
+            "commitGuards": guards, "execution": proposal_execution(json!({"mode": "manual"}))}),
+        json!({"id": "correct-residence-protection", "inputs": inputs, "plan": plan,
+            "commitGuards": guards,
+            "execution": proposal_execution(json!({"mode": "automatic", "maximumAttempts": 2}))}),
+    ]);
+    let targets = json!([{"recordType": "residence", "rowBoundaries": "unrestricted"}]);
+    for profile in source["accessProfiles"].as_array_mut().unwrap() {
+        if profile["id"] == WRITER {
+            continue;
+        }
+        let permissions = &mut profile["permissions"];
+        let residence = &mut permissions["records"][1];
+        assert_eq!(residence["recordType"], "residence");
+        residence["operations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("patch"));
+        residence["writableFields"] = json!(["protection-level"]);
+        permissions["actions"].as_array_mut().unwrap().extend([
+            json!({"action": "protect-residence", "operations": ["invoke"], "targets": targets}),
+            json!({"action": "propose-residence-protection", "operations": ["start"],
+                "targets": targets}),
+            json!({"action": "correct-residence-protection", "operations": ["start"],
+                "targets": targets}),
+        ]);
+        permissions["proposals"].as_array_mut().unwrap().extend([
+            json!({"action": "propose-residence-protection", "ownership": "caller",
+                "operations": proposal_lifecycle(), "targets": targets}),
+            json!({"action": "correct-residence-protection", "ownership": "caller",
+                "operations": proposal_lifecycle(), "targets": targets}),
+        ]);
+    }
+    source
+}
+
+/// Create, as the writer, a residence the residence condition does not mark.
+async fn open_residence(history: &History) -> String {
+    let resident = history
+        .create(
+            "people",
+            json!({"familyName": "Resident", "protectionLevel": "none",
+                "historyProtected": false, "emailAddress": "resident@example.invalid",
+                "phoneNumber": "555-0101"}),
+        )
+        .await;
+    history
+        .create(
+            "residences",
+            json!({"personId": resident, "protectionLevel": "none", "address": RESIDENCE_ADDRESS}),
+        )
+        .await
+}
+
+/// The residence's protection level, as the protection officer reads it.
+async fn residence_level(history: &History, id: &str) -> Value {
+    let reply = history.get(&residence(id), PROTECTION_OFFICER).await;
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    reply.body["data"]["domainData"]["protectionLevel"].clone()
+}
+
+/// Invoke the immediate Action that sets a residence's protection level, as
+/// `profile`.
+async fn protect_as(history: &History, profile: &str, id: &str, level: &str) -> Reply {
+    invoke_as(
+        history,
+        profile,
+        "protect-residence",
+        json!({"residenceId": id}),
+        json!({"residenceId": id, "level": level}),
+    )
+    .await
+}
+
+/// Setting a `record` mark hides the record from a writer the condition
+/// binds, so an immediate Action that sets it is refused as a Patch is, and
+/// the record stays readable and unchanged. An exempt profile sets it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bound_immediate_action_cannot_set_a_record_mark() {
+    let history = start_with(residence_source()).await;
+    let id = open_residence(&history).await;
+    let patch = patch_at(
+        &history,
+        REGISTRAR,
+        &residence(&id),
+        replace("protectionLevel", json!("protected")),
+    )
+    .await;
+    assert_refused(&patch, "Patch sets a record mark");
+    let reply = protect_as(&history, REGISTRAR, &id, "protected").await;
+    assert_refused(&reply, "Action sets a record mark");
+    assert_eq!(residence_level(&history, &id).await, "none");
+    let read = history.get(&residence(&id), REGISTRAR).await;
+    assert_eq!(read.status, 200, "{}", read.text());
+
+    let reply = protect_as(&history, PROTECTION_OFFICER, &id, "protected").await;
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert_eq!(residence_level(&history, &id).await, "protected");
+    history.fixture.finish().await;
+}
+
+/// A Proposal applied by hand is checked against the applying profile, so a
+/// bound profile's apply that would set a `record` mark is refused as its
+/// Patch is. An exempt profile's apply sets it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bound_proposal_apply_cannot_set_a_record_mark() {
+    let history = start_with(residence_source()).await;
+    let id = open_residence(&history).await;
+    let input = json!({"residenceId": id, "level": "protected"});
+    let submitted = submit_input_as(
+        &history,
+        REGISTRAR,
+        "propose-residence-protection",
+        input.clone(),
+    )
+    .await;
+    let refusal = apply(&history, &submitted)
+        .await
+        .expect_err("a bound apply is refused");
+    assert_eq!(
+        refusal.problem_code(),
+        Some(registry_breg_client::BRegProblemCode::WriteOutsideBoundary),
+        "{refusal:?}"
+    );
+    assert_eq!(residence_level(&history, &id).await, "none");
+
+    let submitted = submit_input_as(
+        &history,
+        PROTECTION_OFFICER,
+        "propose-residence-protection",
+        input,
+    )
+    .await;
+    let applied = apply(&history, &submitted)
+        .await
+        .expect("an exempt apply succeeds");
+    assert_eq!(applied.state(), BRegProposalState::Applied);
+    assert_eq!(residence_level(&history, &id).await, "protected");
+    history.fixture.finish().await;
+}
+
+/// Pins a known limit, not the intended behaviour. The automatic apply writes
+/// under the engine's own database profile, which no `record` condition
+/// exempts, so the condition's row policy refuses the state even though the
+/// exempt submitter's own check allows it. That refusal is final, not an
+/// outage, so the Proposal ends blocked after one of its two attempts and the
+/// record is unchanged. An immediate Action or a Proposal applied by hand sets
+/// the mark.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn known_limit_an_automatic_proposal_cannot_set_a_record_mark_even_for_an_exempt_submitter() {
+    let history = start_with(residence_source()).await;
+    let id = open_residence(&history).await;
+    let submitted = submit_input_as(
+        &history,
+        PROTECTION_OFFICER,
+        "correct-residence-protection",
+        json!({"residenceId": id, "level": "protected"}),
+    )
+    .await;
+    let application = run_automatic(&history, &submitted).await;
+    assert_eq!(application["state"], "blocked", "{application}");
+    assert_eq!(
+        application["reason"], "application-refused",
+        "{application}"
+    );
+    assert_eq!(application["recovery"], "correct-input", "{application}");
+    assert_eq!(
+        application["automaticRetry"]["attempts"], 1,
+        "{application}"
+    );
+    assert_eq!(
+        application["automaticRetry"]["scheduled"], false,
+        "{application}"
+    );
+    assert_eq!(residence_level(&history, &id).await, "none");
     history.fixture.finish().await;
 }

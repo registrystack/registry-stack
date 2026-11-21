@@ -1667,7 +1667,7 @@ fn disclosure_record_policies(entity: &CompiledEntity) -> Vec<DdlPolicy> {
         .collect()
 }
 
-fn disclosure_policy_name(entity_id: &str, condition_id: &str) -> String {
+pub(crate) fn disclosure_policy_name(entity_id: &str, condition_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"breg/disclosure-rls-policy/v1");
     for value in [entity_id, condition_id] {
