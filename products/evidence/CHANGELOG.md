@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.47.0 - 2026-11-20
+## 0.47.0 - 2026-11-21
 
 - BREAKING: an `EvidenceProject`'s human `label` and `description` move from
   the top level into the shared `project` block, as `project.label` and

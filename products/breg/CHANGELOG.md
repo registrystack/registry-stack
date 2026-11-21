@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.47.0 - 2026-11-20
+## 0.47.0 - 2026-11-21
 
 - BREAKING: the project's `datasets`, `vocabularies`, `statisticalDatasets`,
   `reviewAuthorities`, `evidenceProviders`, `externalRecordTypes`,

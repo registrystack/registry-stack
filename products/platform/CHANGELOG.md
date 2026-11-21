@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.47.0 - 2026-11-20
+## 0.47.0 - 2026-11-21
 
 - Accept an optional `project.label` and `project.description` beside
   `project.id` and `project.version`, in the shared `ProjectIdentity` block. They are display text for people. A project that sets neither

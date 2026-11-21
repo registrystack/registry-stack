@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.47.0 - 2026-11-20
+## 0.47.0 - 2026-11-21
 
 - BREAKING: `caseworkctl provider add` prints the BReg project fragments it
   proposes in the id-keyed form the BReg project now reads: `accessProfiles`,

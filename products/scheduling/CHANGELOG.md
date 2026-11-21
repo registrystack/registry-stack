@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.47.0 - 2026-11-20
+## 0.47.0 - 2026-11-21
 
 - BREAKING: `services`, `offerings`, `holidaySets`, `openings`, and `hooks` in
   `scheduling.yaml` are mappings from each item's id to the rest of its entry,

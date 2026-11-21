@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.47.0 - 2026-11-20
+## 0.47.0 - 2026-11-21
 
 - BREAKING: in `origins.yaml` (`DiscoveryOrigins`), `origins` is a mapping
   from each origin id to the rest of its entry, held in id order, not a list

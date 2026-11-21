@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.47.0 - 2026-11-20
+## 0.47.0 - 2026-11-21
 
 - BREAKING: `providers`, `senderProfiles`, and `accessProfiles` in
   `messaging.yaml` are mappings from each item's id to the rest of its entry,
