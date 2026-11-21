@@ -507,8 +507,30 @@ row.
 A direct Create or Patch whose resulting record a `record` condition would hide from the writing
 profile is refused with `403 write.outside-boundary`. Give the profile that sets the mark an
 exemption. A Patch of a record the profile can no longer see answers `412 precondition.failed`, as
-for an absent record. A Proposal review shows a withheld field as `null`, and applying a change set
-to a record that became withheld after submission is refused.
+for an absent record.
+
+### Who can lift a mark
+
+Only an exempt profile lifts a `fields` or `history` condition, or writes a field a `fields`
+condition withholds. When a condition that binds the writing profile matches a record, a write to
+that record is refused with `403 write.outside-boundary` in two cases:
+
+- The write names a field the condition lists under `fields`. Writing back the `null` a read showed
+  counts, so the answer is the same whether or not the field holds a value.
+- The record would no longer match the condition afterwards, which would lift the mark.
+
+A bound profile can still set a mark and write any field a condition does not name. In the example
+above, a caseworker bound by `hide-notes` can close a case but cannot reopen it. The rule covers a
+Patch, each batch or import item, an immediate Action and a Proposal. It checks the profile that
+applies the change. A Create has no earlier state, so this rule never refuses it.
+
+A Proposal review shows a withheld field as `null`, and applying a change set to a record that
+became withheld after submission is refused. A Proposal applied by hand is checked as a write by the
+profile that applies it. A Proposal applied automatically runs under the reserved
+`system-proposal-apply` profile, which no condition exempts. So an automatic Proposal is refused
+wherever a write by a bound profile would be, even when an exempt profile submitted it. The record
+is unchanged, and once its attempts are used the Proposal ends `blocked`, with the reason
+`attempts-exhausted` and the recovery `correct-input`.
 
 ### What `bregctl check` refuses
 
@@ -545,6 +567,19 @@ refuses:
   [Disclosure conditions](../breg-statistics/#disclosure-conditions) for datasets;
 - the reserved profile id `system-record-timer`.
 
+These refusals hold whatever the profiles:
+
+- A uniqueness constraint on a field a `fields` condition withholds
+  (`breg.disclosure.withheld-field-unique`). A create that repeated the withheld value would answer
+  a conflict and so confirm a guess. Withhold the record instead, or drop the constraint.
+- A change hook (`created`, `patched` or `tombstoned`) on a Record type with a `record` or `history`
+  condition (`breg.disclosure.withheld-field-exposed`). A change hook must project at least one
+  field and its destinations hold no access profile, so such a Record type declares no change hook
+  at all.
+- A `trigger: read` hook on a Record type without `accessLog`
+  (`breg.disclosure.read-hook-access-log-required`). The read alert is written with the subject
+  access log entry, so it would never fire.
+
 `bregctl explain access` lists each condition in full, `when` literals included, for the author. The
 runtime metadata a caller reads flags `mayBeWithheld` on a field and names the bound conditions by
 `id` and mode, and never carries the literals. The ODRL export omits a grant a condition binds, with
@@ -552,13 +587,16 @@ the reason `disclosure-condition`.
 
 ### What a condition does not hide
 
-Three limits are inherent to what a write has to check, and a fourth follows from how history works.
+Four limits are inherent to what a write has to check, and a fifth follows from how history works.
 Design around them.
 
 - A Proposal's inputs stay visible to its reviewers. A reviewer sees what the author typed, even for
   a field the reviewer's own profile would not read on the record.
 - A uniqueness conflict on a write can reveal that a hidden record exists. A create that repeats a
-  unique value of a withheld record answers `409 mutation.conflict`.
+  unique value of a record a `record` condition withholds answers `409 mutation.conflict`.
+- A refused write can reveal that a condition matches. The `403 write.outside-boundary` a bound
+  profile meets tells it that a condition holds for this record. A `null` it read is then known to
+  be withheld rather than unset.
 - A write that sets a reference can reveal that a withheld record exists, because the database
   checks that the target is there.
 - `withhold: history` on a record the caller can read answers its revisions as not found. A client
@@ -567,7 +605,8 @@ Design around them.
 {/* Evidence: crates/registry-breg/src/disclosure.rs;
     crates/registry-breg/src/compiler/disclosure.rs and compiler/disclosure/reach.rs;
     crates/registry-breg/tests/disclosure_compile.rs;
-    crates/registry-breg/tests/disclosure/fields.rs, history.rs, proposals.rs and records.rs;
+    crates/registry-breg/tests/disclosure/fields.rs, history.rs, proposals.rs, records.rs and
+    writes.rs;
     crates/registry-breg/tests/disclosure_exposure.rs;
     crates/registry-breg/tests/http_read_only.rs,
     metadata_flags_a_field_that_may_be_withheld_without_the_condition_literals. */}
