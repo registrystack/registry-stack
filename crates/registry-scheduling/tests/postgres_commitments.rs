@@ -112,7 +112,7 @@ const OVERLAPPING_OFFERING: &str = "registry-update-60";
 
 fn observer_policy() -> String {
     format!(
-        "{POLICY}hooks:\n  - id: confirmed-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: rescheduled-observer\n    phase: after\n    trigger: appointment.rescheduled\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: cancelled-observer\n    phase: after\n    trigger: appointment.cancelled\n    projection: [appointmentId, revision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: attendance-observer\n    phase: after\n    trigger: appointment.attendance-observed\n    projection: [appointmentId, appointmentRevision, attendanceRevision, attendanceState, observedAt, recordedAt, policyRevision]\n    handler: {{type: url, destinationId: appointment-events}}\n"
+        "{POLICY}hooks:\n  confirmed-observer:\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  rescheduled-observer:\n    phase: after\n    trigger: appointment.rescheduled\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  cancelled-observer:\n    phase: after\n    trigger: appointment.cancelled\n    projection: [appointmentId, revision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  attendance-observer:\n    phase: after\n    trigger: appointment.attendance-observed\n    projection: [appointmentId, appointmentRevision, attendanceRevision, attendanceState, observedAt, recordedAt, policyRevision]\n    handler: {{type: url, destinationId: appointment-events}}\n"
     )
 }
 
@@ -7076,7 +7076,7 @@ fn policy_with_window() -> String {
     POLICY.replace(
         "holdPolicy:",
         &format!(
-            "  - id: {WINDOW_OFFERING}\n\
+            "  {WINDOW_OFFERING}:\n\
              \x20   service: registry-update\n\
              \x20   label: Counter arrivals\n\
              \x20   mode: arrival-window\n\
@@ -7098,7 +7098,7 @@ fn policy_with_shared_window() -> String {
     policy_with_window().replace(
         "holdPolicy:",
         &format!(
-            "  - id: {FOREIGN_WINDOW_OFFERING}\n\
+            "  {FOREIGN_WINDOW_OFFERING}:\n\
              \x20   service: registry-review\n\
              \x20   label: Review arrivals\n\
              \x20   mode: arrival-window\n\

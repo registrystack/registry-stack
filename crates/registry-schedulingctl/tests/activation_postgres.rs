@@ -85,7 +85,7 @@ fn successor_policy() -> String {
 
 fn observer_policy(policy: &str) -> String {
     format!(
-        "{policy}hooks:\n  - id: confirmed-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, revision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n"
+        "{policy}hooks:\n  confirmed-observer:\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, revision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n"
     )
 }
 
@@ -420,7 +420,7 @@ async fn plan_on_an_empty_database_reports_the_initial_activation_and_writes_not
 async fn plan_reports_a_hook_destination_apply_cannot_sign_for() {
     let deployment = Deployment::single("activation_plan_hook_key").await;
     let policy = format!(
-        "{POLICY}hooks:\n  - id: confirmed-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, revision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n"
+        "{POLICY}hooks:\n  confirmed-observer:\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, revision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n"
     );
     let package = deployment.package("package", &policy);
     let key_secret = format!("{}_HOOK_KEY", deployment.audit_secret);

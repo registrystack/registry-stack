@@ -22,7 +22,7 @@ fn bundle_policy() -> String {
         .replacen("service: registry-review", "service: registry-update", 1)
         .replacen(
             "holdPolicy: {ttlMinutes: 10, maximumPerCaller: 2, because: test}",
-            r#"  - id: registry-chairs-30
+            r#"  registry-chairs-30:
     service: registry-update
     label: Chair stock
     mode: exact-time
@@ -721,8 +721,8 @@ async fn operational_projection_exposes_allocation_spans_and_attenuates_resource
 #[tokio::test]
 async fn operational_filters_match_a_secondary_resource_and_its_earlier_buffer() {
     let policy = bundle_policy().replace(
-        "  - id: registry-review-45\n    service: registry-update\n    label: 45-minute record review\n    mode: exact-time\n    location: north-counter\n    because: test\n    cancellationCutoffMinutes: 240\n    exactTime:\n      durationMinutes: 30\n      bufferBeforeMinutes: 0",
-        "  - id: registry-review-45\n    service: registry-update\n    label: 45-minute record review\n    mode: exact-time\n    location: north-counter\n    because: test\n    cancellationCutoffMinutes: 240\n    exactTime:\n      durationMinutes: 30\n      bufferBeforeMinutes: 30",
+        "  registry-review-45:\n    service: registry-update\n    label: 45-minute record review\n    mode: exact-time\n    location: north-counter\n    because: test\n    cancellationCutoffMinutes: 240\n    exactTime:\n      durationMinutes: 30\n      bufferBeforeMinutes: 0",
+        "  registry-review-45:\n    service: registry-update\n    label: 45-minute record review\n    mode: exact-time\n    location: north-counter\n    because: test\n    cancellationCutoffMinutes: 240\n    exactTime:\n      durationMinutes: 30\n      bufferBeforeMinutes: 30",
     );
     let fx = fixture_publishing(
         &policy,
@@ -761,8 +761,8 @@ async fn operational_filters_match_a_secondary_resource_and_its_earlier_buffer()
 #[tokio::test]
 async fn operational_occupied_filter_does_not_match_an_unselected_allocation() {
     let policy = bundle_policy().replace(
-        "  - id: registry-review-45\n    service: registry-update\n    label: 45-minute record review\n    mode: exact-time\n    location: north-counter\n    because: test\n    cancellationCutoffMinutes: 240\n    exactTime:\n      durationMinutes: 30\n      bufferBeforeMinutes: 0",
-        "  - id: registry-review-45\n    service: registry-update\n    label: 45-minute record review\n    mode: exact-time\n    location: north-counter\n    because: test\n    cancellationCutoffMinutes: 240\n    exactTime:\n      durationMinutes: 30\n      bufferBeforeMinutes: 30",
+        "  registry-review-45:\n    service: registry-update\n    label: 45-minute record review\n    mode: exact-time\n    location: north-counter\n    because: test\n    cancellationCutoffMinutes: 240\n    exactTime:\n      durationMinutes: 30\n      bufferBeforeMinutes: 0",
+        "  registry-review-45:\n    service: registry-update\n    label: 45-minute record review\n    mode: exact-time\n    location: north-counter\n    because: test\n    cancellationCutoffMinutes: 240\n    exactTime:\n      durationMinutes: 30\n      bufferBeforeMinutes: 30",
     );
     let fx = fixture_publishing(
         &policy,
@@ -797,8 +797,8 @@ async fn operational_occupied_filter_does_not_match_an_unselected_allocation() {
 #[tokio::test]
 async fn operational_occupied_pagination_orders_by_the_selected_resource() {
     let policy = bundle_policy().replace(
-        "  - id: registry-review-45\n    service: registry-update\n    label: 45-minute record review\n    mode: exact-time\n    location: north-counter\n    because: test\n    cancellationCutoffMinutes: 240\n    exactTime:\n      durationMinutes: 30\n      bufferBeforeMinutes: 0",
-        "  - id: registry-review-45\n    service: registry-update\n    label: 45-minute record review\n    mode: exact-time\n    location: north-counter\n    because: test\n    cancellationCutoffMinutes: 240\n    exactTime:\n      durationMinutes: 30\n      bufferBeforeMinutes: 90",
+        "  registry-review-45:\n    service: registry-update\n    label: 45-minute record review\n    mode: exact-time\n    location: north-counter\n    because: test\n    cancellationCutoffMinutes: 240\n    exactTime:\n      durationMinutes: 30\n      bufferBeforeMinutes: 0",
+        "  registry-review-45:\n    service: registry-update\n    label: 45-minute record review\n    mode: exact-time\n    location: north-counter\n    because: test\n    cancellationCutoffMinutes: 240\n    exactTime:\n      durationMinutes: 30\n      bufferBeforeMinutes: 90",
     );
     let fx = fixture_publishing(
         &policy,
