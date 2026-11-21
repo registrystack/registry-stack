@@ -16,6 +16,10 @@ $$;
 SELECT 'CREATE DATABASE registry_breg'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'registry_breg') \gexec
 
+-- PostgreSQL grants every role CONNECT on a database through PUBLIC.
+-- Revoking it keeps the shared databases closed even where pg_hba.conf has
+-- not been reloaded, and limits registry_breg to the roles granted below.
+REVOKE ALL ON DATABASE postgres, template1 FROM PUBLIC;
 REVOKE ALL ON DATABASE registry_breg FROM PUBLIC;
 REVOKE CREATE ON DATABASE registry_breg FROM registry_migration, registry_runtime;
 GRANT CONNECT ON DATABASE registry_breg TO registry_migration, registry_runtime;
