@@ -455,7 +455,8 @@ impl PostgresRecordReadService {
         let field_conditions = field_withholding_conditions(&disclosure);
         for (index, condition) in field_conditions.iter().enumerate() {
             let when = disclosure_when_sql(&plan.entity, &relations, condition)?;
-            projection.push_str(&format!(", {when} AS \"__breg_disclosure_{index}\""));
+            let column = disclosure_flag_column(index);
+            projection.push_str(&format!(", {when} AS \"{column}\""));
         }
         let limit =
             i64::try_from(request.maximum_records).map_err(|_| ReadServiceError::Unavailable)?;
@@ -575,14 +576,7 @@ impl PostgresRecordReadService {
             .iter()
             .map(|row| {
                 let mut record = row_to_record(row, &plan.entity, &selected_fields)?;
-                withhold_disclosed_fields(
-                    row,
-                    &plan.entity,
-                    &selected_fields,
-                    query.is_some_and(|query| query.order.is_some()),
-                    &field_conditions,
-                    &mut record,
-                )?;
+                withhold_disclosed_fields(row, &plan.entity, &field_conditions, &mut record)?;
                 Ok(record)
             })
             .collect::<Result<Vec<_>, ReadServiceError>>()?;
@@ -3034,19 +3028,16 @@ fn disclosure_when_sql(
 /// Null the members a matching `fields` condition withholds, so a withheld
 /// member reads like one the record never set and the response shape does not
 /// reveal the condition. A member the profile does not select stays absent.
-/// The condition flags follow the projected and sort columns.
+/// Each condition flag is read by its column name.
 fn withhold_disclosed_fields(
     row: &tokio_postgres::Row,
     entity: &CompiledEntity,
-    selected_fields: &[String],
-    ordered: bool,
     conditions: &[&crate::model::CompiledDisclosureCondition],
     record: &mut RecordEnvelope,
 ) -> Result<(), ReadServiceError> {
-    let first_flag = selected_fields.len() + 2 + usize::from(ordered);
     for (index, condition) in conditions.iter().enumerate() {
         let matched = row
-            .try_get::<_, bool>(first_flag + index)
+            .try_get::<_, bool>(disclosure_flag_column(index).as_str())
             .map_err(|_| ReadServiceError::Unavailable)?;
         let crate::model::DisclosureWithhold::Fields(fields) = &condition.withhold else {
             continue;
@@ -3062,6 +3053,11 @@ fn withhold_disclosed_fields(
         }
     }
     Ok(())
+}
+
+/// The column alias of the `index`th field-withholding condition flag.
+fn disclosure_flag_column(index: usize) -> String {
+    format!("__breg_disclosure_{index}")
 }
 
 fn row_to_record(
