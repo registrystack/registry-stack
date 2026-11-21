@@ -718,13 +718,13 @@ class MessagingUpgradeTest(unittest.TestCase):
         return {"packageDigest": package, "activeDigest": active, "change": change,
                 "pendingSchemaVersions": pending}
 
-    def upgrade(self, activated: str | None, *plans: dict[str, Any]
-                ) -> tuple[list[str], Any, list[str]]:
+    def upgrade(self, activated: str | None, *plans: dict[str, Any],
+                rebuilt: str | None = None) -> tuple[list[str], Any, list[str]]:
         with tempfile.TemporaryDirectory() as directory:
             messaging = self.messaging(Path(directory))
             side = unittest.mock.Mock()
             side.run_json.side_effect = list(plans)
-            result = messaging.upgrade(side, activated)
+            result = messaging.upgrade(side, activated, rebuilt)
             runtime = ["--runtime-config", str(messaging.runtime)]
         plan = unittest.mock.call("messagingctl", "--format", "json", "plan", *runtime)
         self.assertEqual(side.run_json.call_args_list, [plan] * len(plans))
@@ -769,6 +769,150 @@ class MessagingUpgradeTest(unittest.TestCase):
         differences = self.upgrade(
             self.ACTIVATED, self.plan("none", [3]), self.plan("activate", []))[0]
         self.assertEqual(differences, ["the package ledger still names a change to apply"])
+
+    REBUILT = "sha256:" + "d" * 64
+
+    def test_a_rebuilt_package_is_applied_over_the_previous_activation(self) -> None:
+        for pending in ([], [3]):
+            with self.subTest(pending=pending):
+                result, side, runtime = self.upgrade(
+                    self.ACTIVATED,
+                    self.plan("activate", pending, package=self.REBUILT),
+                    self.plan("none", [], self.REBUILT, self.REBUILT),
+                    rebuilt=self.REBUILT)
+                self.assertEqual(result, [])
+                self.assertEqual(side.run.call_args_list, [
+                    unittest.mock.call("messagingctl", "check", *runtime),
+                    unittest.mock.call("messagingctl", "apply", *runtime)])
+
+    def test_a_rebuilt_package_is_never_applied_over_a_lost_activation(self) -> None:
+        cases = (
+            (self.ACTIVATED, self.plan("activate", [3], self.OTHER, self.REBUILT)),
+            (self.ACTIVATED, self.plan("activate", [3], None, self.REBUILT)),
+            # The runtime file still names the package the previous release built.
+            (self.ACTIVATED, self.plan("none", [3])),
+            (None, self.plan("activate", [3], None, self.REBUILT)),
+        )
+        for activated, planned in cases:
+            with self.subTest(activated=activated, planned=planned):
+                differences, side, runtime = self.upgrade(activated, planned,
+                                                          rebuilt=self.REBUILT)
+                self.assertTrue(differences)
+                side.run.assert_called_once_with("messagingctl", "check", *runtime)
+
+    def test_the_settled_plan_must_name_the_rebuilt_package_as_active(self) -> None:
+        differences = self.upgrade(
+            self.ACTIVATED, self.plan("activate", [], package=self.REBUILT),
+            self.plan("activate", [], package=self.REBUILT), rebuilt=self.REBUILT)[0]
+        self.assertEqual(differences, [
+            "the ledger activeDigest is not the package rebuilt for this release",
+            "the package ledger still names a change to apply"])
+
+    # The keyed collections of the v0.46.0 starter project, as that release
+    # wrote them.
+    LIST_FORM = {
+        "project": {"id": "starter", "version": "1"},
+        "providers": [{"id": "mail-relay", "type": "smtp"},
+                      {"id": "sms-gateway", "type": "http", "idempotentSubmit": True}],
+        "senderProfiles": [{"id": "transactional", "channel": "email",
+                            "provider": "mail-relay", "sender": "notices@example.org"}],
+        "templates": [{"id": "appointment-reminder", "version": "1"}],
+        "accessProfiles": [{"id": "operations", "actsAs": "operator",
+                            "requesterClients": ["operations-console"]}],
+    }
+    MAP_FORM = {
+        "project": {"id": "starter", "version": "1"},
+        "providers": {"mail-relay": {"type": "smtp"},
+                      "sms-gateway": {"type": "http", "idempotentSubmit": True}},
+        "senderProfiles": {"transactional": {"channel": "email", "provider": "mail-relay",
+                                             "sender": "notices@example.org"}},
+        "templates": [{"id": "appointment-reminder", "version": "1"}],
+        "accessProfiles": {"operations": {"actsAs": "operator",
+                                          "requesterClients": ["operations-console"]}},
+    }
+
+    def test_the_rewrite_keys_each_collection_by_id_and_keeps_templates_a_list(self) -> None:
+        project = json.loads(json.dumps(self.LIST_FORM))
+        self.assertTrue(MODULE.messaging_collections_as_maps(project))
+        self.assertEqual(project, self.MAP_FORM)
+
+    def test_a_project_in_map_form_is_left_as_written(self) -> None:
+        project = json.loads(json.dumps(self.MAP_FORM))
+        self.assertFalse(MODULE.messaging_collections_as_maps(project))
+        self.assertEqual(project, self.MAP_FORM)
+
+    def test_the_rewrite_refuses_an_entry_it_cannot_key(self) -> None:
+        for entries, named in (
+                ([{"type": "smtp"}], r"providers\[0\] has no id"),
+                ([{"id": 7, "type": "smtp"}], r"providers\[0\] has no id"),
+                (["mail-relay"], r"providers\[0\] has no id"),
+                ([{"id": "mail-relay"}, {"id": "mail-relay"}], "writes 'mail-relay' twice")):
+            with self.subTest(entries=entries):
+                with self.assertRaisesRegex(Error, named):
+                    MODULE.messaging_collections_as_maps({"providers": entries})
+
+    def rewrite(self, project: dict[str, Any], built: dict[str, Any]
+                ) -> tuple[str | None, Any, Any, dict[str, Any], dict[str, Any]]:
+        """Run rewrite_in_map_form over `project` with a faked new side whose
+        package report is `built`. Returns its result, the side, the
+        Messaging object, and the project and runtime documents it left."""
+        with tempfile.TemporaryDirectory() as directory, \
+                unittest.mock.patch.object(MODULE, "dump_yaml", dump_json), \
+                unittest.mock.patch.object(MODULE, "load_yaml", load_json):
+            root = Path(directory)
+            messaging = self.messaging(root)
+            messaging.work, messaging.project = root, root / "project"
+            messaging.package = root / "package"
+            messaging.project.mkdir()
+            dump_json(messaging.project / "messaging.yaml", project)
+            dump_json(messaging.runtime, {"package": {"root": str(messaging.package)},
+                                          "identity": {"databaseId": "rehearsal"}})
+            side = unittest.mock.Mock()
+            side.run_json.return_value = built
+            self.printed = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(self.printed):
+                    result = messaging.rewrite_in_map_form(side)
+            finally:
+                self.root = root
+                self.left = (load_json(messaging.project / "messaging.yaml"),
+                             load_json(messaging.runtime))
+        return result, side, messaging, *self.left
+
+    def test_the_rewrite_rebuilds_the_package_and_points_the_runtime_at_it(self) -> None:
+        result, side, messaging, project, runtime = self.rewrite(
+            self.LIST_FORM, {"ok": True, "projectDigest": self.REBUILT})
+        rebuilt = self.root / "package-map-form"
+        self.assertEqual(result, self.REBUILT)
+        self.assertEqual(project, self.MAP_FORM)
+        self.assertEqual(runtime, {"package": {"root": str(rebuilt)},
+                                   "identity": {"databaseId": "rehearsal"}})
+        self.assertEqual(messaging.package, rebuilt)
+        self.assertEqual(side.run.call_args_list, [
+            unittest.mock.call("messagingctl", "check", "--project", str(self.root / "project")),
+            unittest.mock.call("messagingctl", "check", "--package", str(rebuilt))])
+        side.run_json.assert_called_once_with(
+            "messagingctl", "--format", "json", "package", str(self.root / "project"),
+            "--output", str(rebuilt))
+        self.assertEqual(self.printed.getvalue(),
+                         "messaging: rewrote providers, senderProfiles, accessProfiles "
+                         "in map form and rebuilt the package\n")
+
+    def test_a_project_in_map_form_keeps_the_package_the_previous_release_built(self) -> None:
+        result, side, messaging, project, runtime = self.rewrite(self.MAP_FORM, {})
+        self.assertIsNone(result)
+        self.assertEqual(project, self.MAP_FORM)
+        self.assertEqual(runtime["package"], {"root": str(self.root / "package")})
+        self.assertEqual(messaging.package, self.root / "package")
+        side.run.assert_not_called()
+        side.run_json.assert_not_called()
+        self.assertEqual(self.printed.getvalue(), "")
+
+    def test_a_package_report_without_a_digest_is_refused(self) -> None:
+        for built in ({"ok": True}, {"ok": True, "projectDigest": None}):
+            with self.subTest(built=built):
+                with self.assertRaisesRegex(Error, "projectDigest"):
+                    self.rewrite(self.LIST_FORM, built)
 
     def test_the_runtime_reads_scopes_from_the_claim_the_sender_token_carries(self) -> None:
         # One runtime file serves both sides, so it names the scope claim
@@ -1335,9 +1479,24 @@ class MessagingAssertionsTest(unittest.TestCase):
 
     def test_a_ledger_that_named_no_package_before_the_upgrade_is_a_difference(self) -> None:
         for activated in (None, ""):
-            with self.subTest(activated=activated):
-                (difference,) = MODULE.ledger_digest_differences(activated, self.plan())
-                self.assertIn("previous release", difference)
+            for rebuilt in (None, self.OTHER):
+                with self.subTest(activated=activated, rebuilt=rebuilt):
+                    (difference,) = MODULE.ledger_digest_differences(
+                        activated, self.plan(), rebuilt)
+                    self.assertIn("previous release", difference)
+
+    def test_a_rebuilt_package_must_be_the_one_the_plan_names(self) -> None:
+        rebuilt = self.plan(activeDigest=self.OTHER, packageDigest=self.OTHER)
+        self.assertEqual(MODULE.ledger_digest_differences(self.ACTIVE, rebuilt, self.OTHER), [])
+        for planned, named in ((self.plan(), ("activeDigest", "packageDigest")),
+                               (self.plan(packageDigest=self.OTHER), ("activeDigest",)),
+                               (self.plan(activeDigest=self.OTHER), ("packageDigest",))):
+            with self.subTest(planned=planned):
+                differences = MODULE.ledger_digest_differences(
+                    self.ACTIVE, planned, self.OTHER)
+                self.assertEqual(differences, [
+                    f"the ledger {member} is not the package rebuilt for this release"
+                    for member in named])
 
     def test_counts_one_event_across_every_segment_of_the_stream(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1370,12 +1529,16 @@ class MessagingAssertionsTest(unittest.TestCase):
 
     def rehearse(self, *, erase_events: int = 1,
                  ledger_differences: tuple[str, ...] = (),
-                 dispatch_shape: str | None = None) -> tuple[dict, Any, Any]:
+                 dispatch_shape: str | None = None,
+                 rebuilt: str | None = None) -> tuple[dict, Any, Any]:
         """Run rehearse_messaging with every process and database faked. The
-        erase command writes `erase_events` requested and erased records."""
+        erase command writes `erase_events` requested and erased records, and
+        the map form rewrite rebuilds the package as `rebuilt`, or leaves it
+        when that is None."""
         old, new = unittest.mock.Mock(), unittest.mock.Mock()
         old.run_json.return_value = {"active": {"packageDigest": self.ACTIVE}}
         messaging = unittest.mock.Mock()
+        messaging.rewrite_in_map_form.return_value = rebuilt
         messaging.submit.return_value = {"id": "m"}
         messaging.views.return_value = {}
         runtime_stream, operator_stream = MODULE.MESSAGING_AUDIT, MODULE.MESSAGING_OPERATOR_AUDIT
@@ -1433,8 +1596,17 @@ class MessagingAssertionsTest(unittest.TestCase):
             self.rehearse(erase_events=0)
 
     def test_the_leg_upgrades_from_the_digest_the_old_release_activated(self) -> None:
-        _report, new, messaging = self.rehearse()
-        messaging.upgrade.assert_called_once_with(new, self.ACTIVE)
+        report, new, messaging = self.rehearse()
+        messaging.upgrade.assert_called_once_with(new, self.ACTIVE, None)
+        self.assertIs(report["messaging"]["packageRebuilt"], False)
+
+    def test_the_leg_rewrites_the_project_in_map_form_before_the_upgrade(self) -> None:
+        report, new, messaging = self.rehearse(rebuilt=self.OTHER)
+        messaging.rewrite_in_map_form.assert_called_once_with(new)
+        messaging.upgrade.assert_called_once_with(new, self.ACTIVE, self.OTHER)
+        steps = [name for name, _args, _kwargs in messaging.mock_calls]
+        self.assertLess(steps.index("rewrite_in_map_form"), steps.index("upgrade"))
+        self.assertIs(report["messaging"]["packageRebuilt"], True)
 
     def test_the_leg_fails_on_a_ledger_difference_the_upgrade_names(self) -> None:
         with self.assertRaisesRegex(MODULE.RehearsalError, "names another predecessor"):

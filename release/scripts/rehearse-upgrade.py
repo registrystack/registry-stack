@@ -500,20 +500,23 @@ def audit_event_count(directory: Path, name: str, event: str) -> int:
     return count
 
 
-def ledger_digest_differences(activated: str | None, planned: dict[str, Any]) -> list[str]:
+def ledger_digest_differences(activated: str | None, planned: dict[str, Any],
+                              rebuilt: str | None = None) -> list[str]:
     """Name what keeps a `messagingctl plan` report from describing the
-    previous release's activation, left as it was. `activated` is the package
-    digest the previous release's `messagingctl status` reported active: the
-    plan must name it both as active and as the package on disk, with no
-    change to apply."""
+    settled upgrade. `activated` is the package digest the previous release's
+    `messagingctl status` reported active: the plan must name it both as
+    active and as the package on disk, with no change to apply. When the
+    upgrade rebuilt the package, `rebuilt` is its digest, and the plan must
+    name that package in both places instead."""
 
     if not activated:
         return ["the previous release's ledger recorded no active package"]
+    expected, named = ((rebuilt, "the package rebuilt for this release") if rebuilt
+                       else (activated, "the package the previous release activated"))
     differences = []
     for member in ("activeDigest", "packageDigest"):
-        if planned.get(member) != activated:
-            differences.append(f"the ledger {member} is not the package the previous "
-                               "release activated")
+        if planned.get(member) != expected:
+            differences.append(f"the ledger {member} is not {named}")
     if planned.get("change") != "none":
         differences.append("the package ledger still names a change to apply")
     return differences
@@ -1088,6 +1091,34 @@ MESSAGING_RETENTION_ERASED = "messaging.retention.erased"
 # the cancellation, and the new submission. `messagingctl` writes the retention erase run's requested
 # and erased records.
 MESSAGING_UPGRADED_AUDIT_RECORDS = {MESSAGING_AUDIT: 7, MESSAGING_OPERATOR_AUDIT: 2}
+# The `messaging.yaml` collections that v0.47.0 reads as a mapping from each
+# entry's id to the rest of the entry, where earlier releases wrote a list.
+# `templates` stays a list, because a template is named by its id and version.
+MESSAGING_KEYED_COLLECTIONS = ("providers", "senderProfiles", "accessProfiles")
+
+
+def messaging_collections_as_maps(project: dict[str, Any]) -> bool:
+    """Rewrite each keyed collection `project` writes as a list into a mapping
+    from each entry's id to the rest of the entry, the migration the Messaging
+    changelog gives for v0.47.0. Returns whether anything changed. An entry
+    without a string id, or an id written twice, is refused rather than
+    dropped."""
+
+    changed = False
+    for member in MESSAGING_KEYED_COLLECTIONS:
+        entries = project.get(member)
+        if not isinstance(entries, list):
+            continue
+        mapping: dict[str, Any] = {}
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+                raise RehearsalError(f"messaging.yaml {member}[{index}] has no id to key it by")
+            if entry["id"] in mapping:
+                raise RehearsalError(f"messaging.yaml {member} writes {entry['id']!r} twice")
+            mapping[entry["id"]] = {key: value for key, value in entry.items() if key != "id"}
+        project[member] = mapping
+        changed = True
+    return changed
 
 
 class Messaging:
@@ -1171,6 +1202,34 @@ class Messaging:
                 database[wanted] = database.pop(key)
         dump_yaml(self.runtime, runtime)
 
+    def rewrite_in_map_form(self, side: Side) -> str | None:
+        """Rewrite the keyed collections the previous release wrote as lists
+        in map form, build and check a package from the project with `side`,
+        and point the runtime file at it: the edit and rebuild the Messaging
+        changelog gives for v0.47.0. Returns the rebuilt package's digest, or
+        None when the project already writes maps and its package stands."""
+        manifest = self.project / "messaging.yaml"
+        project = load_yaml(manifest)
+        if not messaging_collections_as_maps(project):
+            return None
+        dump_yaml(manifest, project)
+        package = self.work / "package-map-form"
+        side.run("messagingctl", "check", "--project", str(self.project))
+        built = side.run_json("messagingctl", "--format", "json", "package", str(self.project),
+                              "--output", str(package))
+        digest = built.get("projectDigest") if isinstance(built, dict) else None
+        if not isinstance(digest, str) or not digest:
+            raise RehearsalError("messagingctl package reported no projectDigest "
+                                 "for the package rebuilt in map form")
+        side.run("messagingctl", "check", "--package", str(package))
+        runtime = load_yaml(self.runtime)
+        runtime["package"]["root"] = str(package)
+        dump_yaml(self.runtime, runtime)
+        self.package = package
+        print("messaging: rewrote {} in map form and rebuilt the package".format(
+            ", ".join(MESSAGING_KEYED_COLLECTIONS)), flush=True)
+        return digest
+
     def call(self, method: str, path: str, body: Any = None,
              headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], Any]:
         claims = {"iss": MESSAGING_ISSUER, "aud": MESSAGING_AUDIENCE, **MESSAGING_SENDER}
@@ -1208,22 +1267,27 @@ class Messaging:
             views[f"message/{message_id}"] = body
         return views
 
-    def upgrade(self, side: Side, activated: str | None) -> list[str]:
-        """Check the runtime file and plan with `side` over the package the
-        previous release activated. When that plan only has schema versions
-        pending, apply them with the migration credential, the upgrade step
-        the Messaging changelog names, and plan again. Returns what keeps the
-        settled plan from naming the previous release's activation with
-        nothing left to change."""
+    def upgrade(self, side: Side, activated: str | None,
+                rebuilt: str | None = None) -> list[str]:
+        """Check the runtime file and plan with `side` over the package on
+        disk: the one the previous release activated, or the one rebuilt in
+        map form when `rebuilt` names its digest. When the plan keeps the
+        previous release's activation and names that package, and has schema
+        versions pending or the rebuilt package to activate, apply with the
+        migration credential, the upgrade step the Messaging changelog names,
+        and plan again. Returns what keeps the settled plan from naming the
+        package on disk as active with nothing left to change."""
         config = ["--runtime-config", str(self.runtime)]
         side.run("messagingctl", "check", *config)
         planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
+        package = rebuilt or activated
         pending = planned.get("pendingSchemaVersions")
-        if pending and activated and (
-                planned.get("activeDigest") == planned.get("packageDigest") == activated):
+        if (pending or package != activated) and activated and (
+                planned.get("activeDigest") == activated
+                and planned.get("packageDigest") == package):
             side.run("messagingctl", "apply", *config)
             planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
-        return ledger_digest_differences(activated, planned)
+        return ledger_digest_differences(activated, planned, rebuilt)
 
 
 def dispatch_shape_differences(definition: str | None) -> list[str]:
@@ -1271,9 +1335,13 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     # The new binaries read the runtime file and the package the previous
     # release wrote. The ledger must still name that package as active: a plan
     # that reports a change once any pending schema versions are applied means
-    # the upgrade lost the activation.
+    # the upgrade lost the activation. When the previous release wrote the
+    # keyed collections as lists, the operator rewrites them in map form and
+    # rebuilds the package first, so the upgrade activates that package over
+    # the previous one and the ledger must then name it.
     messaging.rename_database_ca_bundle(new)
-    differences = messaging.upgrade(new, activated)
+    rebuilt = messaging.rewrite_in_map_form(new)
+    differences = messaging.upgrade(new, activated, rebuilt)
     differences += dispatch_shape_differences(postgres.sql("messaging", """
         SELECT pg_get_constraintdef(oid) FROM pg_constraint
         WHERE conname = 'messaging_dispatch_jobs_shape';
@@ -1312,6 +1380,7 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
 
     report["messaging"] = {
         "messages": len(message_ids),
+        "packageRebuilt": rebuilt is not None,
         "tables": len(before_counts),
         "auditRecordsBefore": records_before,
         "auditRecordsAfter": records_after,
