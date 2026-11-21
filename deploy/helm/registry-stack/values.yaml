@@ -67,7 +67,6 @@ breg:
     kind: verify
     # Recorded by apply-initial and apply-successor. Empty omits the flag.
     operatorReference: ""
-    backoffLimit: 0
     ttlSecondsAfterFinished: 86400
     activeDeadlineSeconds: 1800
   networkPolicy:
@@ -204,7 +203,6 @@ casework:
     kind: plan
     operatorReference: ""
     backupReferences: []
-    backoffLimit: 0
     ttlSecondsAfterFinished: 86400
     activeDeadlineSeconds: 1800
   networkPolicy:
@@ -310,7 +308,6 @@ evidence:
     name: ""
     kind: check
     operatorReference: ""
-    backoffLimit: 0
     ttlSecondsAfterFinished: 86400
     activeDeadlineSeconds: 1800
   networkPolicy:

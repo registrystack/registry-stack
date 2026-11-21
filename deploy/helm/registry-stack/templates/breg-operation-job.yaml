@@ -29,7 +29,7 @@ metadata:
   annotations:
     registrystack.org/package-digest: {{ $targetDigest | quote }}
 spec:
-  backoffLimit: {{ .Values.breg.operation.backoffLimit }}
+  backoffLimit: 0
   ttlSecondsAfterFinished: {{ .Values.breg.operation.ttlSecondsAfterFinished }}
   activeDeadlineSeconds: {{ .Values.breg.operation.activeDeadlineSeconds }}
   template:
