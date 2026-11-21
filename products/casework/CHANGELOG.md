@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - BREAKING: `caseworkctl provider add` prints the BReg project fragments it
   proposes in the id-keyed form the BReg project now reads: `accessProfiles`,
   `reviewAuthorities` and `actions` entries are keyed by id, with no inner
@@ -35,8 +37,6 @@
 - Every database-sampled gauge is read under one 5 second scrape deadline,
   with a server-side statement timeout set to the time left, so the server
   cancels a slow read. Failed reads are logged by error class.
-
-## 0.47.0 - 2026-11-20
 
 - BREAKING: Casework refuses a `casework.yaml` whose access profiles for people
   (staff, supervisor, administrator, an initiator profile and any other requester

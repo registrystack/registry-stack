@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - BREAKING: an `EvidenceProject`'s human `label` and `description` move from
   the top level into the shared `project` block, as `project.label` and
   `project.description` (pre-1.0 cleanup, so every product accepts them in the
@@ -50,8 +52,6 @@
   to also allow the unspecified address (for example `0.0.0.0`), for a
   container whose network is private to the deployment. The default,
   `private-address`, keeps the loopback-or-private rule.
-
-## 0.47.0 - 2026-11-20
 
 - `rstack dev` runs Evidence projects, alone or with BReg. An Evidence project
   with its own `local-target.yaml` runs on that target, with the development

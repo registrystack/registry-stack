@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - BREAKING: `services`, `offerings`, `holidaySets`, `openings`, and `hooks` in
   `scheduling.yaml` are mappings from each item's id to the rest of its entry,
   as a pre-1.0 cleanup so an item has one name and a duplicate cannot be
@@ -53,8 +55,6 @@
 - Every database-sampled gauge is read under one 5 second scrape deadline,
   with a server-side statement timeout set to the time left, so the server
   cancels a slow read. Failed reads are logged by error class.
-
-## 0.47.0 - 2026-11-20
 
 - BREAKING: `schedulingctl api --client` is removed. Pass `--url URL --header @FILE`
   with a bearer header file, or use a saved `--connection`.

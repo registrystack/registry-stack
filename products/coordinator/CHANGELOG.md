@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - BREAKING: a `CoordinatorProject`'s human `label` and `description` move from
   the top level into the shared `project` block, as `project.label` and
   `project.description` (pre-1.0 cleanup, so every product accepts them in the
@@ -48,8 +50,6 @@
   so a later minor release can add members without another client upgrade.
   They also accept a server that omits `stepLabel`. Rust callers that build
   the client `RunStatus` as a struct literal must set `step_label`.
-
-## 0.47.0 - 2026-11-20
 
 - BREAKING: `coordinatorctl api --client` is removed. Pass `--url URL --header @FILE`
   with a bearer header file, or use a saved `--connection`.

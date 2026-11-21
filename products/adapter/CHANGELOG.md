@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - Accept an optional `project.label` and `project.description` in the project
   block, as the shared project block does. They are display text for
   people and change no compiled output.
@@ -32,8 +34,6 @@
   default, `private-address`, keeps the loopback-or-private rule.
 - The job's item counts take their statement timeout from one 5 second scrape
   deadline. Failed reads are logged by error class.
-
-## 0.47.0 - 2026-11-20
 
 - PostgreSQL jobs can project bounded JSONB values, including the geometry
   and related rows in the [QField PostGIS example](examples/qfield-postgis/README.md).

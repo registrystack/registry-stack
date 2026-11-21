@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.47.0 - 2026-11-20
+
 - BREAKING: `providers`, `senderProfiles`, and `accessProfiles` in
   `messaging.yaml` are mappings from each item's id to the rest of its entry,
   as a pre-1.0 cleanup so an item has one name and a duplicate cannot be
@@ -40,8 +42,6 @@
   cancels a slow read. Failed reads are logged by error class. A failed read
   is counted in `messaging_metrics_sample_failures_total`, and its gauge is
   left out.
-
-## 0.47.0 - 2026-11-20
 
 - `rstack dev` runs Messaging projects. An `smtp` provider sends to a Mailpit
   container and an `http` SMS provider to a mock gateway; the run report names
