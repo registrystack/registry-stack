@@ -152,6 +152,7 @@ It must be sent once, decode to at most 512 bytes, and be neither blank nor cont
 character.
 BReg stores the decoded text as `accessReason` on each subject access log entry the request
 writes, and returns it with the entry.
+Only a read writes an entry, so a write under the profile must carry the reason but nothing keeps it.
 It is null when the profile does not require a reason.
 The text is caller-asserted, so treat it as a claim and not as verified authority.
 

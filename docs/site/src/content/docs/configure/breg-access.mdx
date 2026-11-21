@@ -621,7 +621,9 @@ before any record is read. The reason is stored on the subject access log entry 
 read alert, so a reviewer can ask why. See
 [Record why a record was read](../../operate/breg-access-log/#record-why-a-record-was-read).
 
-The reason is checked on record reads and direct writes only. `bregctl check` refuses the key on a
+The reason is checked on record reads and direct writes only, and only a read records it. A direct
+Create, Patch, batch or Tombstone under the profile must carry the header, but nothing stores the
+reason. `bregctl check` refuses the key on a
 profile that grants import, invoke or start operations, bulk data export, or an action, proposal,
 dataset, external view or projection-refresh permission, because those paths do not check it
 (`breg.access-profile.access-reason-operation-unsupported`). Bulk export is refused even though it
