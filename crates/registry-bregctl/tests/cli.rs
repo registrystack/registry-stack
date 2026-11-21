@@ -751,6 +751,43 @@ fn check_refuses_invalid_disclosure_conditions_with_a_next_step() {
 }
 
 #[test]
+fn check_refuses_a_read_hook_without_an_access_log_with_a_next_step() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    let contact = &mut source["recordTypes"][0];
+    contact["hooks"] = json!([{
+        "id": "contact-read", "phase": "after", "trigger": "read",
+        "profiles": ["directory-editor"], "projection": []
+    }]);
+    let project = TestProject::from_registry_source(&serde_json::to_vec_pretty(&source).unwrap());
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.disclosure.read-hook-access-log-required")
+        .unwrap_or_else(|| panic!("{report}"));
+    assert!(
+        diagnostic["path"].as_str().unwrap().contains("/hooks"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic["suggestedAction"]
+            .as_str()
+            .unwrap()
+            .contains("accessLog"),
+        "{diagnostic}"
+    );
+}
+
+#[test]
 fn hook_projection_errors_point_to_the_second_hook_in_each_owning_file() {
     let mut source = registry_platform_yaml::Reader::new("registry.yaml")
         .scan(include_bytes!(
