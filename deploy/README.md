@@ -50,6 +50,22 @@ Point the application DNS names at the ingress address. Permit inbound 443 and 8
 
 Do this step on a build workstation, not the server. Install `bregctl` v0.46.0 with the [BReg installer](https://docs.registrystack.org/operate/breg/#obtain-the-runtime) and provide a disposable PostgreSQL 17 database for the schema test. Then run the same-release `bregctl check --production`, `test`, and `package` on your project. The test needs the journey's real authorisation bindings. Follow the [BReg package and runtime instructions](https://docs.registrystack.org/operate/breg/#check-test-package). Copy the sealed `package/` root, its digest and the runtime config into a private directory on the server.
 
+A plain `tar` on macOS adds `._*` files and extended attributes to the archive. Make the archive without them, then copy it to the server.
+
+```bash
+COPYFILE_DISABLE=1 tar --no-xattrs -cf breg-inputs.tar package package-digest runtime.yaml
+scp breg-inputs.tar admin@server.example.org:
+```
+
+On the server, unpack it into the private directory and check the package against its checksums.
+
+```bash
+sudo install -d -m 0700 /srv/registry-directory/inputs
+sudo tar --no-same-owner -xf breg-inputs.tar -C /srv/registry-directory/inputs
+rm breg-inputs.tar
+sudo sh -c 'cd /srv/registry-directory/inputs/package && sha256sum -c --quiet SHA256SUMS'
+```
+
 Copy [the v0.46.0 example values](examples/local-breg/values.json) into that directory as `values.json`. Set the hostname, package digest, versioned input names and namespace selectors for your installation. `prepare_local.py` uses this layout.
 
 | Path inside the private input directory | Contents |
@@ -96,9 +112,24 @@ unset RUNTIME_PASSWORD MIGRATION_PASSWORD
 
 Every file in `breg-runtime/` and `breg-migration/` becomes a key of a Kubernetes Secret, so keep other files out of those folders. Move `pg-ca.key` off the server once the certificate is issued, and keep it with your other CA keys.
 
-For the HTTPS certificate, use one issued by a CA your clients trust. Save its chain as `ingress.crt` and its key as `ingress.key`. A self-signed certificate made with `openssl req -x509` works for a test, but clients will refuse it.
+For the HTTPS certificate, use one issued by a CA your clients trust. Save its chain as `ingress.crt` and its key as `ingress.key`. A self-signed certificate works for a test, but clients will refuse it. Make one in the same root shell. The `subjectAltName` extension is required, because clients ignore the common name.
+
+```bash
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -sha256 -days 30 \
+  -subj "/CN=directory.example.org" -addext "subjectAltName=DNS:directory.example.org" \
+  -keyout /srv/registry-directory/inputs/ingress.key -out /srv/registry-directory/inputs/ingress.crt
+```
 
 Keep credential and private-key files owner-only. The two database URLs name `registry_runtime` and `registry_migration`, respectively, on `registry-postgres.<namespace>.svc.cluster.local:5432/registry_breg`. Encode any reserved characters in passwords as URL components. Put the PostgreSQL CA in `breg-runtime/database-ca`. Reference it from the `database.caBundleRef` field of the BReg `runtime.yaml`. That field is part of the BReg runtime file, not a chart value. If the OIDC issuer uses a private CA, also supply its CA with the chart's `breg.caBundleKey`. Configure the issuer's exact HTTPS origin and a network policy that admits the actual issuer endpoint. On K3s, traffic to a Service can be matched at its destination Pod and target port.
+
+The example values admit only PostgreSQL. Helm replaces a list as a whole, so add the issuer rule to `breg.networkPolicy.dependencyEgress` and keep the PostgreSQL rule. This rule admits an issuer at one address on port 443:
+
+```json
+{
+  "to": {"ipBlock": {"cidr": "203.0.113.10/32"}},
+  "ports": [{"port": 443, "protocol": "TCP"}]
+}
+```
 
 Pass the `--database-id` below the same value as `identity.databaseId` in `runtime.yaml`. The claim check refuses an install when the two differ. Pass `--operator-reference` with the change or ticket reference for this installation. BReg records a keyed hash of it with the first activation, so its runtime audit profile must be keyed. Running `install` again later, for example to reopen after `stop`, activates nothing and needs no reference.
 
@@ -117,6 +148,12 @@ curl --fail https://directory.example.org/ready
 ```
 
 The first command prepares the local database and retained storage, then stages immutable named inputs. The second command checks the BReg plan, applies the exact initial package, verifies the ledger and doctor report, and starts serving. Reuse the same inputs to retry. Use a new package claim and versioned input names for a changed package.
+
+Before DNS exists, send the check to the server's address. Add `--cacert /srv/registry-directory/inputs/ingress.crt` for a self-signed certificate.
+
+```bash
+curl --fail --resolve directory.example.org:443:<address> https://directory.example.org/ready
+```
 
 Use your identity provider to register the exact clients and return the claims the package requires. Test with one allowed and one denied request before opening the service. The [ThunderID reference](identity/README.md) illustrates the identity contracts with synthetic users and secrets. Its ThunderID namespace is `registry-identity-qualification`, separate from the product namespace (`directory` in this guide).
 
