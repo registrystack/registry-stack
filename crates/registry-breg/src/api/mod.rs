@@ -511,10 +511,16 @@ async fn openapi(
             openapi_access_log_response_schema(),
         );
     }
-    actions::append_openapi(&visible_actions, &mut paths, &mut schemas);
+    actions::append_openapi(
+        &visible_actions,
+        service.registry.entities(),
+        &mut paths,
+        &mut schemas,
+    );
     crate::artifacts::append_proposal_openapi(
         &mut paths,
         service.registry.actions(),
+        service.registry.entities(),
         Some(&visible_proposals),
     );
     statistics::append_openapi(&service, &claims, &options, &mut paths, &mut schemas);

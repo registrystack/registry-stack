@@ -186,3 +186,84 @@ fn the_openapi_declares_the_write_refusal_a_binding_condition_can_give() {
         [false, false, false]
     );
 }
+
+/// The writable fixture, where the `registrar` also sets the phone number
+/// through the immediate Action `set-person-phone` and applies the manual
+/// Proposal `propose-person-phone`. Both plans patch `person`.
+fn acting(bound_by: Option<&str>) -> Value {
+    let mut value = writable(bound_by);
+    let inputs = json!([
+        {"id": "person", "apiName": "personId", "type": "reference", "target": "person",
+         "required": true, "classification": "internal"},
+        {"id": "phone", "apiName": "phone", "type": "string", "maximumLength": 32,
+         "required": true, "classification": "internal"}]);
+    let plan = json!({"type": "fixed", "effects": [
+        {"id": "contact", "target": {"fromInput": "person"}, "operation": "patch",
+         "set": {"phone": {"fromInput": "phone"}}}]});
+    value["actions"] = json!([
+        {"id": "set-person-phone", "inputs": inputs, "plan": plan,
+         "execution": {"mode": "immediate"}},
+        {"id": "propose-person-phone", "inputs": inputs, "plan": plan,
+         "commitGuards": {"targets": [{"input": "person", "revision": "unchanged"}]},
+         "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"},
+           "application": {"mode": "manual"}, "retention": {"mode": "operator-erase"}}}}]);
+    let targets = json!([{"recordType": "person", "rowBoundaries": "unrestricted"}]);
+    let registrar = value["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|profile| profile["id"] == "registrar")
+        .unwrap();
+    registrar["permissions"]["actions"] = json!([
+        {"action": "set-person-phone", "operations": ["invoke"], "targets": targets},
+        {"action": "propose-person-phone", "operations": ["start"], "targets": targets}]);
+    registrar["permissions"]["proposals"] = json!([
+        {"action": "propose-person-phone", "ownership": "caller",
+         "operations": ["get", "list", "edit", "submit", "cancel", "apply"], "targets": targets}]);
+    value
+}
+
+/// Whether the generated OpenAPI declares the `write.outside-boundary` 403 on
+/// the Action invoke and on the Proposal apply, in that order.
+fn declared_workflow_write_refusals(registry: &CompiledRegistry) -> [bool; 2] {
+    let openapi: Value = serde_json::from_slice(
+        &registry
+            .artifacts()
+            .get("generated/openapi.json")
+            .expect("OpenAPI is generated")
+            .bytes,
+    )
+    .unwrap();
+    let invoke = &openapi["paths"]["/v1/actions/set-person-phone"]["post"];
+    let apply = &openapi["paths"]["/v1/proposals/{proposal_id}/apply"]["post"];
+    assert!(!invoke.is_null(), "the fixture has no Action invoke");
+    assert!(!apply.is_null(), "the fixture has no Proposal apply");
+    [
+        invoke["responses"]["403"]["content"]["application/problem+json"]["examples"]
+            .get("write.outside-boundary")
+            .is_some(),
+        apply["responses"]["403"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("`write.outside-boundary`")),
+    ]
+}
+
+/// A plan Patch by a profile a `fields` or `history` condition binds is
+/// refused when it would lift a mark or overwrite a withheld field. A
+/// `record` condition hides the row instead, and an exempt writer meets no
+/// refusal.
+#[test]
+fn the_openapi_declares_the_write_refusal_on_an_action_invoke_and_a_proposal_apply() {
+    assert_eq!(
+        declared_workflow_write_refusals(&compile(&acting(Some("hide-phone")))),
+        [true, true]
+    );
+    assert_eq!(
+        declared_workflow_write_refusals(&compile(&acting(Some("hide-protected")))),
+        [false, false]
+    );
+    assert_eq!(
+        declared_workflow_write_refusals(&compile(&acting(None))),
+        [false, false]
+    );
+}

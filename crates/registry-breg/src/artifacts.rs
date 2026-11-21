@@ -1143,6 +1143,7 @@ fn action_results_schema(action: &CompiledAction, effect_ids: &BTreeSet<String>)
 pub(crate) fn openapi_action_operation(
     route: &CompiledActionRoute,
     action: &CompiledAction,
+    entities: &BTreeMap<String, CompiledEntity>,
     access_profiles: OpenApiAccessProfiles<'_>,
 ) -> Value {
     let mut operation = Map::from_iter([
@@ -1214,7 +1215,11 @@ pub(crate) fn openapi_action_operation(
     );
     operation.insert(
         "responses".to_owned(),
-        action_operation_responses(route, action),
+        action_operation_responses(
+            route,
+            action,
+            invoke_may_refuse_write(route, action, entities, access_profiles),
+        ),
     );
     Value::Object(operation)
 }
@@ -1743,7 +1748,57 @@ fn bearer_security() -> Value {
     json!([{"bearerAuth": []}])
 }
 
-fn action_operation_responses(route: &CompiledActionRoute, action: &CompiledAction) -> Value {
+/// Whether an immediate Action invoke by a profile the document describes may
+/// be refused as outside what the profile may write.
+fn invoke_may_refuse_write(
+    route: &CompiledActionRoute,
+    action: &CompiledAction,
+    entities: &BTreeMap<String, CompiledEntity>,
+    access_profiles: OpenApiAccessProfiles<'_>,
+) -> bool {
+    if route.kind != ActionRouteKind::Invoke || action.execution.is_proposal() {
+        return false;
+    }
+    match access_profiles {
+        OpenApiAccessProfiles::All => route
+            .access_profiles
+            .iter()
+            .any(|profile_id| action_may_refuse_write(action, entities, profile_id)),
+        OpenApiAccessProfiles::Selected(profile_id) => {
+            action_may_refuse_write(action, entities, profile_id)
+        }
+    }
+}
+
+/// Whether the plan of `action`, written as `profile_id`, may be refused as
+/// outside what the profile may write: a condition that withholds fields or
+/// history binds the profile on a record type the plan patches. The plan
+/// Patch is then refused when it would lift a mark or overwrite a withheld
+/// field. The check passes over a `record` condition, and a plan Create
+/// meets no condition check.
+pub(crate) fn action_may_refuse_write(
+    action: &CompiledAction,
+    entities: &BTreeMap<String, CompiledEntity>,
+    profile_id: &str,
+) -> bool {
+    action
+        .effects
+        .iter()
+        .filter(|effect| effect.operation == Operation::Patch)
+        .filter_map(|effect| entities.get(&effect.target.entity_id))
+        .any(|entity| {
+            crate::disclosure::plan(entity, profile_id)
+                .conditions()
+                .iter()
+                .any(|condition| !matches!(condition.withhold, DisclosureWithhold::Record))
+        })
+}
+
+fn action_operation_responses(
+    route: &CompiledActionRoute,
+    action: &CompiledAction,
+    may_refuse_write: bool,
+) -> Value {
     let (success_status, success) = if route.operation == Operation::Start {
         (
             "201",
@@ -1780,7 +1835,7 @@ fn action_operation_responses(route: &CompiledActionRoute, action: &CompiledActi
         ("200", success)
     };
     let mut responses = Map::from_iter([(success_status.to_owned(), success)]);
-    for (status, problems) in action_problem_responses(route.kind, action) {
+    for (status, problems) in action_problem_responses(route.kind, action, may_refuse_write) {
         let mut examples = problems
             .iter()
             .map(|problem| {
@@ -1826,6 +1881,7 @@ fn action_operation_responses(route: &CompiledActionRoute, action: &CompiledActi
 fn action_problem_responses(
     kind: ActionRouteKind,
     action: &CompiledAction,
+    may_refuse_write: bool,
 ) -> BTreeMap<&'static str, Vec<ProblemExample>> {
     let mut responses = BTreeMap::from([
         (
@@ -1934,6 +1990,9 @@ fn action_problem_responses(
             );
         }
         responses.insert("412", precondition_problems);
+    }
+    if may_refuse_write {
+        responses.insert("403", vec![WRITE_OUTSIDE_BOUNDARY]);
     }
     responses
 }
@@ -2260,10 +2319,10 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
         };
         operations.insert(
             method_name(route.method).to_owned(),
-            openapi_action_operation(route, action, OpenApiAccessProfiles::All),
+            openapi_action_operation(route, action, entities, OpenApiAccessProfiles::All),
         );
     }
-    append_proposal_openapi(&mut paths, actions, None);
+    append_proposal_openapi(&mut paths, actions, entities, None);
     crate::external_view_artifacts::append(
         &mut paths,
         external_views,
@@ -3962,6 +4021,11 @@ struct ProblemExample {
     detail: &'static str,
 }
 
+const WRITE_OUTSIDE_BOUNDARY: ProblemExample = ProblemExample {
+    code: "write.outside-boundary",
+    detail: "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition.",
+};
+
 /// Whether a write by a profile the document describes may be refused as
 /// outside what the profile may write: the profile has a row boundary, or a
 /// disclosure condition binds it. A bound Patch or Batch item is refused when
@@ -4114,13 +4178,7 @@ fn problem_responses(
         Operation::Create | Operation::Patch | Operation::Batch
     ) && may_refuse_write
     {
-        responses.insert(
-            "403",
-            vec![ProblemExample {
-                code: "write.outside-boundary",
-                detail: "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition.",
-            }],
-        );
+        responses.insert("403", vec![WRITE_OUTSIDE_BOUNDARY]);
     }
     if operation == Operation::Batch && may_refuse_write {
         responses.insert(

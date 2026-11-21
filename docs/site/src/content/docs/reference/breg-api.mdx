@@ -454,8 +454,8 @@ or operation answers `409 ingestion.chunk_mismatch` and writes nothing.
 
 An item whose prospective row falls outside the run profile's row boundary answers the run
 protocol's value-free `412 precondition.failed`, records `lastAttempt.outcome` as `refused`, and
-leaves the checkpoint unchanged. The distinct `403 write.outside-boundary` belongs only to direct
-write routes.
+leaves the checkpoint unchanged. An ingestion item never answers the distinct
+`403 write.outside-boundary`.
 
 | Receipt member | Meaning |
 | --- | --- |
