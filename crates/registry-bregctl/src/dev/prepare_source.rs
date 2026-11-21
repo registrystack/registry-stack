@@ -526,8 +526,8 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     }
     if docs.values().any(|doc| {
         doc["accessProfiles"]
-            .as_array()
-            .is_some_and(|profiles| profiles.iter().any(|p| p["id"] == args.access_profile))
+            .as_object()
+            .is_some_and(|profiles| profiles.contains_key(&args.access_profile))
     }) {
         bail!("access profile already exists; select a fresh dedicated profile ID");
     }
@@ -619,7 +619,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         grant_fields.push(selector.clone());
     }
     if registry["accessProfiles"].is_null() {
-        registry["accessProfiles"] = json!([]);
+        registry["accessProfiles"] = json!({});
     }
     // A row reach that binds no row is written as the keyword, never as an
     // empty list.
@@ -628,8 +628,8 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     } else {
         Value::Array(row_boundaries)
     };
-    registry["accessProfiles"].as_array_mut().context("access profiles missing")?.push(json!({
-        "id":args.access_profile,"principalClaim":"registry_principal","requiredScopes":[scope],"requiredPurposes":["evidence-source-read"],
+    registry["accessProfiles"].as_object_mut().context("access profiles missing")?.insert(args.access_profile.clone(), json!({
+        "principalClaim":"registry_principal","requiredScopes":[scope],"requiredPurposes":["evidence-source-read"],
         "permissions":{"records":[{"recordType":entity_id,"operations":["lookup"],"readableFields":grant_fields,
             "lookups":[{"selector":args.selector_profile,"valueOrigin":"request"}],"rowBoundaries":row_boundaries}]}}));
     let sequence = state
@@ -1002,14 +1002,21 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("selectorProfiles");
-        model["accessProfiles"].as_array_mut().unwrap().truncate(1);
+        model["accessProfiles"]
+            .as_object_mut()
+            .unwrap()
+            .retain(|id, _| id == "operator");
         if !top_level {
             let mut profiles = model
                 .as_object_mut()
                 .unwrap()
                 .remove("accessProfiles")
                 .unwrap();
-            let mut operator = profiles.as_array_mut().unwrap().remove(0);
+            let mut operator = profiles
+                .as_object_mut()
+                .unwrap()
+                .remove("operator")
+                .unwrap();
             let mut permissions = operator
                 .as_object_mut()
                 .unwrap()
@@ -1021,7 +1028,7 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .extend(permission.as_object().unwrap().clone());
-            let module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"local-authority","version":"1","extendRecordTypes":[{"recordType":"record","accessProfiles":[operator]}]});
+            let module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"local-authority","version":"1","extendRecordTypes":[{"recordType":"record","accessProfiles":{"operator":operator}}]});
             let module_bytes = serde_norway::to_string(&module).unwrap().into_bytes();
             let parsed = registry_breg::contract::parse_module_yaml(&module_bytes).unwrap();
             model["modules"] = json!([{"id":"local-authority","version":"1","digest":registry_breg::compiler::module_digest(&parsed)}]);
@@ -1180,8 +1187,8 @@ mod tests {
             .any(|role| role["permissions"][0]["permissions"]
                 == json!(["registry:source-reader:lookup"])));
         let prepared: Value = serde_norway::from_slice(&fs::read(path).unwrap()).unwrap();
-        assert_eq!(prepared["accessProfiles"].as_array().unwrap().len(), 1);
-        assert_eq!(prepared["accessProfiles"][0]["id"], "source-reader");
+        assert_eq!(prepared["accessProfiles"].as_object().unwrap().len(), 1);
+        assert!(prepared["accessProfiles"]["source-reader"].is_object());
         assert_eq!(prepared["modules"], original["modules"]);
         assert_eq!(fs::read(module_path).unwrap(), module_bytes);
         let candidate = crate::compile(
@@ -1428,7 +1435,7 @@ mod tests {
             let root = state.root();
             let path = state.project.join("registry.yaml");
             let mut model: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
-            model["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"] =
+            model["accessProfiles"]["operator"]["permissions"]["records"][0]["rowBoundaries"] =
                 json!([{"field":field,"claim":"existing_row","operator":operator}]);
             let model = serde_norway::to_string(&model).unwrap().into_bytes();
             fs::write(&path, &model).unwrap();
@@ -1479,9 +1486,10 @@ mod tests {
         target["id"] = json!("organization");
         target["route"] = json!("organizations");
         model["recordTypes"].as_array_mut().unwrap().push(target);
-        let mut target_grant = model["accessProfiles"][0]["permissions"]["records"][0].clone();
+        let mut target_grant =
+            model["accessProfiles"]["operator"]["permissions"]["records"][0].clone();
         target_grant["recordType"] = json!("organization");
-        model["accessProfiles"][0]["permissions"]["records"]
+        model["accessProfiles"]["operator"]["permissions"]["records"]
             .as_array_mut()
             .unwrap()
             .push(target_grant);
@@ -1491,7 +1499,7 @@ mod tests {
             .unwrap()
             .push(json!({"type":"unique","fields":["organization"]}));
         for key in ["readableFields", "writableFields"] {
-            model["accessProfiles"][0]["permissions"]["records"][0][key]
+            model["accessProfiles"]["operator"]["permissions"]["records"][0][key]
                 .as_array_mut()
                 .unwrap()
                 .push(json!("organization"));

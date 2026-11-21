@@ -440,14 +440,14 @@ fn compiled_registry() -> CompiledRegistry {
             "fields":[{"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
                 {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
             "accessLog":{"subjectField":"subject"}}],
-        "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
+        "accessProfiles":{
+            "reader": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
                 "records":[
                     {"recordType":"entry","operations":["get","list","snapshot","revisions"],"readableFields":["label"],
                         "revisionAccess":true,"rowBoundaries":"unrestricted"}
                 ]
             }}
-        ]
+        }
     });
     compile_project(
         &parse_project_json(&serde_json::to_vec(&source).expect("project serializes"))

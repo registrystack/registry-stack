@@ -35,10 +35,10 @@ fn encrypted_project() -> Value {
                  "lookup":{"normalization":["trim","uppercase"],"unique":true}}
             ]
         }],
-        "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+        "accessProfiles":{"caseworker": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
             "recordType":"case","rowBoundaries":"unrestricted","operations":["get","list","create","patch"],
             "readableFields":["label","secret"],"writableFields":["label","secret"]
-        }]}}]
+        }]}}}
     })
 }
 
@@ -504,9 +504,9 @@ fn encrypted_field_refuses_storage_constraints_and_authored_indexes() {
 #[test]
 fn encrypted_field_refuses_processing_row_boundaries_and_lookupless_selectors() {
     let mut processing = encrypted_project();
-    processing["accessProfiles"][0]["permissions"]["records"][0]["filterableFields"] =
+    processing["accessProfiles"]["caseworker"]["permissions"]["records"][0]["filterableFields"] =
         json!(["secret"]);
-    processing["accessProfiles"][0]["permissions"]["records"][0]["sortableFields"] =
+    processing["accessProfiles"]["caseworker"]["permissions"]["records"][0]["sortableFields"] =
         json!(["secret"]);
     let failure = compile_value(&processing).expect_err("encrypted processing is refused");
     let diagnostic = failure
@@ -520,7 +520,7 @@ fn encrypted_field_refuses_processing_row_boundaries_and_lookupless_selectors() 
     );
 
     let mut boundary = encrypted_project();
-    boundary["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"] =
+    boundary["accessProfiles"]["caseworker"]["permissions"]["records"][0]["rowBoundaries"] =
         json!([{"field":"secret","claim":"secrets","operator":"equals"}]);
     expect_code(&boundary, "breg.access-profile.row-boundary-encrypted");
 
@@ -696,7 +696,7 @@ fn proposal_project() -> Value {
     let mut source = encrypted_project();
     source["recordTypes"][0]["mutationPolicy"] = json!({"patch":"proposal-required"});
     source["actions"] = json!([{"id":"correct-case","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"},"reviewContext":{"id":"case-context","fields":{"currentLabel":{"type":"record","input":"case","field":"label"}}}}},"inputs":[{"id":"case","type":"reference","target":"case","required":true,"classification":"restricted"},{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}],"plan":{"type":"fixed","effects":[{"id":"case","target":{"fromInput":"case"},"operation":"patch","set":{"label":{"fromInput":"label"}}}]}}]);
-    let permissions = &mut source["accessProfiles"][0]["permissions"];
+    let permissions = &mut source["accessProfiles"]["caseworker"]["permissions"];
     permissions["records"][0]["operations"] = json!(["get", "list"]);
     permissions["records"][0]
         .as_object_mut()
@@ -897,9 +897,9 @@ fn encryption_flip_change_sets_classify_without_a_physical_rename() {
         .as_array_mut()
         .expect("fields are an array")
         .retain(|field| field["id"] != "secret");
-    without_secret["accessProfiles"][0]["permissions"]["records"][0]["readableFields"] =
+    without_secret["accessProfiles"]["caseworker"]["permissions"]["records"][0]["readableFields"] =
         json!(["label"]);
-    without_secret["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] =
+    without_secret["accessProfiles"]["caseworker"]["permissions"]["records"][0]["writableFields"] =
         json!(["label"]);
     let without_secret = compile_value(&without_secret).unwrap();
     let mut required_encrypted = encrypted_project();

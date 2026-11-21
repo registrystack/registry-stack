@@ -291,8 +291,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"phase":"after","id":"membership-patched","trigger":"patched","projection":["subject","group","valid-from","valid-to"]}
             ]
           }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal",
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal",
             "requiredPurposes":["history-maintenance"],"requiredScopes":["history-maintain"],
             "permissions":{"records":[{
               "recordType":"membership","operations":["create","get","patch","batch"],
@@ -300,7 +299,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["subject","group","valid-from","valid-to","source-reference"],
               "rowBoundaries": "unrestricted"
             }]}
-          }],
+          }},
           "vocabularies":[{"id":"membership-group","values":["A","B"]}]
         }"#,
     )
@@ -952,8 +951,7 @@ fn last_day_registry() -> registry_breg::CompiledRegistry {
               "lastDayField":"valid-through"
             }]
           }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal",
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal",
             "requiredPurposes":["history-maintenance"],"requiredScopes":["history-maintain"],
             "permissions":{"records":[{
               "recordType":"licence","operations":["create","get","list"],
@@ -961,7 +959,7 @@ fn last_day_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["holder","valid-from","valid-through"],
               "rowBoundaries": "unrestricted"
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("last-day fixture parses");

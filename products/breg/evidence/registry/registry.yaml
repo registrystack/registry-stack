@@ -80,52 +80,52 @@ recordTypes:
     fields:
     - registration-number
 accessProfiles:
-- id: operator
-  default: true
-  principalClaim: registry_principal
-  requiredScopes:
-  - registry:generic:operate
-  requiredPurposes:
-  - registry-operations
-  permissions:
-    records:
-    - recordType: record
-      operations:
-      - create
-      - get
-      - patch
-      readableFields:
-      - code
-      - registration-number
-      - status
-      - label
-      writableFields:
-      - code
-      - registration-number
-      - status
-      - label
-      rowBoundaries: unrestricted
-- id: evidence-source
-  principalClaim: registry_principal
-  requiredScopes:
-  - registry:evidence:lookup
-  requiredPurposes:
-  - evidence-source-read
-  permissions:
-    records:
-    - recordType: record
-      operations:
-      - lookup
-      readableFields:
-      - code
-      - registration-number
-      - status
-      lookups:
-      - selector: by-code
-        valueOrigin: request
-      - selector: by-registration-number
-        valueOrigin: request
-      rowBoundaries: unrestricted
+  operator:
+    default: true
+    principalClaim: registry_principal
+    requiredScopes:
+    - registry:generic:operate
+    requiredPurposes:
+    - registry-operations
+    permissions:
+      records:
+      - recordType: record
+        operations:
+        - create
+        - get
+        - patch
+        readableFields:
+        - code
+        - registration-number
+        - status
+        - label
+        writableFields:
+        - code
+        - registration-number
+        - status
+        - label
+        rowBoundaries: unrestricted
+  evidence-source:
+    principalClaim: registry_principal
+    requiredScopes:
+    - registry:evidence:lookup
+    requiredPurposes:
+    - evidence-source-read
+    permissions:
+      records:
+      - recordType: record
+        operations:
+        - lookup
+        readableFields:
+        - code
+        - registration-number
+        - status
+        lookups:
+        - selector: by-code
+          valueOrigin: request
+        - selector: by-registration-number
+          valueOrigin: request
+        rowBoundaries: unrestricted
 vocabularies:
 - id: record-status
   values:

@@ -305,7 +305,7 @@ actions:
             agreement-state: {value: withdrawn}
             reservation-outcome: {value: withdrawn}
 accessProfiles:
-  - id: reservation-workflow
+  reservation-workflow:
     default: true
     principalClaim: sub
     actorKind: service

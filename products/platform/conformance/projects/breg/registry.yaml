@@ -29,7 +29,7 @@ recordTypes:
       - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
 
 accessProfiles:
-  - id: directory-editor
+  directory-editor:
     default: true
     principalClaim: registry_principal
     requiredScopes: ["registry:directory:write"]
@@ -46,4 +46,4 @@ accessProfiles:
 modules:
   - id: contact-notes
     version: 0.1.0
-    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    digest: "sha256:c1717a42730f6edd222a747c7b47de0856e917d90392e8ea5ded1faaf61b1fa0"

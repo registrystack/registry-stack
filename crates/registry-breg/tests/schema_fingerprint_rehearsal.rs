@@ -709,8 +709,7 @@ fn project_bytes(source_revision: &str) -> Vec<u8> {
     }}],
     "indexes": [{{"id": "by-code", "fields": ["code"]}}]
   }}],
-  "accessProfiles": [{{
-    "id": "reader",
+  "accessProfiles": {{"reader":{{
     "principalClaim": "principal",
     "requiredScopes": "unrestricted",
     "permissions": {{"records": [{{
@@ -718,7 +717,7 @@ fn project_bytes(source_revision: &str) -> Vec<u8> {
       "operations": ["get", "list"],
       "readableFields": ["code"]
     }}]}}
-  }}]
+  }}}}
 }}"#
     );
     project.into_bytes()

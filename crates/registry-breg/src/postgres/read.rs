@@ -3086,7 +3086,7 @@ mod tests {
                     "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
                     "fields":[{"id":"details","type":"structured","maximumBytes":256,"classification":"restricted","encrypted":true,"schema":{"type":"object","additionalProperties":false,"properties":{"__bregEncryptedV1":{"type":"string"}},"required":["__bregEncryptedV1"]}}]
                   }],
-                  "accessProfiles":[{"id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"asset","operations":["get"],"readableFields":["details"],"rowBoundaries":"unrestricted"}]}}]
+                  "accessProfiles":{"reader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"asset","operations":["get"],"readableFields":["details"],"rowBoundaries":"unrestricted"}]}}}
                 }"#,
             )
             .expect("fixture parses"),
@@ -3175,10 +3175,9 @@ mod tests {
                     ],
                     "geojson":{"geometryField":"location"}
                   }],
-                  "accessProfiles":[{
-                    "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+                  "accessProfiles":{"public": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "permissions":{"records":[{"recordType":"site","operations":["get","list"],"readableFields":["code","location"], "rowBoundaries": "unrestricted"}]}
-                  }]
+                  }}
                 }"#,
             )
             .expect("fixture parses"),
@@ -3223,8 +3222,7 @@ mod tests {
                     ],
                     "geojson":{"geometryField":"location"}
                   }],
-                  "accessProfiles":[{
-                    "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+                  "accessProfiles":{"public": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "permissions":{"records":[{
                       "recordType":"site",
                       "operations":["list"],
@@ -3232,7 +3230,7 @@ mod tests {
                       "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.3,"maximumLatitudeSpanDegrees":0.2}},
                       "rowBoundaries": "unrestricted"
                     }]}
-                  }]
+                  }}
                 }"#,
             )
             .expect("fixture parses"),
@@ -3303,14 +3301,13 @@ mod tests {
                     "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"public",
                     "fields":[{"id":"label","type":"string","required":true,"maximumLength":32,"classification":"public"}]
                   }],
-                  "accessProfiles":[{
-                    "id":"task-reader","principalClaim":"registry_principal","actorKind":"agent",
+                  "accessProfiles":{"task-reader": {"principalClaim":"registry_principal","actorKind":"agent",
                     "requesterClients":["agent-client"],"requiredScopes":"unrestricted","requiredPurposes":["review"],
                     "taskGrant":{"sourceIssuer":"https://casework.test"},
                     "permissions":{"records":[{
                       "recordType":"case","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"
                     }]}
-                  }]
+                  }}
                 }"#,
             )
             .expect("fixture parses"),
@@ -3378,14 +3375,13 @@ mod tests {
                       {"id":"secret","type":"string","required":true,"maximumLength":32,"classification":"restricted"}
                     ]
                   }],
-                  "accessProfiles":[{
-                    "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+                  "accessProfiles":{"public": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "permissions":{"records":[{
                       "recordType":"case","operations":["list"],
                       "readableFields":["label"],"filterableFields":["label"],"sortableFields":["label"],
                       "rowBoundaries": "unrestricted"
                     }]}
-                  }]
+                  }}
                 }"#,
             )
             .expect("fixture parses"),
@@ -3643,8 +3639,7 @@ mod tests {
                     ],
                     "geojson":{"geometryField":"location"}
                   }],
-                  "accessProfiles":[{
-                    "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+                  "accessProfiles":{"public": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "permissions":{"records":[{
                       "recordType":"site",
                       "operations":["list"],
@@ -3652,7 +3647,7 @@ mod tests {
                       "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}},
                       "rowBoundaries": "unrestricted"
                     }]}
-                  }]
+                  }}
                 }"#,
             )
             .expect("fixture parses"),

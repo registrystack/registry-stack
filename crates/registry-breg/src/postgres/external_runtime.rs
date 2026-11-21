@@ -3499,7 +3499,7 @@ mod postgres_tests {
             .as_array_mut()
             .unwrap()
             .push(json!({"id":"holder-link","projection":"holder","fromField":"subject-key"}));
-        project["accessProfiles"][0]["permissions"]["externalViews"][0]["links"]
+        project["accessProfiles"]["reader"]["permissions"]["externalViews"][0]["links"]
             .as_array_mut()
             .unwrap()
             .push(json!({"link":"holder-link","readableFields":["family-name"]}));
@@ -4147,7 +4147,7 @@ mod postgres_tests {
             .as_array_mut()
             .unwrap()
             .push(json!({"id":"people-link","projection":"people","fromField":"subject-key"}));
-        project["accessProfiles"][0]["permissions"]["externalViews"][0]["links"]
+        project["accessProfiles"]["reader"]["permissions"]["externalViews"][0]["links"]
             .as_array_mut()
             .unwrap()
             .push(json!({"link":"people-link","readableFields":["family-name"],"allowCount":true}));
@@ -4730,10 +4730,9 @@ mod postgres_tests {
     fn desk_project() -> Value {
         let mut project = labelled_members_project();
         project["accessProfiles"]
-            .as_array_mut()
+            .as_object_mut()
             .unwrap()
-            .push(json!({
-                "id":"desk","principalClaim":"registry_principal","actorKind":"service",
+            .insert("desk".to_owned(), json!({"principalClaim":"registry_principal","actorKind":"service",
                 "requesterClients":["desk-app"],"requiredScopes":["registry.refresh-one"],
                 "requiredPurposes":["consultation"],
                 "permissions":{
@@ -5370,10 +5369,9 @@ mod postgres_tests {
                 "label":{"projection":"people","fromField":"holder"}
             }));
         project["accessProfiles"]
-            .as_array_mut()
+            .as_object_mut()
             .unwrap()
-            .push(json!({
-                "id":"refresh","principalClaim":"registry_principal","actorKind":"service",
+            .insert("refresh".to_owned(), json!({"principalClaim":"registry_principal","actorKind":"service",
                 "requesterClients":["worker"],"requiredScopes":["registry.refresh"],"requiredPurposes":["consultation"],
                 "permissions":{
                     "records":[{"recordType":"local-record","operations":["list"],"rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}],

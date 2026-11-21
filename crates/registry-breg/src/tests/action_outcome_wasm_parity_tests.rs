@@ -57,7 +57,7 @@ fn person_action(script: &str) -> CompiledAction {
             {"id":"friend","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"existing","target":{"fromInput":"person"},"operation":"patch","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}]
+        "accessProfiles":{"registrar": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}}
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project_with_assets(
@@ -101,11 +101,11 @@ fn record_action(script: &str) -> CompiledAction {
         ],"plan":{"type":"function","function":"record-plan","inputs":["label","count","amount"],"refusals":[{"code":"blank-label","label":"A label is required."}],
             "writes":[{"id":"record","target":{"recordType":"record"},"operation":"create","fields":["label","count","amount"]}]
         }}],
-        "accessProfiles":[{"id":"writer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+        "accessProfiles":{"writer": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
             "actions":[
                 {"action":"register-record","operations":["invoke"],"targets":[{"recordType":"record","rowBoundaries":"unrestricted"}],"results":["record"]}
             ]
-        }}]
+        }}}
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project_with_assets(

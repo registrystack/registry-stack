@@ -47,8 +47,8 @@ fn project() -> Value {
                 {"id":"new-label","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
                 "plan":{"type":"fixed","effects":[{"id":"corrected","target":{"fromInput":"case-ref"},"operation":"patch","set":{"label":{"fromInput":"new-label"}}}]}}
         ],
-        "accessProfiles":[
-            {"id":"clerk","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","actorKind":"human","requesterClients":["clerk-portal"],
+        "accessProfiles":{
+            "clerk": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","actorKind":"human","requesterClients":["clerk-portal"],
                 "permissions":{"records":[
                     {"recordType":"case","operations":["create","get","list","import"],"readableFields":["label"],"writableFields":["label"],"rowBoundaries":"unrestricted"},
                     {"recordType":"memo","operations":["create","get","list","patch"],"readableFields":["label"],"writableFields":["label"],"rowBoundaries":"unrestricted"},
@@ -57,14 +57,14 @@ fn project() -> Value {
                         {"action":"relabel-note","operations":["invoke"],"targets":[{"recordType":"note","rowBoundaries":"unrestricted"}],"results":["relabelled"]},
                         {"action":"correct-case","operations":["start"],"targets":[{"recordType":"case","rowBoundaries":"unrestricted"}]}],
                     "proposals":[{"action":"correct-case","operations":["get","list","edit","submit","revise","cancel","apply","rebase","retry","get-review-status"],"ownership":"caller","targets":[{"recordType":"case","rowBoundaries":"unrestricted"}]}]}},
-            {"id":"assistant","principalClaim":"registry_principal","requiredScopes":"unrestricted","actorKind":"agent","requesterClients":["assistant-client"],
+            "assistant": {"principalClaim":"registry_principal","requiredScopes":"unrestricted","actorKind":"agent","requesterClients":["assistant-client"],
                 "permissions":{"records":[
                     {"recordType":"case","operations":["get","list"],"readableFields":["label"],"rowBoundaries":"unrestricted"},
                     {"recordType":"memo","operations":["get","list"],"readableFields":["label"],"writableFields":["label"],"rowBoundaries":"unrestricted"},
                     {"recordType":"note","operations":["get","list"],"readableFields":["label"],"writableFields":["label"],"rowBoundaries":"unrestricted"}],
                     "actions":[{"action":"correct-case","operations":["start"],"targets":[{"recordType":"case","rowBoundaries":"unrestricted"}]}],
                     "proposals":[{"action":"correct-case","operations":["edit"],"ownership":"caller","targets":[{"recordType":"case","rowBoundaries":"unrestricted"}]}]}}
-        ]
+        }
     })
 }
 
@@ -99,7 +99,7 @@ fn refused(
 /// without change control.
 fn with_assistant_operation(permission: usize, operation: &str) -> Value {
     let mut value = project();
-    value["accessProfiles"][1]["permissions"]["records"][permission]["operations"]
+    value["accessProfiles"]["assistant"]["permissions"]["records"][permission]["operations"]
         .as_array_mut()
         .expect("operations array")
         .push(json!(operation));
@@ -135,14 +135,14 @@ fn standing_agent_may_hold_only_bounded_review_context_disclosure() {
     use registry_breg::model::{CompiledActionExecution, ProposalOperation};
 
     let mut value = project();
-    value["accessProfiles"][1]["permissions"]["actions"] = json!([]);
-    value["accessProfiles"][1]["permissions"]["proposals"][0]["operations"] =
+    value["accessProfiles"]["assistant"]["permissions"]["actions"] = json!([]);
+    value["accessProfiles"]["assistant"]["permissions"]["proposals"][0]["operations"] =
         json!(["get-review-context"]);
-    value["accessProfiles"][1]["permissions"]["proposals"][0]
+    value["accessProfiles"]["assistant"]["permissions"]["proposals"][0]
         .as_object_mut()
         .expect("proposal permission")
         .remove("ownership");
-    value["accessProfiles"][1]["permissions"]["proposals"][0]["readableContextFields"] =
+    value["accessProfiles"]["assistant"]["permissions"]["proposals"][0]["readableContextFields"] =
         json!(["currentLabel", "proposedLabel"]);
 
     let registry = compile(&value).expect("bounded standing-agent context read compiles");
@@ -173,16 +173,16 @@ fn standing_agent_may_hold_only_bounded_review_context_disclosure() {
 #[test]
 fn standing_agent_review_context_requires_an_exact_requester_client() {
     let mut value = project();
-    value["accessProfiles"][1]["permissions"]["actions"] = json!([]);
-    value["accessProfiles"][1]["permissions"]["proposals"][0]["operations"] =
+    value["accessProfiles"]["assistant"]["permissions"]["actions"] = json!([]);
+    value["accessProfiles"]["assistant"]["permissions"]["proposals"][0]["operations"] =
         json!(["get-review-context"]);
-    value["accessProfiles"][1]["permissions"]["proposals"][0]
+    value["accessProfiles"]["assistant"]["permissions"]["proposals"][0]
         .as_object_mut()
         .expect("proposal permission")
         .remove("ownership");
-    value["accessProfiles"][1]["permissions"]["proposals"][0]["readableContextFields"] =
+    value["accessProfiles"]["assistant"]["permissions"]["proposals"][0]["readableContextFields"] =
         json!(["currentLabel", "proposedLabel"]);
-    value["accessProfiles"][1]
+    value["accessProfiles"]["assistant"]
         .as_object_mut()
         .expect("standing agent profile")
         .remove("requesterClients");
@@ -204,16 +204,16 @@ fn standing_agent_review_context_requires_an_exact_requester_client() {
 #[test]
 fn imported_proposal_action_uses_the_global_requester_client_binding() {
     let mut value = project();
-    value["accessProfiles"][1]["permissions"]["actions"] = json!([]);
-    value["accessProfiles"][1]["permissions"]["proposals"][0]["operations"] =
+    value["accessProfiles"]["assistant"]["permissions"]["actions"] = json!([]);
+    value["accessProfiles"]["assistant"]["permissions"]["proposals"][0]["operations"] =
         json!(["get-review-context"]);
-    value["accessProfiles"][1]["permissions"]["proposals"][0]
+    value["accessProfiles"]["assistant"]["permissions"]["proposals"][0]
         .as_object_mut()
         .expect("proposal permission")
         .remove("ownership");
-    value["accessProfiles"][1]["permissions"]["proposals"][0]["readableContextFields"] =
+    value["accessProfiles"]["assistant"]["permissions"]["proposals"][0]["readableContextFields"] =
         json!(["currentLabel", "proposedLabel"]);
-    value["accessProfiles"][1]
+    value["accessProfiles"]["assistant"]
         .as_object_mut()
         .expect("standing agent profile")
         .remove("requesterClients");
@@ -257,12 +257,12 @@ fn imported_proposal_action_uses_the_global_requester_client_binding() {
 #[test]
 fn standing_agent_review_context_refuses_an_authored_empty_requester_client_list() {
     let mut value = project();
-    value["accessProfiles"][1]["permissions"]["actions"] = json!([]);
-    value["accessProfiles"][1]["permissions"]["proposals"][0]["operations"] =
+    value["accessProfiles"]["assistant"]["permissions"]["actions"] = json!([]);
+    value["accessProfiles"]["assistant"]["permissions"]["proposals"][0]["operations"] =
         json!(["get-review-context"]);
-    value["accessProfiles"][1]["permissions"]["proposals"][0]["readableContextFields"] =
+    value["accessProfiles"]["assistant"]["permissions"]["proposals"][0]["readableContextFields"] =
         json!(["currentLabel", "proposedLabel"]);
-    value["accessProfiles"][1]["requesterClients"] = json!([]);
+    value["accessProfiles"]["assistant"]["requesterClients"] = json!([]);
     let failure = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
         .expect_err("an authored empty requesterClients list is invalid configuration");
     assert!(codes(&failure).contains(&"config.invalid-value"));
@@ -289,7 +289,7 @@ fn standing_agent_cannot_hold_a_proposal_lifecycle_decision() {
         "get-review-status",
     ] {
         let mut value = project();
-        value["accessProfiles"][1]["permissions"]["proposals"][0]["operations"]
+        value["accessProfiles"]["assistant"]["permissions"]["proposals"][0]["operations"]
             .as_array_mut()
             .unwrap()
             .push(json!(operation));
@@ -305,7 +305,7 @@ fn standing_agent_cannot_hold_a_proposal_lifecycle_decision() {
         assert!(!codes(&failure).contains(&DIRECT_MUTATION_FORBIDDEN));
     }
     let mut value = project();
-    value["accessProfiles"][1]["permissions"]["proposals"][0]["ownership"] = json!("any");
+    value["accessProfiles"]["assistant"]["permissions"]["proposals"][0]["ownership"] = json!("any");
     assert!(
         parse_project_json(&serde_json::to_vec(&value).unwrap()).is_err(),
         "ownership has no any-caller escape"
@@ -356,7 +356,7 @@ fn standing_agent_cannot_batch_record_writes() {
 /// An immediate action commits its effects at once, with no draft for a human
 /// to confirm, so a standing agent may not hold one.
 fn with_assistant_action(value: &mut Value) {
-    value["accessProfiles"][1]["permissions"]["actions"] = json!([{
+    value["accessProfiles"]["assistant"]["permissions"]["actions"] = json!([{
         "action": "relabel-note", "operations": ["invoke"],
         "targets": [{"recordType": "note", "rowBoundaries": "unrestricted"}], "results": ["relabelled"]
     }]);
@@ -386,7 +386,7 @@ fn human_profiles_keep_immediate_actions() {
     // The human profile in the base project invokes the action; a human
     // profile bound to the agent's client keeps it too.
     let mut value = project();
-    value["accessProfiles"][1]["actorKind"] = json!("human");
+    value["accessProfiles"]["assistant"]["actorKind"] = json!("human");
     with_assistant_action(&mut value);
     let registry = compile(&value).expect("human profiles keep immediate actions");
     let action = registry
@@ -423,7 +423,7 @@ fn with_dataset(clerk: &[&str], assistant: &[&str]) -> Value {
         "dimensions": ["open"],
         "disclosure": {"type":"minimum-count-and-rounding","minimumCount": 5, "roundingBase": 5}
     }]);
-    for (profile, operations) in [(0, clerk), (1, assistant)] {
+    for (profile, operations) in [("clerk", clerk), ("assistant", assistant)] {
         let permissions = &mut value["accessProfiles"][profile]["permissions"];
         let note = &mut permissions["records"][2];
         note["readableFields"] = json!(["label", "open", "filed"]);
@@ -455,13 +455,10 @@ fn compile_with_module_unit_profile(
 ) -> Result<registry_breg::CompiledRegistry, CompileFailure> {
     let mut value = with_dataset(&[], &[]);
     value["modules"] = json!([{"id": "assistant-extension", "version": "1"}]);
-    value["accessProfiles"]
-        .as_array_mut()
-        .expect("profiles array")
-        .push(json!({
-            "id": "statistician", "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
-            "permissions": {"datasets": [{"dataset": "notes-by-status", "operations": ["publish", "read-releases"]}]}
-        }));
+    value["accessProfiles"]["statistician"] = json!({
+        "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
+        "permissions": {"datasets": [{"dataset": "notes-by-status", "operations": ["publish", "read-releases"]}]}
+    });
     let project = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
         .expect("project parses");
     let module = parse_module_json(
@@ -470,13 +467,12 @@ fn compile_with_module_unit_profile(
             "id": "assistant-extension", "version": "1",
             "extendRecordTypes": [{
                 "recordType": "note",
-                "accessProfiles": [{
-                    "id": "statistician", "principalClaim": "registry_principal",
+                "accessProfiles": {"statistician": { "principalClaim": "registry_principal",
                     "actorKind": actor_kind, "requesterClients": ["assistant-client"],
                     "operations": ["list"], "allowCount": true,
                     "readableFields": ["label", "open", "filed"], "filterableFields": ["open", "filed"],
                     "requiredScopes": "unrestricted", "rowBoundaries": "unrestricted"
-                }]
+                }}
             }]
         }))
         .expect("module serializes"),
@@ -569,7 +565,7 @@ fn human_service_and_unspecified_profiles_keep_publish() {
     // agent's client as a human or as a service, and with no actor kind at all.
     for actor_kind in ["human", "service"] {
         let mut direct = with_dataset(&[], &["publish", "read-releases"]);
-        direct["accessProfiles"][1]["actorKind"] = json!(actor_kind);
+        direct["accessProfiles"]["assistant"]["actorKind"] = json!(actor_kind);
         let registry = compile(&direct).unwrap_or_else(|failure| {
             panic!("a {actor_kind} profile lost publish: {:?}", codes(&failure))
         });
@@ -577,7 +573,7 @@ fn human_service_and_unspecified_profiles_keep_publish() {
     }
 
     let mut unspecified = with_dataset(&[], &["publish", "read-releases"]);
-    let profile = unspecified["accessProfiles"][1]
+    let profile = unspecified["accessProfiles"]["assistant"]
         .as_object_mut()
         .expect("profile object");
     profile.remove("actorKind");
@@ -591,8 +587,8 @@ fn task_grant_profile_cannot_be_a_dataset_publisher() {
     // A task-grant profile declares requiredPurposes, and a publisher's
     // authority admits none, so the publisher rules refuse it.
     let mut delegated = with_dataset(&[], &["publish", "read-releases"]);
-    delegated["accessProfiles"][1]["requiredPurposes"] = json!(["correction-review"]);
-    delegated["accessProfiles"][1]["taskGrant"] =
+    delegated["accessProfiles"]["assistant"]["requiredPurposes"] = json!(["correction-review"]);
+    delegated["accessProfiles"]["assistant"]["taskGrant"] =
         json!({"sourceIssuer": "https://casework.example"});
     let failure = refused(
         compile(&delegated),
@@ -623,13 +619,12 @@ fn module_contributed_standing_agent_profiles_meet_the_same_ceiling() {
                 "id": "assistant-extension", "version": "1",
                 "extendRecordTypes": [{
                     "recordType": entity,
-                    "accessProfiles": [{
-                        "id": "module-assistant", "principalClaim": "registry_principal",
+                    "accessProfiles": {"module-assistant": { "principalClaim": "registry_principal",
                         "actorKind": "agent", "requesterClients": ["assistant-client"],
                         "operations": ["get", operation],
                         "readableFields": ["label"], "writableFields": ["label"],
                         "requiredScopes": "unrestricted", "rowBoundaries": "unrestricted"
-                    }]
+                    }}
                 }]
             }))
             .expect("module serializes"),
@@ -655,21 +650,22 @@ fn module_contributed_standing_agent_profiles_meet_the_same_ceiling() {
 fn task_grant_and_human_profiles_keep_their_ceilings() {
     compile(&project()).expect("a human keeps lifecycle and direct writes");
     let mut delegated = project();
-    delegated["accessProfiles"][1]["requiredPurposes"] = json!(["correction-review"]);
-    delegated["accessProfiles"][1]["taskGrant"] =
+    delegated["accessProfiles"]["assistant"]["requiredPurposes"] = json!(["correction-review"]);
+    delegated["accessProfiles"]["assistant"]["taskGrant"] =
         json!({"sourceIssuer":"https://casework.example"});
-    delegated["accessProfiles"][1]["permissions"]["proposals"][0]["operations"] = json!([
-        "get",
-        "list",
-        "edit",
-        "submit",
-        "revise",
-        "cancel",
-        "apply",
-        "rebase",
-        "retry",
-        "get-review-status"
-    ]);
+    delegated["accessProfiles"]["assistant"]["permissions"]["proposals"][0]["operations"] =
+        json!([
+            "get",
+            "list",
+            "edit",
+            "submit",
+            "revise",
+            "cancel",
+            "apply",
+            "rebase",
+            "retry",
+            "get-review-status"
+        ]);
     compile(&delegated).expect("explicit task grants retain bounded Proposal lifecycle operations");
     let mut delegated_action = delegated.clone();
     with_assistant_action(&mut delegated_action);
@@ -682,7 +678,7 @@ fn task_grant_and_human_profiles_keep_their_ceilings() {
         (2, "tombstone"),
     ] {
         let mut direct = delegated.clone();
-        direct["accessProfiles"][1]["permissions"]["records"][index]["operations"]
+        direct["accessProfiles"]["assistant"]["permissions"]["records"][index]["operations"]
             .as_array_mut()
             .unwrap()
             .push(json!(operation));
@@ -707,7 +703,7 @@ fn module_contributed_profiles_cannot_declare_a_task_grant() {
     let project = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
         .expect("project parses");
     let delegated_profile = json!({
-        "id": "module-assistant", "principalClaim": "registry_principal",
+        "principalClaim": "registry_principal",
         "actorKind": "agent", "requesterClients": ["assistant-client"],
         "taskGrant": {"sourceIssuer": "http://not-https.example", "permissions": []},
         "operations": ["get", "list", "patch"],
@@ -718,7 +714,7 @@ fn module_contributed_profiles_cannot_declare_a_task_grant() {
         json!({
             "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
             "id": "assistant-extension", "version": "1",
-            "extendRecordTypes": [{"recordType": "note", "accessProfiles": [delegated_profile.clone()]}]
+            "extendRecordTypes": [{"recordType": "note", "accessProfiles": {"module-assistant": delegated_profile.clone()}}]
         }),
         json!({
             "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
@@ -727,7 +723,7 @@ fn module_contributed_profiles_cannot_declare_a_task_grant() {
                 "id": "archive", "primaryDataset": "test-dataset", "route": "archives",
                 "mutationMode": "mutable", "classification": "internal",
                 "fields": [{"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}],
-                "accessProfiles": [delegated_profile.clone()]
+                "accessProfiles": {"module-assistant": delegated_profile.clone()}
             }]
         }),
     ] {

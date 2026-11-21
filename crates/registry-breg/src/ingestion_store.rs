@@ -1620,8 +1620,7 @@ mod tests {
               {"id":"serial-code","apiName":"serialNumber","type":"string","maximumLength":64,"classification":"internal"}
             ]
           }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["review"],
             "permissions":{"records":[{
               "recordType":"entry","operations":["create"],
@@ -1629,7 +1628,7 @@ mod tests {
               "writableFields":["tenant","serial-code"],
               "rowBoundaries":"unrestricted"
             }]}
-          }]
+          }}
         }"#;
         let project =
             crate::contract::parse_project_json(fixture.as_bytes()).expect("the fixture parses");
@@ -1749,8 +1748,7 @@ mod tests {
                 "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
                 "fields":[{fields}]
               }}],
-              "accessProfiles":[{{
-                "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+              "accessProfiles":{{"operator":{{"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "requiredPurposes":["review"],
                 "permissions":{{"records":[{{
                   "recordType":"entry","operations":["create"],
@@ -1758,7 +1756,7 @@ mod tests {
                   "writableFields":[{readable}],
                   "rowBoundaries":"unrestricted"
                 }}]}}
-              }}]
+              }}}}
             }}"#
         );
         let project =

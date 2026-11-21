@@ -25,7 +25,7 @@ actions:
           operation: patch
           set: {label: {fromInput: case-label}}
 accessProfiles:
-  - id: registrar
+  registrar:
     default: true
     principalClaim: registry_principal
     requiredScopes: [case.rename]
@@ -38,7 +38,7 @@ accessProfiles:
             - recordType: case
               rowBoundaries: [{field: region, claim: regions, operator: in}]
           results: [renamed]
-  - id: supervisor
+  supervisor:
     principalClaim: registry_principal
     requiredScopes: [case.supervise]
     requiredPurposes: [case-management]

@@ -402,7 +402,7 @@ async fn exact_submission_observation_rejects_revised_and_rebased_successors() {
             .unwrap()
             .to_json_value();
         // This proof adds only the lifecycle powers it explicitly exercises.
-        source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] =
+        source["accessProfiles"]["directory-editor"]["permissions"]["proposals"][0]["operations"] =
             json!(["get", "list", "submit", "cancel", "revise", "rebase", "retry"]);
         let registry = compile_project(
             &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),

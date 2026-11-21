@@ -49,8 +49,7 @@ fn compiled(allow_data_export: bool) -> registry_breg::CompiledRegistry {
                  "classification": "restricted"}
             ]
         }],
-        "accessProfiles": [{
-            "id": PROFILE,
+        "accessProfiles": {PROFILE: {
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
             "permissions": {"records": [{
@@ -61,7 +60,7 @@ fn compiled(allow_data_export: bool) -> registry_breg::CompiledRegistry {
                 "allowDataExport": allow_data_export,
               "rowBoundaries": "unrestricted"
             }]}
-        }]
+        }}
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project(&project, &[], CompileProfile::Authoring).unwrap()
@@ -110,8 +109,7 @@ fn wide_export_registry() -> registry_breg::CompiledRegistry {
                  "classification": "internal"}
             ]
         }],
-        "accessProfiles": [{
-            "id": PROFILE,
+        "accessProfiles": {PROFILE: {
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
             "permissions": {"records": [{
@@ -122,7 +120,7 @@ fn wide_export_registry() -> registry_breg::CompiledRegistry {
                 "allowDataExport": true,
                 "rowBoundaries": "unrestricted"
             }]}
-        }]
+        }}
     });
     compile_source(source).expect("the wide export registry compiles")
 }
@@ -180,14 +178,13 @@ fn data_export_requires_explicit_profile_permission() {
                 "fields": [{"id": "code", "type": "string", "maximumLength": 16,
                             "classification": "internal"}]
             }],
-            "accessProfiles": [{
-                "id": PROFILE, "principalClaim": "principal", "requiredScopes": "unrestricted",
+            "accessProfiles": {PROFILE: { "principalClaim": "principal", "requiredScopes": "unrestricted",
                 "permissions": {"records": [{
                     "rowBoundaries": "unrestricted", "recordType": ENTITY,
                     "operations": operations, "readableFields": readable,
                     "allowDataExport": true
                 }]}
-            }]
+            }}
         })
     };
     for invalid in [
@@ -211,11 +208,10 @@ fn data_export_requires_explicit_profile_permission() {
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": "project-export", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
-        "accessProfiles": [{
-            "id": "project-exporter", "principalClaim": "principal", "requiredScopes": "unrestricted",
+        "accessProfiles": {"project-exporter": { "principalClaim": "principal", "requiredScopes": "unrestricted",
             "permissions": {"records": [{"recordType": ENTITY, "operations": ["list"],
                         "readableFields": ["code"], "allowDataExport": true, "rowBoundaries": "unrestricted"}]}
-        }],
+        }},
         "recordTypes": [{
             "id": ENTITY, "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create-only",
             "fields": [{"id": "code", "type": "string", "maximumLength": 16,
@@ -344,10 +340,10 @@ fn data_validate_and_chunk_plan_reuse_runtime_rules_and_compiled_batch_bounds() 
                 "batch":{"maximumItems":2,"maximumBytes":100},
                 "fields":[{"id":"code","type":"text","maximumLength":1000,"required":true,
                            "classification":"internal"}]}],
-            "accessProfiles":[{"id":PROFILE,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+            "accessProfiles":{PROFILE: {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                     "recordType":ENTITY,
                     "operations":["create","batch"],"readableFields":["code"],
-                    "writableFields":["code"], "rowBoundaries": "unrestricted"}]}}]
+                    "writableFields":["code"], "rowBoundaries": "unrestricted"}]}}}
         });
         compile_source(source).unwrap()
     };
@@ -392,8 +388,7 @@ fn data_lifecycle_uses_exact_compiled_api_names() {
                 "classification": "internal"
             }]
         }],
-        "accessProfiles": [{
-            "id": PROFILE,
+        "accessProfiles": {PROFILE: {
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
             "permissions": {"records": [{
@@ -404,7 +399,7 @@ fn data_lifecycle_uses_exact_compiled_api_names() {
                 "allowDataExport": true,
               "rowBoundaries": "unrestricted"
             }]}
-        }]
+        }}
     }))
     .unwrap();
 

@@ -25,10 +25,10 @@ fn source() -> Value {
         "recordTypes":[{"id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
           "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"},
                     {"id":"district","type":"string","maximumLength":32,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"reader","principalClaim":"registry_principal","requiredScopes":["entry:read"],
+        "accessProfiles":{"reader": {"principalClaim":"registry_principal","requiredScopes":["entry:read"],
           "permissions":{"records":[{"recordType":"entry","operations":["get","list"],
             "readableFields":["code","district"],"filterableFields":["district"],
-            "rowBoundaries":[boundary()]}]}}]
+            "rowBoundaries":[boundary()]}]}}}
     })
 }
 
@@ -36,7 +36,7 @@ fn source() -> Value {
 /// read, never compiled.
 fn every_row_reach() -> Value {
     let mut value = source();
-    value["accessProfiles"][0]["permissions"] = json!({
+    value["accessProfiles"]["reader"]["permissions"] = json!({
         "records":[{"recordType":"entry","operations":["get"],"readableFields":["code"],
          "rowBoundaries":[boundary()]}],
         "actions":[{"action":"register","operations":["invoke"],
@@ -49,16 +49,16 @@ fn every_row_reach() -> Value {
 
 const ROW_REACH_SITES: [(&str, &str); 3] = [
     (
-        "/accessProfiles/0/permissions/records/0/rowBoundaries",
-        "project.accessProfiles[0].permissions.records[0].rowBoundaries",
+        "/accessProfiles/reader/permissions/records/0/rowBoundaries",
+        "project.accessProfiles.reader.permissions.records[0].rowBoundaries",
     ),
     (
-        "/accessProfiles/0/permissions/actions/0/targets/0/rowBoundaries",
-        "project.accessProfiles[0].permissions.actions[0].targets[0].rowBoundaries",
+        "/accessProfiles/reader/permissions/actions/0/targets/0/rowBoundaries",
+        "project.accessProfiles.reader.permissions.actions[0].targets[0].rowBoundaries",
     ),
     (
-        "/accessProfiles/0/permissions/proposals/0/targets/0/rowBoundaries",
-        "project.accessProfiles[0].permissions.proposals[0].targets[0].rowBoundaries",
+        "/accessProfiles/reader/permissions/proposals/0/targets/0/rowBoundaries",
+        "project.accessProfiles.reader.permissions.proposals[0].targets[0].rowBoundaries",
     ),
 ];
 
@@ -101,17 +101,17 @@ fn remove(value: &mut Value, parent: &str, member: &str) {
 #[test]
 fn required_scopes_is_written_as_unrestricted_or_as_a_list_of_at_least_one_scope() {
     let mut omitted = source();
-    remove(&mut omitted, "/accessProfiles/0", "requiredScopes");
+    remove(&mut omitted, "/accessProfiles/reader", "requiredScopes");
     let (code, path, message) = refusal(&omitted);
     assert_eq!(code, "config.missing-key", "{message}");
-    assert!(path.starts_with("project.accessProfiles[0]"), "{path}");
+    assert!(path.starts_with("project.accessProfiles.reader"), "{path}");
 
     for written in [json!([]), json!("everything")] {
         let mut value = source();
-        set(&mut value, "/accessProfiles/0/requiredScopes", written);
+        set(&mut value, "/accessProfiles/reader/requiredScopes", written);
         let (code, path, message) = refusal(&value);
         assert_eq!(code, "config.invalid-value", "{message}");
-        assert_eq!(path, "project.accessProfiles[0].requiredScopes");
+        assert_eq!(path, "project.accessProfiles.reader.requiredScopes");
         assert!(
             message.contains("write unrestricted to require none"),
             "the refusal names the sentinel: {message}"
@@ -121,7 +121,7 @@ fn required_scopes_is_written_as_unrestricted_or_as_a_list_of_at_least_one_scope
     let mut value = source();
     set(
         &mut value,
-        "/accessProfiles/0/requiredScopes",
+        "/accessProfiles/reader/requiredScopes",
         json!("unrestricted"),
     );
     let project = read(&value).expect("unrestricted is accepted");
@@ -142,10 +142,10 @@ fn a_member_that_only_narrows_a_profile_is_omitted_not_written_empty() {
     for member in ["requiredPurposes", "requesterClients"] {
         for written in [json!([]), json!("unrestricted")] {
             let mut value = source();
-            value["accessProfiles"][0][member] = written;
+            value["accessProfiles"]["reader"][member] = written;
             let (code, path, message) = refusal(&value);
             assert_eq!(code, "config.invalid-value", "{message}");
-            assert_eq!(path, format!("project.accessProfiles[0].{member}"));
+            assert_eq!(path, format!("project.accessProfiles.reader.{member}"));
             assert!(
                 message.contains(&format!("Omit {member}")),
                 "the refusal names the fix: {message}"
@@ -200,12 +200,12 @@ fn an_entity_permission_that_omits_its_row_reach_is_refused_with_the_sentinel_na
     let mut value = source();
     remove(
         &mut value,
-        "/accessProfiles/0/permissions/records/0",
+        "/accessProfiles/reader/permissions/records/0",
         "rowBoundaries",
     );
     let (code, path, message) = refusal(&value);
     assert_eq!(code, "config.invalid-value", "{message}");
-    assert_eq!(path, "project.accessProfiles[0].permissions.records[0]");
+    assert_eq!(path, "project.accessProfiles.reader.permissions.records[0]");
     assert!(
         message.contains("write unrestricted to reach every row"),
         "the refusal names the sentinel: {message}"
@@ -215,7 +215,7 @@ fn an_entity_permission_that_omits_its_row_reach_is_refused_with_the_sentinel_na
 #[test]
 fn an_action_permission_has_no_row_reach_to_write_and_serializes_none() {
     let mut value = source();
-    value["accessProfiles"][0]["permissions"] = json!({
+    value["accessProfiles"]["reader"]["permissions"] = json!({
         "actions":[{"action":"register","operations":["invoke"],
          "targets":[{"recordType":"entry","rowBoundaries":[boundary()]}]}]
     });
@@ -223,23 +223,23 @@ fn an_action_permission_has_no_row_reach_to_write_and_serializes_none() {
     let written = serde_json::to_value(&project).expect("the project serializes");
     assert!(
         written
-            .pointer("/accessProfiles/0/permissions/actions/0")
+            .pointer("/accessProfiles/reader/permissions/actions/0")
             .is_some_and(Value::is_object),
         "the action permission serializes under actions"
     );
     assert_eq!(
-        written.pointer("/accessProfiles/0/permissions/actions/0/rowBoundaries"),
+        written.pointer("/accessProfiles/reader/permissions/actions/0/rowBoundaries"),
         None,
         "an action permission serializes without rowBoundaries"
     );
 
-    value["accessProfiles"][0]["permissions"]["actions"][0]["rowBoundaries"] =
+    value["accessProfiles"]["reader"]["permissions"]["actions"][0]["rowBoundaries"] =
         json!("unrestricted");
     let (code, path, message) = refusal(&value);
     assert_eq!(code, "config.unknown-key", "{message}");
     assert_eq!(
         path,
-        "project.accessProfiles[0].permissions.actions[0].rowBoundaries"
+        "project.accessProfiles.reader.permissions.actions[0].rowBoundaries"
     );
 }
 
@@ -287,7 +287,7 @@ fn an_authored_project_serializes_to_the_form_it_is_read_from() {
     let mut value = every_row_reach();
     set(
         &mut value,
-        "/accessProfiles/0/requiredScopes",
+        "/accessProfiles/reader/requiredScopes",
         json!("unrestricted"),
     );
     for (pointer, _) in ROW_REACH_SITES {
@@ -297,7 +297,7 @@ fn an_authored_project_serializes_to_the_form_it_is_read_from() {
     let project = read(&value).expect("the project is read");
 
     let written = serde_json::to_value(&project).expect("the project serializes");
-    let profile = &written["accessProfiles"][0];
+    let profile = &written["accessProfiles"]["reader"];
     assert_eq!(profile["requiredScopes"], "unrestricted");
     assert!(profile.get("requiredPurposes").is_none(), "{profile}");
     assert!(profile.get("requesterClients").is_none(), "{profile}");
@@ -326,10 +326,9 @@ fn finding_paths(compiled: &CompiledRegistry, code: &str) -> Vec<String> {
 /// `source()` with a second profile, `open`, that requires no scope.
 fn beside_an_open_profile() -> Value {
     let mut value = source();
-    let mut open = value["accessProfiles"][0].clone();
-    open["id"] = json!("open");
+    let mut open = value["accessProfiles"]["reader"].clone();
     open["requiredScopes"] = json!("unrestricted");
-    value["accessProfiles"].as_array_mut().unwrap().push(open);
+    value["accessProfiles"]["open"] = open;
     value
 }
 
@@ -363,7 +362,7 @@ fn an_unrestricted_profile_beside_a_narrower_one_is_reported_without_changing_au
     let mut alone = source();
     set(
         &mut alone,
-        "/accessProfiles/0/requiredScopes",
+        "/accessProfiles/reader/requiredScopes",
         json!("unrestricted"),
     );
     assert!(finding_paths(&compile(&alone).unwrap(), CODE).is_empty());
@@ -373,7 +372,7 @@ fn an_unrestricted_profile_beside_a_narrower_one_is_reported_without_changing_au
     let mut both = beside_an_open_profile();
     set(
         &mut both,
-        "/accessProfiles/0/requiredScopes",
+        "/accessProfiles/reader/requiredScopes",
         json!("unrestricted"),
     );
     let compiled = compile(&both).unwrap();
@@ -412,7 +411,7 @@ fn an_unrestricted_profile_beside_a_narrower_one_is_reported_without_changing_au
     ] {
         let mut value = beside_an_open_profile();
         for (member, written) in members.as_object().unwrap() {
-            value["accessProfiles"][1][member] = written.clone();
+            value["accessProfiles"]["open"][member] = written.clone();
         }
         assert!(
             finding_paths(&compile(&value).unwrap(), CODE).is_empty(),
@@ -422,7 +421,7 @@ fn an_unrestricted_profile_beside_a_narrower_one_is_reported_without_changing_au
 
     // The same gate on both profiles separates nothing.
     let mut shared = beside_an_open_profile();
-    for index in [0, 1] {
+    for index in ["reader", "open"] {
         shared["accessProfiles"][index]["actorKind"] = json!("service");
         shared["accessProfiles"][index]["requesterClients"] = json!(["portal"]);
         shared["accessProfiles"][index]["requiredPurposes"] = json!(["administration"]);
@@ -435,14 +434,14 @@ fn an_unrestricted_profile_beside_a_narrower_one_is_reported_without_changing_au
     // A service profile's tokens are admitted by a profile that names no
     // actor kind. A different kind on each profile admits no common token.
     let mut kinds = beside_an_open_profile();
-    kinds["accessProfiles"][0]["actorKind"] = json!("service");
-    kinds["accessProfiles"][0]["requesterClients"] = json!(["portal"]);
+    kinds["accessProfiles"]["reader"]["actorKind"] = json!("service");
+    kinds["accessProfiles"]["reader"]["requesterClients"] = json!(["portal"]);
     assert_eq!(
         finding_paths(&compile(&kinds).unwrap(), CODE),
         vec!["project.accessProfiles[id=open].requiredScopes"]
     );
-    kinds["accessProfiles"][1]["actorKind"] = json!("human");
-    kinds["accessProfiles"][1]["requesterClients"] = json!(["portal"]);
+    kinds["accessProfiles"]["open"]["actorKind"] = json!("human");
+    kinds["accessProfiles"]["open"]["requesterClients"] = json!(["portal"]);
     assert!(finding_paths(&compile(&kinds).unwrap(), CODE).is_empty());
 }
 
@@ -465,10 +464,10 @@ fn an_item_spelled_like_a_wildcard_is_reported_as_one_name() {
     assert!(finding_paths(&compile(&source()).unwrap(), CODE).is_empty());
 
     let mut value = source();
-    value["accessProfiles"][0]["requiredScopes"] = json!(["*"]);
-    value["accessProfiles"][0]["requiredPurposes"] = json!(["unrestricted"]);
-    value["accessProfiles"][0]["actorKind"] = json!("service");
-    value["accessProfiles"][0]["requesterClients"] = json!(["*", "portal"]);
+    value["accessProfiles"]["reader"]["requiredScopes"] = json!(["*"]);
+    value["accessProfiles"]["reader"]["requiredPurposes"] = json!(["unrestricted"]);
+    value["accessProfiles"]["reader"]["actorKind"] = json!("service");
+    value["accessProfiles"]["reader"]["requesterClients"] = json!(["*", "portal"]);
     value["recordTypes"][0]["accessRequirements"] =
         json!({"requiredScopes":["*"],"allowedPurposes":["unrestricted"]});
     let compiled = compile(&value).expect("a wildcard spelling is a name, so the project compiles");
@@ -488,14 +487,14 @@ fn an_item_spelled_like_a_wildcard_is_reported_as_one_name() {
 }
 
 fn module_profile() -> Value {
-    json!({"id":"mod","principalClaim":"registry_principal","requiredScopes":["entry:read"],
+    json!({"principalClaim":"registry_principal","requiredScopes":["entry:read"],
         "operations":["get","list"],"readableFields":["code"],"rowBoundaries":[boundary()]})
 }
 
 /// A module that contributes `profile` to `entry` by extension.
 fn extension_module(profile: Value) -> Value {
     json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
-        "id":"extra","version":"1","extendRecordTypes":[{"recordType":"entry","accessProfiles":[profile]}]})
+        "id":"extra","version":"1","extendRecordTypes":[{"recordType":"entry","accessProfiles":{"mod":profile}}]})
 }
 
 /// A module that introduces an entity carrying `profile`.
@@ -505,7 +504,7 @@ fn entity_module(profile: Value) -> Value {
         "id":"other","primaryDataset":"test-dataset","route":"others","mutationMode":"mutable",
         "classification":"internal",
         "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}],
-        "accessProfiles":[profile]}]})
+        "accessProfiles":{"mod":profile}}]})
 }
 
 fn read_module(module: &Value) -> Result<registry_breg::contract::RegistryModule, CompileFailure> {
@@ -537,9 +536,9 @@ fn module_sites() -> [ModuleSite; 2] {
     [
         (
             extension_module,
-            "module.extendRecordTypes[0].accessProfiles[0]",
+            "module.extendRecordTypes[0].accessProfiles.mod",
         ),
-        (entity_module, "module.recordTypes[0].accessProfiles[0]"),
+        (entity_module, "module.recordTypes[0].accessProfiles.mod"),
     ]
 }
 
@@ -652,11 +651,10 @@ fn a_module_profile_narrowing_members_are_omitted_not_written_empty() {
 fn a_module_profile_is_reported_by_the_project_profile_findings() {
     // An unrestricted module profile beside a narrower one.
     let mut open = module_profile();
-    open["id"] = json!("open");
     open["requiredScopes"] = json!("unrestricted");
     let module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
         "id":"extra","version":"1","extendRecordTypes":[{
-        "recordType":"entry","accessProfiles":[module_profile(), open]}]});
+        "recordType":"entry","accessProfiles":{"mod":module_profile(), "open":open}}]});
     let compiled = compile_with_module(&module).expect("the module compiles");
     assert_eq!(
         finding_paths(&compiled, "breg.access.profile-subsumes-narrower"),
@@ -674,9 +672,10 @@ fn a_module_profile_is_reported_by_the_project_profile_findings() {
 
     // An unrestricted module profile beside the project's narrower one.
     let mut alone = module_profile();
-    alone["id"] = json!("open");
     alone["requiredScopes"] = json!("unrestricted");
-    let compiled = compile_with_module(&extension_module(alone)).unwrap();
+    let mut module = extension_module(json!({}));
+    module["extendRecordTypes"][0]["accessProfiles"] = json!({"open": alone});
+    let compiled = compile_with_module(&module).unwrap();
     assert_eq!(
         finding_paths(&compiled, "breg.access.profile-subsumes-narrower"),
         vec!["recordTypes[id=entry].accessProfiles[id=open].requiredScopes"]

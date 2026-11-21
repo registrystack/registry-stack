@@ -43,7 +43,7 @@ actions:
           operation: patch
           set: {status: {fromInput: status}, note: {fromInput: note}, related-entry: {fromInput: related-entry}}
 accessProfiles:
-  - id: registrar
+  registrar:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted

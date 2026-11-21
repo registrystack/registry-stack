@@ -645,8 +645,23 @@ fn a_current_project_still_refuses_the_retired_row_reach() {
             .expect("the frozen package's project source is JSON");
     parse_project_yaml(&canonicalize_json(&project).unwrap())
         .expect("the packaged project source reads");
+    let profile_id = project["accessProfiles"]
+        .as_object()
+        .and_then(|profiles| {
+            profiles
+                .iter()
+                .find(|(_, profile)| {
+                    profile
+                        .pointer("/permissions/actions/0/targets/0/rowBoundaries")
+                        .is_some()
+                })
+                .map(|(id, _)| id.clone())
+        })
+        .expect("a packaged access profile states an Action target row reach");
     let reach = project
-        .pointer_mut("/accessProfiles/0/permissions/actions/0/targets/0/rowBoundaries")
+        .pointer_mut(&format!(
+            "/accessProfiles/{profile_id}/permissions/actions/0/targets/0/rowBoundaries"
+        ))
         .expect("the first permission states its row reach");
     assert_eq!(*reach, json!("unrestricted"));
     *reach = json!([]);

@@ -54,8 +54,7 @@ fn project() -> Value {
                 "set": {}
             }]}
         }],
-        "accessProfiles": [{
-            "id": "operator",
+        "accessProfiles": {"operator": {
             "default": true,
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
@@ -78,7 +77,7 @@ fn project() -> Value {
                     }]
                 }]
             }
-        }]
+        }}
     })
 }
 

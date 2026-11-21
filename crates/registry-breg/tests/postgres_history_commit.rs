@@ -708,8 +708,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             ],
             "temporal":{"startField":"valid-from","endField":"valid-to"}
           }],
-          "accessProfiles":[{
-            "id":"writer",
+          "accessProfiles":{"writer": {
             "default":true,
             "principalClaim":"registry_principal",
             "requiredScopes":"unrestricted",
@@ -721,7 +720,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["person","household","valid-from","valid-to"],
               "rowBoundaries": "unrestricted"
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("history store fixture parses");

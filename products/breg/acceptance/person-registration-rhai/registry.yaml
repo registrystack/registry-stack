@@ -401,9 +401,8 @@
       }
     }
   ],
-  "accessProfiles": [
-    {
-      "id": "person-registrar",
+  "accessProfiles": {
+    "person-registrar": {
       "default": true,
       "principalClaim": "registry_principal",
       "requiredScopes": [
@@ -457,8 +456,7 @@
         ]
       }
     },
-    {
-      "id": "person-reader",
+    "person-reader": {
       "default": true,
       "principalClaim": "registry_principal",
       "requiredScopes": [
@@ -507,8 +505,7 @@
         ]
       }
     },
-    {
-      "id": "person-administrator",
+    "person-administrator": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "registry:person:manage"
@@ -557,5 +554,5 @@
         ]
       }
     }
-  ]
+  }
 }

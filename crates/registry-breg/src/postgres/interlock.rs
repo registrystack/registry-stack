@@ -5122,8 +5122,7 @@ mod tests {
                     "mutationMode": "mutable",
                     "fields": [secret]
                 }],
-                "accessProfiles": [{
-                    "id": "caseworker",
+                "accessProfiles": {"caseworker": {
                     "default": true,
                     "principalClaim": "principal",
                     "requiredScopes": "unrestricted",
@@ -5134,7 +5133,7 @@ mod tests {
                         "readableFields": ["secret"],
                         "writableFields": ["secret"]
                     }]}
-                }]
+                }}
             });
             let project = parse_project_json(&serde_json::to_vec(&source).unwrap())
                 .expect("scan-key fixture parses");

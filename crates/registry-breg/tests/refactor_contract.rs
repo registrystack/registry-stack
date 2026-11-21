@@ -81,17 +81,17 @@ fn optional_stored_fields_warn_only_when_no_supported_writer_can_fill_them() {
         .as_object_mut()
         .unwrap()
         .remove("note");
-    value["accessProfiles"][1]["permissions"]["records"][2]["operations"] =
+    value["accessProfiles"]["facility-reader"]["permissions"]["records"][2]["operations"] =
         serde_json::json!(["get", "list", "import"]);
-    value["accessProfiles"][1]["permissions"]["records"][2]["writableFields"] =
+    value["accessProfiles"]["facility-reader"]["permissions"]["records"][2]["writableFields"] =
         serde_json::json!(["facility", "operator", "jurisdiction", "note"]);
     value["recordTypes"][3]["batch"] =
         serde_json::json!({"maximumItems": 100, "maximumBytes": 1048576});
     assert!(unfillable_paths(&parse_project(value.clone())).is_empty());
 
-    value["accessProfiles"][1]["permissions"]["records"][2]["operations"] =
+    value["accessProfiles"]["facility-reader"]["permissions"]["records"][2]["operations"] =
         serde_json::json!(["get", "list"]);
-    value["accessProfiles"][1]["permissions"]["records"][2]
+    value["accessProfiles"]["facility-reader"]["permissions"]["records"][2]
         .as_object_mut()
         .unwrap()
         .remove("writableFields");
@@ -274,12 +274,7 @@ fn automatic_recovery_grants_reject_known_nonhuman_profiles() {
     ] {
         for operation in ["apply", "retry"] {
             let mut source = project_source();
-            let profile = source["accessProfiles"]
-                .as_array_mut()
-                .unwrap()
-                .iter_mut()
-                .find(|profile| profile["id"] == "facility-correction-applier")
-                .unwrap();
+            let profile = &mut source["accessProfiles"]["facility-correction-applier"];
             if let Some(kind) = actor_kind {
                 profile["actorKind"] = json!(kind);
                 profile["requesterClients"] = json!(["registry-client"]);
@@ -307,12 +302,7 @@ fn automatic_recovery_grants_reject_known_nonhuman_profiles() {
     }
 
     let mut source = project_source();
-    let profile = source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == "facility-correction-applier")
-        .unwrap();
+    let profile = &mut source["accessProfiles"]["facility-correction-applier"];
     profile["actorKind"] = json!("service");
     profile["requesterClients"] = json!(["registry-client"]);
     profile["permissions"]["proposals"]
@@ -351,12 +341,7 @@ fn proposal_attachments_require_explicit_bounded_slot_grants() {
     value["actions"][action_index]["execution"]["proposal"]["attachments"] = json!([{"id":"supporting-file","required":false,"maximumBytes":1024,"contentTypes":["application/pdf"],"classification":"restricted"}]);
     value["actions"][action_index]["execution"]["proposal"]["reviewContext"]["fields"]
         ["supportingDocument"]["slot"] = json!("supporting-file");
-    let profile_index = value["accessProfiles"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .position(|profile| profile["id"] == "facility-correction-author")
-        .unwrap();
+    let profile_index = "facility-correction-author";
     let grant = &mut value["accessProfiles"][profile_index]["permissions"]["proposals"][0];
     grant["readableAttachments"] = json!(["supporting-file"]);
     grant["writableAttachments"] = json!(["supporting-file"]);
@@ -619,7 +604,12 @@ fn generated_policy_names_fit_postgres_without_truncation_or_collisions() {
 fn system_executor_profile_cannot_inherit_authored_record_grants() {
     use registry_breg::contract::parse_project_json;
     let mut value: serde_json::Value = project_source();
-    value["accessProfiles"][0]["id"] = serde_json::json!("system-proposal-apply");
+    let operator = value["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .remove("operator-editor")
+        .unwrap();
+    value["accessProfiles"]["system-proposal-apply"] = operator;
     let failure =
         compile(&parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap()).unwrap_err();
     assert!(failure
@@ -635,12 +625,7 @@ fn unused_reference_inputs_require_bounded_current_target_admission() {
     let mut value: serde_json::Value = project_source();
     value["actions"][0]["inputs"].as_array_mut().unwrap().push(json!({"id":"audit-entry","type":"reference","target":"directory-entry","classification":"internal"}));
     assert!(compile(&parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap()).is_err());
-    let profile = value["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == "facility-registrar")
-        .unwrap();
+    let profile = &mut value["accessProfiles"]["facility-registrar"];
     profile["permissions"]["actions"][0]["targets"].as_array_mut().unwrap().push(json!({"recordType":"directory-entry","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}));
     let model =
         compile(&parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap()).unwrap();
@@ -1022,12 +1007,12 @@ fn exact_permission_changes_do_not_change_the_action_behavior_revision() {
     use serde_json::json;
     let before = compile(&parse_project_yaml(PROJECT).unwrap()).unwrap();
     let mut source: serde_json::Value = project_source();
-    for profile in source["accessProfiles"].as_array_mut().unwrap() {
-        if profile["id"] == "facility-registrar" {
+    for (id, profile) in source["accessProfiles"].as_object_mut().unwrap() {
+        if id == "facility-registrar" {
             profile["requiredScopes"] = json!(["registry:facility:register:v2"]);
             profile["permissions"]["actions"][0]["results"] = json!(["facility"]);
         }
-        if profile["id"] == "facility-correction-author" {
+        if id == "facility-correction-author" {
             profile["requiredScopes"] = json!(["registry:facility:correction:submit:v2"]);
         }
     }
@@ -1155,13 +1140,14 @@ fn retired_request_authority_keys_are_rejected_in_record_and_module_profiles() {
         ("readableRequestFields", json!(["reason"])),
     ] {
         let mut project: serde_json::Value = project_source();
-        project["accessProfiles"][0]["permissions"]["records"][0][key] = retired.clone();
+        project["accessProfiles"]["operator-editor"]["permissions"]["records"][0][key] =
+            retired.clone();
         assert!(
             parse_project_json(&serde_json::to_vec(&project).unwrap()).is_err(),
             "retired record permission {key}"
         );
-        let mut module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"records","version":"1","recordTypes":[{"id":"record","primaryDataset":"records","route":"records","mutationMode":"mutable","fields":[{"id":"name","type":"string","maximumLength":32,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"sub","requiredScopes":"unrestricted","operations":["get"],"readableFields":["name"],"rowBoundaries":"unrestricted"}]}]});
-        module["recordTypes"][0]["accessProfiles"][0][key] = retired;
+        let mut module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"records","version":"1","recordTypes":[{"id":"record","primaryDataset":"records","route":"records","mutationMode":"mutable","fields":[{"id":"name","type":"string","maximumLength":32,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"sub","requiredScopes":"unrestricted","operations":["get"],"readableFields":["name"],"rowBoundaries":"unrestricted"}}}]});
+        module["recordTypes"][0]["accessProfiles"]["reader"][key] = retired;
         assert!(
             parse_module_json(&serde_json::to_vec(&module).unwrap()).is_err(),
             "retired module profile {key}"
@@ -1378,7 +1364,7 @@ fn access_profile_display_is_not_an_authority_change() {
     let baseline = compile(&project).unwrap();
 
     let mut presented_source = source.clone();
-    presented_source["accessProfiles"][1]["display"] =
+    presented_source["accessProfiles"]["facility-reader"]["display"] =
         json!({"label":"Facility reader","description":"Presentation only"});
     let project = registry_breg::contract::parse_project_json(
         &serde_json::to_vec(&presented_source).unwrap(),
@@ -1394,7 +1380,7 @@ fn access_profile_display_is_not_an_authority_change() {
         "profile display is retained without changing authority"
     );
 
-    presented_source["accessProfiles"][1]["requiredScopes"] =
+    presented_source["accessProfiles"]["facility-reader"]["requiredScopes"] =
         json!(["registry:facility:read", "registry:facility:review"]);
     let project = registry_breg::contract::parse_project_json(
         &serde_json::to_vec(&presented_source).unwrap(),
@@ -1438,12 +1424,7 @@ fn named_review_authority_status_is_a_service_only_target_free_interface() {
         ("readableReviewProgress", json!(true)),
     ] {
         let mut value_source: serde_json::Value = project_source();
-        let profile = value_source["accessProfiles"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|entry| entry["id"] == "casework-review-status")
-            .unwrap();
+        let profile = &mut value_source["accessProfiles"]["casework-review-status"];
         profile["permissions"]["proposals"][0][field] = value;
         let project = registry_breg::contract::parse_project_json(
             &serde_json::to_vec(&value_source).unwrap(),
@@ -1463,12 +1444,7 @@ fn applicant_review_progress_is_explicit_caller_owned_status_authority() {
 
     let before = compile(&parse_project_yaml(PROJECT).unwrap()).unwrap();
     let mut source = project_source();
-    let author = source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|profile| profile["id"] == "facility-correction-author")
-        .unwrap();
+    let author = &mut source["accessProfiles"]["facility-correction-author"];
     author["permissions"]["proposals"][0]["readableReviewProgress"] = json!(true);
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let compiled = compile(&project).unwrap();
@@ -1501,12 +1477,8 @@ fn applicant_review_progress_is_explicit_caller_owned_status_authority() {
 
     for (field, value) in [("ownership", Value::Null), ("operations", json!(["get"]))] {
         let mut invalid = source.clone();
-        let grant = &mut invalid["accessProfiles"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|profile| profile["id"] == "facility-correction-author")
-            .unwrap()["permissions"]["proposals"][0];
+        let grant = &mut &mut invalid["accessProfiles"]["facility-correction-author"]
+            ["permissions"]["proposals"][0];
         if value.is_null() {
             grant.as_object_mut().unwrap().remove(field);
         } else {
@@ -1863,7 +1835,7 @@ fn retired_authoring_keys_point_to_governed_replacements() {
     let retired = json!({
         "changeControl": {"requiredFor": ["patch"]},
         "changeRequest": {},
-        "accessProfiles": [{"requestVisibility": "owner", "readableRequestFields": ["reason"]}]
+        "accessProfiles": {"reader": {"requestVisibility": "owner", "readableRequestFields": ["reason"]}}
     });
     let actions = json!([{
         "commitGuards": {"targets": [{"equalsInput": "reason"}]},
@@ -1878,11 +1850,11 @@ fn retired_authoring_keys_point_to_governed_replacements() {
         ("/recordTypes/0/changeControl", "mutationPolicy"),
         ("/recordTypes/0/changeRequest", "execution.proposal"),
         (
-            "/recordTypes/0/accessProfiles/0/requestVisibility",
+            "/recordTypes/0/accessProfiles/reader/requestVisibility",
             "ownership: caller",
         ),
         (
-            "/recordTypes/0/accessProfiles/0/readableRequestFields",
+            "/recordTypes/0/accessProfiles/reader/readableRequestFields",
             "readableInputs",
         ),
         (

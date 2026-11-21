@@ -77,7 +77,7 @@ datasets:
   - {id: test-dataset}
 
 accessProfiles:
-  - id: public
+  public:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted

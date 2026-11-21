@@ -381,8 +381,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "constraints":[{"type":"unique","fields":["code"]}],
             "hooks":[{"phase":"after","id":"entry-created","trigger":"created","projection":["code"]}]
         }],
-        "accessProfiles":[{
-            "id":PROFILE, "principalClaim":"registry_principal","requiredScopes":"unrestricted",
+        "accessProfiles":{PROFILE: { "principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "requiredPurposes":["data-export"],
             "permissions":{"records":[{
                 "recordType":"entry",
@@ -392,7 +391,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}],
                 "allowDataExport":true
             }]}
-        }]
+        }}
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project(&project, &[], CompileProfile::Authoring).expect("data export project compiles")

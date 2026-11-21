@@ -160,7 +160,7 @@ fn check_acceptance_reason_refuses_an_authored_expression() {
 kind: PlatformCheckAcceptances
 acceptances:
   - code: breg.access.target-unrestricted-rows
-    scope: {file: registry.yaml, path: /accessProfiles/@id=reader}
+    scope: {file: registry.yaml, path: /accessProfiles/reader}
     reason: ${CHECK_ACCEPTANCE_REASON_CANARY}
 "#,
     )

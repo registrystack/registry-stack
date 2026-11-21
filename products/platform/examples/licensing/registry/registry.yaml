@@ -21,7 +21,7 @@ recordTypes:
       - {id: reference, type: string, required: true, minimumLength: 1, maximumLength: 80, classification: internal}
       - {id: profession, type: string, required: true, minimumLength: 1, maximumLength: 80, classification: internal}
 accessProfiles:
-  - id: applicant
+  applicant:
     default: true
     principalClaim: registry_principal
     requiredScopes: ["licensing:apply"]
@@ -33,7 +33,7 @@ accessProfiles:
           writableFields: [reference, profession]
           rowBoundaries:
             - {field: reference, claim: application_reference, operator: equals}
-  - id: auditor
+  auditor:
     principalClaim: registry_principal
     actorKind: human
     requesterClients: [licensing-auditor]

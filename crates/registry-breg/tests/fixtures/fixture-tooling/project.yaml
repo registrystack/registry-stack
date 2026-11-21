@@ -49,7 +49,7 @@ recordTypes:
     constraints:
       - {type: unique, fields: [label]}
 accessProfiles:
-  - id: operator
+  operator:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted

@@ -38,11 +38,11 @@ manifestProjection:
 modules:
   - id: "asset-registration-actions-core"
     version: "0.1.0"
-    digest: "sha256:7ce4dd6c7efcae0a3500d533f4d4622a899c2a5ac31f14be80139b2c823e1964"
+    digest: "sha256:f973df2814bdabe4f64e809d540eea939e27a37ca4e48e54d95478b2fc52f413"
 
 recordTypes: []
 accessProfiles:
-  - id: asset-action-registrar
+  asset-action-registrar:
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry:asset:register]
@@ -59,7 +59,7 @@ accessProfiles:
               rowBoundaries:
                 - {field: jurisdiction, claim: jurisdiction, operator: equals}
           results: [asset]
-  - id: asset-auditor
+  asset-auditor:
     principalClaim: registry_principal
     requiredScopes: [registry:asset:audit]
     requiredPurposes: [asset-audit]

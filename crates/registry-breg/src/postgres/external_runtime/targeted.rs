@@ -353,10 +353,10 @@ mod postgres_tests {
             "externalRecordTypes": [{"id":"subject","authority":"urn:test:source","identifierScheme":"urn:test:subject","fields":[{"id":"name","type":"string","classification":"internal"}]}],
             "externalProjections": [{"id":"subjects","recordType":"subject","sourceRoute":"subjects","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["name"]}],
             "externalViews": [{"id":"view","recordType":"local-record","links":[{"id":"subject","projection":"subjects","fromField":"subject-key"}]}],
-            "accessProfiles": [{"id":"refresh","principalClaim":"registry_principal","actorKind":"service","requesterClients":["worker"],"requiredScopes":["registry.refresh"],"requiredPurposes":["consultation"],"permissions":{
+            "accessProfiles": {"refresh": {"principalClaim":"registry_principal","actorKind":"service","requesterClients":["worker"],"requiredScopes":["registry.refresh"],"requiredPurposes":["consultation"],"permissions":{
                 "records":[{"recordType":"local-record","operations":["list"],"rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}],
                 "refreshExternalProjections":["subjects"]
-            }}]
+            }}}
         });
         let project =
             crate::contract::parse_project_json(&serde_json::to_vec(&project).unwrap()).unwrap();

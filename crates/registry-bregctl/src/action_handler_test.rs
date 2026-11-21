@@ -766,7 +766,7 @@ actions:
           operation: create
           fields: [person-code, legal-name]
 accessProfiles:
-  - id: registrar
+  registrar:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted

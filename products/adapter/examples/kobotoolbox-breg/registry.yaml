@@ -80,7 +80,7 @@ accessProfiles:
   # The profile the job names as `destination.accessProfile`. The scope and
   # the requesting client match the destination binding in
   # ../kobotoolbox-job/job-runtime.example.yaml.
-  - id: ingestion
+  ingestion:
     default: true
     principalClaim: sub
     requiredScopes: ["registry:write"]

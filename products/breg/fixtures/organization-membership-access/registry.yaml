@@ -105,9 +105,8 @@
       ]
     }
   ],
-  "accessProfiles": [
-    {
-      "id": "member",
+  "accessProfiles": {
+    "member": {
       "default": true,
       "principalClaim": "principal",
       "requiredScopes": [
@@ -156,8 +155,7 @@
         ]
       }
     },
-    {
-      "id": "steward",
+    "steward": {
       "principalClaim": "principal",
       "requiredScopes": [
         "records:manage",
@@ -219,7 +217,7 @@
         ]
       }
     }
-  ],
+  },
   "datasets": [
     {
       "id": "test-dataset"

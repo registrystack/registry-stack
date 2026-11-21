@@ -58,6 +58,41 @@ fn indexed_ids<T>(base: &str, values: &[T], id: impl Fn(&T) -> &str) -> Vec<Loca
         .collect()
 }
 
+/// The pointer of an item an id-keyed mapping holds under `id`.
+fn keyed_pointer(base: &str, id: &str) -> String {
+    format!(
+        "{base}/{}",
+        registry_platform_yaml::escape_pointer_segment(id)
+    )
+}
+
+fn keyed_ids<T>(base: &str, values: &[T], id: impl Fn(&T) -> &str) -> Vec<LocatedId> {
+    values
+        .iter()
+        .map(|value| (id(value).to_owned(), keyed_pointer(base, id(value))))
+        .collect()
+}
+
+fn keyed_display_labels<T>(
+    base: &str,
+    values: &[T],
+    id: impl Fn(&T) -> &str,
+    label: impl Fn(&T) -> Option<&str>,
+) -> Vec<LocatedDisplayText> {
+    values
+        .iter()
+        .filter_map(|value| {
+            label(value).map(|label| {
+                (
+                    id(value).to_owned(),
+                    label.to_owned(),
+                    format!("{}/display/label", keyed_pointer(base, id(value))),
+                )
+            })
+        })
+        .collect()
+}
+
 fn display_labels<T>(
     base: &str,
     values: &[T],
@@ -214,6 +249,8 @@ fn add_value_type_diagnostics(
     }
 }
 
+/// Lookalike ids across two groups: `first` holds ids written as mapping
+/// keys (the project's access profiles), `second` ids written as values.
 fn add_cross_group_collisions(
     document: &registry_platform_yaml::Document,
     errors: &mut Vec<registry_platform_yaml::Diagnostic>,
@@ -228,10 +265,14 @@ fn add_cross_group_collisions(
         if (left < boundary) == (right < boundary) {
             continue;
         }
-        let pair = [
-            AuthoredId::at_value(&values[left].0, &values[left].1),
-            AuthoredId::at_value(&values[right].0, &values[right].1),
-        ];
+        let site = |index: usize| {
+            if index < boundary {
+                AuthoredId::at_key(&values[index].0, &values[index].1)
+            } else {
+                AuthoredId::at_value(&values[index].0, &values[index].1)
+            }
+        };
+        let pair = [site(left), site(right)];
         errors.extend(local_id_collision_diagnostics(document, code, &pair));
     }
 }
@@ -604,10 +645,6 @@ pub(crate) fn project_diagnostics(
             indexed_ids("/actions", &project.actions, |item| &item.id),
         ),
         (
-            "breg.access-profile.id-collision",
-            indexed_ids("/accessProfiles", &project.access_profiles, |item| &item.id),
-        ),
-        (
             "breg.vocabulary.id-collision",
             indexed_ids("/vocabularies", &project.vocabularies, |item| &item.id),
         ),
@@ -628,6 +665,12 @@ pub(crate) fn project_diagnostics(
     ] {
         add_collisions(document, &mut errors, code, &values);
     }
+    add_key_collisions(
+        document,
+        &mut errors,
+        "breg.access-profile.id-collision",
+        &keyed_ids("/accessProfiles", &project.access_profiles, |item| &item.id),
+    );
     for (index, dataset) in project.statistical_datasets.iter().enumerate() {
         let values = indexed_ids(
             &format!("/statisticalDatasets/{index}/measures"),
@@ -753,18 +796,17 @@ pub(crate) fn project_diagnostics(
         let project_profiles = project
             .access_profiles
             .iter()
-            .enumerate()
-            .filter(|(_, profile)| {
+            .filter(|profile| {
                 profile
                     .permissions
                     .entities
                     .iter()
                     .any(|grant| grant.entity == entity.id)
             })
-            .map(|(profile_index, profile)| {
+            .map(|profile| {
                 (
                     profile.id.clone(),
-                    format!("/accessProfiles/{profile_index}/id"),
+                    keyed_pointer("/accessProfiles", &profile.id),
                 )
             })
             .collect::<Vec<_>>();
@@ -797,7 +839,7 @@ pub(crate) fn project_diagnostics(
         (
             "breg.access-profile.duplicate-label",
             "access profiles",
-            display_labels(
+            keyed_display_labels(
                 "/accessProfiles",
                 &project.access_profiles,
                 |item| &item.id,
@@ -1154,7 +1196,7 @@ fn add_profile_and_hook_display_warnings(
         );
         // Root profile pairs are already checked once in their own inventory.
         // Only compare their applicable grants with local profiles here.
-        for (index, profile) in project_profiles.iter().enumerate() {
+        for profile in project_profiles {
             if !profile
                 .permissions
                 .entities
@@ -1174,7 +1216,10 @@ fn add_profile_and_hook_display_warnings(
                             (
                                 profile.id.clone(),
                                 label.clone(),
-                                format!("/accessProfiles/{index}/display/label"),
+                                format!(
+                                    "{}/display/label",
+                                    keyed_pointer("/accessProfiles", &profile.id)
+                                ),
                             ),
                             local.clone(),
                         ],

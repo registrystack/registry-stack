@@ -445,10 +445,10 @@ async fn metadata(
         body["actions"][0]["resultEffects"] = json!([]);
     }
     if !grant_has_operation(&headers, "get") {
-        body["proposals"]["get"]["accessProfiles"] = json!([]);
+        body["proposals"]["get"]["accessProfiles"] = json!({});
     }
     if !grant_has_operation(&headers, "list") {
-        body["proposals"]["accessProfiles"] = json!([]);
+        body["proposals"]["accessProfiles"] = json!({});
     }
     json_response(StatusCode::OK, &body, None)
 }

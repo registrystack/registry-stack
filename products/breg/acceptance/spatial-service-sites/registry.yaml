@@ -106,12 +106,11 @@
     {
       "id": "spatial-service-sites-core",
       "version": "0.1.0",
-      "digest": "sha256:bfcf86fd983dd1983d4fffdf40d2aeaf865856e3ff6dc44d6aee7df90725b87c"
+      "digest": "sha256:01ef6b5f372a224fab7a7cb73ddfb1bb29dbbcea7ad2a90fa43bdf77e404d09a"
     }
   ],
-  "accessProfiles": [
-    {
-      "id": "service-site-admin",
+  "accessProfiles": {
+    "service-site-admin": {
       "default": true,
       "principalClaim": "registry_principal",
       "requiredScopes": [
@@ -196,8 +195,7 @@
         ]
       }
     },
-    {
-      "id": "map-reader",
+    "map-reader": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "service-sites:public:read"
@@ -242,8 +240,7 @@
         ]
       }
     },
-    {
-      "id": "area-map-reader",
+    "area-map-reader": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "service-areas:public:read"
@@ -284,8 +281,7 @@
         ]
       }
     },
-    {
-      "id": "installation-map-reader",
+    "installation-map-reader": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "service-sites:map:read"
@@ -337,8 +333,7 @@
         ]
       }
     },
-    {
-      "id": "directory-reader",
+    "directory-reader": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "service-sites:public:read"
@@ -376,8 +371,7 @@
         ]
       }
     },
-    {
-      "id": "hidden-geometry-reader",
+    "hidden-geometry-reader": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "service-sites:directory:read"
@@ -415,8 +409,7 @@
         ]
       }
     },
-    {
-      "id": "get-only-map-reader",
+    "get-only-map-reader": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "service-sites:site:read"
@@ -445,7 +438,7 @@
         ]
       }
     }
-  ],
+  },
   "vocabularies": [
     {
       "id": "service-zone",

@@ -723,8 +723,7 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
                 "set": {"linked-record": {"fromInput": "link"}}
             }]}
         }],
-        "accessProfiles": [{
-            "id": "lock-order-runner",
+        "accessProfiles": {"lock-order-runner": {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": ["registry:contact:register"],
@@ -742,7 +741,7 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
                 }],
                 "results": ["link-write"]
             }]}
-        }]
+        }}
     });
     let bytes = serde_json::to_vec(&project).expect("lock-order action project serializes");
     let project = parse_project_json(&bytes).expect("lock-order action project parses");
@@ -1091,8 +1090,7 @@ fn compiled_wide_action_registry() -> registry_breg::CompiledRegistry {
             "inputs": action_inputs,
             "plan":{"type":"fixed","effects":effects}
         }],
-        "accessProfiles": [{
-            "id": "wide-action-runner",
+        "accessProfiles": {"wide-action-runner": {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": ["registry:contact:register"],
@@ -1110,7 +1108,7 @@ fn compiled_wide_action_registry() -> registry_breg::CompiledRegistry {
                 }],
                 "results": results
             }]}
-        }]
+        }}
     });
     let bytes = serde_json::to_vec(&project).expect("wide action project serializes");
     let project = parse_project_json(&bytes).expect("wide action project parses");

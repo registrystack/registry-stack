@@ -30,10 +30,10 @@ pub fn project() -> Value {
             "commitGuards": {"targets":[{"input": "parent", "field": "status", "equals": "active"}]},
             "plan":{"type":"fixed","effects": [{"id": "child", "target": {"recordType": "child"}, "operation": "create", "set": {"parent": {"fromInput": "parent"}, "label": {"fromInput": "label"}}}]}
         }],
-        "accessProfiles": [{"id": "registrar", "default": true, "principalClaim": "registry_principal", "requiredScopes": ["registry:register", "registry:parent:process"],
+        "accessProfiles": {"registrar": { "default": true, "principalClaim": "registry_principal", "requiredScopes": ["registry:register", "registry:parent:process"],
             "permissions": {"actions": [{"action": "register-child", "operations": ["invoke"], "targets": [
                 {"recordType": "parent", "rowBoundaries": [{"field": "zone", "claim": "zone", "operator": "equals"}]}, {"recordType": "child", "rowBoundaries": "unrestricted"}
             ], "results": ["child"]}]}
-        }]
+        }}
     })
 }

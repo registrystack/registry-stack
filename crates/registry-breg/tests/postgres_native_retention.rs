@@ -73,7 +73,7 @@ fn registry_source(automatic: bool) -> Value {
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
             "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
             "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
-        "accessProfiles":[{"id":"clerk","default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
+        "accessProfiles":{"clerk": {"default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
             "requiredPurposes":["registry-administration"],"permissions":{
                 "records":[{"recordType":"target","operations":["create","get","list"],"readableFields":["name","jurisdiction"],
                     "writableFields":["name","jurisdiction"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],
@@ -81,7 +81,7 @@ fn registry_source(automatic: bool) -> Value {
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}],
                 "proposals":[{"action":"correct-name","operations":["get","list","edit","submit","revise","rebase","retry","cancel","apply"],
                     "ownership":"caller","readableAttachments":["support"],"writableAttachments":["support"],"targets":[{"recordType":"target",
-                    "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}]});
+                    "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}}});
     source
 }
 fn compile(source: Value) -> registry_breg::CompiledRegistry {

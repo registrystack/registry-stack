@@ -128,14 +128,13 @@ pub fn phone_project() -> Value {
               }]
             }
           }],
-          "accessProfiles":[{
-            "id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          "accessProfiles":{"registrar": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"actions":[{
               "action":"normalize-phone","operations":["invoke"],
               "targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],
               "results":["phone"]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("the proof project shape parses")

@@ -63,7 +63,8 @@ fn timer_project_value() -> Value {
             }]}
         }));
 
-    let record_permission = &mut source["accessProfiles"][0]["permissions"]["records"][0];
+    let record_permission =
+        &mut source["accessProfiles"]["directory-editor"]["permissions"]["records"][0];
     record_permission["writableFields"] = json!([
         "name",
         "email",
@@ -849,7 +850,7 @@ fn timer_control_predicate_and_mapping_types_are_closed() {
 #[test]
 fn timer_refuses_public_invoke_and_non_immediate_actions() {
     let mut public_invoke = timer_project_value();
-    public_invoke["accessProfiles"][0]["permissions"]["actions"]
+    public_invoke["accessProfiles"]["directory-editor"]["permissions"]["actions"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -981,7 +982,7 @@ fn timer_refuses_consent_issuance_capability() {
             "expires-at":{"value":"2027-10-28T00:00:00Z"}
         }
     }]);
-    consent["accessProfiles"][2]["permissions"]["records"][0]["writableFields"]
+    consent["accessProfiles"]["steward"]["permissions"]["records"][0]["writableFields"]
         .as_array_mut()
         .unwrap()
         .push(json!("activates-at"));
@@ -1129,11 +1130,11 @@ fn timer_system_authority_is_anchor_and_create_bounded() {
         .as_array_mut()
         .unwrap()
         .retain(|action| action["id"] != "update-contact-email");
-    create_only["accessProfiles"][0]["permissions"]["actions"]
+    create_only["accessProfiles"]["directory-editor"]["permissions"]["actions"]
         .as_array_mut()
         .unwrap()
         .retain(|permission| permission["action"] != "update-contact-email");
-    create_only["accessProfiles"][0]["permissions"]["records"][0]["operations"]
+    create_only["accessProfiles"]["directory-editor"]["permissions"]["records"][0]["operations"]
         .as_array_mut()
         .unwrap()
         .retain(|operation| operation != "patch");

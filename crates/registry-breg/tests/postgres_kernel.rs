@@ -789,13 +789,13 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "temporal":{"startField":"valid-from","endField":"valid-to"},
             "constraints":[{"type":"temporal-non-overlap","scopeFields":["authority"]}]
         }],
-        "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal",
+        "accessProfiles":{"operator": {"default":true,"principalClaim":"principal",
             "requiredScopes":"unrestricted","requiredPurposes":["registry-administration"],
             "permissions":{"records":[{"recordType":"entry","operations":["create","get","list","patch"],
                 "readableFields":["authority","payload","valid-from","valid-to"],
                 "writableFields":["authority","payload","valid-from","valid-to"],
                 "rowBoundaries":[{"field":"authority","claim":"authority","operator":"equals"}]}]}
-        }]
+        }}
     }"#).expect("native catalog proof fixture parses");
     compile_project(&source, &[], CompileProfile::Authoring)
         .expect("native catalog proof fixture compiles")

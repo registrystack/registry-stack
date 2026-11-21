@@ -555,9 +555,8 @@ fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegi
                  "required": false, "classification": "public"}
             ]
         }],
-        "accessProfiles": [
-            {
-                "id": "operator", "default": true, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
+        "accessProfiles": {
+            "operator": { "default": true, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
                 "requiredPurposes": ["case-management"],
                 "permissions": {"records": [{
                     "recordType": "widget", "operations": ["create", "get", "patch", "batch"],
@@ -568,15 +567,14 @@ fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegi
                     ]
                 }]}
             },
-            {
-                "id": "label-reader", "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
+            "label-reader": { "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
                 "permissions": {"records": [{
                     "recordType": "widget", "operations": ["get", "list"],
                     "readableFields": ["label"],
                     "rowBoundaries": "unrestricted"
                 }]}
             }
-        ]
+        }
     });
     let project = parse_project_json(&serde_json::to_vec(&fixture).expect("fixture JSON encodes"))
         .expect("contract fixture parses");

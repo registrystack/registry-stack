@@ -149,7 +149,7 @@ actions:
             contacts: {fromInput: contacts}
 
 accessProfiles:
-  - id: ingestion
+  ingestion:
     default: true
     principalClaim: sub
     requiredScopes: [registry:write]
@@ -179,7 +179,7 @@ accessProfiles:
             - recordType: field-site
               rowBoundaries:
                 - {field: owner, claim: sub, operator: equals}
-  - id: reconciliation
+  reconciliation:
     principalClaim: sub
     requiredScopes: [registry:reconcile]
     requiredPurposes: [field-intake-reconciliation]

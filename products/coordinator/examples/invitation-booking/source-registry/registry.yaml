@@ -163,7 +163,7 @@ actions:
           set:
             state: {value: expired}
 accessProfiles:
-  - id: invitation-workflow
+  invitation-workflow:
     default: true
     principalClaim: sub
     actorKind: service

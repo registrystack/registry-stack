@@ -509,7 +509,7 @@ fn with_parent_get_boundaries(
     readable_fields: &[&str],
     row_boundaries: Value,
 ) -> Value {
-    source["accessProfiles"][0]["permissions"]["records"] = json!([{
+    source["accessProfiles"]["registrar"]["permissions"]["records"] = json!([{
         "recordType": "parent",
         "operations": ["get"],
         "readableFields": readable_fields,

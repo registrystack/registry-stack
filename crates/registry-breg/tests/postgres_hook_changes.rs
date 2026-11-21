@@ -176,8 +176,8 @@ fn hook_project_json(
               "writes":[{{"id":"followup","target":{{"recordType":"followup"}},"operation":"create","fields":["jurisdiction","label","origin"]}}{extra_writes}]
             }}
           }}],
-          "accessProfiles":[{{
-            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          "accessProfiles":{{"operator":{{
+            "default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{{"records":[{{
               "recordType":"case","operations":["create","get","list"],
@@ -185,14 +185,14 @@ fn hook_project_json(
               "writableFields":["jurisdiction","label","restricted_note"],
               "rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]
             }}]}}
-          }},{{
-            "id":"case-hook","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          }},"case-hook":{{
+            "principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{{"actions":[{{
               "action":"open-followup","operations":["invoke"],
               "targets":[{{"recordType":"followup","rowBoundaries":"unrestricted"}}],
               {case_hook_results}
             }}]}}
-          }}]
+          }}}}
         }}"#,
         case_hooks = case_hooks,
         followup_hooks = followup_hooks,
@@ -475,7 +475,7 @@ fn tally_proposal_registry_with_commit_guards(commit_guards: Option<Value>) -> C
     if let Some(commit_guards) = commit_guards {
         project["actions"][0]["commitGuards"] = commit_guards;
     }
-    let operator = &mut project["accessProfiles"][0]["permissions"]["records"];
+    let operator = &mut project["accessProfiles"]["operator"]["permissions"]["records"];
     for field in ["tally", "tally-condition"] {
         operator[0]["readableFields"]
             .as_array_mut()
@@ -492,7 +492,7 @@ fn tally_proposal_registry_with_commit_guards(commit_guards: Option<Value>) -> C
         "writableFields": ["jurisdiction", "label"],
         "rowBoundaries": [{"field": "jurisdiction", "claim": "jurisdiction", "operator": "equals"}]
     }));
-    project["accessProfiles"][1]["permissions"]["actions"][0]["targets"]
+    project["accessProfiles"]["case-hook"]["permissions"]["actions"][0]["targets"]
         .as_array_mut()
         .unwrap()
         .push(json!({"recordType": "tally", "rowBoundaries": "unrestricted"}));

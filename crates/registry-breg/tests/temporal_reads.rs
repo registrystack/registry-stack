@@ -23,14 +23,13 @@ fn openapi(boundary_type: &str) -> Value {
             ],
             "temporal": {"startField": "valid-from", "endField": "valid-to"}
         }],
-        "accessProfiles": [{
-            "id": "reader", "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
+        "accessProfiles": {"reader": { "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
             "permissions": {"records": [{
                 "recordType": "licence", "operations": ["list"],
                 "readableFields": ["holder", "valid-from", "valid-to"],
                 "rowBoundaries": "unrestricted"
             }]}
-        }]
+        }}
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("parses");
     let registry = compile_project(&project, &[], CompileProfile::Authoring).expect("compiles");

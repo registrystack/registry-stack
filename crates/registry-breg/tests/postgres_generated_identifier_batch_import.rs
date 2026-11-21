@@ -157,8 +157,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                "generate":{"type":"sequence","prefix":"REG-","minimumDigits":4,"scope":["jurisdiction"]}}
             ]
           }],
-          "accessProfiles":[{
-            "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          "accessProfiles":{"writer": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"entry","operations":["create","get","batch"],
@@ -166,7 +165,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["jurisdiction","label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("generated identifier batch/import project parses");

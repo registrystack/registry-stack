@@ -798,8 +798,7 @@ fn timer_project_source() -> Value {
                 "set":{"status":{"value":"active"}}
             }]}
         }],
-        "accessProfiles":[{
-            "id":"service-editor","default":true,"principalClaim":"registry_principal",
+        "accessProfiles":{"service-editor": {"default":true,"principalClaim":"registry_principal",
             "requiredScopes":"unrestricted","requiredPurposes":["service-administration"],
             "permissions":{"records":[{
                 "recordType":"service","operations":["create","get","patch"],
@@ -807,6 +806,6 @@ fn timer_project_source() -> Value {
                 "writableFields":["jurisdiction","status","activates-at"],
                 "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-        }]
+        }}
     })
 }

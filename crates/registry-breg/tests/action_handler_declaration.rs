@@ -18,8 +18,8 @@ fn project() -> Value {
                       {"id":"unbound","type":"string","maximumLength":64,"classification":"restricted"}],
             "plan":{"type":"function","function":"person-plan","inputs":["code"],
                 "writes":[{"id":"person","target":{"recordType":"person"},"operation":"create","fields":["code"]}]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-            "permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}]
+        "accessProfiles":{"registrar": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+            "permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}}
     })
 }
 

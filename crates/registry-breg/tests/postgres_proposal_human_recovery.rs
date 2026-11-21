@@ -37,12 +37,12 @@ fn registry(automatic: bool) -> registry_breg::CompiledRegistry {
             "plan":{"type":"fixed","effects":[{"id":"correction","target":{"fromInput":"contact"},"operation":"patch","set":{"name":{"fromInput":"name"}}}]}}],
         // Omitted actorKind must not convert these explicit recovery grants into
         // permission for a service to recover automatic work as a human.
-        "accessProfiles":[{"id":"operator","default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
+        "accessProfiles":{"operator": {"default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
             "requiredPurposes":["registry-administration"],"permissions":{
                 "records":[{"recordType":"contact","operations":["create","get"],"readableFields":["name","jurisdiction"],
                     "writableFields":["name","jurisdiction"],"rowBoundaries":boundary}],
                 "actions":[{"action":"correct-name","operations":["start"],"targets":targets}],
-                "proposals":[{"action":"correct-name","operations":["get","submit","apply","retry"],"ownership":"caller","targets":targets}]}}]
+                "proposals":[{"action":"correct-name","operations":["get","submit","apply","retry"],"ownership":"caller","targets":targets}]}}}
     });
     compile_project(
         &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),

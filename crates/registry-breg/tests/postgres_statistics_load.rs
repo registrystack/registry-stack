@@ -53,15 +53,15 @@ async fn million_unit_three_dimension_statistics_measurement() {
                 {"id":"event-date","type":"date","required":true,"classification":"internal"}]}],
         "vocabularies":[{"id":"category","values":["a","b","c","d"]},
             {"id":"region","values":["north","south","east","west"]}],
-        "accessProfiles":[{"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+        "accessProfiles":{"publisher": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
             "recordType":"unit","operations":["list"],"allowCount":true,"rowBoundaries":"unrestricted",
             "readableFields":["active","category","region","event-date"],
             "filterableFields":["active","category","region","event-date"]}],"datasets":[{"dataset":"units-by-category","operations":["read-live","publish","read-releases"]}]}},
-            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "reader": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
                 "datasets":[
                     {"dataset":"units-by-category","operations":["read-releases"]}
                 ]
-            }}],
+            }}},
         "statisticalDatasets":[{"id":"units-by-category","unit":"unit","population":"active ne null",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["active","category","region"],

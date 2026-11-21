@@ -2543,7 +2543,7 @@ pub(crate) mod postgres_tests {
             .as_array_mut()
             .unwrap()
             .push(json!({"id":"other-link","projection":"other","fromField":"subject-key"}));
-        project["accessProfiles"][0]["permissions"]["externalViews"][0]["links"]
+        project["accessProfiles"]["reader"]["permissions"]["externalViews"][0]["links"]
             .as_array_mut()
             .unwrap()
             .push(json!({"link":"other-link","readableFields":["label"]}));
@@ -2912,8 +2912,8 @@ pub(crate) mod postgres_tests {
         // A profile grant edit and another projection's cache lifetime are
         // outside this projection's contract.
         let mut edited = project;
-        edited["accessProfiles"][0]["permissions"]["externalViews"][0]["links"][0]["allowCount"] =
-            json!(false);
+        edited["accessProfiles"]["reader"]["permissions"]["externalViews"][0]["links"][0]
+            ["allowCount"] = json!(false);
         edited["externalProjections"][1]["cacheTtlSeconds"] = json!(90);
         let edited = super::super::external_view_query::tests::compile_project(&edited);
         assert_eq!(

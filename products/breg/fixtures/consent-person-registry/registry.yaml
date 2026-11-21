@@ -44,10 +44,10 @@ manifestProjection:
 modules:
   - id: "consent-person"
     version: "0.1.0"
-    digest: "sha256:56aab6818a19d5ee6eba43ab04d9dc86b9cb0ed57b698061de216203f35fc8d0"
+    digest: "sha256:731501ef97d5d08267285fe2799311a4c5bb2a4796d89bbe398eb70eac16d4cf"
   - id: "consent-person-registry-core"
     version: "0.1.0"
-    digest: "sha256:152e3a291a2f7c19845250012b5d8f082a83bcb22ba6ae9b377b7d440a83e3ab"
+    digest: "sha256:e25a708f7a1b652eae0d80efc028f9235cfe285fa1b74b61529e0f575ba1443c"
 
 recipients:
   organizations:
@@ -75,7 +75,7 @@ vocabularies:
 
 recordTypes: []
 accessProfiles:
-  - id: person-registry-operator
+  person-registry-operator:
     default: true
     principalClaim: registry_principal
     actorKind: human
@@ -88,7 +88,7 @@ accessProfiles:
           readableFields: [person-code, legal-name, district]
           writableFields: [person-code, legal-name, district]
           rowBoundaries: unrestricted
-  - id: food-targeting
+  food-targeting:
     principalClaim: registry_principal
     actorKind: service
     requesterClients: [food-agency-portal, health-ngo-portal]
@@ -103,7 +103,7 @@ accessProfiles:
           rowBoundaries: unrestricted
           requireConsent:
             - {record: person-consent-decision, on: id}
-  - id: person-consent-self
+  person-consent-self:
     principalClaim: registry_principal
     requiredScopes: ['consent:person:self']
     permissions:
@@ -152,7 +152,7 @@ accessProfiles:
         - {recordType: person-notice-clause, rowBoundaries: unrestricted}
         - {recordType: person-consent-decision, rowBoundaries: unrestricted}
         results: [decision]
-  - id: person-consent-assisted-capture
+  person-consent-assisted-capture:
     principalClaim: registry_principal
     requiredScopes: ['consent:person:capture']
     permissions:
@@ -169,7 +169,7 @@ accessProfiles:
         - {recordType: person-notice-clause, rowBoundaries: unrestricted}
         - {recordType: person-consent-decision, rowBoundaries: unrestricted}
         results: [decision]
-  - id: person-consent-steward
+  person-consent-steward:
     principalClaim: registry_principal
     requiredScopes: ['consent:person:steward']
     permissions:
@@ -201,7 +201,7 @@ accessProfiles:
         - {recordType: person, rowBoundaries: unrestricted}
         - {recordType: person-consent-decision, rowBoundaries: unrestricted}
         results: [decision]
-  - id: person-consent-link-steward
+  person-consent-link-steward:
     principalClaim: registry_principal
     requiredScopes: ['consent:person:link']
     permissions:
@@ -211,7 +211,7 @@ accessProfiles:
         operations: [create, get, list, patch]
         readableFields: [subject, principal, active]
         writableFields: [subject, principal, active]
-  - id: person-consent-recipient
+  person-consent-recipient:
     principalClaim: registry_principal
     requiredScopes: ['consent:person:read']
     permissions:

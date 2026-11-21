@@ -37,11 +37,11 @@ fn action(script: &str) -> CompiledAction {
             "refusals":[{"code":"blank-label","label":"A label is required."}],
             "writes":[{"id":"record","target":{"recordType":"record"},"operation":"create","fields":["label","count","amount"]}]
         }}],
-        "accessProfiles":[{"id":"writer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+        "accessProfiles":{"writer": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
             "actions":[
                 {"action":"register-record","operations":["invoke"],"targets":[{"recordType":"record","rowBoundaries":"unrestricted"}],"results":["record"]}
             ]
-        }}]
+        }}}
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project_with_assets(

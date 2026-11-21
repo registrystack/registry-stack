@@ -91,8 +91,7 @@ const PROJECT: &[u8] = br#"{
       }]
     }
   ],
-  "accessProfiles":[{
-    "id":"reader",
+  "accessProfiles":{"reader": {
     "principalClaim":"sub",
     "requiredScopes":["registry.read"],
     "permissions":{"records":[
@@ -110,7 +109,7 @@ const PROJECT: &[u8] = br#"{
         "rowBoundaries":"unrestricted"
       }
     ]}
-  }]
+  }}
 }"#;
 
 const MODULE: &[u8] = br#"{

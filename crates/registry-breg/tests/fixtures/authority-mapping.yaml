@@ -35,7 +35,7 @@ actions:
           operation: patch
           set: {label: {fromInput: label}}
 accessProfiles:
-  - id: operator
+  operator:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
@@ -49,7 +49,7 @@ accessProfiles:
             - selector: label
               valueOrigin: verified-claim
               claimMapping: {label: lookup_label}
-  - id: reviewer
+  reviewer:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted

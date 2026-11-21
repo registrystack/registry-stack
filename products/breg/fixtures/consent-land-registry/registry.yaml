@@ -69,12 +69,12 @@
     {
       "id": "consent-land-registry-core",
       "version": "0.1.0",
-      "digest": "sha256:b4accd7892124e8c6f904c62a348cddb5e6048c67c71337e201bcb5bccc57888"
+      "digest": "sha256:28cc4d11debcfbd30a6bf2e8723a23410c4c60bcf46eedf849317450818a4c75"
     },
     {
       "id": "consent-tenure-right",
       "version": "0.1.0",
-      "digest": "sha256:003fd8dd9a7303af32d77f82319db31a19f2e42bd8cad0738647ac164a1258bc"
+      "digest": "sha256:681131a78073f9f0e23672bd5760e153a4c88f09f29d968614e76195a2f17936"
     }
   ],
   "recipients": {
@@ -143,9 +143,8 @@
     }
   ],
   "recordTypes": [],
-  "accessProfiles": [
-    {
-      "id": "land-registry-operator",
+  "accessProfiles": {
+    "land-registry-operator": {
       "default": true,
       "principalClaim": "registry_principal",
       "actorKind": "human",
@@ -200,8 +199,7 @@
         ]
       }
     },
-    {
-      "id": "lender-assessment",
+    "lender-assessment": {
       "principalClaim": "registry_principal",
       "actorKind": "service",
       "requesterClients": [
@@ -240,8 +238,7 @@
         ]
       }
     },
-    {
-      "id": "tenure-right-consent-self",
+    "tenure-right-consent-self": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "consent:tenure-right:self"
@@ -438,8 +435,7 @@
         ]
       }
     },
-    {
-      "id": "tenure-right-consent-assisted-capture",
+    "tenure-right-consent-assisted-capture": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "consent:tenure-right:capture"
@@ -490,8 +486,7 @@
         ]
       }
     },
-    {
-      "id": "tenure-right-consent-steward",
+    "tenure-right-consent-steward": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "consent:tenure-right:steward"
@@ -630,8 +625,7 @@
         ]
       }
     },
-    {
-      "id": "tenure-right-consent-link-steward",
+    "tenure-right-consent-link-steward": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "consent:tenure-right:link"
@@ -661,8 +655,7 @@
         ]
       }
     },
-    {
-      "id": "tenure-right-consent-recipient",
+    "tenure-right-consent-recipient": {
       "principalClaim": "registry_principal",
       "requiredScopes": [
         "consent:tenure-right:read"
@@ -695,7 +688,7 @@
         ]
       }
     }
-  ],
+  },
   "datasets": [
     {
       "id": "consent-land-registry"

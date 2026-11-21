@@ -53,50 +53,50 @@ recordTypes:
   - {id: head, type: reference, target: person, required: true, classification: restricted}
   - {id: label, type: string, maximumLength: 80, required: true, classification: internal}
 accessProfiles:
-- id: food-targeting
-  default: true
-  principalClaim: principal
-  actorKind: service
-  requesterClients: [food-agency-portal, health-ngo-portal]
-  requiredScopes: [records:read]
-  requiredPurposes: [food-assistance]
-  permissions:
-    records:
-    - recordType: person
-      rowBoundaries: unrestricted
-      operations: [get, list]
-      readableFields: [given-name, district]
-    - recordType: household
-      rowBoundaries: unrestricted
-      operations: [get, list]
-      readableFields: [head, label]
-- id: registrar
-  principalClaim: principal
-  actorKind: human
-  requesterClients: [registrar-console]
-  requiredScopes: [records:manage]
-  permissions:
-    records:
-    - recordType: person
-      rowBoundaries: unrestricted
-      operations: [create, get, patch]
-      readableFields: [given-name, district]
-      writableFields: [given-name, district]
-    - recordType: household
-      rowBoundaries: unrestricted
-      operations: [create, get, patch]
-      readableFields: [head, label]
-      writableFields: [head, label]
+  food-targeting:
+    default: true
+    principalClaim: principal
+    actorKind: service
+    requesterClients: [food-agency-portal, health-ngo-portal]
+    requiredScopes: [records:read]
+    requiredPurposes: [food-assistance]
+    permissions:
+      records:
+      - recordType: person
+        rowBoundaries: unrestricted
+        operations: [get, list]
+        readableFields: [given-name, district]
+      - recordType: household
+        rowBoundaries: unrestricted
+        operations: [get, list]
+        readableFields: [head, label]
+  registrar:
+    principalClaim: principal
+    actorKind: human
+    requesterClients: [registrar-console]
+    requiredScopes: [records:manage]
+    permissions:
+      records:
+      - recordType: person
+        rowBoundaries: unrestricted
+        operations: [create, get, patch]
+        readableFields: [given-name, district]
+        writableFields: [given-name, district]
+      - recordType: household
+        rowBoundaries: unrestricted
+        operations: [create, get, patch]
+        readableFields: [head, label]
+        writableFields: [head, label]
 "#;
 
 /// The permission line the report tells the adopter to add, inserted after the
 /// named `readableFields` line of the gated profile.
 fn require_consent(source: &str, readable_fields: &str, requirement: &str) -> String {
-    let anchor = format!("      readableFields: [{readable_fields}]\n");
+    let anchor = format!("        readableFields: [{readable_fields}]\n");
     let (before, after) = source
         .split_once(&anchor)
         .expect("the gated permission is present");
-    format!("{before}{anchor}      requireConsent:\n      - {requirement}\n{after}")
+    format!("{before}{anchor}        requireConsent:\n        - {requirement}\n{after}")
 }
 
 fn module_add(project: &Path, subject: &str) -> Output {
@@ -234,7 +234,7 @@ fn expected_steward_findings(subject: &str) -> Vec<(String, String)> {
             expected.push((
                 "breg.access.target-unrestricted-rows".to_owned(),
                 format!(
-                    "accessProfiles[id={profile}].permissions.actions[action={action}].targets[recordType={target}].rowBoundaries"
+                    "accessProfiles.{profile}.permissions.actions[action={action}].targets[recordType={target}].rowBoundaries"
                 ),
             ));
         }
@@ -392,8 +392,8 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
         "{record: person-consent-decision, on: id}",
     );
     let gated = gated.replacen(
-        "    - recordType: household\n      rowBoundaries: unrestricted\n      operations: [get, list]\n      readableFields: [head, label]\n",
-        "    - recordType: household\n      rowBoundaries: unrestricted\n      operations: [get, list]\n      readableFields: [head, label]\n      requireConsent:\n      - {record: person-consent-decision, on: head}\n",
+        "      - recordType: household\n        rowBoundaries: unrestricted\n        operations: [get, list]\n        readableFields: [head, label]\n",
+        "      - recordType: household\n        rowBoundaries: unrestricted\n        operations: [get, list]\n        readableFields: [head, label]\n        requireConsent:\n        - {record: person-consent-decision, on: head}\n",
         1,
     );
     fs::write(project.path().join("registry.yaml"), gated).expect("gated project writes");
@@ -473,10 +473,10 @@ fn module_add_consent_refuses_an_incomplete_project_without_writing() {
 }
 
 #[test]
-fn module_add_consent_refuses_a_flow_style_profile_list_it_cannot_extend() {
+fn module_add_consent_refuses_a_flow_style_profile_mapping_it_cannot_extend() {
     let source = BASE_PROJECT.replace(
-        "accessProfiles:\n- id: food-targeting",
-        "accessProfiles: [{id: other, principalClaim: principal, requiredScopes: ['records:other'], permissions: {}}]\nretired:\n- id: food-targeting",
+        "accessProfiles:\n  food-targeting:",
+        "accessProfiles: {other: {principalClaim: principal, requiredScopes: ['records:other'], permissions: {}}}\nretired:\n  food-targeting:",
     );
     let (kept, _) = source.split_once("retired:\n").unwrap();
     let project = TestProject::from_registry_source(kept.as_bytes());
@@ -686,12 +686,12 @@ fn consent_module_fits_an_explicit_manifest_project(flow_module_lock: bool) {
     // names a declared recipient client and a purpose vocabulary code, so this
     // gates the template's read-only `record-reader` profile rather than the
     // mixed-operation `operator` profile.
-    let anchor = "  - id: record-reader\n    principalClaim: registry_principal\n    requiredScopes: [registry:generic:read]\n    requiredPurposes: [registry-reporting]\n    permissions:\n      records:\n        - recordType: record\n          operations: [get, list]\n          readableFields: [code, label, group, status]\n          filterableFields: [code]\n          rowBoundaries:\n            - {field: status, claim: registry_record_status, operator: equals}\n";
+    let anchor = "  record-reader:\n    principalClaim: registry_principal\n    requiredScopes: [registry:generic:read]\n    requiredPurposes: [registry-reporting]\n    permissions:\n      records:\n        - recordType: record\n          operations: [get, list]\n          readableFields: [code, label, group, status]\n          filterableFields: [code]\n          rowBoundaries:\n            - {field: status, claim: registry_record_status, operator: equals}\n";
     let (before, after) = source
         .split_once(anchor)
         .expect("the init template's record-reader profile is present");
     let gated = format!(
-        "{before}  - id: record-reader\n    principalClaim: registry_principal\n    actorKind: service\n    requesterClients: [food-agency-portal]\n    requiredScopes: [registry:generic:read]\n    requiredPurposes: [food-assistance]\n    permissions:\n      records:\n        - recordType: record\n          operations: [get, list]\n          readableFields: [code, label, group, status]\n          filterableFields: [code]\n          rowBoundaries:\n            - {{field: status, claim: registry_record_status, operator: equals}}\n          requireConsent:\n          - {{record: record-consent-decision, on: id}}\n{after}"
+        "{before}  record-reader:\n    principalClaim: registry_principal\n    actorKind: service\n    requesterClients: [food-agency-portal]\n    requiredScopes: [registry:generic:read]\n    requiredPurposes: [food-assistance]\n    permissions:\n      records:\n        - recordType: record\n          operations: [get, list]\n          readableFields: [code, label, group, status]\n          filterableFields: [code]\n          rowBoundaries:\n            - {{field: status, claim: registry_record_status, operator: equals}}\n          requireConsent:\n          - {{record: record-consent-decision, on: id}}\n{after}"
     );
     fs::write(destination.join("registry.yaml"), gated).expect("gated project writes");
     // The project check holds the journeys to the profile they call, so they

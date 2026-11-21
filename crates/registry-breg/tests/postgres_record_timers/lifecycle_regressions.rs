@@ -950,7 +950,7 @@ fn compiled_control_remap_registry(control: Option<&str>) -> registry_breg::Comp
             }),
         ]);
     for access_key in ["readableFields", "writableFields"] {
-        source["accessProfiles"][0]["permissions"]["records"][0][access_key]
+        source["accessProfiles"]["service-editor"]["permissions"]["records"][0][access_key]
             .as_array_mut()
             .expect("service access fields are an array")
             .extend([
@@ -980,7 +980,7 @@ fn compiled_control_remap_registry(control: Option<&str>) -> registry_breg::Comp
 fn compiled_tombstone_registry() -> registry_breg::CompiledRegistry {
     let mut source = timer_project_source();
     source["recordTypes"][0]["tombstone"] = json!(true);
-    source["accessProfiles"][0]["permissions"]["records"][0]["operations"]
+    source["accessProfiles"]["service-editor"]["permissions"]["records"][0]["operations"]
         .as_array_mut()
         .expect("service operations are an array")
         .push(json!("tombstone"));

@@ -571,8 +571,11 @@ pub(crate) fn compile(
 
     let mut grants = BTreeMap::new();
     let mut refresh = BTreeMap::new();
-    for (profile_index, profile) in project.access_profiles.iter().enumerate() {
-        let path = format!("/accessProfiles/{profile_index}/permissions");
+    for profile in &project.access_profiles {
+        let path = format!(
+            "/accessProfiles/{}/permissions",
+            registry_platform_yaml::escape_pointer_segment(&profile.id)
+        );
         let mut view_grants = BTreeMap::new();
         for (grant_index, permission) in profile.permissions.external_views.iter().enumerate() {
             let path = format!("{path}/externalViews/{grant_index}");

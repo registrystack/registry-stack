@@ -46,8 +46,7 @@ fn registry() -> registry_breg::CompiledRegistry {
         "temporal":{"startField":"valid-from","endField":"valid-to"},
         "constraints":[{"type":"temporal-non-overlap","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]
       }],
-      "accessProfiles":[{
-        "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+      "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["case-management"],
         "permissions":{"records":[{"recordType":"entry","operations":["create","get","list","patch","batch","tombstone","revisions","snapshot"],
           "readableFields":["code","label","valid-from","valid-to"],"writableFields":["code","label","valid-from","valid-to"],
@@ -55,7 +54,7 @@ fn registry() -> registry_breg::CompiledRegistry {
         },{"recordType":"timestamp-entry","operations":["snapshot"],
           "readableFields":["code","valid-from","valid-to"],"writableFields":[],"rowBoundaries":"unrestricted"
         }]}
-      }]
+      }}
     }"#).expect("SDK fixture follows ordinary authoring contract");
     compile_project(&project, &[], CompileProfile::Authoring).expect("SDK fixture compiles")
 }

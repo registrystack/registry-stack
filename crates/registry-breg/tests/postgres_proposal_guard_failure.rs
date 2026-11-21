@@ -74,7 +74,7 @@ fn registry_with_current_date_offset(
                 {"input":"target","field":"status","equals":"open","reason":"target-not-open"},
                 {"input":"target","field":"capacity","atLeastFromInput":"minimum","reason":"below-minimum"}]},
             "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
-        "accessProfiles":[{"id":"clerk","default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
+        "accessProfiles":{"clerk": {"default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
             "requiredPurposes":["registry-administration"],"permissions":{
                 "records":[{"recordType":"target","operations":["create","get","list"],"readableFields":readable,
                     "writableFields":["name","status","capacity","jurisdiction"],
@@ -83,7 +83,7 @@ fn registry_with_current_date_offset(
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}],
                 "proposals":[{"action":"correct-name","operations":["get","list","edit","submit","revise","rebase","retry","cancel","apply"],
                     "ownership":"caller","targets":[{"recordType":"target",
-                    "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}]});
+                    "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}}});
     if let Some(offset_days) = offset_days {
         source["project"]["timezone"] = json!("UTC");
         source["recordTypes"][0]["fields"]

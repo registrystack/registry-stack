@@ -133,15 +133,14 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "set":{"jurisdiction":{"fromInput":"jurisdiction"},"applicant":{"fromInput":"applicant"}}
             }]}
           }],
-          "accessProfiles":[{
-            "id":"application-registrar","default":true,"principalClaim":"registry_principal",
+          "accessProfiles":{"application-registrar": {"default":true,"principalClaim":"registry_principal",
             "requiredScopes":["registry:applications:write"],
             "permissions":{"actions":[{
               "action":"register-application","operations":["invoke"],
               "targets":[{"recordType":"application","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],
               "results":["application"]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("generated identifier Action project parses");

@@ -8,7 +8,7 @@ extendRecordTypes:
     fields:
       - {id: internal-note, type: string, maximumLength: 500, classification: internal}
     accessProfiles:
-      - id: note-editor
+      note-editor:
         principalClaim: registry_principal
         requiredScopes: ["registry:directory:write"]
         requiredPurposes: [directory-administration]

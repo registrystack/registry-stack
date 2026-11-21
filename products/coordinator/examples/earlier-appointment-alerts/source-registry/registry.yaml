@@ -168,7 +168,7 @@ actions:
             state: {value: withdrawn}
             consent: {value: false}
 accessProfiles:
-  - id: alert-administration
+  alert-administration:
     default: true
     principalClaim: sub
     requiredScopes: [alerts:manage]
@@ -189,7 +189,7 @@ accessProfiles:
             - recordType: alert-subscription
               rowBoundaries: [{field: source, claim: alert_source, operator: equals}]
           results: [subscription]
-  - id: alert-workflow
+  alert-workflow:
     principalClaim: sub
     requiredScopes: [alerts:workflow]
     actorKind: service

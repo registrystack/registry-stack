@@ -4504,8 +4504,8 @@ mod input_write_tests {
                     {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"},
                     {"id":"licence-number","type":"string","required":false,"maximumLength":64,"classification":"internal"}],
                 "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
-            "accessProfiles":[{"id":"clerk","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{
-                "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target","rowBoundaries":"unrestricted"}]}]}}]});
+            "accessProfiles":{"clerk": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{
+                "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target","rowBoundaries":"unrestricted"}]}]}}}});
         let project =
             crate::contract::parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         let registry =

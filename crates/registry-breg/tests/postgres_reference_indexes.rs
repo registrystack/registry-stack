@@ -526,8 +526,8 @@ const MODULE: &[u8] = br#"{"apiVersion":"id.registrystack.org/formats/breg/modul
              {"id":"owner","type":"reference","target":"site","classification":"internal"},
              {"id":"code","type":"string","maximumLength":16,"required":true,"classification":"internal"}],
    "indexes":[{"id":"by-owner","fields":["owner","code"]}],
-   "accessProfiles":[{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"reader","principalClaim":"principal","operations":["get","list"],
-     "readableFields":["site","owner","code"],"filterableFields":["site"]}]}]}"#;
+   "accessProfiles":{"reader": {"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["get","list"],
+     "readableFields":["site","owner","code"],"filterableFields":["site"]}}}]}"#;
 
 fn project_bytes(digest: &str) -> Vec<u8> {
     format!(

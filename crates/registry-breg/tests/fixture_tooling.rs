@@ -801,8 +801,7 @@ fn compiled_crud_alias_fixture() -> registry_breg::CompiledRegistry {
             ],
             "constraints":[{"type":"unique","fields":["person-code"]}]
           }],
-          "accessProfiles":[{
-            "id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
+          "accessProfiles":{"registrar": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"person","operations":["create","get","list","patch"],
               "readableFields":["jurisdiction","person-code","legal-name"],
@@ -812,7 +811,7 @@ fn compiled_crud_alias_fixture() -> registry_breg::CompiledRegistry {
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}],
               "allowCount":true
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("CRUD alias fixture source parses");
@@ -865,14 +864,12 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
                 "set":{"contact-person":{"fromEffect":"person"}}}
             ]}
           }],
-          "accessProfiles":[{
-            "id":"household-seed","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
+          "accessProfiles":{"household-seed": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"household","operations":["create","get"],"readableFields":["jurisdiction","household-code","contact-person"],
               "writableFields":["jurisdiction","household-code"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          },{
-            "id":"contact-registrar","default":true,"principalClaim":"registry_principal",
+          },"contact-registrar": {"default":true,"principalClaim":"registry_principal",
             "requiredScopes":["registry:contact:register"],"requiredPurposes":["contact-registration"],
             "permissions":{"actions":[{
               "action":"register-household-contact","operations":["invoke"],
@@ -883,13 +880,12 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
               ],
               "results":["person","household"]
             }]}
-          },{
-            "id":"person-reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
+          },"person-reader": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"person","operations":["get"],"readableFields":["jurisdiction","person-code","legal-name"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("action fixture source parses");
@@ -971,17 +967,17 @@ fn compiled_spatial_fixture() -> registry_breg::CompiledRegistry {
             ],
             "geojson":{"geometryField":"location"}
           }],
-          "accessProfiles":[
-            {"id":"map-reader","default":true,"principalClaim":"sub","requiredScopes":["sites.read"],"permissions":{"records":[{
+          "accessProfiles":{
+            "map-reader": {"default":true,"principalClaim":"sub","requiredScopes":["sites.read"],"permissions":{"records":[{
               "recordType":"site","operations":["get","list"],"readableFields":["code","location"],
               "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}},
               "rowBoundaries": "unrestricted"
             }]}},
-            {"id":"directory-reader","principalClaim":"sub","requiredScopes":["sites.read"],"permissions":{"records":[{
+            "directory-reader": {"principalClaim":"sub","requiredScopes":["sites.read"],"permissions":{"records":[{
               "recordType":"site","operations":["list"],"readableFields":["code"],
               "rowBoundaries": "unrestricted"
             }]}}
-          ]
+          }
         }"#,
     )
     .expect("spatial project parses");

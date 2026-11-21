@@ -135,7 +135,7 @@ accessProfiles:
   # row-bound, `breg.access.profile-writable-row-boundary` follows for a bound
   # field the grant can write; it asks you to confirm that moving records
   # between callers' rows is intended, or to drop the field from `writableFields`.
-  - id: operator
+  operator:
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry:generic:operate]
@@ -165,7 +165,7 @@ accessProfiles:
   # that field, because a profile that can patch it moves records in and out of
   # another caller's rows. Here the operator may, and `tests/journeys.yaml`
   # shows a record leaving this reader's rows when its status changes.
-  - id: record-reader
+  record-reader:
     principalClaim: registry_principal
     requiredScopes: [registry:generic:read]
     requiredPurposes: [registry-reporting]
@@ -190,7 +190,7 @@ accessProfiles:
   # authorization. That is intended for a source that vouches for the whole
   # registry. Close it by giving the grant a `rowBoundaries` entry, the way
   # `record-reader` above does.
-  - id: evidence-source
+  evidence-source:
     principalClaim: registry_principal
     requiredScopes: [registry:evidence:lookup]
     requiredPurposes: [evidence-source-read]
@@ -210,4 +210,4 @@ accessProfiles:
 modules:
   - id: "record-notes"
     version: "0.1.0"
-    digest: "sha256:b9caa4c6bcf444f5bc3681bfa4de67a09e3de5b428e43d01546466eeb1c03e0f"
+    digest: "sha256:e81adbfb704b393426a5ac9cf5bf1767ad2d4c180139b7f722e726fd5a765893"

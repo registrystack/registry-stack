@@ -234,7 +234,7 @@ actions:
             effective-at: {fromInput: effective-at}
             deed-reference: {fromInput: deed-reference}
 accessProfiles:
-  - id: registrar
+  registrar:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
@@ -264,7 +264,7 @@ accessProfiles:
           operations: [invoke]
           targets: [{recordType: item, rowBoundaries: unrestricted}, {recordType: custody-record, rowBoundaries: unrestricted}, {recordType: custody-handover, rowBoundaries: unrestricted}]
           results: [new-custody, release, handover]
-  - id: event-record-history
+  event-record-history:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:

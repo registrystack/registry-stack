@@ -30,14 +30,13 @@ fn project(start_type: &str, last_day_type: &str) -> Value {
                 "startField": "valid-from", "lastDayField": "valid-through"
             }]
         }],
-        "accessProfiles": [{
-            "id": "reader", "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
+        "accessProfiles": {"reader": { "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
             "permissions": {"records": [{
                 "recordType": "licence", "operations": ["list"],
                 "readableFields": ["holder", "valid-from", "valid-through"],
                 "rowBoundaries": "unrestricted"
             }]}
-        }]
+        }}
     })
 }
 

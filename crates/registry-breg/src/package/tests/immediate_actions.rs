@@ -16,8 +16,8 @@ fn source() -> Value {
             {"id":"item", "apiName":"itemId", "type":"reference", "target":"item", "required":true, "classification":"internal"},
             {"id":"label", "apiName":"newLabel", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}
         ], "plan":{"type":"fixed","effects":[{"id":"renamed", "target":{"fromInput":"item"}, "operation":"patch", "set":{"label":{"fromInput":"label"}}}]}}],
-        "accessProfiles":[{"id":"operator", "default":true, "principalClaim":"principal", "requiredScopes":["item.rename"],
-            "permissions":{"actions":[{"action":"rename-item", "operations":["invoke"], "targets":[{"recordType":"item", "rowBoundaries":"unrestricted"}], "results":["renamed"]}]}}]
+        "accessProfiles":{"operator": { "default":true, "principalClaim":"principal", "requiredScopes":["item.rename"],
+            "permissions":{"actions":[{"action":"rename-item", "operations":["invoke"], "targets":[{"recordType":"item", "rowBoundaries":"unrestricted"}], "results":["renamed"]}]}}}
     })
 }
 
@@ -34,7 +34,7 @@ fn compile_with_assets(value: &Value, assets: &[ModuleAssetSource]) -> CompiledR
 fn source_without_actions() -> Value {
     let mut value = source();
     value["actions"] = json!([]);
-    value["accessProfiles"] = json!([]);
+    value["accessProfiles"] = json!({});
     value
 }
 
@@ -47,10 +47,10 @@ fn ordinary_policy_source(auditor_operations: Option<&[&str]>) -> Value {
                 {"id":"person-code", "type":"string", "maximumLength":40, "required":true, "classification":"internal"},
                 {"id":"sensitive-note", "type":"string", "maximumLength":120, "classification":"internal"}
             ]}],
-        "accessProfiles":[{"id":"operator", "default":true, "principalClaim":"principal","requiredScopes":"unrestricted",
+        "accessProfiles":{"operator": { "default":true, "principalClaim":"principal","requiredScopes":"unrestricted",
             "permissions":{"records":[{"recordType":"person", "operations":["create","get","list"],
                 "readableFields":["person-code","sensitive-note"],
-                "writableFields":["person-code","sensitive-note"], "rowBoundaries":"unrestricted"}]}}]
+                "writableFields":["person-code","sensitive-note"], "rowBoundaries":"unrestricted"}]}}}
     });
     if let Some(operations) = auditor_operations {
         let mut permission = json!({
@@ -65,13 +65,10 @@ fn ordinary_policy_source(auditor_operations: Option<&[&str]>) -> Value {
         if operations.contains(&"create") {
             permission["writableFields"] = json!(["person-code", "sensitive-note"]);
         }
-        source["accessProfiles"]
-            .as_array_mut()
-            .expect("accessProfiles is an array")
-            .push(json!({
-                "id":"auditor", "principalClaim":"principal",
-                "requiredScopes":["registry.audit"], "permissions":{"records":[permission]}
-            }));
+        source["accessProfiles"]["auditor"] = json!({
+            "principalClaim":"principal",
+            "requiredScopes":["registry.audit"], "permissions":{"records":[permission]}
+        });
     }
     source
 }
@@ -188,9 +185,9 @@ fn action_configuration_and_disclosure_changes_are_visible_in_package_diffs() {
     let mut renamed = value.clone();
     renamed["actions"][0]["inputs"][0]["apiName"] = json!("selectedItem");
     let mut scoped = value.clone();
-    scoped["accessProfiles"][0]["requiredScopes"] = json!(["item.rename.restricted"]);
+    scoped["accessProfiles"]["operator"]["requiredScopes"] = json!(["item.rename.restricted"]);
     let mut no_results = value;
-    no_results["accessProfiles"][0]["permissions"]["actions"][0]["results"] = json!([]);
+    no_results["accessProfiles"]["operator"]["permissions"]["actions"][0]["results"] = json!([]);
     for variant in [renamed, scoped, no_results] {
         let after = compile(&variant);
         let changes = compiled_registry_change_set(&before, &after, "prior-package");
@@ -497,13 +494,12 @@ fn reviewed_successor_does_not_duplicate_action_policies_for_new_entity() {
         "inputs":[{"id":"label", "apiName":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}],
         "plan":{"type":"fixed","effects":[{"id":"task", "target":{"recordType":"task"}, "operation":"create", "set":{"label":{"fromInput":"label"}}}]}
     }]);
-    candidate["accessProfiles"] = json!([{
-        "id":"task-operator",
+    candidate["accessProfiles"] = json!({"task-operator": {
         "default":true,
         "principalClaim":"principal",
         "requiredScopes":"unrestricted",
         "permissions":{"actions":[{"action":"create-task", "operations":["invoke"], "targets":[{"recordType":"task", "rowBoundaries":"unrestricted"}], "results":["task"]}]}
-    }]);
+    }});
     let after = compile(&candidate);
     let plan = reviewed_plan(&before, &after);
     let creates = create_policy_sql(&plan);
@@ -524,8 +520,8 @@ fn reviewed_successor_does_not_duplicate_action_policies_for_new_entity() {
 fn reviewed_successor_replaces_action_policies_when_contract_changes() {
     let before = compile(&source());
     let mut changed = source();
-    changed["accessProfiles"][0]["permissions"]["actions"][0]["targets"][0]["rowBoundaries"] =
-        json!([{"field":"label","claim":"itemLabel","operator":"equals"}]);
+    changed["accessProfiles"]["operator"]["permissions"]["actions"][0]["targets"][0]
+        ["rowBoundaries"] = json!([{"field":"label","claim":"itemLabel","operator":"equals"}]);
     let after = compile(&changed);
     let plan = reviewed_plan(&before, &after);
 
@@ -584,7 +580,7 @@ fn reviewed_successor_tracks_link_only_reference_policies() {
             "required":true, "classification":"internal"
         }));
     with_action["actions"][0]["plan"]["effects"][0]["set"]["group"] = json!({"fromInput":"group"});
-    with_action["accessProfiles"][0]["permissions"]["actions"][0]["targets"]
+    with_action["accessProfiles"]["operator"]["permissions"]["actions"][0]["targets"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -614,8 +610,8 @@ fn reviewed_successor_tracks_link_only_reference_policies() {
             .iter()
             .any(|sql| sql.contains(name)));
     }
-    with_action["accessProfiles"][0]["permissions"]["actions"][0]["targets"][1]["rowBoundaries"] =
-        json!([{"field":"label","claim":"groupLabel","operator":"equals"}]);
+    with_action["accessProfiles"]["operator"]["permissions"]["actions"][0]["targets"][1]
+        ["rowBoundaries"] = json!([{"field":"label","claim":"groupLabel","operator":"equals"}]);
     let changed = compile(&with_action);
     let replaced = reviewed_plan(&after, &changed);
     for name in links {
@@ -640,7 +636,7 @@ fn reviewed_successor_does_not_drop_action_policies_for_absent_entity_table() {
         "mutationMode":"mutable",
         "fields":[{"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}]
     }]);
-    removed_entity["accessProfiles"] = json!([]);
+    removed_entity["accessProfiles"] = json!({});
     let after = compile(&removed_entity);
     let plan = reviewed_plan(&before, &after);
 
@@ -658,8 +654,9 @@ fn proposal_source(operations: &[&str], readable_inputs: &[&str]) -> Value {
     value["actions"][0]["execution"] = json!({"mode":"proposal","proposal":{
         "review":{"type":"none"}, "application":{"mode":"manual"}, "retention":{"mode":"retain"}
     }});
-    value["accessProfiles"][0]["permissions"]["actions"][0]["operations"] = json!(["start"]);
-    value["accessProfiles"][0]["permissions"]["proposals"] = json!([{
+    value["accessProfiles"]["operator"]["permissions"]["actions"][0]["operations"] =
+        json!(["start"]);
+    value["accessProfiles"]["operator"]["permissions"]["proposals"] = json!([{
         "action":"rename-item", "operations":operations, "readableInputs":readable_inputs,
         "targets":[{"recordType":"item","rowBoundaries":"unrestricted"}]
     }]);
@@ -716,9 +713,9 @@ fn proposal_task_context_requires_service_authority_and_a_declared_field_subset(
         "id":"booking-context",
         "fields":{"applicationId":{"type":"input","input":"label"}}
     });
-    value["accessProfiles"][0]["actorKind"] = json!("service");
-    value["accessProfiles"][0]["requesterClients"] = json!(["casework-service"]);
-    value["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+    value["accessProfiles"]["operator"]["actorKind"] = json!("service");
+    value["accessProfiles"]["operator"]["requesterClients"] = json!(["casework-service"]);
+    value["accessProfiles"]["operator"]["permissions"]["proposals"][0]["readableContextFields"] =
         json!(["applicationId"]);
     let permission = proposal_permission(&compile(&value));
     assert!(permission
@@ -732,19 +729,19 @@ fn proposal_task_context_requires_service_authority_and_a_declared_field_subset(
     for invalid in [
         {
             let mut invalid = value.clone();
-            invalid["accessProfiles"][0]["actorKind"] = json!("human");
+            invalid["accessProfiles"]["operator"]["actorKind"] = json!("human");
             invalid
         },
         {
             let mut invalid = value.clone();
-            invalid["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
-                json!([]);
+            invalid["accessProfiles"]["operator"]["permissions"]["proposals"][0]
+                ["readableContextFields"] = json!([]);
             invalid
         },
         {
             let mut invalid = value.clone();
-            invalid["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
-                json!(["missing"]);
+            invalid["accessProfiles"]["operator"]["permissions"]["proposals"][0]
+                ["readableContextFields"] = json!(["missing"]);
             invalid
         },
     ] {
@@ -760,7 +757,8 @@ fn proposal_task_context_requires_service_authority_and_a_declared_field_subset(
 #[test]
 fn proposal_writable_inputs_compile_to_the_named_input_ids() {
     let mut value = proposal_source(&["get", "edit", "submit"], &["item", "label"]);
-    value["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] = json!(["label"]);
+    value["accessProfiles"]["operator"]["permissions"]["proposals"][0]["writableInputs"] =
+        json!(["label"]);
     let permission = proposal_permission(&compile(&value));
     assert_eq!(
         permission.writable_inputs,
@@ -783,20 +781,20 @@ fn proposal_grant_without_writable_inputs_compiles_without_the_field() {
 fn proposal_writable_inputs_refuse_invalid_grants() {
     let unknown = {
         let mut value = proposal_source(&["get", "edit"], &["item", "label"]);
-        value["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] =
+        value["accessProfiles"]["operator"]["permissions"]["proposals"][0]["writableInputs"] =
             json!(["missing"]);
         value
     };
     let no_write_authority = {
         let mut value = proposal_source(&["get", "submit"], &["item", "label"]);
-        value["accessProfiles"][0]["permissions"]["actions"] = json!([]);
-        value["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] =
+        value["accessProfiles"]["operator"]["permissions"]["actions"] = json!([]);
+        value["accessProfiles"]["operator"]["permissions"]["proposals"][0]["writableInputs"] =
             json!(["label"]);
         value
     };
     let unreadable_fixed_input = {
         let mut value = proposal_source(&["get", "edit"], &["label"]);
-        value["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] =
+        value["accessProfiles"]["operator"]["permissions"]["proposals"][0]["writableInputs"] =
             json!(["label"]);
         value
     };
@@ -813,14 +811,14 @@ fn proposal_writable_inputs_refuse_invalid_grants() {
 #[test]
 fn proposal_writable_inputs_accept_start_only_or_fully_writable_grants() {
     let mut start_only = proposal_source(&["get", "submit"], &[]);
-    start_only["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] =
+    start_only["accessProfiles"]["operator"]["permissions"]["proposals"][0]["writableInputs"] =
         json!(["item", "label"]);
     assert!(proposal_permission(&compile(&start_only))
         .writable_inputs
         .is_some());
     let mut edit_without_get = proposal_source(&["edit", "submit"], &[]);
-    edit_without_get["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] =
-        json!(["item", "label"]);
+    edit_without_get["accessProfiles"]["operator"]["permissions"]["proposals"][0]
+        ["writableInputs"] = json!(["item", "label"]);
     assert!(proposal_permission(&compile(&edit_without_get))
         .writable_inputs
         .is_some());
@@ -1003,7 +1001,7 @@ fn proposal_input_disclosure_change_is_reported_without_changing_frozen_executio
 fn action_only_claim_change_is_a_reviewable_successor() {
     let before = compile(&source());
     let mut changed = source();
-    changed["accessProfiles"][0]["requiredScopes"] = json!(["item.rename.restricted"]);
+    changed["accessProfiles"]["operator"]["requiredScopes"] = json!(["item.rename.restricted"]);
     let after = compile(&changed);
     assert_eq!(
         before.actions().actions[0].definition_revision,
@@ -1197,7 +1195,7 @@ fn package_capacity_request(source_revision: &str) -> PackageBuildRequest {
         }],
         "distributions": []
     });
-    value["accessProfiles"][0]["permissions"]["records"] = json!([{
+    value["accessProfiles"]["operator"]["permissions"]["records"] = json!([{
         "recordType": "item", "operations": ["get", "list"],
         "readableFields": ["label"], "rowBoundaries": "unrestricted"
     }]);

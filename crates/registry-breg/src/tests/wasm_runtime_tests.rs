@@ -153,7 +153,7 @@ fn wasm_person_action(module_bytes: &[u8]) -> CompiledAction {
         ],"plan":{"type":"function","function":"person-plan","inputs":["given-name","family-name","person"],"refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
             {"id":"person","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}]
+        "accessProfiles":{"registrar": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}}
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project_with_assets(

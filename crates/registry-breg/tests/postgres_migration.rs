@@ -5527,7 +5527,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         _ => "",
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}{batch}{secret}{alias}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}{batch}{secret}{alias}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}}}}}]}}"#
     )
     .into_bytes()
 }

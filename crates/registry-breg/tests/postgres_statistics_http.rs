@@ -3349,7 +3349,7 @@ async fn caller_filtered_openapi_hides_an_inaccessible_statistical_default() {
     let database = TestDatabase::create(2).await;
     let (migration, migration_task) = database.connect_migration().await;
     let mut source = statistics_registry_source();
-    source["accessProfiles"][0]["requiredScopes"] = json!(["statistics.narrow"]);
+    source["accessProfiles"]["analyst"]["requiredScopes"] = json!(["statistics.narrow"]);
     let compiled = Arc::new(compile_statistics_registry(source));
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
@@ -4460,33 +4460,33 @@ fn statistics_registry_source() -> Value {
                 {"id":"jurisdiction","type":"vocabulary-code","vocabulary":"jurisdiction","required":true,"classification":"internal"}
             ]
         }],
-        "accessProfiles":[
-            {"id":"analyst","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+        "accessProfiles":{
+            "analyst": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
                 "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,
                 "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
             }],"datasets":[{"dataset":"records-by-category","operations":["read-live","read-releases"]}]}},
-            {"id":"analyst-wide","principalClaim":"principal","requiredScopes":["statistics.wide"],"permissions":{"records":[{
+            "analyst-wide": {"principalClaim":"principal","requiredScopes":["statistics.wide"],"permissions":{"records":[{
                 "recordType":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
                 "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,"rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":"records-by-category","operations":["read-live","read-releases"]}]}},
-            {"id":"publisher","principalClaim":"principal","requiredScopes":["statistics.publish"],"permissions":{"records":[{
+            "publisher": {"principalClaim":"principal","requiredScopes":["statistics.publish"],"permissions":{"records":[{
                 "recordType":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
                 "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,"rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":"records-by-category","operations":["publish","read-releases"]}]}},
-            {"id":"seed","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+            "seed": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["create"],
                 "writableFields":["subject","active","category","event-date","jurisdiction"],"rowBoundaries":"unrestricted"
             }]}},
-            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "reader": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
                 "datasets":[
                     {"dataset":"records-by-category","operations":["read-releases"]}
                 ]
             }}
-        ],
+        },
         "vocabularies":[
             {"id":"category","values":["a","b"]},
             {"id":"jurisdiction","values":["north","south"]}
@@ -4521,21 +4521,21 @@ fn cap_registry() -> registry_breg::CompiledRegistry {
                 {"id":"event-date","type":"date","required":true,"classification":"internal"}
             ]
         }],
-        "accessProfiles":[
-            {"id":"analyst","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+        "accessProfiles":{
+            "analyst": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
                 "recordType":"record","operations":["list"],"readableFields":["active","category","event-date"],
                 "filterableFields":["active","category","event-date"],"allowCount":true,"rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":"daily-by-category","operations":["read-live","read-releases"]}]}},
-            {"id":"publisher","principalClaim":"principal","requiredScopes":["statistics.publish"],"permissions":{"records":[{
+            "publisher": {"principalClaim":"principal","requiredScopes":["statistics.publish"],"permissions":{"records":[{
                 "recordType":"record","operations":["list"],"readableFields":["active","category","event-date"],
                 "filterableFields":["active","category","event-date"],"allowCount":true,"rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":"daily-by-category","operations":["publish","read-releases"]}]}},
-            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "reader": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
                 "datasets":[
                     {"dataset":"daily-by-category","operations":["read-releases"]}
                 ]
             }}
-        ],
+        },
         "vocabularies":[{"id":"category","values":codes}],
         "statisticalDatasets":[{
             "id":"daily-by-category","unit":"record","population":"active eq true",

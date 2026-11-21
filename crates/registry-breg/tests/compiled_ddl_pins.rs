@@ -69,6 +69,9 @@
 //! Declared Manifest projection authorities and the public service's competent
 //! authority likewise move the revisions of the fixtures that project a
 //! Manifest. SQL and Action fingerprints stay fixed.
+//! Writing `accessProfiles` as a map keyed by id changes the authored module
+//! bytes, so it moves the revisions of the fixtures that lock a module. SQL and
+//! Action fingerprints stay fixed.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
@@ -102,7 +105,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
         ddl_sha256: "43acdae956eb2f932fb22a2cccc5cee5ed19cf806f2f28bbc677eff219d00b99",
-        revision: "sha256:7e6727d1ba4467b516258fd29703eb7ff9e4088ded812ed63ccb076a66de56cb",
+        revision: "sha256:691b0e7b087bd2cd78ff05717ed9ddc2eb34191f52b5d508cf0d7197742545a0",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -113,7 +116,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
         ddl_sha256: "6439a877ee6508b999a77242542695d8ccddc6d80518699d90eddc32b305780b",
-        revision: "sha256:a9da7e8bf14b8f64b0ec768699fa1bad72e4874ae0a0ea1a3db972a830a93efc",
+        revision: "sha256:3597a2cbf9a090e73eb5d555b1fd8a80ba50ca7497b4ed586498d112adeceedc",
     },
     Fixture {
         name: "household-contact-actions",
@@ -124,7 +127,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
         ddl_sha256: "f82f2f8376df97fb184c04d31c8e42c291f7a03dbd909828e1bf61612106de35",
-        revision: "sha256:9d64db83b2697548dc61903a0245f5280a9da400bcb7147cb3c54b758e3fd066",
+        revision: "sha256:ff7ac33b11fac3a466a7b1aa4c13d8044f5347f0d45f5fd73c0ed6db92b8542e",
     },
 ];
 

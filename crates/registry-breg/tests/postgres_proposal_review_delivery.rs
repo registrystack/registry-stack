@@ -354,10 +354,10 @@ fn registry_source(selection: Value) -> Value {
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
             "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
             "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
-        "accessProfiles":[{"id":"clerk","default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],"requiredPurposes":["registry-administration"],"permissions":{
+        "accessProfiles":{"clerk": {"default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],"requiredPurposes":["registry-administration"],"permissions":{
             "records":[{"recordType":"target","operations":["create","get","list"],"readableFields":["name","jurisdiction"],"writableFields":["name","jurisdiction"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],
             "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}],
-            "proposals":[{"action":"correct-name","operations":["get","list","submit","cancel","get-review-status"],"ownership":"caller","targets":[{"recordType":"target","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}]})
+            "proposals":[{"action":"correct-name","operations":["get","list","submit","cancel","get-review-status"],"ownership":"caller","targets":[{"recordType":"target","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}}})
 }
 async fn fixture(authority: &Authority) -> client_http::ClientFixture {
     let bindings = authority.registry.clone();
@@ -2428,7 +2428,7 @@ async fn a_handoff_refusal_is_named_only_while_the_refused_submission_is_current
     }
     let authority = Authority::start(false, true).await;
     let mut source = registry_source(json!(policy()));
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] =
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"] =
         json!(["get", "list", "submit", "revise", "cancel"]);
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();

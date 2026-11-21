@@ -61,10 +61,10 @@ fn compiled() -> CompiledRegistry {
             "selectorProfiles":[{"id":"by-subject","fields":["subject"]}],
             "accessLog":{"subjectField":"subject","trustedIntermediaries":["evidence-service"],
                 "exemptions":{"investigator":{"reason":"investigation-policy-canary","delayDays":7}}}}],
-        "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{"records":[permission.clone()]}},
-            {"id":"investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{"records":[permission]}}
-        ]
+        "accessProfiles":{
+            "reader": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{"records":[permission.clone()]}},
+            "investigator": {"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{"records":[permission]}}
+        }
     });
     compile_project(
         &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
@@ -94,26 +94,26 @@ fn compiled_relationships() -> CompiledRegistry {
                     "investigator":{"reason":"target-local-policy-canary","delayDays":7},
                     "relationship-investigator":{"sourceRecordType":"case","reason":"relationship-policy-canary","delayDays":7}}}}
         ],
-        "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
+        "accessProfiles":{
+            "reader": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
                 "records":[
                     {"recordType":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
                 ]
             }},
-            {"id":"investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{
+            "investigator": {"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{
                 "records":[
                     {"recordType":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
                         "readPaths":[{"path":"people","readableFields":["label"]}]},
                     {"recordType":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
                 ]
             }},
-            {"id":"relationship-investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{
+            "relationship-investigator": {"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{
                 "records":[
                     {"recordType":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
                         "readPaths":[{"path":"people","readableFields":["label"]}]}
                 ]
             }}
-        ]
+        }
     });
     compile_project(
         &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
@@ -917,20 +917,20 @@ fn compiled_with_history() -> CompiledRegistry {
             "fields":[{"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
                 {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
             "accessLog":{"subjectField":"subject"}}],
-        "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
+        "accessProfiles":{
+            "reader": {"default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
                 "records":[
                     {"recordType":"entry","operations":["get","snapshot","revisions"],"readableFields":["label"],
                         "revisionAccess":true,"rowBoundaries":"unrestricted"}
                 ]
             }},
-            {"id":"steward","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
+            "steward": {"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
                 "records":[
                     {"recordType":"entry","operations":["create"],"readableFields":["subject","label"],
                         "writableFields":["subject","label"],"rowBoundaries":"unrestricted"}
                 ]
             }}
-        ]
+        }
     });
     compile_project(
         &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),

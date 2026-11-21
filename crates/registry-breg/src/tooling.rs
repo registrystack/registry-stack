@@ -1176,7 +1176,7 @@ mod tests {
         profile_extra: &str,
     ) -> CompiledRegistry {
         let module_bytes = format!(
-            r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"membership","primaryDataset":"temporal-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"subject","type":"string","maximumLength":64,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","type":"temporal-non-overlap","scopeFields":["subject"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"consumer","principalClaim":"principal","operations":[{operations}],{access_fields}{profile_extra}}}]}}]}}"#
+            r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"membership","primaryDataset":"temporal-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"subject","type":"string","maximumLength":64,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","type":"temporal-non-overlap","scopeFields":["subject"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":{{"consumer":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":[{operations}],{access_fields}{profile_extra}}}}}}}]}}"#
         );
         let module = parse_module_json(module_bytes.as_bytes()).expect("module parses");
         let digest = module_digest(&module);
@@ -1195,7 +1195,7 @@ mod tests {
         principal_claim: &str,
     ) -> CompiledRegistry {
         let module_bytes = format!(
-            r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":16,"classification":"{classification}"}}{extra_fields}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"reader","principalClaim":"{principal_claim}","operations":["get"],"readableFields":["code"]}}]{entity_members}}}]}}"#
+            r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":16,"classification":"{classification}"}}{extra_fields}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"{principal_claim}","operations":["get"],"readableFields":["code"]}}}}{entity_members}}}]}}"#
         );
         let module = parse_module_json(module_bytes.as_bytes()).expect("module parses");
         let digest = module_digest(&module);

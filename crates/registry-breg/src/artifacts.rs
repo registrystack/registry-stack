@@ -4862,11 +4862,11 @@ mod spatial_tests {
                     {"id":"location","apiName":"position","type":"crs84-point","precision":9,"classification":"internal"}
                 ]
             }],
-            "accessProfiles":[
-                {"id":"map","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"site","operations":["get","list"],"readableFields":["code","label","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.5,"maximumLatitudeSpanDegrees":0.25}}, "rowBoundaries": "unrestricted"}]}},
-                {"id":"plain","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"site","operations":["get","list"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]}},
-                {"id":"geometry-only","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"site","operations":["get","list"],"readableFields":["location"], "rowBoundaries": "unrestricted"}]}}
-            ]
+            "accessProfiles":{
+                "map": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"site","operations":["get","list"],"readableFields":["code","label","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.5,"maximumLatitudeSpanDegrees":0.25}}, "rowBoundaries": "unrestricted"}]}},
+                "plain": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"site","operations":["get","list"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]}},
+                "geometry-only": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"site","operations":["get","list"],"readableFields":["location"], "rowBoundaries": "unrestricted"}]}}
+            }
         }"#).expect("spatial artifact fixture parses");
         compile_project(&project, &[], CompileProfile::Authoring)
             .expect("spatial artifact fixture compiles")

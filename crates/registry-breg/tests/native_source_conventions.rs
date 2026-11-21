@@ -32,7 +32,7 @@ fn authored_display() -> Value {
 #[test]
 fn presentation_members_use_the_shared_display_text_reader() {
     for base in [
-        "/accessProfiles/0/display",
+        "/accessProfiles/directory-editor/display",
         "/statisticalDatasets/0/display",
         "/recordTypes/0/hooks/0/display",
         "/actions/0/execution/proposal/hooks/0/display",
@@ -62,27 +62,54 @@ fn presentation_duplicates_are_scoped_to_their_own_kind() {
     ];
     let mut source = authored_display();
     for (base, _) in cases {
-        source.pointer_mut(base).unwrap()[0]["display"]["label"] = json!("Reviewed label");
+        let first = if base == "/accessProfiles" {
+            "directory-editor"
+        } else {
+            "0"
+        };
+        let entries = source.pointer_mut(base).unwrap();
+        let entry = match entries {
+            Value::Object(map) => map.get_mut(first).unwrap(),
+            other => &mut other[0],
+        };
+        entry["display"]["label"] = json!("Reviewed label");
     }
     let decoded = read_project_yaml("registry.yaml", &bytes(&source)).unwrap();
     assert_eq!(decoded.document.warnings().warning_count(), 0);
 
     for (base, code) in cases {
         let mut duplicate = source.clone();
-        let entries = duplicate.pointer_mut(base).unwrap().as_array_mut().unwrap();
-        let mut second = entries[0].clone();
-        second["id"] = json!("second-definition");
+        let by_id = base == "/accessProfiles";
+        let entries = duplicate.pointer_mut(base).unwrap();
+        let mut second = if by_id {
+            entries["directory-editor"].clone()
+        } else {
+            entries[0].clone()
+        };
         second["display"]["label"] = json!("REVIEWED\u{200b} LABEL");
-        entries.push(second);
+        if by_id {
+            entries["second-definition"] = second;
+        } else {
+            second["id"] = json!("second-definition");
+            entries.as_array_mut().unwrap().push(second);
+        }
         let decoded = read_project_yaml("registry.yaml", &bytes(&duplicate)).unwrap();
         let report = decoded.document.warnings();
         let warnings = report.diagnostics();
         assert_eq!(warnings.len(), 1, "{}", report.render_human());
         assert_eq!(warnings[0].code, code);
-        assert_eq!(warnings[0].path, format!("{base}/1/display/label"));
+        let (first_key, second_key) = if by_id {
+            ("directory-editor", "second-definition")
+        } else {
+            ("0", "1")
+        };
+        assert_eq!(
+            warnings[0].path,
+            format!("{base}/{second_key}/display/label")
+        );
         assert_eq!(
             warnings[0].related[0].path,
-            format!("{base}/0/display/label")
+            format!("{base}/{first_key}/display/label")
         );
         assert!(warnings[0].message.contains("second-definition"));
     }
@@ -92,13 +119,15 @@ fn presentation_duplicates_are_scoped_to_their_own_kind() {
 fn profile_and_hook_labels_follow_module_extension_namespaces() {
     let mut project = authored_display();
     project["modules"] = json!([{"id":"extension","version":"0.1.0"}]);
-    project["accessProfiles"][0]["display"]["label"] = json!("Reader");
+    project["accessProfiles"]["directory-editor"]["display"]["label"] = json!("Reader");
     project["recordTypes"][0]["hooks"][0]["display"]["label"] = json!("Notification");
     let profile = |id: &str| {
         json!({
-            "id":id,"display":{"label":"RE\u{200b}ADER"},
-            "principalClaim":"registry_principal","requiredScopes":["directory:read"],
-            "operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"
+            id: {
+                "display":{"label":"RE\u{200b}ADER"},
+                "principalClaim":"registry_principal","requiredScopes":["directory:read"],
+                "operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"
+            }
         })
     };
     let hook = |id: &str| {
@@ -112,8 +141,8 @@ fn profile_and_hook_labels_follow_module_extension_namespaces() {
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
         "kind":"BRegModule","id":"extension","version":"0.1.0",
         "extendRecordTypes":[
-            {"recordType":"entry","accessProfiles":[profile("module-reader")],"hooks":[hook("module-notice")]},
-            {"recordType":"entry","accessProfiles":[profile("other-reader")],"hooks":[hook("other-notice")]}
+            {"recordType":"entry","accessProfiles":profile("module-reader"),"hooks":[hook("module-notice")]},
+            {"recordType":"entry","accessProfiles":profile("other-reader"),"hooks":[hook("other-notice")]}
         ]
     });
     let decoded = read_module_yaml("module.yaml", &bytes(&module)).unwrap();
@@ -149,12 +178,12 @@ fn profile_and_hook_labels_follow_module_extension_namespaces() {
             .path
             .starts_with("modules[id=extension].extendRecordTypes[recordType=entry]")));
     }
-    module["extendRecordTypes"][0]["accessProfiles"][0]["display"]["label"] =
+    module["extendRecordTypes"][0]["accessProfiles"]["module-reader"]["display"]["label"] =
         json!("unsafe\u{202e}");
     let report = read_module_yaml("module.yaml", &bytes(&module)).unwrap_err();
     assert!(report.diagnostics().iter().any(|item| {
         item.code == "config.invalid-value"
-            && item.path == "/extendRecordTypes/0/accessProfiles/0/display/label"
+            && item.path == "/extendRecordTypes/0/accessProfiles/module-reader/display/label"
     }));
 }
 
@@ -303,13 +332,8 @@ fn display_text_is_refused_at_each_breg_authoring_boundary() {
 #[test]
 fn lookalike_local_ids_name_and_locate_both_definitions() {
     let mut source = facility();
-    let mut lookalike = source["accessProfiles"][1].clone();
-    lookalike["id"] = json!("facility_reader");
-    let second_index = source["accessProfiles"].as_array().unwrap().len();
-    source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(lookalike);
+    let lookalike = source["accessProfiles"]["facility-reader"].clone();
+    source["accessProfiles"]["facility_reader"] = lookalike;
 
     let report = read_project_yaml("registry.yaml", &bytes(&source)).unwrap_err();
     let diagnostic = report
@@ -317,15 +341,15 @@ fn lookalike_local_ids_name_and_locate_both_definitions() {
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.access-profile.id-collision")
         .expect("lookalike access profiles are refused");
-    assert_eq!(
-        diagnostic.path,
-        format!("/accessProfiles/{second_index}/id")
-    );
+    assert_eq!(diagnostic.path, "/accessProfiles/facility_reader");
     assert!(diagnostic.message.contains("facility-reader"));
     assert!(diagnostic.message.contains("facility_reader"));
     assert!(diagnostic.source.as_ref().unwrap().line.is_some());
     assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].path, "/accessProfiles/1/id");
+    assert_eq!(
+        diagnostic.related[0].path,
+        "/accessProfiles/facility-reader"
+    );
     assert!(diagnostic.related[0].line.is_some());
 }
 
@@ -612,12 +636,8 @@ fn reader_refusals_keep_duplicate_label_warnings_for_projects_and_modules() {
     let mut project = facility();
     project["recordTypes"][0]["display"]["label"] = json!("Café");
     project["recordTypes"][1]["display"]["label"] = json!("CAFE\u{301}");
-    let mut profile = project["accessProfiles"][1].clone();
-    profile["id"] = json!("facility_reader");
-    project["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(profile);
+    let profile = project["accessProfiles"]["facility-reader"].clone();
+    project["accessProfiles"]["facility_reader"] = profile;
     let report = read_project_yaml("registry.yaml", &bytes(&project)).unwrap_err();
     for code in [
         "breg.record-type.duplicate-label",
@@ -950,10 +970,11 @@ fn compiler_warns_for_duplicate_labels_across_modules_and_extensions() {
     project_source["modules"] = json!([{"id":"local-module","version":"0.1.0"}]);
     project_source["functions"] = json!([]);
     project_source["actions"] = json!([]);
-    project_source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .truncate(3);
+    {
+        let profiles = project_source["accessProfiles"].as_object_mut().unwrap();
+        let keep = ["operator-editor", "facility-reader", "directory-editor"];
+        profiles.retain(|id, _| keep.contains(&id.as_str()));
+    }
     project_source["recordTypes"][0]["fields"][0]["display"] = json!({"label":"Café"});
     let project = read_project_yaml("registry.yaml", &bytes(&project_source))
         .unwrap()
@@ -1037,9 +1058,11 @@ fn compiler_warns_for_duplicate_labels_across_modules_and_extensions() {
 fn compiler_scopes_refusal_labels_by_action_across_project_and_module() {
     let mut project_source = facility();
     project_source["modules"] = json!([{"id":"local-module","version":"0.1.0"}]);
-    let mut permission = project_source["accessProfiles"][4]["permissions"]["actions"][0].clone();
+    let mut permission = project_source["accessProfiles"]["facility-correction-author"]
+        ["permissions"]["actions"][0]
+        .clone();
     permission["action"] = json!("module-correct-address");
-    project_source["accessProfiles"][4]["permissions"]["actions"]
+    project_source["accessProfiles"]["facility-correction-author"]["permissions"]["actions"]
         .as_array_mut()
         .unwrap()
         .push(permission);

@@ -51,8 +51,8 @@ fn acceptance_action() -> CompiledAction {
             "plan":{"type":"function","function":"register-plan","inputs":["identifier","given-name","family-name"],
                 "refusals":[{"code":"blank-name","label":"At least one name part is required."}],
                 "writes":[{"id":"person","target":{"recordType":"person"},"operation":"create","fields":["identifier","display-name"]}]}}],
-        "accessProfiles":[{"id":"writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[
-            {"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}]
+        "accessProfiles":{"writer": {"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[
+            {"action":"register-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}}
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let assets = vec![ModuleAssetSource {
@@ -105,11 +105,11 @@ fn characterization_action(script: &str) -> CompiledAction {
             "refusals":[{"code":"blank-label","label":"A label is required."}],
             "writes":[{"id":"record","target":{"recordType":"record"},"operation":"create","fields":["label","count","amount"]}]
         }}],
-        "accessProfiles":[{"id":"writer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+        "accessProfiles":{"writer": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
             "actions":[
                 {"action":"register-record","operations":["invoke"],"targets":[{"recordType":"record","rowBoundaries":"unrestricted"}],"results":["record"]}
             ]
-        }}]
+        }}}
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project_with_assets(

@@ -39,7 +39,7 @@ fn odrl_cli_exports_supported_reads_and_reports_omissions() {
         .unwrap()
         .unwrap()
         .to_json_value();
-    source["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"] =
+    source["accessProfiles"]["directory-editor"]["permissions"]["records"][0]["rowBoundaries"] =
         json!("unrestricted");
     std::fs::write(
         project.join("registry.yaml"),

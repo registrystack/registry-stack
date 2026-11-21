@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- BREAKING: `accessProfiles` is a mapping from each profile id to the rest of
+  its entry, as a pre-1.0 cleanup so a profile has one name and a duplicate
+  cannot be written. The change covers the project's `accessProfiles` and the
+  `accessProfiles` of a module's Record types and of its `extendRecordTypes`
+  entries. The old list shape is refused, and so is an `id` member inside an
+  entry, with a message that names the mapping. Migration: write
+  `accessProfiles: {operator: {principalClaim: ...}}` in place of
+  `accessProfiles: [{id: operator, principalClaim: ...}]`. `bregctl explain`
+  keeps its output shape and lists profiles in id order, and the source
+  pointers it reports name the profile id in place of its position.
 - BREAKING: in the runtime configuration, `database.trustedRootCertificateRef`
   -> `database.caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef`
   the other TLS blocks use. The old key is refused as an unknown key. The value

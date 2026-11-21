@@ -29,13 +29,12 @@ fn project(loader_operations: &[&str]) -> Value {
         "mutationPolicy":{"patch":"proposal-required"},
         "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
       }],
-      "accessProfiles":[{
-        "id":"loader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
+      "accessProfiles":{"loader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
         "permissions":{"records":[{
           "recordType":"enrollment","operations":loader_operations,"readableFields":["label"],"writableFields":["label"],
           "rowBoundaries":"unrestricted"
         }]}
-      }]
+      }}
     })
 }
 
@@ -129,11 +128,7 @@ fn a_batch_plan_is_not_an_import_plan() {
         .as_array_mut()
         .expect("entities")
         .truncate(1);
-    source["accessProfiles"]
-        .as_array_mut()
-        .expect("profiles")
-        .truncate(1);
-    source["accessProfiles"][0]["default"] = json!(true);
+    source["accessProfiles"]["loader"]["default"] = json!(true);
     let registry = compile(&source);
     let plan = DataImportPlan::from_jsonl(
         &registry,

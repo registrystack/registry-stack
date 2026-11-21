@@ -1860,8 +1860,7 @@ mod tests {
                      "required": true, "classification": "internal"}
                 ]
             }],
-            "accessProfiles": [{
-                "id": PROFILE,
+            "accessProfiles": {PROFILE: {
                 "principalClaim": "principal",
                 "requiredScopes": "unrestricted",
                 "permissions": {"records": [{
@@ -1872,7 +1871,7 @@ mod tests {
                     "allowDataExport": true,
                   "rowBoundaries": "unrestricted"
                 }]}
-            }]
+            }}
         });
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         compile_project(&project, &[], CompileProfile::Authoring).unwrap()
@@ -1982,15 +1981,17 @@ mod tests {
                         "rowBoundaries": "unrestricted"
                     }]);
                 }
-                json!({
-                    "id": format!("reviewer-{profile}"),
-                    "default": profile == 0,
-                    "principalClaim": "principal",
-                    "requiredScopes": [format!("review:{profile}")],
-                    "permissions": permissions
-                })
+                (
+                    format!("reviewer-{profile}"),
+                    json!({
+                        "default": profile == 0,
+                        "principalClaim": "principal",
+                        "requiredScopes": [format!("review:{profile}")],
+                        "permissions": permissions
+                    }),
+                )
             })
-            .collect::<Vec<_>>();
+            .collect::<serde_json::Map<_, _>>();
         serde_json::to_vec(&json!({
             "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
             "kind": "BRegProject",
@@ -2697,8 +2698,7 @@ mod tests {
                      "required": true, "classification": "internal"}
                 ]
             }],
-            "accessProfiles": [{
-                "id": PROFILE,
+            "accessProfiles": {PROFILE: {
                 "principalClaim": "principal",
                 "requiredScopes": "unrestricted",
                 "permissions": {"records": [{
@@ -2709,7 +2709,7 @@ mod tests {
                     "allowDataExport": true,
                     "rowBoundaries": "unrestricted"
                 }]}
-            }]
+            }}
         });
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         compile_project(&project, &[], CompileProfile::Authoring).unwrap()

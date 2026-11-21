@@ -931,8 +931,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "set":{"status":{"value":"active"}}
             }]}
         }],
-        "accessProfiles":[{
-            "id":"service-editor",
+        "accessProfiles":{"service-editor": {
             "default":true,
             "principalClaim":"registry_principal",
             "requiredScopes":"unrestricted",
@@ -954,7 +953,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                     "operator":"equals"
                 }]
             }]}
-        }]
+        }}
     });
     let bytes = serde_json::to_vec(&source).expect("clock fixture serializes");
     let project = parse_project_json(&bytes).expect("clock fixture parses");

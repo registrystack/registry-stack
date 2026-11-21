@@ -20,14 +20,13 @@ fn provenance_project() -> registry_breg::contract::RegistryProject {
             "id":"root-case","primaryDataset":"test-dataset","route":"root-cases","mutationMode":"mutable",
             "fields":[{"id":"root-field","type":"string","maximumLength":8,"classification":"internal"}]
           }],
-          "accessProfiles":[{
-            "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+          "accessProfiles":{"reader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
               "records":[
                 {"recordType":"root-case","operations":["get"],"readableFields":["root-field"],"rowBoundaries":"unrestricted"},
                 {"recordType":"module-case","operations":["get"],"readableFields":["base-field","extra-field"],"rowBoundaries":"unrestricted"}
               ]
             }
-          }]
+          }}
         }"#,
     )
     .expect("project parses")
@@ -197,13 +196,12 @@ fn module_free_project_omits_source_module_and_module_origins() {
             "hooks":[{"id":"case-created","phase":"after","trigger":"created","projection":["label"]}],
             "constraints":[{"type":"unique","fields":["label"]}]
           }],
-          "accessProfiles":[{
-            "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+          "accessProfiles":{"reader": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
               "records":[
                 {"recordType":"case","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
               ]
             }
-          }]
+          }}
         }"#,
     )
     .expect("project parses");

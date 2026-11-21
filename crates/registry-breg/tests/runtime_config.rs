@@ -5556,8 +5556,7 @@ fn a_refresh_worker_profile_with_a_consent_boundary_is_refused() {
         "id": "person-view", "recordType": "person",
         "links": [{"id": "register", "projection": "person-indexed", "fromField": "district"}]
     }]);
-    let mut refresh = project["accessProfiles"][0].clone();
-    refresh["id"] = json!("person-refresh");
+    let mut refresh = project["accessProfiles"]["food-targeting"].clone();
     refresh["default"] = json!(false);
     refresh["requesterClients"] = json!(["wfp-scope"]);
     refresh["permissions"] = json!({
@@ -5568,10 +5567,7 @@ fn a_refresh_worker_profile_with_a_consent_boundary_is_refused() {
         }],
         "refreshExternalProjections": ["person-indexed"]
     });
-    project["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(refresh);
+    project["accessProfiles"]["person-refresh"] = refresh;
     let registry = compile_project(
         &parse_project_json(&serde_json::to_vec(&project).unwrap()).expect("the project parses"),
         &[],

@@ -9,7 +9,7 @@ async fn changed_approved_result_id_has_a_specific_412_and_never_applies() {
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
     source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
-    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"]
         .as_array_mut()
         .unwrap()
         .push(json!("get-review-status"));

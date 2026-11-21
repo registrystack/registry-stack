@@ -13,9 +13,9 @@ fn source() -> Value {
         "project":{"id":"access-explanation","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://access.example.test"},
         "recordTypes":[{"id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
           "fields":[{"id":"district","type":"string","maximumLength":32,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"clerk","principalClaim":"registry_principal","requiredScopes":["entry:edit"],
+        "accessProfiles":{"clerk": {"principalClaim":"registry_principal","requiredScopes":["entry:edit"],
           "permissions":{"records":[{"recordType":"entry","operations":["get","patch"],"readableFields":["district"],"writableFields":["district"],
-            "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}]}}]
+            "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}]}}}
     })
 }
 
@@ -41,15 +41,15 @@ fn repeated_action_target_source() -> Value {
             {"id":"second", "target":{"recordType":"entry"}, "operation":"create", "set":{"district":{"fromInput":"second-district"}}}
         ]}
     }]);
-    candidate["accessProfiles"] = json!([{
-        "id":"clerk", "default":true, "principalClaim":"registry_principal",
+    candidate["accessProfiles"] = json!({"clerk": {
+        "default":true, "principalClaim":"registry_principal",
         "requiredScopes":["entry:edit"],
         "permissions":{"actions":[{
             "action":"create-paired-entries", "operations":["invoke"],
             "targets":[{"recordType":"entry", "rowBoundaries":[{"field":"district", "claim":"districts", "operator":"in"}]}],
             "results":["first", "second"]
         }]}
-    }]);
+    }});
     candidate
 }
 
@@ -79,15 +79,15 @@ fn mixed_action_target_source() -> Value {
             }}
         ]}
     }]);
-    candidate["accessProfiles"] = json!([{
-        "id":"clerk", "default":true, "principalClaim":"registry_principal",
+    candidate["accessProfiles"] = json!({"clerk": {
+        "default":true, "principalClaim":"registry_principal",
         "requiredScopes":["entry:edit"],
         "permissions":{"actions":[{
             "action":"create-and-patch-entry", "operations":["invoke"],
             "targets":[{"recordType":"entry", "rowBoundaries":[{"field":"district", "claim":"districts", "operator":"in"}]}],
             "results":["created", "updated"]
         }]}
-    }]);
+    }});
     candidate
 }
 
@@ -104,15 +104,15 @@ fn function_action_target_source() -> Value {
             "id":"entry", "target":{"recordType":"entry"}, "operation":"create", "fields":["district"]
         }]}
     }]);
-    candidate["accessProfiles"] = json!([{
-        "id":"clerk", "default":true, "principalClaim":"registry_principal",
+    candidate["accessProfiles"] = json!({"clerk": {
+        "default":true, "principalClaim":"registry_principal",
         "requiredScopes":["entry:edit"],
         "permissions":{"actions":[{
             "action":"create-entry", "operations":["invoke"],
             "targets":[{"recordType":"entry", "rowBoundaries":[{"field":"district", "claim":"districts", "operator":"in"}]}],
             "results":["entry"]
         }]}
-    }]);
+    }});
     candidate
 }
 
@@ -150,8 +150,8 @@ fn membership_source() -> Value {
                 {"id":"active", "type":"boolean", "classification":"internal"}
             ]}),
     ]);
-    source["accessProfiles"][0]["principalClaim"] = json!("sub");
-    let grant = &mut source["accessProfiles"][0]["permissions"]["records"][0];
+    source["accessProfiles"]["clerk"]["principalClaim"] = json!("sub");
+    let grant = &mut source["accessProfiles"]["clerk"]["permissions"]["records"][0];
     grant["operations"] = json!(["get", "list"]);
     grant["writableFields"] = json!([]);
     grant["rowBoundaries"] = json!("unrestricted");
@@ -208,9 +208,9 @@ fn timer_source() -> Value {
             }]}
         }
     ]);
-    let record_permission = &mut candidate["accessProfiles"][0]["permissions"]["records"][0];
+    let record_permission = &mut candidate["accessProfiles"]["clerk"]["permissions"]["records"][0];
     record_permission["writableFields"] = json!(["district", "active", "activates-at", "note"]);
-    candidate["accessProfiles"][0]["permissions"]["actions"] = json!([{
+    candidate["accessProfiles"]["clerk"]["permissions"]["actions"] = json!([{
         "action":"schedule-entry", "operations":["invoke"],
         "targets":[{"recordType":"entry", "rowBoundaries":[{
             "field":"district", "claim":"districts", "operator":"in"
@@ -232,7 +232,7 @@ fn access_explanation_connects_row_reach_to_typed_claim_requirements() {
     );
     assert_eq!(
         explanation["recordTypes"][0]["profiles"][0]["rowBoundaries"],
-        source()["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"]
+        source()["accessProfiles"]["clerk"]["permissions"]["records"][0]["rowBoundaries"]
     );
     // A project without consent configuration states no consent block.
     assert_eq!(explanation["consent"], serde_json::Value::Null);
@@ -260,7 +260,7 @@ fn access_explanation_connects_row_reach_to_typed_claim_requirements() {
         .contains("not evaluated"));
 
     let mut broad = source();
-    broad["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"] =
+    broad["accessProfiles"]["clerk"]["permissions"]["records"][0]["rowBoundaries"] =
         json!("unrestricted");
     let registry = compile(&broad);
     assert!(registry
@@ -348,7 +348,7 @@ fn access_explanation_names_timer_policy_writers_and_exact_future_authority() {
 fn inspection_reports_count_defaults_without_changing_compiled_profile_serialization() {
     for allow_count in [false, true] {
         let mut source = source();
-        let grant = &mut source["accessProfiles"][0]["permissions"]["records"][0];
+        let grant = &mut source["accessProfiles"]["clerk"]["permissions"]["records"][0];
         grant["operations"] = json!(["get", "list"]);
         grant["writableFields"] = json!([]);
         grant["rowBoundaries"] = json!("unrestricted");
@@ -469,11 +469,12 @@ fn action_target_authority_distinguishes_writes_from_existing_targets() {
 #[test]
 fn action_target_authority_reports_read_only_record_grant_existence() {
     let mut candidate = mixed_action_target_source();
-    let mut read_only_grant = source()["accessProfiles"][0]["permissions"]["records"][0].clone();
+    let mut read_only_grant =
+        source()["accessProfiles"]["clerk"]["permissions"]["records"][0].clone();
     read_only_grant["operations"] = json!(["get", "list"]);
     read_only_grant["writableFields"] = json!([]);
     read_only_grant["rowBoundaries"] = json!("unrestricted");
-    candidate["accessProfiles"][0]["permissions"]["records"] = json!([read_only_grant]);
+    candidate["accessProfiles"]["clerk"]["permissions"]["records"] = json!([read_only_grant]);
 
     let explanation = registry_breg::access::explain_access(&compile(&candidate));
     let authority = explanation
@@ -519,7 +520,7 @@ fn membership_row_reach_is_explicit_and_uses_the_selected_principal() {
         ),
     ] {
         let mut source = membership_source();
-        source["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"] =
+        source["accessProfiles"]["clerk"]["permissions"]["records"][0]["rowBoundaries"] =
             boundaries.clone();
         let registry = compile(&source);
         let explanation = registry_breg::access::explain_access(&registry);
@@ -560,10 +561,11 @@ fn membership_changes_report_authority_narrowing_and_widening() {
         .as_array_mut()
         .unwrap()
         .push(json!({"id":"approved", "type":"boolean", "classification":"internal"}));
-    let mut additional =
-        source["accessProfiles"][0]["permissions"]["records"][0]["membershipBoundaries"][0].clone();
+    let mut additional = source["accessProfiles"]["clerk"]["permissions"]["records"][0]
+        ["membershipBoundaries"][0]
+        .clone();
     additional["activeField"] = json!("approved");
-    let mut boundaries = source["accessProfiles"][0]["permissions"]["records"][0]
+    let mut boundaries = source["accessProfiles"]["clerk"]["permissions"]["records"][0]
         ["membershipBoundaries"]
         .as_array()
         .unwrap()
@@ -571,8 +573,8 @@ fn membership_changes_report_authority_narrowing_and_widening() {
     boundaries.push(additional);
     let registries = (0..=2)
         .map(|count| {
-            source["accessProfiles"][0]["permissions"]["records"][0]["membershipBoundaries"] =
-                json!(&boundaries[..count]);
+            source["accessProfiles"]["clerk"]["permissions"]["records"][0]
+                ["membershipBoundaries"] = json!(&boundaries[..count]);
             compile(&source)
         })
         .collect::<Vec<_>>();
@@ -597,7 +599,7 @@ fn membership_changes_report_authority_narrowing_and_widening() {
 #[test]
 fn synthetic_own_record_preview_reuses_principal_and_refuses_identity_override() {
     let mut source = source();
-    source["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"] =
+    source["accessProfiles"]["clerk"]["permissions"]["records"][0]["rowBoundaries"] =
         json!([{"field":"district","claim":"registry_principal","operator":"equals"}]);
     let registry = compile(&source);
     let mut scenario = json!({

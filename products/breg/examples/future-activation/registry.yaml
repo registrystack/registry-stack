@@ -77,7 +77,7 @@ actions:
           set: {status: {value: active}}
 
 accessProfiles:
-  - id: service-editor
+  service-editor:
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry:services:write]

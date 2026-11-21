@@ -22,7 +22,7 @@ actions:
           operation: create
           set: {label: {fromInput: label}}
 accessProfiles:
-  - id: registrar
+  registrar:
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted

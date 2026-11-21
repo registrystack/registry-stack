@@ -113,11 +113,11 @@ async fn setup_with_options(
     document["actions"][0]["plan"]["writes"].as_array_mut().unwrap().push(json!({
         "id":"local-register", "target":{"fromInput":"local-register"},"operation":"patch","fields":["checked"]
     }));
-    document["accessProfiles"][0]["permissions"]["actions"][0]["targets"].as_array_mut().unwrap().push(json!({
+    document["accessProfiles"]["landholding-registrar"]["permissions"]["actions"][0]["targets"].as_array_mut().unwrap().push(json!({
         "recordType":"local-register", "rowBoundaries":[{"field":"zone","claim":"zone","operator":"equals"}]
     }));
     if local_get {
-        document["accessProfiles"][0]["permissions"]["records"] = json!([{
+        document["accessProfiles"]["landholding-registrar"]["permissions"]["records"] = json!([{
             "recordType":"local-register", "operations":["get"],
             "readableFields":["active","zone"],
             "rowBoundaries":[{"field":"zone","claim":"zone","operator":"equals"}]

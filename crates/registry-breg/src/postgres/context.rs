@@ -2868,8 +2868,7 @@ mod tests {
                   ]
                 }
               ],
-              "accessProfiles":[{
-                "id":"typed","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+              "accessProfiles":{"typed": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "permissions":{"records":[
                     {
                       "recordType":"parent-entry","operations":["get"],"readableFields":["name"],
@@ -2893,7 +2892,7 @@ mod tests {
                     }
                   ]
                 }
-              }],
+              }},
               "vocabularies":[{"id":"colors","values":["red","blue"]}]
             }"#,
         )
@@ -2912,16 +2911,16 @@ mod tests {
                 "fields":[
                     {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                     {"id":"region","type":"string","minimumLength":1,"maximumLength":64,"required":false,"classification":"internal"}]}],
-            "accessProfiles":[
-                {"id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+            "accessProfiles":{
+                "operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "requiredPurposes":["operations"],"permissions":{"records":[{"recordType":"entry","operations":["get"],
                     "readableFields":["tenant","region"],"rowBoundaries":[
                         {"field":"tenant","claim":"tenant_claim","operator":"equals"},
                         {"field":"region","claim":"region_claim","operator":"in"}]}]}},
-                {"id":"viewer","principalClaim":"registry_principal","requiredScopes":"unrestricted",
+                "viewer": {"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "permissions":{"records":[{"recordType":"entry","operations":["get"],"readableFields":["tenant"],
                     "rowBoundaries":[{"field":"id","claim":"record_id_claim","operator":"equals"}]}]}}
-            ]
+            }
         });
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         compile_project(&project, &[], CompileProfile::Authoring).expect("test project compiles")
@@ -2957,8 +2956,7 @@ mod tests {
                     "set":{"status-note":{"fromInput":"status-note"}}}
                 ]}
               }],
-              "accessProfiles":[{
-                "id":"contact-registrar",
+              "accessProfiles":{"contact-registrar": {
                 "default":true,
                 "principalClaim":"registry_principal",
                 "requiredScopes":"unrestricted",
@@ -2969,7 +2967,7 @@ mod tests {
                   "targets":[{"recordType":"household","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],
                   "results":["household-code-update","household-note-update"]
                 }]}
-              }]
+              }}
             }"#,
         )
         .expect("action context project parses");

@@ -101,14 +101,10 @@ fn handler_response_schema_accepts_omitted_slots_across_overlapping_grant_result
     source["functions"] = json!([{"id":"contact-plan","runtime":"rhai","source":"scripts/handler.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}]);
     source["actions"][0]["plan"] = json!({"type":"function","function":"contact-plan","inputs":["household","person-code","legal-name"],"writes":writes});
 
-    let mut limited = source["accessProfiles"][0].clone();
-    limited["id"] = json!("person-result-only");
+    let mut limited = source["accessProfiles"]["contact-registrar"].clone();
     limited["default"] = json!(false);
     limited["permissions"]["actions"][0]["results"] = json!(["person"]);
-    source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(limited);
+    source["accessProfiles"]["person-result-only"] = limited;
     let source = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let compiled = compile_project_with_assets(&source, &[], &[ModuleAssetSource {
         module: None, path: "scripts/handler.rhai".to_owned(),
@@ -280,8 +276,7 @@ fn household_contact_project(extra: &str) -> String {
                 "set":{"contact-person":{"fromEffect":"person"}}}
             ]}
           }],
-          "accessProfiles":[{
-            "id":"contact-registrar",
+          "accessProfiles":{"contact-registrar": {
             "default":true,
             "principalClaim":"registry_principal",
             "requiredScopes":["registry:contact:register"],
@@ -296,7 +291,7 @@ fn household_contact_project(extra: &str) -> String {
               ],
               "results":["person","membership","household"]
             }]}
-          }]
+          }}
 
         __EXTRA__}"#
     .replace("__EXTRA__", extra)
@@ -565,8 +560,7 @@ fn create_effects_may_rely_entirely_on_server_generated_fields() {
                     "set": {}
                 }]}
             }],
-            "accessProfiles": [{
-                "id": "operator",
+            "accessProfiles": {"operator": {
                 "default": true,
                 "principalClaim": "principal",
                 "requiredScopes": "unrestricted",
@@ -578,7 +572,7 @@ fn create_effects_may_rely_entirely_on_server_generated_fields() {
                         "rowBoundaries": "unrestricted"
                     }]
                 }]}
-            }]
+            }}
         });
 
         let compiled = compile_json(&serde_json::to_vec(&project).unwrap())
@@ -595,8 +589,8 @@ fn action_grants_refuse_request_metadata_projection_overrides() {
         serde_json::from_str(&household_contact_project("")).unwrap();
     compile_json(&serde_json::to_vec(&source).unwrap())
         .expect("action grant with omitted request metadata settings compiles");
-    source["accessProfiles"][0]["permissions"]["actions"][0]["readableRequestFields"] =
-        serde_json::json!([]);
+    source["accessProfiles"]["contact-registrar"]["permissions"]["actions"][0]
+        ["readableRequestFields"] = serde_json::json!([]);
     let failure = registry_breg::parse_project_yaml(&serde_json::to_vec(&source).unwrap())
         .expect_err("request metadata permissions do not apply to immediate actions");
     let refusals: Vec<_> = failure
@@ -608,7 +602,7 @@ fn action_grants_refuse_request_metadata_projection_overrides() {
         refusals,
         [(
             "config.unknown-key",
-            "project.accessProfiles[0].permissions.actions[0].readableRequestFields"
+            "project.accessProfiles.contact-registrar.permissions.actions[0].readableRequestFields"
         )]
     );
 }
@@ -649,7 +643,7 @@ fn action_grants_refuse_unused_target_locks() {
             "route":"unused-records", "mutationMode":"mutable",
             "fields":[{"id":"label", "type":"string", "maximumLength":32, "classification":"internal"}]
         }));
-    source["accessProfiles"][0]["permissions"]["actions"][0]["targets"]
+    source["accessProfiles"]["contact-registrar"]["permissions"]["actions"][0]["targets"]
         .as_array_mut()
         .unwrap()
         .push(serde_json::json!({"recordType":"unused-record", "rowBoundaries":"unrestricted"}));
@@ -735,11 +729,11 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
           "set":{"label":{"fromInput":"label"},"alpha":{"fromEffect":"alpha"}}
         }]}
       }],
-      "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{
+      "accessProfiles":{"operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{
         "action":"make-cycle",
         "operations":["invoke"],
         "targets":[{"recordType":"alpha","rowBoundaries":"unrestricted"},{"recordType":"beta","rowBoundaries":"unrestricted"}]
-      }]}}]
+      }]}}}
     }"#;
     let failure = compile_json(cycle).expect_err("create dependencies cannot cycle");
     assert!(failure
@@ -765,12 +759,12 @@ fn action_inputs_resolve_project_vocabulary_values_for_type_compatibility() {
             "inputs":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}],
             "plan":{"type":"fixed","effects":[{"id":"asset","target":{"recordType":"asset"},"operation":"create","set":{"kind":{"fromInput":"kind"}}}]}
           }],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{
             "action":"create-asset",
             "operations":["invoke"],
             "targets":[{"recordType":"asset","rowBoundaries":"unrestricted"}],
             "results":["asset"]
-          }]}}]
+          }]}}}
         }"#,
     )
     .expect("action input vocabulary values resolve from project vocabularies");
@@ -798,11 +792,11 @@ fn action_inputs_reject_unknown_project_vocabulary_references() {
             "inputs":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}],
             "plan":{"type":"fixed","effects":[{"id":"asset","target":{"recordType":"asset"},"operation":"create","set":{"kind":{"fromInput":"kind"}}}]}
           }],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{
             "action":"create-asset",
             "operations":["invoke"],
             "targets":[{"recordType":"asset","rowBoundaries":"unrestricted"}]
-          }]}}]
+          }]}}}
         }"#,
     )
     .expect_err("unknown action input vocabularies are refused");
@@ -839,8 +833,8 @@ fn action_bounds_apply_before_runtime_target_work() {
           "recordTypes":[{{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
             "fields":[{{"id":"label","type":"string","maximumLength":32,"classification":"internal"}}]}}],
           "actions":[{{"execution":{{"mode":"immediate"}},"id":"bulk-fix","inputs":[{}],"plan":{{"type":"fixed","effects":[{}]}}}}],
-          "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
-            "permissions":{{"actions":[{{"action":"bulk-fix","operations":["invoke"],"targets":[{}]}}]}}}}]
+          "accessProfiles":{{"operator":{{"default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
+            "permissions":{{"actions":[{{"action":"bulk-fix","operations":["invoke"],"targets":[{}]}}]}}}}}}
         }}"#,
         inputs.join(","),
         effects.join(","),
@@ -902,13 +896,12 @@ fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
                     "operation": "create", "set": Value::Object(assignments)
                 }]}
             }],
-            "accessProfiles": [{
-                "id": "operator", "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
+            "accessProfiles": {"operator": { "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
                 "permissions": {"actions": [{
                     "action": "create-bounded-record", "operations": ["invoke"],
                     "targets": [{"recordType": "bounded-record", "rowBoundaries": "unrestricted"}]
                 }]}
-            }]
+            }}
         });
         let failure = compile_json(&serde_json::to_vec(&project).unwrap())
             .expect_err("over-budget action plans are refused before runtime");
@@ -1001,8 +994,7 @@ fn generated_create_fields_count_toward_the_proposal_snapshot_ceiling() {
                 }]
             }
         }],
-        "accessProfiles": [{
-            "id": "operator",
+        "accessProfiles": {"operator": {
             "default": true,
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
@@ -1011,7 +1003,7 @@ fn generated_create_fields_count_toward_the_proposal_snapshot_ceiling() {
                 "operations": ["start"],
                 "targets": [{"recordType": "bounded-record", "rowBoundaries": "unrestricted"}]
             }]}
-        }]
+        }}
     });
 
     let failure = compile_json(&serde_json::to_vec(&project).unwrap())

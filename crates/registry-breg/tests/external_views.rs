@@ -47,7 +47,7 @@ externalViews:
         projection: approved-subjects
         fromField: subject-key
 accessProfiles:
-  - id: reader
+  reader:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [local-consultation]
@@ -135,7 +135,7 @@ fn a_refresh_grant_outside_the_rule_names_the_rule_and_its_fix() {
     let source = PROJECT.replace(
         "accessProfiles:\n",
         "accessProfiles:
-  - id: refresher
+  refresher:
     actorKind: service
     requesterClients: [refresh-worker]
     principalClaim: registry_principal
@@ -208,7 +208,7 @@ fn the_field_a_view_links_from_is_marked_on_its_root_entity() {
 fn refresh_link_gets_a_managed_index_matching_its_row_policy() {
     let source = format!(
         "{PROJECT}\n{}",
-        r#"  - id: refresh
+        r#"  refresh:
     principalClaim: registry_principal
     actorKind: service
     requesterClients: [refresh-worker]
@@ -246,7 +246,7 @@ fn refresh_link_gets_a_managed_index_matching_its_row_policy() {
 fn refresh_link_row_policy_on_canonical_id_uses_the_physical_record_id() {
     let source = format!(
         "{PROJECT}\n{}",
-        r#"  - id: refresh
+        r#"  refresh:
     principalClaim: registry_principal
     actorKind: service
     requesterClients: [refresh-worker]

@@ -99,9 +99,8 @@ fn registry(automatic: bool, reviewed: bool) -> registry_breg::CompiledRegistry 
                 "set":{"name":{"fromInput":"value"}}
             }]}
         }],
-        "accessProfiles":[
-            {
-                "id":"clerk",
+        "accessProfiles":{
+            "clerk": {
                 "default":true,
                 "principalClaim":"registry_principal",
                 "requiredScopes":["proposal:manage"],
@@ -127,8 +126,7 @@ fn registry(automatic: bool, reviewed: bool) -> registry_breg::CompiledRegistry 
                     }]
                 }
             },
-            {
-                "id":"task-agent",
+            "task-agent": {
                 "principalClaim":"registry_principal",
                 "actorKind":"agent",
                 "requesterClients":["agent-client"],
@@ -149,7 +147,7 @@ fn registry(automatic: bool, reviewed: bool) -> registry_breg::CompiledRegistry 
                     }]
                 }
             }
-        ]
+        }
     });
     compile_project(
         &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),

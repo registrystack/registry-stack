@@ -344,15 +344,14 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 ]
             }]
         }],
-        "accessProfiles":[{
-            "id":"reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+        "accessProfiles":{"reader": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"records":[{
                 "recordType":"entry","operations":["create","get","list"],
                 "readableFields":["scenario","short-code","description","amount","count","state"],
                 "writableFields":["scenario"],
                 "rowBoundaries":"unrestricted"
             }]}
-        }]
+        }}
     }"#)
     .expect("derived-value fixture parses");
     let sql = format!(

@@ -413,8 +413,7 @@ fn compiled_registry(
                 {"id":"population","sql":"population.sql","key":"id","execution":"live","fields":[{"id":"population","type":"int64","classification":"internal"}]}
             ]
         }],
-        "accessProfiles":[{
-            "id":"reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+        "accessProfiles":{"reader": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"records":[{
                 "recordType":"entry","operations":["create","get","list","lookup"],
                 "readableFields":["code","active","population"],
@@ -423,7 +422,7 @@ fn compiled_registry(
                 "lookups":[{"selector":"by-code","valueOrigin":"request"}],"allowCount":true,
                 "rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]
             }]}
-        }]
+        }}
     }"#).expect("derived dependency fixture parses");
     let population = if invalid_population {
         "SELECT r.id AS id, other.amount AS population FROM registry_source.entry r JOIN registry_source.entry other ON other.tenant = r.tenant"

@@ -91,9 +91,8 @@
       "competentAuthority": "cross-product-conformance-authority"
     }
   },
-  "accessProfiles": [
-    {
-      "id": "public-reader",
+  "accessProfiles": {
+    "public-reader": {
       "default": true,
       "principalClaim": "registry_principal",
       "requiredScopes": [
@@ -118,8 +117,7 @@
         ]
       }
     },
-    {
-      "id": "protected-reader",
+    "protected-reader": {
       "default": true,
       "principalClaim": "registry_principal",
       "requiredScopes": [
@@ -144,8 +142,7 @@
         ]
       }
     },
-    {
-      "id": "fixture-writer",
+    "fixture-writer": {
       "default": true,
       "principalClaim": "registry_principal",
       "requiredScopes": [
@@ -185,7 +182,7 @@
         ]
       }
     }
-  ],
+  },
   "recordTypes": [
     {
       "id": "public-unit",

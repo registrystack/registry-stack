@@ -55,7 +55,7 @@ profile admits the request only when the token carries its `principalClaim`, eve
 
 ```yaml title="registry.yaml" test-excerpt="facility/registry.yaml"
 accessProfiles:
-  - id: operator-editor
+  operator-editor:
     principalClaim: registry_principal
     requiredScopes: ["registry:operator:write"]
     requiredPurposes: [facility-administration]
@@ -183,7 +183,7 @@ bregctl check facility
 ```
 
 ```text test-excerpt
-warning[breg.access.profile-related-disclosure] <project-dir>/registry.yaml:237:15 /accessProfiles/1/permissions/records/1/readPaths/0
+warning[breg.access.profile-related-disclosure] <project-dir>/registry.yaml:237:15 /accessProfiles/facility-reader/permissions/records/1/readPaths/0
   profile `facility-reader` can read `operator` records linked to `facility` through `facility-assignment` on read path `operators`; it sees fields jurisdiction, operator-code, status under its own `facility` row boundaries, and access profiles declared for `operator` do not apply
   next: Remove fields that these readers should not see from this read path's readableFields, or remove the read path; use a direct permission on the related record type when its own row boundaries should apply.
 0 errors, 1 warning in 3 files
@@ -246,7 +246,7 @@ Add the boundary to the facility's read grant:
 
 ```yaml
 accessProfiles:
-  - id: member
+  member:
     principalClaim: principal
     requiredScopes:
       - records:read

@@ -368,9 +368,8 @@
       ]
     }
   ],
-  "accessProfiles": [
-    {
-      "id": "public-register",
+  "accessProfiles": {
+    "public-register": {
       "default": true,
       "principalClaim": "registry_principal",
       "requiredScopes": [
@@ -429,8 +428,7 @@
         ]
       }
     },
-    {
-      "id": "business-registrar",
+    "business-registrar": {
       "principalClaim": "registry_principal",
       "requiredScopes": "unrestricted",
       "requiredPurposes": [
@@ -545,7 +543,7 @@
         ]
       }
     }
-  ],
+  },
   "vocabularies": [
     {
       "id": "entity-status",

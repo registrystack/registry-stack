@@ -47,21 +47,21 @@ fn registry() -> registry_breg::CompiledRegistry {
         "plan":{"type":"fixed","effects":[{"id":"contact","target":{"recordType":"contact"},"operation":"create",
             "set":{"name":{"fromInput":"name"},"email":{"fromInput":"email"},"jurisdiction":{"fromInput":"jurisdiction"}}}]}}]);
     // The replaced Actions take the canonical profile's Action grants with them.
-    let editor = source["accessProfiles"][0]["permissions"]
+    let editor = source["accessProfiles"]["directory-editor"]["permissions"]
         .as_object_mut()
         .unwrap();
     editor.remove("actions");
     editor.remove("proposals");
-    source["accessProfiles"].as_array_mut().unwrap().push(json!({"id":"task-creator","actorKind":"agent",
+    source["accessProfiles"].as_object_mut().unwrap().insert("task-creator".to_owned(), json!({"actorKind":"agent",
         "requesterClients":["agent-client"],"principalClaim":"registry_principal","requiredScopes":["contact:create"],
         "requiredPurposes":["directory-administration"],"taskGrant":{"sourceIssuer":"https://casework.example"},
         "permissions":{"actions":[{"action":"create-contact","operations":["invoke"],"targets":[{"recordType":"contact",
             "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],"results":["contact"]}]}}));
-    source["accessProfiles"].as_array_mut().unwrap().push(json!({"id":"agent-reader","actorKind":"agent",
+    source["accessProfiles"].as_object_mut().unwrap().insert("agent-reader".to_owned(), json!({"actorKind":"agent",
         "requesterClients":["agent-client"],"principalClaim":"registry_principal","requiredScopes":["contact:create"],
         "requiredPurposes":["directory-administration"],"permissions":{"records":[{"recordType":"contact","operations":["get"],
             "readableFields":["name","email","jurisdiction"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}}));
-    source["accessProfiles"][1]["permissions"]["records"] = json!([{"recordType":"contact","operations":["get"],
+    source["accessProfiles"]["task-creator"]["permissions"]["records"] = json!([{"recordType":"contact","operations":["get"],
         "readableFields":["name","email","jurisdiction"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]);
     compile_project(
         &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),

@@ -43,7 +43,7 @@ recordTypes:
       rowBoundaries:
         - {field: district, claim: assigned_districts, operator: in}
 accessProfiles:
-  - id: district-reader
+  district-reader:
     principalClaim: registry_principal
     requiredScopes: [record:read]
     requiredPurposes: [record-administration]

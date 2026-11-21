@@ -4748,18 +4748,17 @@ mod tests {
         use tracing::Level;
 
         let mut source = project();
-        source["accessProfiles"]
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::json!({
-                "id":"writer","principalClaim":"registry_principal",
+        source["accessProfiles"].as_object_mut().unwrap().insert(
+            "writer".to_owned(),
+            serde_json::json!({"principalClaim":"registry_principal",
                 "requiredScopes":["registry.write"],"requiredPurposes":["consultation"],
                 "permissions":{"records":[{
                     "recordType":"local-record","operations":["create","get"],
                     "readableFields":["tenant"],"writableFields":["subject-key","tenant"],
                     "rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]
                 }]}
-            }));
+            }),
+        );
         let registry = compile_project(&source);
         let fixture = Activated::new(&registry).await;
         let scope = fixture

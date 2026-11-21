@@ -142,8 +142,14 @@ fn unchanged_pre_timer_store_registry_plans_one_engine_transition_without_author
     let root = native_minimal_package();
     let predecessor = load_predecessor_package(&root, &local_package_context())
         .expect("the exact supported legacy package remains a planning baseline");
-    let source = fs::read(root.join("source/registry.yaml")).expect("fixture source reads");
-    let project = parse_project_yaml(&source).expect("fixture source parses");
+    // The legacy package records its source in the list shape that predates
+    // id-keyed access profiles, and its digests forbid editing it, so the
+    // current compiler reads the same source with that one entry re-keyed.
+    let source =
+        fs::read_to_string(root.join("source/registry.yaml")).expect("fixture source reads");
+    let rekeyed = source.replace("  - id: directory-editor\n", "  directory-editor:\n");
+    assert_ne!(source, rekeyed, "the legacy access profile is re-keyed");
+    let project = parse_project_yaml(rekeyed.as_bytes()).expect("fixture source parses");
     let candidate = compile_project(&project, &[], CompileProfile::Production)
         .expect("the current compiler accepts the timer-free project");
     let mut baseline = predecessor.migration_baseline().clone();

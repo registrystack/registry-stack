@@ -2842,8 +2842,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               }
             }]
           }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"case","operations":["create","get","list"],
@@ -2851,7 +2850,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["jurisdiction","label","restricted_note"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("hook delivery fixture parses");
@@ -2884,8 +2883,7 @@ fn local_hook_compiled_registry() -> registry_breg::CompiledRegistry {
               }
             }]
           }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":{"records":[{
               "recordType":"case","operations":["create","get","list"],
@@ -2893,7 +2891,7 @@ fn local_hook_compiled_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["jurisdiction","label","restricted_note"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("local hook fixture parses");

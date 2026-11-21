@@ -15,11 +15,11 @@ pub fn source(hooks: Value) -> Value {
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"restricted"}],
             "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
             "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
-        "accessProfiles":[{"id":"clerk","default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],"requiredPurposes":["registry-administration"],"permissions":{
+        "accessProfiles":{"clerk": {"default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],"requiredPurposes":["registry-administration"],"permissions":{
             "records":[{"recordType":"target","operations":["create","get"],"readableFields":["name"],"writableFields":["name"],"rowBoundaries":"unrestricted"}],
             "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target","rowBoundaries":"unrestricted"}]}],
             "proposals":[{"action":"correct-name","operations":["get","edit","submit","cancel","apply"],"ownership":"caller",
-                "readableAttachments":["support"],"writableAttachments":["support"],"targets":[{"recordType":"target","rowBoundaries":"unrestricted"}]}]}}]})
+                "readableAttachments":["support"],"writableAttachments":["support"],"targets":[{"recordType":"target","rowBoundaries":"unrestricted"}]}]}}}})
 }
 
 pub fn url_hook() -> Value {

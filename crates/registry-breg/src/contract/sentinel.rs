@@ -559,17 +559,37 @@ impl From<AccessProfileSource> for AuthoredModuleProfile {
 pub(super) fn module_access_profiles<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<AccessProfileSource>, D::Error> {
-    Ok(Vec::<AuthoredModuleProfile>::deserialize(deserializer)?
-        .into_iter()
-        .map(AccessProfileSource::from)
-        .collect())
+    Ok(
+        registry_platform_yaml::id_keyed_by_local_id::<D, AuthoredModuleProfile>(deserializer)?
+            .into_iter()
+            .map(AccessProfileSource::from)
+            .collect(),
+    )
 }
 
 pub(super) fn serialize_module_access_profiles<S: Serializer>(
     profiles: &[AccessProfileSource],
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    serializer.collect_seq(profiles.iter().cloned().map(AuthoredModuleProfile::from))
+    let authored = profiles
+        .iter()
+        .cloned()
+        .map(AuthoredModuleProfile::from)
+        .collect::<Vec<_>>();
+    registry_platform_yaml::serialize_id_keyed(&authored, serializer)
+}
+
+#[cfg(feature = "schema")]
+pub(super) fn module_access_profiles_schema(
+    generator: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
+    registry_platform_yaml::id_keyed_schema::<AuthoredModuleProfile>(generator)
+}
+
+impl registry_platform_yaml::Identified for AuthoredModuleProfile {
+    fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 /// A profile's permissions written as anything but the mapping that groups

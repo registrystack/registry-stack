@@ -980,8 +980,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"secret","type":"string","required":true,"maximumLength":100,"classification":"restricted"}
             ]
           }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal",
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal",
             "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
             "permissions":{"records":[{
               "recordType":"widget",
@@ -989,8 +988,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "readableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
             }]}
-          },{
-            "id":"provenance","principalClaim":"registry_principal",
+          },"provenance": {"principalClaim":"registry_principal",
             "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
             "permissions":{"records":[{
               "recordType":"widget",
@@ -999,7 +997,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}],
               "provenanceFields":["kind","reasonCode","sourceReferences"]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("revision HTTP fixture parses");
@@ -1035,8 +1033,7 @@ fn event_record_registry() -> registry_breg::CompiledRegistry {
               "occurredAt":{"at":"occurred-on"}
             }
           }],
-          "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal",
+          "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal",
             "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
             "permissions":{"records":[{
               "recordType":"widget",
@@ -1044,8 +1041,7 @@ fn event_record_registry() -> registry_breg::CompiledRegistry {
               "readableFields":["label","holder","occurred-on"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
             }]}
-          },{
-            "id":"reader","principalClaim":"registry_principal",
+          },"reader": {"principalClaim":"registry_principal",
             "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
             "permissions":{"records":[{
               "recordType":"widget",
@@ -1053,7 +1049,7 @@ fn event_record_registry() -> registry_breg::CompiledRegistry {
               "readableFields":["label","holder","occurred-on"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
             }]}
-          }]
+          }}
         }"#,
     )
     .expect("event record history fixture parses");

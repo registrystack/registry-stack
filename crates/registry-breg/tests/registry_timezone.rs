@@ -53,14 +53,13 @@ fn date_interval_project(start_type: &str) -> Value {
             ],
             "temporal": {"startField": "valid-from", "endField": "valid-to"}
         }],
-        "accessProfiles": [{
-            "id": "reader", "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
+        "accessProfiles": {"reader": { "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
             "permissions": {"records": [{
                 "recordType": "licence", "operations": ["list"],
                 "readableFields": ["holder", "valid-from", "valid-to"],
                 "rowBoundaries": "unrestricted"
             }]}
-        }]
+        }}
     })
 }
 
@@ -271,7 +270,7 @@ fn a_live_derived_field_reading_the_evaluation_date_requires_a_timezone() {
         "id": "age", "sql": "sql/age.sql", "key": "id", "execution": "live",
         "fields": [{"id": "observed-on", "type": "date", "classification": "internal"}]
     }]);
-    source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"]
+    source["accessProfiles"]["reader"]["permissions"]["records"][0]["readableFields"]
         .as_array_mut()
         .unwrap()
         .push(json!("observed-on"));

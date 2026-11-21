@@ -32,7 +32,7 @@ recordTypes:
     fields:
       - {id: code, type: string, maximumLength: 32, classification: internal}
 accessProfiles:
-  - id: reader
+  reader:
     principalClaim: registry_principal
     requiredScopes: unrestricted
 ";
@@ -221,7 +221,7 @@ fn a_group_that_is_omitted_or_empty_grants_nothing() {
 fn a_profile_writes_its_permissions_back_grouped() {
     let project = read(GROUPED);
     let written = serde_json::to_value(&project).expect("the project serializes");
-    let permissions = &written["accessProfiles"][0]["permissions"];
+    let permissions = &written["accessProfiles"]["reader"]["permissions"];
     assert_eq!(permissions["records"][0]["recordType"], "entry");
     assert_eq!(permissions["records"][0]["rowBoundaries"], "unrestricted");
     assert_eq!(permissions["actions"][0]["action"], "register");
@@ -241,7 +241,7 @@ fn a_profile_writes_its_permissions_back_grouped() {
     // A profile that grants nothing writes every group empty.
     let none = serde_json::to_value(read("")).expect("the project serializes");
     assert_eq!(
-        none["accessProfiles"][0]["permissions"],
+        none["accessProfiles"]["reader"]["permissions"],
         serde_json::json!({"records": [], "proposals": [], "actions": [], "datasets": []})
     );
 }
@@ -269,7 +269,7 @@ fn one_permissions_list_is_refused_with_the_grouping_named() {
     for (written, (marker, columns)) in lists {
         let refusal = refusal(written);
         assert_eq!(refusal.code, "config.invalid-value", "{refusal:?}");
-        assert_eq!(refusal.path, "/accessProfiles/0/permissions");
+        assert_eq!(refusal.path, "/accessProfiles/reader/permissions");
         let (line, column) = position(written, marker);
         assert_eq!(
             (refusal.line, refusal.column),
@@ -293,7 +293,7 @@ fn one_permissions_list_is_refused_with_the_grouping_named() {
         panic!("one diagnostic: {failure:?}");
     };
     assert_eq!(diagnostic.code, "config.invalid-value");
-    assert_eq!(diagnostic.path, "project.accessProfiles[0].permissions");
+    assert_eq!(diagnostic.path, "project.accessProfiles.reader.permissions");
     assert!(
         diagnostic.message.contains("permissions.records"),
         "{}",
@@ -380,7 +380,7 @@ fn a_permission_written_under_another_group_is_refused_where_it_is_written() {
         },
     ];
     for case in cases {
-        let item = format!("/accessProfiles/0/permissions/{}/0", case.group);
+        let item = format!("/accessProfiles/reader/permissions/{}/0", case.group);
         let refusals = refusals(case.written);
         assert_eq!(
             refusals.len(),
@@ -426,7 +426,7 @@ fn an_action_permission_states_no_row_reach() {
     assert_eq!(refusal.code, "config.unknown-key", "{refusal:?}");
     assert_eq!(
         refusal.path,
-        "/accessProfiles/0/permissions/actions/0/rowBoundaries"
+        "/accessProfiles/reader/permissions/actions/0/rowBoundaries"
     );
     assert_eq!(
         (refusal.line, refusal.column),
@@ -470,7 +470,7 @@ fn an_action_permission_carries_no_entity_member() {
         assert_eq!(refusal.code, "config.unknown-key", "{refusal:?}");
         assert_eq!(
             refusal.path,
-            format!("/accessProfiles/0/permissions/actions/0/{member}")
+            format!("/accessProfiles/reader/permissions/actions/0/{member}")
         );
         assert_eq!(
             (refusal.line, refusal.column),
@@ -488,7 +488,7 @@ fn an_entity_permission_states_its_row_reach() {
 ";
     let refusal = refusal(written);
     assert_eq!(refusal.code, "config.invalid-value", "{refusal:?}");
-    assert_eq!(refusal.path, "/accessProfiles/0/permissions/records/0");
+    assert_eq!(refusal.path, "/accessProfiles/reader/permissions/records/0");
     assert_eq!(
         (refusal.line, refusal.column),
         position(written, "recordType: entry")
@@ -512,7 +512,7 @@ fn an_entity_permission_states_its_row_reach() {
     assert_eq!(refusal.code, "config.invalid-value", "{refusal:?}");
     assert_eq!(
         refusal.path,
-        "/accessProfiles/0/permissions/records/0/rowBoundaries"
+        "/accessProfiles/reader/permissions/records/0/rowBoundaries"
     );
     assert!(
         refusal
@@ -560,7 +560,7 @@ fn a_group_lists_only_its_own_operations() {
         assert_eq!(refusal.code, "config.unknown-variant", "{refusal:?}");
         assert_eq!(
             refusal.path,
-            format!("/accessProfiles/0/permissions/{group}/0/operations/0")
+            format!("/accessProfiles/reader/permissions/{group}/0/operations/0")
         );
         assert_eq!(
             (refusal.line, refusal.column),
@@ -580,7 +580,7 @@ fn a_dataset_permission_lists_at_least_one_operation() {
     assert_eq!(refusal.code, "config.invalid-value", "{refusal:?}");
     assert_eq!(
         refusal.path,
-        "/accessProfiles/0/permissions/datasets/0/operations"
+        "/accessProfiles/reader/permissions/datasets/0/operations"
     );
     assert_eq!((refusal.line, refusal.column), position(written, "[]"));
     assert_eq!(
@@ -612,7 +612,7 @@ fn a_permission_lists_each_operation_once() {
         assert_eq!(refusal.code, "config.duplicate-item", "{refusal:?}");
         assert_eq!(
             refusal.path,
-            format!("/accessProfiles/0/permissions/{group}/0/operations/1")
+            format!("/accessProfiles/reader/permissions/{group}/0/operations/1")
         );
     }
 }
@@ -627,7 +627,7 @@ fn permissions_holds_only_the_four_groups() {
 ";
     let refusal = refusal(written);
     assert_eq!(refusal.code, "config.unknown-key", "{refusal:?}");
-    assert_eq!(refusal.path, "/accessProfiles/0/permissions/entity");
+    assert_eq!(refusal.path, "/accessProfiles/reader/permissions/entity");
     assert_eq!((refusal.line, refusal.column), position(written, "entity:"));
     assert!(
         refusal.action.contains("records"),

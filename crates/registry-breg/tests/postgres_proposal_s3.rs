@@ -72,7 +72,7 @@ fn registry_source(automatic: bool) -> Value {
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
             "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
             "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
-        "accessProfiles":[{"id":"clerk","default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
+        "accessProfiles":{"clerk": {"default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
             "requiredPurposes":["registry-administration"],"permissions":{
                 "records":[{"recordType":"target","operations":["create","get","list"],"readableFields":["name","jurisdiction"],
                     "writableFields":["name","jurisdiction"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],
@@ -80,7 +80,7 @@ fn registry_source(automatic: bool) -> Value {
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}],
                 "proposals":[{"action":"correct-name","operations":["get","list","edit","submit","revise","rebase","retry","cancel","apply"],
                     "ownership":"caller","readableAttachments":["support"],"writableAttachments":["support"],"targets":[{"recordType":"target",
-                    "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}]});
+                    "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}}});
     source
 }
 fn compile(source: Value) -> registry_breg::CompiledRegistry {
@@ -722,8 +722,7 @@ async fn review_document_binding_refusals_precede_s3_and_revise_never_follows_su
     let mut source = registry_source(false);
     source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({"id":"review-document","fields":{
         "document":{"type":"document","slot":"support"},"changes":{"type":"changes","recordType":"target","fields":["name"]}}});
-    let mut reviewer = source["accessProfiles"][0].clone();
-    reviewer["id"] = json!("reviewer");
+    let mut reviewer = source["accessProfiles"]["clerk"].clone();
     reviewer.as_object_mut().unwrap().remove("default");
     reviewer["permissions"]
         .as_object_mut()
@@ -745,10 +744,7 @@ async fn review_document_binding_refusals_precede_s3_and_revise_never_follows_su
         .as_object_mut()
         .unwrap()
         .remove("writableAttachments");
-    source["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(reviewer);
+    source["accessProfiles"]["reviewer"] = reviewer;
     let storage = s3.storage.clone();
     let fixture = client_http::ClientFixture::start_with_mutations(
         compile(source),

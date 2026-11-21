@@ -44,7 +44,7 @@ actions:
           operation: patch
           set: {label: {fromInput: case-label}}
 accessProfiles:
-  - id: registrar
+  registrar:
     default: true
     principalClaim: registry_principal
     requiredScopes: [case.rename]
@@ -57,7 +57,7 @@ accessProfiles:
             - recordType: case
               rowBoundaries: [{field: region, claim: regions, operator: in}]
           results: [renamed]
-  - id: supervisor
+  supervisor:
     principalClaim: registry_principal
     requiredScopes: [case.supervise]
     requiredPurposes: [case-management]
@@ -67,7 +67,7 @@ accessProfiles:
           operations: [invoke]
           targets: [{recordType: case, rowBoundaries: unrestricted}]
           results: []
-  - id: client-human
+  client-human:
     principalClaim: registry_principal
     actorKind: human
     requesterClients: [agent-client]
@@ -82,6 +82,15 @@ accessProfiles:
               rowBoundaries: [{field: region, claim: regions, operator: in}]
           results: [renamed]
 "#;
+
+/// Profiles are held sorted by id, so tests address one by its id.
+fn profile_position(project: &crate::RegistryProject, id: &str) -> usize {
+    project
+        .access_profiles
+        .iter()
+        .position(|profile| profile.id == id)
+        .unwrap()
+}
 
 fn compiled() -> Arc<CompiledRegistry> {
     let project = parse_project_yaml(PROJECT.as_bytes()).expect("action fixture parses");
@@ -475,7 +484,13 @@ fn delegated_standing_agent_reads_only_its_bounded_review_context() {
     }))
     .unwrap();
     project.actions.push(proposed);
-    project.access_profiles[0].permissions.actions.push(
+    {
+        let at = profile_position(&project, "registrar");
+        &mut project.access_profiles[at]
+    }
+    .permissions
+    .actions
+    .push(
         serde_json::from_value(json!({
             "action":"propose-rename",
             "operations":["start"],
@@ -1974,16 +1989,16 @@ async fn task_statistics_reads_bind_the_grant_to_the_request_principal_and_purpo
         "recordTypes":[{"id":"record","primaryDataset":"records","route":"records","mutationMode":"mutable",
             "fields":[{"id":"active","type":"boolean","required":true,"classification":"internal"},
                 {"id":"occurred-on","type":"date","required":true,"classification":"internal"}]}],
-        "accessProfiles":[
-            {"id":"publisher","principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{
+        "accessProfiles":{
+            "publisher": {"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{
                 "records":[{"recordType":"record","operations":["list"],"rowBoundaries":"unrestricted","allowCount":true,
                     "readableFields":["active","occurred-on"],"filterableFields":["active","occurred-on"]}],
                 "datasets":[{"dataset":"counts","operations":["publish","read-releases"]}]}},
-            {"id":"task-reader","principalClaim":"registry_principal","actorKind":"agent",
+            "task-reader": {"principalClaim":"registry_principal","actorKind":"agent",
                 "requesterClients":["agent-client"],"requiredScopes":["statistics:read"],
                 "requiredPurposes":["case-management","case-audit"],
                 "taskGrant":{"sourceIssuer":"https://casework.example"},
-                "permissions":{"datasets":[{"dataset":"counts","operations":["read-releases"]}]}}],
+                "permissions":{"datasets":[{"dataset":"counts","operations":["read-releases"]}]}}},
         "statisticalDatasets":[{"id":"counts","unit":"record","population":"active eq true",
             "period":{"type":"flow","field":"occurred-on","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["active"],"disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}}]});
@@ -2111,9 +2126,10 @@ async fn availability_compares_a_current_date_guard_against_the_registry_local_d
         .replace("    plan:\n", "    commitGuards:\n      targets: [{input: case-ref, field: opens-on, currentDate: on-or-after}]\n    plan:\n");
     let mut project = parse_project_yaml(source.as_bytes()).unwrap();
     let permission = json!({"recordType":"case","operations":["get"],"readableFields":["label","region","opens-on"],"rowBoundaries":"unrestricted"});
-    let mut profile = serde_json::to_value(&project.access_profiles[0]).unwrap();
+    let at = profile_position(&project, "registrar");
+    let mut profile = serde_json::to_value(&project.access_profiles[at]).unwrap();
     profile["permissions"]["records"] = json!([permission]);
-    project.access_profiles[0] = serde_json::from_value(profile).unwrap();
+    project.access_profiles[at] = serde_json::from_value(profile).unwrap();
     let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
     let late_evening_utc = time::macros::datetime!(2026-10-30 23:30 UTC);
     // Colombo is already on 31 October at 23:30 UTC.
@@ -2174,7 +2190,7 @@ async fn availability_never_probes_hidden_fields_or_borrows_another_profiles_rea
     ] {
         let mut project = parse_project_yaml(source.as_bytes()).unwrap();
         let permission = json!({"recordType":"case","operations":["get"],"readableFields":readable,"rowBoundaries":"unrestricted"});
-        let owner = if reads { 0 } else { 1 };
+        let owner = profile_position(&project, if reads { "registrar" } else { "supervisor" });
         let mut profile = serde_json::to_value(&project.access_profiles[owner]).unwrap();
         profile["permissions"]["records"] = json!([permission]);
         project.access_profiles[owner] = serde_json::from_value(profile).unwrap();

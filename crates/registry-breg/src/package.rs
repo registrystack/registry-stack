@@ -5601,14 +5601,13 @@ mod spatial_projection_migration_tests {
                 "fields":[{fields}],
                 "geojson":{{"geometryField":"geometry"}}
               }}],
-              "accessProfiles":[{{
-                "id":"map-reader","principalClaim":"principal","requiredScopes":"unrestricted",
+              "accessProfiles":{{"map-reader":{{"principalClaim":"principal","requiredScopes":"unrestricted",
                 "permissions":{{"records":[{{
                   "recordType":"area","operations":["get","list"],
                   "rowBoundaries":"unrestricted","readableFields":["geometry"],
                   "spatialQueries":{{"bbox":{{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}}}}
                 }}]}}
-              }}]
+              }}}}
             }}"#
         );
         let project = parse_project_json(source.as_bytes()).expect("spatial project parses");

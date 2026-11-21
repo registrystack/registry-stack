@@ -321,11 +321,11 @@ async fn stock_to_keycloak_preserves_native_proposal_issuer_isolation() {
         {"id":"value","type":"string","required":true,"maximumLength":100,"classification":"internal"}],
         "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
         "plan":{"type":"fixed","effects":[{"id":"label","target":{"fromInput":"target"},"operation":"patch","set":{"label":{"fromInput":"value"}}}]}}],
-        "accessProfiles":[{"id":"clerk","default":true,"principalClaim":"registry_principal","requiredScopes":["registry:read"],"requiredPurposes":["registry-administration"],
+        "accessProfiles":{"clerk": {"default":true,"principalClaim":"registry_principal","requiredScopes":["registry:read"],"requiredPurposes":["registry-administration"],
         "permissions":{"records":[{"recordType":"record","operations":["create","get"],"readableFields":["label","district"],"writableFields":["label","district"],
         "rowBoundaries":[{"field":"district","claim":"districts","operator":"equals"}]}],
         "actions":[{"action":"correct-label","operations":["start"],"targets":[{"recordType":"record","rowBoundaries":[{"field":"district","claim":"districts","operator":"equals"}]}]}],
-        "proposals":[{"action":"correct-label","operations":["get","submit","apply"],"ownership":"caller","targets":[{"recordType":"record","rowBoundaries":[{"field":"district","claim":"districts","operator":"equals"}]}]}]}}]});
+        "proposals":[{"action":"correct-label","operations":["get","submit","apply"],"ownership":"caller","targets":[{"recordType":"record","rowBoundaries":[{"field":"district","claim":"districts","operator":"equals"}]}]}]}}}});
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     let stock = authenticator(&registry, root, &journey.stock, &journey.audience);

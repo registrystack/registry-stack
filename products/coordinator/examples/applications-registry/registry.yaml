@@ -42,7 +42,7 @@ actions:
           operation: patch
           fields: [information-requested, reason]
 accessProfiles:
-  - id: workflow-actions
+  workflow-actions:
     principalClaim: sub
     requiredScopes: [applications:act]
     actorKind: service

@@ -296,7 +296,7 @@ fn proposal_policy_sources(add_submitter: bool, add_optional_field: bool) -> (Ve
         json!([{"id": "casework-main", "protocol": "id.registrystack.org/protocols/review/v1"}]);
     let profile = |id: &str, default: bool| {
         json!({
-            "id": id, "default": default, "principalClaim": "principal", "requiredScopes": "unrestricted",
+            id: {"default": default, "principalClaim": "principal", "requiredScopes": "unrestricted",
             "permissions": {
                 "records": [{"recordType": "asset", "operations": ["get", "list"],
                     "readableFields": ["label"], "rowBoundaries": "unrestricted"}],
@@ -305,14 +305,15 @@ fn proposal_policy_sources(add_submitter: bool, add_optional_field: bool) -> (Ve
                 "proposals": [{"action": "correct-label", "operations": ["get", "list", "submit"],
                     "readableInputs": ["asset", "label"], "ownership": "caller",
                     "targets": [{"recordType": "asset", "rowBoundaries": "unrestricted"}]}]
-            }
+            }}
         })
     };
-    let mut profiles = vec![profile("reader", true)];
+    let mut profiles = profile("reader", true);
     if add_submitter {
-        profiles.push(profile("backup-submitter", false));
+        let backup = profile("backup-submitter", false);
+        profiles["backup-submitter"] = backup["backup-submitter"].clone();
     }
-    project["accessProfiles"] = json!(profiles);
+    project["accessProfiles"] = profiles;
     (serde_json::to_vec(&project).unwrap(), module_bytes)
 }
 

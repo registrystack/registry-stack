@@ -1008,7 +1008,7 @@ pub(crate) mod tests {
         value["project"]["id"] = json!("Notices");
         assert_eq!(refused(&value)[0].1, "/project/id");
         let mut value = valid();
-        value["accessProfiles"] = json!([]);
+        value["accessProfiles"] = json!({});
         assert_eq!(refused(&value)[0].1, "/accessProfiles");
     }
 

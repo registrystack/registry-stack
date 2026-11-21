@@ -66,7 +66,7 @@ recordTypes:
       - {id: code, type: string, required: true, maximumLength: 32, classification: internal}
       - {id: owner, type: string, required: true, maximumLength: 64, classification: internal}
 accessProfiles:
-  - id: reader
+  reader:
     default: true
     principalClaim: sub
     requiredScopes: ["entry:read"]
@@ -435,7 +435,7 @@ fn statistical_route_inspection_matches_generated_client_contract() {
         .to_json_value();
     // The added required fields are outside the canonical Actions' plans.
     source.as_object_mut().unwrap().remove("actions");
-    let editor = source["accessProfiles"][0]["permissions"]
+    let editor = source["accessProfiles"]["directory-editor"]["permissions"]
         .as_object_mut()
         .unwrap();
     editor.remove("actions");
@@ -447,8 +447,7 @@ fn statistical_route_inspection_matches_generated_client_contract() {
             json!({"id":"active","type":"boolean","required":true,"classification":"internal"}),
             json!({"id":"event-date","type":"date","required":true,"classification":"internal"}),
         ]);
-    source["accessProfiles"].as_array_mut().unwrap().push(json!({
-        "id":"analyst","principalClaim":"principal","requiredScopes":["statistics:read"],
+    source["accessProfiles"].as_object_mut().unwrap().insert("analyst".to_owned(), json!({"principalClaim":"principal","requiredScopes":["statistics:read"],
         "permissions":{
             "records":[{"recordType":"contact","operations":["list"],"readableFields":["active","event-date"],
                 "filterableFields":["active","event-date"],"rowBoundaries":"unrestricted","allowCount":true}],

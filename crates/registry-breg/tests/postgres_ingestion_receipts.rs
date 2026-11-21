@@ -1261,8 +1261,7 @@ const FIXTURE_HEAD: &str = r#"{
   }],"#;
 
 const FIXTURE_TAIL: &str = r#"
-  "accessProfiles":[{
-    "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+  "accessProfiles":{"operator": {"default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management","case-review"],
     "permissions":{"records":[{
       "recordType":"widget","operations":["create","get","patch","batch"],
@@ -1270,7 +1269,7 @@ const FIXTURE_TAIL: &str = r#"
       "writableFields":["jurisdiction","label","quantity"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
     }]}
-  }]
+  }}
 }"#;
 
 /// The shared ingestion fixture with one restricted, encrypted field added,

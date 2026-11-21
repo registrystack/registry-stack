@@ -207,7 +207,7 @@ actions:
             status: {value: inactive}
 
 accessProfiles:
-  - id: operator-editor
+  operator-editor:
     principalClaim: registry_principal
     requiredScopes: ["registry:operator:write"]
     requiredPurposes: [facility-administration]
@@ -219,7 +219,7 @@ accessProfiles:
           writableFields: [operator-code, status, jurisdiction]
           rowBoundaries:
             - {field: jurisdiction, claim: jurisdiction, operator: equals}
-  - id: facility-reader
+  facility-reader:
     principalClaim: registry_principal
     requiredScopes: ["registry:facility:read"]
     requiredPurposes: [facility-administration]
@@ -243,7 +243,7 @@ accessProfiles:
           filterableFields: [facility, operator]
           rowBoundaries:
             - {field: jurisdiction, claim: jurisdiction, operator: equals}
-  - id: directory-editor
+  directory-editor:
     default: true
     principalClaim: registry_principal
     requiredScopes: ["registry:directory:write"]
@@ -256,7 +256,7 @@ accessProfiles:
           writableFields: [name, email, jurisdiction]
           rowBoundaries:
             - {field: jurisdiction, claim: jurisdiction, operator: equals}
-  - id: facility-registrar
+  facility-registrar:
     principalClaim: registry_principal
     requiredScopes: ["registry:facility:register"]
     requiredPurposes: [facility-administration]
@@ -275,7 +275,7 @@ accessProfiles:
               rowBoundaries:
                 - {field: jurisdiction, claim: jurisdiction, operator: equals}
           results: [facility, assignment]
-  - id: facility-correction-author
+  facility-correction-author:
     principalClaim: registry_principal
     requiredScopes: ["registry:facility:correction:submit"]
     requiredPurposes: [facility-administration]
@@ -312,7 +312,7 @@ accessProfiles:
             - recordType: facility
               rowBoundaries:
                 - {field: jurisdiction, claim: jurisdiction, operator: equals}
-  - id: facility-correction-applier
+  facility-correction-applier:
     principalClaim: registry_principal
     requiredScopes: ["registry:facility:correction:apply"]
     requiredPurposes: [facility-administration]
@@ -330,7 +330,7 @@ accessProfiles:
             - recordType: facility
               rowBoundaries:
                 - {field: jurisdiction, claim: jurisdiction, operator: equals}
-  - id: proposal-reviewer
+  proposal-reviewer:
     principalClaim: registry_principal
     requiredScopes: ["registry:proposal:review"]
     requiredPurposes: [facility-review]
@@ -350,7 +350,7 @@ accessProfiles:
               rowBoundaries:
                 - {field: jurisdiction, claim: jurisdiction, operator: equals}
 
-  - id: casework-review-status
+  casework-review-status:
     actorKind: service
     principalClaim: registry_principal
     requesterClients: [casework-service]

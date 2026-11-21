@@ -60,7 +60,7 @@ actions:
             applicant: {fromInput: applicant}
 
 accessProfiles:
-  - id: application-clerk
+  application-clerk:
     default: true
     principalClaim: registry_principal
     requiredScopes: ["registry:applications:write"]

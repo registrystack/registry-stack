@@ -3282,12 +3282,12 @@ fn project_bytes(module_digest: &str) -> Vec<u8> {
 
 fn module_bytes(successor: bool) -> Vec<u8> {
     let second = if successor {
-        r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}"#
+        r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}"#
     } else {
         ""
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}{second}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":{{"reader":{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}}}}}{second}]}}"#
     )
     .into_bytes()
 }
@@ -3295,7 +3295,7 @@ fn module_bytes(successor: bool) -> Vec<u8> {
 /// One module whose `holder` entity carries an encrypted restricted field, so
 /// a production package built from it requires field-encryption key state.
 fn module_bytes_with_encrypted_field() -> Vec<u8> {
-    r#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"holder","primaryDataset":"neutral-registry","route":"holders","mutationMode":"mutable","fields":[{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},{"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"},{"id":"secret","type":"string","maximumLength":256,"required":true,"classification":"restricted","encrypted":true,"lookup":{"normalization":["trim","uppercase"],"unique":true}}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["jurisdiction","label","secret"],"requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
+    r#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"holder","primaryDataset":"neutral-registry","route":"holders","mutationMode":"mutable","fields":[{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},{"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"},{"id":"secret","type":"string","maximumLength":256,"required":true,"classification":"restricted","encrypted":true,"lookup":{"normalization":["trim","uppercase"],"unique":true}}],"accessProfiles":{"reader": {"principalClaim":"principal","operations":["get","list"],"readableFields":["jurisdiction","label","secret"],"requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}}}]}"#
         .to_owned()
         .into_bytes()
 }

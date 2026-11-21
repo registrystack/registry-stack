@@ -60,8 +60,7 @@ fn project_source(definition: Value, use_site: &str) -> Value {
         json!([])
     };
     let access_profiles = if uses_action {
-        json!([{
-            "id": "operator",
+        json!({"operator": {
             "default": true,
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
@@ -71,9 +70,9 @@ fn project_source(definition: Value, use_site: &str) -> Value {
                 "targets": [{"recordType": "entry", "rowBoundaries": "unrestricted"}],
                 "results": ["entry"]
             }]}
-        }])
+        }})
     } else {
-        json!([])
+        json!({})
     };
     json!({
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
@@ -339,8 +338,7 @@ fn module_host(with_action_permission: bool) -> RegistryProject {
         "modules": [{"id": "definitions", "version": "1"}]
     });
     if with_action_permission {
-        source["accessProfiles"] = json!([{
-            "id": "operator",
+        source["accessProfiles"] = json!({"operator": {
             "default": true,
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
@@ -350,7 +348,7 @@ fn module_host(with_action_permission: bool) -> RegistryProject {
                 "targets": [{"recordType": "entry", "rowBoundaries": "unrestricted"}],
                 "results": ["entry"]
             }]}
-        }]);
+        }});
     }
     read_project_yaml("registry.yaml", &bytes(&source))
         .expect("the module host parses")

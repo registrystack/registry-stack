@@ -725,10 +725,10 @@ pub(crate) mod tests {
             ]}],
             "externalProjections":[{"id":"projection","recordType":"external-record","sourceRoute":"batch","sourceRouteVersion":"1","purpose":"consultation","scope":"eligible","mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["label","hidden"]}],
             "externalViews":[{"id":"view","recordType":"local-record","links":[{"id":"link","projection":"projection","fromField":"subject-key"}]}],
-            "accessProfiles":[{"id":"reader","principalClaim":"registry_principal","requiredScopes":["registry.read"],"requiredPurposes":["consultation"],"permissions":{
+            "accessProfiles":{"reader": {"principalClaim":"registry_principal","requiredScopes":["registry.read"],"requiredPurposes":["consultation"],"permissions":{
                 "records":[{"recordType":"local-record","operations":["get","list"],"allowCount":true,"rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}],
                 "externalViews":[{"view":"view","links":[{"link":"link","readableFields":["label"],"filterableFields":["label"],"sortableFields":["label"],"allowCount":true}]}]
-            }}]
+            }}}
         })
     }
 
@@ -1343,8 +1343,8 @@ mod postgres_tests {
             .push(serde_json::json!({"id":"issued","type":"date","classification":"internal"}));
         for path in [
             "/externalProjections/0/fields",
-            "/accessProfiles/0/permissions/externalViews/0/links/0/readableFields",
-            "/accessProfiles/0/permissions/externalViews/0/links/0/sortableFields",
+            "/accessProfiles/reader/permissions/externalViews/0/links/0/readableFields",
+            "/accessProfiles/reader/permissions/externalViews/0/links/0/sortableFields",
         ] {
             project
                 .pointer_mut(path)

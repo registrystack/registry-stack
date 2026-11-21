@@ -61,8 +61,7 @@ fn project_value() -> Value {
                 }
             ]
         }],
-        "accessProfiles": [{
-            "id": "editor",
+        "accessProfiles": {"editor": {
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
             "permissions": {"records": [{
@@ -72,7 +71,7 @@ fn project_value() -> Value {
                 "writableFields": ["jurisdiction"],
                 "rowBoundaries": "unrestricted"
             }]}
-        }]
+        }}
     })
 }
 
@@ -198,7 +197,7 @@ fn generated_identifier_semantics_are_strictly_validated() {
     for (expected, generated, companion) in cases {
         let mut project = project_value();
         project["recordTypes"][0]["fields"] = json!([companion, generated]);
-        project["accessProfiles"] = json!([]);
+        project["accessProfiles"] = json!({});
         let failure = compile(&project).expect_err(expected);
         assert!(
             failure
@@ -383,7 +382,7 @@ fn generated_fields_cannot_be_classified_above_internal() {
 #[test]
 fn generated_identifiers_cannot_be_caller_writable() {
     let mut project = project_value();
-    project["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] =
+    project["accessProfiles"]["editor"]["permissions"]["records"][0]["writableFields"] =
         json!(["jurisdiction", "registration-code"]);
     let failure = compile(&project).expect_err("generated identifier write grant is refused");
     assert!(failure
@@ -409,8 +408,7 @@ fn fixed_actions_cannot_supply_server_generated_identifiers() {
             }
         }]}
     }]);
-    project["accessProfiles"] = json!([{
-        "id": "operator",
+    project["accessProfiles"] = json!({"operator": {
         "default": true,
         "principalClaim": "registry_principal",
         "requiredScopes": "unrestricted",
@@ -419,7 +417,7 @@ fn fixed_actions_cannot_supply_server_generated_identifiers() {
             "operations": ["invoke"],
             "targets": [{"recordType": "record", "rowBoundaries": "unrestricted"}]
         }]}
-    }]);
+    }});
 
     let failure = compile(&project).expect_err("Action cannot set a generated identifier");
     assert!(failure
@@ -482,8 +480,7 @@ fn create_effect_bounds_include_server_generated_fields() {
                 "set": Value::Object(set)
             }]}
         }]);
-        project["accessProfiles"] = json!([{
-            "id": "operator",
+        project["accessProfiles"] = json!({"operator": {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
@@ -492,7 +489,7 @@ fn create_effect_bounds_include_server_generated_fields() {
                 "operations": [operation],
                 "targets": [{"recordType": "record", "rowBoundaries": "unrestricted"}]
             }]}
-        }]);
+        }});
 
         let failure = compile(&project).expect_err("generated field exceeds create context bound");
         assert!(
