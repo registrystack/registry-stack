@@ -320,7 +320,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
     # A renamed consumed fact refuses before changing any authored input.
     field = next(field for field in fields if field["id"] == "status")
     field.update(id="lifecycle-status", apiName="lifecycleStatus")
-    for profile in model["accessProfiles"]:
+    for profile in model["accessProfiles"].values():
         for permission in profile["permissions"]["records"]:
             for key in ["readableFields", "writableFields"]:
                 if key in permission:
