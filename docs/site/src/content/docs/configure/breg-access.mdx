@@ -262,6 +262,9 @@ cannot drop or change it.
   (`breg.access-profile.required-filters-field-not-equality-filterable`);
 - sits on a grant without `list`
   (`breg.access-profile.required-filters-list-required`);
+- sits on a grant with `allowDataExport: true`
+  (`breg.access-profile.required-filters-export-unsupported`). A bulk export lists its pages
+  without a filter, so it could never read its first page;
 - has an empty alternative, repeats an alternative, has more than eight alternatives, or has an
   alternative of more than 32 fields, the most predicates one `$filter` may carry
   (`breg.access-profile.required-filters-empty`, `breg.access-profile.required-filters-duplicate`,
@@ -283,8 +286,8 @@ bregctl check facility
 
 `requiredFilters` governs `list` only. That includes the paged collection reads that share its
 grant, such as a temporal `current` or `as-of` list and a GIS collection with `bbox`. It does not
-change lookups, a get, a read path, a bulk export, or a `snapshot` read. A profile that holds those
-grants can still enumerate through them, so grant them only where the caller may enumerate. The same
+change lookups, a get, a read path, or a `snapshot` read. A profile that holds those grants can
+still enumerate through them, so grant them only where the caller may enumerate. The same
 metadata that lists `filterableFields` for a surface also lists its `requiredFilters`, so a client
 can ask for the right criteria before it searches. The ODRL export omits the grant's `list`
 permission, with the reason `required-filters`, and still exports its `get`.
