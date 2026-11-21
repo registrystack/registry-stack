@@ -384,6 +384,7 @@ fn immediate_action_metadata_and_operation_filter_selected_profile() {
     let operation = super::openapi_action_operation(
         route,
         action,
+        registry.entities(),
         super::OpenApiAccessProfiles::Selected("contact-auditor"),
     );
     assert_eq!(operation["x-registry-accessProfile"], "contact-auditor");
@@ -987,5 +988,106 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
 }"#,
     )
     .expect("fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles")
+}
+
+#[test]
+fn a_caller_document_declares_the_workflow_write_refusal_only_to_a_bound_writer() {
+    let registry = compiled_bound_writer_registry();
+    let action = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "set-person-phone")
+        .expect("compiled action exists");
+    let route = registry
+        .actions()
+        .routes
+        .iter()
+        .find(|route| route.id == "actions.set-person-phone.invoke")
+        .expect("compiled invoke route exists");
+    for (profile, declared) in [("registrar", true), ("officer", false)] {
+        let operation = super::openapi_action_operation(
+            route,
+            action,
+            registry.entities(),
+            super::OpenApiAccessProfiles::Selected(profile),
+        );
+        assert_eq!(
+            operation["responses"]["403"].is_object(),
+            declared,
+            "{profile} invoke"
+        );
+        let visible = BTreeSet::from([(
+            "propose-person-phone".to_owned(),
+            profile.to_owned(),
+            crate::model::ProposalOperation::Apply,
+        )]);
+        let mut paths = serde_json::Map::new();
+        super::append_proposal_openapi(
+            &mut paths,
+            registry.actions(),
+            registry.entities(),
+            Some(&visible),
+        );
+        assert_eq!(
+            paths["/v1/proposals/{proposal_id}/apply"]["post"]["responses"]["403"].is_object(),
+            declared,
+            "{profile} apply"
+        );
+    }
+}
+
+/// `registrar` and `officer` both set the phone number through an immediate
+/// Action and apply a manual Proposal that sets it. A condition withholds the
+/// number of a protected person from every profile but `officer`.
+fn compiled_bound_writer_registry() -> CompiledRegistry {
+    let inputs = json!([
+        {"id": "person", "apiName": "personId", "type": "reference", "target": "person",
+         "required": true, "classification": "internal"},
+        {"id": "phone", "apiName": "phone", "type": "string", "maximumLength": 32,
+         "required": true, "classification": "internal"}]);
+    let plan = json!({"type": "fixed", "effects": [
+        {"id": "contact", "target": {"fromInput": "person"}, "operation": "patch",
+         "set": {"phone": {"fromInput": "phone"}}}]});
+    let targets = json!([{"recordType": "person", "rowBoundaries": "unrestricted"}]);
+    let profile = |id: &str, default: bool| {
+        json!({"id": id, "default": default, "principalClaim": "registry_principal",
+            "requiredScopes": [format!("registry.{id}")],
+            "permissions": {
+                "records": [{"recordType": "person", "operations": ["get", "list"],
+                    "rowBoundaries": "unrestricted",
+                    "readableFields": ["family-name", "protected", "phone"]}],
+                "actions": [
+                    {"action": "set-person-phone", "operations": ["invoke"], "targets": targets},
+                    {"action": "propose-person-phone", "operations": ["start"], "targets": targets}],
+                "proposals": [{"action": "propose-person-phone", "ownership": "caller",
+                    "operations": ["get", "list", "edit", "submit", "cancel", "apply"],
+                    "targets": targets}]}})
+    };
+    let source = json!({"datasets": [{"id": "test-dataset"}],
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1", "kind": "BRegProject",
+        "project": {"id": "bound-writer", "version": "1", "defaultLanguage": "en",
+            "canonicalBaseIri": "https://bound-writer.example.test"},
+        "recordTypes": [{"id": "person", "primaryDataset": "test-dataset", "route": "people",
+            "mutationMode": "mutable", "classification": "internal",
+            "fields": [
+                {"id": "family-name", "type": "string", "maximumLength": 64, "classification": "internal"},
+                {"id": "protected", "type": "boolean", "classification": "internal"},
+                {"id": "phone", "type": "string", "maximumLength": 32, "classification": "internal"}],
+            "disclosureConditions": [{"id": "hide-phone",
+                "when": [{"type": "field-equals", "field": "protected", "value": true}],
+                "withhold": "fields", "fields": ["phone"], "exemptProfiles": ["officer"]}]}],
+        "actions": [
+            {"id": "set-person-phone", "inputs": inputs, "plan": plan,
+             "execution": {"mode": "immediate"}},
+            {"id": "propose-person-phone", "inputs": inputs, "plan": plan,
+             "commitGuards": {"targets": [{"input": "person", "revision": "unchanged"}]},
+             "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"},
+                 "application": {"mode": "manual"}, "retention": {"mode": "operator-erase"}}}}],
+        "accessProfiles": [profile("registrar", true), profile("officer", false)]
+    });
+    let project =
+        parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles")
 }

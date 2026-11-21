@@ -34,6 +34,7 @@ pub(super) fn visible_actions<'a>(
 
 pub(super) fn append_openapi(
     surfaces: &[AuthorizedActionSurface<'_>],
+    entities: &BTreeMap<String, CompiledEntity>,
     paths: &mut Map<String, Value>,
     schemas: &mut Map<String, Value>,
 ) {
@@ -50,6 +51,7 @@ pub(super) fn append_openapi(
             openapi_action_operation(
                 surface.route,
                 action,
+                entities,
                 OpenApiAccessProfiles::Selected(surface.context.selected_profile()),
             ),
         );

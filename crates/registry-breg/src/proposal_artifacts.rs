@@ -6,10 +6,15 @@ use crate::model::{CompiledActionExecution, ProposalOperation};
 pub(crate) fn append_proposal_openapi(
     paths: &mut Map<String, Value>,
     actions: &CompiledActionInventory,
+    entities: &BTreeMap<String, CompiledEntity>,
     visible: Option<&BTreeSet<(String, String, ProposalOperation)>>,
 ) {
     let mut permissions: BTreeMap<ProposalOperation, (BTreeSet<String>, Vec<Value>)> =
         BTreeMap::new();
+    // A manual application writes as the applier, so the apply operation may
+    // be refused when a profile it describes may apply a Proposal whose plan
+    // can be refused as that profile.
+    let mut apply_may_refuse_write = false;
     for action in &actions.actions {
         let CompiledActionExecution::Proposal { proposal } = &action.execution else {
             continue;
@@ -40,6 +45,8 @@ pub(crate) fn append_proposal_openapi(
                     }
                 }
             }
+            apply_may_refuse_write |= permitted(ProposalOperation::Apply)
+                && action_may_refuse_write(action, entities, &grant.profile_id);
             let document_fields = proposal
                 .review_context
                 .as_ref()
@@ -211,6 +218,9 @@ pub(crate) fn append_proposal_openapi(
                 .expect("operation responses")
                 .remove("409");
         } else if method == "post" {
+            if operation == ProposalOperation::Apply && apply_may_refuse_write {
+                document["responses"]["403"] = json!({"description":"The application writes outside what the selected access profile may write: a disclosure condition binds it on a record type the plan patches (`write.outside-boundary`)"});
+            }
             let schema = match operation {
                 ProposalOperation::Apply => proposal_apply_input_schema(),
                 ProposalOperation::Edit | ProposalOperation::Rebase => json!({"anyOf":inputs}),
