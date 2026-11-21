@@ -2270,11 +2270,12 @@
           "type": "array"
         },
         "requiredFilters": {
-          "default": [],
-          "description": "Alternative search criteria; a `list` must satisfy at least one.",
+          "description": "Alternative search criteria; a `list` must satisfy at least one. Omit to put no criteria on lists.",
           "items": {
             "$ref": "#/$defs/RequiredFilterSource"
           },
+          "maxItems": 8,
+          "minItems": 1,
           "type": "array"
         },
         "revisionAccess": {
@@ -6279,10 +6280,12 @@
                   "type": "array"
                 },
                 "requiredFilters": {
-                  "description": "Alternative search criteria; a `list` must satisfy at least one.",
+                  "description": "Alternative search criteria; a `list` must satisfy at least one. Omit to put no criteria on lists.",
                   "items": {
                     "$ref": "#/$defs/RequiredFilterSource"
                   },
+                  "maxItems": 8,
+                  "minItems": 1,
                   "type": "array"
                 },
                 "requiredPurposes": {
