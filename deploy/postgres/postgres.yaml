@@ -7,15 +7,22 @@ data:
   # creates NOSUPERUSER roles only, so rejecting postgres over the network
   # covers every superuser role. A role later granted SUPERUSER by hand is
   # not covered and needs its own reject line.
+  #
+  # No role opens a network session on the maintenance or template databases.
+  # Product databases are separated by the CONNECT privilege, not by these
+  # rules: each product's provisioning revokes it from PUBLIC and grants it to
+  # that product's roles only, so adding a product needs no change here.
   pg_hba.conf: |
-    local   all   postgres                  peer
-    local   all   all                       reject
-    hostssl all   postgres 0.0.0.0/0        reject
-    hostssl all   postgres ::/0             reject
-    hostssl all   all      0.0.0.0/0        scram-sha-256
-    hostssl all   all      ::/0             scram-sha-256
-    host    all   all      0.0.0.0/0        reject
-    host    all   all      ::/0             reject
+    local   all                           postgres                 peer
+    local   all                           all                      reject
+    hostssl all                           postgres   0.0.0.0/0     reject
+    hostssl all                           postgres   ::/0          reject
+    hostssl postgres,template0,template1  all        0.0.0.0/0     reject
+    hostssl postgres,template0,template1  all        ::/0          reject
+    hostssl all                           all        0.0.0.0/0     scram-sha-256
+    hostssl all                           all        ::/0          scram-sha-256
+    host    all                           all        0.0.0.0/0     reject
+    host    all                           all        ::/0          reject
 ---
 apiVersion: v1
 kind: Service
