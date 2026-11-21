@@ -451,9 +451,10 @@ The package records the engine-owned timer store; you do not supply timer schema
 Later releases build successor packages from the package this release activated.
 [Change an active registry](../../operate/breg-changes/) covers successor packages in general.
 
-{/* Evidence: crates/registry-breg/src/package/tests/record_timers.rs
-    pre_timer_store_package_is_predecessor_only_and_unknown_features_refuse,
-    unchanged_pre_timer_store_registry_plans_one_engine_transition_without_authored_ddl. */}
+{/* Evidence: crates/registry-breg/src/package/tests/predecessor_sources.rs
+    predecessor_with_legacy_engine_features_is_refused, unknown_engine_features_are_not_read;
+    crates/registry-bregctl/tests/cli.rs
+    apply_over_a_pre_timer_store_active_package_names_the_fresh_database_path. */}
 
 For a successor, `bregctl plan` reports each added, changed, removed, or effect-input-migration
 timer without Record values.
