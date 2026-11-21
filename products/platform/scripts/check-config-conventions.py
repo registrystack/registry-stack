@@ -910,8 +910,10 @@ def resolve_member(root: object, member: str) -> list[tuple[dict, list[bool]]] |
     for token in split_pointer(member):
         following: list[tuple[dict, list[bool]]] = []
         for node, steps in current:
-            for _, child, required in schema_children(root, node, token):
-                named = not (token == "*" or token.isdigit())
+            for suffix, child, required in schema_children(root, node, token):
+                # Only a declared property is a member the schema can
+                # require. A list index or a map key names an entry.
+                named = suffix.startswith("properties/")
                 following.append((child, steps + ([required] if named else [])))
         if not following:
             return None
