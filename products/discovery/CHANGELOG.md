@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- BREAKING: in `origins.yaml` (`DiscoveryOrigins`), `origins` is a mapping
+  from each origin id to the rest of its entry, held in id order, not a list
+  of entries with an `id` member. The list form and an inner `id` are
+  refused with a finding that names the replacement. A repeated key is a
+  `yaml.duplicate-key` finding at the repeat, replacing
+  `discovery.origins.duplicate-origin-id`. Findings name the origin by id,
+  `/origins/evidence-one/catalogUrl`, not by index. The schema bounds the
+  mapping with `maxProperties` 128. The published provider-publication
+  profile is unchanged.
 - BREAKING: in `origins.yaml` (`DiscoveryOrigins`), `origins[].originId` ->
   `origins[].id`, as a pre-1.0 cleanup. The old key is refused as an unknown
   key. The id is now a local identifier: a lowercase letter, then up to 63

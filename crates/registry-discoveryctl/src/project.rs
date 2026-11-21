@@ -18,8 +18,8 @@ use std::path::{Component, Path, PathBuf};
 
 use registry_discovery::{check_runtime, RUNTIME_KIND};
 use registry_platform_yaml::{
-    ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, LocalId, NodeValue,
-    Position, Reader, Related, RemovedKey, Report, Severity, Source, UniqueList, Url,
+    ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Identified, LocalId,
+    NodeValue, Position, Reader, Related, RemovedKey, Report, Severity, Source, UniqueList, Url,
     MAXIMUM_DOCUMENT_BYTES,
 };
 use serde::{Deserialize, Serialize};
@@ -51,11 +51,19 @@ const ORIGINS_FORMAT: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(ORIGINS_API_VERSION)],
         retired_api_versions: &[],
     },
-    removed_keys: &[RemovedKey {
-        pointer: "/schemaVersion",
-        replacement: "Write apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1 \
-                      and kind: DiscoveryOrigins instead.",
-    }],
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/schemaVersion",
+            replacement: "Write apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1 \
+                          and kind: DiscoveryOrigins instead.",
+        },
+        RemovedKey {
+            pointer: "/origins/*/id",
+            replacement: "Write origins as a mapping from each id to the rest of its entry, \
+                          origins: {evidence-one: {catalogUrl: https://evidence.example/catalog.jsonld, \
+                          profile: registry-discovery-v1alpha1}}, with no id member.",
+        },
+    ],
 };
 
 const MAPPING_FORMAT: FormatSpec<'static> = FormatSpec {
@@ -89,8 +97,17 @@ pub struct OriginsFile {
     pub api_version: String,
     /// The kind of this file.
     pub kind: String,
-    /// One to 128 approved origins.
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = MAX_ORIGINS)))]
+    /// One to 128 approved origins, keyed by origin id and held in id order.
+    #[serde(
+        deserialize_with = "registry_platform_yaml::id_keyed_by_local_id",
+        serialize_with = "registry_platform_yaml::serialize_id_keyed"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            schema_with = "registry_platform_yaml::id_keyed_schema_bounded::<ApprovedOrigin, 1, 128>"
+        )
+    )]
     pub origins: Vec<ApprovedOrigin>,
 }
 
@@ -111,6 +128,12 @@ pub struct ApprovedOrigin {
     /// Whether `discoveryctl package` collects this origin. Absent, it does.
     #[serde(default = "enabled_by_default")]
     pub enabled: bool,
+}
+
+impl Identified for ApprovedOrigin {
+    fn id(&self) -> &str {
+        self.id.as_str()
+    }
 }
 
 fn enabled_by_default() -> bool {
@@ -477,26 +500,9 @@ fn check_origins(
             "List at least one origin, and at most 128.",
         ));
     }
-    let mut ids: BTreeMap<&str, String> = BTreeMap::new();
     let mut urls: BTreeMap<&str, String> = BTreeMap::new();
-    for (index, origin) in file.origins.iter().enumerate() {
-        let id_pointer = format!("/origins/{index}/id");
-        let url_pointer = format!("/origins/{index}/catalogUrl");
-        if let Some(first) = ids.get(origin.id.as_str()) {
-            let mut diagnostic = error_at(
-                document,
-                "discovery.origins.duplicate-origin-id",
-                &id_pointer,
-                "an earlier origin already has this id",
-                "Give each origin its own id.",
-            );
-            diagnostic
-                .related
-                .push(related(document, first, "the first origin with this id"));
-            findings.push(diagnostic);
-        } else {
-            ids.insert(origin.id.as_str(), id_pointer);
-        }
+    for origin in &file.origins {
+        let url_pointer = format!("/origins/{}/catalogUrl", origin.id.as_str());
         if !valid_catalog_url(origin.catalog_url.as_str(), allow_loopback) {
             findings.push(error_at(
                 document,
@@ -992,7 +998,7 @@ mod tests {
     const ORIGINS: &str = r#"apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1
 kind: DiscoveryOrigins
 origins:
-  - id: evidence-one
+  evidence-one:
     catalogUrl: https://unreachable.example.invalid/catalog.jsonld
     profile: registry-discovery-v1alpha1
 "#;
@@ -1033,11 +1039,15 @@ alternatives:
     #[test]
     fn an_origin_id_is_a_local_identifier() {
         for invalid in ["Evidence-One", "evidence.one", "1-evidence"] {
-            let origins = ORIGINS.replace("id: evidence-one", &format!("id: {invalid}"));
+            let origins = ORIGINS.replace("  evidence-one:", &format!("  {invalid}:"));
             let root = project(&origins, &[]);
             let diagnostics = refusal(root.path());
             assert_eq!(diagnostics.len(), 1, "{invalid}");
-            assert_eq!(diagnostics[0].path, "/origins/0/id", "{invalid}");
+            assert_eq!(
+                diagnostics[0].path,
+                format!("/origins/{invalid}"),
+                "{invalid}"
+            );
             assert!(
                 diagnostics[0].message.contains("local identifier"),
                 "{invalid}"
@@ -1046,16 +1056,42 @@ alternatives:
     }
 
     #[test]
-    fn the_origin_id_key_is_id_and_origin_id_is_an_unknown_key() {
-        let origins = ORIGINS.replace("  - id: evidence-one", "  - originId: evidence-one");
-        let root = project(&origins, &[]);
+    fn origins_are_an_id_keyed_map_and_the_list_form_and_an_inner_id_are_refused() {
+        let list = ORIGINS.replace("  evidence-one:", "  - id: evidence-one");
+        let root = project(&list, &[]);
+        let diagnostics = refusal(root.path());
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "config.invalid-type"
+                    && diagnostic.path == "/origins"),
+            "{diagnostics:?}"
+        );
+
+        let inner = ORIGINS.replace(
+            "    profile: registry-discovery-v1alpha1\n",
+            "    profile: registry-discovery-v1alpha1\n    id: evidence-one\n",
+        );
+        let root = project(&inner, &[]);
         let diagnostics = refusal(root.path());
         assert!(
             diagnostics.iter().any(|diagnostic| {
-                diagnostic.code == "config.unknown-key" && diagnostic.path == "/origins/0/originId"
+                diagnostic.code == "config.removed-key"
+                    && diagnostic.path == "/origins/evidence-one/id"
             }),
             "{diagnostics:?}"
         );
+    }
+
+    #[test]
+    fn origins_are_held_in_id_order() {
+        let origins = format!(
+            "{ORIGINS}  alpha:\n    catalogUrl: https://other.example.invalid/catalog.jsonld\n    profile: registry-discovery-v1alpha1\n"
+        );
+        let root = project(&origins, &[]);
+        let checked = check_project(root.path(), false).expect("two origins");
+        let ids: Vec<_> = checked.origins.iter().map(|o| o.id.as_str()).collect();
+        assert_eq!(ids, ["alpha", "evidence-one"]);
     }
 
     #[test]
@@ -1124,23 +1160,35 @@ alternatives:
     }
 
     #[test]
-    fn duplicate_origins_point_at_the_first_one() {
+    fn a_repeated_origin_key_is_refused_at_the_repeat() {
         let origins = format!(
-            "{ORIGINS}  - id: evidence-one\n    catalogUrl: https://unreachable.example.invalid/catalog.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: false\n"
+            "{ORIGINS}  evidence-one:\n    catalogUrl: https://other.example.invalid/catalog.jsonld\n    profile: registry-discovery-v1alpha1\n"
+        );
+        let root = project(&origins, &[]);
+        let diagnostics = refusal(root.path());
+        assert_eq!(codes(&diagnostics), ["yaml.duplicate-key"]);
+        assert_eq!(diagnostics[0].path, "/origins/evidence-one");
+        assert_eq!(line_and_column(&diagnostics[0]), (Some(7), Some(3)));
+    }
+
+    #[test]
+    fn a_catalog_url_approved_twice_points_at_the_first_origin() {
+        let origins = format!(
+            "{ORIGINS}  evidence-two:\n    catalogUrl: https://unreachable.example.invalid/catalog.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: false\n"
         );
         let root = project(&origins, &[]);
         let diagnostics = refusal(root.path());
         assert_eq!(
             codes(&diagnostics),
-            [
-                "discovery.origins.duplicate-origin-id",
-                "discovery.origins.duplicate-catalog-url"
-            ]
+            ["discovery.origins.duplicate-catalog-url"]
         );
-        assert_eq!(diagnostics[0].path, "/origins/1/id");
-        assert_eq!(line_and_column(&diagnostics[0]), (Some(7), Some(9)));
-        assert_eq!(diagnostics[0].related[0].path, "/origins/0/id");
-        assert_eq!(diagnostics[0].related[0].line, Some(4));
+        assert_eq!(diagnostics[0].path, "/origins/evidence-two/catalogUrl");
+        assert_eq!(line_and_column(&diagnostics[0]), (Some(8), Some(17)));
+        assert_eq!(
+            diagnostics[0].related[0].path,
+            "/origins/evidence-one/catalogUrl"
+        );
+        assert_eq!(diagnostics[0].related[0].line, Some(5));
     }
 
     #[test]
@@ -1214,7 +1262,7 @@ alternatives:
             codes(&diagnostics),
             [SUBSTITUTION_NOT_ALLOWED, SUBSTITUTION_NOT_ALLOWED]
         );
-        assert_eq!(diagnostics[0].path, "/origins/0/catalogUrl");
+        assert_eq!(diagnostics[0].path, "/origins/evidence-one/catalogUrl");
         assert_eq!(line_and_column(&diagnostics[0]), (Some(5), Some(17)));
         assert_eq!(diagnostics[1].path, "/mappingAuthorityId");
         assert_eq!(line_and_column(&diagnostics[1]), (Some(4), Some(21)));
@@ -1239,8 +1287,8 @@ alternatives:
         assert_eq!(
             unknown,
             [
-                ("/origins/0/catalogURL", (Some(5), Some(5))),
-                ("/origins/0/disabled", (Some(6), Some(5))),
+                ("/origins/evidence-one/catalogURL", (Some(5), Some(5))),
+                ("/origins/evidence-one/disabled", (Some(6), Some(5))),
             ]
         );
         assert!(diagnostics[0].suggested_action.contains("catalogUrl"));
