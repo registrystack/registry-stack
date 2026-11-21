@@ -658,6 +658,44 @@ fn action_refusal_labels_are_scoped_to_their_action() {
 }
 
 #[test]
+fn module_action_duplicate_labels_point_at_the_keyed_actions() {
+    let source = facility();
+    let mut first = source["actions"]["correct-address"].clone();
+    // Action inputs spell their types out, so each named type is inlined.
+    for input in first["inputs"].as_array_mut().unwrap() {
+        if let Some(name) = input.as_object_mut().unwrap().remove("typeRef") {
+            let named = source["valueTypes"][name.as_str().unwrap()].clone();
+            for (key, value) in named.as_object().unwrap() {
+                input[key] = value.clone();
+            }
+        }
+    }
+    first["display"]["label"] = json!("Correct the address");
+    let mut second = first.clone();
+    second["display"]["label"] = json!("correct the address");
+    let module = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule",
+        "id":"local-module",
+        "version":"0.1.0",
+        "actions":{"first-correction": first, "second-correction": second}
+    });
+
+    let decoded = read_module_yaml("module.yaml", &bytes(&module)).unwrap();
+    let report = decoded.document.warnings();
+    let warning = report
+        .diagnostics()
+        .iter()
+        .find(|warning| warning.code == "breg.action.duplicate-label")
+        .expect("equivalent action labels produce a warning");
+    assert_eq!(warning.path, "/actions/second-correction/display/label");
+    assert_eq!(
+        warning.related[0].path,
+        "/actions/first-correction/display/label"
+    );
+}
+
+#[test]
 fn reader_refusals_keep_duplicate_label_warnings_for_projects_and_modules() {
     let mut project = facility();
     project["recordTypes"]["directory-entry"]["display"]["label"] = json!("Café");
