@@ -2890,6 +2890,7 @@ async fn apply_current_row(
                 transaction,
                 request,
                 current.record_revision,
+                &before_data,
                 data,
                 field_encryption,
             )
@@ -2972,6 +2973,7 @@ async fn apply_patch_row(
     transaction: &Transaction<'_>,
     request: &MutationRequest<'_>,
     expected_revision: i64,
+    before: &Map<String, Value>,
     data: Map<String, Value>,
     field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<CurrentRow, MutationError> {
@@ -2980,8 +2982,10 @@ async fn apply_patch_row(
     update_current_row(
         transaction,
         &request.plan.entity,
+        request.claims.access_profile(),
         record_id,
         expected_revision,
+        before,
         data,
         field_encryption,
         Some(ConstraintDisclosure::DeclaredFields {
@@ -2999,6 +3003,7 @@ async fn apply_patch_row(
 pub(super) async fn write_plan_row(
     transaction: &Transaction<'_>,
     entity: &CompiledEntity,
+    writer: &str,
     record_uuid: Uuid,
     expected_revision: Option<i64>,
     fields: Map<String, Value>,
@@ -3048,14 +3053,19 @@ pub(super) async fn write_plan_row(
             .await?
         }
         Some(revision) => {
-            if revision < 1 || before.is_none() {
+            let Some(before) = before else {
+                return Err(MutationError::InvalidRequest);
+            };
+            if revision < 1 {
                 return Err(MutationError::InvalidRequest);
             }
             update_current_row(
                 transaction,
                 entity,
+                writer,
                 &record_id,
                 revision,
+                before,
                 fields,
                 field_encryption,
                 origin.constraint_disclosure(),
@@ -3158,15 +3168,27 @@ async fn insert_current_row(
     row_to_current(entity, &row)
 }
 
+/// Write `data` over the current row `before` as the `writer` profile. Every
+/// update of an existing record passes here, so a bound writer's attempt to
+/// lift a disclosure mark or overwrite a withheld field is refused on each
+/// path alike, before the database can answer with a constraint conflict.
+#[allow(clippy::too_many_arguments)]
 async fn update_current_row(
     transaction: &Transaction<'_>,
     entity: &CompiledEntity,
+    writer: &str,
     record_id: &str,
     expected_revision: i64,
+    before: &Map<String, Value>,
     data: Map<String, Value>,
     field_encryption: Option<&FieldEncryptionService>,
     constraint_disclosure: Option<ConstraintDisclosure<'_>>,
 ) -> Result<CurrentRow, MutationError> {
+    match crate::disclosure::plan(entity, writer).refuses_write(before, &data) {
+        Ok(false) => {}
+        Ok(true) => return Err(MutationError::WriteOutsideBoundary),
+        Err(_) => return Err(MutationError::Unavailable),
+    }
     let submitted_fields = entity
         .fields
         .values()

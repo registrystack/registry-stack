@@ -980,3 +980,6 @@ async fn a_commit_context_shared_with_a_marked_record_is_withheld() {
     assert!(change_context(&detail.body).is_none(), "{}", detail.text());
     history.fixture.finish().await;
 }
+
+#[path = "writes.rs"]
+mod writes;

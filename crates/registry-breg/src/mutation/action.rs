@@ -2187,6 +2187,7 @@ impl MutationTransaction {
         let current = write_plan_row(
             transaction,
             entity,
+            claims.access_profile(),
             record_uuid,
             expected_revision,
             fields,
