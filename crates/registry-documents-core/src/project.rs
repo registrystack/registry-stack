@@ -651,6 +651,36 @@ mod tests {
         include_str!("../../../products/documents/examples/starter/documents.yaml");
 
     #[test]
+    fn the_project_block_reads_a_label_and_description_that_leave_policy_bindings_unchanged() {
+        let labelled_text = STARTER.replacen(
+            "  version: \"1\"\n",
+            "  version: \"1\"\n  label: Civil registry documents\n  description: Holds civil registry documents.\n",
+            1,
+        );
+        let plain = DocumentsProject::decode("documents.yaml", STARTER.as_bytes())
+            .expect("the starter reads")
+            .value;
+        let labelled = DocumentsProject::decode("documents.yaml", labelled_text.as_bytes())
+            .expect("the project block reads a label and description")
+            .value;
+        assert_eq!(plain.project.label, None);
+        assert_eq!(
+            labelled.project.label.as_deref(),
+            Some("Civil registry documents")
+        );
+        assert_eq!(
+            labelled.project.description.as_deref(),
+            Some("Holds civil registry documents.")
+        );
+        for (id, policy) in &plain.document_policies {
+            assert_eq!(
+                policy.binding(id).unwrap(),
+                labelled.document_policies[id].binding(id).unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn the_starter_project_reads_as_written() {
         let decoded = DocumentsProject::decode("documents.yaml", STARTER.as_bytes())
             .unwrap_or_else(|report| panic!("the starter project is refused: {report:?}"));

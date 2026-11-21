@@ -7588,10 +7588,7 @@ mod tests {
             write: None,
             artifacts: Default::default(),
             binding_transforms: Default::default(),
-            project: ProjectIdentity {
-                id: local("case-deployment"),
-                version: "1.0.0".to_string(),
-            },
+            project: ProjectIdentity::new(local("case-deployment"), "1.0.0".to_string()),
             profile: Some(PinnedRef {
                 id: local("case-api"),
                 version: "1.0.0".to_string(),

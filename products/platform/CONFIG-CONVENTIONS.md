@@ -178,8 +178,11 @@ check starts from (CFG-CHECK-2), is `<Prefix>Project`,** format `project`
 (`BRegProject`, `CaseworkProject`, `SchedulingProject`, `MessagingProject`,
 `EvidenceProject`).
 It names the project in a top-level `project` block holding the shared
-`ProjectIdentity` members, `id` (a local identifier) and `version` (text); the
-block may add project-wide members of the product's own. A product whose
+`ProjectIdentity` members, `id` (a local identifier), `version` (text), and
+the optional `label` and `description` (display text, CFG-VAL-11), which never
+change a product's stable identity or behavior revision; the block may add
+project-wide members of the product's own. A top-level `label` or `description`
+is not a project member. A product whose
 top-level authored file is a bundle of files rather than a project (Render)
 names it `<Prefix>Bundle`, format `bundle`.
 *Why:* a person who has written one product's project file knows how the next
@@ -441,7 +444,7 @@ here is added to the list in the same change that first uses it. See CFG-QTY.
 | Largest accepted body or file | `maximum<Thing>Bytes` | `max<Thing>Bytes`, `maxSize` outside `pool` |
 | Outbound hook destination bindings, one entry per destination id | `destinations.hooks` | `eventDestinations` |
 | What a caller resolved to an access profile is to the service (Casework, Documents, Messaging; `role` keeps its data sense elsewhere, so review refuses it here) | `actsAs` under an access profile | |
-| Human-readable name of an authored item (workflow, function, operation, step, event trigger) | `label` | `title` |
+| Human-readable name of an authored item (project, workflow, function, operation, step, event trigger); a project's own is `project.label` | `label` | `title` |
 | A holiday set (the Casework holiday-set file, Scheduling `holidaySets`) | `id`, `revision`, `label`, `dates`; each product keeps its own placement and mirrors the shape, since the two share no crate | |
 | Trust anchors for an outbound TLS peer: a secret reference holding PEM roots | `caBundleRef` | |
 | Trust anchors for an outbound TLS peer: an absolute path to a PEM file | `caBundleFile` | |

@@ -1025,10 +1025,7 @@ mod tests {
             write: None,
             artifacts: Default::default(),
             binding_transforms: Default::default(),
-            project: ProjectIdentity {
-                id: local("case-deployment"),
-                version: "1.0.0".to_string(),
-            },
+            project: ProjectIdentity::new(local("case-deployment"), "1.0.0".to_string()),
             profile: Some(pin("case-api")),
             pack: pin("case-api-pack"),
             record_types: UniqueIdList::new(vec![record_type()]).expect("unique"),

@@ -363,7 +363,9 @@ impl registry_platform_yaml::Identified for AccessProfile {
 
 /// The project identity block: the deployment's own name and version. The id is a local
 /// identifier (CFG-ID-1); the version is text, the same version-as-text
-/// rule as profiles and packs.
+/// rule as profiles and packs. The optional label and description are display
+/// text for people (CFG-ENV-6) and are omitted from the serialized block when
+/// absent.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -372,6 +374,40 @@ pub struct ProjectIdentity {
     pub id: LocalId,
     /// The project version.
     pub version: String,
+    /// An optional human label for the project.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub label: Option<String>,
+    /// An optional explanation of the project for readers.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub description: Option<String>,
+}
+
+impl ProjectIdentity {
+    /// An identity with no label or description.
+    pub fn new(id: LocalId, version: impl Into<String>) -> ProjectIdentity {
+        ProjectIdentity {
+            id,
+            version: version.into(),
+            label: None,
+            description: None,
+        }
+    }
 }
 
 /// The adapter project artifact (`AdapterProject`): the declared record
@@ -569,10 +605,10 @@ mod tests {
     #[test]
     fn project_round_trips() {
         let project = AdapterProject {
-            project: ProjectIdentity {
-                id: LocalId::new("case-deployment").expect("id"),
-                version: "1.0.0".to_string(),
-            },
+            project: ProjectIdentity::new(
+                LocalId::new("case-deployment").expect("id"),
+                "1.0.0".to_string(),
+            ),
             profile: Some(pin("case-api")),
             consultation: None,
             write: None,
@@ -744,6 +780,32 @@ mod tests {
     }
 
     #[test]
+    fn the_project_block_reads_an_optional_label_and_description() {
+        let plain: AdapterProject =
+            serde_json::from_value(govstack_project(true)).expect("project");
+        assert_eq!(plain.project.label, None);
+        assert_eq!(plain.project.description, None);
+        let plain_json = serde_json::to_value(&plain).expect("serialize");
+        assert!(plain_json["project"].get("label").is_none());
+        assert!(plain_json["project"].get("description").is_none());
+
+        let mut value = govstack_project(true);
+        value["project"]["label"] = serde_json::json!("Case deployment");
+        value["project"]["description"] = serde_json::json!("Serves the case API.");
+        let labelled: AdapterProject = serde_json::from_value(value).expect("project");
+        assert_eq!(labelled.project.label.as_deref(), Some("Case deployment"));
+        assert_eq!(
+            labelled.project.description.as_deref(),
+            Some("Serves the case API.")
+        );
+        assert_eq!(labelled.record_types, plain.record_types);
+
+        let mut refused = govstack_project(true);
+        refused["project"]["label"] = serde_json::json!("a\u{2028}b");
+        assert!(serde_json::from_value::<AdapterProject>(refused).is_err());
+    }
+
+    #[test]
     fn an_explicit_member_overrides_its_short_form_default() {
         let mut value = govstack_project(true);
         value["consultation"]["collections"][0]["view"] = serde_json::json!("person-summary");
@@ -899,10 +961,10 @@ mod tests {
             write: None,
             artifacts: Default::default(),
             binding_transforms: Default::default(),
-            project: ProjectIdentity {
-                id: LocalId::new("case-deployment").expect("id"),
-                version: "1.0.0".to_string(),
-            },
+            project: ProjectIdentity::new(
+                LocalId::new("case-deployment").expect("id"),
+                "1.0.0".to_string(),
+            ),
             profile: Some(pin("case-api")),
             pack: pin("case-api-pack"),
             record_types: UniqueIdList::new(vec![record_type()]).expect("unique"),

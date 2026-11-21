@@ -1465,10 +1465,7 @@ mod tests {
         let policy = SchedulingPolicy {
             api_version: "test".to_owned(),
             kind: "test".to_owned(),
-            project: ProjectIdentity {
-                id: LocalId::new("standalone").unwrap(),
-                version: "1".to_owned(),
-            },
+            project: ProjectIdentity::new(LocalId::new("standalone").unwrap(), "1".to_owned()),
             services: vec![ServicePolicy {
                 id: "s1".to_owned(),
                 label: "Service".to_owned(),

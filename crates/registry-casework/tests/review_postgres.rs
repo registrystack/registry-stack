@@ -265,10 +265,7 @@ fn project(version: &str) -> CaseworkProject {
     CaseworkProject {
         api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
         kind: registry_casework_core::CASEWORK_KIND.to_owned(),
-        project: ProjectIdentity {
-            id: "review-test".parse().unwrap(),
-            version: version.to_owned(),
-        },
+        project: ProjectIdentity::new("review-test".parse().unwrap(), version.to_owned()),
         access_profiles: vec![
             profile("staff", CaseworkActsAs::Staff),
             profile("supervisor", CaseworkActsAs::Supervisor),

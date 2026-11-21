@@ -382,10 +382,7 @@ fn project() -> CaseworkProject {
         task_templates: Vec::new(),
         api_version: CASEWORK_API_VERSION.to_owned(),
         kind: CASEWORK_KIND.to_owned(),
-        project: ProjectIdentity {
-            id: "human-identity-auth-test".parse().unwrap(),
-            version: "1".to_owned(),
-        },
+        project: ProjectIdentity::new("human-identity-auth-test".parse().unwrap(), "1".to_owned()),
         access_profiles: vec![
             profile("staff", "casework:staff", CaseworkActsAs::Staff),
             profile(

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Accept an optional `project.label` and `project.description` beside
+  `project.id` and `project.version`, in the shared `ProjectIdentity` block
+  every product's project file uses. They are display text for people. A
+  project that sets neither compiles to the same bytes as before.
+  `ProjectIdentity::new(id, version)` builds an identity without them.
+
 - BREAKING: in the shared `database` runtime block, `trustedRootCertificateRef`
   -> `caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef` the other
   TLS blocks use. The old key is refused as an unknown key. The value is

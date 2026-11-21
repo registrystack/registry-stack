@@ -236,6 +236,10 @@ fn cfg_id_1_the_project_identity_is_closed() {
     let schema = schema::<ProjectIdentity>();
     assert_eq!(schema["additionalProperties"], false);
     assert_eq!(schema["required"], json!(["id", "version"]));
+    assert_eq!(
+        schema["properties"]["label"]["anyOf"][0]["$ref"],
+        "#/$defs/DisplayText"
+    );
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -310,7 +314,10 @@ fn cfg_schema_8_the_shared_block_recipe_places_the_members_beside_the_host() {
         .expect("properties")
         .keys()
         .collect();
-    assert_eq!(properties, ["id", "title", "version"]);
+    assert_eq!(
+        properties,
+        ["description", "id", "label", "title", "version"]
+    );
     assert_eq!(schema["additionalProperties"], false);
     let mut required: Vec<&str> = schema["required"]
         .as_array()

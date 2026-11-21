@@ -123,10 +123,7 @@ fn project_for(model: &GeneratedModel) -> (AdapterProject, Binding) {
         maximum_upstream_calls: BoundedU64::new(1).expect("one upstream call"),
     };
     let project = AdapterProject {
-        project: ProjectIdentity {
-            id: local("generated-project"),
-            version: "1".to_owned(),
-        },
+        project: ProjectIdentity::new(local("generated-project"), "1".to_owned()),
         profile: Some(pin("generated-profile")),
         consultation: None,
         write: None,

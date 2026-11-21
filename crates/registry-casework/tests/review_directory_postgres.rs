@@ -63,10 +63,7 @@ fn project() -> CaseworkProject {
         task_templates: Vec::new(),
         api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
         kind: registry_casework_core::CASEWORK_KIND.to_owned(),
-        project: ProjectIdentity {
-            id: "assignment-test".parse().unwrap(),
-            version: "1".to_owned(),
-        },
+        project: ProjectIdentity::new("assignment-test".parse().unwrap(), "1".to_owned()),
         access_profiles: vec![
             profile("staff", CaseworkActsAs::Staff),
             profile("supervisor", CaseworkActsAs::Supervisor),

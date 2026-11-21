@@ -34,6 +34,31 @@ fn assert_refused(text: &str, path: &str, replacement: &str, row: &str) {
 }
 
 #[test]
+fn the_project_block_reads_a_label_and_description_that_leave_the_compiled_policy_unchanged() {
+    let plain = read(EXAMPLE).expect("the aligned example reads");
+    assert_eq!(plain.project.label, None);
+    let labelled = read(&replaced(
+        "project: {id: regional-review, version: \"1\"}",
+        "project: {id: regional-review, version: \"1\", label: Regional review, description: Routes and times regional reviews.}",
+    ))
+    .expect("the project block reads a label and description");
+    assert_eq!(labelled.project.label.as_deref(), Some("Regional review"));
+    assert_eq!(
+        labelled.project.description.as_deref(),
+        Some("Routes and times regional reviews.")
+    );
+    let policy = plain.review_policies[0].id.clone();
+    let digest = |project: &CaseworkProject| {
+        project
+            .compile_policy(&policy)
+            .expect("the policy compiles")
+            .identity
+            .digest
+    };
+    assert_eq!(digest(&plain), digest(&labelled));
+}
+
+#[test]
 fn the_aligned_example_reads_and_lists_named_items_in_id_order() {
     let project = read(EXAMPLE).expect("the aligned example reads");
     let ids = |items: Vec<&str>| items.join(",");

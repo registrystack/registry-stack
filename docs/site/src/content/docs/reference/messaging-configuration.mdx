@@ -353,7 +353,7 @@ accessProfiles: {}
 ```
 
 The former kind `MessagingPackage` is refused as `config.wrong-kind`, naming `MessagingProject`, and the former `registry.registrystack.org/messaging-package/v1alpha1` as `config.retired-api-version`, naming the runtime envelope.
-`project.id` is a local identifier and `project.version` a text label; together they are the identity that a package built from the project carries.
+`project.id` is a local identifier and `project.version` a text label; together they are the identity that a package built from the project carries. The optional `project.label` and `project.description` are display text and change nothing the package carries.
 
 {/* Evidence: crates/registry-messaging-core/src/package.rs, MessagingProject and the wrong-kind test;
     crates/registry-messaging/src/config.rs, MESSAGING_RETIRED_API_VERSIONS. */}
