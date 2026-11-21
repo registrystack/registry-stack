@@ -788,7 +788,7 @@ fn check_refuses_a_read_hook_without_an_access_log_with_a_next_step() {
 }
 
 #[test]
-fn check_refuses_a_unique_withheld_field_with_a_next_step() {
+fn check_warns_of_a_unique_withheld_field_and_accepts_it() {
     let mut source = registry_platform_yaml::Reader::new("registry.yaml")
         .scan(include_bytes!(
             "../../../products/breg/examples/minimal/registry.yaml"
@@ -808,29 +808,81 @@ fn check_refuses_a_unique_withheld_field_with_a_next_step() {
         "fields": ["phone"],
         "exemptProfiles": ["directory-editor"]
     }]);
+    let grant = &mut source["accessProfiles"][0]["permissions"]["records"][0];
+    for member in ["readableFields", "writableFields"] {
+        grant[member].as_array_mut().unwrap().push(json!("phone"));
+    }
     let project = TestProject::from_registry_source(&serde_json::to_vec_pretty(&source).unwrap());
     let output = bregctl(&["--format", "json", "check", path(project.path())]);
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.status.success(), "{output:?}");
     let report = json_stdout(&output);
-    let diagnostic = report["diagnostics"]
+    let warning = report["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|diagnostic| diagnostic["code"] == "breg.disclosure.withheld-field-unique")
-        .unwrap_or_else(|| panic!("{report}"));
+        .find(|diagnostic| diagnostic["code"] == "breg.disclosure.withheld-field-probe")
+        .unwrap_or_else(|| panic!("{report}"))
+        .clone();
+    assert_eq!(warning["severity"], "warning", "{warning}");
+    assert_eq!(warning["rank"], "widens-access", "{warning}");
     assert!(
-        diagnostic["path"]
+        warning["path"]
             .as_str()
             .unwrap()
             .contains("/disclosureConditions"),
-        "{diagnostic}"
+        "{warning}"
     );
     assert!(
-        diagnostic["suggestedAction"]
+        warning["message"].as_str().unwrap().contains("409"),
+        "{warning}"
+    );
+    assert!(
+        warning["suggestedAction"]
             .as_str()
             .unwrap()
-            .contains("Withhold the record instead, or drop the constraint"),
-        "{diagnostic}"
+            .contains("accept this finding"),
+        "{warning}"
+    );
+    let denied = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(project.path()),
+        "--deny-warnings",
+    ]);
+    assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+
+    fs::write(
+        project.path().join("check-acceptances.yaml"),
+        r#"apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+kind: PlatformCheckAcceptances
+acceptances:
+  - code: breg.disclosure.withheld-field-probe
+    scope:
+      file: registry.yaml
+      path: /recordTypes/@id=contact/disclosureConditions/@id=hide-phone/fields/0
+    reason: Only trusted directory staff can create contacts.
+"#,
+    )
+    .unwrap();
+    let accepted = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(project.path()),
+        "--deny-warnings",
+    ]);
+    assert!(accepted.status.success(), "{accepted:?}");
+    let accepted_report = json_stdout(&accepted);
+    let accepted_warning = accepted_report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.disclosure.withheld-field-probe")
+        .unwrap_or_else(|| panic!("{accepted_report}"));
+    assert_eq!(
+        accepted_warning["acceptedReason"],
+        "Only trusted directory staff can create contacts."
     );
 }
 

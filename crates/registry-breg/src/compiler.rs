@@ -347,6 +347,7 @@ pub fn compile_project_with_assets(
         &module_profiles,
     ));
     findings.extend(create_required_field_findings(&sources));
+    findings.extend(disclosure::withheld_field_probe_findings(&sources));
     validate_derived_assets(&sources, &origins.derived, assets, &mut diagnostics);
     validate_hook_assets(&sources, &origins.hooks, assets, &mut diagnostics);
     if !diagnostics.is_empty() {

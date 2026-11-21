@@ -352,24 +352,47 @@ fn a_read_hook_on_a_record_type_without_an_access_log_is_refused() {
     );
 }
 
+const PROBE: &str = "breg.disclosure.withheld-field-probe";
+
+/// The paths at which `value` compiles with the withheld-field probe finding.
+fn probe_findings(value: &Value) -> Vec<String> {
+    compile(value)
+        .expect("a constraint on a withheld field is a finding, not a refusal")
+        .findings()
+        .iter()
+        .filter(|finding| finding.code == PROBE)
+        .map(|finding| {
+            assert_eq!(
+                finding.severity,
+                registry_breg::DiagnosticSeverity::Finding,
+                "{finding:?}"
+            );
+            finding.path.clone()
+        })
+        .collect()
+}
+
+/// A Create that repeats a withheld value answers a conflict and any other
+/// value succeeds, so a constraint over a withheld field confirms a guess.
+/// The project still compiles, with a finding to accept or act on.
 #[test]
-fn a_uniqueness_constraint_on_a_withheld_field_is_refused() {
+fn a_uniqueness_constraint_on_a_withheld_field_is_a_finding() {
     let path = format!("{FIELDS_COND}.fields[field=phone]");
     for fields in [json!(["phone"]), json!(["district", "phone"])] {
         let mut value = source();
         value["recordTypes"][0]["constraints"] = json!([{"type": "unique", "fields": fields}]);
-        assert_refused(&value, "breg.disclosure.withheld-field-unique", &path);
+        assert_eq!(probe_findings(&value), [path.clone()]);
     }
     let mut unrelated = source();
     unrelated["recordTypes"][0]["constraints"] =
         json!([{"type": "unique", "fields": ["subject-id"]}]);
-    compile(&unrelated).expect("a constraint on a field no condition withholds compiles");
+    assert!(probe_findings(&unrelated).is_empty());
 }
 
 /// An encrypted field's unique blind index answers a repeated value with a
 /// conflict in the same way as a uniqueness constraint.
 #[test]
-fn a_unique_blind_index_on_a_withheld_field_is_refused() {
+fn a_unique_blind_index_on_a_withheld_field_is_a_finding() {
     let encrypted_phone = |unique: bool| {
         let mut value = source();
         value["recordTypes"][0]["fields"][4] = json!({"id":"phone","type":"string","maximumLength":32,
@@ -377,13 +400,55 @@ fn a_unique_blind_index_on_a_withheld_field_is_refused() {
         person_permission(&mut value, 1)["filterableFields"] = json!(["family-name"]);
         value
     };
-    compile(&encrypted_phone(false))
-        .expect("a withheld encrypted field without a unique index compiles");
-    assert_refused(
-        &encrypted_phone(true),
-        "breg.disclosure.withheld-field-unique",
-        &format!("{FIELDS_COND}.fields[field=phone]"),
+    assert!(probe_findings(&encrypted_phone(false)).is_empty());
+    assert_eq!(
+        probe_findings(&encrypted_phone(true)),
+        [format!("{FIELDS_COND}.fields[field=phone]")]
     );
+}
+
+/// A Create whose period overlaps a hidden record's within the same scope
+/// answers a conflict, so a withheld period field in a temporal non-overlap
+/// key confirms a guess as a unique member does.
+#[test]
+fn a_withheld_field_in_a_temporal_non_overlap_key_is_a_finding() {
+    let temporal = |constraint: Option<Value>| {
+        let mut value = source();
+        let person = &mut value["recordTypes"][0];
+        let fields = person["fields"].as_array_mut().unwrap();
+        fields.push(
+            json!({"id":"valid-from","type":"timestamp","validTimeRole":"valid-from",
+            "required":true,"classification":"internal"}),
+        );
+        fields.push(
+            json!({"id":"valid-to","type":"timestamp","validTimeRole":"valid-to",
+            "classification":"internal"}),
+        );
+        person["temporal"] = json!({"startField":"valid-from","endField":"valid-to"});
+        person["disclosureConditions"][1]["fields"] = json!(["valid-to"]);
+        if let Some(constraint) = constraint {
+            person["constraints"] = json!([constraint]);
+        }
+        for profile in 0..2 {
+            person_permission(&mut value, profile)["readableFields"]
+                .as_array_mut()
+                .unwrap()
+                .extend([json!("valid-from"), json!("valid-to")]);
+        }
+        value
+    };
+    assert!(probe_findings(&temporal(None)).is_empty());
+    // The key compares the valid-time fields whether or not it names them.
+    for constraint in [
+        json!({"type":"temporal-non-overlap","scopeFields":["subject-id"],
+            "startField":"valid-from","endField":"valid-to"}),
+        json!({"type":"temporal-non-overlap","scopeFields":["subject-id"]}),
+    ] {
+        assert_eq!(
+            probe_findings(&temporal(Some(constraint))),
+            [format!("{FIELDS_COND}.fields[field=valid-to]")]
+        );
+    }
 }
 
 fn statistics_source() -> Value {

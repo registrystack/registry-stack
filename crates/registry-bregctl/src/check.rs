@@ -135,6 +135,7 @@ pub(super) fn finding_rank_for_code(code: &str) -> FindingRank {
             | "breg.access.profile-writable-row-boundary"
             | "breg.access.target-unrestricted-rows"
             | "breg.access-profile.task-grant-rows-unbound"
+            | "breg.disclosure.withheld-field-probe"
     ) {
         FindingRank::WidensAccess
     } else if code.starts_with("breg.record-type.list-unindexed-") {
@@ -1705,7 +1706,7 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
         "breg.disclosure.fields-invalid" => "List each withheld stored field once under fields when withhold is fields, and omit fields for record and history. A withheld field is optional and is not id.",
         "breg.disclosure.exempt-profiles-invalid" => "Name at least one access profile under exemptProfiles, and only profiles the project declares.",
         "breg.disclosure.withheld-field-exposed" => "Remove the withheld field from the profile's filterableFields, sortableFields, lookups, data export, hook projections or statistical dataset, or add the profile to exemptProfiles.",
-        "breg.disclosure.withheld-field-unique" => "Withhold the record instead, or drop the constraint or the encrypted field's unique lookup. A uniqueness conflict would confirm a guessed withheld value.",
+        "breg.disclosure.withheld-field-probe" => "Keep the field out of uniqueness constraints, unique encrypted lookups and temporal non-overlap keys, or accept this finding if the profiles that can create records of this type are trusted.",
         "breg.disclosure.read-hook-access-log-required" => "Declare accessLog on the record type, so each logged read raises its alert, or remove the read hook.",
         "breg.access-profile.access-reason-operation-unsupported" => "Remove import, invoke and start grants, allowDataExport, and the actions, proposals, datasets, externalViews and refreshExternalProjections permissions, from this profile, or drop requireAccessReason. The reason is checked on record reads and direct writes only.",
         "breg.disclosure.spatial-query-withheld-geometry" => "Remove spatialQueries from the profile, or add the profile to exemptProfiles of the condition that withholds the geometry field.",
