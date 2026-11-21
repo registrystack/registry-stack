@@ -29,14 +29,15 @@ hours one location publishes. `check` listed two under `effective.openings`. Thi
 serves `registry-update-30`:
 
 ```yaml title="scheduling/scheduling.yaml" test-excerpt="scheduling/scheduling.yaml"
-- id: bangkok-counter-hours
-  location: bangkok-counter
-  holidaySet: office-holidays
-  weekdays: [mon, tue, wed, thu, fri]
-  startTime: "09:00"
-  endTime: "12:30"
-  effectiveFrom: "2026-10-01"
-  effectiveUntil: "2026-12-31"
+openings:
+  bangkok-counter-hours:
+    location: bangkok-counter
+    holidaySet: office-holidays
+    weekdays: [mon, tue, wed, thu, fri]
+    startTime: "09:00"
+    endTime: "12:30"
+    effectiveFrom: "2026-10-01"
+    effectiveUntil: "2026-12-31"
 ```
 
 Times are wall-clock times at the location, read in the time zone its location record names, so
@@ -50,11 +51,11 @@ closes the opening for the whole day. The starter's set closes nothing yet. Clos
 October 2026:
 
 ```diff test-edit title="scheduling/scheduling.yaml"
- - id: office-holidays
-   revision: 1
-+  dates:
-+    - "2026-10-13"
-   label: Public holidays observed by the registry offices.
+   office-holidays:
+     revision: 1
++    dates:
++      - "2026-10-13"
+     label: Public holidays observed by the registry offices.
 ```
 
 Prove it with a case at the end of the counter fixture. A booking at 09:00 that day must be
