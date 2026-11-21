@@ -611,6 +611,10 @@ refuses:
 
 These refusals hold whatever the profiles:
 
+- A `record` condition on a consent Record type that a `requireConsent` names
+  (`breg.disclosure.consent-record-condition`). The consent check reads that type under the gated
+  profile, so a hidden revocation would let an earlier consent stand. A `fields` or `history`
+  condition there stays allowed.
 - A change hook (`created`, `patched` or `tombstoned`) on a Record type with a `record` or `history`
   condition (`breg.disclosure.withheld-field-exposed`). A change hook must project at least one
   field and its destinations hold no access profile, so such a Record type declares no change hook

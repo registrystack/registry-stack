@@ -155,6 +155,9 @@ Filtering and sorting run in SQL before that step.
 `bregctl check` therefore refuses each surface that would let a bound profile filter, sort, look up,
 export, count, project, or derive from a withheld field (`breg.disclosure.*`), read path grants
 included.
+It also refuses a `record` condition on a consent Record type that a `requireConsent` names.
+The consent check reads that type under the gated profile, so a hidden revocation would let an
+earlier consent stand.
 Writes are checked in Rust against the writing profile.
 A bound profile cannot lift a mark, write a withheld field, or tombstone a marked Record, and a write
 whose result a `record` condition would hide from the writer is refused.

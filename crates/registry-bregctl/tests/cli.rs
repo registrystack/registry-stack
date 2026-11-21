@@ -796,6 +796,46 @@ fn check_refuses_invalid_disclosure_conditions_with_a_next_step() {
 }
 
 #[test]
+fn check_refuses_a_record_condition_on_a_consent_record_with_a_next_step() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../registry-breg/tests/fixtures/consent-access.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    source["recordTypes"]["consent-decision"]["disclosureConditions"] = json!({"hide-withdrawn": {
+        "when": [{"type": "field-equals", "field": "decision", "value": "withdrawn"}],
+        "withhold": "record",
+        "exemptProfiles": ["steward"]
+    }});
+    let project = TestProject::from_registry_source(&serde_json::to_vec_pretty(&source).unwrap());
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.disclosure.consent-record-condition")
+        .unwrap_or_else(|| panic!("{report}"));
+    assert!(
+        diagnostic["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("/disclosureConditions/hide-withdrawn"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic["suggestedAction"]
+            .as_str()
+            .unwrap()
+            .contains("withhold: fields"),
+        "{diagnostic}"
+    );
+}
+
+#[test]
 fn check_refuses_a_read_hook_without_an_access_log_with_a_next_step() {
     let mut source = registry_platform_yaml::Reader::new("registry.yaml")
         .scan(include_bytes!(

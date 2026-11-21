@@ -185,6 +185,34 @@ pub(super) fn validate(
         reach::validate_boundaries(entity, condition, &root, errors);
         reach::validate_read_paths(entity, condition, entities, &root, errors);
         reach::validate_timers(entity, condition, &root, errors);
+        validate_consent_record(entity, condition, entities, &root, errors);
+    }
+}
+
+/// The consent check of `requireConsent` reads its consent record type under
+/// the gated profile, so a `record` condition that profile does not pass would
+/// hide a later revocation from the check and let the earlier consent stand.
+fn validate_consent_record(
+    entity: &EntitySource,
+    condition: &DisclosureConditionSource,
+    entities: &BTreeMap<String, EntitySource>,
+    root: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if condition.withhold != DisclosureWithholdSource::Record {
+        return;
+    }
+    let required = entities
+        .values()
+        .flat_map(|gated| gated.access_profiles.iter())
+        .flat_map(|profile| profile.require_consent.iter())
+        .any(|requirement| requirement.record == entity.id);
+    if required {
+        errors.push(Diagnostic::error(
+            "breg.disclosure.consent-record-condition",
+            root,
+            "requireConsent reads this consent record type under the gated profile, so a record condition could hide a revocation and let an earlier consent stand: withhold fields or history instead",
+        ));
     }
 }
 

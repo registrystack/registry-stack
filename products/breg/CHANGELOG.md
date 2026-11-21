@@ -156,9 +156,12 @@
   sorts, lookups, export, hook projections, read paths, row, membership or consent boundaries,
   derived fields, spatial queries, Evidence facts, external view links or statistical datasets reach
   a withheld value, a Record timer that reads a withheld field, and a Record timer on a hidden
-  record that creates a record a bound profile reads (`breg.disclosure.*`). It warns, ranked as
-  widening access, when a field a `fields` condition withholds is in a uniqueness constraint or a
-  partial one's `when`, a unique encrypted lookup or a temporal non-overlap, because a Create, or a
+  record that creates a record a bound profile reads (`breg.disclosure.*`). It refuses a `record`
+  condition on a consent Record type that a `requireConsent` names, because the consent check reads
+  that type under the gated profile and a hidden revocation would let an earlier consent stand
+  (`breg.disclosure.consent-record-condition`). It warns, ranked as widening access, when a field a
+  `fields` condition withholds is in a uniqueness constraint or a partial one's `when`, a unique
+  encrypted lookup or a temporal non-overlap, because a Create, or a
   Patch of another record, that repeats the value answers `409` and confirms it exists on a hidden
   record (`breg.disclosure.withheld-field-probe`). It also warns when a `record` condition on a
   view's root binds a profile that may refresh the view, because the refresh then skips the
