@@ -538,10 +538,29 @@ async fn a_proposal_applied_by_a_bound_profile_is_refused() {
     history.fixture.finish().await;
 }
 
-/// An automatic Proposal applies as `system-proposal-apply`, which no
-/// condition exempts, so it cannot write what a condition withholds.
+/// Run one automatic application attempt and return the Proposal's
+/// application status, as the protection officer reads it.
+async fn run_automatic(history: &History, submitted: &registry_breg_client::BRegProposal) -> Value {
+    history
+        .fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .expect("the automatic attempt runs");
+    let proposal = history
+        .get(
+            &format!("/v1/proposals/{}", submitted.id()),
+            PROTECTION_OFFICER,
+        )
+        .await;
+    assert_eq!(proposal.status, 200, "{}", proposal.text());
+    proposal.body["applicationStatus"].clone()
+}
+
+/// An automatic Proposal is checked against the profile that submitted it. An
+/// exempt submitter's Proposal writes the withheld field.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_automatic_proposal_does_not_overwrite_a_withheld_field() {
+async fn an_automatic_proposal_of_an_exempt_submitter_applies() {
     let history = start().await;
     let seeded = seed(&history).await;
     let submitted = submit_as(
@@ -552,34 +571,58 @@ async fn an_automatic_proposal_does_not_overwrite_a_withheld_field() {
         REDIRECTED_EMAIL,
     )
     .await;
-    history
-        .fixture
-        .mutations
-        .run_automatic_proposal_once_for_test()
-        .await
-        .expect("the automatic attempt runs");
+    let application = run_automatic(&history, &submitted).await;
+    assert_eq!(application["state"], "applied", "{application}");
+    assert_eq!(
+        stored(&history, &seeded.f).await["emailAddress"],
+        REDIRECTED_EMAIL
+    );
+    history.fixture.finish().await;
+}
+
+/// A bound submitter's automatic Proposal cannot write what a condition
+/// withholds from the submitter.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_automatic_proposal_of_a_bound_submitter_is_blocked() {
+    let history = start().await;
+    let seeded = seed(&history).await;
+    let submitted = submit_as(
+        &history,
+        REGISTRAR,
+        "correct-person-email",
+        &seeded.f,
+        REDIRECTED_EMAIL,
+    )
+    .await;
+    let application = run_automatic(&history, &submitted).await;
+    assert_eq!(application["state"], "blocked", "{application}");
+    assert_eq!(application["reason"], "attempts-exhausted", "{application}");
+    assert_eq!(application["recovery"], "correct-input", "{application}");
+    assert_no_sentinel(&application.to_string());
     assert_unchanged(&history, &seeded).await;
-    let proposal = history
-        .get(
-            &format!("/v1/proposals/{}", submitted.id()),
-            PROTECTION_OFFICER,
-        )
-        .await;
-    assert_eq!(proposal.status, 200, "{}", proposal.text());
-    let application = &proposal.body["applicationStatus"];
-    assert_eq!(application["state"], "blocked", "{}", proposal.text());
-    assert_eq!(
-        application["reason"],
-        "attempts-exhausted",
-        "{}",
-        proposal.text()
-    );
-    assert_eq!(
-        application["recovery"],
-        "correct-input",
-        "{}",
-        proposal.text()
-    );
+    history.fixture.finish().await;
+}
+
+/// The emergency registrar is exempt from the contacts condition, not from the
+/// history condition. Its automatic Proposal on `p` writes the contact, which
+/// only the contacts condition withholds from it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_automatic_proposal_of_the_emergency_registrar_applies() {
+    let history = start().await;
+    let seeded = seed(&history).await;
+    let submitted = submit_as(
+        &history,
+        EMERGENCY_REGISTRAR,
+        "correct-person-email",
+        &seeded.p,
+        REDIRECTED_EMAIL,
+    )
+    .await;
+    let application = run_automatic(&history, &submitted).await;
+    assert_eq!(application["state"], "applied", "{application}");
+    let p = stored(&history, &seeded.p).await;
+    assert_eq!(p["emailAddress"], REDIRECTED_EMAIL);
+    assert_eq!(p["historyProtected"], true);
     history.fixture.finish().await;
 }
 

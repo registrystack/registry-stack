@@ -847,6 +847,7 @@ impl PreparedProposal {
             attachments: self.attachments,
             submitted_by: context.actor,
             submitted_at: context.now,
+            submitted_profile: context.access_profile,
         })
     }
 }
@@ -877,6 +878,10 @@ pub struct ProposalSnapshot {
     effect_digest: ProposalDigest,
     submitted_by: TrustedActorRef,
     submitted_at: TrustedTimestamp,
+    /// The access profile that submitted this version. Like `submitted_by`
+    /// it is outside the effect digest. A version frozen without one has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    submitted_profile: Option<String>,
 }
 
 impl ProposalSnapshot {
@@ -946,6 +951,10 @@ impl ProposalSnapshot {
         &self.submitted_at
     }
 
+    pub fn submitted_profile(&self) -> Option<&str> {
+        self.submitted_profile.as_deref()
+    }
+
     pub fn verify_digest(&self, request: &ProposalKey) -> Result<(), WorkflowError> {
         let actual = proposal_digest(ProposalDigestInput {
             inputs: &self.inputs,
@@ -994,6 +1003,9 @@ impl ProposalSnapshot {
         self.effect_digest.validate()?;
         self.submitted_by.validate()?;
         self.submitted_at.validate()?;
+        if let Some(profile) = &self.submitted_profile {
+            ValidatedToken::new(profile.clone(), TokenKind::Profile)?;
+        }
         self.verify_digest(request)
     }
 
@@ -1367,11 +1379,27 @@ impl FieldValue {
 pub struct TrustedTransitionContext {
     actor: TrustedActorRef,
     now: TrustedTimestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    access_profile: Option<String>,
 }
 
 impl TrustedTransitionContext {
     pub fn from_verified_context(actor: TrustedActorRef, now: TrustedTimestamp) -> Self {
-        Self { actor, now }
+        Self {
+            actor,
+            now,
+            access_profile: None,
+        }
+    }
+
+    /// Carry the verified access profile of the transition. A submit freezes
+    /// it into the submitted version.
+    pub fn with_access_profile(
+        mut self,
+        profile: impl Into<String>,
+    ) -> Result<Self, WorkflowError> {
+        self.access_profile = Some(ValidatedToken::new(profile, TokenKind::Profile)?.0);
+        Ok(self)
     }
 
     pub fn actor(&self) -> &TrustedActorRef {
@@ -1380,6 +1408,10 @@ impl TrustedTransitionContext {
 
     pub fn now(&self) -> &TrustedTimestamp {
         &self.now
+    }
+
+    pub fn access_profile(&self) -> Option<&str> {
+        self.access_profile.as_deref()
     }
 }
 
@@ -2044,6 +2076,7 @@ enum TokenKind {
     Effect,
     Entity,
     Field,
+    Profile,
     Record,
     Timestamp,
 }
@@ -2131,6 +2164,7 @@ impl fmt::Debug for ProposalSnapshot {
             .field("effect_digest", &Redacted)
             .field("submitted_by", &Redacted)
             .field("submitted_at", &Redacted)
+            .field("submitted_profile", &self.submitted_profile)
             .finish()
     }
 }
@@ -2194,6 +2228,7 @@ impl fmt::Debug for TrustedTransitionContext {
             .debug_struct("TrustedTransitionContext")
             .field("actor", &Redacted)
             .field("now", &Redacted)
+            .field("access_profile", &self.access_profile)
             .finish()
     }
 }
@@ -2737,6 +2772,126 @@ mod source_owned_review_tests {
             .expect("direct application")
             .into_workflow();
         assert_eq!(applied.state(), ProposalState::Applied);
+    }
+
+    #[test]
+    fn each_submit_freezes_the_access_profile_that_submitted_it() {
+        let as_profile = |timestamp: &str, profile: &str| {
+            context("submitter", timestamp)
+                .with_access_profile(profile)
+                .expect("access profile")
+        };
+        let submitted = workflow()
+            .submit(
+                as_profile("2026-09-19T00:00:00Z", "protection-officer"),
+                proposal(no_review()),
+            )
+            .expect("submit")
+            .into_workflow();
+        let first = submitted.current_proposal().expect("frozen proposal");
+        assert_eq!(first.submitted_profile(), Some("protection-officer"));
+
+        let resubmitted = submitted
+            .clone()
+            .revise(context("submitter", "2026-09-19T00:01:00Z"))
+            .expect("revise")
+            .into_workflow()
+            .submit(
+                as_profile("2026-09-19T00:02:00Z", "registrar"),
+                proposal(no_review()),
+            )
+            .expect("resubmit")
+            .into_workflow();
+        assert_eq!(
+            resubmitted
+                .proposal(SubmissionVersion::first())
+                .expect("first version")
+                .submitted_profile(),
+            Some("protection-officer")
+        );
+        assert_eq!(
+            resubmitted
+                .current_proposal()
+                .expect("second version")
+                .submitted_profile(),
+            Some("registrar")
+        );
+
+        // The profile is outside the effect digest.
+        let unprofiled = workflow()
+            .submit(
+                context("submitter", "2026-09-19T00:00:00Z"),
+                proposal(no_review()),
+            )
+            .expect("submit")
+            .into_workflow();
+        let unprofiled = unprofiled.current_proposal().expect("frozen proposal");
+        assert_eq!(unprofiled.submitted_profile(), None);
+        assert_eq!(
+            unprofiled.effect_digest().as_str(),
+            first.effect_digest().as_str()
+        );
+
+        for refused in ["", "bad\nprofile"] {
+            assert_eq!(
+                context("submitter", "2026-09-19T00:00:00Z")
+                    .with_access_profile(refused)
+                    .expect_err("an invalid profile is refused"),
+                WorkflowError::InvalidIdentifier
+            );
+        }
+    }
+
+    #[test]
+    fn a_snapshot_without_a_submitted_profile_restores() {
+        let submitted = workflow()
+            .submit(
+                context("submitter", "2026-09-19T00:00:00Z")
+                    .with_access_profile("registrar")
+                    .expect("access profile"),
+                proposal(no_review()),
+            )
+            .expect("submit")
+            .into_workflow();
+        let stored = serde_json::to_value(&submitted).expect("workflow serializes");
+        assert_eq!(
+            stored["proposals"]["1"]["submittedProfile"], "registrar",
+            "{stored}"
+        );
+        let restore = |stored: &Value| {
+            serde_json::from_value::<ProposalWorkflow>(stored.clone())
+                .expect("workflow deserializes")
+                .validate_restored()
+        };
+        assert_eq!(
+            restore(&stored)
+                .expect("restores")
+                .current_proposal()
+                .expect("frozen proposal")
+                .submitted_profile(),
+            Some("registrar")
+        );
+
+        let mut earlier = stored.clone();
+        earlier["proposals"]["1"]
+            .as_object_mut()
+            .expect("snapshot object")
+            .remove("submittedProfile");
+        assert_eq!(
+            restore(&earlier)
+                .expect("an earlier snapshot restores")
+                .current_proposal()
+                .expect("frozen proposal")
+                .submitted_profile(),
+            None
+        );
+
+        let mut invalid = stored;
+        invalid["proposals"]["1"]["submittedProfile"] = json!("");
+        assert_eq!(
+            restore(&invalid).expect_err("an invalid profile is refused"),
+            WorkflowError::InvalidIdentifier
+        );
     }
 
     #[test]

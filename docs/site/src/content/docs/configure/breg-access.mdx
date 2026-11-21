@@ -532,11 +532,17 @@ already hides the row, so the tombstone answers `412 precondition.failed`, as fo
 
 A Proposal review shows a withheld field as `null`, and applying a change set to a record that
 became withheld after submission is refused. A Proposal applied by hand is checked as a write by the
-profile that applies it. A Proposal applied automatically runs under the reserved
-`system-proposal-apply` profile, which no condition exempts. So an automatic Proposal is refused
-wherever a write by a bound profile would be, even when an exempt profile submitted it. The record
-is unchanged, and once its attempts are used the Proposal ends `blocked`, with the reason
-`attempts-exhausted` and the recovery `correct-input`.
+profile that applies it. A Proposal applied automatically is checked against the profile that
+submitted the version being applied, which each submit records. An exempt submitter's automatic
+Proposal applies. A bound submitter's is refused wherever a write by that profile would be, and so is
+one whose submitting profile was removed or lost its exemption after submission. A version that
+records no submitting profile is checked against the reserved `system-proposal-apply` profile, which
+no condition exempts. A refused automatic Proposal leaves the record unchanged, and once its attempts
+are used it ends `blocked`, with the reason `attempts-exhausted` and the recovery `correct-input`.
+
+An automatic application still reads its targets under `system-proposal-apply`. A target that a
+`record` condition hides from that profile is absent to it, so an automatic Proposal cannot apply
+to such a record, whoever submitted it. Apply that Proposal by hand under an exempt profile.
 
 ### What `bregctl check` refuses
 
