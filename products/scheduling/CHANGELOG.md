@@ -22,7 +22,7 @@
   no longer reads, so reactivate the policy from the rewritten package.
 
 - Accept an optional `project.label` and `project.description` in the project
-  block, as every product's project file does. They are display text for
+  block, as the shared project block does. They are display text for
   people and change no scheduling behavior. The policy digest covers the whole
   authored document, so a relabel changes it, and activation stores the
   relabelled policy.

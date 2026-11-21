@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Accept an optional `project.label` and `project.description` in the project
-  block, as every product's project file does. They are display text for
+  block, as the shared project block does. They are display text for
   people and change no compiled output.
 
 - BREAKING: in the runtime configuration, `database.trustedRootCertificateRef` -> `database.caBundleRef`, as a pre-1.0 cleanup, to match the `caBundleRef` the other TLS blocks use. The old key is refused as an unknown key. The value is unchanged: a secret reference to the PEM CA bundle the connection trusts.

@@ -3,9 +3,8 @@
 ## Unreleased
 
 - Accept an optional `project.label` and `project.description` beside
-  `project.id` and `project.version`, in the shared `ProjectIdentity` block
-  every product's project file uses. They are display text for people. A
-  project that sets neither compiles to the same bytes as before.
+  `project.id` and `project.version`, in the shared `ProjectIdentity` block. They are display text for people. A project that sets neither
+  compiles to the same bytes as before. BReg keeps its own `project.display`.
   `ProjectIdentity::new(id, version)` builds an identity without them.
 
 - BREAKING: in the shared `database` runtime block, `trustedRootCertificateRef`

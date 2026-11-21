@@ -380,9 +380,11 @@ text_newtype!(Url);
 /// The members that name a project (CFG-ENV-6): a project's `project` block
 /// holds these, and may add project-wide members of the product's own.
 /// `id` and `version` are required. `label` and `description` are optional
-/// display text for people. Neither changes a product's stable identity or
-/// behavior revision, and an absent member is omitted when the block is
-/// serialized, so a project that sets neither compiles to the same bytes.
+/// display text for people. Neither changes a product's behavior or stable
+/// identity. A product whose digest covers the whole authored document, such
+/// as Scheduling, still sees them, so a relabel changes that digest. An absent
+/// member is omitted when the block is serialized, so a project that sets
+/// neither compiles to the same bytes.
 /// Schema name `ProjectIdentity`.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
