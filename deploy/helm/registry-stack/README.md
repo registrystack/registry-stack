@@ -7,10 +7,12 @@ on your own infrastructure.
 
 ## Supported releases
 
-The chart was tested against the v0.46.0 Registry Stack images and is not part
-of any release artifact. Adopters pin every image by digest from the release
-manifest of the version they run. The chart `appVersion` stays 0.46.0 until a
-later release is tested, so it does not follow newer releases automatically.
+The chart was tested against the v0.47.0 Registry Stack images and is not part
+of any release artifact. That test installed BReg on a K3s cluster and ran its
+smoke checks. Casework, Evidence and App Kit were checked only by rendering.
+Adopters pin every image by digest from the release manifest of the version
+they run. The chart `appVersion` stays 0.47.0 until a later release is tested,
+so it does not follow newer releases automatically.
 
 This chart deploys four independently controlled workloads:
 
