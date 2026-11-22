@@ -34,12 +34,12 @@ RUNTIME_PACKAGE_INSTALLER = Path("release/scripts/install-runtime-packages.sh")
 RUNTIME_PACKAGES = {
     "libc6": {
         "archive": "debian",
-        "snapshot": "20260913T000000Z",
+        "snapshot": "20261114T144101Z",
         "pool": "pool/main/g/glibc",
-        "version": "2.41-12+deb13u4",
+        "version": "2.41-12+deb13u5",
         "sha256": {
-            "amd64": "967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9",
-            "arm64": "8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc",
+            "amd64": "b59b0625cd1a791375d40dab23a4d5d3d0641e3d0a773501becdc3725b7f99cf",
+            "arm64": "0966fc3da1a26cc57647c68b5736f791b6e7eb498173a7993f63b6c89b4ed4f5",
         },
     },
     "libssl3t64": {

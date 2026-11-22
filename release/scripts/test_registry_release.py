@@ -3522,14 +3522,14 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertEqual(
             [
-                "ADD --checksum=sha256:967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9 "
-                + "https://snapshot.debian.org/archive/debian/20260913T000000Z/"
-                + "pool/main/g/glibc/libc6_2.41-12+deb13u4_amd64.deb "
-                + "/workspace/runtime-packages/libc6_2.41-12+deb13u4_amd64.deb",
-                "ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc "
-                + "https://snapshot.debian.org/archive/debian/20260913T000000Z/"
-                + "pool/main/g/glibc/libc6_2.41-12+deb13u4_arm64.deb "
-                + "/workspace/runtime-packages/libc6_2.41-12+deb13u4_arm64.deb",
+                "ADD --checksum=sha256:b59b0625cd1a791375d40dab23a4d5d3d0641e3d0a773501becdc3725b7f99cf "
+                + "https://snapshot.debian.org/archive/debian/20261114T144101Z/"
+                + "pool/main/g/glibc/libc6_2.41-12+deb13u5_amd64.deb "
+                + "/workspace/runtime-packages/libc6_2.41-12+deb13u5_amd64.deb",
+                "ADD --checksum=sha256:0966fc3da1a26cc57647c68b5736f791b6e7eb498173a7993f63b6c89b4ed4f5 "
+                + "https://snapshot.debian.org/archive/debian/20261114T144101Z/"
+                + "pool/main/g/glibc/libc6_2.41-12+deb13u5_arm64.deb "
+                + "/workspace/runtime-packages/libc6_2.41-12+deb13u5_arm64.deb",
                 "ADD --checksum=sha256:ff16bc048bcd7d1b256094450b79c77947d8e76fe2a24bd99b91021d591fa074 "
                 + "https://snapshot.debian.org/archive/debian-security/20260930T060347Z/"
                 + "pool/updates/main/o/openssl/libssl3t64_3.5.7-1~deb13u3_amd64.deb "
