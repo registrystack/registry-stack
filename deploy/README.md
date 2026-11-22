@@ -4,7 +4,7 @@ This folder is a public reference. It is not a supported product, is not publish
 
 Use the Registry Stack chart on Ubuntu 24.04 or 26.04 amd64 with K3s. On an existing Kubernetes cluster, give it the same inputs. The chart runs Base Registry Engine (BReg), Casework, Evidence and a prebuilt App Kit host. Each component is opt-in. Use the same Stack release for the products, tools and clients in one installation.
 
-This guide targets Registry Stack v0.46.0. The example values pin every image by digest from that release manifest. The `deploy/` folder is not part of any release tag. Use it from the commit that carries this guide, and record that commit with the installation. Install `bregctl` v0.46.0 to match the images.
+This guide targets Registry Stack v0.47.0. The example values pin every image by digest from that release manifest. The `deploy/` folder is not part of any release tag. Use it from the commit that carries this guide, and record that commit with the installation. Install `bregctl` v0.47.0 to match the images.
 
 The deployment commands use Python 3.11 or newer. Both supported Ubuntu releases provide a suitable Python version. Helm 4 is the only supported Helm version. The install section installs it.
 
@@ -25,7 +25,7 @@ The single-server preparation stores retained application volumes below `/var/li
 | Optional object storage | Operator-owned S3-compatible service. See the [SeaweedFS profile](examples/seaweedfs/README.md). |
 | Extension endpoints | Partner-built OCI images. Bind their names and paths in the chart's `extensions` values and deploy them as a [separate release of the same chart](examples/intake-status/README.md). |
 
-Messaging, Scheduling, Discovery, Render, Coordinator and the BReg MCP and review and Evidence OID4VCI images have their own release contracts. They have no modules in this chart. Document Store is held from the release. Adapter has native binaries in v0.46.0. Check the release manifest before selecting an additional service.
+Messaging, Scheduling, Discovery, Render and the BReg MCP and review and Evidence OID4VCI images have their own release contracts. They have no modules in this chart. Document Store is held from the release. Adapter and Coordinator ship native binaries in v0.47.0, with no image. Check the release manifest before selecting an additional service.
 
 ## Install one Ubuntu server
 
@@ -48,7 +48,7 @@ Point the application DNS names at the ingress address. Permit inbound 443 and 8
 
 ### Prepare and start BReg
 
-Do this step on a build workstation, not the server. Install `bregctl` v0.46.0 with the [BReg installer](https://docs.registrystack.org/operate/breg/#obtain-the-runtime) and provide a disposable PostgreSQL 17 database for the schema test. Then run the same-release `bregctl check --production`, `test`, and `package` on your project. The test needs the journey's real authorisation bindings. Follow the [BReg package and runtime instructions](https://docs.registrystack.org/operate/breg/#check-test-package). Copy the sealed `package/` root, its digest and the runtime config into a private directory on the server.
+Do this step on a build workstation, not the server. Install `bregctl` v0.47.0 with the [BReg installer](https://docs.registrystack.org/operate/breg/#obtain-the-runtime) and provide a disposable PostgreSQL 17 database for the schema test. Then run the same-release `bregctl check --production`, `test`, and `package` on your project. The test needs the journey's real authorisation bindings. Follow the [BReg package and runtime instructions](https://docs.registrystack.org/operate/breg/#check-test-package). Copy the sealed `package/` root, its digest and the runtime config into a private directory on the server.
 
 A plain `tar` on macOS adds `._*` files and extended attributes to the archive. Make the archive without them, then copy it to the server.
 
@@ -66,7 +66,7 @@ rm breg-inputs.tar
 sudo sh -c 'cd /srv/registry-directory/inputs/package && sha256sum -c --quiet SHA256SUMS'
 ```
 
-Copy [the v0.46.0 example values](examples/local-breg/values.json) into that directory as `values.json`. Set the hostname, package digest, versioned input names and namespace selectors for your installation. `prepare_local.py` uses this layout.
+Copy [the v0.47.0 example values](examples/local-breg/values.json) into that directory as `values.json`. Set the hostname, package digest, versioned input names and namespace selectors for your installation. `prepare_local.py` uses this layout.
 
 | Path inside the private input directory | Contents |
 | --- | --- |
