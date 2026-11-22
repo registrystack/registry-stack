@@ -663,7 +663,7 @@ dependencies = [
  "bitflags",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -2946,12 +2946,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f4d0e94ddd48749f06bbe4e5389fb9799a0c45bcaf00495042076ef05e3241a"
 
 [[package]]
-name = "hayro-ccitt"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adbed896e99325bc312778bb9c9c289d795d51c12775c44dd5e4352f679c7e46"
-
-[[package]]
 name = "hayro-cmap"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2968,7 +2962,7 @@ checksum = "f2613d0406898995042d0794c4245b2f2fba1246490c8ac593769bba6551129d"
 dependencies = [
  "bitflags",
  "hayro-cmap",
- "hayro-syntax 0.7.2",
+ "hayro-syntax",
  "kurbo",
  "moxcms",
  "phf 0.13.1",
@@ -2986,16 +2980,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69374b3668dd45aeb3d3145cda68f2c7b4f223aaa2511e67d076f1c7d741388d"
 dependencies = [
  "fearless_simd",
- "hayro-ccitt 0.3.0",
-]
-
-[[package]]
-name = "hayro-jbig2"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb5c7f3a4eb551c2bb7fa16e268f728d4bc2a5c9b090554b8dc0ee2503fb5840"
-dependencies = [
- "hayro-ccitt 0.5.0",
+ "hayro-ccitt",
 ]
 
 [[package]]
@@ -3006,12 +2991,6 @@ checksum = "c75ab947623ef4ccaa7acf0579edf7cbb5a73838e3839a7be73335e522f433a1"
 dependencies = [
  "fearless_simd",
 ]
-
-[[package]]
-name = "hayro-jpeg2000"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e5e5f2b3de970707fc22fd956d8f44211602939d5e4588603afa919cb7b3740"
 
 [[package]]
 name = "hayro-postscript"
@@ -3040,24 +3019,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0edeafd70aa2db743de8ede8637d07ec87db05efe69cde371d03f1b185fcef27"
 dependencies = [
  "flate2",
- "hayro-ccitt 0.3.0",
- "hayro-jbig2 0.3.0",
- "hayro-jpeg2000 0.3.5",
+ "hayro-ccitt",
+ "hayro-jbig2",
+ "hayro-jpeg2000",
  "memchr",
- "rustc-hash 2.1.3",
- "smallvec",
- "zune-jpeg",
-]
-
-[[package]]
-name = "hayro-syntax"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6ced8279487b029813f6cc05399099fa34df6fa23d8f7b0d41d972c49d5b30d"
-dependencies = [
- "hayro-ccitt 0.5.0",
- "hayro-jbig2 0.4.0",
- "hayro-jpeg2000 0.5.0",
  "rustc-hash 2.1.3",
  "smallvec",
  "zune-jpeg",
@@ -3070,7 +3035,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0b3db92c4917aad24ff30d61413a9a7509ae88b27aee1ae34eff881e1d2723a"
 dependencies = [
  "flate2",
- "hayro-syntax 0.7.2",
+ "hayro-syntax",
  "pdf-writer",
 ]
 
@@ -4226,6 +4191,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "memo-map"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5449c8c750f1a07ea702bbd212bd999fceece9b3d1508b17023b3e174583124b"
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4233,10 +4204,11 @@ checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
 name = "minijinja"
-version = "3.1.0"
+version = "2.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "509eeb2603a84eccabb4d75f6ec8ba23b46bbf441aaeb863d6b83a5887fd51e4"
+checksum = "86886cf6dbf4e614b19c9a1eec9775f021869d7eadde0fc73921a81b90c9b4c9"
 dependencies = [
+ "memo-map",
  "serde",
 ]
 
@@ -5567,9 +5539,9 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "pyo3"
-version = "0.30.1"
+version = "0.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "229ca13b8a15bb0d1487b81ab975bfcd97513416499a8312011b6036e42e0de4"
+checksum = "700d18fa267b73b9b521fd7e13580e2f446916f176cacee1ab63fcc8191f1655"
 dependencies = [
  "libc",
  "once_cell",
@@ -5581,18 +5553,18 @@ dependencies = [
 
 [[package]]
 name = "pyo3-build-config"
-version = "0.30.1"
+version = "0.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70130e2b6dd1ee589a8788026a429561ca5c40fa7a2fa7914c2282eddae24700"
+checksum = "7b3fc0c4d08f6bb10e71fe39dfb9e2f59c6eb6854e22ec8092f50c69a4499adb"
 dependencies = [
  "target-lexicon",
 ]
 
 [[package]]
 name = "pyo3-ffi"
-version = "0.30.1"
+version = "0.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e7ff73c555c286d212d4ce7e5fbda845a973c4f61bd5f160f5f2c3c2a04d1c4"
+checksum = "dfc0b8e19df29aad7086cf977bb0c2a2f143e30567eb113e9cf72b62ca698330"
 dependencies = [
  "libc",
  "pyo3-build-config",
@@ -5600,26 +5572,26 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros"
-version = "0.30.1"
+version = "0.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c46d2e5862c7bb8207e3b639f713dda3c499933444784154c11d013c5a691b60"
+checksum = "6100e8a4b5eba53afaa5ed078364851a0b2499c553a44c31026b929049b49dc6"
 dependencies = [
  "proc-macro2",
  "pyo3-macros-backend",
  "quote",
- "syn 3.0.10",
+ "syn 2.0.119",
 ]
 
 [[package]]
 name = "pyo3-macros-backend"
-version = "0.30.1"
+version = "0.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38b89f066f2ae72a2aef52d1537ca2fcd104440ebfadee06e97aa90738a25b9b"
+checksum = "6143877a16e82b5a727b7127ff4cd86858a24a28d745d72f43e6f227c7b1bdb3"
 dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "syn 3.0.10",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -7784,7 +7756,7 @@ dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
  "cms",
- "der 0.8.2",
+ "der 0.7.10",
  "ed25519-dalek 2.2.0",
  "hmac 0.13.0",
  "p256",
@@ -8104,7 +8076,7 @@ dependencies = [
  "chrono",
  "clap",
  "comemo",
- "hayro-syntax 0.9.0",
+ "hayro-syntax",
  "hex",
  "jsonschema",
  "jsonwebtoken",
@@ -9877,7 +9849,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
  "windows-sys 0.61.2",
@@ -10631,7 +10603,7 @@ dependencies = [
  "fontdb",
  "glidesort",
  "hayagriva",
- "hayro-syntax 0.7.2",
+ "hayro-syntax",
  "icu_properties",
  "image",
  "indexmap",
