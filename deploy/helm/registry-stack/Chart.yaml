@@ -3,7 +3,7 @@ name: registry-stack
 description: Operate digest-pinned BReg, Casework, Evidence, and a prebuilt Registry App Kit on Kubernetes
 type: application
 version: 0.1.0
-appVersion: "0.46.0"
+appVersion: "0.47.0"
 kubeVersion: ">=1.28.0-0"
 annotations:
   artifacthub.io/license: Apache-2.0
