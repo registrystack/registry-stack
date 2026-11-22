@@ -88,7 +88,7 @@ jobs:
           submodules: false
 
       - name: Install Go for the AWS-LC-FIPS source build
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: 1.27.2
           cache: false
@@ -97,7 +97,7 @@ jobs:
         run: rustup toolchain install 1.95.0 --profile minimal
 
       - name: Cache Cargo registry and build artifacts
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           key: render-golden-go-1.27.2-${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
