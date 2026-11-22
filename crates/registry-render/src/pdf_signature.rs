@@ -287,7 +287,7 @@ struct Original {
     /// Whether the page already has `/Tabs /S`.
     page_tabs: bool,
     /// The page's existing annotation references, in order.
-    annotations: Vec<(i32, i32)>,
+    annotations: Vec<(u32, i32)>,
 }
 
 fn read_original(
@@ -302,7 +302,7 @@ fn read_original(
     })?;
     let xref = pdf.xref();
     let root = xref.root_id();
-    if root != ObjectIdentifier::new(revision.root as i32, 0) {
+    if root != ObjectIdentifier::new(revision.root, 0) {
         return Err(PdfSignatureError::Malformed(
             "the trailer and hayro-syntax disagree on the catalog",
         ));
@@ -377,8 +377,7 @@ fn read_original(
     Ok(Original {
         catalog: revision.root,
         catalog_dict,
-        page: u32::try_from(page_id.obj_number)
-            .map_err(|_| PdfSignatureError::Malformed("the first page has a negative number"))?,
+        page: page_id.obj_number,
         page_dict,
         page_annots,
         page_tabs,
@@ -729,11 +728,11 @@ mod tests {
     }
 
     /// The first object number the update allocates: the field and widget.
-    fn next_object(original: &[u8]) -> i32 {
-        syntax::read_revision(original).expect("revision").size as i32
+    fn next_object(original: &[u8]) -> u32 {
+        syntax::read_revision(original).expect("revision").size
     }
 
-    fn page_annotations(bytes: &[u8]) -> Vec<(i32, i32)> {
+    fn page_annotations(bytes: &[u8]) -> Vec<(u32, i32)> {
         let pdf = hayro_syntax::Pdf::new(bytes.to_vec()).expect("reads");
         let page = pdf.pages()[0].raw().clone();
         let annots: Array<'_> = page.get(b"Annots").expect("Annots");
