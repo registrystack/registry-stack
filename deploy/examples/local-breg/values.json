@@ -10,7 +10,7 @@
     "serve": true,
     "image": {
       "repository": "ghcr.io/registrystack/breg",
-      "digest": "sha256:4cb370eb6c7e5c730f018b9e91dd55ad73339da7f6384f606fb963838e8b3cbc"
+      "digest": "sha256:1df9186e0861e13b2fec256216fa97fb27c80b6db04714c3d7834b34c175a3f2"
     },
     "nodeSelector": {"kubernetes.io/arch": "amd64"},
     "runtimeConfig": {"configMapName": "directory-runtime-v1"},
