@@ -164,10 +164,10 @@ class ReleaseImagePolicyTests(unittest.TestCase):
         self.assertEqual(
             {
                 "libc6": (
-                    "2.41-12+deb13u4",
+                    "2.41-12+deb13u5",
                     {
-                        "amd64": "967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9",
-                        "arm64": "8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc",
+                        "amd64": "b59b0625cd1a791375d40dab23a4d5d3d0641e3d0a773501becdc3725b7f99cf",
+                        "arm64": "0966fc3da1a26cc57647c68b5736f791b6e7eb498173a7993f63b6c89b4ed4f5",
                     },
                 ),
                 "libssl3t64": (
@@ -212,7 +212,7 @@ class ReleaseImagePolicyTests(unittest.TestCase):
     def test_runtime_package_overlay_is_fully_pinned(self) -> None:
         mutations = [
             (
-                "install_package libc6 2.41-12+deb13u4",
+                "install_package libc6 2.41-12+deb13u5",
                 "install_package libc6 2.41-12+deb13u3",
                 "exact fixed runtime libc6 version",
             ),
@@ -352,7 +352,7 @@ class ReleaseImagePolicyTests(unittest.TestCase):
         # Version field the installer checks keeps it. The fake tools answer
         # for an archive whose first line is its Package and second its Version.
         archives = {
-            "libc6_2.41-12+deb13u4_amd64.deb": ("libc6", "2.41-12+deb13u4"),
+            "libc6_2.41-12+deb13u5_amd64.deb": ("libc6", "2.41-12+deb13u5"),
             "libssl3t64_3.5.7-1~deb13u3_amd64.deb": ("libssl3t64", "3.5.7-1~deb13u3"),
             "zlib1g_1.3.dfsg+really1.3.1-1+deb13u1_amd64.deb": (
                 "zlib1g",
