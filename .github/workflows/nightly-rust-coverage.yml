@@ -81,14 +81,14 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
           save-if: false
 
       - name: Install pinned coverage tool
-        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
 
