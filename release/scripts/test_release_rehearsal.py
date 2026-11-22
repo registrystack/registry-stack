@@ -16,7 +16,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/release-rehearsal.yml"
 SCRIPT = ROOT / "release/scripts/rehearse-release"
-SETUP_GO_ACTION = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e"
+SETUP_GO_ACTION = "actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5"
 
 
 class ReleaseRehearsalTest(unittest.TestCase):

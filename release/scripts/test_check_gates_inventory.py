@@ -12,7 +12,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release" / "scripts" / "check-gates-inventory.py"
-SETUP_GO_ACTION = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e"
+SETUP_GO_ACTION = "actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5"
 
 
 def extract_top_level_block(workflow: str, name: str) -> str:
