@@ -270,7 +270,7 @@ jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_r
 lettre = { version = "0.11.24", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 # Every default feature stays off here; each member enables only the features
 # its own templates need, and states why in its manifest.
-minijinja = { version = "2.24", default-features = false }
+minijinja = { version = "3.1", default-features = false }
 miniz_oxide = "=0.9.1"
 napi = { version = "3.12.0", features = ["async", "serde-json"] }
 napi-build = { version = "2.4.0" }
