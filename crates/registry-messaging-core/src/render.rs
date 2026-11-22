@@ -26,7 +26,10 @@ use minijinja::value::{Serde, Value, ValueKind};
 use minijinja::{Environment, Error, ErrorKind, HtmlEscape, UndefinedBehavior};
 use serde::{Deserialize, Serialize};
 
-/// Instructions one part may execute.
+/// Fuel one part may spend. minijinja charges one unit per instruction
+/// executed, and roughly one unit per 64 bytes of output and of strings and
+/// lists a template creates, so the budget also bounds the data a render
+/// builds. The exact costs are not stable across minijinja releases.
 pub const RENDER_FUEL: u64 = 100_000;
 
 /// Nesting depth of template blocks and data one render may reach.
