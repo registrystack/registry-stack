@@ -215,3 +215,51 @@ fn plain_macos_binary_is_limited_to_registry_manifest() {
         ["name"] = serde_json::json!("bregctl-v0.44.0-macos-arm64");
     assert!(ReleaseManifest::parse(&serde_json::to_vec(&value).unwrap()).is_err());
 }
+
+fn push_binary_payload(value: &mut serde_json::Value, name: &str) {
+    value["payloads"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "name": name,
+            "kind": "binary",
+            "size": 21,
+            "sha256": "2".repeat(64)
+        }));
+}
+
+#[test]
+fn distribution_only_language_server_needs_no_component() {
+    let mut value = stack_v3_document();
+    push_binary_payload(&mut value, "registry-language-server-v0.44.0-linux-amd64");
+    push_binary_payload(
+        &mut value,
+        "registry-language-server-v0.44.0-macos-arm64.tar.gz",
+    );
+
+    let manifest = ReleaseManifest::parse(&serde_json::to_vec(&value).unwrap())
+        .expect("the standalone language server is a release asset, not an rstack component");
+    assert!(!manifest
+        .components
+        .components
+        .contains_key("language-server"));
+}
+
+#[test]
+fn unclassified_binary_payload_is_rejected() {
+    for name in [
+        "unclassified-v0.44.0-linux-amd64",
+        "registry-language-server-v0.43.0-linux-amd64",
+        "registry-language-server-v0.44.0-windows-amd64",
+        "registry-language-server-v0.44.0-macos-arm64",
+        "registry-language-server-extra-v0.44.0-linux-amd64",
+    ] {
+        let mut value = stack_v3_document();
+        push_binary_payload(&mut value, name);
+        let error = ReleaseManifest::parse(&serde_json::to_vec(&value).unwrap()).unwrap_err();
+        assert!(
+            error.contains("is not classified by components"),
+            "{name}: unexpected error: {error}"
+        );
+    }
+}
