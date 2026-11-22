@@ -49,7 +49,7 @@ jobs:
           submodules: false
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace-registry
           cache-targets: false
@@ -61,7 +61,7 @@ jobs:
           cosign-release: v3.0.6
 
       - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: "0.11.16"
 
