@@ -22,7 +22,7 @@
 //! stripped from the rendered output; a subject loses newlines as well, so
 //! no rendered value can open a new header line.
 
-use minijinja::value::{Value, ValueKind};
+use minijinja::value::{Serde, Value, ValueKind};
 use minijinja::{Environment, Error, ErrorKind, HtmlEscape, UndefinedBehavior};
 use serde::{Deserialize, Serialize};
 
@@ -130,7 +130,7 @@ pub fn render_part(
         .template_from_str(source)
         .map_err(|_| RenderFailure::Failed)?;
     let mut output = BoundedOutput::new(kind.ceiling());
-    let rendered = template.render_captured_to(Value::from_serialize(data), &mut output);
+    let rendered = template.render_captured_to(Value::from(Serde(data)), &mut output);
     if output.exceeded {
         return Err(RenderFailure::TooLarge);
     }

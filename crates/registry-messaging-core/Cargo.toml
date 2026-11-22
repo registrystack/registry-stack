@@ -18,7 +18,7 @@ jsonschema.workspace = true
 # No loader, includes, macros, or built-in filters and globals, so a template
 # reaches nothing but the closed filters and tests the renderer registers.
 # `fuel` bounds execution.
-minijinja = { workspace = true, features = ["fuel"] }
+minijinja = { workspace = true, features = ["fuel", "serde"] }
 registry-platform-crypto.workspace = true
 registry-platform-yaml.workspace = true
 schemars = { workspace = true, optional = true }

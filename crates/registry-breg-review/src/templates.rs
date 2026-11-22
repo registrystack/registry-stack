@@ -3,6 +3,7 @@
 //! The page templates, compiled once at startup with HTML autoescaping on
 //! every template.
 
+use minijinja::value::Serde;
 use minijinja::{AutoEscape, Environment};
 use serde::Serialize;
 
@@ -78,7 +79,9 @@ impl Templates {
     }
 
     pub(crate) fn review(&self, page: &ReviewPage<'_>) -> Result<String, minijinja::Error> {
-        self.environment.get_template("review.html")?.render(page)
+        self.environment
+            .get_template("review.html")?
+            .render(Serde(page))
     }
 
     pub(crate) fn submitted(&self, csrf: &str) -> Result<String, minijinja::Error> {
