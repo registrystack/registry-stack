@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -87,6 +88,20 @@ class ComponentManifestTests(unittest.TestCase):
         self.assertIn(
             "registry-language-server",
             rstack_components.DISTRIBUTION_ONLY_BINARIES,
+        )
+
+    def test_rstack_validator_exempts_the_same_distribution_only_binaries(self) -> None:
+        model = (
+            Path(__file__).resolve().parents[2] / "crates/registry-rstack/src/model.rs"
+        ).read_text(encoding="utf-8")
+        declaration = re.search(
+            r"const DISTRIBUTION_ONLY_BINARIES: \[&str; \d+\] = \[([^\]]*)\];",
+            model,
+        )
+        self.assertIsNotNone(declaration, "rstack declares no distribution-only binaries")
+        self.assertEqual(
+            set(rstack_components.DISTRIBUTION_ONLY_BINARIES),
+            set(re.findall(r'"([^"]+)"', declaration.group(1))),
         )
 
     def test_candidate_schemas_admit_every_component_name(self) -> None:

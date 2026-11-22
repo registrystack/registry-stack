@@ -9,6 +9,9 @@ const RELEASE_SCHEMAS: [&str; 2] = [
     "registry-stack.release-candidate.v3",
 ];
 const PLATFORMS: [&str; 3] = ["linux-amd64", "linux-arm64", "macos-arm64"];
+// Binaries published as standalone release assets that rstack never installs.
+// Mirrors DISTRIBUTION_ONLY_BINARIES in release/scripts/rstack_components.py.
+const DISTRIBUTION_ONLY_BINARIES: [&str; 1] = ["registry-language-server"];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -292,7 +295,10 @@ impl ReleaseManifest {
             }
         }
         for payload in &manifest.payloads {
-            if payload.kind == "binary" && !covered.contains(&payload.name) {
+            if payload.kind == "binary"
+                && !covered.contains(&payload.name)
+                && !distribution_only_binary(&payload.name, &manifest.release.tag)
+            {
                 return Err(format!(
                     "binary payload {} is not classified by components",
                     payload.name
@@ -345,4 +351,12 @@ fn asset_name(binary: &str, release: &str, platform: &str) -> String {
         ""
     };
     format!("{binary}-{release}-{platform}{suffix}")
+}
+
+fn distribution_only_binary(name: &str, release: &str) -> bool {
+    DISTRIBUTION_ONLY_BINARIES.iter().any(|binary| {
+        PLATFORMS
+            .iter()
+            .any(|platform| name == asset_name(binary, release, platform))
+    })
 }
