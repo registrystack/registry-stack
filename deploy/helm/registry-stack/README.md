@@ -316,7 +316,10 @@ scope, access profile, and row boundaries.
 [Extension endpoint guide](../../examples/intake-status/README.md)
 
 Extension egress rejects an `ipBlock` that opens every address, such as
-`0.0.0.0/0`, `::/0` or any prefix shorter than `/8`. This is a guard against
+`0.0.0.0/0`, `::/0` or any prefix shorter than `/8`. It also rejects any block
+inside the IPv4-mapped IPv6 range `::ffff:0:0/96`, such as `::ffff:0.0.0.0/96`,
+however the IPv6 address is written. Write an IPv4 range in dotted IPv4 form,
+such as `198.51.100.0/24`. This is a guard against
 mistakes and not a security boundary, because several broader-than-intended
 blocks can still be combined. Review extension egress as you would any
 NetworkPolicy. The core workloads' own egress is not subject to this guard.

@@ -876,8 +876,39 @@ class ExtensionTest(ChartTest):
                     values=(EXTENSIONS,), namespace="pilot-extensions",
                 )
 
+    def test_ipv4_mapped_blocks_are_refused(self):
+        # Every spelling of a block inside ::ffff:0:0/96 is refused, so an
+        # IPv4 range is always reviewed in its dotted form.
+        for cidr in (
+            "::ffff:0.0.0.0/96", "::ffff:0:0/96", "0:0:0:0:0:ffff:0:0/96", "::FFFF:0:0/96",
+            "::ffff:10.0.0.0/104", "::ffff:203.0.113.7/128", "::ffff:c000:200/120",
+            "0::ffff:0:0/96", "::0:ffff:0:0/96", "0:0:0:0::ffff:0:0/96", "0:0:0:0:0:ffff::/96",
+            "0000:0000:0000:0000:0000:FfFf:0000:0000/96",
+        ):
+            with self.subTest(cidr=cidr):
+                egress = [{"to": {"ipBlock": {"cidr": cidr}}, "ports": [{"port": 443}]}]
+                self.assert_refused(
+                    ["--set-json", "extensions.endpoints.intake.egress=" + json.dumps(egress)],
+                    "at '/extensions/endpoints/intake/egress/0/to/ipBlock/cidr'",
+                    "IPv4-mapped", "dotted IPv4 form",
+                    values=(EXTENSIONS,), namespace="pilot-extensions",
+                )
+        egress = [
+            {"to": {"ipBlock": {"cidr": "198.51.100.0/24"}}, "ports": [{"port": 443}]},
+            {"to": {"ipBlock": {"cidr": "::ffff:198.51.100.0/120"}}, "ports": [{"port": 443}]},
+        ]
+        self.assert_refused(
+            ["--set-json", "extensions.endpoints.intake.egress=" + json.dumps(egress)],
+            "at '/extensions/endpoints/intake/egress/1/to/ipBlock/cidr'",
+            values=(EXTENSIONS,), namespace="pilot-extensions",
+        )
+
     def test_bounded_blocks_are_accepted(self):
-        for cidr in ("198.51.100.0/24", "203.0.113.7/32", "10.0.0.0/8", "2001:db8::/32", "0.0.0.0/8"):
+        # The last four are IPv6 blocks near, but outside, ::ffff:0:0/96.
+        for cidr in (
+            "198.51.100.0/24", "203.0.113.7/32", "10.0.0.0/8", "2001:db8::/32", "0.0.0.0/8",
+            "::fffe:0:0/96", "::1:ffff:0:0/96", "::ffff:0/112", "2001:db8::ffff:0:0/96",
+        ):
             with self.subTest(cidr=cidr):
                 egress = [{"to": {"ipBlock": {"cidr": cidr}}, "ports": [{"port": 443}]}]
                 result = helm_template(
@@ -885,6 +916,19 @@ class ExtensionTest(ChartTest):
                     values=(EXTENSIONS,), namespace="pilot-extensions",
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_selector_peers_are_rendered(self):
+        peer = {
+            "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "directory"}},
+            "podSelector": {"matchLabels": {"app.kubernetes.io/name": "breg"}},
+        }
+        egress = [{"to": peer, "ports": [{"port": 8080, "protocol": "TCP"}]}]
+        docs = render(
+            ["--set-json", "extensions.endpoints.intake.egress=" + json.dumps(egress)],
+            values=(EXTENSIONS,), namespace="pilot-extensions",
+        )
+        policy = named(docs, "NetworkPolicy", "extension-intake")
+        self.assertEqual(policy["spec"]["egress"], [{"to": [peer], "ports": egress[0]["ports"]}])
 
 
 class SchemaRefusalTest(ChartTest):

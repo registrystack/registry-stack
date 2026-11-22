@@ -37,7 +37,18 @@ spec:
           port: {{ $endpoint.port }}
   {{- if $endpoint.egress }}
   egress:
-    {{- range $endpoint.egress }}
+    {{- range $index, $rule := $endpoint.egress }}
+    {{- /*
+      Refuse any block inside ::ffff:0:0/96, in every IPv6 spelling, so an
+      IPv4 range is reviewed in its dotted form. The address is mapped when
+      its first five groups are zero and its sixth is ffff: either five
+      explicit zero groups precede ffff, or a "::" precedes ffff and exactly
+      two groups or a dotted quad follow it.
+    */}}
+    {{- $cidr := dig "ipBlock" "cidr" "" $rule.to }}
+    {{- if regexMatch `^((0{1,4}:){5}ffff:|(::|(0{1,4}:){1,4}:)(0{1,4}:){0,4}ffff:([0-9a-f]{1,4}:[0-9a-f]{1,4}|[0-9]{1,3}(\.[0-9]{1,3}){3})/)` (lower $cidr) }}
+    {{- fail (printf "at '/extensions/endpoints/%s/egress/%d/to/ipBlock/cidr': '%s' is an IPv4-mapped IPv6 block. Write the IPv4 range in dotted IPv4 form, such as 198.51.100.0/24." $id $index $cidr) }}
+    {{- end }}
     - to:
         - {{- toYaml .to | nindent 10 }}
       ports:
