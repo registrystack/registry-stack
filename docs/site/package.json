@@ -89,7 +89,7 @@
   "devDependencies": {
     "@astrojs/check": "^0.9.12",
     "@astrojs/markdown-remark": "7.3.10",
-    "@redocly/cli": "^2.81.0",
+    "@redocly/cli": "^2.82.0",
     "@vvago/vale": "^3.25.1",
     "github-slugger": "^2.0.0",
     "markdownlint-cli2": "^0.24.0",
