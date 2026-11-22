@@ -7,11 +7,13 @@
 //! update copies every entry it does not replace byte for byte. Callers
 //! cross-check the keys found here against `hayro-syntax`. Reading the
 //! revision also walks every object in use with a nesting bound, and the
-//! page tree with a depth bound and each node once, because `hayro-syntax`
-//! recurses through both without one and a stack overflow aborts.
+//! page tree with a depth bound and each node once. `hayro-syntax` 0.9.0
+//! stops skipping a value nested 512 deep and walks its page tree
+//! iteratively with a visited set. The bounds here are tighter and do not
+//! depend on those limits staying as they are.
 //!
 //! The reader accepts only files whose cross-reference table, trailer and
-//! objects `hayro-syntax` 0.7.2 reads as written. When it cannot, it
+//! objects `hayro-syntax` 0.9.0 reads as written. When it cannot, it
 //! rebuilds the table by scanning every byte of the file and reading what
 //! follows each `N G obj` without a depth bound, stream data included, so
 //! each rule here that is stricter than PDF needs says which reading of
@@ -359,8 +361,8 @@ struct XrefEntry {
 /// `/Encrypt`, and nothing after `%%EOF` but one optional EOL. The value of
 /// every object in use must read as a PDF value nested at most `MAX_DEPTH`
 /// deep that ends before the table; a stream must be one `hayro-syntax`
-/// reads (`check_stream`), and its data is not read. Every offset, `startxref` and `/Size` must fit the 32-bit
-/// numbers `hayro-syntax` reads them as. The page tree
+/// reads (`check_stream`), and its data is not read. Every offset,
+/// `startxref` and `/Size` must fit 32-bit numbers. The page tree
 /// must nest at most `MAX_PAGE_TREE_DEPTH` nodes deep and reach each node
 /// once.
 pub(super) fn read_revision(pdf: &[u8]) -> Result<Revision, PdfSignatureError> {
@@ -402,7 +404,8 @@ pub(super) fn read_revision(pdf: &[u8]) -> Result<Revision, PdfSignatureError> {
         return Err(PdfSignatureError::NotSingleRevision);
     }
 
-    // `hayro-syntax` numbers objects with 32-bit signed numbers.
+    // `hayro-syntax` numbers objects with unsigned 32-bit numbers; `/Size`
+    // is kept within `i32`, the narrower range earlier versions read.
     let size = value(b"Size")
         .and_then(parse_uint)
         .filter(|size| i32::try_from(*size).is_ok())
@@ -424,8 +427,8 @@ pub(super) fn read_revision(pdf: &[u8]) -> Result<Revision, PdfSignatureError> {
             .ok_or(malformed(
                 "a cross-reference entry does not point at its object",
             ))?;
-        // `hayro-syntax` recurses without a depth limit; walking every
-        // object here first keeps its recursion within `MAX_DEPTH`. The
+        // `hayro-syntax` stops skipping a value nested 512 deep; walking
+        // every object here first keeps nesting within `MAX_DEPTH`. The
         // value is read in the whole file, as `hayro-syntax` reads it, so
         // a token that runs on into `xref` is one token here too.
         let value = skip_space(pdf, body);
@@ -605,15 +608,16 @@ fn cover(subsections: &[Subsection], size: u32) -> Result<Vec<Option<usize>>, Pd
 }
 
 /// If the dictionary at `dict..dict_end` opens a stream, check it is one
-/// `hayro-syntax` reads. Its stream reader gives up on a stream that names
-/// an external file, one whose `stream` keyword is not followed by an
-/// end-of-line, and one with no `endstream` after its data; an object it
-/// gives up on is missing from its object list, which is all the signature
-/// check sees. `/FFilter` and `/FDecodeParms` belong to an external file
-/// too. A comment before the keyword is refused because the reader's
-/// fallback finds the first `stream` after the dictionary, comments
-/// included. `last_endstream` is the offset of the last `endstream` in
-/// `objects`. The stream's data is not read.
+/// `hayro-syntax` reads. Its stream reader gives up on a stream whose
+/// `stream` keyword is not followed by an end-of-line and on one with no
+/// `endstream` after its data; an object it gives up on is missing from its
+/// object list, which is all the signature check sees. It reads a stream
+/// that names an external file (`/F`, `/FFilter` or `/FDecodeParms`) but
+/// cannot decode it, and this check refuses such a stream. Its fallback
+/// skips white-space and comments before the `stream` keyword; a comment
+/// there is refused here anyway, as stricter than PDF needs.
+/// `last_endstream` is the offset of the last `endstream` in `objects`. The
+/// stream's data is not read.
 fn check_stream(
     objects: &[u8],
     dict: usize,
@@ -668,12 +672,12 @@ fn object_body_at(pdf: &[u8], offset: usize, number: usize) -> Option<usize> {
 
 /// Walk the page tree from the catalog's `/Pages` through every `/Kids`
 /// reference, at most `MAX_PAGE_TREE_DEPTH` nodes deep, reaching each node
-/// once. `hayro-syntax` builds its page list when it opens a file,
-/// recursing once per level and visiting a shared node once per parent:
-/// a deep chain of shallow objects aborts it on a stack overflow, a cycle
-/// never ends, and a node with two parents multiplies its work. The walk
-/// follows `/Kids` whatever a node's `/Type` says, so it reaches every node
-/// `hayro-syntax` recurses into.
+/// once. `hayro-syntax` builds its page list when it opens a file, walking
+/// the tree iteratively and visiting a node reached by reference once, so a
+/// cycle or a node with two parents does not hang it. This walk refuses both
+/// anyway, and a chain deeper than `MAX_PAGE_TREE_DEPTH`. It follows `/Kids`
+/// whatever a node's `/Type` says, so it reaches every node `hayro-syntax`
+/// descends into.
 ///
 /// `values[number]` is the offset in `objects` of object `number`'s value.
 fn check_page_tree(
@@ -984,9 +988,9 @@ mod tests {
         }
     }
 
-    /// `hayro-syntax` reads `startxref` and object numbers as 32-bit signed
-    /// numbers and rebuilds the table when one does not fit, so the bounded
-    /// reader refuses what it would not read as written. Only a file of
+    /// `hayro-syntax` reads `startxref` as a 32-bit signed number and
+    /// rebuilds the table when it does not fit. `/Size` is kept within `i32`
+    /// too, so the bounded reader refuses what it would not read as written. Only a file of
     /// gigabytes reaches either bound, so each is checked where it is read.
     #[test]
     fn startxref_and_size_fit_what_hayro_syntax_reads() {

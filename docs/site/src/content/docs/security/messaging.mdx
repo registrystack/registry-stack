@@ -405,9 +405,11 @@ rows.
 
 ### MESSAGING-RES-05: template rendering can briefly allocate up to a multiple of the data size
 
-- Condition: the fuel budget counts instructions, not bytes, so an expression such as string
-  repetition can allocate up to the data's size multiplied by one factor before the per-part output
-  ceiling refuses it.
+- Condition: the fuel budget charges instructions and also roughly one unit per 64 bytes of output
+  and of strings and lists the template creates, and refuses an operation such as string repetition
+  before it allocates when the remaining fuel cannot pay for it. A render can still allocate a
+  multiple of the data's size, bounded by the fuel budget, before the per-part output ceiling
+  refuses it.
   `{% autoescape false %}` is accepted by the parser and has no effect.
   The loader reads each file after listing the directory, so a file swapped between the two reads is
   caught only by the digest the ledger compares.
