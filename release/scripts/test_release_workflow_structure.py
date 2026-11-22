@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 LATEST_RELEASE_HELPER = ROOT / "release/scripts/verify_latest_published_release.py"
 LINUX_NODE_BUILD_HELPER = ROOT / "release/scripts/build-linux-node-client"
-SETUP_GO_ACTION = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e"
+SETUP_GO_ACTION = "actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5"
 # Go builds AWS-LC-FIPS and is not shipped. Every hosted job installs this one
 # release, and every cache that holds its output names it.
 GO_VERSION = "1.27.2"
