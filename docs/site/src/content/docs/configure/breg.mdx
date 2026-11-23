@@ -428,6 +428,9 @@ It computes one value over every row the reader sees.
 Such a subquery may read a Record type on which the reader's grant has row boundaries.
 `bregctl check` then reports the finding `breg.disclosure.derived-reads-withheld-source-rows`.
 The value is exact only for readers whose grant on that Record type is unbounded.
+BReg flags only a subquery inside an expression.
+It does not detect a join to a table expression or `FROM` subquery over rows not linked to the row.
+Keep such a derived field to readers whose grant on that Record type is unbounded.
 
 Other protections on a Record type the SQL reads also leave rows out of the computation.
 They are a `record` disclosure condition that binds the reader, and `membershipBoundaries` or `requireConsent` on the reader's grant on that type.
