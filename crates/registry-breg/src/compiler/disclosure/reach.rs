@@ -472,12 +472,15 @@ pub(in crate::compiler) fn validate_derived_reads(
 /// reader's own grant on that record type sees. A grant that sees fewer rows
 /// than are linked to a row the reader sees yields a wrong answer, not an
 /// error. So the grant must read rows, carry the row boundaries of the grant
-/// the request runs under (a request installs that grant's boundary values,
-/// and a grant whose boundaries name other fields or operators sees no row),
-/// and add no membership or consent requirement of a kind that grant lacks.
-/// A matching boundary still assumes the linked rows hold the same boundary
-/// values. Readable fields limit the answer, not this computation, so the
-/// grant need not make any field readable.
+/// the request runs under (a request installs that grant's boundary values as
+/// one ordered list, and a grant whose list differs in length, order, fields
+/// or operators sees no row), and add no membership or consent requirement of
+/// a kind that grant lacks. Membership and consent probe each row on their
+/// own, so omitting one sees more rows. A matching boundary still assumes the
+/// linked rows hold the same boundary values. Readable fields limit the
+/// answer, not this computation, so the grant need not make any field
+/// readable. One statement computes every column of the relation, so a reader
+/// of any of its fields needs every source the statement reads.
 fn validate_derived_source_grants(
     owner: &EntitySource,
     sql: &[u8],
