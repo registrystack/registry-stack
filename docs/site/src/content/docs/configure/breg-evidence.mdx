@@ -56,7 +56,8 @@ Both name fields that are already in `--fields`, and without them the generated 
 - `--require-value FIELD=VALUE` lists the values a fact field may hold.
   Repeat the flag to allow several values for one field.
   A record whose value is not listed answers no match, the same answer as a record whose fact is missing.
-  A record that does not exist answers unresolved instead, and Evidence reports the two differently, so a caller can tell that a refused record exists.
+  A record that does not exist answers unresolved instead.
+  Evidence returns the same public problem for both, so a caller cannot tell them apart, but the Evidence audit records them separately.
   The check runs in the generated lookup, never in derived logic.
   It runs after the identity check and before any fact is returned.
   Use it as defence in depth beside the access profile's row boundary.
@@ -94,6 +95,10 @@ Generate the next version into another directory so that you can compare and rev
     alternatives_keep_one_route_and_selected_identity_with_stable_inventories,
     generated_pack_authentication_is_explicitly_selected,
     a_record_outside_the_allowed_values_answers_no_match_not_unresolved,
+    crates/registry-evidence/src/runtime_tests.rs
+    declared_existence_disclosure_mode_governs_the_public_collapse,
+    a_declared_unresolved_problem_logs_a_cause_only_when_a_404_does_not_match_it;
+    crates/registry-breg/src/evidence_source/tests.rs
     a_required_value_with_a_control_character_is_refused,
     a_required_uuid_or_reference_value_must_be_canonical_lowercase,
     a_required_date_value_must_be_a_real_calendar_date,

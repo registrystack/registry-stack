@@ -3813,7 +3813,7 @@
             },
             {
               "display": "--require-value <FIELD=VALUE>",
-              "description": "Allowed value for a fact field, as FIELD=VALUE (evidence-source only). Repeat the flag to allow several values for one field. A record with any other value answers no-match, which Evidence reports apart from an unknown record's unresolved lookup",
+              "description": "Allowed value for a fact field, as FIELD=VALUE (evidence-source only). Repeat the flag to allow several values for one field. A record with any other value answers no-match, which Evidence answers publicly like an unknown record",
               "always_required": false,
               "repeatable": true,
               "default_values": [],
