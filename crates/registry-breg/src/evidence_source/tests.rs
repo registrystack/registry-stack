@@ -1271,6 +1271,80 @@ fn refuses_an_export_whose_schema_evidence_would_not_read() {
     export_evidence_source(&registry, &options).unwrap();
 }
 
+/// `fact_rule_project` with a `note` text field long enough for the values
+/// `require_notes` asks for.
+fn long_note_project() -> Value {
+    let mut project = fact_rule_project();
+    project["recordTypes"]["record"]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"note","type":"text","maximumLength":30000,"classification":"internal"}));
+    project["accessProfiles"]["evidence-source"]["permissions"]["records"][0]["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("note"));
+    project
+}
+
+/// Options that require `note` to hold one of distinct values of `lengths`
+/// characters.
+fn require_notes(lengths: &[usize]) -> EvidenceSourceOptions {
+    let mut options = fact_rule_options();
+    options.fields = vec!["status".into(), "note".into()];
+    options.optional_fields = Vec::new();
+    options.required_values = BTreeMap::from([(
+        "note".to_owned(),
+        lengths
+            .iter()
+            .zip('a'..)
+            .map(|(length, letter)| letter.to_string().repeat(*length))
+            .collect(),
+    )]);
+    options
+}
+
+#[test]
+fn refuses_an_export_whose_lookup_script_evidence_would_not_read() {
+    // The lookup script spells out every allowed value. Three 22,000-character
+    // values each fit the field and together exceed the 65,536 bytes Evidence
+    // reads a script within.
+    let registry = compiled(&long_note_project(), SQL);
+    let refusal = refused(&registry, &require_notes(&[22_000, 22_000, 22_000]));
+    assert_eq!(refusal.code, "breg.evidence-source.refused");
+    assert_eq!(refusal.path, "required-values");
+    assert!(
+        refusal.message.contains("65536 bytes"),
+        "{}",
+        refusal.message
+    );
+    // A script of exactly the bound exports, and one a byte longer does not.
+    let script = |export: &EvidenceSourceExport| {
+        file(export, "adapter-packs/registry-status/scripts/lookup.rhai").len()
+    };
+    let shortest = script(&export_evidence_source(&registry, &require_notes(&[1, 1, 1])).unwrap());
+    let spare = 65_536 - shortest;
+    let mut lengths = [1 + spare / 3, 1 + spare / 3, 1 + spare - 2 * (spare / 3)];
+    let at_bound = export_evidence_source(&registry, &require_notes(&lengths)).unwrap();
+    assert_eq!(script(&at_bound), 65_536);
+    lengths[2] += 1;
+    let refusal = refused(&registry, &require_notes(&lengths));
+    assert_eq!(refusal.path, "required-values");
+    assert!(
+        refusal.message.contains("65537 bytes"),
+        "{}",
+        refusal.message
+    );
+}
+
+#[cfg(feature = "runtime")]
+#[test]
+fn the_lookup_script_bound_is_the_one_evidence_loads_pack_scripts_within() {
+    assert_eq!(
+        EVIDENCE_MAXIMUM_SCRIPT_BYTES,
+        registry_adapter_engine::scripts::SCRIPT_PROFILE.maximum_source_bytes
+    );
+}
+
 #[test]
 fn a_boolean_field_accepts_a_boolean_value() {
     let mut options = fact_rule_options();

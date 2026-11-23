@@ -114,6 +114,13 @@ pub struct EvidenceSourceExport {
 /// reads within. The export refuses a schema Evidence would refuse to load.
 const EVIDENCE_MAXIMUM_SCHEMA_BYTES: usize = 256 * 1024;
 
+/// The largest script Evidence loads from a pack:
+/// `SCRIPT_PROFILE.maximum_source_bytes` in
+/// `crates/registry-adapter-engine/src/scripts.rs`, which `ScriptSet` reads
+/// each pack script within. The export refuses a lookup script Evidence would
+/// refuse to load.
+const EVIDENCE_MAXIMUM_SCRIPT_BYTES: usize = 65_536;
+
 fn refusal(path: &str, message: &str) -> Diagnostic {
     Diagnostic::error("breg.evidence-source.refused", path, message)
 }
@@ -1035,6 +1042,18 @@ fn export_with_behavior(
                 ),
             ));
         }
+    }
+    // The script spells out every allowed value. An export selects at most 16
+    // facts with short names, so long required values are what can make the
+    // script too large.
+    if script.len() > EVIDENCE_MAXIMUM_SCRIPT_BYTES {
+        return Err(refusal(
+            "required-values",
+            &format!(
+                "the generated lookup script is {} bytes, over the {EVIDENCE_MAXIMUM_SCRIPT_BYTES} bytes Evidence reads a script within; require fewer or shorter values, export fewer facts or use a reviewed custom adapter",
+                script.len()
+            ),
+        ));
     }
     let script_bytes = script.into_bytes();
     let protocol_bytes = serde_json::to_vec(&json!({

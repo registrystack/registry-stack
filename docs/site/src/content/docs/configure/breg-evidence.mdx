@@ -79,6 +79,8 @@ Both name fields that are already in `--fields`, and without them the generated 
 
 The command refuses a required value that does not fit the field's type, or that names a field that is not an exported fact.
 It also refuses an empty value list, and a field that is both required to hold a value and optional.
+The generated lookup script spells out every required value, and Evidence reads a script file of at most 64 KiB.
+The command refuses required values that would make the script larger, as a few long text values can.
 Both inputs are part of the pack version, so changing either one produces a new pack version.
 A selector field that is also listed in `--fields` becomes a required fact.
 A fixture or record that leaves it out then fails.
@@ -104,6 +106,8 @@ Generate the next version into another directory so that you can compare and rev
     a_required_value_with_a_control_character_is_refused,
     a_required_uuid_or_reference_value_must_be_canonical_lowercase,
     a_required_date_value_must_be_a_real_calendar_date,
+    refuses_an_export_whose_lookup_script_evidence_would_not_read,
+    the_lookup_script_bound_is_the_one_evidence_loads_pack_scripts_within,
     the_behavior_revision_binds_the_value_the_lookup_compares_not_its_spelling,
     an_optional_fact_that_is_null_still_matches_and_is_omitted;
     crates/registry-bregctl/tests/evidence_source.rs an_explicit_lookup_project_exports_an_evidence_source_without_edits. */}
