@@ -35,10 +35,13 @@
   the same grant governs the profile's direct reads. So is a grant with row
   boundaries on a Record type that a subquery referring to no column of the
   row reads: its value covers only the rows the reader sees, and is exact
-  only for readers whose grant on that type is unbounded. Migration: for each
-  refusal, grant the profile `get` on the named Record type with only the link
-  fields readable and the row boundaries the message names, or remove the
-  derived field from the profile.
+  only for readers whose grant on that type is unbounded. BReg flags only a
+  subquery inside an expression. It does not detect a join to a table
+  expression or `FROM` subquery over rows not linked to the row, so keep such
+  a derived field to readers whose grant on that type is unbounded.
+  Migration: for each refusal, grant the profile `get` on the named Record
+  type with only the link fields readable and the row boundaries the message
+  names, or remove the derived field from the profile.
 - BREAKING: `bregctl check` refuses derived SQL that applies `LIMIT` or
   `OFFSET` to the rows it returns, directly or through a table expression or
   `FROM` subquery (`breg.derived.sql-invalid`). The view runs under the
