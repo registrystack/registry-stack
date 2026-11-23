@@ -146,11 +146,16 @@ It is not a BReg authorisation boundary.
 The access profile's row boundary is the only place BReg withholds a Record from the Evidence
 workload.
 A Record the rule refuses answers no-match, while a Record that does not exist answers unresolved.
-An Evidence caller can therefore tell that a refused Record exists.
+Evidence returns the same public problem for both, so an Evidence caller cannot tell them apart.
+The Evidence audit records the two separately, so anyone who reads it can tell that a refused
+Record exists.
 
 {/* Evidence: crates/registry-breg/src/evidence_source.rs, export_evidence_source;
     crates/registry-breg/src/evidence_source/tests.rs,
-    a_record_outside_the_allowed_values_answers_no_match_not_unresolved. */}
+    a_record_outside_the_allowed_values_answers_no_match_not_unresolved;
+    crates/registry-evidence/src/runtime_tests.rs,
+    declared_existence_disclosure_mode_governs_the_public_collapse,
+    a_declared_unresolved_problem_logs_a_cause_only_when_a_404_does_not_match_it. */}
 
 ### Disclosure conditions
 
