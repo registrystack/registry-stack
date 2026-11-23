@@ -370,14 +370,21 @@ For each other Record type the SQL reads, the profile's grant on that type must:
 
 - include `get`, `lookup`, `list`, `batch`, `revisions` or `snapshot`, refused otherwise with `breg.disclosure.derived-reads-unreadable-source`
 - have the same `rowBoundaries`, in the same order, as the profile's grant on the Record type that owns the derived field
-- add no `membershipBoundaries` or `requireConsent` that the owner's grant lacks
+- require no `requiredPurposes`, or every purpose that the owner's grant requires
 
-A grant that breaks either boundary rule is refused with `breg.disclosure.derived-reads-source-boundary`.
+A grant that breaks the boundary or purpose rule is refused with `breg.disclosure.derived-reads-source-boundary`.
 The request matches the reader's boundaries as one ordered list.
 A grant with fewer boundaries, or with none, sees no rows rather than more.
-For a read path, the grant on the path's root Record type sets the boundaries, because the path read runs under that grant.
+A request runs under one purpose, and a grant that requires purposes sees no rows under any other.
+A profile's purposes cover each of its grants in the project, so a purpose mismatch comes from a module grant that requires other purposes.
+A read path runs under the profile's grant on the path's root Record type, so that grant sets the boundaries and purposes.
 A profile bounded by `id` cannot read a derived field over another Record type, because no row of another type shares that `id`.
-A derived field that reads only its own Record type needs no other grant.
+
+A derived field whose SQL reads its own Record type once needs no other grant.
+SQL can read its own Record type more than once, in a join, a subquery or a table expression used twice.
+It then reads other rows of that type, so the owner's Record type counts as a type the SQL reads.
+A profile bounded by `id` cannot read such a field.
+A read path reader needs its grant on the owner to match its grant on the path's root.
 
 The smallest grant is `get`, with only the link fields readable and the same row boundaries.
 Here a derived `member-count` field on `household` counts the linked `member` rows:
@@ -406,13 +413,28 @@ Matching boundaries assume that each linked row holds the same boundary value as
 A `member` recorded in a different district from its household is left out of the household's count, with no error.
 Keep boundary values consistent across linked records.
 
-{/* Evidence: crates/registry-breg/src/compiler/disclosure/reach.rs, validate_derived_source_grants and derived_source_finding;
+Other protections on a Record type the SQL reads also leave rows out of the computation.
+They are a `record` disclosure condition that binds the reader, and `membershipBoundaries` or `requireConsent` on the reader's grant on that type.
+The same grant governs the profile's direct reads, where hiding those rows may be intended.
+So `bregctl check` reports each one as the finding `breg.disclosure.derived-reads-withheld-source-rows` instead of refusing it.
+The derived value leaves out the rows that the protection hides.
+
+{/* Evidence: crates/registry-breg/src/compiler/disclosure/reach.rs, validate_derived_source_grants,
+    derived_source_refusal and withheld_source_rows;
+    crates/registry-breg/src/derived_sql.rs, derived_sql_source_scans;
     crates/registry-breg/src/generated_ddl.rs, grant_reads_rows and policy_authority_expression_for_alias;
     crates/registry-breg/tests/disclosure_compile.rs, a_derived_field_cannot_read_a_record_type_its_reader_cannot_read,
     a_derived_field_cannot_read_a_record_type_under_other_row_boundaries,
     a_derived_field_cannot_read_a_record_type_under_a_subset_or_reordering_of_its_readers_boundaries,
+    a_derived_field_cannot_read_a_record_type_under_purposes_its_reader_lacks,
     reading_one_column_of_a_derived_relation_needs_every_source_it_reads,
-    a_read_path_reader_must_read_the_derived_source_under_its_root_boundaries and
+    a_read_path_reader_must_read_the_derived_source_under_its_root_boundaries,
+    a_derived_field_that_reads_its_own_record_type_twice_cannot_serve_a_reader_bounded_by_id,
+    a_read_path_reader_of_a_self_joined_derived_field_must_read_the_owner_under_its_root_boundaries,
+    a_record_condition_on_a_derived_source_that_binds_the_reader_is_a_finding,
+    a_record_condition_on_a_self_joined_owner_that_binds_the_reader_is_a_finding,
+    a_membership_boundary_on_a_derived_source_grant_is_a_finding,
+    a_consent_requirement_on_a_derived_source_grant_is_a_finding and
     a_derived_field_may_read_source_fields_its_reader_cannot_read. */}
 
 ## Schedule a Record-controlled Action

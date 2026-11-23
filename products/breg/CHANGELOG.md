@@ -13,14 +13,21 @@
   `rowBoundaries`, in the same order, as the profile's grant on the Record
   type that owns the field, or on the root Record type of a read path. Fewer
   boundaries are refused too, because they see no rows rather than more. It
-  may not add `membershipBoundaries` or `requireConsent` that grant lacks
+  must require no `requiredPurposes`, or every purpose that grant requires
   (`breg.disclosure.derived-reads-source-boundary`). A profile bounded by `id`
-  cannot read a derived field over another Record type. A derived field that
-  reads only its own Record type is unaffected. BReg cannot check that linked
-  rows hold the same boundary values, so keep them consistent. Migration:
-  for each refusal, grant the profile `get` on the named Record type with only
-  the link fields readable and the row boundaries the message names, or remove
-  the derived field from the profile.
+  cannot read a derived field over another Record type. SQL that reads its
+  own Record type more than once, in a join, a subquery or a table expression
+  used twice, counts that type as another Record type it reads. A derived
+  field that reads its own Record type once is unaffected. BReg cannot check
+  that linked rows hold the same boundary values, so keep them consistent. A
+  `record` disclosure condition that binds the reader on a Record type the SQL
+  reads, and `membershipBoundaries` or `requireConsent` on the reader's grant
+  on that type, leave rows out of the derived value. Each is reported as the
+  finding `breg.disclosure.derived-reads-withheld-source-rows`, not refused,
+  because the same grant governs the profile's direct reads. Migration: for
+  each refusal, grant the profile `get` on the named Record type with only the
+  link fields readable and the row boundaries the message names, or remove the
+  derived field from the profile.
 - BREAKING: `bregctl generate evidence-source` carries a fact field's
   declared `pattern` into the generated fact and response schemas, and states
   a decimal fact's declared precision and scale as a `pattern`. Every pattern
