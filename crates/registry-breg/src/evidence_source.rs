@@ -240,7 +240,14 @@ fn pattern_is_portable(pattern: &str) -> bool {
             let differs = ESCAPES.contains(escape) && !(bracket.is_some() && escape == 'b');
             // A second digit makes PostgreSQL read an octal escape.
             let octal = escape.is_ascii_digit() && chars.peek().is_some_and(char::is_ascii_digit);
-            if differs || octal {
+            // The consumer rewrites `\c` and a letter to a control character
+            // before it reads escapes, so it takes the backslash an escaped
+            // backslash yields as the start of `\c`.
+            let control = escape == '\\' && {
+                let mut ahead = chars.clone();
+                ahead.next() == Some('c') && ahead.next().is_some_and(|c| c.is_ascii_alphabetic())
+            };
+            if differs || octal || control {
                 return false;
             }
             if let Some(read) = &mut bracket {
@@ -288,6 +295,17 @@ fn pattern_is_portable(pattern: &str) -> bool {
     true
 }
 
+/// Whether Evidence compiles a fact schema holding the pattern. It compiles a
+/// pack schema with this draft and format mode (registry-adapter-engine's
+/// `evidence.rs`), so a pattern it cannot read would fail the pack on import.
+fn evidence_compiles(pattern: &str) -> bool {
+    jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .should_validate_formats(true)
+        .compile(&json!({"type": "string", "pattern": pattern}))
+        .is_ok()
+}
+
 /// The schema of one exported fact: the field type plus the constraints the
 /// field declares and JSON Schema can state. A decimal's `minimum` and
 /// `maximum` are not stated, since the fact is a string.
@@ -301,6 +319,12 @@ fn field_schema(
             return Err(refusal(
                 "fields",
                 "a fact field's pattern uses regular expression syntax that PostgreSQL and Evidence read differently, such as `.`, `\\w`, `\\s` or a POSIX class; spell the characters out, use `[^\\n]` for any character but a newline, or use a custom adapter",
+            ));
+        }
+        if !evidence_compiles(pattern) {
+            return Err(refusal(
+                "fields",
+                "a fact field's pattern is one Evidence cannot compile, such as `\\c` before a character other than a letter or a lookbehind whose length varies; rewrite the pattern or use a custom adapter",
             ));
         }
         schema["pattern"] = json!(pattern);

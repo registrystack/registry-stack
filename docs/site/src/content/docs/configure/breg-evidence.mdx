@@ -216,6 +216,8 @@ The export refuses a pattern with a construct that PostgreSQL and Evidence read 
 It refuses `.` outside brackets, because only PostgreSQL lets it match a line break, and a string or text value can hold one.
 It also refuses the `\w` and `\s` classes, which are Unicode in PostgreSQL and ASCII in Evidence.
 The same goes for `\b`, `\x`, POSIX classes such as `[[:alpha:]]`, PostgreSQL's own anchors, and embedded options such as `(?i)`.
+It refuses an escaped backslash followed by `c` and a letter, because Evidence reads that backslash as the start of a control character.
+It also refuses any pattern Evidence cannot compile, such as a lookbehind whose length varies.
 Spell the characters out instead, for example `[A-Za-z]`, or `[^\n]` for any character but a line break.
 An absent or null required fact produces no match and cannot become an authoritative negative answer.
 BReg recognises a genuine unresolved lookup only by its exact declared Problem Details status, type, and code.
