@@ -731,6 +731,14 @@ pub fn export_evidence_source(
     }
     project_response.push_str("    #{data: #{domainData: projected}}\n}\n");
     extract.push_str(" else { throw \"unsupported source selector profile\"; }\n");
+    // A null optional fact is absent data. A missing key means the projection
+    // or the read grant lost the field, which is a protocol error.
+    for id in &rules.optional {
+        extract.push_str(&format!(
+            "    if !record.contains({}) {{ throw \"source_protocol_error\"; }}\n",
+            json!(field(entity, id)?.api_name)
+        ));
+    }
     // A record outside a field's allowed values is refused here, in the
     // lookup, exactly like an unknown record. It never reaches derived logic.
     for (id, literals) in &rules.required {
