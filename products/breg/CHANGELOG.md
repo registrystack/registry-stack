@@ -18,8 +18,10 @@
   cannot read a derived field over another Record type. SQL that reads its
   own Record type more than once, in a join, a subquery or a table expression
   used twice, counts that type as another Record type it reads. So does SQL
-  that combines its rows with an aggregate, `GROUP BY` or `DISTINCT`, unless
-  it returns each row's own `id` and any `GROUP BY` includes it. A derived
+  whose key is not each row's own `id`, read from the Record type itself
+  rather than through a table expression or subquery, and SQL that combines
+  or picks among its rows with an aggregate, `GROUP BY` or `DISTINCT ON`,
+  unless any `GROUP BY` or `DISTINCT ON` includes that `id`. A derived
   field that reads its own Record type once, row by row, is unaffected. BReg
   cannot check that linked rows hold the same boundary values, so keep them
   consistent. A `record` disclosure condition that binds the reader on a
@@ -31,6 +33,13 @@
   refusal, grant the profile `get` on the named Record type with only the link
   fields readable and the row boundaries the message names, or remove the
   derived field from the profile.
+- BREAKING: `bregctl check` refuses derived SQL that applies `LIMIT` or
+  `OFFSET` to the rows it returns, directly or through a table expression or
+  `FROM` subquery (`breg.derived.sql-invalid`). The view runs under the
+  caller's row security, so which rows got a value depended on which rows the
+  reader could see. A subquery in an expression, or a `LATERAL` subquery
+  after the item it reads, may still use them to pick among one row's linked
+  rows. Migration: rank within a correlated subquery, or remove the limit.
 - BREAKING: `bregctl generate evidence-source` carries a fact field's
   declared `pattern` into the generated fact and response schemas, and states
   a decimal fact's declared precision and scale as a `pattern`. Every pattern
