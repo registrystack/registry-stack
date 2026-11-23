@@ -1584,14 +1584,15 @@ fn a_derived_field_cannot_read_a_record_type_under_a_subset_or_reordering_of_its
 /// memberships, so on a source grant it leaves out the source rows the
 /// caller holds no membership for. That same grant governs the profile's
 /// direct reads, where the boundary may be the point, so the project compiles
-/// with a finding whether the reader's own grant carries the boundary or not.
-/// A source grant that omits it raises none.
+/// with a finding whether the reader's own grant carries the boundary or not,
+/// on whatever field. A source grant that omits it raises none.
 #[test]
 fn a_membership_boundary_on_a_derived_source_grant_is_a_finding() {
     let mut value = membership_fixture::source("facility");
     value["recordTypes"]["inspection"] = json!({"primaryDataset":"test-dataset","route":"inspections","mutationMode":"mutable","classification":"internal",
         "fields":[{"id":"facility","type":"reference","target":"facility","classification":"internal"},
                   {"id":"organization","type":"reference","target":"organization","classification":"internal"},
+                  {"id":"inspecting-organization","type":"reference","target":"organization","classification":"internal"},
                   {"id":"passed","type":"boolean","classification":"internal"}]});
     value["recordTypes"]["facility"]["derived"] = json!([{"id":"inspection-state","sql":"sql/derived.sql","key":"id",
         "fields":[{"id":"has-passed-inspection","type":"boolean","classification":"internal"}]}]);
@@ -1638,6 +1639,16 @@ fn a_membership_boundary_on_a_derived_source_grant_is_a_finding() {
     ] {
         assert!(found[0].1.contains(named), "{named} in {found:?}");
     }
+
+    // A membership on another field than the reader's own is a finding too.
+    let mut member = value.clone();
+    let mut other_field = membership.clone();
+    other_field[0]["field"] = json!("inspecting-organization");
+    grant("member", &mut member, Some(&other_field));
+    assert_eq!(
+        finding_paths(&withheld_source_rows(compile_with_sql(&member, sql))),
+        ["recordTypes[id=inspection].accessProfiles[id=member].membershipBoundaries"]
+    );
 
     // The steward's grant on the facility carries none.
     grant("steward", &mut value, Some(&membership));
