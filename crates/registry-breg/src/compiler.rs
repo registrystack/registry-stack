@@ -350,7 +350,13 @@ pub fn compile_project_with_assets(
     ));
     findings.extend(create_required_field_findings(&sources));
     findings.extend(disclosure::withheld_field_probe_findings(&sources));
-    validate_derived_assets(&sources, &origins.derived, assets, &mut diagnostics);
+    validate_derived_assets(
+        &sources,
+        &origins.derived,
+        assets,
+        &mut diagnostics,
+        &mut findings,
+    );
     validate_hook_assets(&sources, &origins.hooks, assets, &mut diagnostics);
     if !diagnostics.is_empty() {
         findings.push(stopped_stage_finding(
@@ -7574,6 +7580,7 @@ fn validate_derived_assets(
     origins: &BTreeMap<(String, String), Option<String>>,
     assets: &[ModuleAssetSource],
     errors: &mut Vec<Diagnostic>,
+    findings: &mut Vec<Diagnostic>,
 ) {
     let source_columns = sources
         .values()
@@ -7636,6 +7643,7 @@ fn validate_derived_assets(
                     &source_columns,
                     sources,
                     errors,
+                    findings,
                 );
             }
         }

@@ -1712,7 +1712,8 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
         "breg.disclosure.spatial-query-withheld-geometry" => "Remove spatialQueries from the profile, or add the profile to exemptProfiles of the condition that withholds the geometry field.",
         "breg.disclosure.derived-reads-withheld-field" => "Remove the derived fields from the profile's readableFields, filterableFields and sortableFields, and from its read path grants, stop the derived SQL reading the withheld field, or add the profile to exemptProfiles.",
         "breg.disclosure.derived-reads-unreadable-source" => "Grant the profile get on the record type the derived SQL reads, with only its link fields readable and the rowBoundaries of the profile's grant on the record type that owns the derived field. Or remove the derived field from the profile.",
-        "breg.disclosure.derived-reads-source-boundary" => "Give the profile's grant on the record type the derived SQL reads the same rowBoundaries as its grant on the record type that owns the derived field, and no membershipBoundaries or requireConsent that grant lacks. Or remove the derived field from the profile.",
+        "breg.disclosure.derived-reads-source-boundary" => "Give the profile's grant on the record type the derived SQL reads the same rowBoundaries as its grant on the record type that owns the derived field, and no requiredPurposes unless they include every purpose that grant requires. Or remove the derived field from the profile.",
+        "breg.disclosure.derived-reads-withheld-source-rows" => "Accept this finding if the derived value should leave out the rows the record condition, membershipBoundaries or requireConsent hides. Otherwise add the profile to exemptProfiles of the condition, or remove the derived field from the profile.",
         "breg.disclosure.row-boundary-withheld-field" => "Bound the profile's rows by a field no condition withholds from it, or add the profile to exemptProfiles.",
         "breg.disclosure.membership-boundary-withheld-field" => "Bound the profile's rows by a membership on a field no condition withholds from it, or add the profile to exemptProfiles.",
         "breg.disclosure.consent-boundary-withheld-field" => "Point requireConsent on at a field no condition withholds from the profile, or add the profile to exemptProfiles.",
@@ -1961,11 +1962,26 @@ mod tests {
                 "breg.disclosure.derived-reads-source-boundary",
                 "rowBoundaries",
             ),
+            (
+                "breg.disclosure.derived-reads-source-boundary",
+                "requiredPurposes",
+            ),
         ] {
             let action = action_for(code, Severity::Error);
             assert_ne!(action, CORRECT_SOURCE, "{code}");
             assert!(action.contains(setting), "{code}: {action}");
         }
+    }
+
+    #[test]
+    fn derived_source_rows_finding_names_each_protection_to_accept_or_exempt() {
+        let code = "breg.disclosure.derived-reads-withheld-source-rows";
+        let action = action_for(code, Severity::Warning);
+        assert_ne!(action, REVIEW_FINDING, "{code}");
+        for setting in ["membershipBoundaries", "requireConsent", "exemptProfiles"] {
+            assert!(action.contains(setting), "{code}: {action}");
+        }
+        assert!(matches!(finding_rank_for_code(code), FindingRank::Hygiene));
     }
 
     #[test]

@@ -53,6 +53,74 @@ pub(crate) fn derived_sql_dependencies(sql: &[u8]) -> DerivedSqlDependencies {
     dependencies
 }
 
+/// Count how many times SQL which has already passed [`validate_derived_sql`]
+/// reads each `registry_source` relation, counting the reads of a common
+/// table expression once for each reference to it. A table expression
+/// declared inside another query is counted where it is declared as well as
+/// where it is referenced, so a count can be too high but never too low.
+pub(crate) fn derived_sql_source_scans(sql: &[u8]) -> BTreeMap<String, usize> {
+    const VALIDATED: &str = "derived SQL was validated before its source scans";
+    let text = std::str::from_utf8(sql).expect(VALIDATED);
+    let parsed = pg_query::parse(text, 0).expect(VALIDATED);
+    let Some(PgNode::SelectStmt(root)) = root_node(&parsed) else {
+        panic!("{VALIDATED}");
+    };
+    // Validation admits only non-recursive table expressions whose names are
+    // unique across the statement.
+    let ctes = raw_nodes(&parsed)
+        .into_iter()
+        .filter_map(|node| {
+            let NodeRef::CommonTableExpr(cte) = node else {
+                return None;
+            };
+            let query = cte.ctequery.as_deref()?.node.as_ref()?;
+            Some((cte.ctename.as_str(), query))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut main = root.clone();
+    main.with_clause = None;
+    let mut scans = BTreeMap::new();
+    count_source_scans(
+        &PgNode::SelectStmt(main),
+        &ctes,
+        &mut Vec::new(),
+        &mut scans,
+    );
+    scans
+}
+
+fn count_source_scans<'a>(
+    node: &PgNode,
+    ctes: &BTreeMap<&'a str, &'a PgNode>,
+    expanding: &mut Vec<&'a str>,
+    scans: &mut BTreeMap<String, usize>,
+) {
+    for node in raw_subtree_nodes(node) {
+        let NodeRef::RangeVar(range) = node else {
+            continue;
+        };
+        if !range.catalogname.is_empty() {
+            continue;
+        }
+        if range.schemaname == "registry_source" {
+            *scans.entry(range.relname.clone()).or_default() += 1;
+        } else if let Some((&name, &query)) = range
+            .schemaname
+            .is_empty()
+            .then(|| ctes.get_key_value(range.relname.as_str()))
+            .flatten()
+        {
+            // A non-recursive expression cannot read itself; the guard only
+            // keeps a malformed reference from looping.
+            if !expanding.contains(&name) {
+                expanding.push(name);
+                count_source_scans(query, ctes, expanding, scans);
+                expanding.pop();
+            }
+        }
+    }
+}
+
 /// Resolve the stored source columns read by SQL which has already passed
 /// [`validate_derived_sql`]. This reuses the validator's lexical scopes so
 /// aliases, correlated subqueries, and shadowing bind to the same source
@@ -1012,12 +1080,27 @@ fn valid_ast(parsed: &pg_query::ParseResult, known_relations: &BTreeSet<&str>) -
 /// traversal for every child-bearing node admitted below so validation and
 /// encrypted-column checks see the same complete expression tree.
 fn raw_nodes(parsed: &pg_query::ParseResult) -> Vec<NodeRef<'_>> {
-    let mut nodes = parsed
-        .protobuf
-        .nodes()
-        .into_iter()
-        .map(|(node, _, _, _)| node)
-        .collect::<Vec<_>>();
+    expand_raw_nodes(
+        parsed
+            .protobuf
+            .nodes()
+            .into_iter()
+            .map(|(node, _, _, _)| node)
+            .collect(),
+    )
+}
+
+/// [`raw_nodes`] for the tree under one node.
+fn raw_subtree_nodes(node: &PgNode) -> Vec<NodeRef<'_>> {
+    expand_raw_nodes(
+        node.nodes()
+            .into_iter()
+            .map(|(node, _, _, _)| node)
+            .collect(),
+    )
+}
+
+fn expand_raw_nodes(mut nodes: Vec<NodeRef<'_>>) -> Vec<NodeRef<'_>> {
     let mut index = 0;
     while index < nodes.len() {
         match nodes[index] {
@@ -1265,6 +1348,52 @@ mod tests {
             BTreeSet::from(["household".to_owned(), "member".to_owned()])
         );
         assert!(dependencies.uses_evaluation_date);
+    }
+
+    #[test]
+    fn source_scans_count_each_read_and_each_table_expression_reference() {
+        let scans = |sql: &str| {
+            derived_sql_source_scans(sql.as_bytes())
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        let counted = |pairs: &[(&str, usize)]| {
+            pairs
+                .iter()
+                .map(|(relation, count)| ((*relation).to_owned(), *count))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            scans("SELECT h.id FROM registry_source.household h LEFT JOIN registry_source.member m ON m.household_id = h.id"),
+            counted(&[("household", 1), ("member", 1)])
+        );
+        assert_eq!(
+            scans("SELECT p.id, (SELECT count(q.id) FROM registry_source.person q WHERE q.district = p.district) AS size FROM registry_source.person p"),
+            counted(&[("person", 2)])
+        );
+        assert_eq!(
+            scans("SELECT p.id, count(q.id) FILTER (WHERE EXISTS (SELECT 1 FROM registry_source.person r WHERE r.id = q.id)) AS size FROM registry_source.person p LEFT JOIN registry_source.member q ON q.id = p.id GROUP BY p.id"),
+            counted(&[("member", 1), ("person", 2)])
+        );
+        // An expression read once counts its reads once; read twice, twice,
+        // including through another expression that reads it.
+        assert_eq!(
+            scans("WITH people AS (SELECT p.id AS id FROM registry_source.person p) SELECT a.id FROM people a"),
+            counted(&[("person", 1)])
+        );
+        assert_eq!(
+            scans("WITH people AS (SELECT p.id AS id, p.district AS district FROM registry_source.person p) SELECT a.id FROM people a LEFT JOIN people b ON b.district = a.district"),
+            counted(&[("person", 2)])
+        );
+        assert_eq!(
+            scans("WITH people AS (SELECT p.id AS id FROM registry_source.person p), pairs AS (SELECT a.id AS id FROM people a JOIN people b ON b.id = a.id) SELECT x.id FROM pairs x JOIN registry_source.household h ON h.id = x.id"),
+            counted(&[("household", 1), ("person", 2)])
+        );
+        // An expression nobody references reads nothing.
+        assert_eq!(
+            scans("WITH unused AS (SELECT m.id AS id FROM registry_source.member m) SELECT h.id FROM registry_source.household h"),
+            counted(&[("household", 1)])
+        );
     }
 
     #[test]
