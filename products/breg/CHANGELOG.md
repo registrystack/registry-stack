@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- BREAKING: `bregctl generate evidence-source` carries a field's declared
+  `pattern` into the generated fact and response schemas and into the
+  export's `behaviorRevision`, and states a decimal fact's declared precision
+  and scale as a `pattern`. The export refuses an exported fact or identity
+  field whose pattern uses PostgreSQL-only regular expression syntax that
+  JSON Schema reads differently. An export whose fields declare no pattern and
+  include no decimal produces the same files. Migration: regenerate the export
+  of a registry with a patterned or decimal field and review the changed pack
+  schemas on import; rewrite a refused pattern in plain syntax, or use a
+  reviewed custom adapter.
+- `bregctl generate evidence-source` accepts `--require-value FIELD=VALUE` and
+  `--optional-fields A,B`, both naming fields already in `--fields`.
+  `--require-value` lists the values a fact field may hold; repeat it to allow
+  several values for one field. A record holding any other value gets the same
+  `no-match` outcome as an unknown record, decided in the generated lookup
+  before any fact is returned. `--optional-fields` names facts a record may
+  leave empty: a null value leaves the fact out of the answer and out of the
+  fact schema's `required` list, and the lookup still matches. A key absent
+  from the response stays a source protocol error. The command refuses a rule
+  on a field that is not an exported fact, a value that does not fit the
+  field's type, and a field that is both required to hold a value and optional.
+  Either option, when set, enters the export's `behaviorRevision`; an export
+  that sets neither keeps the revision it had.
+- Hook conditions of `type: fields` accept `changedAny`, two or more fields of
+  which at least one must change. `changed` keeps its meaning: every listed
+  field must change. A condition sets one or the other, and both are valid only
+  with the `patched` trigger. `bregctl check` refuses a one-field `changedAny`
+  (`breg.event.when-changed-any-single`) and a condition that sets both
+  (`breg.event.when-changed-ambiguous`), and applies the unknown-field and
+  encrypted-field checks to `changedAny`. A module that does not use
+  `changedAny` keeps its digest.
+
 ## 0.47.0 - 2026-11-21
 
 - BREAKING: the project's `datasets`, `vocabularies`, `statisticalDatasets`,
