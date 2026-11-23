@@ -390,8 +390,7 @@ pub(crate) fn validate_derived_sql(
 /// Whether `LIMIT` or `OFFSET` narrows the rows a `SELECT` returns, on the
 /// statement itself or on a table expression or `FROM` subquery whose rows
 /// feed it. Those rank across every row the caller can see. A subquery in an
-/// expression, or a `LATERAL` subquery after the item it reads, runs once per
-/// outer row and may narrow the rows it picks from.
+/// expression runs once per outer row and may narrow the linked rows it picks.
 fn limits_returned_rows(select: &SelectStmt) -> bool {
     select.limit_count.is_some()
         || select.limit_offset.is_some()
@@ -407,28 +406,21 @@ fn limits_returned_rows(select: &SelectStmt) -> bool {
         || select
             .from_clause
             .iter()
-            .enumerate()
-            .any(|(index, node)| from_item_limits_rows(node, index > 0))
+            .any(from_item_limits_rows)
 }
 
-fn from_item_limits_rows(node: &PgNodeWrapper, preceded: bool) -> bool {
+fn from_item_limits_rows(node: &PgNodeWrapper) -> bool {
     match node.node.as_ref() {
-        Some(PgNode::RangeSubselect(range)) => !(range.lateral && preceded)
-            && range
-                .subquery
-                .as_deref()
-                .and_then(|query| query.node.as_ref())
-                .is_some_and(
-                    |node| matches!(node, PgNode::SelectStmt(query) if limits_returned_rows(query)),
-                ),
+        Some(PgNode::RangeSubselect(range)) => range
+            .subquery
+            .as_deref()
+            .and_then(|query| query.node.as_ref())
+            .is_some_and(
+                |node| matches!(node, PgNode::SelectStmt(query) if limits_returned_rows(query)),
+            ),
         Some(PgNode::JoinExpr(join)) => {
-            join.larg
-                .as_deref()
-                .is_some_and(|left| from_item_limits_rows(left, preceded))
-                || join
-                    .rarg
-                    .as_deref()
-                    .is_some_and(|right| from_item_limits_rows(right, true))
+            join.larg.as_deref().is_some_and(from_item_limits_rows)
+                || join.rarg.as_deref().is_some_and(from_item_limits_rows)
         }
         _ => false,
     }
@@ -1776,6 +1768,17 @@ mod tests {
             "SELECT m.id FROM registry_source.member m JOIN (SELECT h.id AS id FROM registry_source.household h OFFSET 1) e ON e.id = m.household",
             // A `LATERAL` subquery with nothing before it reads no outer row.
             "SELECT e.id FROM LATERAL (SELECT h.id AS id FROM registry_source.household h LIMIT 10) e",
+            // Every `FROM` subquery stays conservative, including a `LATERAL`
+            // one that does or does not read an item before it.
+            "SELECT h.id, f.id FROM registry_source.household h LEFT JOIN LATERAL (SELECT m.id AS id, m.household AS household FROM registry_source.member m ORDER BY m.id LIMIT 1) f ON f.household = h.id",
+            "SELECT h.id, f.id FROM registry_source.household h, LATERAL (SELECT m.id AS id FROM registry_source.member m OFFSET 1) f",
+            "SELECT h.id, f.id FROM registry_source.household h, LATERAL (SELECT h.id AS id FROM registry_source.member h LIMIT 1) f",
+            "SELECT h.id, g.id FROM registry_source.household h, LATERAL (SELECT f.id AS id FROM registry_source.member m, LATERAL (SELECT n.id AS id FROM registry_source.member n LIMIT 1) f) g",
+            "SELECT h.id, f.id FROM registry_source.household h LEFT JOIN LATERAL (SELECT m.id AS id FROM registry_source.member m WHERE m.household = h.id ORDER BY m.id LIMIT 1) f ON true",
+            "SELECT h.id, f.id FROM registry_source.household h, LATERAL (SELECT m.id AS id FROM registry_source.member m WHERE m.household = h.id LIMIT 1) f",
+            "SELECT h.id, f.id FROM registry_source.household h, LATERAL (SELECT m.id AS id FROM registry_source.member m WHERE m.district = code LIMIT 1) f",
+            "SELECT h.id, f.id FROM registry_source.household h, LATERAL (SELECT m.id AS id FROM registry_source.member m WHERE EXISTS (SELECT 1 FROM registry_source.member n WHERE n.household = h.id AND n.id = m.id) LIMIT 1) f",
+            "SELECT h.id, g.id FROM registry_source.household h, LATERAL (SELECT f.id AS id FROM registry_source.member m, LATERAL (SELECT n.id AS id FROM registry_source.member n WHERE n.household = h.id LIMIT 1) f) g",
         ] {
             assert!(limits(sql), "{sql}");
         }
@@ -1783,8 +1786,6 @@ mod tests {
             "SELECT h.id FROM registry_source.household h ORDER BY h.id",
             "SELECT h.id, (SELECT m.id FROM registry_source.member m WHERE m.household = h.id ORDER BY m.id LIMIT 1) FROM registry_source.household h",
             "SELECT h.id, EXISTS (SELECT 1 FROM registry_source.member m WHERE m.household = h.id OFFSET 1) FROM registry_source.household h",
-            "SELECT h.id, f.id FROM registry_source.household h LEFT JOIN LATERAL (SELECT m.id AS id FROM registry_source.member m WHERE m.household = h.id ORDER BY m.id LIMIT 1) f ON true",
-            "SELECT h.id, f.id FROM registry_source.household h, LATERAL (SELECT m.id AS id FROM registry_source.member m WHERE m.household = h.id LIMIT 1) f",
         ] {
             assert!(!limits(sql), "{sql}");
         }

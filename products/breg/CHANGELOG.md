@@ -46,9 +46,10 @@
   `OFFSET` to the rows it returns, directly or through a table expression or
   `FROM` subquery (`breg.derived.sql-invalid`). The view runs under the
   caller's row security, so which rows got a value depended on which rows the
-  reader could see. A subquery in an expression, or a `LATERAL` subquery
-  after the item it reads, may still use them to pick among one row's linked
-  rows. Migration: rank within a correlated subquery, or remove the limit.
+  reader could see. A correlated subquery in an expression may still use them
+  to pick among one row's linked rows. A `FROM` subquery cannot use them, even
+  when it is `LATERAL`. Migration: rank within an expression subquery, or
+  remove the limit.
 - BREAKING: `bregctl generate evidence-source` carries a fact field's
   declared `pattern` into the generated fact and response schemas, and states
   a decimal fact's declared precision and scale as a `pattern`. Every pattern

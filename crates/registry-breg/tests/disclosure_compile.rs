@@ -2067,6 +2067,39 @@ fn a_derived_relation_cannot_limit_the_rows_it_returns() {
     );
 }
 
+/// A `LATERAL` table subquery may contain a different limited subquery from the
+/// one that reads its outer row. Until BReg proves each bound locally, every
+/// `LIMIT` or `OFFSET` inside a `FROM` subquery is refused. An expression
+/// subquery remains the supported way to pick among one row's linked rows.
+#[test]
+fn a_lateral_subquery_cannot_hide_an_unlinked_limit_or_offset() {
+    let sql_path = "recordTypes[person].derived[visit-state].sql";
+    let mut value = visit_source();
+    person_permission(&mut value, REGISTRAR)["rowBoundaries"] = by_district();
+    grant_visits(&mut value, by_district());
+    for sql in [
+        "SELECT p.id AS id, f.outcome = 'closed' AS has_closed_visit FROM registry_source.person p LEFT JOIN LATERAL (SELECT v.person AS person, v.outcome AS outcome FROM registry_source.visit v ORDER BY v.id DESC LIMIT 1) f ON f.person = p.id",
+        "SELECT p.id AS id, f.outcome = 'closed' AS has_closed_visit FROM registry_source.person p, LATERAL (SELECT v.person AS person, v.outcome AS outcome FROM registry_source.visit v ORDER BY v.id DESC OFFSET 1) f WHERE f.person = p.id",
+        // An alias inside the subquery hides the outer item it shares a name with.
+        "SELECT p.id AS id, f.outcome = 'closed' AS has_closed_visit FROM registry_source.person p LEFT JOIN LATERAL (SELECT p.person AS person, p.outcome AS outcome FROM registry_source.visit p ORDER BY p.id DESC LIMIT 1) f ON f.person = p.id",
+        "SELECT p.id AS id, f.outcome = 'closed' AS has_closed_visit FROM registry_source.person p LEFT JOIN LATERAL (SELECT p.id AS person, limited.outcome AS outcome FROM (SELECT v.outcome AS outcome FROM registry_source.visit v ORDER BY v.id DESC LIMIT 1) limited) f ON f.person = p.id",
+        "SELECT p.id AS id, f.outcome = 'closed' AS has_closed_visit FROM registry_source.person p LEFT JOIN LATERAL (SELECT v.outcome AS outcome FROM registry_source.visit v WHERE v.person = p.id ORDER BY v.id DESC LIMIT 1) f ON true",
+        "SELECT p.id AS id, f.outcome = 'closed' AS has_closed_visit FROM registry_source.person p, LATERAL (SELECT v.outcome AS outcome FROM registry_source.visit v WHERE v.person = p.id ORDER BY v.id DESC LIMIT 1) f",
+    ] {
+        let found = derived_diagnostics(&value, sql);
+        assert!(
+            found.iter().any(|(code, path, message)| code == "breg.derived.sql-invalid"
+                && path == sql_path
+                && message.contains("which rows the reader can see")),
+            "{sql}: got {found:?}"
+        );
+    }
+    assert_compiles_with_sql(
+        &value,
+        "SELECT p.id AS id, (SELECT v.outcome = 'closed' FROM registry_source.visit v WHERE v.person = p.id ORDER BY v.id DESC LIMIT 1) AS has_closed_visit FROM registry_source.person p",
+    );
+}
+
 /// A `record` condition on the owner hides rows from a second read of the
 /// owner's record type as it does from a source's.
 #[test]
