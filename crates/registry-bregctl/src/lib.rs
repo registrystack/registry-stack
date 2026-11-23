@@ -676,6 +676,16 @@ struct GenerateArgs {
     /// Explicit readable fact fields, separated by commas.
     #[arg(long, value_delimiter = ',')]
     fields: Vec<String>,
+    /// Allowed value for a fact field, as FIELD=VALUE (evidence-source only).
+    /// Repeat the flag to allow several values for one field. A record with
+    /// any other value gets the same no-match outcome as an unknown record.
+    #[arg(long = "require-value", value_name = "FIELD=VALUE")]
+    require_values: Vec<String>,
+    /// Fact fields a record may leave empty, separated by commas
+    /// (evidence-source only). The fact is omitted when empty and the lookup
+    /// still matches.
+    #[arg(long, value_delimiter = ',')]
+    optional_fields: Vec<String>,
     /// Stable source identity inside the Evidence authoring project.
     #[arg(long)]
     source_id: Option<String>,
@@ -8752,6 +8762,8 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
             || args.entity.is_some()
             || !args.selectors.is_empty()
             || !args.fields.is_empty()
+            || !args.require_values.is_empty()
+            || !args.optional_fields.is_empty()
             || args.source_id.is_some()
             || args.connection.is_some()
             || args.authentication.is_some()
@@ -8772,6 +8784,16 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
             .clone()
             .ok_or_else(|| fail(&format!("generate evidence-source requires {flag}")))
     };
+    let mut required_values = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for assignment in &args.require_values {
+        let (field, value) = assignment
+            .split_once('=')
+            .ok_or_else(|| fail("--require-value takes FIELD=VALUE"))?;
+        required_values
+            .entry(field.to_owned())
+            .or_default()
+            .push(value.to_owned());
+    }
     let options = registry_breg::evidence_source::EvidenceSourceOptions {
         access_profile: required(&args.access_profile, "--access-profile")?,
         entity: required(&args.entity, "--record-type")?,
@@ -8780,6 +8802,8 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
         source_id: required(&args.source_id, "--source-id")?,
         connection: required(&args.connection, "--connection")?,
         authentication: args.authentication.unwrap_or_default().into(),
+        required_values,
+        optional_fields: args.optional_fields.clone(),
     };
     let profile = profile(args.production);
     let (compiled, source) = compile_with_source(&args.project, profile, "generate")?;
@@ -9073,6 +9097,8 @@ fn generate_odrl(args: &GenerateArgs) -> Result<SuccessReport, FailureReport> {
     if args.entity.is_some()
         || !args.selectors.is_empty()
         || !args.fields.is_empty()
+        || !args.require_values.is_empty()
+        || !args.optional_fields.is_empty()
         || args.source_id.is_some()
         || args.connection.is_some()
     {

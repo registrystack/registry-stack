@@ -96,6 +96,8 @@ fn evidence_source_options(
         connection: args.connection.clone(),
         authentication:
             registry_breg::evidence_source::EvidenceSourceAuthentication::Oauth2PrivateKeyJwt,
+        required_values: std::collections::BTreeMap::new(),
+        optional_fields: Vec::new(),
     }
 }
 
@@ -1639,6 +1641,8 @@ mod tests {
                 source_id: "registry".into(),
                 connection: "registry".into(),
                 authentication: registry_breg::evidence_source::EvidenceSourceAuthentication::Oauth2PrivateKeyJwt,
+                required_values: std::collections::BTreeMap::new(),
+                optional_fields: Vec::new(),
             },
         )
         .unwrap();

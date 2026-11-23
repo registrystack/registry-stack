@@ -47,6 +47,8 @@ fn options() -> EvidenceSourceOptions {
         source_id: "registry-status".into(),
         connection: "registry".into(),
         authentication: EvidenceSourceAuthentication::StaticAuthorization,
+        required_values: BTreeMap::new(),
+        optional_fields: Vec::new(),
     }
 }
 fn file<'a>(export: &'a EvidenceSourceExport, path: &str) -> &'a [u8] {
@@ -871,4 +873,205 @@ fn reference_selectors_and_facts_preserve_the_uuid_format() {
     };
     assert_eq!(selector_schema(&kind).unwrap().0["type"], "uuid");
     assert_eq!(scalar_schema(&kind).unwrap()["format"], "uuid");
+}
+
+fn fact_rule_project() -> Value {
+    let mut project = project();
+    project["recordTypes"]["record"]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"area","type":"string","minimumLength":1,"maximumLength":16,"classification":"internal"}));
+    project["accessProfiles"]["evidence-source"]["permissions"]["records"][0]["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("area"));
+    project
+}
+
+fn fact_rule_options() -> EvidenceSourceOptions {
+    let mut options = options();
+    options.fields = vec!["status".into(), "area".into()];
+    options.required_values = BTreeMap::from([("status".to_owned(), vec!["active".to_owned()])]);
+    options.optional_fields = vec!["area".into()];
+    options
+}
+
+/// Runs the generated `lookup` entrypoint over a returned record.
+fn run_lookup(export: &EvidenceSourceExport, record: Value) -> Value {
+    let script = std::str::from_utf8(file(
+        export,
+        "adapter-packs/registry-status/scripts/lookup.rhai",
+    ))
+    .unwrap();
+    let engine = rhai::Engine::new();
+    let ast = engine.compile(script).unwrap();
+    let exchange = json!({
+        "properties": {"bregEvidenceInputs": {"by-code--code": "A1"}},
+        "body": {"data": {"domainData": record}}
+    });
+    let exchange = rhai::serde::to_dynamic(&exchange).unwrap();
+    let outcome: rhai::Dynamic = engine
+        .call_fn(&mut rhai::Scope::new(), &ast, "lookup", (exchange,))
+        .unwrap();
+    rhai::serde::from_dynamic(&outcome).unwrap()
+}
+
+fn fact_rule_export() -> EvidenceSourceExport {
+    let mut options = fact_rule_options();
+    options.selectors = vec!["by-code".into()];
+    export_evidence_source(&compiled(&fact_rule_project(), SQL), &options).unwrap()
+}
+
+#[test]
+fn a_record_with_an_allowed_value_matches() {
+    let outcome = run_lookup(
+        &fact_rule_export(),
+        json!({"code":"A1","status":"active","area":"N1"}),
+    );
+    assert_eq!(
+        outcome,
+        json!({"lookup":"matched","facts":{"status":"active","area":"N1"}})
+    );
+}
+
+#[test]
+fn a_record_outside_the_allowed_values_gives_the_unknown_record_outcome() {
+    let export = fact_rule_export();
+    let inactive = run_lookup(
+        &export,
+        json!({"code":"A1","status":"suspended","area":"N1"}),
+    );
+    let missing_fact = run_lookup(&export, json!({"code":"A1","status":null,"area":"N1"}));
+    assert_eq!(inactive, json!({"lookup":"no-match"}));
+    assert_eq!(inactive, missing_fact);
+    let script = std::str::from_utf8(file(
+        &export,
+        "adapter-packs/registry-status/scripts/lookup.rhai",
+    ))
+    .unwrap();
+    assert!(script.find("source_protocol_error").unwrap() < script.find("\"active\"").unwrap());
+    assert!(script.find("\"active\"").unwrap() < script.find("let facts").unwrap());
+}
+
+#[test]
+fn several_allowed_values_each_match() {
+    let mut options = fact_rule_options();
+    options.selectors = vec!["by-code".into()];
+    options.required_values =
+        BTreeMap::from([("status".to_owned(), vec!["active".into(), "pending".into()])]);
+    let export = export_evidence_source(&compiled(&fact_rule_project(), SQL), &options).unwrap();
+    for status in ["active", "pending"] {
+        let outcome = run_lookup(&export, json!({"code":"A1","status":status}));
+        assert_eq!(outcome["lookup"], "matched", "{status}");
+    }
+    let outcome = run_lookup(&export, json!({"code":"A1","status":"closed"}));
+    assert_eq!(outcome, json!({"lookup":"no-match"}));
+}
+
+#[test]
+fn an_optional_fact_that_is_missing_or_null_still_matches_and_is_omitted() {
+    let export = fact_rule_export();
+    for record in [
+        json!({"code":"A1","status":"active"}),
+        json!({"code":"A1","status":"active","area":null}),
+    ] {
+        let outcome = run_lookup(&export, record);
+        assert_eq!(
+            outcome,
+            json!({"lookup":"matched","facts":{"status":"active"}})
+        );
+    }
+}
+
+#[test]
+fn a_required_fact_that_is_missing_is_still_no_match() {
+    let mut options = fact_rule_options();
+    options.selectors = vec!["by-code".into()];
+    options.required_values.clear();
+    options.optional_fields = Vec::new();
+    let export = export_evidence_source(&compiled(&fact_rule_project(), SQL), &options).unwrap();
+    let outcome = run_lookup(&export, json!({"code":"A1","status":"active"}));
+    assert_eq!(outcome, json!({"lookup":"no-match"}));
+}
+
+#[test]
+fn the_fact_schema_leaves_an_optional_fact_out_of_required() {
+    let export = fact_rule_export();
+    let facts = yaml(&export, "adapter-packs/registry-status/schemas/facts.json");
+    assert_eq!(facts["required"], json!(["status"]));
+    assert!(facts["properties"].get("area").is_some());
+}
+
+#[test]
+fn fact_rules_are_bound_into_the_behavior_revision() {
+    let registry = compiled(&fact_rule_project(), SQL);
+    let plain = {
+        let mut options = fact_rule_options();
+        options.required_values.clear();
+        options.optional_fields.clear();
+        export_evidence_source(&registry, &options).unwrap()
+    };
+    let guarded = export_evidence_source(&registry, &fact_rule_options()).unwrap();
+    let mut other_value = fact_rule_options();
+    other_value.required_values =
+        BTreeMap::from([("status".to_owned(), vec!["pending".to_owned()])]);
+    let other = export_evidence_source(&registry, &other_value).unwrap();
+    assert_ne!(plain.behavior_revision, guarded.behavior_revision);
+    assert_ne!(guarded.behavior_revision, other.behavior_revision);
+}
+
+#[test]
+fn refuses_invalid_fact_rules() {
+    let registry = compiled(&fact_rule_project(), SQL);
+    let require = |field: &str, values: &[&str]| {
+        let mut options = fact_rule_options();
+        options.optional_fields.clear();
+        options.fields = vec!["status".into(), "area".into(), "active".into()];
+        options.required_values = BTreeMap::from([(
+            field.to_owned(),
+            values.iter().map(|value| (*value).to_owned()).collect(),
+        )]);
+        refused(&registry, &options)
+    };
+    // A field the generated source does not export as a fact.
+    for field in ["code", "unknown"] {
+        let refusal = require(field, &["x"]);
+        assert_eq!(refusal.code, "breg.evidence-source.refused");
+        assert_eq!(refusal.path, "required-values");
+    }
+    // A value of the wrong type for the field.
+    let refusal = require("active", &["yes"]);
+    assert_eq!(refusal.path, "required-values");
+    assert!(refusal.message.contains("boolean"), "{}", refusal.message);
+    let refusal = require("status", &["a-value-longer-than-the-field-allows"]);
+    assert_eq!(refusal.path, "required-values");
+    // An empty value list.
+    let refusal = require("status", &[]);
+    assert_eq!(refusal.path, "required-values");
+    assert!(refusal.message.contains("at least one"));
+    // Both required and optional.
+    let mut both = fact_rule_options();
+    both.optional_fields = vec!["status".into()];
+    let refusal = refused(&registry, &both);
+    assert_eq!(refusal.path, "optional-fields");
+    assert!(refusal.message.contains("both"));
+    // An optional field that is not an exported fact.
+    let mut unexported = fact_rule_options();
+    unexported.optional_fields = vec!["code".into()];
+    assert_eq!(refused(&registry, &unexported).path, "optional-fields");
+}
+
+#[test]
+fn a_boolean_field_accepts_a_boolean_value() {
+    let mut options = fact_rule_options();
+    options.selectors = vec!["by-code".into()];
+    options.fields = vec!["active".into(), "area".into()];
+    options.required_values = BTreeMap::from([("active".to_owned(), vec!["true".to_owned()])]);
+    let export = export_evidence_source(&compiled(&fact_rule_project(), SQL), &options).unwrap();
+    let script = std::str::from_utf8(file(
+        &export,
+        "adapter-packs/registry-status/scripts/lookup.rhai",
+    ))
+    .unwrap();
+    assert!(script.contains("record[\"active\"] == true"), "{script}");
 }

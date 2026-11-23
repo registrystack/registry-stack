@@ -231,3 +231,123 @@ fn committed_example_is_the_manifest_bregctl_writes() {
          rewrite it with the command in this test's comment"
     );
 }
+
+fn export_with(output: &Path, extra: &[&str]) -> Output {
+    let project = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/evidence/registry")
+        .canonicalize()
+        .unwrap();
+    Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .args(["--format", "json", "generate", "evidence-source"])
+        .arg(project)
+        .args([
+            "--access-profile",
+            "evidence-source",
+            "--record-type",
+            "record",
+            "--selector",
+            "by-code",
+            "--fields",
+            "status",
+            "--source-id",
+            "registry-status",
+            "--connection",
+            "registry",
+        ])
+        .args(extra)
+        .arg("--output")
+        .arg(output)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn required_values_and_optional_facts_reach_the_generated_pack() {
+    let temp = tempfile::tempdir().unwrap();
+    let guarded = temp.path().canonicalize().unwrap().join("guarded");
+    let result = export_with(
+        &guarded,
+        &[
+            "--require-value",
+            "status=active",
+            "--require-value",
+            "status=retired",
+        ],
+    );
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    let script =
+        fs::read_to_string(guarded.join("adapter-packs/registry-status/scripts/lookup.rhai"))
+            .unwrap();
+    assert!(script.contains(
+        "if !(record[\"status\"] == \"active\" || record[\"status\"] == \"retired\") { return #{lookup: \"no-match\"}; }"
+    ));
+
+    let optional = temp.path().canonicalize().unwrap().join("optional");
+    let result = export_with(&optional, &["--optional-fields", "status"]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    let facts: Value = serde_json::from_slice(
+        &fs::read(optional.join("adapter-packs/registry-status/schemas/facts.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(facts["required"], serde_json::json!([]));
+}
+
+#[test]
+fn invalid_fact_rule_flags_are_refused_without_publishing_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    for (name, extra, code) in [
+        (
+            "no-equals",
+            vec!["--require-value", "status"],
+            "evidence-source.arguments",
+        ),
+        (
+            "wrong-value",
+            vec!["--require-value", "status=not-a-status"],
+            "breg.evidence-source.refused",
+        ),
+        (
+            "both",
+            vec![
+                "--require-value",
+                "status=active",
+                "--optional-fields",
+                "status",
+            ],
+            "breg.evidence-source.refused",
+        ),
+    ] {
+        let destination = root.join(name);
+        let result = export_with(&destination, &extra);
+        assert!(!result.status.success(), "{name}");
+        let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(report["diagnostics"][0]["code"], code, "{name}");
+        assert!(!destination.exists(), "{name}");
+    }
+}
+
+#[test]
+fn fact_rule_flags_apply_only_to_evidence_source() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/evidence/registry")
+        .canonicalize()
+        .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .args(["--format", "json", "generate", "odrl"])
+        .arg(project)
+        .args(["--require-value", "status=active", "--output"])
+        .arg(temp.path().canonicalize().unwrap().join("odrl"))
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+}
