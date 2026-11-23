@@ -104,10 +104,36 @@ owns.
 `when` uses `type: fields` for Record mutations.
 It takes these tests, all optional and combined with AND:
 
-- `changed`, fields whose value must change
+- `changed`, fields whose value must change. Every listed field must change.
+- `changedAny`, two or more fields of which at least one must change
 - `beforeEquals`, field values required before the change
 - `afterEquals`, field values required after the change
 - `beforeIsNull` and `afterIsNull`, fields that must be unset before or after the change
+
+Use `changed` when every listed field must change, and `changedAny` when a change to any one of them
+is enough. For example, this condition fires only when both `status` and `reviewer` change:
+
+```yaml
+when:
+  type: fields
+  changed:
+    - status
+    - reviewer
+```
+
+This condition fires when `phone`, `email` or both change:
+
+```yaml
+when:
+  type: fields
+  changedAny:
+    - phone
+    - email
+```
+
+`changedAny` needs at least two fields: for one field, use `changed`. A condition cannot set both
+`changed` and `changedAny`.
+Both are valid only with the `patched` trigger.
 
 At least one test is required when `when` is present, and every field must be declared on the Record
 type.
@@ -115,7 +141,7 @@ A comparison value is a scalar of the field's declared type; state an unset valu
 `beforeIsNull` or `afterIsNull`, because `null` is refused as a comparison value.
 A condition cannot name an encrypted field.
 Which tests are valid depends on the trigger: `created` accepts `afterEquals` and `afterIsNull`,
-`patched` accepts every test, and `tombstoned` accepts `beforeEquals` and `beforeIsNull`.
+`patched` accepts every test, including `changed` and `changedAny`, and `tombstoned` accepts `beforeEquals` and `beforeIsNull`.
 BReg evaluates the condition against the validated before and after snapshots, and an invalid
 combination fails compilation.
 

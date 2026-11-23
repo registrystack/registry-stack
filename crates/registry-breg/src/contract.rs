@@ -5322,6 +5322,10 @@ pub enum EventConditionSource {
         /// Fields whose values must change. Only valid with the patched trigger.
         #[serde(default)]
         changed: UniqueSet<String>,
+        /// Fields of which at least one must change. Lists two or more fields and
+        /// excludes `changed`. Only valid with the patched trigger.
+        #[serde(default)]
+        changed_any: UniqueSet<String>,
         /// Required values before the change. Valid with patched and tombstoned triggers.
         #[serde(default)]
         #[serde(deserialize_with = "local_id_map")]
@@ -5359,6 +5363,8 @@ registry_platform_yaml::tagged_union!(EventConditionSource);
 enum EventConditionWire<'a> {
     Fields {
         changed: &'a BTreeSet<String>,
+        #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+        changed_any: &'a BTreeSet<String>,
         before_equals: &'a BTreeMap<String, EventScalarValue>,
         after_equals: &'a BTreeMap<String, EventScalarValue>,
         #[serde(skip_serializing_if = "BTreeSet::is_empty")]
@@ -5373,12 +5379,14 @@ impl Serialize for EventConditionSource {
         match self {
             Self::Fields {
                 changed,
+                changed_any,
                 before_equals,
                 after_equals,
                 before_is_null,
                 after_is_null,
             } => EventConditionWire::Fields {
                 changed,
+                changed_any,
                 before_equals,
                 after_equals,
                 before_is_null,

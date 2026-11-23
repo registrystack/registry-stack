@@ -558,6 +558,13 @@ fn encrypted_fields_refuse_event_projection_and_conditions() {
         "when":{"type":"fields","changed":["secret"]}
     }]);
     expect_code(&changed, "breg.event.when-encrypted");
+
+    let mut changed_any = encrypted_project();
+    changed_any["recordTypes"]["case"]["hooks"] = json!([{
+        "id":"secret-seen","phase":"after","trigger":"patched","projection":["label"],
+        "when":{"type":"fields","changedAny":["label","secret"]}
+    }]);
+    expect_code(&changed_any, "breg.event.when-encrypted");
 }
 
 #[test]

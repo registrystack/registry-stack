@@ -2366,6 +2366,15 @@
           "type": "array",
           "uniqueItems": true
         },
+        "changedAny": {
+          "default": [],
+          "description": "Fields of which at least one must change. Lists two or more fields and\nexcludes `changed`. Only valid with the patched trigger.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
         "type": {
           "const": "fields",
           "type": "string"
