@@ -678,8 +678,8 @@ struct GenerateArgs {
     fields: Vec<String>,
     /// Allowed value for a fact field, as FIELD=VALUE (evidence-source only).
     /// Repeat the flag to allow several values for one field. A record with
-    /// any other value answers no-match, which Evidence answers publicly like
-    /// an unknown record.
+    /// any other value answers no-match. A caller gets the same answer as for
+    /// an unknown record, and only the Evidence audit tells them apart.
     #[arg(long = "require-value", value_name = "FIELD=VALUE")]
     require_values: Vec<String>,
     /// Fact fields a record may leave empty, separated by commas
