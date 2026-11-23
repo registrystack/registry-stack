@@ -336,6 +336,9 @@ Column references resolve against the columns exposed by each range in its own S
 `JSON_QUERY`, table functions, SQL/JSON aggregates and constructors, and XML constructs are refused.
 Additions to this grammar require a concrete use case and review; a parser upgrade does not automatically admit new syntax.
 Joins use explicit `ON` conditions; source and join aliases cannot rename columns through alias lists.
+`LIMIT` and `OFFSET` are refused on the rows the SQL returns, including through a table expression or `FROM` subquery.
+Which rows get a value would then depend on which rows the reader can see.
+A subquery in an expression, or a `LATERAL` subquery after the item it reads, may still use them to pick among one row's linked rows.
 
 Every emitted derived row must have a non-null canonical `id`, and one derived relation may emit at most one row for that `id`.
 BReg refuses the query atomically when reviewed SQL violates either rule.
@@ -351,6 +354,8 @@ When a compiler release changes these wrappers, its release note carries the pac
 Starting the runtime never rewrites the active catalog.
 
 {/* Evidence: crates/registry-breg/src/derived_sql.rs, JSON_VALUE, JSON_QUERY and the accepted-grammar tests in that module;
+    crates/registry-breg/src/derived_sql.rs, limits_returned_rows;
+    crates/registry-breg/tests/disclosure_compile.rs, a_derived_relation_cannot_limit_the_rows_it_returns;
     crates/registry-breg/src/generated_ddl.rs, security_invoker. */}
 
 {/* TODO[evidence]: the derived-row id rules (non-null canonical id, at most one row per id) and the value-check view behaviour have no located test. */}
@@ -380,10 +385,11 @@ A profile's purposes cover each of its grants in the project, so a purpose misma
 A read path runs under the profile's grant on the path's root Record type, so that grant sets the boundaries and purposes.
 A profile bounded by `id` cannot read a derived field over another Record type, because no row of another type shares that `id`.
 
-A derived field whose SQL reads its own Record type once needs no other grant.
+A derived field whose SQL reads its own Record type once, row by row, needs no other grant.
 SQL can read its own Record type more than once, in a join, a subquery or a table expression used twice.
 It then reads other rows of that type, so the owner's Record type counts as a type the SQL reads.
-So does SQL that combines its rows with an aggregate, `GROUP BY` or `DISTINCT`, unless it returns each row's own `id` and any `GROUP BY` includes it.
+So does SQL whose key is not each row's own `id`, read from the Record type itself rather than through a table expression or subquery.
+So does SQL that combines or picks among its rows with an aggregate, `GROUP BY` or `DISTINCT ON`, unless any `GROUP BY` or `DISTINCT ON` includes that `id`.
 A profile bounded by `id` cannot read such a field.
 A read path reader needs its grant on the owner to match its grant on the path's root.
 
@@ -422,7 +428,7 @@ The derived value leaves out the rows that the protection hides.
 
 {/* Evidence: crates/registry-breg/src/compiler/disclosure/reach.rs, validate_derived_source_grants,
     derived_source_refusal and withheld_source_rows;
-    crates/registry-breg/src/derived_sql.rs, derived_sql_source_scans and derived_sql_combines_rows_of;
+    crates/registry-breg/src/derived_sql.rs, derived_sql_source_scans and derived_sql_reads_other_rows_of;
     crates/registry-breg/src/generated_ddl.rs, grant_reads_rows and policy_authority_expression_for_alias;
     crates/registry-breg/tests/disclosure_compile.rs, a_derived_field_cannot_read_a_record_type_its_reader_cannot_read,
     a_derived_field_cannot_read_a_record_type_under_other_row_boundaries,
@@ -432,6 +438,8 @@ The derived value leaves out the rows that the protection hides.
     a_read_path_reader_must_read_the_derived_source_under_its_root_boundaries,
     a_derived_field_that_reads_its_own_record_type_twice_cannot_serve_a_reader_bounded_by_id,
     a_derived_field_that_combines_its_own_rows_in_one_read_cannot_serve_a_reader_bounded_by_id,
+    a_derived_field_that_picks_among_its_own_rows_cannot_serve_a_reader_bounded_by_id,
+    a_derived_field_keyed_by_another_column_cannot_serve_a_reader_bounded_by_id,
     a_read_path_reader_of_a_self_joined_derived_field_must_read_the_owner_under_its_root_boundaries,
     a_record_condition_on_a_derived_source_that_binds_the_reader_is_a_finding,
     a_record_condition_on_a_self_joined_owner_that_binds_the_reader_is_a_finding,
