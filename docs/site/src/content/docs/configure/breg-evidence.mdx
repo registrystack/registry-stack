@@ -55,18 +55,27 @@ Both name fields that are already in `--fields`, and without them the generated 
 
 - `--require-value FIELD=VALUE` lists the values a fact field may hold.
   Repeat the flag to allow several values for one field.
-  A record whose value is not listed gets the same no-match outcome as a missing or unknown record, so nothing discloses that the record exists.
-  The check sits in the generated lookup, after the identity check and before any fact is returned, and never in derived logic.
-  Use it as defence in depth beside the access profile's row boundary, for example so a person register refuses inactive people even if a deployment's token claim is widened by mistake.
-  The value is read according to the field's type: `true` or `false` for a boolean, a whole number for an int64, a code of the vocabulary for a vocabulary field, and text within the field's length bounds for a string.
+  A record whose value is not listed gets the same no-match outcome as a missing or unknown record.
+  Nothing discloses that the record exists.
+  The check runs in the generated lookup, never in derived logic.
+  It runs after the identity check and before any fact is returned.
+  Use it as defence in depth beside the access profile's row boundary.
+  For example, a person register can refuse inactive people even if a deployment's token claim is widened by mistake.
+  The value is read according to the field's type.
+  A boolean takes `true` or `false`, and an int64 takes a whole number.
+  A vocabulary field takes a code of the vocabulary, and a string takes text within the field's length bounds.
 - `--optional-fields A,B` names facts that a record may leave empty.
-  A null value no longer causes a no-match: the fact is left out of the answer when it is null, and the generated fact schema does not list it as required.
+  A null value does not cause a no-match.
+  The fact is left out of the answer, and the generated fact schema does not list it as required.
   A key that is absent from the response is still a protocol error, because it means the projection or the read grant lost the field.
   Use it when a record can legitimately have no value, such as a person with no recorded residence area.
 
-The command refuses a required value on a field that is not an exported fact, a value that does not fit the field's type, an empty value list, and a field that is both required to hold a value and optional.
+The command refuses a required value that does not fit the field's type, or that names a field that is not an exported fact.
+It also refuses an empty value list, and a field that is both required to hold a value and optional.
 Both inputs are part of the pack version, so changing either one produces a new pack version.
-A selector field that is also listed in `--fields` becomes a required fact, so a fixture or record that leaves it out fails: keep selector fields out of `--fields` unless you want them returned.
+A selector field that is also listed in `--fields` becomes a required fact.
+A fixture or record that leaves it out then fails.
+Keep selector fields out of `--fields` unless you want them returned.
 
 For each selected alternative, the generated request uses the fixed lookup route, method, and access profile.
 It asks for the selected facts plus only that alternative's identity fields, and those identity fields must already be readable.
@@ -185,6 +194,7 @@ No AssertionDefinition can skip that check by replacing its derive Function.
 
 Only the explicit fact fields enter the fact set.
 A fact keeps the field's declared `pattern` in both generated schemas, and a decimal fact states its declared precision and scale as a pattern.
+Every pattern the schemas carry is part of the pack version.
 The export refuses a pattern that uses PostgreSQL-only regular expression syntax, because JSON Schema would read it differently.
 An absent or null required fact produces no match and cannot become an authoritative negative answer.
 BReg recognises a genuine unresolved lookup only by its exact declared Problem Details status, type, and code.
@@ -214,6 +224,7 @@ Bounded scalar facts are supported; structured and spatial facts require a custo
     refuses_a_composite_selector_beyond_the_aggregate_selector_bound,
     a_declared_field_pattern_reaches_the_fact_and_response_schemas,
     a_decimal_fact_states_the_declared_precision_and_scale,
+    every_fact_pattern_is_bound_into_the_behavior_revision,
     refuses_a_pattern_that_only_postgresql_reads_the_same_way;
     crates/registry-bregctl/tests/evidence_source.rs lookup.unresolved. */}
 
