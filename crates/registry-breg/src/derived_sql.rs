@@ -121,6 +121,103 @@ fn count_source_scans<'a>(
     }
 }
 
+/// Whether SQL which has already passed [`validate_derived_sql`] and reads
+/// `relation` at most once may still compute a row's value from several of
+/// its rows. That is so when the statement combines rows anywhere, with an
+/// aggregate or window function, `GROUP BY`, `HAVING` or `DISTINCT`, unless
+/// its top-level `SELECT` reads `relation` in its own `FROM` list, returns
+/// that relation's `id` as the key and groups by nothing or by that `id`.
+pub(crate) fn derived_sql_combines_rows_of(sql: &[u8], relation: &str) -> bool {
+    const VALIDATED: &str = "derived SQL was validated before its row combination check";
+    let text = std::str::from_utf8(sql).expect(VALIDATED);
+    let parsed = pg_query::parse(text, 0).expect(VALIDATED);
+    let Some(PgNode::SelectStmt(root)) = root_node(&parsed) else {
+        panic!("{VALIDATED}");
+    };
+    let reads = raw_nodes(&parsed).into_iter().any(|node| {
+        matches!(
+            node,
+            NodeRef::RangeVar(range)
+                if range.catalogname.is_empty()
+                    && range.schemaname == "registry_source"
+                    && range.relname == relation
+        )
+    });
+    reads && combines_rows(&parsed) && !keeps_rows_apart(root, relation)
+}
+
+fn combines_rows(parsed: &pg_query::ParseResult) -> bool {
+    raw_nodes(parsed).into_iter().any(|node| match node {
+        NodeRef::FuncCall(function) => {
+            function.over.is_some()
+                || node_strings(&function.funcname).is_some_and(|name| admitted_aggregate(&name))
+        }
+        NodeRef::SelectStmt(select) => {
+            !select.group_clause.is_empty()
+                || select.having_clause.is_some()
+                || !select.distinct_clause.is_empty()
+                || !select.window_clause.is_empty()
+        }
+        _ => false,
+    })
+}
+
+/// Whether one `SELECT` yields at most one row of `relation` per output row,
+/// keyed by that row's `id`.
+fn keeps_rows_apart(select: &SelectStmt, relation: &str) -> bool {
+    let Some(qualifier) = select
+        .from_clause
+        .iter()
+        .find_map(|node| direct_source_qualifier(node, relation))
+    else {
+        return false;
+    };
+    let is_id = |node: &PgNodeWrapper| {
+        matches!(
+            node.node.as_ref(),
+            Some(PgNode::ColumnRef(column))
+                if node_strings(&column.fields).is_some_and(|fields| fields == [qualifier.as_str(), "id"])
+        )
+    };
+    let key_is_id = select.target_list.first().is_some_and(|target| {
+        matches!(
+            target.node.as_ref(),
+            Some(PgNode::ResTarget(target)) if target.val.as_deref().is_some_and(is_id)
+        )
+    });
+    // `HAVING` without `GROUP BY` makes the whole statement one group.
+    key_is_id
+        && if select.group_clause.is_empty() {
+            select.having_clause.is_none()
+        } else {
+            select.group_clause.iter().any(is_id)
+        }
+}
+
+/// The qualifier of `relation` when one `FROM` item reads it directly, as a
+/// table or through joins, but not inside a subquery.
+fn direct_source_qualifier(node: &PgNodeWrapper, relation: &str) -> Option<String> {
+    match node.node.as_ref()? {
+        PgNode::RangeVar(range)
+            if range.catalogname.is_empty()
+                && range.schemaname == "registry_source"
+                && range.relname == relation =>
+        {
+            Some(
+                range
+                    .alias
+                    .as_ref()
+                    .map_or_else(|| range.relname.clone(), |alias| alias.aliasname.clone()),
+            )
+        }
+        PgNode::JoinExpr(join) => [join.larg.as_deref(), join.rarg.as_deref()]
+            .into_iter()
+            .flatten()
+            .find_map(|side| direct_source_qualifier(side, relation)),
+        _ => None,
+    }
+}
+
 /// Resolve the stored source columns read by SQL which has already passed
 /// [`validate_derived_sql`]. This reuses the validator's lexical scopes so
 /// aliases, correlated subqueries, and shadowing bind to the same source
@@ -1181,18 +1278,22 @@ fn safe_function(function: &pg_query::protobuf::FuncCall) -> bool {
     if function.over.is_some() || function.agg_within_group || function.func_variadic {
         return false;
     }
-    matches!(
-        name.as_slice(),
-        [function] if matches!(function.as_str(), "count" | "bool_and" | "every")
-    ) || matches!(
-        name.as_slice(),
-        [schema, function]
-            if schema == "pg_catalog"
-                && matches!(function.as_str(), "count" | "bool_and" | "every")
-    ) || matches!(
-        name.as_slice(),
-        [schema, function] if schema == "registry_context" && function == "evaluation_date"
-    )
+    admitted_aggregate(&name)
+        || matches!(
+            name.as_slice(),
+            [schema, function] if schema == "registry_context" && function == "evaluation_date"
+        )
+}
+
+/// The aggregate functions derived SQL may call, bare or in `pg_catalog`.
+fn admitted_aggregate(name: &[String]) -> bool {
+    match name {
+        [function] => matches!(function.as_str(), "count" | "bool_and" | "every"),
+        [schema, function] if schema == "pg_catalog" => {
+            matches!(function.as_str(), "count" | "bool_and" | "every")
+        }
+        _ => false,
+    }
 }
 
 fn safe_json_function(function: &JsonFuncExpr) -> bool {
@@ -1394,6 +1495,42 @@ mod tests {
             scans("WITH unused AS (SELECT m.id AS id FROM registry_source.member m) SELECT h.id FROM registry_source.household h"),
             counted(&[("household", 1)])
         );
+    }
+
+    #[test]
+    fn combining_owner_rows_needs_a_combination_that_keeps_no_row_apart() {
+        let combines = |sql: &str| derived_sql_combines_rows_of(sql.as_bytes(), "person");
+        for sql in [
+            "SELECT p.head AS id, count(p.id) AS size FROM registry_source.person p GROUP BY p.head",
+            "SELECT p.head AS id, count(*) AS size FROM registry_source.person p GROUP BY p.head",
+            "SELECT p.head AS id, pg_catalog.bool_and(p.active) AS all_active FROM registry_source.person p GROUP BY p.head",
+            "SELECT p.head AS id, every(p.active) AS all_active FROM registry_source.person p GROUP BY p.head",
+            "SELECT p.head AS id FROM registry_source.person p GROUP BY p.head",
+            "SELECT DISTINCT p.head AS id FROM registry_source.person p",
+            "SELECT p.id AS id, count(p.id) AS size FROM registry_source.person p HAVING count(p.id) > 1",
+            // Rows read through a table expression or a subquery count as
+            // combined whenever anything combines rows.
+            "WITH heads AS (SELECT p.head AS id, count(p.id) AS size FROM registry_source.person p GROUP BY p.head) SELECT h.id AS id, h.size AS size FROM heads h",
+            "WITH people AS (SELECT p.head AS id FROM registry_source.person p) SELECT a.id AS id, count(*) AS size FROM people a GROUP BY a.id",
+            "SELECT s.id AS id, count(m.id) AS size FROM (SELECT p.id AS id FROM registry_source.person p) s LEFT JOIN registry_source.member m ON m.person = s.id GROUP BY s.id",
+        ] {
+            assert!(combines(sql), "{sql}");
+        }
+        for sql in [
+            "SELECT p.id AS id, p.age AS age FROM registry_source.person p",
+            "SELECT p.id AS id, (registry_context.evaluation_date() - p.birth_date) / 365 AS age FROM registry_source.person p",
+            "SELECT p.id AS id, m.id IS NOT NULL AS member FROM registry_source.person p LEFT JOIN registry_source.member m ON m.person = p.id",
+            "SELECT p.id AS id, count(m.id) AS size FROM registry_source.person p LEFT JOIN registry_source.member m ON m.person = p.id GROUP BY p.id",
+            "SELECT person.id AS id, count(m.id) AS size FROM registry_source.member m RIGHT JOIN registry_source.person ON m.person = person.id GROUP BY person.district, person.id",
+            "SELECT p.id AS id, count(m.id) AS size FROM registry_source.person p LEFT JOIN registry_source.member m ON m.person = p.id GROUP BY p.id HAVING count(m.id) > 1",
+            "SELECT p.id AS id, (SELECT count(m.id) FROM registry_source.member m WHERE m.person = p.id) AS size FROM registry_source.person p",
+            "SELECT DISTINCT p.id AS id, p.age AS age FROM registry_source.person p",
+            // A statement that reads another relation's rows combines none of
+            // the owner's.
+            "SELECT h.id AS id, count(m.id) AS size FROM registry_source.household h LEFT JOIN registry_source.member m ON m.household = h.id GROUP BY h.id",
+        ] {
+            assert!(!combines(sql), "{sql}");
+        }
     }
 
     #[test]

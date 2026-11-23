@@ -1827,6 +1827,52 @@ fn a_derived_field_that_reads_its_own_record_type_twice_cannot_serve_a_reader_bo
     assert!(compile_with_sql(&value, SELF_JOIN_SQL).is_ok());
 }
 
+/// SQL that combines rows of its owner's record type in one read computes a
+/// row's value from other rows too: here a head of household's count comes
+/// from the people who name them. A reader bounded by `id` would see only its
+/// own row, so the count would be silently wrong. Window functions are refused
+/// for every reader, and a value computed from the row alone stays readable.
+#[test]
+fn a_derived_field_that_combines_its_own_rows_in_one_read_cannot_serve_a_reader_bounded_by_id() {
+    let path = "recordTypes[id=person].accessProfiles[id=registrar].rowBoundaries";
+    let mut value = self_join_source();
+    let fields = value["recordTypes"]["person"]["fields"]
+        .as_array_mut()
+        .unwrap();
+    fields.push(
+        json!({"id":"head","type":"reference","target":"person","classification":"internal"}),
+    );
+    fields.push(json!({"id":"birth-date","type":"date","classification":"internal"}));
+    value["project"]["timezone"] = json!("UTC");
+    person_permission(&mut value, REGISTRAR)["rowBoundaries"] =
+        json!([{"field":"id","claim":"person_id","operator":"equals"}]);
+    for sql in [
+        "SELECT p.head AS id, count(p.id) AS household_size FROM registry_source.person p GROUP BY p.head",
+        "SELECT DISTINCT p.head AS id, 1::int8 AS household_size FROM registry_source.person p",
+    ] {
+        let found = derived_diagnostics(&value, sql);
+        let (_, _, message) = found
+            .iter()
+            .find(|(code, found, _)| code == SOURCE_BOUNDARY && found == path)
+            .unwrap_or_else(|| panic!("{sql}: got {found:?}"));
+        for named in ["`registrar`", "`household-size`", "`person`", "`id`"] {
+            assert!(message.contains(named), "{named} in {message}");
+        }
+    }
+    let window = "SELECT p.id AS id, count(p.id) OVER (PARTITION BY p.district) AS household_size FROM registry_source.person p";
+    assert!(
+        codes(compile_with_sql(&value, window)).contains(&"breg.derived.sql-invalid".to_owned())
+    );
+    let age = "SELECT p.id AS id, (registry_context.evaluation_date() - p.birth_date) / 365 AS household_size FROM registry_source.person p";
+    assert_compiles_with_sql(&value, age);
+
+    person_permission(&mut value, REGISTRAR)["rowBoundaries"] = by_district();
+    assert_compiles_with_sql(
+        &value,
+        "SELECT p.head AS id, count(p.id) AS household_size FROM registry_source.person p GROUP BY p.head",
+    );
+}
+
 /// A `record` condition on the owner hides rows from a second read of the
 /// owner's record type as it does from a source's.
 #[test]
@@ -1842,9 +1888,9 @@ fn a_record_condition_on_a_self_joined_owner_that_binds_the_reader_is_a_finding(
 }
 
 /// A read path request installs the reader's boundary values for its grant on
-/// the path's root, so SQL that reads the owner's record type more than once
-/// needs the reader's own grant on the owner, under the root's boundaries,
-/// as it would for any other source.
+/// the path's root, so SQL that reads the owner's record type more than once,
+/// or combines its rows, needs the reader's own grant on the owner, under the
+/// root's boundaries, as it would for any other source.
 #[test]
 fn a_read_path_reader_of_a_self_joined_derived_field_must_read_the_owner_under_its_root_boundaries()
 {
@@ -1863,6 +1909,7 @@ fn a_read_path_reader_of_a_self_joined_derived_field_must_read_the_owner_under_i
     person_permission(&mut value, REGISTRAR)["readPaths"] =
         json!([{"path":"dossiers","readableFields":["code","related-count"]}]);
     let twice = "SELECT c.id AS id, count(d.id) AS related_count FROM registry_source.dossier c LEFT JOIN registry_source.dossier d ON d.code = c.code GROUP BY c.id";
+    // Grouping by the owner's `id` keeps each owner row apart.
     let once = "SELECT c.id AS id, count(c.id) AS related_count FROM registry_source.dossier c GROUP BY c.id";
     assert_compiles_with_sql(&value, once);
     let found = derived_diagnostics(&value, twice);

@@ -483,8 +483,11 @@ pub(in crate::compiler) fn validate_derived_reads(
 /// any field readable. One statement computes every column of the relation,
 /// so a reader of any of its fields needs every source the statement reads.
 ///
-/// SQL that reads the owner's record type more than once reads owner rows
-/// besides the one it computes for, so the owner then counts as a source too.
+/// SQL that reads the owner's record type more than once can compute a row's
+/// value from owner rows besides that one, and so can SQL that combines rows
+/// (an aggregate, `GROUP BY`, `HAVING` or `DISTINCT`) unless its top-level
+/// `SELECT` reads the owner directly, keys on its `id` and groups by nothing
+/// or by that `id`. The owner then counts as a source too.
 /// A reader through its grant on the owner runs under that grant, so it meets
 /// the boundary and purpose rules by construction, and an `id` boundary is
 /// what refuses it. A read path reader runs under its grant on the path's
@@ -503,13 +506,15 @@ fn validate_derived_source_grants(
     findings: &mut Vec<Diagnostic>,
 ) {
     let relations = crate::derived_sql::derived_sql_dependencies(sql).source_relations;
-    let self_joined = crate::derived_sql::derived_sql_source_scans(sql)
-        .get(&super::super::canonical_sql_name(&owner.id))
-        .is_some_and(|scans| *scans > 1);
+    let owner_relation = super::super::canonical_sql_name(&owner.id);
+    let reads_other_owner_rows = crate::derived_sql::derived_sql_source_scans(sql)
+        .get(&owner_relation)
+        .is_some_and(|scans| *scans > 1)
+        || crate::derived_sql::derived_sql_combines_rows_of(sql, &owner_relation);
     let mut refused = BTreeSet::new();
     let mut found = BTreeSet::new();
     for source in sources.values().filter(|source| {
-        (source.id != owner.id || self_joined)
+        (source.id != owner.id || reads_other_owner_rows)
             && relations.contains(&super::super::canonical_sql_name(&source.id))
     }) {
         for reader in readers {
