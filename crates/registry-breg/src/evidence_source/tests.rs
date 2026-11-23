@@ -1193,6 +1193,26 @@ fn every_fact_pattern_is_bound_into_the_behavior_revision() {
 }
 
 #[test]
+fn a_decimal_precision_or_scale_change_is_a_new_pack_version() {
+    let revision = |precision: u8, scale: u8| {
+        let mut project = pattern_project(AREA_PATTERN);
+        let amount = project["recordTypes"]["record"]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|field| field["id"] == "amount")
+            .unwrap();
+        amount["precision"] = json!(precision);
+        amount["scale"] = json!(scale);
+        export_evidence_source(&compiled(&project, SQL), &pattern_options())
+            .unwrap()
+            .behavior_revision
+    };
+    assert_ne!(revision(6, 2), revision(7, 2));
+    assert_ne!(revision(6, 2), revision(6, 3));
+}
+
+#[test]
 fn refuses_a_pattern_that_only_postgresql_reads_the_same_way() {
     for pattern in ["^[[:alpha:]]{2,20}$", "\\mAB", "(?i)^ab$", "***=^ab$"] {
         let diagnostic = refused(
