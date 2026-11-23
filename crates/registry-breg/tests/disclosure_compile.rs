@@ -3,7 +3,7 @@
 //! Compile-time rules for `disclosureConditions`, `requireAccessReason` and
 //! the read-trigger hook.
 
-use registry_breg::contract::ModuleAssetSource;
+use registry_breg::contract::{ModuleAssetSource, RegistryModule};
 use registry_breg::model::DisclosureWithhold;
 use registry_breg::{
     compile_project, compile_project_with_assets, parse_project_json, CompileProfile,
@@ -1139,9 +1139,17 @@ fn compile_with_sql(
     value: &Value,
     sql: &str,
 ) -> Result<CompiledRegistry, registry_breg::CompileFailure> {
+    compile_with_modules_and_sql(value, &[], sql)
+}
+
+fn compile_with_modules_and_sql(
+    value: &Value,
+    modules: &[RegistryModule],
+    sql: &str,
+) -> Result<CompiledRegistry, registry_breg::CompileFailure> {
     compile_project_with_assets(
         &parse_project_json(&serde_json::to_vec(value).unwrap()).unwrap(),
-        &[],
+        modules,
         &[ModuleAssetSource {
             module: None,
             path: "sql/derived.sql".to_owned(),
@@ -1273,7 +1281,13 @@ fn by_district() -> Value {
 }
 
 fn derived_diagnostics(value: &Value, sql: &str) -> Vec<(String, String, String)> {
-    match compile_with_sql(value, sql) {
+    diagnostics_of(compile_with_sql(value, sql))
+}
+
+fn diagnostics_of(
+    result: Result<CompiledRegistry, registry_breg::CompileFailure>,
+) -> Vec<(String, String, String)> {
+    match result {
         Ok(_) => Vec::new(),
         Err(failure) => failure
             .diagnostics()
@@ -1292,6 +1306,33 @@ fn derived_diagnostics(value: &Value, sql: &str) -> Vec<(String, String, String)
 fn assert_compiles_with_sql(value: &Value, sql: &str) {
     let found = derived_diagnostics(value, sql);
     assert!(found.is_empty(), "{found:?}");
+}
+
+const WITHHELD_SOURCE_ROWS: &str = "breg.disclosure.derived-reads-withheld-source-rows";
+
+/// The paths and messages of the withheld-source-rows findings a project that
+/// must compile carries.
+fn withheld_source_rows(
+    result: Result<CompiledRegistry, registry_breg::CompileFailure>,
+) -> Vec<(String, String)> {
+    result
+        .unwrap_or_else(|failure| panic!("{:?}", failure.diagnostics()))
+        .findings()
+        .iter()
+        .filter(|finding| finding.code == WITHHELD_SOURCE_ROWS)
+        .map(|finding| {
+            assert_eq!(
+                finding.severity,
+                registry_breg::DiagnosticSeverity::Finding,
+                "{finding:?}"
+            );
+            (finding.path.clone(), finding.message.clone())
+        })
+        .collect()
+}
+
+fn finding_paths(findings: &[(String, String)]) -> Vec<&str> {
+    findings.iter().map(|(path, _)| path.as_str()).collect()
 }
 
 #[test]
@@ -1540,10 +1581,13 @@ fn a_derived_field_cannot_read_a_record_type_under_a_subset_or_reordering_of_its
 }
 
 /// A membership boundary is checked per row against the caller's own
-/// memberships. A source grant may omit one the reader's grant carries, or
-/// repeat its kind on a field of its own, but may not add one.
+/// memberships, so on a source grant it leaves out the source rows the
+/// caller holds no membership for. That same grant governs the profile's
+/// direct reads, where the boundary may be the point, so the project compiles
+/// with a finding whether the reader's own grant carries the boundary or not.
+/// A source grant that omits it raises none.
 #[test]
-fn a_derived_field_cannot_read_a_record_type_under_an_added_membership_boundary() {
+fn a_membership_boundary_on_a_derived_source_grant_is_a_finding() {
     let mut value = membership_fixture::source("facility");
     value["recordTypes"]["inspection"] = json!({"primaryDataset":"test-dataset","route":"inspections","mutationMode":"mutable","classification":"internal",
         "fields":[{"id":"facility","type":"reference","target":"facility","classification":"internal"},
@@ -1576,26 +1620,40 @@ fn a_derived_field_cannot_read_a_record_type_under_an_added_membership_boundary(
 
     let mut member = value.clone();
     grant("member", &mut member, None);
-    assert_compiles_with_sql(&member, sql);
+    assert!(withheld_source_rows(compile_with_sql(&member, sql)).is_empty());
+
+    // The reader's grant on the facility carries the same membership.
     let mut member = value.clone();
     grant("member", &mut member, Some(&membership));
-    assert_compiles_with_sql(&member, sql);
+    let found = withheld_source_rows(compile_with_sql(&member, sql));
+    assert_eq!(
+        finding_paths(&found),
+        ["recordTypes[id=inspection].accessProfiles[id=member].membershipBoundaries"]
+    );
+    for named in [
+        "`member`",
+        "`has-passed-inspection`",
+        "`inspection`",
+        "`membership`",
+    ] {
+        assert!(found[0].1.contains(named), "{named} in {found:?}");
+    }
 
+    // The steward's grant on the facility carries none.
     grant("steward", &mut value, Some(&membership));
-    assert!(derived_diagnostics(&value, sql)
-        .iter()
-        .any(|(code, path, _)| {
-            code == SOURCE_BOUNDARY
-                && path
-                    == "recordTypes[id=inspection].accessProfiles[id=steward].membershipBoundaries"
-        }));
+    assert_eq!(
+        finding_paths(&withheld_source_rows(compile_with_sql(&value, sql))),
+        ["recordTypes[id=inspection].accessProfiles[id=steward].membershipBoundaries"]
+    );
 }
 
-/// A consent requirement is checked per row against recorded consent. A
-/// source grant may repeat the consent record its reader's grant requires, on
-/// a field of its own, but may not add one.
+/// A consent requirement is checked per row against recorded consent, so on
+/// a source grant it leaves out the source rows without it. As with a
+/// membership boundary, the project compiles with a finding whether the
+/// reader's own grant requires the same consent or not.
 #[test]
-fn a_derived_field_cannot_read_a_record_type_under_an_added_consent_requirement() {
+fn a_consent_requirement_on_a_derived_source_grant_is_a_finding() {
+    let path = "recordTypes[id=enrolment].accessProfiles[id=food-targeting].requireConsent";
     let value = consent_fixture::source();
     let derive = |value: &mut Value, owner: &str| {
         value["recordTypes"][owner]["derived"] = json!([{"id":"enrolment-state","sql":"sql/derived.sql","key":"id",
@@ -1616,10 +1674,19 @@ fn a_derived_field_cannot_read_a_record_type_under_an_added_consent_requirement(
     // The grants on person and on enrolment require the same consent record.
     let mut person = value.clone();
     derive(&mut person, "person");
-    assert_compiles_with_sql(
+    let found = withheld_source_rows(compile_with_sql(
         &person,
         "SELECT p.id AS id, (count(e.id) > 0) AS has_enrolment FROM registry_source.person p LEFT JOIN registry_source.enrolment e ON e.person = p.id GROUP BY p.id",
-    );
+    ));
+    assert_eq!(finding_paths(&found), [path]);
+    for named in [
+        "`food-targeting`",
+        "`has-enrolment`",
+        "`enrolment`",
+        &format!("`{}`", consent_fixture::CONSENT_RECORD),
+    ] {
+        assert!(found[0].1.contains(named), "{named} in {found:?}");
+    }
 
     // The grant on household requires none.
     let mut household = value;
@@ -1632,13 +1699,235 @@ fn a_derived_field_cannot_read_a_record_type_under_an_added_consent_requirement(
             "rowBoundaries":"unrestricted","readableFields":["household"]}),
         );
     let sql = "SELECT h.id AS id, (count(e.id) > 0) AS has_enrolment FROM registry_source.household h LEFT JOIN registry_source.enrolment_household l ON l.household = h.id LEFT JOIN registry_source.enrolment e ON e.id = l.enrolment GROUP BY h.id";
-    let found = derived_diagnostics(&household, sql);
+    assert_eq!(
+        finding_paths(&withheld_source_rows(compile_with_sql(&household, sql))),
+        [path]
+    );
+}
+
+/// A module grant of `get` on visits to the registrar, unrestricted, under
+/// `purposes` when any are given.
+fn visit_module_grant(purposes: &[&str]) -> RegistryModule {
+    let mut grant = json!({"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+        "operations":["get"],"readableFields":["person"],"rowBoundaries":"unrestricted"});
+    if !purposes.is_empty() {
+        grant["requiredPurposes"] = json!(purposes);
+    }
+    registry_breg::contract::parse_module_yaml(
+        &serde_json::to_vec(&json!({
+            "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
+            "id":"extra","version":"1",
+            "extendRecordTypes":{"visit": {"accessProfiles":{REGISTRAR: grant}}}}))
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+/// A request runs under one purpose, and a grant that requires purposes sees
+/// rows only under one of them. So a grant on the source must require no
+/// purpose, or every purpose the reader's grant admits. A reader's grant that
+/// requires none admits a request under any purpose, so then the source grant
+/// must require none either.
+#[test]
+fn a_derived_field_cannot_read_a_record_type_under_purposes_its_reader_lacks() {
+    let path = "recordTypes[id=visit].accessProfiles[id=registrar].requiredPurposes";
+    for (reader, visits, refused) in [
+        (&["service-delivery"][..], &["audit"][..], true),
+        (&[][..], &["audit"][..], true),
+        (&["service-delivery", "audit"][..], &["audit"][..], true),
+        (&["service-delivery"][..], &[][..], false),
+        (
+            &["service-delivery"][..],
+            &["service-delivery", "audit"][..],
+            false,
+        ),
+        (&[][..], &[][..], false),
+    ] {
+        let mut value = visit_source();
+        value["modules"] = json!({"extra":{"version":"1"}});
+        if !reader.is_empty() {
+            value["accessProfiles"][REGISTRAR]["requiredPurposes"] = json!(reader);
+        }
+        let found = diagnostics_of(compile_with_modules_and_sql(
+            &value,
+            &[visit_module_grant(visits)],
+            VISIT_SQL,
+        ));
+        if refused {
+            let (_, _, message) = found
+                .iter()
+                .find(|(code, found, _)| code == SOURCE_BOUNDARY && found == path)
+                .unwrap_or_else(|| panic!("{reader:?} over {visits:?}: got {found:?}"));
+            for named in ["`registrar`", "`has-closed-visit`", "`visit`", "`audit`"] {
+                assert!(message.contains(named), "{named} in {message}");
+            }
+        } else {
+            assert!(
+                found.is_empty(),
+                "{reader:?} over {visits:?}: got {found:?}"
+            );
+        }
+    }
+}
+
+const SELF_JOIN_SQL: &str = "SELECT p.id AS id, count(q.id) AS household_size FROM registry_source.person p LEFT JOIN registry_source.person q ON q.district = p.district GROUP BY p.id";
+
+/// A person-level derived field the registrar reads, computed by `sql`.
+fn self_join_source() -> Value {
+    let mut value = source();
+    value["recordTypes"]["person"]["derived"] = json!([{"id":"household","sql":"sql/derived.sql","key":"id",
+        "fields":[{"id":"household-size","type":"int64","classification":"internal"}]}]);
+    person_permission(&mut value, REGISTRAR)["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("household-size"));
+    value
+}
+
+/// SQL that reads its owner's record type more than once reads rows besides
+/// the one it computes for, and a reader bounded by `id` sees only that one.
+/// A second read through a common table expression or a subquery counts.
+#[test]
+fn a_derived_field_that_reads_its_own_record_type_twice_cannot_serve_a_reader_bounded_by_id() {
+    let path = "recordTypes[id=person].accessProfiles[id=registrar].rowBoundaries";
+    let mut value = self_join_source();
+    person_permission(&mut value, REGISTRAR)["rowBoundaries"] =
+        json!([{"field":"id","claim":"person_id","operator":"equals"}]);
+    for sql in [
+        SELF_JOIN_SQL,
+        "WITH people AS (SELECT p.id AS id, p.district AS district FROM registry_source.person p) SELECT a.id AS id, count(b.id) AS household_size FROM people a LEFT JOIN people b ON b.district = a.district GROUP BY a.id",
+        "SELECT p.id AS id, (SELECT count(q.id) FROM registry_source.person q WHERE q.district = p.district) AS household_size FROM registry_source.person p",
+    ] {
+        let found = derived_diagnostics(&value, sql);
+        let (_, _, message) = found
+            .iter()
+            .find(|(code, found, _)| code == SOURCE_BOUNDARY && found == path)
+            .unwrap_or_else(|| panic!("{sql}: got {found:?}"));
+        for named in ["`registrar`", "`household-size`", "`person`", "`id`"] {
+            assert!(message.contains(named), "{named} in {message}");
+        }
+    }
+    let once = "SELECT p.id AS id, p.age AS household_size FROM registry_source.person p";
+    assert_compiles_with_sql(&value, once);
+    let once_in_cte = "WITH people AS (SELECT p.id AS id, p.age AS age FROM registry_source.person p) SELECT a.id AS id, a.age AS household_size FROM people a";
+    assert_compiles_with_sql(&value, once_in_cte);
+
+    person_permission(&mut value, REGISTRAR)["rowBoundaries"] = by_district();
+    assert!(compile_with_sql(&value, SELF_JOIN_SQL).is_ok());
+}
+
+/// A `record` condition on the owner hides rows from a second read of the
+/// owner's record type as it does from a source's.
+#[test]
+fn a_record_condition_on_a_self_joined_owner_that_binds_the_reader_is_a_finding() {
+    let value = self_join_source();
+    let found = withheld_source_rows(compile_with_sql(&value, SELF_JOIN_SQL));
+    assert_eq!(finding_paths(&found), [COND]);
+    for named in ["`registrar`", "`household-size`", "`person`"] {
+        assert!(found[0].1.contains(named), "{named} in {found:?}");
+    }
+    let once = "SELECT p.id AS id, p.age AS household_size FROM registry_source.person p";
+    assert!(withheld_source_rows(compile_with_sql(&value, once)).is_empty());
+}
+
+/// A read path request installs the reader's boundary values for its grant on
+/// the path's root, so SQL that reads the owner's record type more than once
+/// needs the reader's own grant on the owner, under the root's boundaries,
+/// as it would for any other source.
+#[test]
+fn a_read_path_reader_of_a_self_joined_derived_field_must_read_the_owner_under_its_root_boundaries()
+{
+    let mut value = source();
+    value["recordTypes"]["dossier"] = json!({"primaryDataset":"test-dataset","route":"dossiers","mutationMode":"mutable","classification":"internal",
+        "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"},
+                  {"id":"district","type":"string","maximumLength":32,"classification":"internal"}],
+        "derived":[{"id":"related","sql":"sql/derived.sql","key":"id",
+          "fields":[{"id":"related-count","type":"int64","classification":"internal"}]}]});
+    value["recordTypes"]["dossier-link"] = json!({"primaryDataset":"test-dataset","route":"dossier-links","mutationMode":"mutable","classification":"internal",
+        "fields":[{"id":"person","type":"reference","target":"person","classification":"internal"},
+                  {"id":"dossier","type":"reference","target":"dossier","classification":"internal"}]});
+    value["recordTypes"]["person"]["readPaths"] =
+        json!([{"id":"dossiers","through":"dossier-link","to":"dossier","route":"dossiers"}]);
+    person_permission(&mut value, REGISTRAR)["rowBoundaries"] = by_district();
+    person_permission(&mut value, REGISTRAR)["readPaths"] =
+        json!([{"path":"dossiers","readableFields":["code","related-count"]}]);
+    let twice = "SELECT c.id AS id, count(d.id) AS related_count FROM registry_source.dossier c LEFT JOIN registry_source.dossier d ON d.code = c.code GROUP BY c.id";
+    let once = "SELECT c.id AS id, count(c.id) AS related_count FROM registry_source.dossier c GROUP BY c.id";
+    assert_compiles_with_sql(&value, once);
+    let found = derived_diagnostics(&value, twice);
     assert!(
-        found.iter().any(|(code, path, _)| code == SOURCE_BOUNDARY
-            && path
-                == "recordTypes[id=enrolment].accessProfiles[id=food-targeting].requireConsent"),
+        found.iter().any(|(code, path, _)| code == UNREADABLE_SOURCE
+            && path == "recordTypes[id=dossier].accessProfiles[id=registrar].operations"),
         "{found:?}"
     );
+
+    let grant_dossiers = |value: &mut Value, row_boundaries: Value| {
+        value["accessProfiles"][REGISTRAR]["permissions"]["records"]
+            .as_array_mut()
+            .unwrap()
+            .push(
+                json!({"recordType":"dossier","operations":["get"],"rowBoundaries":row_boundaries,
+                "readableFields":["code"]}),
+            );
+    };
+    let mut unrestricted = value.clone();
+    grant_dossiers(&mut unrestricted, json!("unrestricted"));
+    assert!(
+        derived_diagnostics(&unrestricted, twice)
+            .iter()
+            .any(|(code, path, _)| code == SOURCE_BOUNDARY
+                && path == "recordTypes[id=dossier].accessProfiles[id=registrar].rowBoundaries"),
+        "{:?}",
+        derived_diagnostics(&unrestricted, twice)
+    );
+    grant_dossiers(&mut value, by_district());
+    assert_compiles_with_sql(&value, twice);
+}
+
+/// A `record` condition on a source hides the rows it matches from every
+/// profile it binds, the derived computation included. Hiding them may be the
+/// point, so the project compiles with a finding. An exempt profile, and a
+/// `fields` or `history` condition, which hide no current row, raise none.
+#[test]
+fn a_record_condition_on_a_derived_source_that_binds_the_reader_is_a_finding() {
+    let path = "recordTypes[id=visit].disclosureConditions[id=hide-sealed]";
+    let with_condition = |withhold: Value, exempt: Value| {
+        let mut value = visit_source();
+        grant_visits(&mut value, json!("unrestricted"));
+        value["recordTypes"]["visit"]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":"sealed","type":"boolean","classification":"internal"}));
+        let mut condition = json!({"when":[{"type":"field-equals","field":"sealed","value":true}],
+            "exemptProfiles":exempt});
+        for (member, value) in withhold.as_object().unwrap() {
+            condition[member] = value.clone();
+        }
+        value["recordTypes"]["visit"]["disclosureConditions"] = json!({"hide-sealed": condition});
+        value
+    };
+
+    let bound = with_condition(json!({"withhold":"record"}), json!([OFFICER]));
+    let found = withheld_source_rows(compile_with_sql(&bound, VISIT_SQL));
+    assert_eq!(finding_paths(&found), [path]);
+    for named in ["`registrar`", "`has-closed-visit`", "`visit`"] {
+        assert!(found[0].1.contains(named), "{named} in {found:?}");
+    }
+
+    for (withhold, exempt) in [
+        (json!({"withhold":"record"}), json!([OFFICER, REGISTRAR])),
+        (json!({"withhold":"history"}), json!([OFFICER])),
+        (
+            json!({"withhold":"fields","fields":["district"]}),
+            json!([OFFICER]),
+        ),
+    ] {
+        let value = with_condition(withhold.clone(), exempt);
+        assert!(
+            withheld_source_rows(compile_with_sql(&value, VISIT_SQL)).is_empty(),
+            "{withhold}"
+        );
+    }
 }
 
 const LINKED: &str = r#"

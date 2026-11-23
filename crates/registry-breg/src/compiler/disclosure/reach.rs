@@ -377,6 +377,7 @@ pub(in crate::compiler) fn validate_derived_reads(
     source_columns: &BTreeMap<String, BTreeSet<String>>,
     sources: &BTreeMap<String, EntitySource>,
     errors: &mut Vec<Diagnostic>,
+    findings: &mut Vec<Diagnostic>,
 ) {
     let read = crate::derived_sql::derived_sql_source_columns(sql, source_columns);
     let derived_ids: BTreeSet<&str> = derived
@@ -432,7 +433,7 @@ pub(in crate::compiler) fn validate_derived_reads(
         .iter()
         .map(|reader| reader.request_grant.id.as_str())
         .collect();
-    validate_derived_source_grants(owner, sql, &derived_readers, sources, errors);
+    validate_derived_source_grants(owner, sql, &derived_readers, sources, errors, findings);
     for source in sources.values() {
         let Some(columns) = read.get(&super::super::canonical_sql_name(&source.id)) else {
             continue;
@@ -474,37 +475,163 @@ pub(in crate::compiler) fn validate_derived_reads(
 /// error. So the grant must read rows, carry the row boundaries of the grant
 /// the request runs under (a request installs that grant's boundary values as
 /// one ordered list, and a grant whose list differs in length, order, fields
-/// or operators sees no row), and add no membership or consent requirement of
-/// a kind that grant lacks. Membership and consent probe each row on their
-/// own, so omitting one sees more rows. A matching boundary still assumes the
-/// linked rows hold the same boundary values. Readable fields limit the
-/// answer, not this computation, so the grant need not make any field
-/// readable. One statement computes every column of the relation, so a reader
-/// of any of its fields needs every source the statement reads.
+/// or operators sees no row), and require no purpose unless it requires every
+/// purpose that grant admits (a request runs under one purpose, and a grant
+/// that requires purposes sees no row under any other). A matching boundary
+/// still assumes the linked rows hold the same boundary values. Readable
+/// fields limit the answer, not this computation, so the grant need not make
+/// any field readable. One statement computes every column of the relation,
+/// so a reader of any of its fields needs every source the statement reads.
+///
+/// SQL that reads the owner's record type more than once reads owner rows
+/// besides the one it computes for, so the owner then counts as a source too.
+/// A reader through its grant on the owner runs under that grant, so it meets
+/// the boundary and purpose rules by construction, and an `id` boundary is
+/// what refuses it. A read path reader runs under its grant on the path's
+/// root and meets every rule.
+///
+/// A `record` condition that binds the reader, a membership boundary and a
+/// consent requirement each hide source rows on their own terms. The source
+/// grant also governs the profile's direct reads, where hiding those rows may
+/// be the point, so each is a finding, not a refusal.
 fn validate_derived_source_grants(
     owner: &EntitySource,
     sql: &[u8],
     readers: &[DerivedReader<'_>],
     sources: &BTreeMap<String, EntitySource>,
     errors: &mut Vec<Diagnostic>,
+    findings: &mut Vec<Diagnostic>,
 ) {
     let relations = crate::derived_sql::derived_sql_dependencies(sql).source_relations;
-    let mut reported = BTreeSet::new();
+    let self_joined = crate::derived_sql::derived_sql_source_scans(sql)
+        .get(&super::super::canonical_sql_name(&owner.id))
+        .is_some_and(|scans| *scans > 1);
+    let mut refused = BTreeSet::new();
+    let mut found = BTreeSet::new();
     for source in sources.values().filter(|source| {
-        source.id != owner.id && relations.contains(&super::super::canonical_sql_name(&source.id))
+        (source.id != owner.id || self_joined)
+            && relations.contains(&super::super::canonical_sql_name(&source.id))
     }) {
         for reader in readers {
-            let Some((code, path, message)) = derived_source_finding(owner, source, reader) else {
-                continue;
-            };
-            if reported.insert((code, path.clone())) {
-                errors.push(Diagnostic::error(code, path, &message));
+            if let Some((code, path, message)) = derived_source_refusal(owner, source, reader) {
+                if refused.insert((code, path.clone())) {
+                    errors.push(Diagnostic::error(code, path, &message));
+                }
+            }
+            for (path, message) in withheld_source_rows(owner, source, reader) {
+                if found.insert((path.clone(), &reader.request_grant.id)) {
+                    findings.push(Diagnostic::finding(
+                        "breg.disclosure.derived-reads-withheld-source-rows",
+                        path,
+                        &message,
+                    ));
+                }
             }
         }
     }
 }
 
-fn derived_source_finding(
+/// What a refusal or finding about `reader` and `source` opens with.
+fn reads_derived_from(
+    owner: &EntitySource,
+    source: &EntitySource,
+    reader: &DerivedReader<'_>,
+) -> String {
+    let fields = reader
+        .fields
+        .iter()
+        .map(|field| format!("`{field}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "access profile `{}` reads derived field {fields} of `{}`, which is computed from `{}` under the profile's row security",
+        reader.request_grant.id, owner.id, source.id
+    )
+}
+
+/// The profile's grant on `source`, when it reads rows.
+fn reading_grant<'a>(
+    source: &'a EntitySource,
+    reader: &DerivedReader<'_>,
+) -> Option<&'a AccessProfileSource> {
+    source
+        .access_profiles
+        .iter()
+        .find(|grant| grant.id == reader.request_grant.id)
+        .filter(|grant| crate::generated_ddl::grant_reads_rows(grant.operations.as_set()))
+}
+
+fn backticked<'a>(values: impl IntoIterator<Item = &'a String>) -> String {
+    values
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|value| format!("`{value}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn withheld_source_rows(
+    owner: &EntitySource,
+    source: &EntitySource,
+    reader: &DerivedReader<'_>,
+) -> Vec<(String, String)> {
+    let profile = &reader.request_grant.id;
+    let reads = reads_derived_from(owner, source, reader);
+    let mut found = Vec::new();
+    for condition in source.disclosure_conditions.iter().filter(|condition| {
+        condition.withhold == DisclosureWithholdSource::Record
+            && !condition.exempt_profiles.contains(profile)
+    }) {
+        found.push((
+            format!(
+                "recordTypes[id={}].disclosureConditions[id={}]",
+                source.id, condition.id
+            ),
+            format!(
+                "{reads}, and this `record` condition binds the profile, so its derived values leave out the `{}` rows the condition hides",
+                source.id
+            ),
+        ));
+    }
+    let Some(grant) = reading_grant(source, reader) else {
+        return found;
+    };
+    let source_path = |member: &str| {
+        format!(
+            "recordTypes[id={}].accessProfiles[id={profile}].{member}",
+            source.id
+        )
+    };
+    if !grant.membership_boundaries.is_empty() {
+        found.push((
+            source_path("membershipBoundaries"),
+            format!(
+                "{reads}, and its grant on `{source}` requires a membership through {through}, so its derived values leave out the `{source}` rows the caller holds no such membership for",
+                source = source.id,
+                through = backticked(
+                    grant
+                        .membership_boundaries
+                        .iter()
+                        .map(|boundary| &boundary.membership_entity)
+                ),
+            ),
+        ));
+    }
+    if !grant.require_consent.is_empty() {
+        found.push((
+            source_path("requireConsent"),
+            format!(
+                "{reads}, and its grant on `{source}` requires consent recorded in {records}, so its derived values leave out the `{source}` rows without that consent",
+                source = source.id,
+                records = backticked(grant.require_consent.iter().map(|requirement| &requirement.record)),
+            ),
+        ));
+    }
+    found
+}
+
+fn derived_source_refusal(
     owner: &EntitySource,
     source: &EntitySource,
     reader: &DerivedReader<'_>,
@@ -512,16 +639,7 @@ fn derived_source_finding(
     let request = reader.request_grant;
     let request_entity = reader.request_entity;
     let profile = &request.id;
-    let fields = reader
-        .fields
-        .iter()
-        .map(|field| format!("`{field}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let reads = format!(
-        "access profile `{profile}` reads derived field {fields} of `{}`, which is computed from `{}` under the profile's row security",
-        owner.id, source.id
-    );
+    let reads = reads_derived_from(owner, source, reader);
     let missed = format!("so the computation misses linked `{}` rows", source.id);
     let source_path = |member: &str| {
         format!(
@@ -529,12 +647,7 @@ fn derived_source_finding(
             source.id
         )
     };
-    let Some(grant) = source
-        .access_profiles
-        .iter()
-        .find(|grant| grant.id == *profile)
-        .filter(|grant| crate::generated_ddl::grant_reads_rows(grant.operations.as_set()))
-    else {
+    let Some(grant) = reading_grant(source, reader) else {
         return Some((
             "breg.disclosure.derived-reads-unreadable-source",
             source_path("operations"),
@@ -576,44 +689,32 @@ fn derived_source_finding(
             ),
         ));
     }
-    if let Some(added) = grant.membership_boundaries.iter().find(|boundary| {
-        !request.membership_boundaries.iter().any(|held| {
+    // A request runs under one purpose, which its own grant admits. A source
+    // grant that requires purposes sees no row under any purpose it lacks.
+    if !grant.required_purposes.is_empty()
+        && (request.required_purposes.is_empty()
+            || !request
+                .required_purposes
+                .is_subset(&grant.required_purposes))
+    {
+        let (admitted, fix) = if request.required_purposes.is_empty() {
             (
-                &held.membership_entity,
-                &held.membership_key_field,
-                &held.principal_field,
-                &held.active_field,
-            ) == (
-                &boundary.membership_entity,
-                &boundary.membership_key_field,
-                &boundary.principal_field,
-                &boundary.active_field,
+                "any purpose".to_owned(),
+                format!("or require on the grant on `{request_entity}` only purposes the grant on `{}` requires", source.id),
             )
-        })
-    }) {
+        } else {
+            (
+                format!("purpose {}", backticked(request.required_purposes.iter())),
+                format!("or every purpose the grant on `{request_entity}` requires"),
+            )
+        };
         return Some((
             CODE,
-            source_path("membershipBoundaries"),
+            source_path("requiredPurposes"),
             format!(
-                "{reads}, but its grant on `{source}` requires a membership through `{membership}` that its grant on `{request_entity}` does not, {missed}: give the grant on `{request_entity}` the same membership boundary, or remove it from the grant on `{source}`",
+                "{reads}, but its grant on `{source}` requires purpose {required} and its grant on `{request_entity}` admits {admitted}, so under any other purpose the computation misses every linked `{source}` row: require no purpose on the grant on `{source}`, {fix}",
                 source = source.id,
-                membership = added.membership_entity,
-            ),
-        ));
-    }
-    if let Some(added) = grant.require_consent.iter().find(|requirement| {
-        !request
-            .require_consent
-            .iter()
-            .any(|held| held.record == requirement.record)
-    }) {
-        return Some((
-            CODE,
-            source_path("requireConsent"),
-            format!(
-                "{reads}, but its grant on `{source}` requires consent recorded in `{record}` that its grant on `{request_entity}` does not, {missed}: require the same consent on the grant on `{request_entity}`, or remove it from the grant on `{source}`",
-                source = source.id,
-                record = added.record,
+                required = backticked(grant.required_purposes.iter()),
             ),
         ));
     }
