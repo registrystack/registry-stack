@@ -911,16 +911,14 @@ fn export_with_behavior(
     // BReg's 404, which the route stops on as unresolved before this runs.
     // A refused record never reaches derived logic. A caller receives the same
     // answer for both. Only the Evidence audit and its source lookup metric
-    // record the difference.
+    // record the difference. One array membership test keeps the expression
+    // depth the same however many values are allowed. It compares with `==`,
+    // which never equates a string, a number and a boolean with one another.
     for (id, literals) in &rules.required {
         let api_name = json!(field(entity, id)?.api_name);
-        let allowed = literals
-            .iter()
-            .map(|literal| format!("record[{api_name}] == {literal}"))
-            .collect::<Vec<_>>()
-            .join(" || ");
         extract.push_str(&format!(
-            "    if !({allowed}) {{ return #{{lookup: \"no-match\"}}; }}\n"
+            "    if ![{}].contains(record[{api_name}]) {{ return #{{lookup: \"no-match\"}}; }}\n",
+            literals.join(", ")
         ));
     }
     for id in fields.difference(&rules.optional) {

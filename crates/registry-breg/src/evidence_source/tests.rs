@@ -1345,6 +1345,148 @@ fn the_lookup_script_bound_is_the_one_evidence_loads_pack_scripts_within() {
     );
 }
 
+/// Loads the exported lookup script as Evidence loads a pack script, under
+/// the runtime's script profile, and runs `lookup` over each record.
+#[cfg(feature = "runtime")]
+fn lookup_under_the_evidence_profile(
+    export: &EvidenceSourceExport,
+    records: &[Value],
+) -> Vec<Value> {
+    use registry_adapter_engine::scripts::{ScriptSet, SCRIPT_PROFILE};
+    let pack_root = "adapter-packs/registry-status";
+    let path = "scripts/lookup.rhai";
+    let script = file(export, &format!("{pack_root}/{path}"));
+    let manifest = yaml(export, &format!("{pack_root}/pack.yaml"));
+    let pack: registry_adapter_core::AdapterPack = serde_json::from_value(json!({
+        "id": manifest["id"],
+        "version": manifest["version"],
+        "testedVersions": manifest["testedVersions"],
+        "scripts": manifest["scripts"],
+    }))
+    .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir(directory.path().join("scripts")).unwrap();
+    std::fs::write(directory.path().join(path), script).unwrap();
+    let mut scripts = ScriptSet::default();
+    if let Err(error) = scripts.add(&pack, directory.path(), path, "lookup") {
+        let detail = registry_platform_script::rhai::build_engine(&SCRIPT_PROFILE, None, |_| {})
+            .compile(std::str::from_utf8(script).unwrap())
+            .err();
+        panic!("Evidence does not load the lookup script: {error:?} {detail:?}");
+    }
+    records
+        .iter()
+        .map(|record| {
+            let exchange = json!({
+                "properties": {"bregEvidenceInputs": {"by-code--code": "A1"}},
+                "body": {"data": {"domainData": record}}
+            });
+            scripts
+                .call(&Default::default(), path, "lookup", &exchange)
+                .unwrap_or_else(|error| panic!("{record}: {error:?}"))
+        })
+        .collect()
+}
+
+#[cfg(feature = "runtime")]
+#[test]
+fn many_allowed_values_load_and_match_under_the_evidence_script_profile() {
+    let mut options = fact_rule_options();
+    options.selectors = vec!["by-code".into()];
+    options.required_values = BTreeMap::from([(
+        "status".to_owned(),
+        (0..200).map(|index| index.to_string()).collect(),
+    )]);
+    let export = export_evidence_source(&compiled(&fact_rule_project(), SQL), &options).unwrap();
+    let statuses = [
+        json!("0"),
+        json!("100"),
+        json!("199"),
+        json!("200"),
+        json!("01"),
+        json!(""),
+        json!(null),
+        json!(1),
+        json!(true),
+    ];
+    let records = statuses
+        .iter()
+        .map(|status| json!({"code":"A1","status":status,"area":null}))
+        .collect::<Vec<_>>();
+    let outcomes = lookup_under_the_evidence_profile(&export, &records);
+    for (status, outcome) in statuses.iter().zip(&outcomes).take(3) {
+        assert_eq!(
+            outcome,
+            &json!({"lookup":"matched","facts":{"status":status}}),
+            "{status}"
+        );
+    }
+    // An unlisted string, a different spelling, null, and a number or a
+    // boolean that is not a string are all outside the allowed values.
+    for (status, outcome) in statuses.iter().zip(&outcomes).skip(3) {
+        assert_eq!(outcome, &json!({"lookup":"no-match"}), "{status}");
+    }
+}
+
+#[cfg(feature = "runtime")]
+#[test]
+fn an_integer_allowed_value_matches_only_an_integer_under_the_evidence_script_profile() {
+    let mut options = fact_rule_options();
+    options.selectors = vec!["by-code".into()];
+    options.fields = vec!["status".into(), "area".into(), "visits".into()];
+    options.required_values = BTreeMap::from([("visits".to_owned(), vec!["7".into(), "8".into()])]);
+    let export = export_evidence_source(&compiled(&counted_project(), SQL), &options).unwrap();
+    let records = [json!(7), json!(8), json!(9), json!("7"), json!(null)]
+        .iter()
+        .map(|visits| json!({"code":"A1","status":"active","area":null,"visits":visits}))
+        .collect::<Vec<_>>();
+    let lookups = lookup_under_the_evidence_profile(&export, &records)
+        .into_iter()
+        .map(|outcome| outcome["lookup"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lookups,
+        ["matched", "matched", "no-match", "no-match", "no-match"]
+    );
+}
+
+#[cfg(feature = "runtime")]
+#[test]
+fn the_most_allowed_values_the_script_bound_admits_run_within_the_evidence_profile() {
+    let registry = compiled(&fact_rule_project(), SQL);
+    let export = |count: usize| {
+        let mut options = fact_rule_options();
+        options.selectors = vec!["by-code".into()];
+        options.required_values = BTreeMap::from([(
+            "status".to_owned(),
+            (0..count).map(|index| format!("{index:04x}")).collect(),
+        )]);
+        export_evidence_source(&registry, &options)
+    };
+    let script_bytes = |count: usize| {
+        file(
+            &export(count).unwrap(),
+            "adapter-packs/registry-status/scripts/lookup.rhai",
+        )
+        .len()
+    };
+    let one = script_bytes(1);
+    let step = script_bytes(2) - one;
+    let most = 1 + (EVIDENCE_MAXIMUM_SCRIPT_BYTES - one) / step;
+    assert_eq!(export(most + 1).err().unwrap().path, "required-values");
+    let export = export(most).unwrap();
+    let last = format!("{:04x}", most - 1);
+    let outcomes = lookup_under_the_evidence_profile(
+        &export,
+        &[
+            json!({"code":"A1","status":last,"area":null}),
+            json!({"code":"A1","status":"zzzz","area":null}),
+        ],
+    );
+    assert_eq!(outcomes[0]["lookup"], "matched");
+    assert_eq!(outcomes[1], json!({"lookup":"no-match"}));
+}
+
 #[test]
 fn a_boolean_field_accepts_a_boolean_value() {
     let mut options = fact_rule_options();
@@ -1357,7 +1499,10 @@ fn a_boolean_field_accepts_a_boolean_value() {
         "adapter-packs/registry-status/scripts/lookup.rhai",
     ))
     .unwrap();
-    assert!(script.contains("record[\"active\"] == true"), "{script}");
+    assert!(
+        script.contains("[true].contains(record[\"active\"])"),
+        "{script}"
+    );
 }
 
 fn pattern_project(pattern: &str) -> Value {

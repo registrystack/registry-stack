@@ -283,7 +283,7 @@ fn required_values_and_optional_facts_reach_the_generated_pack() {
         fs::read_to_string(guarded.join("adapter-packs/registry-status/scripts/lookup.rhai"))
             .unwrap();
     assert!(script.contains(
-        "if !(record[\"status\"] == \"active\" || record[\"status\"] == \"retired\") { return #{lookup: \"no-match\"}; }"
+        "if ![\"active\", \"retired\"].contains(record[\"status\"]) { return #{lookup: \"no-match\"}; }"
     ));
 
     let optional = temp.path().canonicalize().unwrap().join("optional");
