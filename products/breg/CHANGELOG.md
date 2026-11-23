@@ -91,6 +91,10 @@
 - `bregctl generate evidence-source` refuses an export whose generated schema
   file is larger than the 256 KiB Evidence reads a schema within. Evidence
   would refuse to load such a pack.
+- `bregctl generate evidence-source` refuses `--require-value` values that
+  make the generated lookup script larger than the 64 KiB Evidence reads a
+  script within, as a few long text values can. Evidence would refuse to load
+  such a pack.
 - Hook conditions of `type: fields` accept `changedAny`, two or more fields of
   which at least one must change. `changed` keeps its meaning: every listed
   field must change. A condition sets one or the other, and both are valid only
