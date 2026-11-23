@@ -29,10 +29,12 @@
   pattern stays out of the pack, because the generated lookup already requires
   the returned identity to equal the caller's input. The export refuses a fact
   field whose pattern uses a construct that PostgreSQL and Evidence read
-  differently: `.` outside brackets, `\w`, `\s`, `\b`, `\x`, a POSIX class
-  such as `[[:alpha:]]`, a PostgreSQL-only anchor, or an embedded option such
-  as `(?i)`. An export whose facts declare no pattern and include no decimal
-  produces the same files and the same `behaviorRevision`. Migration:
+  differently, such as `.` outside brackets, `\w`, `\s`, `\b`, `\x`, a POSIX
+  class like `[[:alpha:]]`, a PostgreSQL-only anchor, an embedded option like
+  `(?i)`, or an escaped backslash followed by `c` and a letter. It also refuses
+  a pattern Evidence cannot compile. An export whose facts declare no pattern
+  and include no decimal produces the same files and the same
+  `behaviorRevision`. Migration:
   regenerate the export of a registry with a patterned or decimal fact and
   review the changed pack schemas and version on import. Rewrite a refused
   pattern with the characters spelled out, such as `[A-Za-z]` or `[^\n]`, or
