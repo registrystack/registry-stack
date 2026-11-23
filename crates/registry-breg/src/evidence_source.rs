@@ -12,6 +12,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::{
+    artifacts::decimal_pattern,
     contract::{FieldTypeSource, LookupValueOrigin, Operation},
     diagnostics::Diagnostic,
     model::{CompiledEntity, CompiledLogicalField, CompiledRegistry},
@@ -189,6 +190,63 @@ fn field<'a>(entity: &'a CompiledEntity, id: &str) -> Result<&'a CompiledLogical
         })
 }
 
+/// The declared `pattern` of a stored field. Derived fields declare none.
+fn declared_pattern<'a>(entity: &'a CompiledEntity, id: &str) -> Option<&'a str> {
+    entity
+        .fields
+        .get(id)
+        .and_then(|field| field.pattern.as_deref())
+}
+
+/// Whether a PostgreSQL ARE reads the same under JSON Schema's ECMA 262
+/// dialect. A pattern using an ARE-only construct is refused rather than
+/// carried with a different meaning.
+fn pattern_is_portable(pattern: &str) -> bool {
+    let mut chars = pattern.chars().peekable();
+    if pattern.starts_with("***") {
+        return false;
+    }
+    while let Some(c) = chars.next() {
+        match (c, chars.peek().copied()) {
+            ('\\', Some(next)) => {
+                if "mMyYAZe".contains(next) {
+                    return false;
+                }
+                chars.next();
+            }
+            ('[', Some(':' | '.' | '=')) => return false,
+            ('(', Some('?')) => {
+                chars.next();
+                if !matches!(chars.peek(), Some(':' | '=' | '!' | '<')) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+/// The schema of one exported fact: the field type plus the constraints the
+/// field declares and JSON Schema can state. A decimal's `minimum` and
+/// `maximum` are not stated, since the fact is a string.
+fn field_schema(
+    entity: &CompiledEntity,
+    logical: &CompiledLogicalField,
+) -> Result<Value, Diagnostic> {
+    let mut schema = scalar_schema(&logical.field_type)?;
+    if let Some(pattern) = declared_pattern(entity, &logical.id) {
+        if !pattern_is_portable(pattern) {
+            return Err(refusal(
+                "fields",
+                "a fact field's pattern uses PostgreSQL-only regular expression syntax that JSON Schema reads differently; use a plain pattern or a custom adapter",
+            ));
+        }
+        schema["pattern"] = json!(pattern);
+    }
+    Ok(schema)
+}
+
 fn scalar_schema(kind: &FieldTypeSource) -> Result<Value, Diagnostic> {
     match kind {
         FieldTypeSource::String { max_length, .. } | FieldTypeSource::Text { max_length }
@@ -220,7 +278,7 @@ fn scalar_schema(kind: &FieldTypeSource) -> Result<Value, Diagnostic> {
         FieldTypeSource::Decimal {
             precision, scale, ..
         } => {
-            json!({"type":"string","minLength":1,"maxLength":u32::from(*precision) + u32::from(*scale > 0) + 2})
+            json!({"type":"string","minLength":1,"maxLength":u32::from(*precision) + u32::from(*scale > 0) + 2,"pattern":decimal_pattern(*precision, *scale)})
         }
         FieldTypeSource::Date => {
             json!({"type":"string","format":"date","minLength":10,"maxLength":10})
@@ -551,7 +609,7 @@ pub fn export_evidence_source(
                 "every exported fact must already be readable under the selected profile and have an Evidence-compatible field name",
             ));
         }
-        fact_properties.insert(id.clone(), scalar_schema(&field(entity, id)?.field_type)?);
+        fact_properties.insert(id.clone(), field_schema(entity, field(entity, id)?)?);
     }
     let rules = fact_rules(entity, &fields, options)?;
     let mut all_fields = fields.clone();
@@ -789,7 +847,7 @@ pub fn export_evidence_source(
     let mut dependencies = Map::new();
     for id in &all_fields {
         let logical = field(entity, id)?;
-        let mut schema = scalar_schema(&logical.field_type)?;
+        let mut schema = field_schema(entity, logical)?;
         schema["type"] = json!([schema["type"], "null"]);
         // A null vocabulary value is absent data, not a protocol mismatch.
         // The fixed fact schema still enforces the vocabulary after extraction.
@@ -798,11 +856,12 @@ pub fn export_evidence_source(
             .expect("scalar schema object")
             .remove("enum");
         response_fields.insert(logical.api_name.clone(), schema);
-        dependencies.insert(
-            id.clone(),
-            serde_json::to_value(logical)
-                .map_err(|_| refusal("fields", "could not encode field contract"))?,
-        );
+        let mut dependency = serde_json::to_value(logical)
+            .map_err(|_| refusal("fields", "could not encode field contract"))?;
+        if let Some(pattern) = declared_pattern(entity, id) {
+            dependency["pattern"] = json!(pattern);
+        }
+        dependencies.insert(id.clone(), dependency);
     }
     let behavior = selected_behavior(
         registry,

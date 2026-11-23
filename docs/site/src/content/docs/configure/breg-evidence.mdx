@@ -66,6 +66,7 @@ Both name fields that are already in `--fields`, and without them the generated 
 
 The command refuses a required value on a field that is not an exported fact, a value that does not fit the field's type, an empty value list, and a field that is both required to hold a value and optional.
 Both inputs are part of the pack version, so changing either one produces a new pack version.
+A selector field that is also listed in `--fields` becomes a required fact, so a fixture or record that leaves it out fails: keep selector fields out of `--fields` unless you want them returned.
 
 For each selected alternative, the generated request uses the fixed lookup route, method, and access profile.
 It asks for the selected facts plus only that alternative's identity fields, and those identity fields must already be readable.
@@ -183,6 +184,8 @@ A missing, wrongly typed, or mismatched identity fails as a source protocol erro
 No AssertionDefinition can skip that check by replacing its derive Function.
 
 Only the explicit fact fields enter the fact set.
+A fact keeps the field's declared `pattern` in both generated schemas, and a decimal fact states its declared precision and scale as a pattern.
+The export refuses a pattern that uses PostgreSQL-only regular expression syntax, because JSON Schema would read it differently.
 An absent or null required fact produces no match and cannot become an authoritative negative answer.
 BReg recognises a genuine unresolved lookup only by its exact declared Problem Details status, type, and code.
 Other HTTP failures remain failures.
@@ -208,7 +211,10 @@ Bounded scalar facts are supported; structured and spatial facts require a custo
     vocabulary_selector_requires_a_codelist_instead_of_length_only_validation,
     scalar_documents_preserve_int64_and_nullable_vocabulary_bounds,
     refuses_a_string_selector_field_that_accepts_the_empty_value,
-    refuses_a_composite_selector_beyond_the_aggregate_selector_bound;
+    refuses_a_composite_selector_beyond_the_aggregate_selector_bound,
+    a_declared_field_pattern_reaches_the_fact_and_response_schemas,
+    a_decimal_fact_states_the_declared_precision_and_scale,
+    refuses_a_pattern_that_only_postgresql_reads_the_same_way;
     crates/registry-bregctl/tests/evidence_source.rs lookup.unresolved. */}
 
 ## Import and update ordinary files
