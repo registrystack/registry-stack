@@ -1244,6 +1244,7 @@ fn a_read_path_cannot_read_a_derived_field_that_reads_a_withheld_field() {
 
 const UNREADABLE_SOURCE: &str = "breg.disclosure.derived-reads-unreadable-source";
 const SOURCE_BOUNDARY: &str = "breg.disclosure.derived-reads-source-boundary";
+const OTHER_OWNER_ROWS: &str = "breg.disclosure.derived-reads-other-owner-rows";
 const VISIT_SQL: &str = "SELECT p.id AS id, (count(v.id) FILTER (WHERE v.outcome = 'closed') > 0) AS has_closed_visit FROM registry_source.person p LEFT JOIN registry_source.visit v ON v.person = p.id GROUP BY p.id";
 
 /// A person-level derived field computed over `visit`, a record type that
@@ -1795,6 +1796,19 @@ fn self_join_source() -> Value {
     value
 }
 
+/// A refusal of the owner as a source names the rewrite that keeps each owner
+/// row apart. Its grant on the owner is the one the reader reads under, so
+/// aligning a grant with it is no fix.
+fn assert_names_the_owner_rewrite(message: &str, owner: &str) {
+    for named in [
+        format!("read `{owner}` once, in the top-level `FROM`, key on its own `id`"),
+        "group or pick `DISTINCT ON` by nothing or by that `id`".to_owned(),
+    ] {
+        assert!(message.contains(&named), "{named} in {message}");
+    }
+    assert!(!message.contains("linked"), "{message}");
+}
+
 /// SQL that reads its owner's record type more than once reads rows besides
 /// the one it computes for, and a reader bounded by `id` sees only that one.
 /// A second read through a common table expression or a subquery counts.
@@ -1812,11 +1826,12 @@ fn a_derived_field_that_reads_its_own_record_type_twice_cannot_serve_a_reader_bo
         let found = derived_diagnostics(&value, sql);
         let (_, _, message) = found
             .iter()
-            .find(|(code, found, _)| code == SOURCE_BOUNDARY && found == path)
+            .find(|(code, found, _)| code == OTHER_OWNER_ROWS && found == path)
             .unwrap_or_else(|| panic!("{sql}: got {found:?}"));
         for named in ["`registrar`", "`household-size`", "`person`", "`id`"] {
             assert!(message.contains(named), "{named} in {message}");
         }
+        assert_names_the_owner_rewrite(message, "person");
     }
     let once = "SELECT p.id AS id, p.age AS household_size FROM registry_source.person p";
     assert_compiles_with_sql(&value, once);
@@ -1851,11 +1866,12 @@ fn a_derived_field_that_combines_its_own_rows_in_one_read_cannot_serve_a_reader_
         let found = derived_diagnostics(&value, sql);
         let (_, _, message) = found
             .iter()
-            .find(|(code, found, _)| code == SOURCE_BOUNDARY && found == path)
+            .find(|(code, found, _)| code == OTHER_OWNER_ROWS && found == path)
             .unwrap_or_else(|| panic!("{sql}: got {found:?}"));
         for named in ["`registrar`", "`household-size`", "`person`", "`id`"] {
             assert!(message.contains(named), "{named} in {message}");
         }
+        assert_names_the_owner_rewrite(message, "person");
     }
     let window = "SELECT p.id AS id, count(p.id) OVER (PARTITION BY p.district) AS household_size FROM registry_source.person p";
     assert!(
@@ -1891,11 +1907,12 @@ fn a_derived_field_that_picks_among_its_own_rows_cannot_serve_a_reader_bounded_b
     let found = derived_diagnostics(&value, pick);
     let (_, _, message) = found
         .iter()
-        .find(|(code, found, _)| code == SOURCE_BOUNDARY && found == path)
+        .find(|(code, found, _)| code == OTHER_OWNER_ROWS && found == path)
         .unwrap_or_else(|| panic!("got {found:?}"));
     for named in ["`registrar`", "`household-size`", "`person`", "`id`"] {
         assert!(message.contains(named), "{named} in {message}");
     }
+    assert_names_the_owner_rewrite(message, "person");
     // Naming the row's own `id` keeps every row.
     assert_compiles_with_sql(
         &value,
@@ -1938,11 +1955,12 @@ fn a_derived_field_keyed_by_another_column_cannot_serve_a_reader_bounded_by_id()
         let found = derived_diagnostics(&value, sql);
         let (_, _, message) = found
             .iter()
-            .find(|(code, found, _)| code == SOURCE_BOUNDARY && found == path)
+            .find(|(code, found, _)| code == OTHER_OWNER_ROWS && found == path)
             .unwrap_or_else(|| panic!("{sql}: got {found:?}"));
         for named in ["`registrar`", "`is-head`", "`person`", "`id`"] {
             assert!(message.contains(named), "{named} in {message}");
         }
+        assert_names_the_owner_rewrite(message, "person");
     }
     for sql in [
         "SELECT p.id AS id, p.head IS NULL AS is_head FROM registry_source.person p",
@@ -2035,11 +2053,21 @@ fn a_read_path_reader_of_a_self_joined_derived_field_must_read_the_owner_under_i
     let once = "SELECT c.id AS id, count(c.id) AS related_count FROM registry_source.dossier c GROUP BY c.id";
     assert_compiles_with_sql(&value, once);
     let found = derived_diagnostics(&value, twice);
-    assert!(
-        found.iter().any(|(code, path, _)| code == UNREADABLE_SOURCE
-            && path == "recordTypes[id=dossier].accessProfiles[id=registrar].operations"),
-        "{found:?}"
-    );
+    let (_, _, message) = found
+        .iter()
+        .find(|(code, path, _)| {
+            code == OTHER_OWNER_ROWS
+                && path == "recordTypes[id=dossier].accessProfiles[id=registrar].operations"
+        })
+        .unwrap_or_else(|| panic!("{found:?}"));
+    assert_names_the_owner_rewrite(message, "dossier");
+    // A read path reader may instead read the owner under the root's boundaries.
+    for named in [
+        "grant it `get` on `dossier`",
+        "`district` equals claim `district`",
+    ] {
+        assert!(message.contains(named), "{named} in {message}");
+    }
 
     let grant_dossiers = |value: &mut Value, row_boundaries: Value| {
         value["accessProfiles"][REGISTRAR]["permissions"]["records"]
@@ -2052,16 +2080,77 @@ fn a_read_path_reader_of_a_self_joined_derived_field_must_read_the_owner_under_i
     };
     let mut unrestricted = value.clone();
     grant_dossiers(&mut unrestricted, json!("unrestricted"));
-    assert!(
-        derived_diagnostics(&unrestricted, twice)
-            .iter()
-            .any(|(code, path, _)| code == SOURCE_BOUNDARY
-                && path == "recordTypes[id=dossier].accessProfiles[id=registrar].rowBoundaries"),
-        "{:?}",
-        derived_diagnostics(&unrestricted, twice)
-    );
+    let found = derived_diagnostics(&unrestricted, twice);
+    let (_, _, message) = found
+        .iter()
+        .find(|(code, path, _)| {
+            code == OTHER_OWNER_ROWS
+                && path == "recordTypes[id=dossier].accessProfiles[id=registrar].rowBoundaries"
+        })
+        .unwrap_or_else(|| panic!("{found:?}"));
+    assert_names_the_owner_rewrite(message, "dossier");
     grant_dossiers(&mut value, by_district());
     assert_compiles_with_sql(&value, twice);
+}
+
+/// A subquery that refers to no column of the row computes one value over
+/// every row of the record type it reads that the reader sees, not over the
+/// rows linked to the row. Under a grant on that type with row boundaries that
+/// is part of the rows, so it is a finding. Under an unbounded grant the value
+/// is exact, and it raises none.
+#[test]
+fn a_subquery_unlinked_to_the_row_is_a_finding_under_a_bounded_source_grant() {
+    let unlinked = "SELECT p.id AS id, (SELECT count(v.id) > 0 FROM registry_source.visit v) AS has_closed_visit FROM registry_source.person p";
+    let linked = "SELECT p.id AS id, (SELECT count(v.id) > 0 FROM registry_source.visit v WHERE v.person = p.id) AS has_closed_visit FROM registry_source.person p";
+    let mut bounded = visit_source();
+    person_permission(&mut bounded, REGISTRAR)["rowBoundaries"] = by_district();
+    grant_visits(&mut bounded, by_district());
+    let found = withheld_source_rows(compile_with_sql(&bounded, unlinked));
+    assert_eq!(
+        finding_paths(&found),
+        ["recordTypes[id=visit].accessProfiles[id=registrar].rowBoundaries"]
+    );
+    for named in [
+        "`registrar`",
+        "`has-closed-visit`",
+        "`visit`",
+        "`district` equals claim `district`",
+        "refers to no column of the row",
+    ] {
+        assert!(found[0].1.contains(named), "{named} in {found:?}");
+    }
+    for sql in [linked, VISIT_SQL] {
+        assert!(
+            withheld_source_rows(compile_with_sql(&bounded, sql)).is_empty(),
+            "{sql}"
+        );
+    }
+
+    let mut unrestricted = visit_source();
+    grant_visits(&mut unrestricted, json!("unrestricted"));
+    assert!(withheld_source_rows(compile_with_sql(&unrestricted, unlinked)).is_empty());
+}
+
+/// The owner's own record type, read in a subquery that refers to no column of
+/// the row, gives the same finding under a bounded grant on the owner.
+#[test]
+fn a_subquery_unlinked_to_the_row_over_the_owner_is_a_finding_under_a_bounded_grant() {
+    let path = "recordTypes[id=person].accessProfiles[id=registrar].rowBoundaries";
+    let unlinked = "SELECT p.id AS id, (SELECT count(q.id) FROM registry_source.person q) AS household_size FROM registry_source.person p";
+    let mut value = self_join_source();
+    person_permission(&mut value, REGISTRAR)["rowBoundaries"] = by_district();
+    let found = withheld_source_rows(compile_with_sql(&value, unlinked));
+    assert!(finding_paths(&found).contains(&path), "{found:?}");
+    assert!(!finding_paths(&withheld_source_rows(compile_with_sql(
+        &value,
+        SELF_JOIN_SQL
+    )))
+    .contains(&path));
+
+    person_permission(&mut value, REGISTRAR)["rowBoundaries"] = json!("unrestricted");
+    assert!(
+        !finding_paths(&withheld_source_rows(compile_with_sql(&value, unlinked))).contains(&path)
+    );
 }
 
 /// A `record` condition on a source hides the rows it matches from every

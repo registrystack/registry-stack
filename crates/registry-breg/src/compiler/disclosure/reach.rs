@@ -433,7 +433,15 @@ pub(in crate::compiler) fn validate_derived_reads(
         .iter()
         .map(|reader| reader.request_grant.id.as_str())
         .collect();
-    validate_derived_source_grants(owner, sql, &derived_readers, sources, errors, findings);
+    validate_derived_source_grants(
+        owner,
+        sql,
+        source_columns,
+        &derived_readers,
+        sources,
+        errors,
+        findings,
+    );
     for source in sources.values() {
         let Some(columns) = read.get(&super::super::canonical_sql_name(&source.id)) else {
             continue;
@@ -493,21 +501,27 @@ pub(in crate::compiler) fn validate_derived_reads(
 /// A reader through its grant on the owner runs under that grant, so it meets
 /// the boundary and purpose rules by construction, and an `id` boundary is
 /// what refuses it. A read path reader runs under its grant on the path's
-/// root and meets every rule.
+/// root and meets every rule. A refusal of the owner as a source has its own
+/// code, because the fix is to read the owner once, keyed by its own `id`.
 ///
 /// A `record` condition that binds the reader, a membership boundary and a
 /// consent requirement each hide source rows on their own terms. The source
 /// grant also governs the profile's direct reads, where hiding those rows may
-/// be the point, so each is a finding, not a refusal.
+/// be the point, so each is a finding, not a refusal. So is a row boundary on
+/// a grant whose rows the SQL reads in a subquery that refers to no column of
+/// the row: the value covers every row the reader sees, not the linked rows,
+/// and is exact only for a reader whose grant on that type is unbounded.
 fn validate_derived_source_grants(
     owner: &EntitySource,
     sql: &[u8],
+    source_columns: &BTreeMap<String, BTreeSet<String>>,
     readers: &[DerivedReader<'_>],
     sources: &BTreeMap<String, EntitySource>,
     errors: &mut Vec<Diagnostic>,
     findings: &mut Vec<Diagnostic>,
 ) {
     let relations = crate::derived_sql::derived_sql_dependencies(sql).source_relations;
+    let unlinked = crate::derived_sql::derived_sql_unlinked_reads(sql, source_columns);
     let owner_relation = super::super::canonical_sql_name(&owner.id);
     let reads_other_owner_rows = crate::derived_sql::derived_sql_source_scans(sql)
         .get(&owner_relation)
@@ -519,13 +533,24 @@ fn validate_derived_source_grants(
         (source.id != owner.id || reads_other_owner_rows)
             && relations.contains(&super::super::canonical_sql_name(&source.id))
     }) {
+        let read_unlinked = unlinked.contains(&super::super::canonical_sql_name(&source.id));
         for reader in readers {
-            if let Some((code, path, message)) = derived_source_refusal(owner, source, reader) {
+            let unlinked_rows = if let Some((code, path, message)) =
+                derived_source_refusal(owner, source, reader)
+            {
                 if refused.insert((code, path.clone())) {
                     errors.push(Diagnostic::error(code, path, &message));
                 }
-            }
-            for (path, message) in withheld_source_rows(owner, source, reader) {
+                None
+            } else if read_unlinked {
+                unlinked_source_rows(owner, source, reader)
+            } else {
+                None
+            };
+            for (path, message) in withheld_source_rows(owner, source, reader)
+                .into_iter()
+                .chain(unlinked_rows)
+            {
                 if found.insert((path.clone(), &reader.request_grant.id)) {
                     findings.push(Diagnostic::finding(
                         "breg.disclosure.derived-reads-withheld-source-rows",
@@ -550,6 +575,12 @@ fn reads_derived_from(
         .map(|field| format!("`{field}`"))
         .collect::<Vec<_>>()
         .join(", ");
+    if source.id == owner.id {
+        return format!(
+            "access profile `{}` reads derived field {fields} of `{}`, whose SQL may compute a row's value from other `{}` rows under the profile's row security",
+            reader.request_grant.id, owner.id, source.id
+        );
+    }
     format!(
         "access profile `{}` reads derived field {fields} of `{}`, which is computed from `{}` under the profile's row security",
         reader.request_grant.id, owner.id, source.id
@@ -638,6 +669,34 @@ fn withheld_source_rows(
     found
 }
 
+/// A finding when the SQL reads `source` in a subquery that refers to no
+/// column of the row and the profile's grant on `source` has row boundaries.
+fn unlinked_source_rows(
+    owner: &EntitySource,
+    source: &EntitySource,
+    reader: &DerivedReader<'_>,
+) -> Option<(String, String)> {
+    let grant = reading_grant(source, reader)?;
+    if grant.row_boundaries.is_empty() {
+        return None;
+    }
+    Some((
+        format!(
+            "recordTypes[id={}].accessProfiles[id={}].rowBoundaries",
+            source.id, reader.request_grant.id
+        ),
+        format!(
+            "{reads}, and a subquery that refers to no column of the row reads every `{source}` row the profile sees, which its grant on `{source}` bounds by {boundaries}, so its derived values cover only those rows, not every `{source}` row",
+            reads = reads_derived_from(owner, source, reader),
+            source = source.id,
+            boundaries = describe_row_boundaries(&grant.row_boundaries),
+        ),
+    ))
+}
+
+/// A refusal of the owner as a source has its own code and names the rewrite
+/// first: the reader's grant on the owner is the one the computation runs
+/// under, so for a direct reader no grant can be aligned with it.
 fn derived_source_refusal(
     owner: &EntitySource,
     source: &EntitySource,
@@ -647,7 +706,26 @@ fn derived_source_refusal(
     let request_entity = reader.request_entity;
     let profile = &request.id;
     let reads = reads_derived_from(owner, source, reader);
-    let missed = format!("so the computation misses linked `{}` rows", source.id);
+    let own = source.id == owner.id;
+    let (code, which, readable, rewrite) = if own {
+        (
+            "breg.disclosure.derived-reads-other-owner-rows",
+            "other",
+            "the fields the SQL reads",
+            format!(
+                "read `{}` once, in the top-level `FROM`, key on its own `id`, and group or pick `DISTINCT ON` by nothing or by that `id`, or ",
+                owner.id
+            ),
+        )
+    } else {
+        (
+            "breg.disclosure.derived-reads-source-boundary",
+            "linked",
+            "the link fields",
+            String::new(),
+        )
+    };
+    let missed = format!("so the computation misses {which} `{}` rows", source.id);
     let source_path = |member: &str| {
         format!(
             "recordTypes[id={}].accessProfiles[id={profile}].{member}",
@@ -656,28 +734,39 @@ fn derived_source_refusal(
     };
     let Some(grant) = reading_grant(source, reader) else {
         return Some((
-            "breg.disclosure.derived-reads-unreadable-source",
+            if own {
+                code
+            } else {
+                "breg.disclosure.derived-reads-unreadable-source"
+            },
             source_path("operations"),
             format!(
-                "{reads}, but the profile cannot read `{source}` rows, {missed}: grant it `get` on `{source}`, with only the link fields readable and the row boundaries {boundaries} of its grant on `{request_entity}`",
+                "{reads}, but the profile cannot read `{source}` rows, {missed}: {rewrite}grant it `get` on `{source}`, with only {readable} readable and the row boundaries {boundaries} of its grant on `{request_entity}`",
                 source = source.id,
                 boundaries = describe_row_boundaries(&request.row_boundaries),
             ),
         ));
     };
-    const CODE: &str = "breg.disclosure.derived-reads-source-boundary";
     if request
         .row_boundaries
         .iter()
         .any(|boundary| boundary.field == "id")
     {
-        return Some((
-            CODE,
-            format!("recordTypes[id={request_entity}].accessProfiles[id={profile}].rowBoundaries"),
+        let message = if own {
+            format!(
+                "{reads}, but its grant on `{request_entity}` is bounded by `id`, so the computation sees no other `{source}` row: {rewrite}do not grant the derived field",
+                source = source.id,
+            )
+        } else {
             format!(
                 "{reads}, but its grant on `{request_entity}` is bounded by `id`, which no linked `{source}` row shares, {missed}: bound that grant by a field `{source}` also carries, or do not grant the derived field",
                 source = source.id,
-            ),
+            )
+        };
+        return Some((
+            code,
+            format!("recordTypes[id={request_entity}].accessProfiles[id={profile}].rowBoundaries"),
+            message,
         ));
     }
     // This rule is sound only while the SELECT policy built by
@@ -686,10 +775,10 @@ fn derived_source_refusal(
     // that matching must revisit this comparison.
     if grant.row_boundaries != request.row_boundaries {
         return Some((
-            CODE,
+            code,
             source_path("rowBoundaries"),
             format!(
-                "{reads}, but its grant on `{source}` is bounded by {source_rows} and its grant on `{request_entity}` by {request_rows}, {missed}: bound the grant on `{source}` by {request_rows} too, on fields that hold the same values",
+                "{reads}, but its grant on `{source}` is bounded by {source_rows} and its grant on `{request_entity}` by {request_rows}, {missed}: {rewrite}bound the grant on `{source}` by {request_rows} too, on fields that hold the same values",
                 source = source.id,
                 source_rows = describe_row_boundaries(&grant.row_boundaries),
                 request_rows = describe_row_boundaries(&request.row_boundaries),
@@ -716,10 +805,10 @@ fn derived_source_refusal(
             )
         };
         return Some((
-            CODE,
+            code,
             source_path("requiredPurposes"),
             format!(
-                "{reads}, but its grant on `{source}` requires purpose {required} and its grant on `{request_entity}` admits {admitted}, so under any other purpose the computation misses every linked `{source}` row: require no purpose on the grant on `{source}`, {fix}",
+                "{reads}, but its grant on `{source}` requires purpose {required} and its grant on `{request_entity}` admits {admitted}, so under any other purpose the computation misses every {which} `{source}` row: {rewrite}require no purpose on the grant on `{source}`, {fix}",
                 source = source.id,
                 required = backticked(grant.required_purposes.iter()),
             ),
