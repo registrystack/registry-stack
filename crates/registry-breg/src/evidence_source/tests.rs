@@ -1167,6 +1167,32 @@ fn the_field_pattern_is_bound_into_the_behavior_revision() {
 }
 
 #[test]
+fn every_fact_pattern_is_bound_into_the_behavior_revision() {
+    // A pack version identifies one set of schema bytes, so the behavior
+    // material carries each fact's pattern, whether declared or derived.
+    let registry = compiled(&pattern_project(AREA_PATTERN), SQL);
+    for fields in [["area"], ["amount"], ["status"]] {
+        let mut options = pattern_options();
+        options.fields = fields.iter().map(|id| id.to_string()).collect();
+        let (export, behavior) = export_with_behavior(&registry, &options).unwrap();
+        assert_eq!(
+            export.behavior_revision,
+            format!("sha256:{}", digest(&canonical(&behavior).unwrap()))
+        );
+        let facts = yaml(&export, "adapter-packs/registry-status/schemas/facts.json");
+        let facts = facts["properties"].as_object().unwrap();
+        assert_eq!(facts.len(), 1, "{fields:?}");
+        for (id, fact) in facts {
+            assert_eq!(
+                behavior["fields"][id].get("pattern"),
+                fact.get("pattern"),
+                "fact `{id}`"
+            );
+        }
+    }
+}
+
+#[test]
 fn refuses_a_pattern_that_only_postgresql_reads_the_same_way() {
     for pattern in ["^[[:alpha:]]{2,20}$", "\\mAB", "(?i)^ab$", "***=^ab$"] {
         let diagnostic = refused(

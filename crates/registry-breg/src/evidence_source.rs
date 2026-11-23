@@ -525,6 +525,14 @@ pub fn export_evidence_source(
     registry: &CompiledRegistry,
     options: &EvidenceSourceOptions,
 ) -> Result<EvidenceSourceExport, Diagnostic> {
+    export_with_behavior(registry, options).map(|(export, _)| export)
+}
+
+/// The export and the behavior material its `behavior_revision` digests.
+fn export_with_behavior(
+    registry: &CompiledRegistry,
+    options: &EvidenceSourceOptions,
+) -> Result<(EvidenceSourceExport, Value), Diagnostic> {
     for (path, name) in [
         ("source-id", &options.source_id),
         ("connection", &options.connection),
@@ -848,6 +856,14 @@ pub fn export_evidence_source(
     for id in &all_fields {
         let logical = field(entity, id)?;
         let mut schema = field_schema(entity, logical)?;
+        let mut dependency = serde_json::to_value(logical)
+            .map_err(|_| refusal("fields", "could not encode field contract"))?;
+        // Bind every pattern the schemas carry, declared or derived, so a
+        // pack version identifies one set of schema bytes.
+        if let Some(pattern) = schema.get("pattern") {
+            dependency["pattern"] = pattern.clone();
+        }
+        dependencies.insert(id.clone(), dependency);
         schema["type"] = json!([schema["type"], "null"]);
         // A null vocabulary value is absent data, not a protocol mismatch.
         // The fixed fact schema still enforces the vocabulary after extraction.
@@ -856,12 +872,6 @@ pub fn export_evidence_source(
             .expect("scalar schema object")
             .remove("enum");
         response_fields.insert(logical.api_name.clone(), schema);
-        let mut dependency = serde_json::to_value(logical)
-            .map_err(|_| refusal("fields", "could not encode field contract"))?;
-        if let Some(pattern) = declared_pattern(entity, id) {
-            dependency["pattern"] = json!(pattern);
-        }
-        dependencies.insert(id.clone(), dependency);
     }
     let behavior = selected_behavior(
         registry,
@@ -1017,12 +1027,15 @@ pub fn export_evidence_source(
         "application/json",
         manifest,
     ));
-    Ok(EvidenceSourceExport {
-        artifacts,
-        behavior_revision,
-        selector_profiles,
-        identity_fields,
-    })
+    Ok((
+        EvidenceSourceExport {
+            artifacts,
+            behavior_revision,
+            selector_profiles,
+            identity_fields,
+        },
+        behavior,
+    ))
 }
 
 fn selected_behavior(
