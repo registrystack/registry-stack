@@ -898,6 +898,11 @@ fn fact_rule_options() -> EvidenceSourceOptions {
 
 /// Runs the generated `lookup` entrypoint over a returned record.
 fn run_lookup(export: &EvidenceSourceExport, record: Value) -> Value {
+    try_lookup(export, record).unwrap()
+}
+
+/// As `run_lookup`, with a script error returned as its text.
+fn try_lookup(export: &EvidenceSourceExport, record: Value) -> Result<Value, String> {
     let script = std::str::from_utf8(file(
         export,
         "adapter-packs/registry-status/scripts/lookup.rhai",
@@ -912,8 +917,8 @@ fn run_lookup(export: &EvidenceSourceExport, record: Value) -> Value {
     let exchange = rhai::serde::to_dynamic(&exchange).unwrap();
     let outcome: rhai::Dynamic = engine
         .call_fn(&mut rhai::Scope::new(), &ast, "lookup", (exchange,))
-        .unwrap();
-    rhai::serde::from_dynamic(&outcome).unwrap()
+        .map_err(|error| error.to_string())?;
+    Ok(rhai::serde::from_dynamic(&outcome).unwrap())
 }
 
 fn fact_rule_export() -> EvidenceSourceExport {
@@ -961,26 +966,38 @@ fn several_allowed_values_each_match() {
         BTreeMap::from([("status".to_owned(), vec!["active".into(), "pending".into()])]);
     let export = export_evidence_source(&compiled(&fact_rule_project(), SQL), &options).unwrap();
     for status in ["active", "pending"] {
-        let outcome = run_lookup(&export, json!({"code":"A1","status":status}));
+        let outcome = run_lookup(&export, json!({"code":"A1","status":status,"area":null}));
         assert_eq!(outcome["lookup"], "matched", "{status}");
     }
-    let outcome = run_lookup(&export, json!({"code":"A1","status":"closed"}));
+    let outcome = run_lookup(&export, json!({"code":"A1","status":"closed","area":null}));
     assert_eq!(outcome, json!({"lookup":"no-match"}));
 }
 
 #[test]
-fn an_optional_fact_that_is_missing_or_null_still_matches_and_is_omitted() {
-    let export = fact_rule_export();
-    for record in [
-        json!({"code":"A1","status":"active"}),
+fn an_optional_fact_that_is_null_still_matches_and_is_omitted() {
+    let outcome = run_lookup(
+        &fact_rule_export(),
         json!({"code":"A1","status":"active","area":null}),
-    ] {
-        let outcome = run_lookup(&export, record);
-        assert_eq!(
-            outcome,
-            json!({"lookup":"matched","facts":{"status":"active"}})
-        );
-    }
+    );
+    assert_eq!(
+        outcome,
+        json!({"lookup":"matched","facts":{"status":"active"}})
+    );
+}
+
+#[test]
+fn an_optional_fact_whose_key_is_absent_is_a_protocol_error() {
+    let export = fact_rule_export();
+    let error = try_lookup(&export, json!({"code":"A1","status":"active"})).unwrap_err();
+    assert!(error.contains("source_protocol_error"), "{error}");
+    let script = std::str::from_utf8(file(
+        &export,
+        "adapter-packs/registry-status/scripts/lookup.rhai",
+    ))
+    .unwrap();
+    let contains = script.find("!record.contains(\"area\")").unwrap();
+    assert!(script.find("source_protocol_error").unwrap() < contains);
+    assert!(contains < script.find("let facts").unwrap());
 }
 
 #[test]
