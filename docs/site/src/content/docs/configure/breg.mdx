@@ -338,7 +338,8 @@ Additions to this grammar require a concrete use case and review; a parser upgra
 Joins use explicit `ON` conditions; source and join aliases cannot rename columns through alias lists.
 `LIMIT` and `OFFSET` are refused on the rows the SQL returns, including through a table expression or `FROM` subquery.
 Which rows get a value would then depend on which rows the reader can see.
-A subquery in an expression, or a `LATERAL` subquery after the item it reads, may still use them to pick among one row's linked rows.
+A correlated subquery in an expression may still use them to pick among one row's linked rows.
+A `FROM` subquery cannot use them, even when it is `LATERAL`.
 
 Every emitted derived row must have a non-null canonical `id`, and one derived relation may emit at most one row for that `id`.
 BReg refuses the query atomically when reviewed SQL violates either rule.

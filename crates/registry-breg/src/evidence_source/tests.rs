@@ -971,10 +971,10 @@ fn a_record_outside_the_allowed_values_answers_no_match_not_unresolved() {
     let missing_fact = run_lookup(&export, json!({"code":"A1","status":null,"area":"N1"}));
     assert_eq!(inactive, json!({"lookup":"no-match"}));
     assert_eq!(inactive, missing_fact);
-    // An unknown record is BReg's 404, which the route stops on as an
-    // unresolved lookup before `lookup` runs. A refused record is a 200 that
-    // reaches `lookup` and answers no match, so Evidence reports the two
-    // differently and a caller can tell that the refused record exists.
+    // An unknown record is BReg's 404, which the route stops on as unresolved
+    // before `lookup` runs. A refused record reaches `lookup` and answers no
+    // match. Evidence returns the same public no-match answer for both, while
+    // the source lookup metric retains the internal distinction.
     let script = std::str::from_utf8(file(
         &export,
         "adapter-packs/registry-status/scripts/lookup.rhai",
