@@ -1271,3 +1271,47 @@ fn refuses_a_pattern_that_only_postgresql_reads_the_same_way() {
         assert_eq!(diagnostic.path, "fields", "{pattern}");
     }
 }
+
+#[path = "../../tests/support/evidence_source_patterns.rs"]
+mod pattern_cases;
+
+#[test]
+fn the_export_accepts_exactly_the_patterns_both_engines_read_the_same_way() {
+    use pattern_cases::{Verdict, CASES};
+    for case in CASES {
+        // Evidence compiles a pack schema with this draft and format mode
+        // (registry-adapter-engine's `evidence.rs`).
+        let schema = json!({"type": "string", "pattern": case.pattern});
+        let consumer = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .should_validate_formats(true)
+            .compile(&schema);
+        let agrees = consumer.is_ok_and(|consumer| {
+            case.postgres
+                .iter()
+                .all(|(value, matched)| consumer.is_valid(&json!(value)) == *matched)
+        });
+        assert_eq!(
+            agrees,
+            case.verdict != Verdict::Differs,
+            "{}: {}",
+            case.pattern,
+            case.note
+        );
+        let export = export_evidence_source(
+            &compiled(&pattern_project(case.pattern), SQL),
+            &pattern_options(),
+        );
+        match (case.verdict, export) {
+            (Verdict::Portable, Ok(export)) => {
+                let facts = yaml(&export, "adapter-packs/registry-status/schemas/facts.json");
+                assert_eq!(facts["properties"]["area"]["pattern"], case.pattern);
+            }
+            (Verdict::Portable, Err(diagnostic)) => {
+                panic!("{} was refused: {}", case.pattern, diagnostic.message)
+            }
+            (_, Ok(_)) => panic!("{} was accepted: {}", case.pattern, case.note),
+            (_, Err(diagnostic)) => assert_eq!(diagnostic.path, "fields", "{}", case.pattern),
+        }
+    }
+}

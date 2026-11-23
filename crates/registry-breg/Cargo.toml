@@ -587,6 +587,11 @@ path = "tests/postgres_ingestion_runs.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "postgres_evidence_source_patterns"
+path = "tests/postgres_evidence_source_patterns.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "postgres_logical_sql_names"
 path = "tests/postgres_logical_sql_names.rs"
 required-features = ["postgres-test"]

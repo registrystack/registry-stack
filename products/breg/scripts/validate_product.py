@@ -188,6 +188,7 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_statistics_measures",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_statistics_exact",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_statistics_protected_sums",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_evidence_source_patterns",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_logical_sql_names",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test schema_fingerprint_rehearsal",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_startup",

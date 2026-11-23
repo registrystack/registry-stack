@@ -1,0 +1,152 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! Regular expression constructs read by the two engines a generated Evidence
+//! source puts a fact field's declared pattern through. PostgreSQL holds the
+//! stored value to the pattern with `CHECK (column ~ pattern)`, under the
+//! generated text collation `pg_catalog.pg_c_utf8`. Evidence validates the
+//! fact against the same pattern with the `jsonschema` crate, which rewrites
+//! `\d`, `\w` and `\s` to ASCII forms and hands the rest to `fancy-regex`.
+//!
+//! `postgres` records PostgreSQL's answer for each value. The unit test in
+//! `src/evidence_source/tests.rs` holds the consumer to that record, and the
+//! `postgres_evidence_source_patterns` target holds the record to a real
+//! server.
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Verdict {
+    /// Both engines agree on every value, and the export accepts the pattern.
+    Portable,
+    /// The engines disagree on a value, or the consumer cannot compile the
+    /// pattern, and the export refuses it.
+    Differs,
+    /// Both engines agree on these values, but the export refuses the
+    /// construct whole because a near spelling of it differs.
+    Refused,
+}
+
+pub struct PatternCase {
+    pub pattern: &'static str,
+    /// Each value with whether PostgreSQL's `~` matches it.
+    pub postgres: &'static [(&'static str, bool)],
+    pub verdict: Verdict,
+    /// Why the engines differ, or why the export refuses an agreeing pattern.
+    pub note: &'static str,
+}
+
+pub const CASES: &[PatternCase] = &[
+    PatternCase { pattern: "^[A-Z0-9]{2,20}$", postgres: &[("AB12", true), ("ab", false), ("A", false), ("ÀB", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\d{5}$", postgres: &[("12345", true), ("1234", false), ("١٢٣٤٥", false), ("12a45", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\D+$", postgres: &[("ab", true), ("١", true), ("1", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\u0041$", postgres: &[("A", true), ("a", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^[.,0-9]+$", postgres: &[("1.5", true), ("1,5", true), ("a", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^[=+]?[0-9]+$", postgres: &[("=1", true), ("+1", true), ("1", true), ("-1", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^[a-z]+$", postgres: &[("abc", true), ("é", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^[^a]$", postgres: &[("\n", true), ("b", true), ("a", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "(?<=a)b", postgres: &[("ab", true), ("b", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "(?=a)a", postgres: &[("a", true), ("b", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^(a)\1$", postgres: &[("aa", true), ("a", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\0$", postgres: &[("0", false), ("a", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\cA$", postgres: &[("\u{1}", true), ("A", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\t\n\r\f\v$", postgres: &[("\t\n\r\u{c}\u{b}", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\a$", postgres: &[("\u{7}", true), ("a", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^[\d]$", postgres: &[("1", true), ("١", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^[]a]$", postgres: &[("]", true), ("a", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^[^]a]$", postgres: &[("]", false), ("b", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^a{2,3}?$", postgres: &[("aa", true), ("aaaa", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^(?:ab|cd)+$", postgres: &[("abcd", true), ("ac", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\.\[\]\(\)\{\}\*\+\?\|\^\$\\$", postgres: &[(".[](){}*+?|^$\\", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\-$", postgres: &[("-", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\/$", postgres: &[("/", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^ab$", postgres: &[("ab", true), ("ab\n", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^[a-z]{0,255}$", postgres: &[("ab", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^[\b]$", postgres: &[("\u{8}", true), ("b", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\e$", postgres: &[("\u{1b}", true), ("e", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\U00000041$", postgres: &[("A", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^[a\]b]$", postgres: &[("]", true), ("a", true), ("\\", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^[\e]$", postgres: &[("\u{1b}", true), ("e", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^[\-]$", postgres: &[("-", true), ("\\", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^[a-]$", postgres: &[("-", true), ("a", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^[-a]$", postgres: &[("-", true), ("a", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^[\.]$", postgres: &[(".", true), ("\\", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^[.]$", postgres: &[(".", true), ("\n", false), ("a", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^a}$", postgres: &[("a}", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^a{2}$", postgres: &[("aa", true), ("a{2}", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "{a", postgres: &[("{a", true), ("a", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^x{a}$", postgres: &[("x{a}", true), ("x", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\Aab$", postgres: &[("ab", true), ("xab", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^a\{$", postgres: &[("a{", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^[{]$", postgres: &[("{", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^a|b$", postgres: &[("a", true), ("xb", true), ("ax", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^(a|)$", postgres: &[("", true), ("a", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^()$", postgres: &[("", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^a+?b$", postgres: &[("aab", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^[\u00e9]$", postgres: &[("é", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\%$", postgres: &[("%", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\ $", postgres: &[(" ", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\#$", postgres: &[("#", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\&$", postgres: &[("&", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\~$", postgres: &[("~", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\=$", postgres: &[("=", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^a{ 2}$", postgres: &[("a{ 2}", true), ("aa", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^a{0}$", postgres: &[("", true), ("a", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^a&&b$", postgres: &[("a&&b", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "a^b", postgres: &[("a^b", false), ("ab", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^[a^]$", postgres: &[("^", true), ("a", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^(?:a)(?=b)b$", postgres: &[("ab", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^(?<!a)b$", postgres: &[("b", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^[\]]$", postgres: &[("]", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^[\[]$", postgres: &[("[", true)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^[a\-z]$", postgres: &[("-", true), ("b", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^a[^\n]b$", postgres: &[("axb", true), ("a\nb", false), ("ab", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^[^\n]{1,10}$", postgres: &[("José", true), ("a\nb", false), ("", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^[à-ÿ]$", postgres: &[("é", true), ("Ā", false), ("a", false), ("É", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^é+$", postgres: &[("éé", true), ("É", false), ("e", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: "^[A-Z]{2}[0-9]{4}$", postgres: &[("AB1234", true), ("ab1234", false), ("AB12345", false), ("AB\u{ff11}\u{ff12}\u{ff13}\u{ff14}", false)], verdict: Verdict::Portable, note: "" },
+    PatternCase { pattern: r"^\w+$", postgres: &[("José", true), ("abc_1", true), ("-", false)], verdict: Verdict::Differs, note: "word class: Unicode in PostgreSQL, ASCII in the consumer" },
+    PatternCase { pattern: r"^\W+$", postgres: &[("é", false), ("-", true), ("a", false)], verdict: Verdict::Differs, note: "word class: Unicode in PostgreSQL, ASCII in the consumer" },
+    PatternCase { pattern: r"^\s$", postgres: &[(" ", true), ("\t", true), ("\u{2002}", true), ("\u{feff}", false), ("\u{85}", true), ("\u{a0}", true), ("\u{3000}", true)], verdict: Verdict::Differs, note: "space class: Unicode White_Space in PostgreSQL, a fixed list in the consumer" },
+    PatternCase { pattern: r"^\S$", postgres: &[(" ", false), ("\u{2002}", false), ("\u{feff}", true), ("a", true)], verdict: Verdict::Differs, note: "space class: Unicode White_Space in PostgreSQL, a fixed list in the consumer" },
+    PatternCase { pattern: "^a.b$", postgres: &[("axb", true), ("a\nb", true), ("a\rb", true)], verdict: Verdict::Differs, note: "dot: PostgreSQL matches a newline, the consumer does not" },
+    PatternCase { pattern: r"\bab", postgres: &[("ab", false), ("\u{8}ab", true), ("xab", false)], verdict: Verdict::Differs, note: "\\b: backspace in PostgreSQL, a word boundary in the consumer" },
+    PatternCase { pattern: r"^a\Bb$", postgres: &[("a\\b", true), ("ab", false)], verdict: Verdict::Differs, note: "\\B: a backslash in PostgreSQL, a non-boundary in the consumer" },
+    PatternCase { pattern: r"^\x41B$", postgres: &[("AB", false), ("Л", true)], verdict: Verdict::Differs, note: "\\x: PostgreSQL reads every hex digit that follows" },
+    PatternCase { pattern: "^[[:alpha:]]{2,20}$", postgres: &[("José", true), ("ab", true), ("a1", false)], verdict: Verdict::Differs, note: "[ inside a bracket expression: a class, collating element or equivalence class in PostgreSQL, a nested class in the consumer" },
+    PatternCase { pattern: "^[[.-.]]$", postgres: &[("-", true), (".", false)], verdict: Verdict::Differs, note: "[ inside a bracket expression: a class, collating element or equivalence class in PostgreSQL, a nested class in the consumer" },
+    PatternCase { pattern: "^[[=a=]]$", postgres: &[("a", true), ("=", false)], verdict: Verdict::Differs, note: "[ inside a bracket expression: a class, collating element or equivalence class in PostgreSQL, a nested class in the consumer" },
+    PatternCase { pattern: "^[[x]$", postgres: &[("[", true), ("x", true)], verdict: Verdict::Differs, note: "[ inside a bracket expression: a class, collating element or equivalence class in PostgreSQL, a nested class in the consumer" },
+    PatternCase { pattern: "^[a&&b]$", postgres: &[("a", true), ("&", true), ("b", true)], verdict: Verdict::Differs, note: "a class set operator in the consumer, literal members in PostgreSQL" },
+    PatternCase { pattern: "^[x~~y]$", postgres: &[("x", true), ("~", true), ("y", true)], verdict: Verdict::Differs, note: "a class set operator in the consumer, literal members in PostgreSQL" },
+    PatternCase { pattern: r"\mAB", postgres: &[("AB", true), ("xAB", false)], verdict: Verdict::Differs, note: "a PostgreSQL-only word or string anchor" },
+    PatternCase { pattern: "(?i)^k$", postgres: &[("K", true), ("k", true), ("\u{212a}", false)], verdict: Verdict::Differs, note: "case folding: the consumer folds the Kelvin sign and the long s" },
+    PatternCase { pattern: "***=^ab$", postgres: &[("^ab$", true), ("ab", false)], verdict: Verdict::Differs, note: "a PostgreSQL director prefix" },
+    PatternCase { pattern: r"^\101$", postgres: &[("A", true), ("aa", false)], verdict: Verdict::Differs, note: "a multi-digit escape: octal in PostgreSQL, a back reference or an error in the consumer" },
+    PatternCase { pattern: r"^[\w]$", postgres: &[("é", true), ("a", true)], verdict: Verdict::Differs, note: "word class: Unicode in PostgreSQL, ASCII in the consumer" },
+    PatternCase { pattern: "^a{,3}$", postgres: &[("aa", false)], verdict: Verdict::Differs, note: "a bound with no minimum: literal in PostgreSQL, a bound in the consumer" },
+    PatternCase { pattern: r"^\Aab\Z$", postgres: &[("ab", true)], verdict: Verdict::Differs, note: "a PostgreSQL-only word or string anchor" },
+    PatternCase { pattern: r"^\y$", postgres: &[("", false)], verdict: Verdict::Differs, note: "a PostgreSQL-only word or string anchor" },
+    PatternCase { pattern: r"^[\B]$", postgres: &[("\\", true), ("B", false)], verdict: Verdict::Differs, note: "\\B: a backslash in PostgreSQL, a non-boundary in the consumer" },
+    PatternCase { pattern: r"^[\x41B]$", postgres: &[("A", false), ("B", false), ("Л", true)], verdict: Verdict::Differs, note: "\\x: PostgreSQL reads every hex digit that follows" },
+    PatternCase { pattern: r"^[\s]$", postgres: &[("\u{2002}", true), ("\u{feff}", false), (" ", true)], verdict: Verdict::Differs, note: "space class: Unicode White_Space in PostgreSQL, a fixed list in the consumer" },
+    PatternCase { pattern: r"^[\101]$", postgres: &[("A", true), ("1", false), ("0", false)], verdict: Verdict::Differs, note: "a multi-digit escape: octal in PostgreSQL, a back reference or an error in the consumer" },
+    PatternCase { pattern: r"^ab\Z", postgres: &[("ab", true)], verdict: Verdict::Differs, note: "a PostgreSQL-only word or string anchor" },
+    PatternCase { pattern: "***:ab", postgres: &[("ab", true)], verdict: Verdict::Differs, note: "a PostgreSQL director prefix" },
+    PatternCase { pattern: "[[:<:]]ab", postgres: &[("ab", true), ("xab", false)], verdict: Verdict::Differs, note: "[ inside a bracket expression: a class, collating element or equivalence class in PostgreSQL, a nested class in the consumer" },
+    PatternCase { pattern: "^[[.space.]]$", postgres: &[(" ", true), ("s", false)], verdict: Verdict::Differs, note: "[ inside a bracket expression: a class, collating element or equivalence class in PostgreSQL, a nested class in the consumer" },
+    PatternCase { pattern: r"^\08$", postgres: &[("8", false)], verdict: Verdict::Differs, note: "a multi-digit escape: octal in PostgreSQL, a back reference or an error in the consumer" },
+    PatternCase { pattern: r"^\<$", postgres: &[("<", true)], verdict: Verdict::Differs, note: "a PostgreSQL-only word or string anchor" },
+    PatternCase { pattern: "(?i)^s$", postgres: &[("S", true), ("\u{17f}", false)], verdict: Verdict::Differs, note: "case folding: the consumer folds the Kelvin sign and the long s" },
+    PatternCase { pattern: r"^a\>$", postgres: &[("a>", true), ("a", false)], verdict: Verdict::Differs, note: "a PostgreSQL-only word or string anchor" },
+    PatternCase { pattern: "^a{,}$", postgres: &[("a{,}", true), ("a", false)], verdict: Verdict::Differs, note: "a bound with no minimum: literal in PostgreSQL, a bound in the consumer" },
+    PatternCase { pattern: "^[+--]$", postgres: &[("+", true), (",", true), ("-", true)], verdict: Verdict::Differs, note: "a class set operator in the consumer, literal members in PostgreSQL" },
+    PatternCase { pattern: r"^a\Mb$", postgres: &[("ab", false)], verdict: Verdict::Differs, note: "a PostgreSQL-only word or string anchor" },
+    PatternCase { pattern: r"^a\Yb$", postgres: &[("ab", true)], verdict: Verdict::Differs, note: "a PostgreSQL-only word or string anchor" },
+    PatternCase { pattern: r"^\yab$", postgres: &[("ab", true)], verdict: Verdict::Differs, note: "a PostgreSQL-only word or string anchor" },
+    PatternCase { pattern: r"^\Za$", postgres: &[("a", false)], verdict: Verdict::Differs, note: "a PostgreSQL-only word or string anchor" },
+    PatternCase { pattern: r"^a\bb$", postgres: &[("a\u{8}b", true), ("ab", false)], verdict: Verdict::Differs, note: "\\b: backspace in PostgreSQL, a word boundary in the consumer" },
+    PatternCase { pattern: r"^\b$", postgres: &[("\u{8}", true), ("", false)], verdict: Verdict::Differs, note: "\\b: backspace in PostgreSQL, a word boundary in the consumer" },
+    PatternCase { pattern: "^[[]$", postgres: &[("[", true)], verdict: Verdict::Differs, note: "[ inside a bracket expression: a class, collating element or equivalence class in PostgreSQL, a nested class in the consumer" },
+    PatternCase { pattern: r"^\x41$", postgres: &[("A", true), ("a", false)], verdict: Verdict::Refused, note: "\\x is refused whole, because a hex digit after it changes the reading" },
+    PatternCase { pattern: "(?#c)ab", postgres: &[("ab", true)], verdict: Verdict::Refused, note: "embedded options and comments are refused whole, because (?i) folds case differently" },
+    PatternCase { pattern: "(?x)a b", postgres: &[("ab", true), ("a b", false)], verdict: Verdict::Refused, note: "embedded options and comments are refused whole, because (?i) folds case differently" },
+    PatternCase { pattern: r"^(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\10$", postgres: &[("abcdefghijj", true), ("abcdefghija0", false)], verdict: Verdict::Refused, note: "a multi-digit escape is refused whole, because PostgreSQL can read it as octal" },
+];

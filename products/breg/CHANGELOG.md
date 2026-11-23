@@ -9,12 +9,15 @@
   with a patterned or decimal fact gets a new pack version. A selector field's
   pattern stays out of the pack, because the generated lookup already requires
   the returned identity to equal the caller's input. The export refuses a fact
-  field whose pattern uses PostgreSQL-only regular expression syntax that
-  JSON Schema reads differently. An export whose facts declare no pattern and
-  include no decimal produces the same files and the same `behaviorRevision`.
-  Migration: regenerate the export of a registry with a patterned or decimal
-  fact and review the changed pack schemas and version on import. Rewrite a
-  refused pattern in plain syntax, or use a reviewed custom adapter.
+  field whose pattern uses a construct that PostgreSQL and Evidence read
+  differently: `.` outside brackets, `\w`, `\s`, `\b`, `\x`, a POSIX class
+  such as `[[:alpha:]]`, a PostgreSQL-only anchor, or an embedded option such
+  as `(?i)`. An export whose facts declare no pattern and include no decimal
+  produces the same files and the same `behaviorRevision`. Migration:
+  regenerate the export of a registry with a patterned or decimal fact and
+  review the changed pack schemas and version on import. Rewrite a refused
+  pattern with the characters spelled out, such as `[A-Za-z]` or `[^\n]`, or
+  use a reviewed custom adapter.
 - `bregctl generate evidence-source` accepts `--require-value FIELD=VALUE` and
   `--optional-fields A,B`, both naming fields already in `--fields`.
   `--require-value` lists the values a fact field may hold. Repeat it to allow
