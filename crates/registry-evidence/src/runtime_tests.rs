@@ -9007,6 +9007,109 @@ async fn sec_exact_registry_lookup_declared_unresolved_maps_to_evidence_unavaila
     }
 }
 
+/// Threat: a caller learns that a record exists because the lookup refused
+/// it, when an unknown record would have answered differently. Enforcement: a
+/// found record the lookup refuses with `no-match` and a record the source
+/// answers with its declared unresolved Problem give the caller the same
+/// public answer, on the HTTP request and in a batch. Only the audit of the
+/// single request differs (no-match versus unresolved), so an operator can
+/// tell them apart there. The batch audit records both items alike.
+#[tokio::test]
+async fn a_refused_record_and_an_unknown_record_give_a_caller_the_same_answer() {
+    let server = MockServer::start().await;
+    let prepared = prepare_fixture_with_pack_variant(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+        AcceptancePackVariant::ExactRegistry,
+        |_| {},
+    );
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("exact registry lookup composition initializes"),
+    );
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let token = access_token(None);
+
+    let mut answers = Vec::new();
+    for (case, response) in [
+        (
+            "refused",
+            ResponseTemplate::new(200).set_body_json(json!({
+                "data": {"domainData": {"official_residence_code": "R-999"}}
+            })),
+        ),
+        (
+            "unknown",
+            ResponseTemplate::new(404).set_body_raw(
+                registry_lookup_problem_body(
+                    REGISTRY_LOOKUP_PROBLEM_CODE,
+                    "the source holds no such record",
+                    "unknown-record-trace",
+                ),
+                "application/problem+json",
+            ),
+        ),
+    ] {
+        server.reset().await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/v2/resources/residence-record/lookups/by-record-reference",
+            ))
+            .respond_with(response)
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let served = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&residence_request())
+            .await;
+        let mut body = served.json::<Value>();
+        assert_eq!(body["code"], "evidence.unavailable", "{case}: {body}");
+        body.as_object_mut()
+            .expect("the public answer is a Problem object")
+            .remove("traceId")
+            .expect("the public answer carries a trace id");
+
+        let batch = runtime
+            .evaluate_request_batch(
+                &format!("operation-{case}-record-batch"),
+                &token,
+                &request_batch_from_request(&residence_request(), 1),
+            )
+            .await
+            .expect("a batch answers an unavailable item, not a failure");
+        let batch: EvidenceRequestBatchResponse =
+            serde_json::from_slice(batch.bytes()).expect("batch response parses");
+        assert!(
+            matches!(
+                batch.items.as_slice(),
+                [EvidenceRequestBatchResponseItem::EvidenceNotAvailable]
+            ),
+            "{case}: the batch item is the same unavailable answer"
+        );
+        server.verify().await;
+        answers.push((served.status_code(), body));
+    }
+    assert_eq!(
+        answers[0], answers[1],
+        "a refused and an unknown record answer a caller alike"
+    );
+
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"decision\":\"no-match\"").count(), 1);
+    assert_eq!(audit.matches("\"decision\":\"unresolved\"").count(), 1);
+    assert_eq!(
+        audit
+            .matches("\"outcomes\":[{\"itemIndex\":0,\"outcome\":\"evidence-not-available\"}]")
+            .count(),
+        2
+    );
+}
+
 #[tokio::test]
 async fn runtime_output_gate_rejects_every_fixture_injected_derivation_without_release() {
     let cases = [
@@ -11549,9 +11652,14 @@ fn install_acceptance_source_pack(
     #{selectors: #{recordReference: exchange.body.recordReference}}
 }
 "#;
+    // The lookup refuses a found record whose code is outside its allowed
+    // values with `no-match`, the way a generated required-value rule does.
     const EXACT_REGISTRY_LOOKUP: &str = r#"fn exact_registry_lookup(exchange) {
     if exchange.body["lookup"] == "unresolved" { return #{lookup: "unresolved"}; }
-    #{lookup: "matched", facts: #{official_residence_code: if (exchange.body["data"]["domainData"]["official_residence_code"]) == () { throw "source_protocol_error"; } else { exchange.body["data"]["domainData"]["official_residence_code"] }}}
+    let code = exchange.body["data"]["domainData"]["official_residence_code"];
+    if code == () { throw "source_protocol_error"; }
+    if !(code == "R-101") { return #{lookup: "no-match"}; }
+    #{lookup: "matched", facts: #{official_residence_code: code}}
 }
 "#;
     const SQLITE_LOOKUP: &str = r#"fn sqlite_lookup(exchange) {
