@@ -91,10 +91,10 @@ pub struct EvidenceSourceOptions {
     pub connection: String,
     pub authentication: EvidenceSourceAuthentication,
     /// Per fact field, the values a record may hold. A record with any other
-    /// value, or none, answers no match. A caller gets the same answer for a
-    /// refused record and an unknown one. Only the Evidence audit record of a
-    /// single request differs, so an operator can tell them apart. Values are
-    /// spelled as text and read according to the field's type.
+    /// value, or none, answers no match. A caller receives the same answer for
+    /// a refused record and an unknown one. Only the Evidence audit record of a
+    /// single request and the source lookup metric record the difference.
+    /// Values are spelled as text and read according to the field's type.
     pub required_values: BTreeMap<String, Vec<String>>,
     /// Fact fields a record may leave empty. The fact is omitted when absent,
     /// and the lookup still matches.
@@ -902,8 +902,9 @@ fn export_with_behavior(
     // A record outside a field's allowed values is refused here, in the
     // lookup, with the no-match answer of a missing fact. An unknown record is
     // BReg's 404, which the route stops on as unresolved before this runs.
-    // A refused record never reaches derived logic. A caller gets the same
-    // answer for both, and only the Evidence audit record tells them apart.
+    // A refused record never reaches derived logic. A caller receives the same
+    // answer for both. Only the Evidence audit and its source lookup metric
+    // record the difference.
     for (id, literals) in &rules.required {
         let api_name = json!(field(entity, id)?.api_name);
         let allowed = literals

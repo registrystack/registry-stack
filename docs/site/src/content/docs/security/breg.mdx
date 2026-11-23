@@ -145,11 +145,12 @@ has returned the Record.
 It is not a BReg authorisation boundary.
 The access profile's row boundary is the only place BReg withholds a Record from the Evidence
 workload.
-An Evidence caller gets the same answer for a Record the rule refuses and a Record that does not
-exist.
-Only the Evidence audit record of a single request differs (`no-match` versus `unresolved`).
+An Evidence caller receives the same answer for a Record the rule refuses and a Record that does
+not exist.
+Only the Evidence audit record of a single request and the `evidence_source_lookups_total` metric
+record the difference (`no-match` versus `unresolved`).
 An operator, or anyone who reads that audit, can tell from it that a refused Record exists.
-A request batch audits both items as not available.
+A request batch audits both items as not available, and the metric still counts them apart.
 
 {/* Evidence: crates/registry-breg/src/evidence_source.rs, export_evidence_source;
     crates/registry-breg/src/evidence_source/tests.rs,
