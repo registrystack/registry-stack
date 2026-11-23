@@ -140,12 +140,13 @@ See `BREG-RES-16` for what remains.
     raw_node_allowlist_refuses_unreviewed_sql_json_xml_and_hidden_descendants;
     crates/registry-breg/tests/postgres_package/fingerprint.rs. */}
 
-A `--require-value` rule in a generated Evidence source runs in the Evidence adapter after BReg
-has returned the Record, so it is not a BReg authorization boundary.
+A `--require-value` rule in a generated Evidence source runs in the Evidence adapter, after BReg
+has returned the Record.
+It is not a BReg authorisation boundary.
 The access profile's row boundary is the only place BReg withholds a Record from the Evidence
 workload.
-A Record the rule refuses answers no-match, while a Record that does not exist answers unresolved,
-so an Evidence caller can tell that a refused Record exists.
+A Record the rule refuses answers no-match, while a Record that does not exist answers unresolved.
+An Evidence caller can therefore tell that a refused Record exists.
 
 {/* Evidence: crates/registry-breg/src/evidence_source.rs, export_evidence_source;
     crates/registry-breg/src/evidence_source/tests.rs,

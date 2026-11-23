@@ -63,7 +63,8 @@ Both name fields that are already in `--fields`, and without them the generated 
   For example, a person register can refuse inactive people even if a deployment's token claim is widened by mistake.
   The value is read according to the field's type.
   A boolean takes `true` or `false`, and an int64 takes a whole number.
-  A vocabulary field takes a code of the vocabulary, a string takes text within the field's length bounds, and a text field takes text within its maximum length.
+  A vocabulary field takes a code of the vocabulary.
+  A string takes text within the field's length bounds, and a text field takes text within its maximum length.
   A date takes a calendar date as `YYYY-MM-DD`.
   A uuid or reference field takes a lowercase hyphenated uuid, the spelling a record is read back in.
   No value may hold a control character, and other field types cannot carry a required value.
@@ -206,7 +207,8 @@ A selector field's pattern stays out of the pack, because the identity check alr
 Every pattern the schemas carry is part of the pack version.
 The export refuses a pattern with a construct that PostgreSQL and Evidence read differently, rather than carry it with another meaning.
 It refuses `.` outside brackets, because only PostgreSQL lets it match a line break, and a string or text value can hold one.
-It also refuses the `\w` and `\s` classes, which are Unicode in PostgreSQL and ASCII in Evidence, as well as `\b`, `\x`, POSIX classes such as `[[:alpha:]]`, PostgreSQL's own anchors, and embedded options such as `(?i)`.
+It also refuses the `\w` and `\s` classes, which are Unicode in PostgreSQL and ASCII in Evidence.
+The same goes for `\b`, `\x`, POSIX classes such as `[[:alpha:]]`, PostgreSQL's own anchors, and embedded options such as `(?i)`.
 Spell the characters out instead, for example `[A-Za-z]`, or `[^\n]` for any character but a line break.
 An absent or null required fact produces no match and cannot become an authoritative negative answer.
 BReg recognises a genuine unresolved lookup only by its exact declared Problem Details status, type, and code.
@@ -226,7 +228,8 @@ It refuses a string selector field that accepts the empty value, an explicit or 
 Declare a `minimumLength` of at least 1, or maintain a reviewed custom adapter.
 Use a bounded string selector or maintain a reviewed custom adapter for unsupported shapes.
 Bounded scalar facts are supported; structured and spatial facts require a custom adapter.
-The export refuses a pack whose generated schema file would be larger than 256 KiB, the most Evidence reads a schema within, as many long vocabulary facts can be.
+Evidence reads a schema file of at most 256 KiB.
+The export refuses a pack whose generated schema is larger, as many long vocabulary facts can make it.
 
 {/* Evidence: crates/registry-breg/src/evidence_source/tests.rs
     emitted_extract_checks_the_returned_identity_by_exact_value_and_scalar_type,
