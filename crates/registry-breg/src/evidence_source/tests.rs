@@ -1213,6 +1213,55 @@ fn a_decimal_precision_or_scale_change_is_a_new_pack_version() {
 }
 
 #[test]
+fn a_selector_field_pattern_stays_out_of_the_pack() {
+    // Only a fact carries its field's pattern. A selector-only field is the
+    // caller's input, which the returned identity must equal exactly, so its
+    // pattern changes no file and no pack version, and is never refused.
+    let export = |pattern: Option<&str>| {
+        let mut project = pattern_project(AREA_PATTERN);
+        if let Some(pattern) = pattern {
+            project["recordTypes"]["record"]["fields"][0]["pattern"] = json!(pattern);
+        }
+        export_with_behavior(&compiled(&project, SQL), &pattern_options()).unwrap()
+    };
+    let (plain, plain_behavior) = export(None);
+    for pattern in ["^[A-Z][0-9]$", "^\\w+$"] {
+        let (patterned, behavior) = export(Some(pattern));
+        assert_eq!(
+            patterned.behavior_revision, plain.behavior_revision,
+            "{pattern}"
+        );
+        assert_eq!(behavior, plain_behavior, "{pattern}");
+        assert_eq!(patterned.artifacts.len(), plain.artifacts.len());
+        for artifact in &plain.artifacts {
+            let mut expected: Value = serde_json::from_slice(&artifact.bytes)
+                .unwrap_or_else(|_| json!(String::from_utf8_lossy(&artifact.bytes)));
+            let mut actual: Value = serde_json::from_slice(file(&patterned, &artifact.path))
+                .unwrap_or_else(|_| {
+                    json!(String::from_utf8_lossy(file(&patterned, &artifact.path)))
+                });
+            // The compiled registry digest follows every project edit.
+            for document in [&mut expected, &mut actual] {
+                if let Some(provenance) = document
+                    .get_mut("provenance")
+                    .and_then(Value::as_object_mut)
+                {
+                    provenance.remove("registryRevision");
+                }
+            }
+            assert_eq!(actual, expected, "{}", artifact.path);
+        }
+    }
+    let response = yaml(
+        &plain,
+        "adapter-packs/registry-status/schemas/response.json",
+    );
+    let returned = &response["properties"]["data"]["properties"]["domainData"]["properties"];
+    assert!(returned["code"].get("pattern").is_none());
+    assert_eq!(returned["area"]["pattern"], AREA_PATTERN);
+}
+
+#[test]
 fn refuses_a_pattern_that_only_postgresql_reads_the_same_way() {
     for pattern in ["^[[:alpha:]]{2,20}$", "\\mAB", "(?i)^ab$", "***=^ab$"] {
         let diagnostic = refused(

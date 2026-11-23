@@ -194,6 +194,7 @@ No AssertionDefinition can skip that check by replacing its derive Function.
 
 Only the explicit fact fields enter the fact set.
 A fact keeps the field's declared `pattern` in both generated schemas, and a decimal fact states its declared precision and scale as a pattern.
+A selector field's pattern stays out of the pack, because the identity check already requires the returned value to equal the caller's input.
 Every pattern the schemas carry is part of the pack version.
 The export refuses a pattern that uses PostgreSQL-only regular expression syntax, because JSON Schema would read it differently.
 An absent or null required fact produces no match and cannot become an authoritative negative answer.
@@ -224,6 +225,7 @@ Bounded scalar facts are supported; structured and spatial facts require a custo
     refuses_a_composite_selector_beyond_the_aggregate_selector_bound,
     a_declared_field_pattern_reaches_the_fact_and_response_schemas,
     a_decimal_fact_states_the_declared_precision_and_scale,
+    a_selector_field_pattern_stays_out_of_the_pack,
     every_fact_pattern_is_bound_into_the_behavior_revision,
     refuses_a_pattern_that_only_postgresql_reads_the_same_way;
     crates/registry-bregctl/tests/evidence_source.rs lookup.unresolved. */}
