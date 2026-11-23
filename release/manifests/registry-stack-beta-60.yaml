@@ -73,4 +73,4 @@ warnings:
     detail: Generated BReg Evidence sources now carry compatible fact patterns and decimal precision into their schemas and behaviorRevision. Regenerate and review each source with a patterned or decimal fact. Rewrite a refused pattern with explicit characters, or use a reviewed custom Adapter pack. See release/notes/v0.48.0.md.
   - code: breg-derived-read-completeness
     classification: breaking-change
-    detail: bregctl check refuses an access profile whose derived value can omit source rows under the reader's row security, and refuses LIMIT or OFFSET on the rows the derived relation returns. Align the source grants with the reader grant, or rewrite the SQL so each value uses complete visible rows. See release/notes/v0.48.0.md.
+    detail: bregctl check refuses an access profile whose derived value can omit source rows under the reader's row security, and refuses LIMIT or OFFSET on the rows the derived relation returns or in any FROM subquery, including correlated LATERAL. Align the source grants with the reader grant. Move row selection into a correlated expression subquery, or remove the limit. See release/notes/v0.48.0.md.

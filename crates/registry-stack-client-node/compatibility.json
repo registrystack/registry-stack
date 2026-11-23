@@ -6,8 +6,8 @@
   },
   "namespaces": {
     "discovery": {
-      "testedServerBaseline": "0.47.0",
-      "compatibleServerPatchLine": "0.47.x",
+      "testedServerBaseline": "0.48.0",
+      "compatibleServerPatchLine": "0.48.x",
       "responseCompatibility": {
         "additiveObjectMembers": "ignored-after-duplicate-key-rejection",
         "unknownProblemCodes": "http-status-only",
