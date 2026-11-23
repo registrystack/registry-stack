@@ -1092,3 +1092,87 @@ fn a_boolean_field_accepts_a_boolean_value() {
     .unwrap();
     assert!(script.contains("record[\"active\"] == true"), "{script}");
 }
+
+fn pattern_project(pattern: &str) -> Value {
+    let mut project = project();
+    project["recordTypes"]["record"]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .extend([
+            json!({"id":"area","type":"string","minimumLength":2,"maximumLength":20,"pattern":pattern,"classification":"internal"}),
+            json!({"id":"amount","type":"decimal","precision":6,"scale":2,"classification":"internal"}),
+        ]);
+    project["accessProfiles"]["evidence-source"]["permissions"]["records"][0]["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .extend([json!("area"), json!("amount")]);
+    project
+}
+
+fn pattern_options() -> EvidenceSourceOptions {
+    let mut options = options();
+    options.fields = vec!["area".into(), "amount".into()];
+    options.selectors = vec!["by-code".into()];
+    options
+}
+
+const AREA_PATTERN: &str = "^[A-Z0-9]{2,20}$";
+
+#[test]
+fn a_declared_field_pattern_reaches_the_fact_and_response_schemas() {
+    let export = export_evidence_source(
+        &compiled(&pattern_project(AREA_PATTERN), SQL),
+        &pattern_options(),
+    )
+    .unwrap();
+    let facts = yaml(&export, "adapter-packs/registry-status/schemas/facts.json");
+    let response = yaml(
+        &export,
+        "adapter-packs/registry-status/schemas/response.json",
+    );
+    assert_eq!(facts["properties"]["area"]["pattern"], AREA_PATTERN);
+    assert_eq!(facts["properties"]["area"]["minLength"], 2);
+    assert_eq!(facts["properties"]["area"]["maxLength"], 20);
+    assert_eq!(
+        response["properties"]["data"]["properties"]["domainData"]["properties"]["area"]["pattern"],
+        AREA_PATTERN
+    );
+}
+
+#[test]
+fn a_decimal_fact_states_the_declared_precision_and_scale() {
+    let export = export_evidence_source(
+        &compiled(&pattern_project(AREA_PATTERN), SQL),
+        &pattern_options(),
+    )
+    .unwrap();
+    let facts = yaml(&export, "adapter-packs/registry-status/schemas/facts.json");
+    assert_eq!(
+        facts["properties"]["amount"]["pattern"],
+        "^-?(0|[1-9][0-9]{0,3})\\.[0-9]{2}$"
+    );
+}
+
+#[test]
+fn the_field_pattern_is_bound_into_the_behavior_revision() {
+    let revision = |pattern: &str| {
+        export_evidence_source(
+            &compiled(&pattern_project(pattern), SQL),
+            &pattern_options(),
+        )
+        .unwrap()
+        .behavior_revision
+    };
+    assert_ne!(revision(AREA_PATTERN), revision("^[A-Z]{2,20}$"));
+}
+
+#[test]
+fn refuses_a_pattern_that_only_postgresql_reads_the_same_way() {
+    for pattern in ["^[[:alpha:]]{2,20}$", "\\mAB", "(?i)^ab$", "***=^ab$"] {
+        let diagnostic = refused(
+            &compiled(&pattern_project(pattern), SQL),
+            &pattern_options(),
+        );
+        assert_eq!(diagnostic.path, "fields", "{pattern}");
+    }
+}
