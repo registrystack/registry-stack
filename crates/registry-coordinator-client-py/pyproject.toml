@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "registry-coordinator-client-native"
-version = "0.47.1"
+version = "0.48.0"
 description = "Internal Coordinator binding, built from source."
 readme = "README.md"
 license = { text = "Apache-2.0" }
