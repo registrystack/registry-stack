@@ -196,7 +196,10 @@ Only the explicit fact fields enter the fact set.
 A fact keeps the field's declared `pattern` in both generated schemas, and a decimal fact states its declared precision and scale as a pattern.
 A selector field's pattern stays out of the pack, because the identity check already requires the returned value to equal the caller's input.
 Every pattern the schemas carry is part of the pack version.
-The export refuses a pattern that uses PostgreSQL-only regular expression syntax, because JSON Schema would read it differently.
+The export refuses a pattern with a construct that PostgreSQL and Evidence read differently, rather than carry it with another meaning.
+It refuses `.` outside brackets, because only PostgreSQL lets it match a line break, and a string or text value can hold one.
+It also refuses the `\w` and `\s` classes, which are Unicode in PostgreSQL and ASCII in Evidence, as well as `\b`, `\x`, POSIX classes such as `[[:alpha:]]`, PostgreSQL's own anchors, and embedded options such as `(?i)`.
+Spell the characters out instead, for example `[A-Za-z]`, or `[^\n]` for any character but a line break.
 An absent or null required fact produces no match and cannot become an authoritative negative answer.
 BReg recognises a genuine unresolved lookup only by its exact declared Problem Details status, type, and code.
 Other HTTP failures remain failures.
@@ -227,7 +230,9 @@ Bounded scalar facts are supported; structured and spatial facts require a custo
     a_decimal_fact_states_the_declared_precision_and_scale,
     a_selector_field_pattern_stays_out_of_the_pack,
     every_fact_pattern_is_bound_into_the_behavior_revision,
-    refuses_a_pattern_that_only_postgresql_reads_the_same_way;
+    refuses_a_pattern_that_only_postgresql_reads_the_same_way,
+    the_export_accepts_exactly_the_patterns_both_engines_read_the_same_way;
+    crates/registry-breg/tests/postgres_evidence_source_patterns.rs;
     crates/registry-bregctl/tests/evidence_source.rs lookup.unresolved. */}
 
 ## Import and update ordinary files

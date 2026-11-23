@@ -198,30 +198,84 @@ fn declared_pattern<'a>(entity: &'a CompiledEntity, id: &str) -> Option<&'a str>
         .and_then(|field| field.pattern.as_deref())
 }
 
-/// Whether a PostgreSQL ARE reads the same under JSON Schema's ECMA 262
-/// dialect. A pattern using an ARE-only construct is refused rather than
-/// carried with a different meaning.
+/// Whether PostgreSQL and Evidence read a fact field's declared pattern the
+/// same way. PostgreSQL holds a stored value to the pattern as an advanced
+/// regular expression under the column's `pg_c_utf8` collation. Evidence
+/// validates the fact with the `jsonschema` crate, which rewrites `\d`, `\w`
+/// and `\s` to ASCII classes and hands the rest to `fancy-regex`. A pattern
+/// with a construct the two read differently is refused rather than carried
+/// with another meaning. The case table in
+/// `tests/support/evidence_source_patterns.rs` runs each construct through
+/// both engines.
+///
+/// A pattern field is string or text, and either can hold a newline, which
+/// PostgreSQL's `.` matches and the consumer's does not. So `.` outside a
+/// bracket expression is refused wherever it appears, and `[^\n]` reads the
+/// same in both.
 fn pattern_is_portable(pattern: &str) -> bool {
-    let mut chars = pattern.chars().peekable();
+    // Escapes the engines read differently: the word and space classes are
+    // Unicode only in PostgreSQL, `\b` is a backspace there and a word
+    // boundary in the consumer, `\B` is a backslash there, `\x` keeps reading
+    // hex digits there, and the rest are PostgreSQL's own anchors.
+    const ESCAPES: &str = "wWsSbBxmMyYZ<>";
     if pattern.starts_with("***") {
         return false;
     }
+    let mut chars = pattern.chars().peekable();
+    // The members read so far in an open bracket expression.
+    let mut bracket: Option<usize> = None;
     while let Some(c) = chars.next() {
-        match (c, chars.peek().copied()) {
-            ('\\', Some(next)) => {
-                if "mMyYAZe".contains(next) {
-                    return false;
-                }
-                chars.next();
+        if c == '\\' {
+            let Some(escape) = chars.next() else {
+                return false;
+            };
+            // In a bracket expression `\b` is a backspace in both engines.
+            let differs = ESCAPES.contains(escape) && !(bracket.is_some() && escape == 'b');
+            // A second digit makes PostgreSQL read an octal escape.
+            let octal = escape.is_ascii_digit() && chars.peek().is_some_and(char::is_ascii_digit);
+            if differs || octal {
+                return false;
             }
-            ('[', Some(':' | '.' | '=')) => return false,
-            ('(', Some('?')) => {
-                chars.next();
-                if !matches!(chars.peek(), Some(':' | '=' | '!' | '<')) {
-                    return false;
-                }
+            if let Some(read) = &mut bracket {
+                *read += 1;
             }
-            _ => {}
+            continue;
+        }
+        let next = chars.peek().copied();
+        match bracket {
+            None => match (c, next) {
+                // `{,n}` is a bound only in the consumer.
+                ('.', _) | ('{', Some(',')) => return false,
+                ('(', Some('?')) => {
+                    chars.next();
+                    match chars.next() {
+                        Some(':' | '=' | '!') => {}
+                        Some('<') if matches!(chars.peek(), Some('=' | '!')) => {
+                            chars.next();
+                        }
+                        // Embedded options and comments: `(?i)` folds case
+                        // differently.
+                        _ => return false,
+                    }
+                }
+                ('[', _) => {
+                    bracket = Some(0);
+                    if next == Some('^') {
+                        chars.next();
+                    }
+                }
+                _ => {}
+            },
+            Some(read) => match (c, next) {
+                // A leading `]` is a member in both engines.
+                (']', _) if read > 0 => bracket = None,
+                // A nested `[` opens a class, collating element or
+                // equivalence class in PostgreSQL and a nested class in the
+                // consumer. The doubled operators are class set operations
+                // only in the consumer.
+                ('[', _) | ('&', Some('&')) | ('~', Some('~')) | ('-', Some('-')) => return false,
+                _ => bracket = Some(read + 1),
+            },
         }
     }
     true
@@ -239,7 +293,7 @@ fn field_schema(
         if !pattern_is_portable(pattern) {
             return Err(refusal(
                 "fields",
-                "a fact field's pattern uses PostgreSQL-only regular expression syntax that JSON Schema reads differently; use a plain pattern or a custom adapter",
+                "a fact field's pattern uses regular expression syntax that PostgreSQL and Evidence read differently, such as `.`, `\\w`, `\\s` or a POSIX class; spell the characters out, use `[^\\n]` for any character but a newline, or use a custom adapter",
             ));
         }
         schema["pattern"] = json!(pattern);
