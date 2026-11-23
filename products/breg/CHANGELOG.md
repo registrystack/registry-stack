@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- BREAKING: `bregctl check` refuses an access profile that reads, filters or
+  sorts a derived field when the profile cannot see every row the derived SQL
+  links to on another Record type. The derived view runs under the caller's
+  row security, so such a profile got a value computed from part of the data,
+  with no error. For each other Record type the SQL reads, the profile now
+  needs a grant with `get`, `lookup`, `list`, `batch`, `revisions` or
+  `snapshot` (`breg.disclosure.derived-reads-unreadable-source`). That grant
+  must have the same `rowBoundaries`, in the same order, as the profile's
+  grant on the Record type that owns the field, or on the root Record type of
+  a read path. It may not add `membershipBoundaries` or `requireConsent` that
+  grant lacks (`breg.disclosure.derived-reads-source-boundary`). A profile
+  bounded by `id` cannot read a derived field over another Record type. A
+  derived field that reads only its own Record type is unaffected. Migration:
+  for each refusal, grant the profile `get` on the named Record type with only
+  the link fields readable and the row boundaries the message names, or remove
+  the derived field from the profile.
 - BREAKING: `bregctl generate evidence-source` carries a fact field's
   declared `pattern` into the generated fact and response schemas, and states
   a decimal fact's declared precision and scale as a `pattern`. Every pattern

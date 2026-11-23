@@ -22,7 +22,10 @@ fn project() -> Value {
             "rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}]}}}})
 }
 
-fn compiled(project: &Value, sql: &str) -> CompiledRegistry {
+fn compile(
+    project: &Value,
+    sql: &str,
+) -> Result<CompiledRegistry, crate::diagnostics::CompileFailure> {
     let source = parse_project_json(&serde_json::to_vec(project).unwrap()).unwrap();
     compile_project_with_assets(
         &source,
@@ -34,7 +37,10 @@ fn compiled(project: &Value, sql: &str) -> CompiledRegistry {
         }],
         CompileProfile::Authoring,
     )
-    .unwrap()
+}
+
+fn compiled(project: &Value, sql: &str) -> CompiledRegistry {
+    compile(project, sql).unwrap()
 }
 
 const SQL: &str = "SELECT r.id AS id, r.status = 'active' AS active FROM registry_source.record r";
@@ -502,18 +508,20 @@ fn membership_behavior_reaches_helper_semantics_source_fields_and_select_authori
 #[test]
 fn reached_derived_source_consumes_its_membership_helper() {
     let mut original = membership_project();
-    let boundary = original["accessProfiles"]["evidence-source"]["permissions"]["records"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("membershipBoundaries")
-        .unwrap();
+    let reader = &original["accessProfiles"]["evidence-source"]["permissions"]["records"][0];
+    let (boundary, row_boundaries) = (
+        reader["membershipBoundaries"].clone(),
+        reader["rowBoundaries"].clone(),
+    );
     original["recordTypes"].as_object_mut().unwrap().insert("flag".to_owned(), json!({"route":"flags","primaryDataset":"test-dataset","mutationMode":"mutable","fields":[
             {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
             {"id":"organization","type":"reference","target":"organization","classification":"internal"},
+            {"id":"other-organization","type":"reference","target":"organization","classification":"internal"},
+            {"id":"tenant","type":"string","maximumLength":16,"classification":"internal"},
             {"id":"enabled","type":"boolean","classification":"internal"}]
     }));
     original["accessProfiles"]["evidence-source"]["permissions"]["records"].as_array_mut().unwrap().push(json!({
-        "recordType":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":"unrestricted",
+        "recordType":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":row_boundaries,
         "membershipBoundaries":boundary
     }));
     let sql = "SELECT r.id AS id, f.enabled AS active FROM registry_source.record r JOIN registry_source.flag f ON f.code = r.code";
@@ -521,7 +529,7 @@ fn reached_derived_source_consumes_its_membership_helper() {
     selection.fields = vec!["active".into()];
     let before = export_evidence_source(&compiled(&original, sql), &selection).unwrap();
     original["accessProfiles"]["evidence-source"]["permissions"]["records"][1]
-        ["membershipBoundaries"][0]["principalField"] = json!("other-principal");
+        ["membershipBoundaries"][0]["field"] = json!("other-organization");
     assert_ne!(
         before.behavior_revision,
         export_evidence_source(&compiled(&original, sql), &selection)
@@ -582,24 +590,34 @@ fn refuses_a_string_selector_field_that_accepts_the_empty_value() {
 }
 
 #[test]
-fn reached_source_select_authority_is_part_of_consumed_behavior() {
+fn reached_source_select_authority_is_required_for_consumed_behavior() {
     let mut original = project();
     original["recordTypes"].as_object_mut().unwrap().insert(
         "flag".to_owned(),
         json!({"primaryDataset":"test-dataset","route":"flags","mutationMode":"mutable","fields":[
         {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
+        {"id":"tenant","type":"string","maximumLength":16,"classification":"internal"},
         {"id":"enabled","type":"boolean","classification":"internal"}]}),
     );
-    original["accessProfiles"]["evidence-source"]["permissions"]["records"].as_array_mut().unwrap().push(json!({"recordType":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":"unrestricted"}));
+    let row_boundaries = original["accessProfiles"]["evidence-source"]["permissions"]["records"][0]
+        ["rowBoundaries"]
+        .clone();
+    original["accessProfiles"]["evidence-source"]["permissions"]["records"].as_array_mut().unwrap().push(json!({"recordType":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":row_boundaries}));
     let sql = "SELECT r.id AS id, f.enabled AS active FROM registry_source.record r JOIN registry_source.flag f ON f.code = r.code";
     let mut selection = options();
     selection.fields = vec!["active".into()];
-    let before = export_evidence_source(&compiled(&original, sql), &selection).unwrap();
-    original["accessProfiles"]["evidence-source"]["permissions"]["records"][1] = json!({"recordType":"flag","operations":["create"],"writableFields":["code","enabled"],"rowBoundaries":"unrestricted"});
-    let after = export_evidence_source(&compiled(&original, sql), &selection).unwrap();
-    assert_ne!(
-        before.behavior_revision, after.behavior_revision,
-        "same source schema and boundaries cannot mask loss of SELECT RLS authority"
+    export_evidence_source(&compiled(&original, sql), &selection).unwrap();
+    original["accessProfiles"]["evidence-source"]["permissions"]["records"][1] = json!({"recordType":"flag","operations":["create"],"writableFields":["code","enabled"],"rowBoundaries":row_boundaries});
+    let failure = compile(&original, sql)
+        .expect_err("same source schema and boundaries cannot mask loss of SELECT RLS authority");
+    assert!(
+        failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "breg.disclosure.derived-reads-unreadable-source"
+                && diagnostic.path
+                    == "recordTypes[id=flag].accessProfiles[id=evidence-source].operations"
+        }),
+        "{:?}",
+        failure.diagnostics()
     );
 }
 

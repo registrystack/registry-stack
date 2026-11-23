@@ -5,13 +5,15 @@
 //! withheld field cannot be recovered through geometry queries, boundaries,
 //! read paths, Record timers, derived fields, external views or statistics.
 //! A Record timer is also refused a created record that carries a record a
-//! `record` condition hides.
+//! `record` condition hides. A derived field is also refused to a profile
+//! whose requests cannot see every source row its computation links to.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::contract::{
-    AccessProfileSource, DerivedSource, DisclosureConditionSource, DisclosureWithholdSource,
-    EntitySource, Operation, TimerPredicateSource, UniqueSet,
+    AccessProfileSource, BoundaryOperator, DerivedSource, DisclosureConditionSource,
+    DisclosureWithholdSource, EntitySource, Operation, RowBoundarySource, TimerPredicateSource,
+    UniqueSet,
 };
 use crate::diagnostics::Diagnostic;
 use crate::external_views::CompiledExternalViews;
@@ -343,6 +345,27 @@ pub(super) fn validate_read_paths(
     }
 }
 
+/// A profile that reads, filters or sorts an owner's derived fields, with the
+/// grant whose row boundaries its request runs under: its grant on the owner,
+/// or on the root of a read path that ends at the owner.
+struct DerivedReader<'a> {
+    request_entity: &'a str,
+    request_grant: &'a AccessProfileSource,
+    fields: BTreeSet<&'a str>,
+}
+
+fn derived_fields_named<'a>(
+    derived_ids: &BTreeSet<&str>,
+    granted: [&'a UniqueSet<String>; 3],
+) -> BTreeSet<&'a str> {
+    granted
+        .into_iter()
+        .flat_map(|granted| granted.iter())
+        .map(String::as_str)
+        .filter(|id| derived_ids.contains(id))
+        .collect()
+}
+
 /// A derived field is computed from source columns, so a profile that reads,
 /// filters or sorts it, directly or through a read path whose `to` is the
 /// owner, learns whatever a withheld source field says. The SQL must already
@@ -356,41 +379,60 @@ pub(in crate::compiler) fn validate_derived_reads(
     errors: &mut Vec<Diagnostic>,
 ) {
     let read = crate::derived_sql::derived_sql_source_columns(sql, source_columns);
-    let derived_ids: BTreeSet<&String> = derived.fields.iter().map(|field| &field.id).collect();
-    let names_derived = |granted: [&UniqueSet<String>; 3]| {
-        granted
-            .iter()
-            .any(|granted| granted.iter().any(|id| derived_ids.contains(id)))
-    };
+    let derived_ids: BTreeSet<&str> = derived
+        .fields
+        .iter()
+        .map(|field| field.id.as_str())
+        .collect();
+    let derived_ids = &derived_ids;
     // Each profile that reads the owner's derived fields: its own grant on the
     // owner, then its grants on read paths that end at the owner.
-    let readers: BTreeSet<&str> = owner
-        .access_profiles
-        .iter()
-        .filter(|profile| {
-            names_derived([
+    let direct = owner.access_profiles.iter().map(|profile| DerivedReader {
+        request_entity: &owner.id,
+        request_grant: profile,
+        fields: derived_fields_named(
+            derived_ids,
+            [
                 &profile.readable_fields,
                 &profile.filterable_fields,
                 &profile.sortable_fields,
-            ])
-        })
-        .chain(sources.values().flat_map(|path_owner| {
-            path_owner.access_profiles.iter().filter(|profile| {
-                profile.read_paths.iter().any(|grant| {
+            ],
+        ),
+    });
+    let through_paths = sources.values().flat_map(|path_owner| {
+        path_owner.access_profiles.iter().flat_map(move |profile| {
+            profile
+                .read_paths
+                .iter()
+                .filter(move |grant| {
                     path_owner
                         .read_paths
                         .iter()
                         .any(|path| path.id == grant.path && path.to == owner.id)
-                        && names_derived([
+                })
+                .map(move |grant| DerivedReader {
+                    request_entity: &path_owner.id,
+                    request_grant: profile,
+                    fields: derived_fields_named(
+                        derived_ids,
+                        [
                             &grant.readable_fields,
                             &grant.filterable_fields,
                             &grant.sortable_fields,
-                        ])
+                        ],
+                    ),
                 })
-            })
-        }))
-        .map(|profile| profile.id.as_str())
+        })
+    });
+    let derived_readers: Vec<DerivedReader<'_>> = direct
+        .chain(through_paths)
+        .filter(|reader| !reader.fields.is_empty())
         .collect();
+    let readers: BTreeSet<&str> = derived_readers
+        .iter()
+        .map(|reader| reader.request_grant.id.as_str())
+        .collect();
+    validate_derived_source_grants(owner, sql, &derived_readers, sources, errors);
     for source in sources.values() {
         let Some(columns) = read.get(&super::super::canonical_sql_name(&source.id)) else {
             continue;
@@ -423,6 +465,169 @@ pub(in crate::compiler) fn validate_derived_reads(
             }
         }
     }
+}
+
+/// Derived SQL runs in the reader's request, under its row security, so each
+/// record type it reads besides the owner contributes only the rows the
+/// reader's own grant on that record type sees. A grant that sees fewer rows
+/// than are linked to a row the reader sees yields a wrong answer, not an
+/// error. So the grant must read rows, carry the row boundaries of the grant
+/// the request runs under (a request installs that grant's boundary values,
+/// and a grant whose boundaries name other fields or operators sees no row),
+/// and add no membership or consent requirement of a kind that grant lacks.
+/// A matching boundary still assumes the linked rows hold the same boundary
+/// values. Readable fields limit the answer, not this computation, so the
+/// grant need not make any field readable.
+fn validate_derived_source_grants(
+    owner: &EntitySource,
+    sql: &[u8],
+    readers: &[DerivedReader<'_>],
+    sources: &BTreeMap<String, EntitySource>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let relations = crate::derived_sql::derived_sql_dependencies(sql).source_relations;
+    let mut reported = BTreeSet::new();
+    for source in sources.values().filter(|source| {
+        source.id != owner.id && relations.contains(&super::super::canonical_sql_name(&source.id))
+    }) {
+        for reader in readers {
+            let Some((code, path, message)) = derived_source_finding(owner, source, reader) else {
+                continue;
+            };
+            if reported.insert((code, path.clone())) {
+                errors.push(Diagnostic::error(code, path, &message));
+            }
+        }
+    }
+}
+
+fn derived_source_finding(
+    owner: &EntitySource,
+    source: &EntitySource,
+    reader: &DerivedReader<'_>,
+) -> Option<(&'static str, String, String)> {
+    let request = reader.request_grant;
+    let request_entity = reader.request_entity;
+    let profile = &request.id;
+    let fields = reader
+        .fields
+        .iter()
+        .map(|field| format!("`{field}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let reads = format!(
+        "access profile `{profile}` reads derived field {fields} of `{}`, which is computed from `{}` under the profile's row security",
+        owner.id, source.id
+    );
+    let missed = format!("so the computation misses linked `{}` rows", source.id);
+    let source_path = |member: &str| {
+        format!(
+            "recordTypes[id={}].accessProfiles[id={profile}].{member}",
+            source.id
+        )
+    };
+    let Some(grant) = source
+        .access_profiles
+        .iter()
+        .find(|grant| grant.id == *profile)
+        .filter(|grant| crate::generated_ddl::grant_reads_rows(grant.operations.as_set()))
+    else {
+        return Some((
+            "breg.disclosure.derived-reads-unreadable-source",
+            source_path("operations"),
+            format!(
+                "{reads}, but the profile cannot read `{source}` rows, {missed}: grant it `get` on `{source}`, with only the link fields readable and the row boundaries {boundaries} of its grant on `{request_entity}`",
+                source = source.id,
+                boundaries = describe_row_boundaries(&request.row_boundaries),
+            ),
+        ));
+    };
+    const CODE: &str = "breg.disclosure.derived-reads-source-boundary";
+    if request
+        .row_boundaries
+        .iter()
+        .any(|boundary| boundary.field == "id")
+    {
+        return Some((
+            CODE,
+            format!("recordTypes[id={request_entity}].accessProfiles[id={profile}].rowBoundaries"),
+            format!(
+                "{reads}, but its grant on `{request_entity}` is bounded by `id`, which no linked `{source}` row shares, {missed}: bound that grant by a field `{source}` also carries, or do not grant the derived field",
+                source = source.id,
+            ),
+        ));
+    }
+    if grant.row_boundaries != request.row_boundaries {
+        return Some((
+            CODE,
+            source_path("rowBoundaries"),
+            format!(
+                "{reads}, but its grant on `{source}` is bounded by {source_rows} and its grant on `{request_entity}` by {request_rows}, {missed}: bound the grant on `{source}` by {request_rows} too, on fields that hold the same values",
+                source = source.id,
+                source_rows = describe_row_boundaries(&grant.row_boundaries),
+                request_rows = describe_row_boundaries(&request.row_boundaries),
+            ),
+        ));
+    }
+    if let Some(added) = grant.membership_boundaries.iter().find(|boundary| {
+        !request.membership_boundaries.iter().any(|held| {
+            (
+                &held.membership_entity,
+                &held.membership_key_field,
+                &held.principal_field,
+                &held.active_field,
+            ) == (
+                &boundary.membership_entity,
+                &boundary.membership_key_field,
+                &boundary.principal_field,
+                &boundary.active_field,
+            )
+        })
+    }) {
+        return Some((
+            CODE,
+            source_path("membershipBoundaries"),
+            format!(
+                "{reads}, but its grant on `{source}` requires a membership through `{membership}` that its grant on `{request_entity}` does not, {missed}: give the grant on `{request_entity}` the same membership boundary, or remove it from the grant on `{source}`",
+                source = source.id,
+                membership = added.membership_entity,
+            ),
+        ));
+    }
+    if let Some(added) = grant.require_consent.iter().find(|requirement| {
+        !request
+            .require_consent
+            .iter()
+            .any(|held| held.record == requirement.record)
+    }) {
+        return Some((
+            CODE,
+            source_path("requireConsent"),
+            format!(
+                "{reads}, but its grant on `{source}` requires consent recorded in `{record}` that its grant on `{request_entity}` does not, {missed}: require the same consent on the grant on `{request_entity}`, or remove it from the grant on `{source}`",
+                source = source.id,
+                record = added.record,
+            ),
+        ));
+    }
+    None
+}
+
+fn describe_row_boundaries(boundaries: &[RowBoundarySource]) -> String {
+    if boundaries.is_empty() {
+        return "`unrestricted`".to_owned();
+    }
+    boundaries
+        .iter()
+        .map(|boundary| {
+            let operator = match boundary.operator {
+                BoundaryOperator::Equals => "equals",
+                BoundaryOperator::In => "in",
+            };
+            format!("`{}` {operator} claim `{}`", boundary.field, boundary.claim)
+        })
+        .collect::<Vec<_>>()
+        .join(" and ")
 }
 
 /// An external view joins from a local field, so a profile that reads the link

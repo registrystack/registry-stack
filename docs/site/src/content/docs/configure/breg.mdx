@@ -355,6 +355,61 @@ Starting the runtime never rewrites the active catalog.
 
 {/* TODO[evidence]: the derived-row id rules (non-null canonical id, at most one row per id) and the value-check view behaviour have no located test. */}
 
+### Grant the Record types the SQL reads
+
+The derived view runs under the caller's row security.
+Its SQL sees only the rows that the caller's access profile can read, on every Record type it reads.
+`readableFields` limits what a read returns, not what the computation reads.
+
+A profile that reads a derived field must therefore see every row that the SQL links to on other Record types.
+Otherwise the field is computed from part of the data, and the read returns a wrong value with no error.
+
+`bregctl check` checks each profile that reads, filters or sorts a derived field.
+For each other Record type the SQL reads, the profile's grant on that type must:
+
+- include `get`, `lookup`, `list`, `batch`, `revisions` or `snapshot`, refused otherwise with `breg.disclosure.derived-reads-unreadable-source`
+- have the same `rowBoundaries`, in the same order, as the profile's grant on the Record type that owns the derived field
+- add no `membershipBoundaries` or `requireConsent` that the owner's grant lacks
+
+A grant that breaks either boundary rule is refused with `breg.disclosure.derived-reads-source-boundary`.
+For a read path, the grant on the path's root Record type sets the boundaries, because the path read runs under that grant.
+A profile bounded by `id` cannot read a derived field over another Record type, because no row of another type shares that `id`.
+A derived field that reads only its own Record type needs no other grant.
+
+The smallest grant is `get`, with only the link fields readable and the same row boundaries.
+Here a derived `member-count` field on `household` counts the linked `member` rows:
+
+```yaml
+accessProfiles:
+  household-reader:
+    principalClaim: registry_principal
+    requiredScopes: ["registry:household:read"]
+    permissions:
+      records:
+        - recordType: household
+          operations: [get, list]
+          readableFields: [household-code, member-count]
+          rowBoundaries:
+            - {field: district, claim: district, operator: equals}
+        - recordType: member
+          operations: [get]
+          readableFields: [household]
+          rowBoundaries:
+            - {field: district, claim: district, operator: equals}
+```
+
+A row boundary names a field by its `id`, so the Record type the SQL reads needs a field with the same `id`, here `district`.
+Matching boundaries still assume that linked rows hold the same boundary values.
+A `member` in a different district from its household stays hidden from the household's reader, and the count leaves it out.
+Keep boundary values consistent across linked records.
+
+{/* Evidence: crates/registry-breg/src/compiler/disclosure/reach.rs, validate_derived_source_grants and derived_source_finding;
+    crates/registry-breg/src/generated_ddl.rs, grant_reads_rows and policy_authority_expression_for_alias;
+    crates/registry-breg/tests/disclosure_compile.rs, a_derived_field_cannot_read_a_record_type_its_reader_cannot_read,
+    a_derived_field_cannot_read_a_record_type_under_other_row_boundaries,
+    a_read_path_reader_must_read_the_derived_source_under_its_root_boundaries and
+    a_derived_field_may_read_source_fields_its_reader_cannot_read. */}
+
 ## Schedule a Record-controlled Action
 
 A Record timer schedules one bounded immediate Action from control fields on the Record. The

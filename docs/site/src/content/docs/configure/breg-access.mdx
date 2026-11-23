@@ -125,6 +125,10 @@ under an `in` boundary can move a row between the caller's allowed values, which
 points out. Write
 `rowBoundaries: unrestricted` only for deliberately registry-wide authority.
 
+A derived field is computed under the same boundaries. A profile that reads one needs a read grant
+with the same `rowBoundaries` on every other Record type its SQL reads. See
+[Grant the Record types the SQL reads](../breg/#grant-the-record-types-the-sql-reads).
+
 An agent is held to a narrower rule. A token from an agent, or one acting for another principal,
 cannot create, patch, or delete Records directly, with or without a task grant; it reaches them
 through [Actions and Proposals](../breg-actions/) instead.

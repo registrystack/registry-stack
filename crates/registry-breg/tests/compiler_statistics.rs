@@ -1955,6 +1955,18 @@ fn tooling_classifies_statistical_grant_direction_and_definition_review() {
     }));
 }
 
+/// Stop the publisher reading the derived dimension itself, so only the
+/// dataset's dependency rules judge its grant on `lookup`. A profile that reads
+/// the derived field is refused earlier, by the derived-read source rules.
+fn without_publisher_derived_read(value: &mut Value) {
+    for member in ["readableFields", "filterableFields"] {
+        value["accessProfiles"][PUBLISHER]["permissions"]["records"][0][member]
+            .as_array_mut()
+            .unwrap()
+            .retain(|field| *field != "evaluated-category");
+    }
+}
+
 #[test]
 fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     let mut value = source();
@@ -1984,6 +1996,13 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
         .push(json!({
             "recordType":"lookup","operations":["list"],"readableFields":["flag"],
             "filterableFields":["flag"],"allowCount":true,"rowBoundaries":"unrestricted"
+        }));
+    value["accessProfiles"]["analyst"]["permissions"]["records"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "recordType":"lookup","operations":["get"],"readableFields":[],
+            "rowBoundaries":"unrestricted"
         }));
     value["statisticalDatasets"]["records-by-category"]["dimensions"] =
         json!(["evaluated-category"]);
@@ -2053,6 +2072,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
         }),
     ] {
         let mut mutation_only_dependency = value.clone();
+        without_publisher_derived_read(&mut mutation_only_dependency);
         mutation_only_dependency["accessProfiles"][PUBLISHER]["permissions"]["records"][1] =
             permission;
         let failure = compile_with_sql(&mutation_only_dependency, sql)
@@ -2064,6 +2084,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     }
 
     let mut missing_dependency_grant = value.clone();
+    without_publisher_derived_read(&mut missing_dependency_grant);
     missing_dependency_grant["accessProfiles"]["publisher"]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
@@ -2098,8 +2119,10 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
         .unwrap();
     value["recordTypes"][&long_entity] = lookup;
     value["recordTypes"][&long_entity]["route"] = json!("long-lookups");
-    value["accessProfiles"][PUBLISHER]["permissions"]["records"][1]["recordType"] =
-        json!(long_entity.clone());
+    for profile in [PUBLISHER, ANALYST] {
+        value["accessProfiles"][profile]["permissions"]["records"][1]["recordType"] =
+            json!(long_entity.clone());
+    }
     let long_sql = sql.replace(
         "registry_source.lookup",
         &format!("registry_source.{long_entity}"),
@@ -2669,6 +2692,13 @@ fn a_derived_dimension_over_a_non_public_source_entity_is_refused() {
         .push(json!({
             "recordType":"lookup","operations":["list"],"readableFields":["flag"],
             "filterableFields":["flag"],"allowCount":true,"rowBoundaries":"unrestricted"
+        }));
+    value["accessProfiles"][ANALYST]["permissions"]["records"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "recordType":"lookup","operations":["get"],"readableFields":[],
+            "rowBoundaries":"unrestricted"
         }));
     value["statisticalDatasets"]["records-by-category"]["dimensions"] =
         json!(["evaluated-category"]);

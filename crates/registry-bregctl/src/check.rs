@@ -1711,6 +1711,8 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
         "breg.access-profile.access-reason-operation-unsupported" => "Remove import, invoke and start grants, allowDataExport, and the actions, proposals, datasets, externalViews and refreshExternalProjections permissions, from this profile, or drop requireAccessReason. The reason is checked on record reads and direct writes only.",
         "breg.disclosure.spatial-query-withheld-geometry" => "Remove spatialQueries from the profile, or add the profile to exemptProfiles of the condition that withholds the geometry field.",
         "breg.disclosure.derived-reads-withheld-field" => "Remove the derived fields from the profile's readableFields, filterableFields and sortableFields, and from its read path grants, stop the derived SQL reading the withheld field, or add the profile to exemptProfiles.",
+        "breg.disclosure.derived-reads-unreadable-source" => "Grant the profile get on the record type the derived SQL reads, with only its link fields readable and the rowBoundaries of the profile's grant on the record type that owns the derived field. Or remove the derived field from the profile.",
+        "breg.disclosure.derived-reads-source-boundary" => "Give the profile's grant on the record type the derived SQL reads the same rowBoundaries as its grant on the record type that owns the derived field, and no membershipBoundaries or requireConsent that grant lacks. Or remove the derived field from the profile.",
         "breg.disclosure.row-boundary-withheld-field" => "Bound the profile's rows by a field no condition withholds from it, or add the profile to exemptProfiles.",
         "breg.disclosure.membership-boundary-withheld-field" => "Bound the profile's rows by a membership on a field no condition withholds from it, or add the profile to exemptProfiles.",
         "breg.disclosure.consent-boundary-withheld-field" => "Point requireConsent on at a field no condition withholds from the profile, or add the profile to exemptProfiles.",
@@ -1947,6 +1949,21 @@ mod tests {
             ("breg.record-type.api-name-invalid", "apiName"),
         ] {
             let action = action_for(code, Severity::Error);
+            assert!(action.contains(setting), "{code}: {action}");
+        }
+    }
+
+    #[test]
+    fn derived_source_grant_errors_name_the_grant_to_add_or_align() {
+        for (code, setting) in [
+            ("breg.disclosure.derived-reads-unreadable-source", "get"),
+            (
+                "breg.disclosure.derived-reads-source-boundary",
+                "rowBoundaries",
+            ),
+        ] {
+            let action = action_for(code, Severity::Error);
+            assert_ne!(action, CORRECT_SOURCE, "{code}");
             assert!(action.contains(setting), "{code}: {action}");
         }
     }
