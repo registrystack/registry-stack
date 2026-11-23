@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.48.0 - 2026-11-23
+
+- No user-visible product changes in this release.
+
 ## 0.47.0 - 2026-11-21
 
 - Accept an optional `project.label` and `project.description` beside
